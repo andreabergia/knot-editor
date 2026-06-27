@@ -8,11 +8,15 @@ The order reflects dependency: earlier steps produce abstractions and evidence t
 
 ## 1. Establish the prototype skeleton
 
-- Crate project skeleton.
-- Crate layout separating core (model), view (rendering), and host (future scripting runtime).
-- A minimal event loop and window capable of presenting a frame.
-- Logging, basic profiling hooks, and a reproducible benchmark harness for later steps.
-- Decide: which platforms to target for the prototype (at minimum macOS and Linux; Windows deferred unless a BiDi/IME regression appears).
+- ✅ Crate project skeleton.
+- ✅ Crate layout separating core (model), view (rendering), and host (future scripting runtime).
+  - Implemented as modules within a single `knot` binary crate (`core`, `view`, `host`, `app`); crate-splitting deferred until step 7's no-internal-path experiment demands compile-time enforcement.
+- ✅ A minimal event loop and window capable of presenting a frame.
+  - winit event loop opens a macOS window. GPU/rendering deferred to step 2.
+- ⏭️ Logging, basic profiling hooks, and a reproducible benchmark harness for later steps.
+  - Deferred: nothing to measure yet. Revisit at step 2 (renderer frame times) and step 4 (buffer edits).
+- ✅ Decide: which platforms to target for the prototype (at minimum macOS and Linux; Windows deferred unless a BiDi/IME regression appears).
+  - macOS only for the prototype. Linux revisited if/when renderer choice (step 2) calls for it.
 
 **Question answered:** can the project stand up a GPU-backed window with the desired layering?
 
