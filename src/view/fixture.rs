@@ -69,37 +69,41 @@ impl Fixture {
             text_lines.push(lines.next().context("fixture truncated in text body")?.to_owned());
         }
 
-        let sep = lines.next().context("missing segment separator `---`")?;
-        if sep.trim() != "---" {
-            bail!("expected `---` separator, found {sep:?}");
-        }
-
         let mut styles = vec![Vec::new(); count];
-        for spec_line in lines {
-            let s = spec_line.trim();
-            if s.is_empty() {
-                continue;
+
+        // The segment table is optional: fixtures whose styles are not
+        // load-bearing (CJK, Arabic, emoji, minified) omit it entirely.
+        // If present, it must be preceded by a `---` separator.
+        if let Some(sep) = lines.next() {
+            if sep.trim() != "---" {
+                bail!("expected `---` separator, found {sep:?}");
             }
-            let parts: Vec<&str> = s.split_whitespace().collect();
-            if parts.len() != 6 {
-                bail!("bad segment spec `{s}` (expected 6 fields)");
+            for spec_line in lines {
+                let s = spec_line.trim();
+                if s.is_empty() {
+                    continue;
+                }
+                let parts: Vec<&str> = s.split_whitespace().collect();
+                if parts.len() != 6 {
+                    bail!("bad segment spec `{s}` (expected 6 fields)");
+                }
+                let line_idx: usize = parts[0].parse()?;
+                let start: usize = parts[1].parse()?;
+                let end: usize = parts[2].parse()?;
+                let color = u32::from_str_radix(parts[3].trim_start_matches("0x"), 16)?;
+                let bold = parts[4] != "0";
+                let italic = parts[5] != "0";
+                if line_idx >= count {
+                    bail!("segment spec references line {line_idx} >= count {count}");
+                }
+                styles[line_idx].push(SegSpec {
+                    start,
+                    end,
+                    color,
+                    bold,
+                    italic,
+                });
             }
-            let line_idx: usize = parts[0].parse()?;
-            let start: usize = parts[1].parse()?;
-            let end: usize = parts[2].parse()?;
-            let color = u32::from_str_radix(parts[3].trim_start_matches("0x"), 16)?;
-            let bold = parts[4] != "0";
-            let italic = parts[5] != "0";
-            if line_idx >= count {
-                bail!("segment spec references line {line_idx} >= count {count}");
-            }
-            styles[line_idx].push(SegSpec {
-                start,
-                end,
-                color,
-                bold,
-                italic,
-            });
         }
 
         Ok(Self {
@@ -111,6 +115,36 @@ impl Fixture {
     /// Number of lines in the fixture.
     pub fn line_count(&self) -> usize {
         self.lines.len()
+    }
+
+    /// Tile the fixture `n` times, producing a synthetic large fixture.
+    ///
+    /// Used for fixture 2 (1M-line tiled Rust): the on-disk fixture stays
+    /// small, and the harness synthesizes the large workload in memory at
+    /// startup. Styles are tiled alongside the text so the multi-attribute
+    /// shaping path is exercised at full scale.
+    pub fn tiled(&self, n: usize) -> Self {
+        if n <= 1 {
+            return self.clone_shallow();
+        }
+        let base = self.lines.len();
+        let total = base * n;
+        let mut lines = Vec::with_capacity(total);
+        let mut styles = Vec::with_capacity(total);
+        for _ in 0..n {
+            for (i, line) in self.lines.iter().enumerate() {
+                lines.push(line.clone());
+                styles.push(self.styles[i].clone());
+            }
+        }
+        Fixture { lines, styles }
+    }
+
+    fn clone_shallow(&self) -> Self {
+        Fixture {
+            lines: self.lines.clone(),
+            styles: self.styles.clone(),
+        }
     }
 
     /// Build the segment list for a single line, borrowing from `self`.

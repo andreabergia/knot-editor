@@ -16,7 +16,7 @@ fn main() -> ExitCode {
             eprintln!("error: {e:#}");
             eprintln!(
                 "usage: bench --fixture <path.kfx> --backend <name> \
-                 [--duration <secs>] [--list-backends]"
+                 [--duration <secs>] [--tile <n>] [--list-backends]"
             );
             return ExitCode::from(2);
         }

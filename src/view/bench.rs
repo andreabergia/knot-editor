@@ -41,10 +41,17 @@ pub struct BenchConfig {
     pub fixture: PathBuf,
     pub backend: String,
     pub duration: Option<Duration>,
+    /// If set, the loaded fixture is tiled (repeated) this many times in
+    /// memory to synthesize a large fixture — used for fixture 2 (1M-line
+    /// tiled Rust). The on-disk fixture stays small.
+    pub tile: Option<usize>,
 }
 
 pub fn run(cfg: BenchConfig) -> Result<()> {
-    let fixture = Fixture::load(&cfg.fixture)?;
+    let mut fixture = Fixture::load(&cfg.fixture)?;
+    if let Some(tile) = cfg.tile {
+        fixture = fixture.tiled(tile);
+    }
     eprintln!(
         "[bench] fixture={} lines={} backend={}",
         cfg.display_fixture(),
@@ -344,6 +351,7 @@ pub fn parse_args(args: impl Iterator<Item = String>) -> Result<BenchConfig> {
     let mut fixture = None;
     let mut backend = None;
     let mut duration = None;
+    let mut tile = None;
     let mut list = false;
 
     let mut it = args.peekable();
@@ -364,6 +372,13 @@ pub fn parse_args(args: impl Iterator<Item = String>) -> Result<BenchConfig> {
                     .parse()?;
                 duration = Some(Duration::from_secs(secs));
             }
+            "--tile" => {
+                let n: usize = it
+                    .next()
+                    .context("--tile requires a count")?
+                    .parse()?;
+                tile = Some(n);
+            }
             "--list-backends" => {
                 list = true;
             }
@@ -383,6 +398,7 @@ pub fn parse_args(args: impl Iterator<Item = String>) -> Result<BenchConfig> {
         fixture,
         backend,
         duration,
+        tile,
     })
 }
 
