@@ -52,14 +52,20 @@ pub fn run(cfg: BenchConfig) -> Result<()> {
         cfg.backend,
     );
 
+    // Construct the backend before entering the event loop so a bad
+    // backend name fails with a clean error rather than a panic
+    // mid-loop.
+    let renderer = create_backend(&cfg.backend)?;
+
     let event_loop = EventLoop::new()?;
-    let mut harness = Harness::new(cfg, fixture);
+    let mut harness = Harness::new(cfg, fixture, renderer);
     event_loop.run_app(&mut harness)?;
     harness.report();
     Ok(())
 }
 
 struct Harness {
+    pending_renderer: Option<Box<dyn Renderer>>,
     fixture_display: String,
     backend_name: String,
     fixture: Fixture,
@@ -106,9 +112,10 @@ impl BenchConfig {
 }
 
 impl Harness {
-    fn new(cfg: BenchConfig, fixture: Fixture) -> Self {
+    fn new(cfg: BenchConfig, fixture: Fixture, renderer: Box<dyn Renderer>) -> Self {
         let duration = cfg.duration.unwrap_or(RUN_DURATION);
         Self {
+            pending_renderer: Some(renderer),
             fixture_display: cfg.display_fixture().to_owned(),
             backend_name: cfg.backend.clone(),
             fixture,
@@ -148,9 +155,9 @@ impl ApplicationHandler for Harness {
             )
             .expect("window creation failed");
 
-        let mut renderer = create_backend(&self.backend_name).unwrap_or_else(|e| {
-            panic!("failed to construct backend `{}`: {e}", self.backend_name);
-        });
+        let mut renderer = self.pending_renderer.take().expect(
+            "resumed called twice without a renderer; this is a harness bug",
+        );
         renderer.init(&window).expect("backend init failed");
 
         let now = Instant::now();

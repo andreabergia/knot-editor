@@ -170,7 +170,7 @@ Per backend, after the runs, record (in this document, not just in chat):
 
 1. ✅ Plan written (this document).
 2. ✅ Renderer trait + harness skeleton + metrics collection (`sysinfo` dep).
-3. Stub backend; validate the loop runs end-to-end and metrics look sane.
+3. ✅ Stub backend; validate the loop runs end-to-end and metrics look sane.
 4. Fixture set authored under `bench/` (start with fixture 1; add the rest).
 5. wgpu + cosmic-text backend.
 6. wgpu + direct rustybuzz backend (or fold into 5 with a recorded finding).
