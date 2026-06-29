@@ -309,6 +309,51 @@ sizes (1577 lines, ~1M tiled).
   confirms the visible-range computation is cheap; not a renderer
   candidate.
 
+### Step 9 — decision
+
+**Outcome:** no primary renderer is committed. The benchmark validated a
+rendering-*primitive* comparison, and Skia is the clear winner of that
+comparison (lowest p50 on every fixture; survives BiDi/CJK/emoji without
+API surgery; cosmic-text has a real CJK defect — 40% of glyphs dropped).
+But the benchmark did not — and could not — answer the product-level
+question: *what do we build the editor UI on?* A framework with its own
+sufficiently mature text-rendering path might make the primitive-level
+choice moot; or a framework might expose Skia as its primitive, in which
+case the evidence above carries forward. Either way, the renderer-
+primitive decision is downstream of the framework decision, not prior to
+it.
+
+**Findings recorded:**
+
+- The step-2 benchmark compared rendering primitives, not UI frameworks.
+  That is a narrower question than "what does the editor render with,"
+  and is not load-bearing on its own.
+- Frameworks are back in scope. The "no internal path that extensions
+  cannot reach" objection (`design.md` §"The UI is fully customizable")
+  was overapplied: that commitment governs the buffer/view boundary
+  (step 7), not whether the rendering stack is hand-written. If the core
+  lives inside the same framework as extensions, there is no asymmetry.
+  The sharpened requirement is that the framework expose, at the
+  extension level, the same rendering/text primitives the built-in
+  views use — otherwise the built-in text view becomes a privileged
+  path by virtue of having primitive access extensions lack. That is a
+  framework-selection criterion, not a reason to reject frameworks.
+- **gpui is reinstated** as a candidate. The coupling objection applies
+  to all dependencies and is not disqualifying; the license is
+  Apache-2.0. The original exclusion ("Candidates" § above;
+  `docs/roadmap.md` step 2) was premature.
+- Whether gpui's (or any framework's) text-rendering path is mature
+  enough — and whether "renderer primitive" and "UI framework" are even
+  separable questions — is unresolved. No speculation here; it is
+  deferred to step 2.5.
+
+**Step 3 (IME, BiDi, wide-character metrics) is folded.** With no
+renderer committed, "run against every surviving renderer from step 2"
+has no referent. BiDi/CJK/emoji *rendering* becomes a step-2.5 framework-
+eval criterion; IME/cursor/selection/column behaviors are editor concerns
+that need the buffer (step 4) and view (step 7) to exist first. See
+`docs/roadmap.md` step 3.
+
 ## Execution order
 
 1. ✅ Plan written (this document).
@@ -321,9 +366,10 @@ sizes (1577 lines, ~1M tiled).
 7. ✅ skia backend.
 8. ✅ Run all fixtures against all backends; record numbers in this document
    (see "Step 8 results" above).
-9. Decision: primary renderer, or "more than one survives, revisit after
-   step 3".
-10. Update `docs/roadmap.md` step 2 with ✅ markers.
+9. ✅ Decision: no primary renderer committed; framework-level question
+   deferred to step 2.5 (see "Step 9 — decision" above).
+10. ✅ Update `docs/roadmap.md`: mark step 2 done with findings, add step
+    2.5, fold step 3.
 
 Each step is a separate commit.
 
