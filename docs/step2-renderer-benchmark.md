@@ -42,7 +42,7 @@ Three backends, compared on identical workloads:
    on top of wgpu, without cosmic-text's retained-mode layout machinery.
    Measures how much cosmic-text helps vs. costs. (Implementation note: if
    this turns out to be a thin wrapper over cosmic-text's own internal
-   shaper, we may fold it into candidate 1 and document that as a finding.)
+   shaper, we may fold it into candidate 1 and document that as a finding.) **— FOLDED into candidate 1. See "Findings" below.**
 3. **skia** (`skia-safe`) — mature, batteries-included, built-in text
    shaping. The "what does a production renderer give us for free?"
    baseline.
@@ -116,7 +116,6 @@ src/view/
   backends/
     mod.rs            unconditional re-exports
     wgpu_cosmic.rs    wgpu + cosmic-text
-    wgpu_direct.rs    wgpu + rustybuzz (thin)
     skia.rs           skia-safe (built-in shaping)
     stub.rs           no-op backend for harness validation
 ```
@@ -155,7 +154,40 @@ A separate binary (`bench` example or `[[bin]]`) that:
 
 Output is plain stdout for now; no file logging or charts.
 
-## Findings to capture
+## Findings
+
+### Candidate 2 (wgpu + raw rustybuzz) folded into candidate 1
+
+The step-2 plan anticipated this in its implementation note. Building a
+"thinner shaping layer on raw rustybuzz" to a fair-comparison standard would
+require reimplementing, on top of rustybuzz:
+
+- BiDi resolution (`unicode-bidi`) — paragraph level + run extraction + L1/L2
+  reordering. cosmic-text does this in `shape_until_scroll` /
+  `BidiParagraphs`.
+- Font fallback walks against a `fontdb` database (per-script, per-glyph
+  probing across all matched faces). cosmic-text integrates this with its
+  shaper in `shape_run`/`should_attach_panostyle_color_emoji_font`.
+- Line layout: wrapping, soft-break handling, horizontal alignment, tab
+  expansion, scroll-rect reduction to visible runs.
+- Caching of shape plans and per-(font, script, direction, size) glyph
+  tables.
+
+That is ~most of cosmic-text. A benchmark whose candidate-2 is a several-
+thousand-line from-scratch reimplementation of the layer it claims to
+compare against is not informative: it measures our rewrite, not the
+"thinner shaper" hypothesis. As a prototype-phase benchmark we are unwilling
+to undertake that work.
+
+**Finding**: candidates 1 and 2 are indistinguishable for our purposes.
+cosmic-text *is* the "wgpu + rustybuzz with the layout machinery filled in"
+path. The cost/benefit of cosmic-text's retained-mode layout is assessed
+indirectly by comparing candidate 1 against candidate 3 (skia), which
+represents the opposite extreme (mature, batteries-included renderer with
+its own shaping path). If skia is competitive, a from-scratch rustybuzz
+path would have to beat both — unlikely given the work above.
+
+We proceed with candidates 1 and 3 only.
 
 Per backend, after the runs, record (in this document, not just in chat):
 - Raw numbers per fixture.
@@ -173,7 +205,8 @@ Per backend, after the runs, record (in this document, not just in chat):
 3. ✅ Stub backend; validate the loop runs end-to-end and metrics look sane.
 4. ✅ Fixture set authored under `bench/` (start with fixture 1; add the rest).
 5. wgpu + cosmic-text backend.
-6. wgpu + direct rustybuzz backend (or fold into 5 with a recorded finding).
+6. ✅ wgpu + direct rustybuzz backend — folded into candidate 1
+   (see "Findings" below).
 7. skia backend.
 8. Run all fixtures against all backends; record numbers in this document.
 9. Decision: primary renderer, or "more than one survives, revisit after
