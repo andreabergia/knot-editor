@@ -6,3 +6,6 @@
 
 pub mod stub;
 pub mod wgpu_cosmic;
+
+#[cfg(target_os = "macos")]
+pub mod skia;
