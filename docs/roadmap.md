@@ -28,7 +28,7 @@ The renderer is intentionally undecided. This step evaluates multiple candidates
 
 - **wgpu** — portable, low-level, gives full control and exposes the most about where the hard problems live.
 - **skia** — mature, has a text-shaping path already, used by Chrome/Android; heavier dependency, less control.
-- **gpui** — Zed's retained-mode GPU UI framework; opinionated and fast. Reinstated as a candidate in step 2.5 — coupling is true of all dependencies, and the license is Apache-2.0.
+- **gpui** — Zed's retained-mode GPU UI framework; opinionated and fast. Reinstated as a candidate in step 3 — coupling is true of all dependencies, and the license is Apache-2.0.
 - A retained-mode GPU text shaper (e.g. cosmic-text / glyphon-style), as a fourth comparison point.
 
 This step does not depend on the editable buffer model: a synthetic 1M-line text workload is enough to evaluate renderers. For each viable candidate:
@@ -38,36 +38,23 @@ This step does not depend on the editable buffer model: a synthetic 1M-line text
 - Note constraints each candidate imposes on the future view API and on the no-internal-path commitment (step 7) — a renderer that forces privileged paths into the view is itself a finding.
 - Decide primary renderer, or decide that more than one candidate survives and revisit after step 3.
 
-**✅ Done — with a deferral.** The benchmark ran; see `docs/step2-renderer-benchmark.md` for raw numbers and findings. At the rendering-primitive level, Skia is the clear winner (lowest p50 on every fixture; survives BiDi/CJK/emoji without API surgery; cosmic-text has a real CJK defect). However, the benchmark compared rendering *primitives*, not UI frameworks, and could not answer the product-level question of what to build the editor UI on. A framework with its own sufficiently mature text-rendering path might make the primitive-level choice moot. That framework-level evaluation is step 2.5 below. The "no internal path" objection was overapplied to frameworks: that commitment (step 7) governs the buffer/view boundary, not whether the rendering stack is hand-written.
+**✅ Done — with a deferral.** The benchmark ran; see `docs/step2-renderer-benchmark.md` for raw numbers and findings. At the rendering-primitive level, Skia is the clear winner (lowest p50 on every fixture; survives BiDi/CJK/emoji without API surgery; cosmic-text has a real CJK defect). However, the benchmark compared rendering *primitives*, not UI frameworks, and could not answer the product-level question of what to build the editor UI on. A framework with its own sufficiently mature text-rendering path might make the primitive-level choice moot. That framework-level evaluation is step 3 below. The "no internal path" objection was overapplied to frameworks: that commitment (step 7) governs the buffer/view boundary, not whether the rendering stack is hand-written.
 
-**Question answered (at the primitive level):** Skia meets the performance bar; the framework-level bar is step 2.5's question.
+**Question answered (at the primitive level):** Skia meets the performance bar; the framework-level bar is step 3's question.
 
 ---
 
-## 2.5 UI framework comparison
+## 3. UI framework comparison
 
 Step 2 answered the rendering-primitive question (Skia wins) but left open the product question: what does the editor build its UI on? A framework may bundle a mature text-rendering path, making direct use of Skia unnecessary; or it may expose Skia as its primitive, in which case step 2's evidence carries forward. The "renderer primitive" and "UI framework" questions may turn out not to be separable at all. This step evaluates frameworks against criteria including:
 
-- text-rendering maturity (shaping, BiDi, CJK fallback, color emoji) — carrying forward the rendering-side concerns of the old step 3;
+- text-rendering maturity (shaping, BiDi, CJK fallback, color emoji);
 - extension-level access to the same rendering/text primitives the built-in views use (the sharpened form of the step-7 "no internal path" commitment);
 - platform reach and embedding story.
 
 The candidate list and research are deferred to this step.
 
 **Question answered:** which framework (if any) meets the rendering-maturity, extensibility, and platform bar without importing a privileged stack?
-
----
-
-## 3. ~~IME, BiDi, and wide-character metrics~~ (folded)
-
-Step 2 no longer commits a renderer, so "run against every surviving renderer from step 2" has no referent. The concerns redistribute:
-
-- **BiDi / CJK / emoji *rendering*** → folds into step 2.5 as a framework-eval criterion. (Step 2 already partially evidenced this at the primitive level: Skia passed, cosmic-text has a CJK glyph-drop defect.)
-- **IME composition, cursor movement, selection, column alignment** → these are editor behaviors that require a buffer (step 4) and view (step 7) to exist before they can be tested. They are not a standalone pre-buffer step; they become validation points once those land.
-
-No work happens under this step number.
-
-**Question answered:** folded — see step 2.5 (rendering) and steps 4/7 (editor behaviors).
 
 ---
 
