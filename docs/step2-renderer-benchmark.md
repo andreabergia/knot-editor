@@ -198,17 +198,129 @@ Per backend, after the runs, record (in this document, not just in chat):
 - Whether the backend survived BiDi/CJK/emoji fixtures without API-level
   surgery (feeds step 3).
 
+### Step 8 results — raw numbers
+
+Harness config: 5s per run, 1200×800 window, 1 line/frame scroll, vsync
+off on both GPU backends (`PresentMode::AutoNoVsync` for wgpu,
+`setDisplaySyncEnabled(false)` for skia — parity, so frame times reflect
+shaping + raster cost, not the display refresh cap). Release build
+(`cargo build --release`). Host: macOS 26.5.1, Apple M1 Pro, Retina.
+
+| # | Fixture (lines) | Backend | frames | p50 | p99 | peak RSS | CPU% |
+|---|---|---|---|---|---|---|---|
+| 1 | rust_sample (1577) | stub | 962271 | 0.00ms | 0.00ms | 98.0MiB | 18.2% |
+| 1 | rust_sample (1577) | wgpu_cosmic | 464 | 9.96ms | 13.29ms | 125.5MiB | 26.2% |
+| 1 | rust_sample (1577) | skia | 1283 | 1.82ms | 11.73ms | 295.5MiB | 10.8% |
+| 2 | rust_sample --tile 635 (1,001,395) | stub | 967080 | 0.00ms | 0.00ms | 499.5MiB | 19.5% |
+| 2 | rust_sample --tile 635 (1,001,395) | wgpu_cosmic | 470 | 9.91ms | 13.41ms | 527.1MiB | 26.4% |
+| 2 | rust_sample --tile 635 (1,001,395) | skia | 1292 | 1.82ms | 12.15ms | 703.6MiB | 11.0% |
+| 3 | cjk (25) | stub | 1803078 | 0.00ms | 0.00ms | 109.4MiB | 20.6% |
+| 3 | cjk (25) | wgpu_cosmic | 1339 | 2.14ms | 10.84ms | 126.5MiB | 15.9% |
+| 3 | cjk (25) | skia | 1324 | 1.41ms | 12.29ms | 102.1MiB | 4.8% |
+| 4 | arabic (11) | stub | 2035600 | 0.00ms | 0.00ms | 113.2MiB | 20.5% |
+| 4 | arabic (11) | wgpu_cosmic | 725 | 6.43ms | 7.03ms | 124.4MiB | 26.5% |
+| 4 | arabic (11) | skia | 1266 | 1.38ms | 13.64ms | 93.4MiB | 5.5% |
+| 5 | emoji (19) | stub | 1898900 | 0.00ms | 0.00ms | 111.0MiB | 20.8% |
+| 5 | emoji (19) | wgpu_cosmic | 365 | 12.80ms | 13.54ms | 127.9MiB | 26.1% |
+| 5 | emoji (19) | skia | 1314 | 1.84ms | 12.77ms | 98.6MiB | 4.9% |
+| 6 | minified_js (2) | stub | 2245858 | 0.00ms | 0.00ms | 116.7MiB | 19.5% |
+| 6 | minified_js (2) | wgpu_cosmic | 680 | 6.87ms | 7.47ms | 124.6MiB | 26.4% |
+| 6 | minified_js (2) | skia | 1169 | 2.19ms | 15.61ms | 91.2MiB | 4.8% |
+
+Caveat on fixture sizes: fixtures 3–6 are smaller than the plan target
+(25/11/19/2 lines vs ~1k/500/1k/50). They exercise "shape the whole
+buffer every frame" rather than scroll-culling — a different but still
+informative stress (per-frame shaping cost for the full visible range,
+no off-screen culling to hide behind). Fixtures 1 and 2 hit the planned
+sizes (1577 lines, ~1M tiled).
+
+#### Cross-backend observations
+
+- **skia has the lowest p50 frame time on every fixture** (1.4–2.2ms vs
+  wgpu_cosmic's 2.1–12.8ms). Its p99 spikes higher and less predictably
+  (11–16ms), suggesting internal GC/cleanup bursts, but the typical
+  frame is fast and stable.
+- **wgpu_cosmic's frame time tracks shaping cost per visible run**: the
+  emoji fixture (color-glyph rasterization through swash) is the slowest
+  at p50=12.8ms / 73fps; the small CJK fixture (102 glyphs, 46 runs) is
+  the fastest at p50=2.1ms. The 1M-line tiled fixture (f2) is essentially
+  identical to f1 — visible-range culling works, only ~44 lines are
+  shaped per frame.
+- **CPU usage mirrors frame time**: skia 4.8–11%, wgpu_cosmic 15.9–26.5%,
+  stub ~18–20% (harness + sysinfo overhead floor). wgpu_cosmic does more
+  CPU work because shaping and glyph rasterization happen there; skia's
+  HarfBuzz+ICU shaping is also CPU work but its glyph cache is warmer.
+- **Peak RSS**: skia's baseline is higher (~295MiB on f1 vs
+  wgpu_cosmic's 125MiB) and scales worse with buffer size (703MiB vs
+  527MiB on the 1M tiled f2). The stub's 499MiB on f2 is the raw fixture
+  in memory (~1M lines × ~500 bytes/line) — the floor both renderers add
+  to. Neither renderer holds the whole buffer in GPU memory; only the
+  visible range gets uploaded.
+
+#### Per-backend findings (per the plan's "record after the runs" list)
+
+**wgpu_cosmic**
+
+- *Constraints on the future `View` API*: the trait's "list of styled
+  segments per visible line" maps cleanly to cosmic-text's
+  `set_rich_text` spans — no API surgery needed. However the backend
+  rebuilds the entire cosmic-text `Buffer` every frame via
+  `set_rich_text` and re-runs `shape_until_scroll` from scratch. A
+  retained `View` would want to pass only changed lines and reuse shaped
+  runs across frames; the current trait doesn't expose that, but it
+  doesn't forbid it either.
+- *Privileged path*: none required. The backend accepts the segment list
+  as the trait specifies; no backdoor into the buffer or shaping layer.
+- *BiDi/CJK/emoji survival*: BiDi/Arabic shapes correctly (p99=7.03ms,
+  no API surgery — `set_rich_text` + `shape_until_scroll` handle RTL).
+  Emoji shapes but is the slowest fixture (color-glyph rasterization
+  through swash is the cost). **CJK has a real issue**: the first-frame
+  diagnostic reports `no_entry=41` of 102 glyphs — 40% of CJK glyphs are
+  dropped because `ensure_glyph` fails (swash image lookup or atlas
+  allocation returns `None`). The shaper found the glyphs (`notdef=0`)
+  and the fontdb has 12 CJK candidate faces, but the rasterization/atlas
+  path drops them. Visible degeneration in the CJK fixture. This is a
+  finding for step 3, not a plan change — the trait survived, the
+  backend's atlas/swash integration needs work.
+
+**skia**
+
+- *Constraints on the future `View` API*: same trait shape works.
+  `ParagraphBuilder` is one-shot (build, layout, paint, drop per frame);
+  a retained `View` would cache `Paragraph` objects per visible range.
+  The trait doesn't forbid that. Paragraph base direction (LTR vs RTL)
+  is set per-frame from the first strong-directional character via
+  `detect_base_direction` — a small backend-internal heuristic, not a
+  trait change.
+- *Privileged path*: none required. skia's `FontCollection` with the
+  system `FontMgr` handles CJK/Arabic/emoji fallback for free — no
+  buffer backdoor.
+- *BiDi/CJK/emoji survival*: all three shape and render correctly
+  without API-level surgery. CJK fallback, Arabic RTL reordering + base
+  direction, and emoji color glyphs all work through the system FontMgr.
+  This is the "what does a production renderer give us for free"
+  baseline the plan asked for, and it delivered.
+
+**stub**
+
+- *Harness overhead floor only*: p50/p99 round to 0.00ms
+  (sub-microsecond per frame). The 18–21% CPU is the event loop +
+  sysinfo sampling, not rendering. Validates the harness end-to-end and
+  confirms the visible-range computation is cheap; not a renderer
+  candidate.
+
 ## Execution order
 
 1. ✅ Plan written (this document).
 2. ✅ Renderer trait + harness skeleton + metrics collection (`sysinfo` dep).
 3. ✅ Stub backend; validate the loop runs end-to-end and metrics look sane.
 4. ✅ Fixture set authored under `bench/` (start with fixture 1; add the rest).
-5. wgpu + cosmic-text backend.
+5. ✅ wgpu + cosmic-text backend.
 6. ✅ wgpu + direct rustybuzz backend — folded into candidate 1
    (see "Findings" below).
 7. ✅ skia backend.
-8. Run all fixtures against all backends; record numbers in this document.
+8. ✅ Run all fixtures against all backends; record numbers in this document
+   (see "Step 8 results" above).
 9. Decision: primary renderer, or "more than one survives, revisit after
    step 3".
 10. Update `docs/roadmap.md` step 2 with ✅ markers.
