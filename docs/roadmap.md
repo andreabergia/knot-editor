@@ -52,7 +52,18 @@ Step 2 answered the rendering-primitive question (Skia wins) but left open the p
 - extension-level access to the same rendering/text primitives the built-in views use (the sharpened form of the step-7 "no internal path" commitment);
 - platform reach and embedding story.
 
-The candidate list and research are deferred to this step.
+The candidate list is now fixed. Frameworks to evaluate:
+
+- **gpui** (and the **gpui-ce** community fork) — Zed's retained-mode GPU UI framework; Apache-2.0. Reinstated in step 2. The leading candidate: ships a production editor with mature text rendering. Open questions: whether the text primitives the built-in editor view uses are reachable at the same level by an extension/widget author, and whether the community fork meaningfully improves standalone (non-Zed) usability.
+- **iced** — Elm-architecture, wgpu + cosmic-text; MIT. Powers COSMIC. Early research confirms it uniquely well-satisfies the no-internal-path criterion (cosmic-text is publicly re-exported; a raw `Buffer` primitive is first-class; the built-in widgets' `draw`/`layout` are `pub`); IME is a first-class API. Risk: inherits cosmic-text's CJK shaping defects verbatim (pinned to 0.19, uses harfrust), and depends on a forked winit.
+- **floem** (Lapce) — reactive, Parley + peniko + fontique + swash (the Linebender text stack) with vello/skia backends; MIT. Early research confirms it meets the no-internal-path bar: the editor lives *inside* Floem, and Lapce consumes the same public `PaintCx` / `TextLayout` / `draw_glyphs` that any `View` receives; IME is already handled in Lapce. Risk: BiDi/CJK quality is inherited from Parley and not separately documented at the Floem layer; pre-1.0, with a forked winit and git-only transitive deps.
+
+Dropped from consideration after initial research:
+
+- **makepad** — fails the no-internal-path commitment structurally: the script/DSL VM exposes only low-level draw uniforms, not the text shaping/layout primitives, while built-in Rust widgets consume those primitives directly. Adopting it would import a privileged text path.
+- **xilem/masonry** — would satisfy the no-internal-path criterion in principle (Parley + Vello + Fontique), but Xilem is pre-alpha, Masonry is pre-alpha and churning, and Vello is alpha. Not usable as a framework today; the vello+parley primitives could be revisited as a build-it-ourselves sub-path if no framework survives step 3.
+
+🔄 In progress. Per-framework findings to be written up in `docs/step3-framework-comparison.md`.
 
 **Question answered:** which framework (if any) meets the rendering-maturity, extensibility, and platform bar without importing a privileged stack?
 
