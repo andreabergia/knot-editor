@@ -32,7 +32,9 @@ use objc2_quartz_core::{CAMetalDrawable, CAMetalLayer};
 use skia_safe::{
     Color, Color4f, ColorType, FontMgr, FontStyle, Point,
     gpu::{self, DirectContext, SurfaceOrigin, backend_render_targets, mtl},
-    textlayout::{FontCollection, ParagraphBuilder, ParagraphStyle, TextStyle},
+    textlayout::{
+        FontCollection, ParagraphBuilder, ParagraphStyle, TextDirection, TextStyle,
+    },
 };
 use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use winit::window::Window;
@@ -216,6 +218,13 @@ impl Renderer for Skia {
 
             let mut para_style = ParagraphStyle::new();
             para_style.set_text_style(&default_style);
+            // Skia shapes RTL runs correctly via BiDi, but the paragraph
+            // *base direction* (which edge the first line starts from)
+            // defaults to LTR. Detect it from the first strong-directional
+            // character so pure-Arabic content starts at the right edge
+            // and mixed/LTR/CJK content stays LTR. Same heuristic
+            // cosmic-text applies for paragraph direction.
+            para_style.set_text_direction(detect_base_direction(visible));
 
             let mut builder = ParagraphBuilder::new(&para_style, (*font_collection).clone());
             for (i, line) in visible.iter().enumerate() {
@@ -290,4 +299,58 @@ fn font_style_for(bold: bool, italic: bool) -> FontStyle {
         (false, true) => FontStyle::italic(),
         (false, false) => FontStyle::normal(),
     }
+}
+
+/// Detect the paragraph base direction from the first strong-
+/// directional character in the visible content (the standard BiDi
+/// paragraph-direction heuristic). Arabic/Hebrew → RTL; Latin/Greek/
+/// Cyrillic letters → LTR; everything else (spaces, digits, CJK
+/// ideographs, emoji, punctuation) is neutral and skipped. If no
+/// strong character is found, default to LTR.
+fn detect_base_direction(visible: &[Vec<Segment>]) -> TextDirection {
+    for line in visible {
+        for seg in line {
+            for c in seg.text.chars() {
+                let cp = c as u32;
+                if is_strong_rtl(cp) {
+                    return TextDirection::RTL;
+                }
+                if is_strong_ltr(cp) {
+                    return TextDirection::LTR;
+                }
+            }
+        }
+    }
+    TextDirection::LTR
+}
+
+/// Strong RTL: Arabic + Hebrew + their presentation forms, plus the
+/// RLM mark. Covers the ranges that matter for the fixture set and
+/// the common editor case.
+fn is_strong_rtl(cp: u32) -> bool {
+    matches!(cp,
+        0x0590..=0x05FF   // Hebrew
+        | 0x0600..=0x06FF // Arabic
+        | 0x0700..=0x074F // Syriac
+        | 0x0750..=0x077F // Arabic Supplement
+        | 0x08A0..=0x08FF // Arabic Extended-A
+        | 0xFB1D..=0xFB4F // Hebrew presentation forms
+        | 0xFB50..=0xFDFF // Arabic presentation forms-A
+        | 0xFE70..=0xFEFF // Arabic presentation forms-B
+        | 0x200F         // RLM
+    )
+}
+
+/// Strong LTR: basic Latin, Latin-1 supplement, Latin Extended-A/B,
+/// Greek, and Cyrillic letters. CJK ideographs are intentionally
+/// *not* strong (BiDi treats them as neutral), so a pure-CJK
+/// paragraph falls through to the LTR default — which is correct.
+fn is_strong_ltr(cp: u32) -> bool {
+    let is_letter = matches!(cp,
+        0x0041..=0x005A | 0x0061..=0x007A   // basic Latin A-Z a-z
+        | 0x00C0..=0x024F                  // Latin-1 supplement + Extended-A/B
+        | 0x0370..=0x03FF                  // Greek
+        | 0x0400..=0x04FF                  // Cyrillic
+    );
+    is_letter
 }
