@@ -5,3 +5,4 @@
 //! when switching backends at runtime via `--backend`.
 
 pub mod stub;
+pub mod wgpu_cosmic;

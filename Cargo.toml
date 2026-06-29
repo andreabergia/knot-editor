@@ -5,7 +5,11 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1"
+bytemuck = { version = "1", features = ["derive"] }
+cosmic-text = "0.19"
+pollster = "0.4"
 sysinfo = "0.32"
+wgpu = "29"
 winit = "0.30"
 
 [lib]

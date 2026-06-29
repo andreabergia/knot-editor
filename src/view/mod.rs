@@ -36,13 +36,14 @@ pub trait Renderer {
 pub fn create_backend(name: &str) -> anyhow::Result<Box<dyn Renderer>> {
     match name {
         "stub" => Ok(Box::new(backends::stub::Stub::new()) as Box<dyn Renderer>),
+        "wgpu_cosmic" => Ok(Box::new(backends::wgpu_cosmic::WgpuCosmic::new()) as Box<dyn Renderer>),
         other => anyhow::bail!(
-            "unknown backend `{other}`; expected one of: stub \
-             (wgpu_cosmic, wgpu_direct, skia arrive in tasks 5-7)"
+            "unknown backend `{other}`; expected one of: stub, wgpu_cosmic \
+             (wgpu_direct, skia arrive in tasks 6-7)"
         ),
     }
 }
 
 pub fn available_backends() -> &'static [&'static str] {
-    &["stub"]
+    &["stub", "wgpu_cosmic"]
 }
