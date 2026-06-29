@@ -114,15 +114,15 @@ struct Gpu {
 
 ## Smoke test
 
-1. `cargo build` — expect a long first build (skia native compile via
-   `skia-bindings`; needs CMake/Python/clang, ~10min). If it fails on this
-   machine, document as a finding (this is exactly the "skia build
-   complexity" risk flagged at `step2-renderer-benchmark.md:220`) and
-   decide whether to push through or sequence differently.
-2. `bench --fixture bench/fixtures/rust_sample.kfx --backend skia
-   --duration 2` — confirm it renders visibly and the first-3-frames debug
-   looks sane (glyph count in a reasonable ballpark, no panic, no
-   `notdef`/fallback storm).
+1. ✅ `cargo build` — clean, no warnings. `skia-bindings` used its
+   default `binary-cache` feature (pre-built binaries), so the "long
+   native compile" risk did **not** materialize: ~27s, no CMake/clang.
+2. ✅ `bench --fixture bench/fixtures/rust_sample.kfx --backend skia
+   --duration 2` — renders visibly; first-3-frames debug sane:
+   `size=1200x800 lines=44 height=880.0` (880/44 = 20px/line — exact
+   line-height parity with wgpu_cosmic), no panic, no notdef storm.
+   Also verified cjk/emoji/arabic fixtures render without crashing
+   (font fallback works).
 
 ## Doc updates
 

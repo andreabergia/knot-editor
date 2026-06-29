@@ -207,7 +207,7 @@ Per backend, after the runs, record (in this document, not just in chat):
 5. wgpu + cosmic-text backend.
 6. ✅ wgpu + direct rustybuzz backend — folded into candidate 1
    (see "Findings" below).
-7. skia backend.
+7. ✅ skia backend.
 8. Run all fixtures against all backends; record numbers in this document.
 9. Decision: primary renderer, or "more than one survives, revisit after
    step 3".
@@ -220,6 +220,10 @@ Each step is a separate commit.
 - **skia build complexity** — `skia-safe` has a heavy native build. If it
   blocks iteration, we may run the wgpu candidates first and add skia in
   parallel rather than serially. Not a plan change, just sequencing.
+  **Finding (task 7):** did not materialize. `skia-bindings` ships a
+  `binary-cache` feature (on by default) that fetches pre-built binaries,
+  so `cargo build` completed in ~27s with no native compile — CMake/clang
+  were never invoked.
 - **cosmic-text API churn** — if its API forces a specific layout model
   that conflicts with our future `View` abstraction, that's a finding, not
   a plan change; record it and proceed.
