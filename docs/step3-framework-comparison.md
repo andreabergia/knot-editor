@@ -258,13 +258,30 @@ benchmark). The framework choice is made by which binary is run.
      docs.rs, not yet exercised at the widget level.
    - ⬜ IME primitives (`ElementInputHandler` / `PlatformInputHandler`,
      `Window::handle_input`, preedit underline) — surveyed only.
-   - ⬜ Layout reach for 3-pane shell (`div` flex), selectable list
-     (`List`/`UniformList`), resize divider — surveyed only.
-3. ⬜ gpui 3-pane shell with placeholder editor. Build the layout reach
-   (item 6) first — left panel, editor center (placeholder text), right
-   panel — on the public `div` flex / list primitives, including a resize
-   divider if reachable. Editor center is a stub rendering static text; this
-   isolates layout-reach findings before the text widget lands.
+- ✅ Layout reach for 3-pane shell (`div` flex), selectable list
+      (`uniform_list`), resize divider — exercised at the widget level in
+      `src/step3/gpui/main.rs`. The 3-pane resizable shell (left file list,
+      placeholder editor center, right outline list) builds entirely on the
+      public API:
+        - flex/column layout: `div().flex().flex_row()` / `flex_col()` ✓
+        - fixed/relative sizing: `w(px(..))`, `flex_1()` ✓
+        - selectable single-row list: `uniform_list` ✓
+        - row click → highlight: `.id(..).on_click(..)` (StatefulInteractiveElement) ✓
+        - hover styling: `.hover(|s| s.bg(..))` (InteractiveElement) ✓
+        - conditional styling: `.when(cond, |d| d..)` (FluentBuilder) ✓
+        - resize divider: **no built-in splitter** — built custom from
+          `on_drag` + `on_drag_move` + `on_drop` (capture-phase drag-move
+          listener on root), with an invisible `DragGhost` view satisfying
+          `on_drag`'s constructor and a `DividerDrag { which }` value type.
+          Cosmetic finding, not a blocker. `Pixels(pub(crate) f32)` requires
+          `f32::from(Pixels)` to read the float, not field access.
+3. ✅ gpui 3-pane shell with placeholder editor. Built and verified
+   (window opens, divider drag-resizes both panes, row click highlights) in
+   `src/step3/gpui/main.rs`. Layout-reach finding: gpui 0.2.2 passes the
+   no-internal-path bar for item 6 — the shell is reproducible by an
+   extension author, not a privileged built-in. The only gap is the absence
+   of a built-in resizable splitter, which is a cosmetic/ergonomic finding,
+   not a no-internal-path failure.
 4. ⬜ gpui editor widget (items 1–5) inside the shell. Replace the placeholder
    with the demanding widget: styled text, scrolling, cursor+selection, IME
    preedit, one annotation overlay.
