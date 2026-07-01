@@ -239,10 +239,27 @@ benchmark). The framework choice is made by which binary is run.
 ## Execution order
 
 1. ✅ Plan written (this document).
-2. ⬜ gpui API-reachability spike: confirm the public text + layout + IME
+2. 🔄 gpui API-reachability spike: confirm the public text + layout + IME
    primitives exist at the level the widget needs. Record preliminary
    no-internal-path scorecard. (If a blocker is found here, decide whether
    gpui-ce changes the picture before proceeding to implementation.)
+
+   Progress:
+   - ✅ Standalone build from crates.io (`gpui 0.2.2`,
+     `default-features = false, features = ["font-kit"]`) — no Zed repo glue.
+     Build prerequisite: one-time `xcodebuild -downloadComponent
+     MetalToolchain` (macOS ships the shader toolchain separately from Xcode).
+   - ✅ Window + declarative render path reachable on the public API:
+     `src/step3/gpui/main.rs` (`Application::run`, `App::open_window`,
+     `Context::new`, `Render`, `div().flex().child(...)`). Window opens and
+     stays alive.
+   - ⬜ Text-shaping primitives (`WindowTextSystem::layout_line`, `ShapedLine`,
+     `ShapedGlyph`, `StyledText`/`TextRun`, multi-attribute runs) — surveyed in
+     docs.rs, not yet exercised at the widget level.
+   - ⬜ IME primitives (`ElementInputHandler` / `PlatformInputHandler`,
+     `Window::handle_input`, preedit underline) — surveyed only.
+   - ⬜ Layout reach for 3-pane shell (`div` flex), selectable list
+     (`List`/`UniformList`), resize divider — surveyed only.
 3. ⬜ gpui widget + shell implementation, full 6-item spec.
 4. ⬜ Run gpui against all fixtures (auto-scroll + interactive); record
    quantitative + qualitative findings in this document.

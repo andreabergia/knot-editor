@@ -7,6 +7,7 @@ edition = "2024"
 anyhow = "1"
 bytemuck = { version = "1", features = ["derive"] }
 cosmic-text = "0.19"
+gpui = { version = "0.2", default-features = false, features = ["font-kit"] }
 pollster = "0.4"
 sysinfo = "0.32"
 wgpu = "29"
@@ -34,3 +35,7 @@ path = "src/main.rs"
 [[bin]]
 name = "bench"
 path = "src/bin/bench.rs"
+
+[[bin]]
+name = "step3-gpui"
+path = "src/step3/gpui/main.rs"
