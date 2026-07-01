@@ -260,14 +260,21 @@ benchmark). The framework choice is made by which binary is run.
      `Window::handle_input`, preedit underline) — surveyed only.
    - ⬜ Layout reach for 3-pane shell (`div` flex), selectable list
      (`List`/`UniformList`), resize divider — surveyed only.
-3. ⬜ gpui widget + shell implementation, full 6-item spec.
-4. ⬜ Run gpui against all fixtures (auto-scroll + interactive); record
+3. ⬜ gpui 3-pane shell with placeholder editor. Build the layout reach
+   (item 6) first — left panel, editor center (placeholder text), right
+   panel — on the public `div` flex / list primitives, including a resize
+   divider if reachable. Editor center is a stub rendering static text; this
+   isolates layout-reach findings before the text widget lands.
+4. ⬜ gpui editor widget (items 1–5) inside the shell. Replace the placeholder
+   with the demanding widget: styled text, scrolling, cursor+selection, IME
+   preedit, one annotation overlay.
+5. ⬜ Run gpui against all fixtures (auto-scroll + interactive); record
    quantitative + qualitative findings in this document.
-5. ⬜ iced API-reachibility spike + implementation + runs + findings.
-6. ⬜ floem API-reachibility spike + implementation + runs + findings.
-7. ⬜ Cross-framework comparison table + decision: which framework (if any)
+6. ⬜ iced API-reachibility spike + implementation + runs + findings.
+7. ⬜ floem API-reachibility spike + implementation + runs + findings.
+8. ⬜ Cross-framework comparison table + decision: which framework (if any)
    meets the bar. Update `docs/roadmap.md` step 3 status.
-8. ⬜ If a decision is made, seed the step-7 `View` abstraction from the
+9. ⬜ If a decision is made, seed the step-7 `View` abstraction from the
    surviving framework's widget surface (noted, not implemented here).
 
 Each step is at least one commit; large steps (e.g. a full framework
