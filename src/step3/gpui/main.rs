@@ -19,6 +19,9 @@
 
 use gpui::{prelude::FluentBuilder, *};
 
+mod editor;
+use editor::EditorView;
+
 actions!(knot, [Quit]);
 
 const MIN_PANE: f32 = 120.;
@@ -50,10 +53,27 @@ struct Shell {
     /// `(which, start_x, start_width)` captured on the first drag-move event
     /// of an in-progress divider drag; cleared on drop.
     drag_origin: Option<(usize, Pixels, f32)>,
+    /// Editor widget (step 4). Owned as an `Entity` so the custom `Element`
+    /// in `editor.rs` can read its state each paint.
+    editor: Entity<EditorView>,
 }
 
 impl Shell {
-    fn new() -> Self {
+    /// Construct the shell, preloading the editor with `rust_sample.kfx`
+    /// (the same fixture the renderer bench uses) so the editor pane has
+    /// real styled text to render. Fixture resolution is relative to the
+    /// crate root so the binary runs from any cwd.
+    fn new(cx: &mut Context<Self>) -> Self {
+        let fixture_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("bench/fixtures/rust_sample.kfx");
+        let fixture = ::knot::view::fixture::Fixture::load(&fixture_path)
+            .unwrap_or_else(|e| {
+                eprintln!("[step3-gpui] failed to load fixture {fixture_path:?}: {e}");
+                ::knot::view::fixture::Fixture::from_lines(vec![format!(
+                    "(no fixture at {fixture_path:?}: {e})"
+                )])
+            });
+        let editor = cx.new(|cx| EditorView::from_fixture(&fixture, cx));
         Shell {
             left_files: vec![
                 "src/lib.rs".into(),
@@ -83,6 +103,7 @@ impl Shell {
             left_width: 260.,
             right_width: 220.,
             drag_origin: None,
+            editor,
         }
     }
 
@@ -249,17 +270,7 @@ let delta = f32::from(pos_x - start_x);
                     .flex_1()
                     .h_full()
                     .bg(rgb(0x1e1e1e))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .h_full()
-                            .w_full()
-                            .items_center()
-                            .justify_center()
-                            .text_color(rgb(0x666666))
-                            .child("editor placeholder"),
-                    ),
+                    .child(self.editor.clone()),
             )
             .child(Self::divider(1))
             .child(
@@ -302,7 +313,7 @@ fn main() {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 ..Default::default()
             },
-            |_window, cx| cx.new(|_| Shell::new()),
+            |_window, cx| cx.new(|cx| Shell::new(cx)),
         )
         .unwrap();
 

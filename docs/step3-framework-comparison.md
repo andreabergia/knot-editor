@@ -282,9 +282,25 @@ benchmark). The framework choice is made by which binary is run.
    extension author, not a privileged built-in. The only gap is the absence
    of a built-in resizable splitter, which is a cosmetic/ergonomic finding,
    not a no-internal-path failure.
-4. ⬜ gpui editor widget (items 1–5) inside the shell. Replace the placeholder
+4. 🔄 gpui editor widget (items 1–5) inside the shell. Replace the placeholder
    with the demanding widget: styled text, scrolling, cursor+selection, IME
    preedit, one annotation overlay.
+
+   Progress:
+   - ✅ Item 1 (styled text) + scroll-half of item 2: `src/step3/gpui/editor.rs`
+     renders fixture lines via a custom `Element` on the public API. Each
+     visible line is shaped with `WindowTextSystem::shape_line` (multi-
+     attribute `TextRun`s carry bold/italic/color from the fixture's segment
+     specs) and painted with `ShapedLine::paint` inside a
+     `with_content_mask` viewport; a 6px scrollbar thumb is overlaid at the
+     right edge outside the content mask so it stays visible while scrolled.
+     Scroll-wheel drives a pixel scroll offset (macOS natural-scroll
+     direction) via `.on_scroll_wheel` on the wrapping `div().id("editor")`.
+     No-internal-path scorecard for item 1 + scroll: all-green.
+   - ⬜ Item 2 remainder: keyboard-driven scroll + cursor movement.
+   - ⬜ Item 3: selection (mouse + keyboard).
+   - ⬜ Item 4: IME preedit via `EntityInputHandler` + `ElementInputHandler`.
+   - ⬜ Item 5: one annotation overlay (e.g. wavy diagnostic underline).
 5. ⬜ Run gpui against all fixtures (auto-scroll + interactive); record
    quantitative + qualitative findings in this document.
 6. ⬜ iced API-reachibility spike + implementation + runs + findings.

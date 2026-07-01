@@ -117,6 +117,17 @@ impl Fixture {
         self.lines.len()
     }
 
+    /// Construct a fixture from raw text with no authored style segments.
+    /// Each line is rendered with the default style. Used by callers that
+    /// synthesize a fixture in memory (e.g. an editor pane's load fallback).
+    pub fn from_lines(lines: Vec<String>) -> Self {
+        let n = lines.len();
+        Fixture {
+            lines,
+            styles: vec![Vec::new(); n],
+        }
+    }
+
     /// Tile the fixture `n` times, producing a synthetic large fixture.
     ///
     /// Used for fixture 2 (1M-line tiled Rust): the on-disk fixture stays
