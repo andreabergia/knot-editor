@@ -297,7 +297,21 @@ benchmark). The framework choice is made by which binary is run.
      Scroll-wheel drives a pixel scroll offset (macOS natural-scroll
      direction) via `.on_scroll_wheel` on the wrapping `div().id("editor")`.
      No-internal-path scorecard for item 1 + scroll: all-green.
-   - ⬜ Item 2 remainder: keyboard-driven scroll + cursor movement.
+   - ✅ Item 2 remainder (keyboard-driven scroll + cursor): `EditorView`
+     now tracks a caret `(line, byte_col)` + `preferred_col`, implements
+     `Focusable` (using the previously-stubbed `FocusHandle`), and binds
+     `.track_focus` + `.on_key_down` on the editor `div`. Arrow keys /
+     home / end / pageup / pagedown move the caret (cmd-left/right map to
+     home/end per macOS; all motion clamps to utf-8 char boundaries and
+     wraps across line ends). After each move the caret is kept inside the
+     viewport by nudging `scroll` via `ensure_cursor_visible`. The element
+     writes the measured pane height back into the view each paint (no
+     notify) so the scroll clamp uses the real viewport. The caret is
+     painted as a 2px bar at `ShapedLine::x_for_index(col)` when the
+     editor holds window focus, inside the content mask so it clips out
+     when scrolled away. No-internal-path scorecard for item 2: all-green
+     (Focusable, track_focus, on_key_down, KeyDownEvent.keystroke,
+     ShapedLine.x_for_index, Entity::update during paint).
    - ⬜ Item 3: selection (mouse + keyboard).
    - ⬜ Item 4: IME preedit via `EntityInputHandler` + `ElementInputHandler`.
    - ⬜ Item 5: one annotation overlay (e.g. wavy diagnostic underline).
