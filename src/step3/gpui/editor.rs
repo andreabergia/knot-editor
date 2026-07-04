@@ -7,15 +7,22 @@
 // paint from scroll + its allocated bounds.
 //
 // This stage covers roadmap item 1 (styled text) + item 2 (keyboard-driven
-// scroll + cursor movement). Selection/IME/annotation come later.
+// scroll + cursor movement) + item 3 (selection: mouse drag + shift-extend +
+// shift-arrow). IME/annotation come later.
 //
 // Cursor model: a single caret stored as `(line, byte_col)` into the owned
 // `lines` buffer, plus a `preferred_col` used to keep a stable column when
 // moving vertically across lines of differing widths. The caret is painted
 // as a 2px bar at the shaped line's `x_for_index(col)` when the editor's
-// focus handle is the window's focused handle. Keyboard movement clamps to
-// utf-8 char boundaries and, after each move, re-scrolls so the caret stays
-// inside the viewport.
+// focus handle is the window's focused handle AND no selection is active
+// (macOS hides the caret while a selection is held). Keyboard movement
+// clamps to utf-8 char boundaries and, after each move, re-scrolls so the
+// caret stays inside the viewport.
+//
+// Selection model: an `anchor` (line, byte_col) plus the caret mark the two
+// ends; `has_selection` is false when anchor == caret. Drag, shift-click,
+// and shift-arrow all extend the selection by moving the caret while leaving
+// the anchor fixed; a plain click or non-shift arrow collapses it.
 
 use gpui::{prelude::*, *};
 
@@ -55,6 +62,14 @@ pub struct EditorView {
     /// and read by the mouse-down handler so it can map a click position to a
     /// (line, byte_col) caret.
     bounds: Bounds<Pixels>,
+    /// Selection anchor (the "other" end of the selection, opposite the
+    /// caret). Only meaningful while `has_selection` is true. Set when a
+    /// drag/shift-extend begins from the caret's pre-existing position; the
+    /// caret then tracks the moving end. Both anchor and caret use the same
+    /// (line, byte_col) coordinate space as the cursor fields above.
+    anchor_line: usize,
+    anchor_col: usize,
+    has_selection: bool,
     focus: FocusHandle,
 }
 
@@ -141,6 +156,9 @@ impl EditorView {
             preferred_col: 0,
             viewport_h: 0.,
             bounds: Bounds::default(),
+            anchor_line: 0,
+            anchor_col: 0,
+            has_selection: false,
             focus: cx.focus_handle(),
         }
     }
@@ -217,87 +235,125 @@ impl EditorView {
     // so we fold ensure_cursor_visible's clamp into the paint-time scroll
     // clamp (see below) and additionally nudge scroll coarsely by one
     // viewport for pageup/pagedown.
+    ///
+    /// Selection semantics:
+    /// - With **shift** held, every motion extends the selection: the anchor
+    ///   is seeded from the pre-motion caret (if no selection yet) and the
+    ///   caret moves to the target. If the target lands back on the anchor
+    ///   the selection collapses (`has_selection = false`).
+    /// - Without shift, an existing selection **collapses** to the end the
+    ///   motion points toward (forward motions → selection end, backward →
+    ///   selection start) without moving past it; a second press moves
+    ///   normally. With no selection the caret simply moves to the target.
     fn on_key_down(&mut self, ev: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let key = ev.keystroke.key.to_lowercase();
         let cmd = ev.keystroke.modifiers.platform;
+        let shift = ev.keystroke.modifiers.shift;
         let last_line = self.lines.len().saturating_sub(1);
-        let handled = match (cmd, key.as_str()) {
-            (true, "left") => {
-                self.cursor_col = 0;
-                self.preferred_col = 0;
-                true
-            }
+
+        // Compute the motion's target caret, its direction (forward = toward
+        // end of buffer, used for collapse-tiebreak), whether it's a
+        // horizontal motion (which resets `preferred_col` to the new col),
+        // and a scroll delta (pageup/pagedown nudge the viewport too).
+        let (target, forward, horizontal, scroll_delta): (
+            (usize, usize),
+            bool,
+            bool,
+            f32,
+        ) = match (cmd, key.as_str()) {
+            (true, "left") => ((self.cursor_line, 0), false, true, 0.),
             (true, "right") => {
-                self.cursor_col = self.line_end(self.cursor_line);
-                self.preferred_col = self.cursor_col;
-                true
+                ((self.cursor_line, self.line_end(self.cursor_line)), true, true, 0.)
             }
             (false, "left") => {
-                if self.cursor_col > 0 {
-                    self.cursor_col = self.prev_boundary(self.cursor_line, self.cursor_col);
+                let (l, c) = if self.cursor_col > 0 {
+                    (self.cursor_line, self.prev_boundary(self.cursor_line, self.cursor_col))
                 } else if self.cursor_line > 0 {
-                    self.cursor_line -= 1;
-                    self.cursor_col = self.line_end(self.cursor_line);
-                }
-                self.preferred_col = self.cursor_col;
-                true
+                    (self.cursor_line - 1, self.line_end(self.cursor_line - 1))
+                } else {
+                    (self.cursor_line, 0)
+                };
+                ((l, c), false, true, 0.)
             }
             (false, "right") => {
-                if self.cursor_col < self.line_end(self.cursor_line) {
-                    self.cursor_col = self.next_boundary(self.cursor_line, self.cursor_col);
+                let (l, c) = if self.cursor_col < self.line_end(self.cursor_line) {
+                    (self.cursor_line, self.next_boundary(self.cursor_line, self.cursor_col))
                 } else if self.cursor_line < last_line {
-                    self.cursor_line += 1;
-                    self.cursor_col = 0;
-                }
-                self.preferred_col = self.cursor_col;
-                true
+                    (self.cursor_line + 1, 0)
+                } else {
+                    (self.cursor_line, self.cursor_col)
+                };
+                ((l, c), true, true, 0.)
             }
             (false, "up") => {
-                if self.cursor_line > 0 {
-                    self.cursor_line -= 1;
-                    self.cursor_col = self.clamp_col_to_line(self.cursor_line, self.preferred_col);
-                }
-                true
+                let l = if self.cursor_line > 0 { self.cursor_line - 1 } else { self.cursor_line };
+                let c = self.clamp_col_to_line(l, self.preferred_col);
+                ((l, c), false, false, 0.)
             }
             (false, "down") => {
-                if self.cursor_line < last_line {
-                    self.cursor_line += 1;
-                    self.cursor_col = self.clamp_col_to_line(self.cursor_line, self.preferred_col);
-                }
-                true
+                let l = if self.cursor_line < last_line {
+                    self.cursor_line + 1
+                } else {
+                    self.cursor_line
+                };
+                let c = self.clamp_col_to_line(l, self.preferred_col);
+                ((l, c), true, false, 0.)
             }
-            (false, "home") => {
-                self.cursor_col = 0;
-                self.preferred_col = 0;
-                true
-            }
+            (false, "home") => ((self.cursor_line, 0), false, true, 0.),
             (false, "end") => {
-                self.cursor_col = self.line_end(self.cursor_line);
-                self.preferred_col = self.cursor_col;
-                true
+                ((self.cursor_line, self.line_end(self.cursor_line)), true, true, 0.)
             }
             (false, "pageup") => {
                 let rows = self.page_rows(window);
-                self.cursor_line = self.cursor_line.saturating_sub(rows).min(last_line);
-                self.cursor_col = self.clamp_col_to_line(self.cursor_line, self.preferred_col);
-                self.scroll = (self.scroll - rows as f32 * LINE_HEIGHT).max(0.);
-                true
+                let l = self.cursor_line.saturating_sub(rows).min(last_line);
+                let c = self.clamp_col_to_line(l, self.preferred_col);
+                ((l, c), false, false, -(rows as f32 * LINE_HEIGHT))
             }
             (false, "pagedown") => {
                 let rows = self.page_rows(window);
-                self.cursor_line = (self.cursor_line + rows).min(last_line);
-                self.cursor_col = self.clamp_col_to_line(self.cursor_line, self.preferred_col);
-                self.scroll += rows as f32 * LINE_HEIGHT;
-                true
+                let l = (self.cursor_line + rows).min(last_line);
+                let c = self.clamp_col_to_line(l, self.preferred_col);
+                ((l, c), true, false, rows as f32 * LINE_HEIGHT)
             }
-            _ => false,
+            _ => return,
         };
-        if handled {
-            self.ensure_cursor_visible(self.viewport_h);
-            self.clamp_scroll();
-            cx.stop_propagation();
-            cx.notify();
+
+        let did_page;
+        if shift {
+            if !self.has_selection {
+                self.anchor_line = self.cursor_line;
+                self.anchor_col = self.cursor_col;
+            }
+            self.cursor_line = target.0;
+            self.cursor_col = target.1;
+            self.has_selection =
+                self.cursor_line != self.anchor_line || self.cursor_col != self.anchor_col;
+            did_page = scroll_delta != 0.;
+        } else if self.has_selection {
+            // Collapse to the end the motion points toward; no further move.
+            let (start, end) = self.selection_range().expect("has_selection was true");
+            let end = if forward { end } else { start };
+            self.cursor_line = end.0;
+            self.cursor_col = end.1;
+            self.has_selection = false;
+            did_page = false;
+        } else {
+            self.cursor_line = target.0;
+            self.cursor_col = target.1;
+            did_page = scroll_delta != 0.;
         }
+
+        if horizontal {
+            self.preferred_col = self.cursor_col;
+        }
+        if did_page {
+            self.scroll = (self.scroll + scroll_delta).max(0.);
+        }
+
+        self.ensure_cursor_visible(self.viewport_h);
+        self.clamp_scroll();
+        cx.stop_propagation();
+        cx.notify();
     }
 
     /// Convert `preferred_col` to a valid byte column on `line`, never
@@ -317,9 +373,65 @@ impl EditorView {
     /// Mouse-down hit-tests the click onto a (line, byte_col) caret and moves
     /// it there. Uses `closest_index_for_x` on the shaped line — the public
     /// `LineLayout` API — so the caret lands on the nearest glyph boundary
-    /// rather than a guessed byte offset.
+    /// rather than a guessed byte offset. With shift held, the existing caret
+    /// becomes the selection anchor and the click position becomes the new
+    /// caret (extending the selection); without shift, any selection is
+    /// cleared and the caret jumps to the click.
     fn on_mouse_down(&mut self, ev: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        let p = ev.position;
+        let (line, col) = self.hit_test(ev.position, window);
+        if ev.modifiers.shift {
+            if !self.has_selection {
+                self.anchor_line = self.cursor_line;
+                self.anchor_col = self.cursor_col;
+            }
+            self.cursor_line = line;
+            self.cursor_col = col;
+            self.preferred_col = col;
+            self.has_selection =
+                self.cursor_line != self.anchor_line || self.cursor_col != self.anchor_col;
+        } else {
+            self.cursor_line = line;
+            self.cursor_col = col;
+            self.preferred_col = col;
+            self.has_selection = false;
+        }
+        self.ensure_cursor_visible(self.viewport_h);
+        self.clamp_scroll();
+        cx.notify();
+    }
+
+    /// Mouse-move while the left button is held extends the selection from
+    /// the anchor (the position where the drag began) to the cursor's new
+    /// position under the pointer. The first move event of a drag seeds the
+    /// anchor from the pre-drag caret. `MouseMoveEvent::dragging()` is true
+    /// when the platform reports the left button as currently pressed, so we
+    /// don't need a separate mouse-up handler to know we're still dragging.
+    /// (If the pointer leaves the pane we stop receiving moves — acceptable
+    /// for the prototype; a drag-capture fix is deferred.)
+    fn on_mouse_move(&mut self, ev: &MouseMoveEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if !ev.dragging() {
+            return;
+        }
+        let (line, col) = self.hit_test(ev.position, window);
+        if !self.has_selection {
+            self.anchor_line = self.cursor_line;
+            self.anchor_col = self.cursor_col;
+        }
+        self.cursor_line = line;
+        self.cursor_col = col;
+        self.preferred_col = col;
+        self.has_selection =
+            self.cursor_line != self.anchor_line || self.cursor_col != self.anchor_col;
+        self.ensure_cursor_visible(self.viewport_h);
+        self.clamp_scroll();
+        cx.notify();
+    }
+
+    /// Map a window-space point to a (line, byte_col) caret position using the
+    /// last paint's `bounds`. Line is clamped to the last line; column comes
+    /// from `closest_index_for_x` on the shaped line, falling back to 0 for
+    /// empty lines.
+    fn hit_test(&self, p: Point<Pixels>, window: &Window) -> (usize, usize) {
         let origin = self.bounds.origin;
         let line = ((f32::from(p.y - origin.y) + self.scroll) / LINE_HEIGHT).floor() as usize;
         let line = line.min(self.lines.len().saturating_sub(1));
@@ -335,12 +447,24 @@ impl EditorView {
             );
             shaped.closest_index_for_x(p.x - origin.x)
         };
-        self.cursor_line = line;
-        self.cursor_col = col;
-        self.preferred_col = col;
-        self.ensure_cursor_visible(self.viewport_h);
-        self.clamp_scroll();
-        cx.notify();
+        (line, col)
+    }
+
+    /// Ordered (start, end) of the active selection, where start <= end in
+    /// (line, col) lexicographic order. Returns `None` when there is no
+    /// selection (caret-only). The caller uses this to decide which lines get
+    /// full-width highlight vs partial leading/trailing rects.
+    fn selection_range(&self) -> Option<((usize, usize), (usize, usize))> {
+        if !self.has_selection {
+            return None;
+        }
+        let a = (self.anchor_line, self.anchor_col);
+        let c = (self.cursor_line, self.cursor_col);
+        if a <= c {
+            Some((a, c))
+        } else {
+            Some((c, a))
+        }
     }
 }
 
@@ -363,6 +487,11 @@ impl Render for EditorView {
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::on_key_down))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
+            // Mouse-move extends the selection while the left button is held
+            // (drag-select). `MouseMoveEvent::dragging()` is true when the
+            // platform reports the left button as currently pressed, so the
+            // handler self-gates and we don't need a separate mouse-up.
+            .on_mouse_move(cx.listener(Self::on_mouse_move))
             // Scroll wheel: accumulate pixel delta, clamp against the real
             // viewport height (written each paint by the element). macOS
             // "natural" scroll: trackpad two-finger gesture down moves the
@@ -457,12 +586,14 @@ impl Element for EditorElement {
             scroll_max,
             vis,
             caret,
+            selection,
             focus_handle,
         ): (
             f32,
             f32,
             Vec<(usize, String, Vec<Seg>)>,
             Option<(usize, usize)>,
+            Option<((usize, usize), (usize, usize))>,
             FocusHandle,
         ) = {
             let view = self.entity.read(cx);
@@ -480,7 +611,14 @@ impl Element for EditorElement {
             } else {
                 None
             };
-            (view.scroll, max, vis, caret, view.focus.clone())
+            (
+                view.scroll,
+                max,
+                vis,
+                caret,
+                view.selection_range(),
+                view.focus.clone(),
+            )
         };
 
         // Write the measured viewport height back into the view so the key
@@ -500,46 +638,95 @@ impl Element for EditorElement {
         // extent doesn't bleed into neighbouring panes.
         let mask = Some(ContentMask { bounds });
         window.with_content_mask(mask, |window| {
-            for (ix, line, row) in &vis {
-                if line.is_empty() {
-                    continue;
+            // Shape each visible non-empty line once and reuse the
+            // `ShapedLine` for both the selection highlight and the text
+            // paint, so we don't pay for shaping twice per frame.
+            let shaped: Vec<(usize, ShapedLine)> = vis
+                .iter()
+                .filter_map(|(ix, line, row)| {
+                    if line.is_empty() {
+                        return None;
+                    }
+                    let runs = runs_for(line, row);
+                    let s = window.text_system().shape_line(
+                        SharedString::from(line.clone()),
+                        font_size,
+                        &runs,
+                        None,
+                    );
+                    Some((*ix, s))
+                })
+                .collect();
+
+            // Selection highlight, painted BEHIND the text. For each visible
+            // line in the selection's line range we paint a rect covering the
+            // selected byte span on that line: full pane width for interior
+            // lines (including empty ones, which get a full-width bar so the
+            // selection reads as contiguous), and partial spans for the start
+            // and end lines. Empty boundary lines paint nothing (zero-width).
+            if let Some((start, end)) = selection {
+                let sel_color = hsla(0.6, 0.7, 0.55, 0.35);
+                let pane_w = bounds.size.width;
+                for (ix, s) in &shaped {
+                    if *ix < start.0 || *ix > end.0 {
+                        continue;
+                    }
+                    let (rx, rw) = if start.0 == end.0 {
+                        let x0 = s.x_for_index(start.1);
+                        let x1 = s.x_for_index(end.1);
+                        (x0, x1 - x0)
+                    } else if *ix == start.0 {
+                        let x0 = s.x_for_index(start.1);
+                        (x0, pane_w - x0)
+                    } else if *ix == end.0 {
+                        let x1 = s.x_for_index(end.1);
+                        (px(0.), x1)
+                    } else {
+                        (px(0.), pane_w)
+                    };
+                    let top = bounds.origin.y + px(*ix as f32 * LINE_HEIGHT) - px(scroll);
+                    let rect = Bounds {
+                        origin: point(bounds.origin.x + rx, top),
+                        size: size(rw, line_height),
+                    };
+                    let _ = window.paint_quad(fill(rect, sel_color));
                 }
-                let runs = runs_for(line, row);
-                let shaped = window
-                    .text_system()
-                    .shape_line(SharedString::from(line.clone()), font_size, &runs, None);
+                // Empty interior lines: no shaped line above, so paint a
+                // full-width highlight here so the selection looks unbroken
+                // across blank lines.
+                for (ix, line, _row) in &vis {
+                    if line.is_empty() && *ix > start.0 && *ix < end.0 {
+                        let top = bounds.origin.y + px(*ix as f32 * LINE_HEIGHT) - px(scroll);
+                        let rect = Bounds {
+                            origin: point(bounds.origin.x, top),
+                            size: size(pane_w, line_height),
+                        };
+                        let _ = window.paint_quad(fill(rect, sel_color));
+                    }
+                }
+            }
+
+            // Text, reusing the shaped lines from above.
+            for (ix, s) in &shaped {
                 let origin = point(
                     bounds.origin.x,
                     bounds.origin.y + px(*ix as f32 * LINE_HEIGHT) - px(scroll),
                 );
-                let _ = shaped.paint(origin, line_height, window, cx);
+                let _ = s.paint(origin, line_height, window, cx);
             }
 
             // Caret: a 2px vertical bar at the shaped line's
             // `x_for_index(cursor_col)`, painted only when the editor holds
-            // window focus. (No blink yet — IME/selection stages get a timer.)
-            if focused {
+            // window focus AND there is no active selection (macOS hides the
+            // caret while a selection is drag-held). No blink yet —
+            // IME/selection stages get a timer.
+            if focused && selection.is_none() {
                 if let Some((line_ix, col)) = caret {
-                    let caret_x = if let Some((_, line, row)) =
-                        vis.iter().find(|(ix, _, _)| *ix == line_ix)
-                    {
-                        if line.is_empty() {
-                            px(0.)
-                        } else {
-                            let runs = runs_for(line, row);
-                            let shaped = window.text_system().shape_line(
-                                SharedString::from(line.clone()),
-                                font_size,
-                                &runs,
-                                None,
-                            );
-                            shaped.x_for_index(col)
-                        }
-                    } else {
-                        px(0.)
-                    };
-                    // Re-shape the cursor line is cheap; fall back to 0 for
-                    // empty line. Caret rect spans the full line height.
+                    let caret_x = shaped
+                        .iter()
+                        .find(|(ix, _)| *ix == line_ix)
+                        .map(|(_, s)| s.x_for_index(col))
+                        .unwrap_or(px(0.));
                     let top = bounds.origin.y + px(line_ix as f32 * LINE_HEIGHT) - px(scroll);
                     let caret_bounds = Bounds {
                         origin: point(bounds.origin.x + caret_x, top),

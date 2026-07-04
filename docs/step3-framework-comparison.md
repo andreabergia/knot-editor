@@ -312,8 +312,21 @@ benchmark). The framework choice is made by which binary is run.
      when scrolled away. No-internal-path scorecard for item 2: all-green
      (Focusable, track_focus, on_key_down, KeyDownEvent.keystroke,
      ShapedLine.x_for_index, Entity::update during paint).
-   - ⬜ Item 3: selection (mouse + keyboard).
-   - ⬜ Item 4: IME preedit via `EntityInputHandler` + `ElementInputHandler`.
+    - ✅ Item 3 (selection): `EditorView` gains an `anchor` (line, byte_col)
+      + `has_selection` flag alongside the caret. Drag-select via
+      `on_mouse_move` (self-gated on `MouseMoveEvent::dragging()`), shift-click
+      and shift-arrow extend from the anchor; plain click / non-shift arrow
+      collapse (non-shift motion collapses to the end the motion points
+      toward, without moving past it). `selection_range()` returns the
+      ordered (start, end); the element paints a translucent blue rect per
+      visible line — partial spans on the start/end lines via
+      `x_for_index`, full pane width for interior lines (incl. empty ones,
+      so blank lines stay visually selected) — behind the text, and hides
+      the caret while a selection is active. Shaped lines are computed once
+      per frame and reused for selection + text + caret. No-internal-path
+      scorecard for item 3: all-green (`on_mouse_move`, `MouseMoveEvent`,
+      `Modifiers.shift`, `paint_quad`, `x_for_index` all public).
+    - ⬜ Item 4: IME preedit via `EntityInputHandler` + `ElementInputHandler`.
    - ⬜ Item 5: one annotation overlay (e.g. wavy diagnostic underline).
 5. ⬜ Run gpui against all fixtures (auto-scroll + interactive); record
    quantitative + qualitative findings in this document.
