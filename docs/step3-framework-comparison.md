@@ -282,7 +282,7 @@ benchmark). The framework choice is made by which binary is run.
    extension author, not a privileged built-in. The only gap is the absence
    of a built-in resizable splitter, which is a cosmetic/ergonomic finding,
    not a no-internal-path failure.
-4. 🔄 gpui editor widget (items 1–5) inside the shell. Replace the placeholder
+4. ✅ gpui editor widget (items 1–5) inside the shell. Replace the placeholder
    with the demanding widget: styled text, scrolling, cursor+selection, IME
    preedit, one annotation overlay.
 
@@ -347,7 +347,20 @@ benchmark). The framework choice is made by which binary is run.
       range`. No-internal-path scorecard for item 4: all-green
       (`EntityInputHandler`, `ElementInputHandler::new`, `Window::handle_
       input`, `UTF16Selection`, all public).
-    - ⬜ Item 5: one annotation overlay (e.g. wavy diagnostic underline).
+    - ✅ Item 5 (annotation overlay): `EditorView` carries `annotations:
+      Vec<Annotation>` where `Annotation { line, start, end, color }` are
+      byte-column spans. Seeded at load by scanning for `LEAF_MAX` /
+      `INTERNAL_MIN` (warning/amber), `fn ` names (info/blue), `unsafe`
+      (error/red). The element paints a wavy underline via the public
+      `Window::paint_underline(origin, width, &UnderlineStyle { wavy: true,
+      thickness, color })` — reusing the already-shaped visible lines for
+      `x_for_index` positioning, with the y offset matching the line
+      painter's internal formula (`padding_top + ascent + descent * 0.618`).
+      Painted after text + caret, inside the content mask. Annotations on
+      empty lines are skipped (zero-width). Not updated on edit — the spike
+      only needs to demonstrate the paint path. No-internal-path scorecard
+      for item 5: all-green (`paint_underline`, `UnderlineStyle.wavy`,
+      `ShapedLine.ascent`/`.descent` fields, `x_for_index` all public).
 5. ⬜ Run gpui against all fixtures (auto-scroll + interactive); record
    quantitative + qualitative findings in this document.
 6. ⬜ iced API-reachibility spike + implementation + runs + findings.

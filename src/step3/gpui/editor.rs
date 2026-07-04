@@ -8,8 +8,8 @@
 //
 // This stage covers roadmap item 1 (styled text) + item 2 (keyboard-driven
 // scroll + cursor movement) + item 3 (selection: mouse drag + shift-extend +
-// shift-arrow) + item 4 (IME preedit via EntityInputHandler). Annotation
-// comes later.
+// shift-arrow) + item 4 (IME preedit via EntityInputHandler) + item 5
+// (annotation overlay: wavy diagnostic underlines).
 //
 // Cursor model: a single caret stored as `(line, byte_col)` into the owned
 // `lines` buffer, plus a `preferred_col` used to keep a stable column when
@@ -49,11 +49,32 @@ struct Seg {
     italic: bool,
 }
 
+/// One diagnostic annotation to render as a wavy underline overlay. `start`
+/// and `end` are byte columns within `line`; `color` is an RGB u32. This is
+/// the simplest model that exercises the paint path — a real implementation
+/// would carry a severity enum + message + source, but for the spike we only
+/// need the geometry + color.
+#[derive(Clone, Copy)]
+struct Annotation {
+    line: usize,
+    start: usize,
+    end: usize,
+    color: u32,
+}
+
 const DEFAULT_COLOR: u32 = 0xC0C0C0;
+const ERROR_COLOR: u32 = 0xF48771;
+const WARNING_COLOR: u32 = 0xE2C08D;
+const INFO_COLOR: u32 = 0x6CB6FF;
 
 pub struct EditorView {
     lines: Vec<String>,
     segs: Vec<Vec<Seg>>,
+    /// Diagnostic annotations (wavy underline overlay). Seeded at load time
+    /// by scanning for a few fixture patterns; a real implementation would
+    /// receive these from the language server layer. Not updated on edit —
+    /// the spike only needs to demonstrate the paint path.
+    annotations: Vec<Annotation>,
     /// Vertical scroll offset in pixels (0 = top of buffer).
     scroll: f32,
     /// Caret position: (line index, byte offset within that line).
@@ -162,9 +183,45 @@ impl EditorView {
             }
             segs.push(row);
         }
+
+        // Seed a few annotations by scanning for patterns, so the wavy
+        // underline paint path is exercised on any fixture. `LEAF_MAX` /
+        // `INTERNAL_MIN` get a "warning" (amber) squiggle, `fn ` names get
+        // an "info" (blue) squiggle, and `unsafe` gets an "error" (red)
+        // squiggle. This mimics a language server's diagnostic overlay
+        // without wiring one up.
+        let mut annotations = Vec::new();
+        for (ix, line) in lines.iter().enumerate() {
+            for pat in [("LEAF_MAX", WARNING_COLOR), ("INTERNAL_MIN", WARNING_COLOR), ("unsafe", ERROR_COLOR)] {
+                let (needle, color) = pat;
+                let mut from = 0;
+                while let Some(pos) = line[from..].find(needle) {
+                    let start = from + pos;
+                    let end = start + needle.len();
+                    annotations.push(Annotation { line: ix, start, end, color });
+                    from = end;
+                }
+            }
+            if let Some(pos) = line.find("fn ") {
+                // Annotate the function name after `fn ` as info.
+                let name_start = pos + 3;
+                let rest = &line[name_start..];
+                let name_end_in_rest = rest.find(|c: char| !c.is_alphanumeric() && c != '_').unwrap_or(rest.len());
+                if name_end_in_rest > 0 {
+                    annotations.push(Annotation {
+                        line: ix,
+                        start: name_start,
+                        end: name_start + name_end_in_rest,
+                        color: INFO_COLOR,
+                    });
+                }
+            }
+        }
+
         Self {
             lines,
             segs,
+            annotations,
             scroll: 0.,
             cursor_line: 0,
             cursor_col: 0,
@@ -1005,6 +1062,7 @@ impl Element for EditorElement {
             caret,
             selection,
             marked,
+            annotations,
             focus_handle,
             entity,
         ): (
@@ -1014,6 +1072,7 @@ impl Element for EditorElement {
             Option<(usize, usize)>,
             Option<((usize, usize), (usize, usize))>,
             Option<((usize, usize), (usize, usize))>,
+            Vec<Annotation>,
             FocusHandle,
             Entity<EditorView>,
         ) = {
@@ -1040,6 +1099,13 @@ impl Element for EditorElement {
                 let e = view.from_flat_utf16(mr.end);
                 (s, e)
             });
+            // Only copy annotations that fall on visible lines.
+            let annotations = view
+                .annotations
+                .iter()
+                .filter(|a| a.line >= first && a.line < last)
+                .copied()
+                .collect();
             (
                 view.scroll,
                 max,
@@ -1047,6 +1113,7 @@ impl Element for EditorElement {
                 caret,
                 view.selection_range(),
                 marked,
+                annotations,
                 view.focus.clone(),
                 self.entity.clone(),
             )
@@ -1217,6 +1284,50 @@ impl Element for EditorElement {
                         size: size(px(2.), line_height),
                     };
                     let _ = window.paint_quad(fill(caret_bounds, hsla(0., 0., 0.9, 1.0)));
+                }
+            }
+
+            // Annotation overlay: wavy underlines beneath annotated byte
+            // spans, painted AFTER text + caret so they sit on top. Each
+            // annotation is a (line, start_byte_col, end_byte_col, color)
+            // tuple; we reuse the already-shaped lines to get the x
+            // coordinates via `x_for_index`, then call `paint_underline`
+            // with `wavy: true`. The underline y follows the same formula
+            // the line painter uses internally:
+            //   padding_top + ascent + descent * 0.618
+            // below the line's top edge, so the squiggle sits just below the
+            // text baseline. Annotations on empty lines (no shaped line) are
+            // skipped — a zero-width wavy line would be invisible anyway.
+            if !annotations.is_empty() {
+                for ann in &annotations {
+                    let shaped_line = match shaped.iter().find(|(ix, _)| *ix == ann.line) {
+                        Some((_, s)) => s,
+                        None => continue,
+                    };
+                    let x0 = shaped_line.x_for_index(ann.start);
+                    let x1 = shaped_line.x_for_index(ann.end);
+                    let width = x1 - x0;
+                    if width <= px(0.) {
+                        continue;
+                    }
+                    let ascent = shaped_line.ascent;
+                    let descent = shaped_line.descent;
+                    let padding_top = (line_height - ascent - descent) / 2.;
+                    let underline_y = bounds.origin.y
+                        + px(ann.line as f32 * LINE_HEIGHT)
+                        - px(scroll)
+                        + padding_top
+                        + ascent
+                        + descent * 0.618;
+                    window.paint_underline(
+                        point(bounds.origin.x + x0, underline_y),
+                        width,
+                        &UnderlineStyle {
+                            thickness: px(1.5),
+                            color: Some(rgb(ann.color).into()),
+                            wavy: true,
+                        },
+                    );
                 }
             }
         });
