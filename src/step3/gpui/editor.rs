@@ -562,6 +562,19 @@ impl EditorView {
         cx.notify();
     }
 
+    /// Per-line horizontal offset for RTL lines: right-align the line within
+    /// the pane so a pure-Arabic line starts at the right edge instead of the
+    /// left. Returns 0 for LTR lines, `(pane_w - shaped_w).max(0)` for RTL.
+    /// The caret, selection, IME preedit, annotation, and hit-test all add
+    /// this offset to their x computations so they stay consistent with the
+    /// right-aligned text.
+    fn line_x_offset(&self, line: usize, shaped_w: Pixels, pane_w: Pixels) -> Pixels {
+        match self.lines.get(line) {
+            Some(s) if is_rtl_line(s) => (pane_w - shaped_w).max(px(0.)),
+            _ => px(0.),
+        }
+    }
+
     /// Map a window-space point to a (line, byte_col) caret position using the
     /// last paint's `bounds`. Line is clamped to the last line; column comes
     /// from `closest_index_for_x` on the shaped line, falling back to 0 for
@@ -580,7 +593,8 @@ impl EditorView {
                 &runs,
                 None,
             );
-            shaped.closest_index_for_x(p.x - origin.x)
+            let x_off = self.line_x_offset(line, shaped.width, self.bounds.size.width);
+            shaped.closest_index_for_x(p.x - origin.x - x_off)
         };
         (line, col)
     }
@@ -923,15 +937,21 @@ impl EntityInputHandler for EditorView {
             &runs,
             None,
         );
-        let x0 = shaped.x_for_index(start_col);
+        let rtl = is_rtl_line(line_str);
+        let x0 = x_for_index_dir(&shaped, start_col, rtl);
         let x1 = if start_line == end_line {
-            shaped.x_for_index(end_col)
+            x_for_index_dir(&shaped, end_col, rtl)
         } else {
             element_bounds.size.width
         };
-        let width = (x1 - x0).max(px(1.));
+        let (origin_x, width) = if rtl && start_line == end_line {
+            (x1, (x0 - x1).max(px(1.)))
+        } else {
+            (x0, (x1 - x0).max(px(1.)))
+        };
+        let x_off = self.line_x_offset(line, shaped.width, element_bounds.size.width);
         Some(Bounds {
-            origin: point(element_bounds.origin.x + x0, top),
+            origin: point(element_bounds.origin.x + x_off + origin_x, top),
             size: size(width, px(LINE_HEIGHT)),
         })
     }
@@ -1068,7 +1088,7 @@ impl Element for EditorElement {
         ): (
             f32,
             f32,
-            Vec<(usize, String, Vec<Seg>)>,
+            Vec<(usize, String, Vec<Seg>, bool)>,
             Option<(usize, usize)>,
             Option<((usize, usize), (usize, usize))>,
             Option<((usize, usize), (usize, usize))>,
@@ -1082,7 +1102,14 @@ impl Element for EditorElement {
             let visible_rows = (f32::from(bounds.size.height) / LINE_HEIGHT).ceil() as usize + 1;
             let last = (first + visible_rows).min(view.lines.len());
             let vis = (first..last)
-                .map(|ix| (ix, view.lines[ix].clone(), view.segs[ix].clone()))
+                .map(|ix| {
+                    (
+                        ix,
+                        view.lines[ix].clone(),
+                        view.segs[ix].clone(),
+                        is_rtl_line(&view.lines[ix]),
+                    )
+                })
                 .collect();
             // Only paint the caret when it's on a visible line; otherwise it
             // is clipped anyway, so skip the shaping cost.
@@ -1149,13 +1176,18 @@ impl Element for EditorElement {
         // Clip to viewport so paint below the last line / outside horizontal
         // extent doesn't bleed into neighbouring panes.
         let mask = Some(ContentMask { bounds });
+        let pane_w = bounds.size.width;
         window.with_content_mask(mask, |window| {
             // Shape each visible non-empty line once and reuse the
             // `ShapedLine` for both the selection highlight and the text
-            // paint, so we don't pay for shaping twice per frame.
-            let shaped: Vec<(usize, ShapedLine)> = vis
+            // paint, so we don't pay for shaping twice per frame. The third
+            // tuple element is the per-line x offset (0 for LTR, or
+            // `pane_w - shaped_w` for RTL so they right-align); the fourth
+            // is the line's RTL flag, used to pick the correct
+            // `x_for_index_dir` branch at each paint site.
+            let shaped: Vec<(usize, ShapedLine, Pixels, bool)> = vis
                 .iter()
-                .filter_map(|(ix, line, row)| {
+                .filter_map(|(ix, line, row, rtl)| {
                     if line.is_empty() {
                         return None;
                     }
@@ -1166,7 +1198,12 @@ impl Element for EditorElement {
                         &runs,
                         None,
                     );
-                    Some((*ix, s))
+                    let x_off = if *rtl {
+                        (pane_w - s.width).max(px(0.))
+                    } else {
+                        px(0.)
+                    };
+                    Some((*ix, s, x_off, *rtl))
                 })
                 .collect();
 
@@ -1179,26 +1216,46 @@ impl Element for EditorElement {
             if let Some((start, end)) = selection {
                 let sel_color = hsla(0.6, 0.7, 0.55, 0.35);
                 let pane_w = bounds.size.width;
-                for (ix, s) in &shaped {
+                for (ix, s, x_off, rtl) in &shaped {
                     if *ix < start.0 || *ix > end.0 {
                         continue;
                     }
                     let (rx, rw) = if start.0 == end.0 {
-                        let x0 = s.x_for_index(start.1);
-                        let x1 = s.x_for_index(end.1);
-                        (x0, x1 - x0)
+                        let x0 = x_for_index_dir(s, start.1, *rtl);
+                        let x1 = x_for_index_dir(s, end.1, *rtl);
+                        if *rtl {
+                            // RTL: start (smaller col) is to the RIGHT,
+                            // end is to the LEFT — swap so x0 < x1.
+                            (x1, (x0 - x1).max(px(0.)))
+                        } else {
+                            (x0, x1 - x0)
+                        }
                     } else if *ix == start.0 {
-                        let x0 = s.x_for_index(start.1);
-                        (x0, pane_w - x0)
+                        let x0 = x_for_index_dir(s, start.1, *rtl);
+                        if *rtl {
+                            // Start line, RTL: selection extends from x0
+                            // (the caret boundary) to the pane's RIGHT
+                            // edge — but on RTL the start is the rightmost
+                            // point, so the rect goes from x0 rightward.
+                            (x0, (pane_w - x0).max(px(0.)))
+                        } else {
+                            (x0, pane_w - x0)
+                        }
                     } else if *ix == end.0 {
-                        let x1 = s.x_for_index(end.1);
-                        (px(0.), x1)
+                        let x1 = x_for_index_dir(s, end.1, *rtl);
+                        if *rtl {
+                            // End line, RTL: selection extends from pane
+                            // left edge to x1 (the leftmost boundary).
+                            (px(0.), x1.max(px(0.)))
+                        } else {
+                            (px(0.), x1)
+                        }
                     } else {
                         (px(0.), pane_w)
                     };
                     let top = bounds.origin.y + px(*ix as f32 * LINE_HEIGHT) - px(scroll);
                     let rect = Bounds {
-                        origin: point(bounds.origin.x + rx, top),
+                        origin: point(bounds.origin.x + *x_off + rx, top),
                         size: size(rw, line_height),
                     };
                     let _ = window.paint_quad(fill(rect, sel_color));
@@ -1206,7 +1263,7 @@ impl Element for EditorElement {
                 // Empty interior lines: no shaped line above, so paint a
                 // full-width highlight here so the selection looks unbroken
                 // across blank lines.
-                for (ix, line, _row) in &vis {
+                for (ix, line, _row, _rtl) in &vis {
                     if line.is_empty() && *ix > start.0 && *ix < end.0 {
                         let top = bounds.origin.y + px(*ix as f32 * LINE_HEIGHT) - px(scroll);
                         let rect = Bounds {
@@ -1219,9 +1276,9 @@ impl Element for EditorElement {
             }
 
             // Text, reusing the shaped lines from above.
-            for (ix, s) in &shaped {
+            for (ix, s, x_off, _rtl) in &shaped {
                 let origin = point(
-                    bounds.origin.x,
+                    bounds.origin.x + *x_off,
                     bounds.origin.y + px(*ix as f32 * LINE_HEIGHT) - px(scroll),
                 );
                 let _ = s.paint(origin, line_height, window, cx);
@@ -1236,20 +1293,32 @@ impl Element for EditorElement {
                 let mark_color = hsla(0.0, 0.0, 0.7, 0.8);
                 let underline_h = px(1.5);
                 let pane_w = bounds.size.width;
-                for (ix, s) in &shaped {
+                for (ix, s, x_off, rtl) in &shaped {
                     if *ix < start.0 || *ix > end.0 {
                         continue;
                     }
                     let (rx, rw) = if start.0 == end.0 {
-                        let x0 = s.x_for_index(start.1);
-                        let x1 = s.x_for_index(end.1);
-                        (x0, (x1 - x0).max(px(2.)))
+                        let x0 = x_for_index_dir(s, start.1, *rtl);
+                        let x1 = x_for_index_dir(s, end.1, *rtl);
+                        if *rtl {
+                            (x1, (x0 - x1).max(px(2.)))
+                        } else {
+                            (x0, (x1 - x0).max(px(2.)))
+                        }
                     } else if *ix == start.0 {
-                        let x0 = s.x_for_index(start.1);
-                        (x0, pane_w - x0)
+                        let x0 = x_for_index_dir(s, start.1, *rtl);
+                        if *rtl {
+                            (x0, (pane_w - x0).max(px(2.)))
+                        } else {
+                            (x0, pane_w - x0)
+                        }
                     } else if *ix == end.0 {
-                        let x1 = s.x_for_index(end.1);
-                        (px(0.), x1.max(px(2.)))
+                        let x1 = x_for_index_dir(s, end.1, *rtl);
+                        if *rtl {
+                            (px(0.), x1.max(px(2.)))
+                        } else {
+                            (px(0.), x1.max(px(2.)))
+                        }
                     } else {
                         (px(0.), pane_w)
                     };
@@ -1259,7 +1328,7 @@ impl Element for EditorElement {
                         + line_height
                         - underline_h;
                     let rect = Bounds {
-                        origin: point(bounds.origin.x + rx, top),
+                        origin: point(bounds.origin.x + *x_off + rx, top),
                         size: size(rw, underline_h),
                     };
                     let _ = window.paint_quad(fill(rect, mark_color));
@@ -1273,14 +1342,14 @@ impl Element for EditorElement {
             // IME/selection stages get a timer.
             if focused && selection.is_none() {
                 if let Some((line_ix, col)) = caret {
-                    let caret_x = shaped
+                    let (caret_x, x_off) = shaped
                         .iter()
-                        .find(|(ix, _)| *ix == line_ix)
-                        .map(|(_, s)| s.x_for_index(col))
-                        .unwrap_or(px(0.));
+                        .find(|(ix, _, _, _)| *ix == line_ix)
+                        .map(|(_, s, x_off, rtl)| (x_for_index_dir(s, col, *rtl), *x_off))
+                        .unwrap_or((px(0.), px(0.)));
                     let top = bounds.origin.y + px(line_ix as f32 * LINE_HEIGHT) - px(scroll);
                     let caret_bounds = Bounds {
-                        origin: point(bounds.origin.x + caret_x, top),
+                        origin: point(bounds.origin.x + x_off + caret_x, top),
                         size: size(px(2.), line_height),
                     };
                     let _ = window.paint_quad(fill(caret_bounds, hsla(0., 0., 0.9, 1.0)));
@@ -1300,13 +1369,18 @@ impl Element for EditorElement {
             // skipped — a zero-width wavy line would be invisible anyway.
             if !annotations.is_empty() {
                 for ann in &annotations {
-                    let shaped_line = match shaped.iter().find(|(ix, _)| *ix == ann.line) {
-                        Some((_, s)) => s,
-                        None => continue,
+                    let (shaped_line, x_off, rtl) =
+                        match shaped.iter().find(|(ix, _, _, _)| *ix == ann.line) {
+                            Some((_, s, x_off, rtl)) => (s, *x_off, *rtl),
+                            None => continue,
+                        };
+                    let x0 = x_for_index_dir(shaped_line, ann.start, rtl);
+                    let x1 = x_for_index_dir(shaped_line, ann.end, rtl);
+                    let (origin_x, width) = if rtl {
+                        (x1, (x0 - x1).max(px(0.)))
+                    } else {
+                        (x0, (x1 - x0).max(px(0.)))
                     };
-                    let x0 = shaped_line.x_for_index(ann.start);
-                    let x1 = shaped_line.x_for_index(ann.end);
-                    let width = x1 - x0;
                     if width <= px(0.) {
                         continue;
                     }
@@ -1320,7 +1394,7 @@ impl Element for EditorElement {
                         + ascent
                         + descent * 0.618;
                     window.paint_underline(
-                        point(bounds.origin.x + x0, underline_y),
+                        point(bounds.origin.x + x_off + origin_x, underline_y),
                         width,
                         &UnderlineStyle {
                             thickness: px(1.5),
@@ -1385,7 +1459,85 @@ fn make_font(bold: bool, italic: bool) -> Font {
     if italic {
         font = font.italic();
     }
+    // Menlo has no Arabic/CJK/emoji glyphs; add fallbacks so Core Text
+    // substitutes the system fonts for those ranges. The cascade order
+    // matches the fixture set: Geeza Pro (Arabic), PingFang SC (CJK),
+    // Apple Color Emoji.
+    font.fallbacks = Some(FontFallbacks::from_fonts(vec![
+        "Geeza Pro".into(),
+        "PingFang SC".into(),
+        "Apple Color Emoji".into(),
+    ]));
     font
+}
+
+/// Heuristic: is this line's base direction right-to-left? Scans for the
+/// first strong directional character (a letter) and checks whether it
+/// falls in an RTL Unicode block (Arabic or Hebrew). Lines starting with
+/// LTR content (code, comments, markdown) return false even if they
+/// contain embedded RTL runs — the base direction stays LTR.
+fn is_rtl_line(s: &str) -> bool {
+    for ch in s.chars() {
+        if !ch.is_alphabetic() {
+            continue;
+        }
+        let c = ch as u32;
+        let rtl = (0x0590..=0x05FF).contains(&c)   // Hebrew
+            || (0x0600..=0x06FF).contains(&c)      // Arabic
+            || (0x0700..=0x074F).contains(&c)      // Syriac
+            || (0x0750..=0x077F).contains(&c)      // Arabic Supplement
+            || (0x08A0..=0x08FF).contains(&c)      // Arabic Extended-A
+            || (0xFB1D..=0xFB4F).contains(&c)      // Hebrew presentation forms
+            || (0xFB50..=0xFDFF).contains(&c)      // Arabic presentation forms-A
+            || (0xFE70..=0xFEFF).contains(&c);     // Arabic presentation forms-B
+        return rtl;
+    }
+    false
+}
+
+/// Direction-aware `x_for_index`. gpui's `ShapedLine::x_for_index` walks
+/// glyphs in visual order assuming increasing logical indices — correct for
+/// LTR, broken for RTL where Core Text reorders glyphs so visual order has
+/// DECREASING logical indices (leftmost glyph = highest logical index).
+///
+/// For LTR, boundary `i` is at the left edge of the glyph whose logical
+/// index is the smallest value >= i (the char at position i).
+///
+/// For RTL, boundary `i` is at the left edge of the glyph whose logical
+/// index is the LARGEST value < i (the char just before the boundary in
+/// logical order, which sits to the RIGHT of the boundary in visual order).
+/// Special cases: `i == 0` returns `s.width` (right edge, before the first
+/// logical char); `i >= s.len` returns the leftmost glyph's x (after the
+/// last logical char).
+///
+/// Uses only public fields: `LineLayout.runs`, `ShapedRun.glyphs`,
+/// `ShapedGlyph.index`, `ShapedGlyph.position`, `LineLayout.width`,
+/// `LineLayout.len` — all `pub`.
+fn x_for_index_dir(s: &ShapedLine, index: usize, rtl: bool) -> Pixels {
+    if !rtl {
+        for run in &s.runs {
+            for glyph in &run.glyphs {
+                if glyph.index >= index {
+                    return glyph.position.x;
+                }
+            }
+        }
+        return s.width;
+    }
+    if index == 0 {
+        return s.width;
+    }
+    let mut best_x = px(0.);
+    let mut best_index: usize = 0;
+    for run in &s.runs {
+        for glyph in &run.glyphs {
+            if glyph.index < index && glyph.index >= best_index {
+                best_index = glyph.index;
+                best_x = glyph.position.x;
+            }
+        }
+    }
+    best_x
 }
 
 const FONT_SIZE: f32 = 14.0;

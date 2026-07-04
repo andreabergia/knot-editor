@@ -56,16 +56,21 @@ struct Shell {
     /// Editor widget (step 4). Owned as an `Entity` so the custom `Element`
     /// in `editor.rs` can read its state each paint.
     editor: Entity<EditorView>,
+    /// Name of the fixture currently loaded (shown in a thin status header
+    /// above the editor so it's visible at a glance which fixture is running).
+    fixture_name: String,
 }
 
 impl Shell {
-    /// Construct the shell, preloading the editor with `rust_sample.kfx`
-    /// (the same fixture the renderer bench uses) so the editor pane has
-    /// real styled text to render. Fixture resolution is relative to the
-    /// crate root so the binary runs from any cwd.
+    /// Construct the shell, preloading the editor with a fixture chosen
+    /// from `argv[1]` (default `rust_sample`) so the editor pane has real
+    /// styled text to render. Fixture resolution is relative to the crate
+    /// root so the binary runs from any cwd.
     fn new(cx: &mut Context<Self>) -> Self {
+        let fixture_name = std::env::args().nth(1).unwrap_or_else(|| "rust_sample".into());
         let fixture_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("bench/fixtures/rust_sample.kfx");
+            .join("bench/fixtures")
+            .join(format!("{fixture_name}.kfx"));
         let fixture = ::knot::view::fixture::Fixture::load(&fixture_path)
             .unwrap_or_else(|e| {
                 eprintln!("[step3-gpui] failed to load fixture {fixture_path:?}: {e}");
@@ -104,6 +109,7 @@ impl Shell {
             right_width: 220.,
             drag_origin: None,
             editor,
+            fixture_name,
         }
     }
 
@@ -269,8 +275,19 @@ let delta = f32::from(pos_x - start_x);
                 div()
                     .flex_1()
                     .h_full()
+                    .flex()
+                    .flex_col()
                     .bg(rgb(0x1e1e1e))
-                    .child(self.editor.clone()),
+                    .child(
+                        div()
+                            .px_2()
+                            .py_1()
+                            .text_xs()
+                            .text_color(rgb(0x888888))
+                            .bg(rgb(0x252526))
+                            .child(self.fixture_name.clone()),
+                    )
+                    .child(div().flex_1().child(self.editor.clone())),
             )
             .child(Self::divider(1))
             .child(
