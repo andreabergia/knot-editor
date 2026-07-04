@@ -8,7 +8,8 @@
 //
 // This stage covers roadmap item 1 (styled text) + item 2 (keyboard-driven
 // scroll + cursor movement) + item 3 (selection: mouse drag + shift-extend +
-// shift-arrow). IME/annotation come later.
+// shift-arrow) + item 4 (IME preedit via EntityInputHandler). Annotation
+// comes later.
 //
 // Cursor model: a single caret stored as `(line, byte_col)` into the owned
 // `lines` buffer, plus a `preferred_col` used to keep a stable column when
@@ -23,8 +24,17 @@
 // ends; `has_selection` is false when anchor == caret. Drag, shift-click,
 // and shift-arrow all extend the selection by moving the caret while leaving
 // the anchor fixed; a plain click or non-shift arrow collapses it.
+//
+// IME model: `EditorView` implements `EntityInputHandler`, the 8-method
+// NSTextInputClient mapping. The element calls `Window::handle_input` during
+// paint (self-gated on focus) to register an `ElementInputHandler` wrapper.
+// `marked_range_utf16` tracks the active preedit span as flat UTF-16 offsets
+// into `lines.join("\\n")`; the element paints a thin underline over it.
+// Editing rebuilds `lines`+`segs` from the spliced flat document (fixture
+// styling is lost on edited lines — acceptable for the spike).
 
 use gpui::{prelude::*, *};
+use std::ops::Range;
 
 /// Owned, frame-stable copy of one styled segment of one line.
 /// Mirrors `knot::view::fixture`'s borrowed `Segment`/`SegSpec` but holds
@@ -70,6 +80,11 @@ pub struct EditorView {
     anchor_line: usize,
     anchor_col: usize,
     has_selection: bool,
+    /// IME preedit (marked) range as flat UTF-16 offsets into the
+    /// `lines.join("\\n")` document. `None` = no active composition. Set by
+    /// `replace_and_mark_text_in_range`, cleared by `replace_text_in_range` /
+    /// `unmark_text`. The element paints an underline over this span.
+    marked_range_utf16: Option<Range<usize>>,
     focus: FocusHandle,
 }
 
@@ -159,6 +174,7 @@ impl EditorView {
             anchor_line: 0,
             anchor_col: 0,
             has_selection: false,
+            marked_range_utf16: None,
             focus: cx.focus_handle(),
         }
     }
@@ -250,6 +266,68 @@ impl EditorView {
         let cmd = ev.keystroke.modifiers.platform;
         let shift = ev.keystroke.modifiers.shift;
         let last_line = self.lines.len().saturating_sub(1);
+
+        // Text-editing keys (enter, backspace, forward-delete) are handled
+        // before the motion match. The IME dispatch sends non-printing keys
+        // (backspace) through `doCommandBySelector:` which re-dispatches to
+        // this handler; if we don't handle them here they're lost. Enter
+        // (`key_char = Some("\n")`) might go through `insertText:` or
+        // `doCommandBySelector:` depending on the active keyboard layout,
+        // so we handle it explicitly too. All three call
+        // `replace_text_in_range` directly and stop propagation.
+        if !cmd {
+            match key.as_str() {
+                "enter" => {
+                    self.replace_text_in_range(None, "\n", window, cx);
+                    cx.stop_propagation();
+                    return;
+                }
+                "backspace" => {
+                    let range = if self.has_selection {
+                        let sel = self.selection_range().expect("has_selection");
+                        let s = self.to_flat_utf16(sel.0.0, sel.0.1);
+                        let e = self.to_flat_utf16(sel.1.0, sel.1.1);
+                        Some(s..e)
+                    } else {
+                        let caret = self.to_flat_utf16(self.cursor_line, self.cursor_col);
+                        if caret > 0 {
+                            Some(caret - 1..caret)
+                        } else {
+                            None
+                        }
+                    };
+                    if let Some(r) = range {
+                        self.replace_text_in_range(Some(r), "", window, cx);
+                    }
+                    cx.stop_propagation();
+                    return;
+                }
+                "delete" => {
+                    // Forward delete (fn+delete on Mac keyboards).
+                    let range = if self.has_selection {
+                        let sel = self.selection_range().expect("has_selection");
+                        let s = self.to_flat_utf16(sel.0.0, sel.0.1);
+                        let e = self.to_flat_utf16(sel.1.0, sel.1.1);
+                        Some(s..e)
+                    } else {
+                        let caret = self.to_flat_utf16(self.cursor_line, self.cursor_col);
+                        let doc = self.flat_doc();
+                        let doc_utf16_len: usize = doc.chars().map(|c| c.len_utf16()).sum();
+                        if caret < doc_utf16_len {
+                            Some(caret..caret + 1)
+                        } else {
+                            None
+                        }
+                    };
+                    if let Some(r) = range {
+                        self.replace_text_in_range(Some(r), "", window, cx);
+                    }
+                    cx.stop_propagation();
+                    return;
+                }
+                _ => {}
+            }
+        }
 
         // Compute the motion's target caret, its direction (forward = toward
         // end of buffer, used for collapse-tiebreak), whether it's a
@@ -466,11 +544,350 @@ impl EditorView {
             Some((c, a))
         }
     }
+
+    // ── Flat-UTF16 document model ───────────────────────────────────────
+    //
+    // The IME API speaks in flat UTF-16 offsets into the whole document
+    // (lines joined by "\n"). These helpers convert between the (line,
+    // byte_col) caret space and the flat UTF-16 offset space, and perform
+    // text splices that rebuild the `lines`/`segs` storage. Editing resets
+    // segs to a single default-color seg per line — fixture highlighting is
+    // lost on edited lines, acceptable for the spike.
+
+    /// Full document as a single String, lines joined by "\n".
+    fn flat_doc(&self) -> String {
+        self.lines.join("\n")
+    }
+
+    /// Convert a (line, byte_col) position to a flat UTF-16 offset.
+    fn to_flat_utf16(&self, line: usize, byte_col: usize) -> usize {
+        let mut off = 0usize;
+        for (i, l) in self.lines.iter().enumerate() {
+            if i == line {
+                return off + self.utf16_to_byte_col(l, byte_col);
+            }
+            off += l.chars().count() + 1; // +1 for "\n"
+        }
+        off
+    }
+
+    /// Convert a flat UTF-16 offset to a (line, byte_col) position.
+    fn from_flat_utf16(&self, mut off: usize) -> (usize, usize) {
+        for (i, l) in self.lines.iter().enumerate() {
+            let line_utf16_len = l.chars().count();
+            if off <= line_utf16_len {
+                return (i, self.utf16_to_byte_col(l, off));
+            }
+            off -= line_utf16_len + 1;
+        }
+        (self.lines.len().saturating_sub(1), 0)
+    }
+
+    /// Convert a UTF-16 offset within `s` to a UTF-8 byte offset.
+    fn utf16_to_byte_col(&self, s: &str, utf16_off: usize) -> usize {
+        let mut utf16_count = 0usize;
+        for (byte_idx, ch) in s.char_indices() {
+            if utf16_count >= utf16_off {
+                return byte_idx;
+            }
+            utf16_count += ch.len_utf16();
+        }
+        s.len()
+    }
+
+    /// Convert a UTF-8 byte offset within `s` to a UTF-16 offset.
+    fn byte_col_to_utf16(&self, s: &str, byte_off: usize) -> usize {
+        let mut utf16_count = 0usize;
+        for (byte_idx, ch) in s.char_indices() {
+            if byte_idx >= byte_off {
+                break;
+            }
+            utf16_count += ch.len_utf16();
+        }
+        utf16_count
+    }
+
+    /// Splice the flat document: replace bytes [byte_start, byte_end) with
+    /// `text`, then rebuild `lines` + `segs` from the result.
+    fn splice(&mut self, byte_start: usize, byte_end: usize, text: &str) {
+        let mut doc = self.flat_doc();
+        // Clamp to valid byte boundaries (char_indices are safe splice points).
+        let max = doc.len();
+        let start = byte_start.min(max);
+        let end = byte_end.min(max).max(start);
+        doc.replace_range(start..end, text);
+        self.lines = doc.split('\n').map(String::from).collect();
+        // Reset segs: one default-color seg per line. Fixture styling is
+        // lost on edit — acceptable for the spike (noted in commit).
+        self.segs = self
+            .lines
+            .iter()
+            .map(|l| {
+                vec![Seg {
+                    start: 0,
+                    end: l.len(),
+                    color: DEFAULT_COLOR,
+                    bold: false,
+                    italic: false,
+                }]
+            })
+            .collect();
+    }
+
+    /// Determine the byte range to replace given an optional UTF-16 range.
+    /// If `range` is `None`, replace the marked range if there is one,
+    /// otherwise the current selection, otherwise the caret (zero-length).
+    /// If `range` is `Some`, convert it from UTF-16 to byte offsets.
+    fn resolve_replacement_range(&self, range: Option<Range<usize>>) -> (usize, usize) {
+        let doc = self.flat_doc();
+        match range {
+            Some(r) => {
+                let start = self.utf16_to_byte_col(&doc, r.start);
+                let end = self.utf16_to_byte_col(&doc, r.end);
+                (start, end)
+            }
+            None => {
+                if let Some(mr) = &self.marked_range_utf16 {
+                    let start = self.utf16_to_byte_col(&doc, mr.start);
+                    let end = self.utf16_to_byte_col(&doc, mr.end);
+                    (start, end)
+                } else if self.has_selection {
+                    let caret = self.to_flat_utf16(self.cursor_line, self.cursor_col);
+                    let anchor = self.to_flat_utf16(self.anchor_line, self.anchor_col);
+                    let (s, e) = if caret <= anchor {
+                        (caret, anchor)
+                    } else {
+                        (anchor, caret)
+                    };
+                    let start = self.utf16_to_byte_col(&doc, s);
+                    let end = self.utf16_to_byte_col(&doc, e);
+                    (start, end)
+                } else {
+                    let caret = self.to_flat_utf16(self.cursor_line, self.cursor_col);
+                    let byte = self.utf16_to_byte_col(&doc, caret);
+                    (byte, byte)
+                }
+            }
+        }
+    }
 }
 
 impl Focusable for EditorView {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus.clone()
+    }
+}
+
+impl EntityInputHandler for EditorView {
+    /// Return the substring of the flat document at the given UTF-16 range.
+    /// `adjusted_range` stays `None` — we don't need to adjust the range
+    /// because our document is a plain string with no layout constraints.
+    fn text_for_range(
+        &mut self,
+        range: Range<usize>,
+        _adjusted: &mut Option<Range<usize>>,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<String> {
+        let doc = self.flat_doc();
+        let start = self.utf16_to_byte_col(&doc, range.start);
+        let end = self.utf16_to_byte_col(&doc, range.end);
+        if start > doc.len() || end > doc.len() || start > end {
+            return None;
+        }
+        Some(doc[start..end].to_string())
+    }
+
+    /// Return the current selection as a `UTF16Selection`. When there is no
+    /// selection (caret only), return a zero-length range at the caret
+    /// position. `reversed` is true when the caret (head) is before the
+    /// anchor (tail) in document order.
+    fn selected_text_range(
+        &mut self,
+        _ignore_disabled_input: bool,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<UTF16Selection> {
+        let caret = self.to_flat_utf16(self.cursor_line, self.cursor_col);
+        if self.has_selection {
+            let anchor = self.to_flat_utf16(self.anchor_line, self.anchor_col);
+            let (start, end, reversed) = if anchor <= caret {
+                (anchor, caret, false)
+            } else {
+                (caret, anchor, true)
+            };
+            Some(UTF16Selection {
+                range: start..end,
+                reversed,
+            })
+        } else {
+            Some(UTF16Selection {
+                range: caret..caret,
+                reversed: false,
+            })
+        }
+    }
+
+    fn marked_text_range(
+        &self,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<Range<usize>> {
+        self.marked_range_utf16.clone()
+    }
+
+    /// Remove the IME composing state. The marked text stays in the document
+    /// as regular text (per Apple's contract); we just clear the marking and
+    /// move the caret to the end of the formerly marked span.
+    fn unmark_text(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(mr) = self.marked_range_utf16.take() {
+            let (line, col) = self.from_flat_utf16(mr.end);
+            self.cursor_line = line;
+            self.cursor_col = col;
+            self.preferred_col = col;
+            self.has_selection = false;
+            self.ensure_cursor_visible(self.viewport_h);
+            self.clamp_scroll();
+            cx.notify();
+        }
+    }
+
+    /// Replace text at the given UTF-16 range (or the current selection /
+    /// marked range if `range` is `None`) with `text`. This is the
+    /// `insertText:` callback — it commits text into the document. After
+    /// replacement the marked range is cleared and the caret moves to the
+    /// end of the inserted text.
+    fn replace_text_in_range(
+        &mut self,
+        range: Option<Range<usize>>,
+        text: &str,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Normalize line endings: macOS may send \r for Enter in some
+        // keyboard layouts; our line model uses \n.
+        let text: String = text.replace("\r\n", "\n").replace('\r', "\n");
+        let (byte_start, byte_end) = self.resolve_replacement_range(range);
+        self.splice(byte_start, byte_end, &text);
+        self.marked_range_utf16 = None;
+
+        // Caret → end of inserted text.
+        let doc = self.flat_doc();
+        let insert_end_byte = byte_start + text.len();
+        let insert_end_utf16 = self.byte_col_to_utf16(&doc, insert_end_byte.min(doc.len()));
+        let (line, col) = self.from_flat_utf16(insert_end_utf16);
+        self.cursor_line = line;
+        self.cursor_col = col;
+        self.preferred_col = col;
+        self.has_selection = false;
+        self.ensure_cursor_visible(self.viewport_h);
+        self.clamp_scroll();
+        cx.notify();
+    }
+
+    /// Replace text at the given range (or current selection / marked range
+    /// if `None`) with `new_text`, and mark the result as IME composing text.
+    /// `new_selected_range` is relative to the start of the marked text (per
+    /// Apple's `setMarkedText:selectedRange:replacementRange:`). The caret
+    /// moves to the end of `new_selected_range`, and the anchor to its start,
+    /// giving a visible selection within the preedit string.
+    fn replace_and_mark_text_in_range(
+        &mut self,
+        range: Option<Range<usize>>,
+        new_text: &str,
+        new_selected_range: Option<Range<usize>>,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (byte_start, byte_end) = self.resolve_replacement_range(range);
+
+        // Compute the UTF-16 offset where the marked text will start.
+        let doc = self.flat_doc();
+        let marked_start_utf16 = self.byte_col_to_utf16(&doc, byte_start);
+
+        self.splice(byte_start, byte_end, new_text);
+
+        // Marked range = [marked_start, marked_start + utf16_len(new_text)).
+        let marked_utf16_len: usize = new_text.chars().map(|c| c.len_utf16()).sum();
+        self.marked_range_utf16 = Some(marked_start_utf16..marked_start_utf16 + marked_utf16_len);
+
+        // Caret + anchor from new_selected_range (relative to marked start).
+        let (sel_start_rel, sel_end_rel) = match new_selected_range {
+            Some(r) => (r.start, r.end),
+            None => (marked_utf16_len, marked_utf16_len),
+        };
+        let anchor_utf16 = marked_start_utf16 + sel_start_rel.min(marked_utf16_len);
+        let caret_utf16 = marked_start_utf16 + sel_end_rel.min(marked_utf16_len);
+        let (al, ac) = self.from_flat_utf16(anchor_utf16);
+        let (cl, cc) = self.from_flat_utf16(caret_utf16);
+        self.anchor_line = al;
+        self.anchor_col = ac;
+        self.cursor_line = cl;
+        self.cursor_col = cc;
+        self.preferred_col = cc;
+        self.has_selection = anchor_utf16 != caret_utf16;
+
+        self.ensure_cursor_visible(self.viewport_h);
+        self.clamp_scroll();
+        cx.notify();
+    }
+
+    /// Return the bounds (in window-local px) of the given UTF-16 range, used
+    /// by macOS to position the IME candidate window. We shape the line
+    /// containing the range start and return a rect spanning from the start
+    /// column's x to the end column's x (or at least the caret x if they
+    /// coincide), at the line's vertical position.
+    fn bounds_for_range(
+        &mut self,
+        range_utf16: Range<usize>,
+        element_bounds: Bounds<Pixels>,
+        window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<Bounds<Pixels>> {
+        let (start_line, start_col) = self.from_flat_utf16(range_utf16.start);
+        let (end_line, end_col) = self.from_flat_utf16(range_utf16.end);
+        let line = start_line;
+        let line_str = self.lines.get(line)?;
+        let top = element_bounds.origin.y
+            + px(line as f32 * LINE_HEIGHT)
+            - px(self.scroll);
+
+        if line_str.is_empty() {
+            return Some(Bounds {
+                origin: point(element_bounds.origin.x, top),
+                size: size(px(1.), px(LINE_HEIGHT)),
+            });
+        }
+
+        let runs = runs_for(line_str, &self.segs[line]);
+        let shaped = window.text_system().shape_line(
+            SharedString::from(line_str.clone()),
+            px(FONT_SIZE),
+            &runs,
+            None,
+        );
+        let x0 = shaped.x_for_index(start_col);
+        let x1 = if start_line == end_line {
+            shaped.x_for_index(end_col)
+        } else {
+            element_bounds.size.width
+        };
+        let width = (x1 - x0).max(px(1.));
+        Some(Bounds {
+            origin: point(element_bounds.origin.x + x0, top),
+            size: size(width, px(LINE_HEIGHT)),
+        })
+    }
+
+    /// Map a window-space point to a flat UTF-16 offset, for IME hit-testing.
+    fn character_index_for_point(
+        &mut self,
+        point: Point<Pixels>,
+        window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<usize> {
+        let (line, col) = self.hit_test(point, window);
+        Some(self.to_flat_utf16(line, col))
     }
 }
 
@@ -587,14 +1004,18 @@ impl Element for EditorElement {
             vis,
             caret,
             selection,
+            marked,
             focus_handle,
+            entity,
         ): (
             f32,
             f32,
             Vec<(usize, String, Vec<Seg>)>,
             Option<(usize, usize)>,
             Option<((usize, usize), (usize, usize))>,
+            Option<((usize, usize), (usize, usize))>,
             FocusHandle,
+            Entity<EditorView>,
         ) = {
             let view = self.entity.read(cx);
             let max = (view.lines.len() as f32) * LINE_HEIGHT;
@@ -611,13 +1032,23 @@ impl Element for EditorElement {
             } else {
                 None
             };
+            // Convert marked UTF-16 range to (line, byte_col) start/end for
+            // underline painting. Done inside the borrow since from_flat_utf16
+            // needs &self.
+            let marked = view.marked_range_utf16.as_ref().map(|mr| {
+                let s = view.from_flat_utf16(mr.start);
+                let e = view.from_flat_utf16(mr.end);
+                (s, e)
+            });
             (
                 view.scroll,
                 max,
                 vis,
                 caret,
                 view.selection_range(),
+                marked,
                 view.focus.clone(),
+                self.entity.clone(),
             )
         };
 
@@ -629,6 +1060,20 @@ impl Element for EditorElement {
             view.viewport_h = viewport_h;
             view.bounds = bounds;
         });
+
+        // Register the IME input handler. `handle_input` self-gates on
+        // focus — it only registers if `focus_handle.is_focused(window)`,
+        // so calling it unconditionally is safe. Must be called during
+        // paint (debug_assert_paint). `ElementInputHandler` wraps our
+        // `EntityInputHandler` impl and forwards all calls through
+        // `entity.update`.
+        if focus_handle.is_focused(window) {
+            window.handle_input(
+                &focus_handle,
+                ElementInputHandler::new(bounds, entity),
+                cx,
+            );
+        }
 
         let font_size = px(FONT_SIZE);
         let line_height = px(LINE_HEIGHT);
@@ -713,6 +1158,45 @@ impl Element for EditorElement {
                     bounds.origin.y + px(*ix as f32 * LINE_HEIGHT) - px(scroll),
                 );
                 let _ = s.paint(origin, line_height, window, cx);
+            }
+
+            // IME preedit (marked text) underline. Paint a 1px bar at the
+            // bottom of each line's marked byte span. Single-line case:
+            // x_for_index(start)..x_for_index(end). Multi-line: full width
+            // for interior lines, partial for start/end (same partition as
+            // selection but with underline styling instead of fill).
+            if let Some((start, end)) = marked {
+                let mark_color = hsla(0.0, 0.0, 0.7, 0.8);
+                let underline_h = px(1.5);
+                let pane_w = bounds.size.width;
+                for (ix, s) in &shaped {
+                    if *ix < start.0 || *ix > end.0 {
+                        continue;
+                    }
+                    let (rx, rw) = if start.0 == end.0 {
+                        let x0 = s.x_for_index(start.1);
+                        let x1 = s.x_for_index(end.1);
+                        (x0, (x1 - x0).max(px(2.)))
+                    } else if *ix == start.0 {
+                        let x0 = s.x_for_index(start.1);
+                        (x0, pane_w - x0)
+                    } else if *ix == end.0 {
+                        let x1 = s.x_for_index(end.1);
+                        (px(0.), x1.max(px(2.)))
+                    } else {
+                        (px(0.), pane_w)
+                    };
+                    let top = bounds.origin.y
+                        + px(*ix as f32 * LINE_HEIGHT)
+                        - px(scroll)
+                        + line_height
+                        - underline_h;
+                    let rect = Bounds {
+                        origin: point(bounds.origin.x + rx, top),
+                        size: size(rw, underline_h),
+                    };
+                    let _ = window.paint_quad(fill(rect, mark_color));
+                }
             }
 
             // Caret: a 2px vertical bar at the shaped line's

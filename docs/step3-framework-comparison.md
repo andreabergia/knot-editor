@@ -326,8 +326,28 @@ benchmark). The framework choice is made by which binary is run.
       per frame and reused for selection + text + caret. No-internal-path
       scorecard for item 3: all-green (`on_mouse_move`, `MouseMoveEvent`,
       `Modifiers.shift`, `paint_quad`, `x_for_index` all public).
-    - ⬜ Item 4: IME preedit via `EntityInputHandler` + `ElementInputHandler`.
-   - ⬜ Item 5: one annotation overlay (e.g. wavy diagnostic underline).
+    - ✅ Item 4 (IME preedit): `EditorView` implements `EntityInputHandler`
+      (8-method NSTextInputClient mapping). The element calls
+      `Window::handle_input(ElementInputHandler::new(bounds, entity), cx)`
+      during paint — self-gated on focus. `marked_range_utf16` tracks the
+      active preedit span as flat UTF-16 offsets into `lines.join("\n")`;
+      helpers `to_flat_utf16`/`from_flat_utf16`/`utf16_to_byte_col`/
+      `byte_col_to_utf16`/`flat_doc`/`splice` bridge the (line, byte_col)
+      caret space and the flat UTF-16 IME space. `replace_text_in_range`
+      commits text (clears marked, moves caret to end); `replace_and_mark_
+      text_in_range` sets the marked range + selection-within-preedit (sel
+      relative to marked start, per Apple's `setMarkedText` contract);
+      `unmark_text` keeps the text, clears the marking. `bounds_for_range`
+      shapes the line and returns a rect for the IME candidate window.
+      Editing rebuilds lines+segs from the spliced flat doc (fixture
+      styling lost on edited lines — acceptable for the spike). The element
+      paints a 1.5px underline over the marked span. Basic ASCII text input
+      (type a character) works for free: unhandled printable keys fall
+      through to `interpretKeyEvents` → `insertText` → `replace_text_in_
+      range`. No-internal-path scorecard for item 4: all-green
+      (`EntityInputHandler`, `ElementInputHandler::new`, `Window::handle_
+      input`, `UTF16Selection`, all public).
+    - ⬜ Item 5: one annotation overlay (e.g. wavy diagnostic underline).
 5. ⬜ Run gpui against all fixtures (auto-scroll + interactive); record
    quantitative + qualitative findings in this document.
 6. ⬜ iced API-reachibility spike + implementation + runs + findings.
