@@ -361,8 +361,90 @@ benchmark). The framework choice is made by which binary is run.
       only needs to demonstrate the paint path. No-internal-path scorecard
       for item 5: all-green (`paint_underline`, `UnderlineStyle.wavy`,
       `ShapedLine.ascent`/`.descent` fields, `x_for_index` all public).
-5. ⬜ Run gpui against all fixtures (auto-scroll + interactive); record
+5. ✅ Run gpui against all fixtures (auto-scroll + interactive); record
    quantitative + qualitative findings in this document.
+
+   The editor widget was run against all 5 fixtures in `bench/fixtures/`,
+   one at a time, with manual verification of rendering + caret + click +
+   selection on each:
+
+   - **arabic.kfx** (11 lines, RTL/bidi + connected glyph shaping):
+     ✅ Renders correctly right-to-left. Connected Arabic glyph forms
+     shape properly (initial/medial/final/isolated) via Core Text after
+     adding `Geeza Pro` as a font fallback (Menlo has no Arabic glyphs;
+     `Font.fallbacks: Option<FontFallbacks>` is a public field, set
+     directly). Caret, click, and selection all land at the correct
+     visual position on pure-Arabic lines AND on the mixed line 7
+     (`النص المختلط يحتاج إلى خوارزمية Unicode Bidirectional لترتيب
+     الحروف.`) where an embedded LTR English substring ("Unicode
+     Bidirectional") sits inside an RTL base-direction line.
+   - **cjk.kfx** (25 lines, wide-char + mixed-width alignment):
+     ✅ Wide CJK glyphs render at 2× width, mixed ASCII+CJK lines align
+     correctly. Caret navigation across 3-byte UTF-8 chars works after
+     fixing `clamp_col_to_line` to snap `preferred_col` to a UTF-8 char
+     boundary via `prev_boundary` (pre-existing bug exposed by the RTL
+     change, which indexes `line_str[index..]` for per-character
+     direction detection).
+   - **emoji.kfx** (19 lines, ZWJ grapheme clusters): ✅ ZWJ family
+     sequences (👨‍👩‍👧‍👦) render as a single cluster. Caret/click/
+     selection operate at UTF-8 code-point granularity (not grapheme
+     cluster) — acceptable for the spike; a real implementation would
+     use a grapheme cluster boundary iterator.
+   - **minified_js.kfx** (2 lines, one ~3KB line): ✅ The ~3KB single
+     line renders, horizontal clipping keeps it inside the editor pane
+     (no bleed into the outline pane), caret/click/selection work on
+     the long line.
+   - **rust_sample.kfx** (~5000 lines, 491KB): ✅ Vertical scroll smooth,
+     viewport culling correct (only visible lines shape + paint),
+     scrollbar thumb proportional, styled segments render with their
+     authored colors, wavy annotation underlines render (warnings on
+     `LEAF_MAX`/`INTERNAL_MIN`, info on `fn` names, error on `unsafe`),
+     caret/click/selection work across the large buffer.
+
+   **RTL/bidi findings (significant).** gpui 0.2.2 has NO explicit RTL/bidi
+   API: no `writing_direction`, no `kCTWritingDirectionAttribute` on the
+   macOS attributed string, no `ParagraphDirection`, no public way to pass
+   `TextAlign::Right` through `ShapedLine::paint` (only `WrappedLine::paint`
+   takes an `align`). On macOS, `CTLine::new_with_attributed_string` does
+   bidi auto-detection from the first strong character, so glyphs come back
+   in VISUAL order with ABSOLUTE x positions — *rendering* is correct out of
+   the box. But gpui's `ShapedLine::paint` hardcodes `TextAlign::Left`, so a
+   pure-RTL line left-aligns at the pane's left edge instead of the right.
+   Worse, `x_for_index(index)` (line_layout.rs:105) walks glyphs in visual
+   order assuming increasing logical indices — broken for RTL, where visual
+   order has decreasing indices, so it returns ~0 for every index (caret
+   always paints at the left edge). `closest_index_for_x(x)` IS correct for
+   RTL (returns the logical index of the glyph at a visual position).
+
+   Both were worked around with the PUBLIC API only — no fork, no
+   `pub(crate)`, no upstream patch:
+
+   1. **Right-alignment**: a per-line `is_rtl_line(s)` heuristic (first
+      strong alphabetic char in an Arabic/Hebrew/etc Unicode block) gates
+      an `(pane_w - s.width).max(0)` x offset added to the paint origin and
+      to all x computations (caret, selection, IME preedit, annotation,
+      hit-test, `bounds_for_range`).
+   2. **`x_for_index` for RTL**: a custom `x_for_index_dir(s, index,
+      line_str)` free function walks the public `LineLayout.runs` /
+      `ShapedRun.glyphs` / `ShapedGlyph.index` / `ShapedGlyph.position`
+      fields directly. Direction is detected PER-CHARACTER (via
+      `char_is_strong_rtl(line_str[index..].chars().next())`), not per-run
+      — gpui merges CTRuns by font, so a single `ShapedRun` can contain
+      both RTL and LTR glyphs when an English substring is surrounded by
+      spaces that share its font. Per-character detection correctly places
+      the caret inside the embedded LTR substring. Replaces gpui's
+      `x_for_index` at all paint sites.
+
+   **No-internal-path scorecard for step 5**: all-green. `Font.fallbacks`,
+   `FontFallbacks::from_fonts`, `LineLayout.runs`, `ShapedRun.glyphs`,
+   `ShapedGlyph.index`, `ShapedGlyph.position`, `LineLayout.width`,
+   `LineLayout.len` are all `pub`. The RTL gaps were architectural (no API
+   surface) rather than privileged-primitive (API exists but is
+   `pub(crate)`); the workarounds use only public fields. This is a
+   notable finding: gpui 0.2.2's public API is *sufficient* for a
+   correct bidi editor, but only by reimplementing `x_for_index` on top
+   of the raw glyph array — a widget author must know the glyph layout
+   contract, which is undocumented outside the source.
 6. ⬜ iced API-reachibility spike + implementation + runs + findings.
 7. ⬜ floem API-reachibility spike + implementation + runs + findings.
 8. ⬜ Cross-framework comparison table + decision: which framework (if any)
