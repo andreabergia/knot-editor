@@ -445,12 +445,59 @@ benchmark). The framework choice is made by which binary is run.
    correct bidi editor, but only by reimplementing `x_for_index` on top
    of the raw glyph array — a widget author must know the glyph layout
    contract, which is undocumented outside the source.
-6. ⬜ iced API-reachibility spike + implementation + runs + findings.
-7. ⬜ floem API-reachibility spike + implementation + runs + findings.
-8. ⬜ Cross-framework comparison table + decision: which framework (if any)
+6. ❌ iced API-reachibility spike + implementation + runs + findings.
+   **Cancelled** — gpui (step 5) cleared the bar cleanly; the cross-
+   framework comparison that this step and step 7 were to feed is no
+   longer needed for a decision. iced remains documented above as a
+   candidate that uniquely satisfies the no-internal-path criterion
+   (cosmic-text re-exported, `Buffer` first-class, `pub draw`/`layout`,
+   first-class IME); its principal risk — the pinned cosmic-text 0.19
+   CJK shaping defect from step 2 — is recorded but not re-validated
+   at the widget level. Recorded as research risk only.
+7. ❌ floem API-reachibility spike + implementation + runs + findings.
+   **Cancelled** — same rationale as step 6. floem remains documented
+   above as a candidate that meets the no-internal-path bar (the
+   editor lives inside Floem; Lapce consumes the same public
+   `PaintCx` / `TextLayout` / `draw_glyphs` any `View` receives;
+   IME handled in Lapce); its principal risk — Parley's undocumented
+   BiDi/CJK quality — is recorded but not re-validated at the widget
+   level. Recorded as research risk only.
+8. ✅ Cross-framework comparison table + decision: which framework (if any)
    meets the bar. Update `docs/roadmap.md` step 3 status.
+
+   **Decision: gpui 0.2.2 is the framework.** The cross-framework
+   comparison table is *not* produced — the plan called for it to feed
+   a decision between surviving frameworks, and gpui was the only one
+   spiked. The decision rests on gpui passing the bar on its own merits:
+
+   - **No-internal-path scorecard**: all-green across items 1–5 and the
+     fixture runs. The one significant gap (RTL/bidi) was architectural
+     — no API surface at all — rather than a privileged primitive
+     (`pub(crate)`), and was worked around with public fields only.
+   - **Text-rendering maturity**: rendering correct on all 5 fixtures
+     (RTL/bidi with connected glyph shaping, CJK wide-char, ZWJ emoji,
+     long single line, ~5000-line buffer). Connected Arabic shaping,
+     CJK width alignment, and ZWJ cluster rendering are inherited
+     from Core Text's maturity; the widget author only supplies font
+     fallbacks (`Font.fallbacks`, a public field).
+   - **Effort**: the full widget — items 1–5, RTL/bidi, fixture runs —
+     landed in 9 commits over the spike. The implementation was
+     pleasant and fast.
+
+   The investigation stops here rather than continuing through iced and
+   floem: a cross-framework comparison is unnecessary to make a product
+   decision when the leading candidate clears the bar cleanly, and
+   prototype-phase iteration speed is paramount (per `AGENTS.md`).
+   `docs/roadmap.md` step 3 updated to ✅ Done — gpui.
 9. ⬜ If a decision is made, seed the step-7 `View` abstraction from the
    surviving framework's widget surface (noted, not implemented here).
+
+   Decision made in step 8 (above). Seeding the `View` abstraction is
+   left for step 7 proper; nothing implemented here. The gpui widget
+   surface that step 7 will generalize from lives in
+   `src/step3/gpui/editor.rs` (`EditorView`, `EditorElement`,
+   `runs_for`, `x_for_index_dir`, `is_rtl_line`, the flat-UTF16 IME
+   helpers, `EntityInputHandler` impl) — note its public-API shape.
 
 Each step is at least one commit; large steps (e.g. a full framework
 implementation) span many commits, split at logical boundaries as the work

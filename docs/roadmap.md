@@ -63,9 +63,43 @@ Dropped from consideration after initial research:
 - **makepad** — fails the no-internal-path commitment structurally: the script/DSL VM exposes only low-level draw uniforms, not the text shaping/layout primitives, while built-in Rust widgets consume those primitives directly. Adopting it would import a privileged text path.
 - **xilem/masonry** — would satisfy the no-internal-path criterion in principle (Parley + Vello + Fontique), but Xilem is pre-alpha, Masonry is pre-alpha and churning, and Vello is alpha. Not usable as a framework today; the vello+parley primitives could be revisited as a build-it-ourselves sub-path if no framework survives step 3.
 
-🔄 In progress. Per-framework findings to be written up in `docs/step3-framework-comparison.md`.
+✅ Done — **gpui** is the framework.
 
-**Question answered:** which framework (if any) meets the rendering-maturity, extensibility, and platform bar without importing a privileged stack?
+The gpui spike built the full demanding editor widget (styled text, scroll,
+caret, selection, IME preedit + editing, wavy annotation overlay) and a
+3-pane resizable shell, strictly against gpui 0.2.2's *public* API — no
+`pub(crate)`, no fork, no upstream patch. It passed all 5 fixtures
+(arabic/bidi, cjk, emoji/ZWJ, minified long-line, ~5000-line rust) with
+manual verification.
+
+The no-internal-path scorecard is all-green. The one significant finding
+was architectural, not privileged-primitive: gpui 0.2.2 has no explicit
+RTL/bidi API surface (no `writing_direction`, no `TextAlign::Right` on
+`ShapedLine::paint`). Core Text auto-detects bidi so *rendering* is
+correct out of the box, but `ShapedLine::paint` left-aligns and
+`x_for_index` is broken for RTL. Both were worked around with public
+fields only — a per-line `is_rtl_line` heuristic + right-align offset,
+and a custom `x_for_index_dir` that walks the public
+`LineLayout.runs` / `ShapedGlyph.index` / `ShapedGlyph.position` with
+*per-character* direction detection (per-run is unreliable: gpui merges
+CTRuns by font, mixing RTL and LTR glyphs in one run).
+
+The investigation was short-circuited here: the original plan was to
+spike iced and floem next for a cross-framework comparison. With gpui
+clearing the bar cleanly and the implementation proving pleasant and
+fast to build, the comparison is unnecessary for a decision. The iced
+and floem spikes (steps 6 and 7 of the execution plan) are cancelled;
+their findings noted only as research risk in `docs/step3-framework-
+comparison.md`. Step 9 (seed the `View` abstraction from the surviving
+framework's widget surface) is left for step 7 proper.
+
+Caveats carrying forward: the RTL workaround requires undocumented
+knowledge of the glyph layout contract (the widget author reimplements
+`x_for_index` on the raw glyph array); a real editor will want a
+grapheme cluster boundary iterator rather than UTF-8 code-point
+granularity for caret/selection over ZWJ sequences.
+
+**Question answered:** which framework (if any) meets the rendering-maturity, extensibility, and platform bar without importing a privileged stack? → **gpui 0.2.2.**
 
 ---
 
