@@ -937,14 +937,13 @@ impl EntityInputHandler for EditorView {
             &runs,
             None,
         );
-        let rtl = is_rtl_line(line_str);
-        let x0 = x_for_index_dir(&shaped, start_col, rtl);
+        let x0 = x_for_index_dir(&shaped, start_col, line_str);
         let x1 = if start_line == end_line {
-            x_for_index_dir(&shaped, end_col, rtl)
+            x_for_index_dir(&shaped, end_col, line_str)
         } else {
             element_bounds.size.width
         };
-        let (origin_x, width) = if rtl && start_line == end_line {
+        let (origin_x, width) = if start_line == end_line && x0 > x1 {
             (x1, (x0 - x1).max(px(1.)))
         } else {
             (x0, (x1 - x0).max(px(1.)))
@@ -1088,7 +1087,7 @@ impl Element for EditorElement {
         ): (
             f32,
             f32,
-            Vec<(usize, String, Vec<Seg>, bool)>,
+            Vec<(usize, String, Vec<Seg>)>,
             Option<(usize, usize)>,
             Option<((usize, usize), (usize, usize))>,
             Option<((usize, usize), (usize, usize))>,
@@ -1103,12 +1102,7 @@ impl Element for EditorElement {
             let last = (first + visible_rows).min(view.lines.len());
             let vis = (first..last)
                 .map(|ix| {
-                    (
-                        ix,
-                        view.lines[ix].clone(),
-                        view.segs[ix].clone(),
-                        is_rtl_line(&view.lines[ix]),
-                    )
+                    (ix, view.lines[ix].clone(), view.segs[ix].clone())
                 })
                 .collect();
             // Only paint the caret when it's on a visible line; otherwise it
@@ -1183,11 +1177,11 @@ impl Element for EditorElement {
             // paint, so we don't pay for shaping twice per frame. The third
             // tuple element is the per-line x offset (0 for LTR, or
             // `pane_w - shaped_w` for RTL so they right-align); the fourth
-            // is the line's RTL flag, used to pick the correct
-            // `x_for_index_dir` branch at each paint site.
-            let shaped: Vec<(usize, ShapedLine, Pixels, bool)> = vis
+            // is a `&str` reference to the line text, passed to
+            // `x_for_index_dir` for per-character direction detection.
+            let shaped: Vec<(usize, ShapedLine, Pixels, &str)> = vis
                 .iter()
-                .filter_map(|(ix, line, row, rtl)| {
+                .filter_map(|(ix, line, row)| {
                     if line.is_empty() {
                         return None;
                     }
@@ -1198,12 +1192,12 @@ impl Element for EditorElement {
                         &runs,
                         None,
                     );
-                    let x_off = if *rtl {
+                    let x_off = if is_rtl_line(line) {
                         (pane_w - s.width).max(px(0.))
                     } else {
                         px(0.)
                     };
-                    Some((*ix, s, x_off, *rtl))
+                    Some((*ix, s, x_off, line.as_str()))
                 })
                 .collect();
 
@@ -1216,37 +1210,27 @@ impl Element for EditorElement {
             if let Some((start, end)) = selection {
                 let sel_color = hsla(0.6, 0.7, 0.55, 0.35);
                 let pane_w = bounds.size.width;
-                for (ix, s, x_off, rtl) in &shaped {
+                for (ix, s, x_off, line_str) in &shaped {
                     if *ix < start.0 || *ix > end.0 {
                         continue;
                     }
+                    let rtl_base = is_rtl_line(line_str);
                     let (rx, rw) = if start.0 == end.0 {
-                        let x0 = x_for_index_dir(s, start.1, *rtl);
-                        let x1 = x_for_index_dir(s, end.1, *rtl);
-                        if *rtl {
-                            // RTL: start (smaller col) is to the RIGHT,
-                            // end is to the LEFT — swap so x0 < x1.
-                            (x1, (x0 - x1).max(px(0.)))
-                        } else {
-                            (x0, x1 - x0)
-                        }
+                        let x0 = x_for_index_dir(s, start.1, line_str);
+                        let x1 = x_for_index_dir(s, end.1, line_str);
+                        let (lo, hi) = if x0 <= x1 { (x0, x1) } else { (x1, x0) };
+                        (lo, hi - lo)
                     } else if *ix == start.0 {
-                        let x0 = x_for_index_dir(s, start.1, *rtl);
-                        if *rtl {
-                            // Start line, RTL: selection extends from x0
-                            // (the caret boundary) to the pane's RIGHT
-                            // edge — but on RTL the start is the rightmost
-                            // point, so the rect goes from x0 rightward.
-                            (x0, (pane_w - x0).max(px(0.)))
+                        let x0 = x_for_index_dir(s, start.1, line_str);
+                        if rtl_base {
+                            (px(0.), x0.max(px(0.)))
                         } else {
                             (x0, pane_w - x0)
                         }
                     } else if *ix == end.0 {
-                        let x1 = x_for_index_dir(s, end.1, *rtl);
-                        if *rtl {
-                            // End line, RTL: selection extends from pane
-                            // left edge to x1 (the leftmost boundary).
-                            (px(0.), x1.max(px(0.)))
+                        let x1 = x_for_index_dir(s, end.1, line_str);
+                        if rtl_base {
+                            (x1, (pane_w - x1).max(px(0.)))
                         } else {
                             (px(0.), x1)
                         }
@@ -1263,7 +1247,7 @@ impl Element for EditorElement {
                 // Empty interior lines: no shaped line above, so paint a
                 // full-width highlight here so the selection looks unbroken
                 // across blank lines.
-                for (ix, line, _row, _rtl) in &vis {
+                for (ix, line, _row) in &vis {
                     if line.is_empty() && *ix > start.0 && *ix < end.0 {
                         let top = bounds.origin.y + px(*ix as f32 * LINE_HEIGHT) - px(scroll);
                         let rect = Bounds {
@@ -1276,7 +1260,7 @@ impl Element for EditorElement {
             }
 
             // Text, reusing the shaped lines from above.
-            for (ix, s, x_off, _rtl) in &shaped {
+            for (ix, s, x_off, _line_str) in &shaped {
                 let origin = point(
                     bounds.origin.x + *x_off,
                     bounds.origin.y + px(*ix as f32 * LINE_HEIGHT) - px(scroll),
@@ -1293,29 +1277,27 @@ impl Element for EditorElement {
                 let mark_color = hsla(0.0, 0.0, 0.7, 0.8);
                 let underline_h = px(1.5);
                 let pane_w = bounds.size.width;
-                for (ix, s, x_off, rtl) in &shaped {
+                for (ix, s, x_off, line_str) in &shaped {
                     if *ix < start.0 || *ix > end.0 {
                         continue;
                     }
+                    let rtl_base = is_rtl_line(line_str);
                     let (rx, rw) = if start.0 == end.0 {
-                        let x0 = x_for_index_dir(s, start.1, *rtl);
-                        let x1 = x_for_index_dir(s, end.1, *rtl);
-                        if *rtl {
-                            (x1, (x0 - x1).max(px(2.)))
-                        } else {
-                            (x0, (x1 - x0).max(px(2.)))
-                        }
+                        let x0 = x_for_index_dir(s, start.1, line_str);
+                        let x1 = x_for_index_dir(s, end.1, line_str);
+                        let (lo, hi) = if x0 <= x1 { (x0, x1) } else { (x1, x0) };
+                        (lo, (hi - lo).max(px(2.)))
                     } else if *ix == start.0 {
-                        let x0 = x_for_index_dir(s, start.1, *rtl);
-                        if *rtl {
-                            (x0, (pane_w - x0).max(px(2.)))
+                        let x0 = x_for_index_dir(s, start.1, line_str);
+                        if rtl_base {
+                            (px(0.), x0.max(px(2.)))
                         } else {
                             (x0, pane_w - x0)
                         }
                     } else if *ix == end.0 {
-                        let x1 = x_for_index_dir(s, end.1, *rtl);
-                        if *rtl {
-                            (px(0.), x1.max(px(2.)))
+                        let x1 = x_for_index_dir(s, end.1, line_str);
+                        if rtl_base {
+                            (x1, (pane_w - x1).max(px(2.)))
                         } else {
                             (px(0.), x1.max(px(2.)))
                         }
@@ -1345,7 +1327,7 @@ impl Element for EditorElement {
                     let (caret_x, x_off) = shaped
                         .iter()
                         .find(|(ix, _, _, _)| *ix == line_ix)
-                        .map(|(_, s, x_off, rtl)| (x_for_index_dir(s, col, *rtl), *x_off))
+                        .map(|(_, s, x_off, line_str)| (x_for_index_dir(s, col, line_str), *x_off))
                         .unwrap_or((px(0.), px(0.)));
                     let top = bounds.origin.y + px(line_ix as f32 * LINE_HEIGHT) - px(scroll);
                     let caret_bounds = Bounds {
@@ -1369,17 +1351,17 @@ impl Element for EditorElement {
             // skipped — a zero-width wavy line would be invisible anyway.
             if !annotations.is_empty() {
                 for ann in &annotations {
-                    let (shaped_line, x_off, rtl) =
+                    let (shaped_line, x_off, line_str) =
                         match shaped.iter().find(|(ix, _, _, _)| *ix == ann.line) {
-                            Some((_, s, x_off, rtl)) => (s, *x_off, *rtl),
+                            Some((_, s, x_off, line_str)) => (s, *x_off, *line_str),
                             None => continue,
                         };
-                    let x0 = x_for_index_dir(shaped_line, ann.start, rtl);
-                    let x1 = x_for_index_dir(shaped_line, ann.end, rtl);
-                    let (origin_x, width) = if rtl {
-                        (x1, (x0 - x1).max(px(0.)))
-                    } else {
+                    let x0 = x_for_index_dir(shaped_line, ann.start, line_str);
+                    let x1 = x_for_index_dir(shaped_line, ann.end, line_str);
+                    let (origin_x, width) = if x0 <= x1 {
                         (x0, (x1 - x0).max(px(0.)))
+                    } else {
+                        (x1, (x0 - x1).max(px(0.)))
                     };
                     if width <= px(0.) {
                         continue;
@@ -1481,63 +1463,80 @@ fn is_rtl_line(s: &str) -> bool {
         if !ch.is_alphabetic() {
             continue;
         }
-        let c = ch as u32;
-        let rtl = (0x0590..=0x05FF).contains(&c)   // Hebrew
-            || (0x0600..=0x06FF).contains(&c)      // Arabic
-            || (0x0700..=0x074F).contains(&c)      // Syriac
-            || (0x0750..=0x077F).contains(&c)      // Arabic Supplement
-            || (0x08A0..=0x08FF).contains(&c)      // Arabic Extended-A
-            || (0xFB1D..=0xFB4F).contains(&c)      // Hebrew presentation forms
-            || (0xFB50..=0xFDFF).contains(&c)      // Arabic presentation forms-A
-            || (0xFE70..=0xFEFF).contains(&c);     // Arabic presentation forms-B
-        return rtl;
+        return char_is_strong_rtl(ch);
     }
     false
 }
 
+/// Is this character a strong RTL character (Arabic/Hebrew block)?
+fn char_is_strong_rtl(ch: char) -> bool {
+    let c = ch as u32;
+    (0x0590..=0x05FF).contains(&c)   // Hebrew
+        || (0x0600..=0x06FF).contains(&c)      // Arabic
+        || (0x0700..=0x074F).contains(&c)      // Syriac
+        || (0x0750..=0x077F).contains(&c)      // Arabic Supplement
+        || (0x08A0..=0x08FF).contains(&c)      // Arabic Extended-A
+        || (0xFB1D..=0xFB4F).contains(&c)      // Hebrew presentation forms
+        || (0xFB50..=0xFDFF).contains(&c)      // Arabic presentation forms-A
+        || (0xFE70..=0xFEFF).contains(&c)      // Arabic presentation forms-B
+}
+
 /// Direction-aware `x_for_index`. gpui's `ShapedLine::x_for_index` walks
 /// glyphs in visual order assuming increasing logical indices — correct for
-/// LTR, broken for RTL where Core Text reorders glyphs so visual order has
-/// DECREASING logical indices (leftmost glyph = highest logical index).
+/// pure LTR, broken for RTL where Core Text reorders glyphs so visual order
+/// has DECREASING logical indices.
 ///
-/// For LTR, boundary `i` is at the left edge of the glyph whose logical
-/// index is the smallest value >= i (the char at position i).
+/// This function detects the direction of the character AT `index` (the char
+/// after the boundary) rather than relying on per-run heuristics, because
+/// gpui merges CTRuns by font — a single `ShapedRun` can contain both RTL
+/// and LTR glyphs (e.g. an Arabic line with embedded English, where the
+/// surrounding spaces share the same font as the English text).
 ///
-/// For RTL, boundary `i` is at the left edge of the glyph whose logical
-/// index is the LARGEST value < i (the char just before the boundary in
-/// logical order, which sits to the RIGHT of the boundary in visual order).
-/// Special cases: `i == 0` returns `s.width` (right edge, before the first
-/// logical char); `i >= s.len` returns the leftmost glyph's x (after the
-/// last logical char).
+/// For an LTR character at `index`: the caret is at the LEFT edge of that
+/// character's glyph (find the glyph with `index == target`).
+/// For an RTL character at `index`: the caret is at the LEFT edge of the
+/// glyph with the LARGEST index < `index` (the char before the boundary
+/// in logical order, which sits to the RIGHT in visual order).
+///
+/// Special cases: `index == 0` returns `s.width` for RTL-base lines (right
+/// edge) or `px(0.)` for LTR; `index >= s.len` is the mirror.
 ///
 /// Uses only public fields: `LineLayout.runs`, `ShapedRun.glyphs`,
 /// `ShapedGlyph.index`, `ShapedGlyph.position`, `LineLayout.width`,
-/// `LineLayout.len` — all `pub`.
-fn x_for_index_dir(s: &ShapedLine, index: usize, rtl: bool) -> Pixels {
-    if !rtl {
-        for run in &s.runs {
-            for glyph in &run.glyphs {
-                if glyph.index >= index {
-                    return glyph.position.x;
-                }
-            }
-        }
-        return s.width;
-    }
+/// `LineLayout.len`.
+fn x_for_index_dir(s: &ShapedLine, index: usize, line_str: &str) -> Pixels {
+    let rtl_base = is_rtl_line(line_str);
     if index == 0 {
-        return s.width;
+        return if rtl_base { s.width } else { px(0.) };
     }
-    let mut best_x = px(0.);
-    let mut best_index: usize = 0;
-    for run in &s.runs {
-        for glyph in &run.glyphs {
-            if glyph.index < index && glyph.index >= best_index {
-                best_index = glyph.index;
-                best_x = glyph.position.x;
-            }
+    if index >= s.len {
+        return if rtl_base { px(0.) } else { s.width };
+    }
+
+    let rtl = line_str[index..]
+        .chars()
+        .next()
+        .map(char_is_strong_rtl)
+        .unwrap_or(rtl_base);
+
+    let all_glyphs: Vec<&ShapedGlyph> =
+        s.runs.iter().flat_map(|r| r.glyphs.iter()).collect();
+
+    if !rtl {
+        if let Some(g) = all_glyphs.iter().find(|g| g.index == index) {
+            return g.position.x;
         }
     }
-    best_x
+
+    let mut best: Option<Pixels> = None;
+    let mut best_idx: i64 = -1;
+    for g in &all_glyphs {
+        if (g.index as i64) < (index as i64) && (g.index as i64) > best_idx {
+            best_idx = g.index as i64;
+            best = Some(g.position.x);
+        }
+    }
+    best.unwrap_or(if rtl_base { px(0.) } else { s.width })
 }
 
 const FONT_SIZE: f32 = 14.0;
