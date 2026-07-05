@@ -497,7 +497,14 @@ impl EditorView {
     /// proportional fonts this is approximate; correct per-char x would
     /// require shaping the target line, deferred to selection.)
     fn clamp_col_to_line(&self, line: usize, col: usize) -> usize {
-        col.min(self.line_end(line))
+        let end = self.line_end(line);
+        let col = col.min(end);
+        // Snap to the nearest preceding UTF-8 char boundary. `col` often
+        // comes from `preferred_col` which was a valid boundary on a
+        // DIFFERENT line — e.g. ASCII col 6 is mid-character on a CJK line
+        // where byte 6 is inside a 3-byte char. Without this snap, the
+        // caret lands on a non-boundary and later `line_str[col..]` panics.
+        self.prev_boundary(line, col)
     }
 
     fn page_rows(&self, window: &Window) -> usize {
