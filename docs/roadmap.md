@@ -105,11 +105,16 @@ granularity for caret/selection over ZWJ sequences.
 
 ## 4. Buffer model
 
-- A `TextBuffer` with an editable rope or piece-table backing store.
-- Stable positions that survive edits (the foundation annotations depend on).
-- Basic operations: insert, delete, replace, read-range, random access by offset.
-- Internally benchmark: per-edit cost on a 1M-line buffer, randomized edit streams, concurrent-ish edit sequences.
-- Decide on the representation (rope vs piece table vs piece table with stable IDs).
+Plan and decisions recorded in `docs/step4-buffer-plan.md`.
+
+- ⏳ `TextBuffer` with a stable-ID piece-table backing store (built by hand, not wrapped — see D1/D2).
+- ⏳ `Position` token (opaque, stable across unrelated edits) + a `BufferEdit` edit-log surface that step 5 can subscribe to.
+- ⏳ Basic operations: insert, delete, replace, read_range, random access by byte offset.
+- ⏳ Line index (lazy build, incremental under edits); raw text storage, no `\r` normalization (D3/D4).
+- ⏳ Internal benchmark: per-edit cost on a 1M-line buffer (reuse step-2 `rust_sample.kfx --tile 635` fixture), randomized edit streams, interleaved-producer (single-threaded, D5) scenario. Output in `docs/step4-buffer-benchmark.md`.
+- ⏳ Decision checkpoint: confirm rope-vs-stable-ID-PT, write answer here, proceed to step 5.
+
+**Deferred out of step 4:** undo/redo history; CRDT/collaborative editing; non-UTF-8 encodings; file save/load I/O; syntax-tree integration; the annotation model itself (step 5); views (step 7).
 
 **Question answered:** is there a buffer representation that is fast enough and exposes stable enough positions for the annotation layer?
 
