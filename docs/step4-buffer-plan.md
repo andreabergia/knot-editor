@@ -217,9 +217,14 @@ performed (per D4).
 
 ## Sequenced work
 
-1. `TextBuffer` skeleton: piece table with stable IDs, insert / delete
+1. ✅ `TextBuffer` skeleton: piece table with stable IDs, insert / delete
    / replace / read_range / byte_offset. No line index, no positions
-   yet.
+   yet. — implemented in `src/core/buffer.rs`; 26 unit tests covering
+   insert / delete / replace / read_range, boundary-elision, splits,
+   and multi-byte UTF-8. `byte_offset` random access deferred per
+   discussion (step 3 will revisit). UTF-8 boundary enforcement is
+   debug-assert only for now; recorded as a TODO at the top of
+   `buffer.rs` and to be revisited at step 5 / step 7.
 2. Line index (lazy build + incremental update under edits).
 3. `Position` token + `BufferEdit` edit-log surface, minimal API
    designed so step 5 can stress it without a rewrite.
