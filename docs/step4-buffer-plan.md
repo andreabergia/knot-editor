@@ -225,7 +225,16 @@ performed (per D4).
    discussion (step 3 will revisit). UTF-8 boundary enforcement is
    debug-assert only for now; recorded as a TODO at the top of
    `buffer.rs` and to be revisited at step 5 / step 7.
-2. Line index (lazy build + incremental update under edits).
+2. ✅ Line index (lazy build + incremental update under edits). —
+   implemented in `src/core/buffer.rs`: `line_starts: Option<Vec<usize>>`,
+   built lazily by `ensure_line_starts` on first query, kept valid by
+   `update_line_starts` (binary-search splice + O(n−i) suffix fix-up).
+   Public API: `line_count` / `line_start` / `line_of_offset`
+   (take `&mut self` because they may build). 17 new unit tests covering
+   lazy-build, single/multi-line, trailing-newline, interior inserts,
+   deletes (whole / interior / to-end / entire-buffer), replace (multi-
+   line / collapsing), and a 200-iteration randomized stress test that
+   re-derives expected line starts from a full text scan.
 3. `Position` token + `BufferEdit` edit-log surface, minimal API
    designed so step 5 can stress it without a rewrite.
 4. Benchmark harness + randomized edit streams on the 1M-line fixture;

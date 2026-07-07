@@ -1,8 +1,9 @@
 //! `TextBuffer`: stable-ID piece-table backing store.
 //!
-//! Step 4, item 1 of `docs/step4-buffer-plan.md`. This is the bare skeleton:
-//! piece table with monotonic stable piece IDs, insert / delete / replace /
-//! read_range. Line index and `Position` tokens come in subsequent items.
+//! Steps 4.1 and 4.2 of `docs/step4-buffer-plan.md`: a piece table with
+//! monotonic stable piece IDs (insert / delete / replace / read_range)
+//! plus a lazy, incrementally-maintained line index (D4).
+//! `Position` tokens and the `BufferEdit` log come in subsequent items.
 //!
 //! ## Backing store (D1 / D2 / D7)
 //!
@@ -87,6 +88,15 @@ pub struct TextBuffer {
     pieces: Vec<Piece>,
     /// Global monotonic piece-id counter. Never reused.
     next_id: PieceId,
+    /// Lazy line index per D4:
+    /// - `None` — not yet built. Built on first query that needs it.
+    /// - `Some(vec)` — kept valid under edits via incremental update
+    ///   (`update_line_starts`), never rebuilt wholesale.
+    ///
+    /// `vec` is sorted ascending. `vec[0] == 0` always (line 0 starts at
+    /// byte offset 0); even an empty buffer stores `[0]`. A trailing `'\n'`
+    /// creates one extra empty line, so `"abc\n"` has `vec == [0, 4]`.
+    line_starts: Option<Vec<usize>>,
 }
 
 impl TextBuffer {
@@ -103,6 +113,7 @@ impl TextBuffer {
             add: String::new(),
             pieces: Vec::new(),
             next_id: 1,
+            line_starts: None,
         };
         if len > 0 {
             buf.pieces.push(Piece {
@@ -123,6 +134,7 @@ impl TextBuffer {
             add: String::new(),
             pieces: Vec::new(),
             next_id: 1,
+            line_starts: None,
         }
     }
 
@@ -195,6 +207,9 @@ impl TextBuffer {
         };
         self.next_id += 1;
         self.pieces.insert(split.insert_at, new_piece);
+
+        // Keep the line index valid for the edited span.
+        self.update_line_starts(at..at, text);
     }
 
     /// Delete the byte range `[start, end)` from the logical text.
@@ -223,6 +238,9 @@ impl TextBuffer {
         // have shortened a piece to the post-end remainder; that remainder
         // sits at `right.insert_at` and survives the drain.
         self.pieces.drain(left.insert_at..right.insert_at);
+
+        // Keep the line index valid for the edited span.
+        self.update_line_starts(range, "");
     }
 
     /// Replace `[range.start, range.end)` with `text`.
@@ -244,6 +262,38 @@ impl TextBuffer {
         self.insert(range.start, text);
     }
 
+    // ---- Line index (D4) ------------------------------------------------
+
+    /// Number of lines. The buffer always has at least one line (line 0,
+    /// possibly empty), so this returns `>= 1`. Builds the line index
+    /// lazily on first call.
+    pub fn line_count(&mut self) -> usize {
+        self.ensure_line_starts();
+        self.line_starts.as_ref().unwrap().len()
+    }
+
+    /// Byte offset of the start of `line` (0-indexed). `line` must be
+    /// `< line_count()`. Builds the line index lazily on first call.
+    pub fn line_start(&mut self, line: usize) -> usize {
+        self.ensure_line_starts();
+        let starts = self.line_starts.as_ref().unwrap();
+        assert!(line < starts.len(), "line {line} out of range ({})", starts.len());
+        starts[line]
+    }
+
+    /// 0-indexed line number of the line containing byte offset `offset`.
+    /// `offset` must satisfy `0 <= offset <= len()`. `len()` maps to the
+    /// last line. Builds the line index lazily on first call.
+    pub fn line_of_offset(&mut self, offset: usize) -> usize {
+        assert!(offset <= self.len());
+        self.ensure_line_starts();
+        let starts = self.line_starts.as_ref().unwrap();
+        // First index where `starts[i] > offset`; the line containing
+        // `offset` is the one before it. `saturating_sub` covers `offset`
+        // landing on or before the first entry (always 0 here).
+        starts.partition_point(|&s| s <= offset).saturating_sub(1)
+    }
+
     // ---- Internals -------------------------------------------------------
 
     /// Backing slice for a piece. Lifetime ties to `self`.
@@ -253,6 +303,83 @@ impl TextBuffer {
             Backing::Add => self.add.as_str(),
         };
         &buf[p.start..p.start + p.len]
+    }
+
+    /// Build the line index from scratch by scanning all piece content for
+    /// `'\n'` bytes. O(total length). Called once per buffer lifetime, on
+    /// the first line-index query; subsequent edits keep it valid via
+    /// `update_line_starts`.
+    fn ensure_line_starts(&mut self) {
+        if self.line_starts.is_some() {
+            return;
+        }
+        let mut starts: Vec<usize> = vec![0];
+        let mut acc = 0usize;
+        for p in &self.pieces {
+            let bytes = self.backing_slice(*p).as_bytes();
+            for (i, &b) in bytes.iter().enumerate() {
+                if b == b'\n' {
+                    starts.push(acc + i + 1);
+                }
+            }
+            acc += p.len;
+        }
+        self.line_starts = Some(starts);
+    }
+
+    /// Incrementally update the line index after an edit that replaced the
+    /// byte span `[range.start, range.end)` with `new_text` (whose byte
+    /// length is `new_text.len()`).
+    ///
+    /// No-op if the line index isn't built yet (lazy: edits don't force a
+    /// build). Otherwise splices the K-entry delta for the edited span and
+    /// fixes up the surviving suffix in O(n−i) — see the implementation
+    /// note in `docs/step4-buffer-plan.md`.
+    ///
+    /// Algorithm:
+    /// - `delta = new_text.len() - (range.end - range.start)` (signed).
+    /// - `lo`  = first index where `starts[i] >= range.start` → kept
+    ///   unchanged.
+    /// - `hi`  = first index where `starts[i] > range.end` → suffix to
+    ///   shift by `delta`.
+    /// - Middle section (replaces `starts[lo..hi]`):
+    ///   1. If `starts[lo] == range.start`, the `'\n'` at `range.start - 1`
+    ///      survives untouched, so the line at `range.start` survives at
+    ///      the same byte offset — re-emit `range.start`.
+    ///   2. For each `'\n'` at index `i` in `new_text`, emit a new line
+    ///      start at `range.start + i + 1`.
+    /// - The new array is `[starts[..lo], middle, [s + delta for s in starts[hi..]]]`.
+    fn update_line_starts(&mut self, range: Range<usize>, new_text: &str) {
+        let Some(starts) = self.line_starts.as_mut() else {
+            return;
+        };
+
+        let delta: isize =
+            new_text.len() as isize - (range.end - range.start) as isize;
+        let lo = starts.partition_point(|&s| s < range.start);
+        let hi = starts.partition_point(|&s| s <= range.end);
+
+        // Build the middle section: surviving line at `range.start` (if any)
+        // plus new line starts from `'\n'`s in `new_text`.
+        let mut middle: Vec<usize> = Vec::new();
+        if lo < starts.len() && starts[lo] == range.start {
+            middle.push(range.start);
+        }
+        for (i, &b) in new_text.as_bytes().iter().enumerate() {
+            if b == b'\n' {
+                middle.push(range.start + i + 1);
+            }
+        }
+
+        // Assemble the new line index.
+        let mut new_starts: Vec<usize> =
+            Vec::with_capacity(lo + middle.len() + (starts.len() - hi));
+        new_starts.extend_from_slice(&starts[..lo]);
+        new_starts.extend(middle);
+        for &s in &starts[hi..] {
+            new_starts.push((s as isize + delta) as usize);
+        }
+        *starts = new_starts;
     }
 
     /// True iff `offset` is a UTF-8 char boundary of the logical text.
@@ -618,5 +745,230 @@ mod tests {
         // range 2..9 removes "c1def2g", leaving "ab" + "hij".
         b.delete(2..9);
         assert_eq!(s(&b), "abhij");
+    }
+
+    // ---- Line index (D4) ----------------------------------------------
+
+    /// Peek the line-index state directly (assumes built).
+    fn ls(b: &TextBuffer) -> &[usize] {
+        b.line_starts.as_ref().expect("line_starts built")
+    }
+
+    #[test]
+    fn line_index_empty_buffer() {
+        let mut b = TextBuffer::new();
+        assert_eq!(b.line_count(), 1);
+        assert_eq!(b.line_start(0), 0);
+        assert_eq!(b.line_of_offset(0), 0);
+        assert_eq!(ls(&b), &[0]);
+    }
+
+    #[test]
+    fn line_index_single_line() {
+        let mut b = TextBuffer::from_text("hello");
+        assert_eq!(b.line_count(), 1);
+        assert_eq!(b.line_start(0), 0);
+        for off in 0..=b.len() {
+            assert_eq!(b.line_of_offset(off), 0, "offset {off}");
+        }
+        assert_eq!(ls(&b), &[0]);
+    }
+
+    #[test]
+    fn line_index_multi_line() {
+        let mut b = TextBuffer::from_text("ab\ncd\nef");
+        // Bytes: a(0) b(1) \n(2) c(3) d(4) \n(5) e(6) f(7). len 8.
+        assert_eq!(b.line_count(), 3);
+        assert_eq!(b.line_start(0), 0);
+        assert_eq!(b.line_start(1), 3);
+        assert_eq!(b.line_start(2), 6);
+        // Offset → line mappings.
+        assert_eq!(b.line_of_offset(0), 0);
+        assert_eq!(b.line_of_offset(2), 0); // the '\n' belongs to line 0
+        assert_eq!(b.line_of_offset(3), 1); // first byte of line 1
+        assert_eq!(b.line_of_offset(5), 1); // trailing '\n' of line 1
+        assert_eq!(b.line_of_offset(6), 2);
+        assert_eq!(b.line_of_offset(8), 2); // one-past-end maps to last line
+        assert_eq!(ls(&b), &[0, 3, 6]);
+    }
+
+    #[test]
+    fn line_index_trailing_newline_creates_empty_last_line() {
+        let mut b = TextBuffer::from_text("abc\n");
+        assert_eq!(b.line_count(), 2);
+        assert_eq!(b.line_start(0), 0);
+        assert_eq!(b.line_start(1), 4);
+        assert_eq!(ls(&b), &[0, 4]);
+    }
+
+    #[test]
+    fn line_index_lazy_until_first_query() {
+        // Edits before first query don't build the index; they leave it None.
+        let mut b = TextBuffer::from_text("abc");
+        b.insert(3, "def");
+        b.delete(0..1);
+        assert!(b.line_starts.is_none(), "should still be lazy after edits");
+        // First query triggers the build.
+        assert_eq!(b.line_count(), 1);
+        assert!(b.line_starts.is_some());
+    }
+
+    #[test]
+    fn line_index_insert_with_newlines_interior() {
+        let mut b = TextBuffer::from_text("abcdef"); // starts [0]
+        b.insert(3, "X\nY");
+        // "abcX\nYdef": a(0) b(1) c(2) X(3) \n(4) Y(5) d(6) e(7) f(8). len 9.
+        assert_eq!(s(&b), "abcX\nYdef");
+        assert_eq!(b.line_count(), 2);
+        assert_eq!(b.line_start(0), 0);
+        assert_eq!(b.line_start(1), 5);
+        assert_eq!(ls(&b), &[0, 5]);
+    }
+
+    #[test]
+    fn line_index_insert_at_existing_line_start() {
+        // Inserting right at a line start must preserve that line start.
+        let mut b = TextBuffer::from_text("ab\ncd"); // starts [0, 3]
+        b.insert(3, "x"); // "ab\nxcd"
+        assert_eq!(s(&b), "ab\nxcd");
+        assert_eq!(b.line_count(), 2);
+        assert_eq!(b.line_start(0), 0);
+        assert_eq!(b.line_start(1), 3);
+        assert_eq!(ls(&b), &[0, 3]);
+    }
+
+    #[test]
+    fn line_index_insert_newline_at_offset_zero() {
+        let mut b = TextBuffer::from_text("abc\ndef\nghi"); // [0, 4, 8]
+        b.insert(0, "\n");
+        // "\nabc\ndef\nghi" → \n(0) a(1) b(2) c(3) \n(4) d(5) e(6) f(7) \n(8) g(9) h(10) i(11)
+        assert_eq!(s(&b), "\nabc\ndef\nghi");
+        assert_eq!(b.line_count(), 4);
+        assert_eq!(ls(&b), &[0, 1, 5, 9]);
+    }
+
+    #[test]
+    fn line_index_delete_removes_newline_in_span() {
+        let mut b = TextBuffer::from_text("abc\ndef\nghi"); // [0, 4, 8]
+        // Delete "\ndef" (offsets 3..8), collapse to one line "abcghi"
+        b.delete(3..8);
+        assert_eq!(s(&b), "abcghi");
+        assert_eq!(b.line_count(), 1);
+        assert_eq!(ls(&b), &[0]);
+    }
+
+    #[test]
+    fn line_index_delete_to_end_keeps_trailing_empty_line() {
+        // "ab\ncd" → delete [3, 5) (deletes "cd"), leaving "ab\n".
+        // The trailing '\n' demarcates an empty final line.
+        let mut b = TextBuffer::from_text("ab\ncd"); // [0, 3]
+        b.delete(3..5);
+        assert_eq!(s(&b), "ab\n");
+        assert_eq!(b.line_count(), 2);
+        assert_eq!(ls(&b), &[0, 3]);
+    }
+
+    #[test]
+    fn line_index_delete_entire_buffer() {
+        let mut b = TextBuffer::from_text("ab\ncd\nef"); // [0, 3, 6]
+        b.delete(0..8);
+        assert_eq!(s(&b), "");
+        assert!(b.is_empty());
+        assert_eq!(b.line_count(), 1);
+        assert_eq!(ls(&b), &[0]);
+    }
+
+    #[test]
+    fn line_index_delete_inside_one_line_no_change_to_index() {
+        let mut b = TextBuffer::from_text("ab\ncd\nef"); // [0, 3, 6]
+        b.delete(4..5); // delete 'd' from line 1 → "ab\nc\nef"
+        assert_eq!(s(&b), "ab\nc\nef");
+        assert_eq!(b.line_count(), 3);
+        assert_eq!(ls(&b), &[0, 3, 5]); // line 2 shifted by -1
+    }
+
+    #[test]
+    fn line_index_replace_with_multiline_text() {
+        let mut b = TextBuffer::from_text("abc\ndef\nghi"); // [0, 4, 8]
+        // Replace "\ndef" → "X\nY": result "abcX\nYghi", starts [0, 5]
+        b.replace(3..8, "X\nY");
+        assert_eq!(s(&b), "abcX\nYghi");
+        assert_eq!(b.line_count(), 2);
+        assert_eq!(ls(&b), &[0, 5]);
+    }
+
+    #[test]
+    fn line_index_replace_collapsing_lines() {
+        let mut b = TextBuffer::from_text("abc\ndef\nghi"); // [0, 4, 8]
+        // Replace "\ndef\n" (offsets 3..8) with "": result "abcghi", 1 line.
+        b.replace(3..8, "");
+        assert_eq!(s(&b), "abcghi");
+        assert_eq!(b.line_count(), 1);
+        assert_eq!(ls(&b), &[0]);
+    }
+
+    #[test]
+    fn line_index_replace_inserts_new_lines_at_start() {
+        let mut b = TextBuffer::from_text("abc"); // [0]
+        // Replace whole buffer with multi-line content.
+        b.replace(0..3, "ab\ncd\nef");
+        assert_eq!(s(&b), "ab\ncd\nef");
+        assert_eq!(b.line_count(), 3);
+        assert_eq!(ls(&b), &[0, 3, 6]);
+    }
+
+    #[test]
+    fn line_index_append_newline_at_end() {
+        let mut b = TextBuffer::from_text("abc"); // [0]
+        b.insert(3, "\n"); // "abc\n" → [0, 4]
+        assert_eq!(b.line_count(), 2);
+        assert_eq!(ls(&b), &[0, 4]);
+    }
+
+    #[test]
+    fn line_index_survives_many_random_edits() {
+        // Stress: build a buffer, do many inserts/deletes of '\n'-bearing
+        // spans, and verify the index matches a fresh scan of the text.
+        let text = "the quick brown fox\njumps over\nthe lazy dog\n";
+        let mut b = TextBuffer::from_text(text);
+        // Force a build so subsequent edits go through the incremental path.
+        let _ = b.line_count();
+
+        let mut rng_state: u64 = 0xdead_beef;
+        let mut next_rand = || {
+            // xorshift64
+            rng_state ^= rng_state << 13;
+            rng_state ^= rng_state >> 7;
+            rng_state ^= rng_state << 17;
+            rng_state
+        };
+        for _ in 0..200 {
+            let len = b.len();
+            let start = (next_rand() % (len as u64 + 1)) as usize;
+            let end = (next_rand() % (len as u64 + 1)) as usize;
+            let (start, end) = if start <= end { (start, end) } else { (end, start) };
+            // Pick one of a few candidate replacements.
+            let pick = next_rand() % 4;
+            let new_text = match pick {
+                0 => "",
+                1 => "x",
+                2 => "\n",
+                _ => "ab\ncd",
+            };
+            // Only apply if both ends are char boundaries (we use ASCII
+            // source text + ASCII inserts, so every offset is a boundary).
+            b.replace(start..end, new_text);
+        }
+
+        // Re-derive expected line starts from the final text.
+        let final_text = s(&b);
+        let mut expected: Vec<usize> = vec![0];
+        for (i, byte) in final_text.as_bytes().iter().enumerate() {
+            if *byte == b'\n' {
+                expected.push(i + 1);
+            }
+        }
+        assert_eq!(b.line_count(), expected.len(), "line count mismatch");
+        assert_eq!(ls(&b), &expected[..], "line starts mismatch");
     }
 }
