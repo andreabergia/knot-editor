@@ -70,6 +70,12 @@ model is insufficient, both steps reopen.
   richer (word index, UTF-16 cache) is built outside the core by
   features that need it.
 
+> **Implementation note:** `Vec<usize>` is used for the initial line index,
+> accepting O(n) insertion-splay cost. If the 1M-line benchmark shows this
+> is a bottleneck, the index switches to a Fenwick tree or `BTreeMap`. The
+> lazy-build-first strategy means the index is rebuilt on first query after
+> an edit — acceptable until per-edit latency data is collected.
+
 ### D5 — Single-threaded core
 
 The "concurrent-ish edit sequences" benchmark bullet in the roadmap
@@ -86,7 +92,7 @@ runtime).
 - `TextBuffer` with stable-ID piece table backing.
 - `insert` / `delete` / `replace` / `read_range` / `byte_offset` random access.
 - `Position` token (opaque, stable across unrelated edits) and an
-  edit log exposing `BufferEdit { before_range, after_range }` so
+  edit log exposing per-edit `BufferEdit` events (see D7 for the struct) so
   step 5 can subscribe and refine.
 - Line index (lazy + incremental).
 - Internal benchmark: 1M-line fixture, randomized edit streams,
@@ -149,10 +155,19 @@ internals to step 5):
 
 ```rust
 enum BufferEdit {
-    Insert { at: usize, len: usize, splits: Vec<Split> },
+    Insert { at: usize, inserted_len: usize, splits: Vec<Split> },
     Delete { range: Range<usize>, splits: Vec<Split> },
 }
 struct Split { old_piece: PieceId, split_offset: usize, new_piece: PieceId }
+```
+
+**Concrete types:**
+```rust
+pub type PieceId = u64;  // monotonically increasing, global counter
+pub struct Position {
+    piece: PieceId,
+    offset: u32,  // offset within piece (< 4 GiB)
+}
 ```
 
 `splits` is normally length 0 (edit on a boundary) or 1 (interior
@@ -176,10 +191,26 @@ is the existing `rust_sample.kfx --tile 635` path (see
 raw line text usable as buffer input; the segment-table portion is
 renderer-only and ignored here.
 
-Add a `core` benchmark target separate from the renderer `bench`
-binary — different metrics (per-edit latency, RSS) vs the renderer
-(frame time). Output written to `docs/step4-buffer-benchmark.md` once
-the run completes.
+Add a `[[bin]]` entry to `Cargo.toml`:
+
+```toml
+[[bin]]
+name = "core-bench"
+path = "src/bin/core_bench.rs"
+```
+
+This binary links `knot` as a library and drives the piece-table workload,
+reusing the CLI argument style from `bench` (`--fixture`, `--tile`, `--duration`)
+but measuring per-edit latency and RSS instead of frame time.
+Output written to `docs/step4-buffer-benchmark.md` once the run completes.
+
+### Piece-table construction from fixture
+
+The initial buffer is built from a fixture's raw lines joined by `'\n'`,
+forming a single contiguous UTF-8 byte buffer. The initial piece table
+contains one piece referencing the full buffer. On load, the line index
+is empty (lazy — built on first query). No `\r` normalization is
+performed (per D4).
 
 ## Sequenced work
 
