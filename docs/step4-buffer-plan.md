@@ -70,11 +70,14 @@ model is insufficient, both steps reopen.
   richer (word index, UTF-16 cache) is built outside the core by
   features that need it.
 
-> **Implementation note:** `Vec<usize>` is used for the initial line index,
-> accepting O(n) insertion-splay cost. If the 1M-line benchmark shows this
-> is a bottleneck, the index switches to a Fenwick tree or `BTreeMap`. The
-> lazy-build-first strategy means the index is rebuilt on first query after
-> an edit — acceptable until per-edit latency data is collected.
+> **Implementation note:** the line index is a `Vec<usize>` of sorted
+> line-start byte offsets. Edits keep it sorted: binary-search the
+> affected range, splice the K-entry delta for the edited span, then
+> fix up the suffix in O(n−i). If the suffix shift shows up as a
+> bottleneck, the backing swaps to a Fenwick tree or `BTreeMap` for
+> O(log n) per edit. The index is built lazily on first query after
+> load or after any edit that dirtied it; between builds it is kept
+> valid by incremental update, not full rebuild.
 
 ### D5 — Single-threaded core
 
