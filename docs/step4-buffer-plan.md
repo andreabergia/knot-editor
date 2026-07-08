@@ -235,8 +235,52 @@ performed (per D4).
    deletes (whole / interior / to-end / entire-buffer), replace (multi-
    line / collapsing), and a 200-iteration randomized stress test that
    re-derives expected line starts from a full text scan.
-3. `Position` token + `BufferEdit` edit-log surface, minimal API
-   designed so step 5 can stress it without a rewrite.
+3. ✅ `Position` token + `BufferEdit` edit-log surface, minimal API
+   designed so step 5 can stress it without a rewrite. —
+   implemented in `src/core/buffer.rs`:
+
+   - **`Position { piece: PieceId, offset: u32 }`** — opaque stable
+     token (public accessors `piece()` / `offset()`); `Copy` / `Eq` /
+     `Hash` so step 5 can key annotations by it. Issued by
+     `TextBuffer::position_at(at) -> Option<Position>` (returns `None`
+     only for the empty buffer). Sticky-left policy: a token at a
+     piece boundary is anchored to the piece ending at that offset,
+     so subsequent inserts at the boundary leave the token pointing at
+     the same byte.
+   - **`TextBuffer::resolve(Position) -> Option<usize>`** — back to a
+     byte offset; returns `None` if the anchor piece was deleted or
+     the offset exceeds the piece's *current* length (right-half-of-split
+     staleness — detectable, not silently wrong, per D7).
+   - **`BufferEdit { Insert{at, inserted_len, splits}, Delete{range,
+     splits} }`** with **`Split { old_piece, split_offset, new_piece }`**
+     — fields are byte offsets in *pre-edit* logical text, so an
+     observer replaying stale tokens can reason about each edit in
+     isolation. `splits` is length 0 (boundary-elided) or 1 (one
+     interior split); a `delete` spanning two interiors carries up to 2.
+   - **`split_at`** refactored to push `Split` records onto a caller-
+     supplied `&mut Vec<Split>`, so `insert` and `delete` can attach
+     them to the `BufferEdit` they emit.
+   - **Edit-log API:** `edit_seq() -> usize` (high-water mark),
+     `edits_since(seq) -> &[BufferEdit]` (incremental slice, clamps a
+     stale cursor), `take_edits() -> Vec<BufferEdit>` (whole-drain
+     escape hatch, mostly for tests / bounded-memory compaction).
+     `replace` decomposes into delete-then-insert and pushes *two*
+     events.
+   - **End-to-end remap-by-log** validation in tests: a helper walks
+     `edits_since(0)`, applies the D7 remap rule
+     `(old_piece, k) → (new_piece, k - split_offset)` to a stale token,
+     and the remapped token resolves to the same content the original
+     pointed at. Multi-split chains remap correctly through each link.
+
+   23 new unit tests covering `position_at` empty / zero / end / interior
+   / piece-boundary sticky-left / round-trip-through-resolve; `resolve`
+   for unknown-piece and stale-offset; left-half-survives-split and
+   right-half-becomes-stale; positions in deleted pieces; position
+   stability across unrelated edits; edit-log sequence numbers,
+   incremental slices, whole-drain; `BufferEdit::Insert` / `Delete`
+   payload fields; boundary-vs-interior split counts; `replace`'s
+   delete-then-insert pair; and two end-to-end log-driven remap
+   simulations.
 4. Benchmark harness + randomized edit streams on the 1M-line fixture;
    write up findings.
 5. **Decision checkpoint.** Based on throughput numbers and how the

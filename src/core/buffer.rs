@@ -1,9 +1,38 @@
 //! `TextBuffer`: stable-ID piece-table backing store.
 //!
-//! Steps 4.1 and 4.2 of `docs/step4-buffer-plan.md`: a piece table with
-//! monotonic stable piece IDs (insert / delete / replace / read_range)
-//! plus a lazy, incrementally-maintained line index (D4).
-//! `Position` tokens and the `BufferEdit` log come in subsequent items.
+//! Steps 4.1—4.3 of `docs/step4-buffer-plan.md`: a piece table with
+//! monotonic stable piece IDs (insert / delete / replace / read_range),
+//! a lazy incrementally-maintained line index (D4), and the
+//! `Position` / `BufferEdit` surface that step 5 will subscribe to.
+//!
+//! ## Position tokens (D2 / D7)
+//!
+//! A `Position` is an opaque `(PieceId, u32 offset_within_piece)` pair.
+//! It is stable across *unrelated* edits: an edit elsewhere in the
+//! buffer does not invalidate it. The only failure modes are:
+//!
+//! - The piece was deleted wholesale → `resolve` returns `None`.
+//! - The position sat in the right half of an interior split (D7) and
+//!   the underlying piece has since been shortened → `resolve` returns
+//!   `None`, but the content the position pointed to is recoverable
+//!   from the matching `Split` record in the edit log: the new location
+//!   is `(Split::new_piece, old_offset - Split::split_offset)`.
+//!
+//! Default stickiness is *sticky-left*: a `position_at` query at a piece
+//! boundary returns the piece ending at that offset (with `offset ==
+//! piece.len`), so a subsequent insert at the boundary leaves the
+//! position pointing at the same byte it pointed at before. Sticky-right
+//! is step 5's job — it reads the edit log and relocates.
+//!
+//! ## Edit log (D7)
+//!
+//! Every `insert` / `delete` (and `replace`, which decomposes into a
+//! delete-then-insert pair) pushes one `BufferEdit` event onto an
+//! unbounded `Vec<BufferEdit>`. Fields are byte offsets into the
+//! *pre-edit* logical text, so an observer replaying stale `Position`s
+//! can reason about each edit against the buffer state *in which the
+//! position was issued*. Compaction is deferred — the log only grows,
+//! bounded only by a future `take_edits` drain.
 //!
 //! ## Backing store (D1 / D2 / D7)
 //!
@@ -45,6 +74,81 @@ use std::ops::Range;
 /// Stable across unrelated edits: a piece's id never changes for the
 /// piece's lifetime, and is never reused (the counter only goes up).
 pub type PieceId = u64;
+
+/// Opaque, stable token for a location in the logical text (D2 / D7).
+///
+/// `(piece, offset_within_piece)`. Issued by `TextBuffer::position_at`,
+/// resolved back to a byte offset by `TextBuffer::resolve`. The token
+/// is stable across unrelated edits; failure modes are documented on
+/// the module and on `resolve`.
+///
+/// Field accessors are exposed (rather than the struct being fully
+/// opaque) because step 5 needs to *store* tokens keyed by piece id and
+/// to apply the deterministic remap described in `Split`; the fields
+/// are immutable and the type is `Copy`, so leaking them is safe.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Position {
+    piece: PieceId,
+    offset: u32,
+}
+
+impl Position {
+    /// The piece this token is anchored to.
+    pub fn piece(&self) -> PieceId {
+        self.piece
+    }
+
+    /// The offset within `piece`, in UTF-8 bytes. Satisfies `<= piece.len`
+    /// for a *valid* token; may exceed it for a *stale* token issued
+    /// before the piece was split.
+    pub fn offset(&self) -> u32 {
+        self.offset
+    }
+}
+
+/// One half of an interior split (D7).
+///
+/// A `Position` whose `piece` is `old_piece` and whose offset is
+/// `> split_offset` is *stale but detectable*: its content has moved to
+/// `new_piece` at offset `old_offset - split_offset`. Step 5 reads the
+/// edit log and applies this transformation; step 4 itself never
+/// touches its callers' tokens.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Split {
+    /// The piece that was shortened by the split (retains its id).
+    pub old_piece: PieceId,
+    /// The split point within that piece, equal to its post-split length.
+    pub split_offset: usize,
+    /// The freshly-issued id of the right (longer-offset) half.
+    pub new_piece: PieceId,
+}
+
+/// Per-edit event in the `TextBuffer`'s edit log (D7).
+///
+/// `at` and `range` are byte offsets into the buffer's *pre-edit*
+/// logical text, so an observer replaying stale `Position`s can reason
+/// about each edit against the buffer state in which the tokens were
+/// issued. `splits` is normally length 0 (the edit landed on a piece
+/// boundary and was elided) or 1 (one interior split); a `delete`
+/// spanning two interiors may carry up to 2.
+#[derive(Clone, Debug)]
+pub enum BufferEdit {
+    /// Bytes were inserted at `at`; the inserted span has byte length
+    /// `inserted_len`. Splits describe any interior piece splits the
+    /// edit forced (at most one, at `at`).
+    Insert {
+        at: usize,
+        inserted_len: usize,
+        splits: Vec<Split>,
+    },
+    /// Bytes in `range` were removed. Splits describe any interior
+    /// piece splits the edit forced (up to two, at `range.start` and
+    /// `range.end`).
+    Delete {
+        range: Range<usize>,
+        splits: Vec<Split>,
+    },
+}
 
 /// Which backing buffer a piece references.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -97,6 +201,11 @@ pub struct TextBuffer {
     /// byte offset 0); even an empty buffer stores `[0]`. A trailing `'\n'`
     /// creates one extra empty line, so `"abc\n"` has `vec == [0, 4]`.
     line_starts: Option<Vec<usize>>,
+    /// Append-only edit log (D7). Each `insert` / `delete` pushes one
+    /// `BufferEdit`. `replace` decomposes into a delete-then-insert pair
+    /// and pushes two. The log is unbounded; compaction is deferred
+    /// behind a benchmark number and `take_edits`.
+    edits: Vec<BufferEdit>,
 }
 
 impl TextBuffer {
@@ -114,6 +223,7 @@ impl TextBuffer {
             pieces: Vec::new(),
             next_id: 1,
             line_starts: None,
+            edits: Vec::new(),
         };
         if len > 0 {
             buf.pieces.push(Piece {
@@ -135,6 +245,7 @@ impl TextBuffer {
             pieces: Vec::new(),
             next_id: 1,
             line_starts: None,
+            edits: Vec::new(),
         }
     }
 
@@ -197,8 +308,10 @@ impl TextBuffer {
         let add_start = self.add.len();
         self.add.push_str(text);
 
-        // Locate the insertion point in the piece chain.
-        let split = self.split_at(at);
+        // Locate the insertion point in the piece chain. Splits are
+        // recorded so they can be attached to the BufferEdit event.
+        let mut splits = Vec::new();
+        let split = self.split_at(at, &mut splits);
         let new_piece = Piece {
             id: self.next_id,
             backing: Backing::Add,
@@ -210,6 +323,14 @@ impl TextBuffer {
 
         // Keep the line index valid for the edited span.
         self.update_line_starts(at..at, text);
+
+        // Record the edit event (D7). `at` and `inserted_len` are byte
+        // offsets into the pre-edit logical text.
+        self.edits.push(BufferEdit::Insert {
+            at,
+            inserted_len: text.len(),
+            splits,
+        });
     }
 
     /// Delete the byte range `[start, end)` from the logical text.
@@ -227,8 +348,11 @@ impl TextBuffer {
         }
 
         // Split the chain at both ends, then drop the pieces in between.
-        let left = self.split_at(range.start);
-        let right = self.split_at(range.end);
+        // Both calls share one `splits` vec so the ordering in the
+        // BufferEdit event is "left-end-split, then right-end-split".
+        let mut splits = Vec::new();
+        let left = self.split_at(range.start, &mut splits);
+        let right = self.split_at(range.end, &mut splits);
 
         // The splits guarantee that `left.insert_at` is the index of the
         // first piece strictly at-or-after `range.start`, and
@@ -240,7 +364,10 @@ impl TextBuffer {
         self.pieces.drain(left.insert_at..right.insert_at);
 
         // Keep the line index valid for the edited span.
-        self.update_line_starts(range, "");
+        self.update_line_starts(range.clone(), "");
+
+        // Record the edit event (D7). `range` is the pre-edit byte span.
+        self.edits.push(BufferEdit::Delete { range, splits });
     }
 
     /// Replace `[range.start, range.end)` with `text`.
@@ -292,6 +419,110 @@ impl TextBuffer {
         // `offset` is the one before it. `saturating_sub` covers `offset`
         // landing on or before the first entry (always 0 here).
         starts.partition_point(|&s| s <= offset).saturating_sub(1)
+    }
+
+    // ---- Position tokens (D2 / D7) -------------------------------------
+
+    /// Issue a `Position` token for byte offset `at` in the current
+    /// logical text.
+    ///
+    /// `at` must satisfy `0 <= at <= len()`. Returns `None` iff the
+    /// buffer is empty (no piece exists to anchor the token).
+    ///
+    /// Sticky-left policy (D7): if `at` lies on a piece boundary, the
+    /// token is anchored to the piece *ending* at `at`, with
+    /// `offset == piece.len`. A subsequent insert at `at` is therefore
+    /// boundary-elided (no split), and the position keeps pointing at
+    /// the same byte it pointed at before. To point *past* an inserted
+    /// span (sticky-right), step 5 issues its own token *after* the
+    /// edit, or remaps via the edit log.
+    pub fn position_at(&self, at: usize) -> Option<Position> {
+        assert!(at <= self.len());
+        if self.pieces.is_empty() {
+            return None;
+        }
+        if at == 0 {
+            return Some(Position {
+                piece: self.pieces[0].id,
+                offset: 0,
+            });
+        }
+        let mut acc = 0usize;
+        for p in &self.pieces {
+            let p_end = acc + p.len;
+            if at == p_end {
+                // Sticky-left: position anchored to the piece ending at `at`.
+                return Some(Position {
+                    piece: p.id,
+                    offset: p.len as u32,
+                });
+            }
+            if at > acc && at < p_end {
+                return Some(Position {
+                    piece: p.id,
+                    offset: (at - acc) as u32,
+                });
+            }
+            acc = p_end;
+        }
+        // `at <= len()` and the last piece's `p_end == len()`, so the
+        // `at == p_end` branch above is taken for `at == len()`.
+        unreachable!("position_at({at}) not resolved");
+    }
+
+    /// Resolve a `Position` token back to a byte offset.
+    ///
+    /// Returns `Some(byte_offset)` iff the position is *valid*: the
+    /// piece still exists in the chain and `offset <= piece.len` in its
+    /// *current* length. Returns `None` if:
+    ///
+    /// - The anchor piece has been deleted (no piece with `id` remains).
+    /// - The anchor piece exists but `offset > piece.len` — the
+    ///   position sat in the right half of an interior split (D7) and
+    ///   is now *stale but detectable*. Step 5 reads the matching
+    ///   `Split` from the edit log and remaps to
+    ///   `(Split::new_piece, offset - Split::split_offset)`.
+    pub fn resolve(&self, p: Position) -> Option<usize> {
+        let mut acc = 0usize;
+        for piece in &self.pieces {
+            if piece.id == p.piece {
+                let off = p.offset as usize;
+                if off > piece.len {
+                    return None;
+                }
+                return Some(acc + off);
+            }
+            acc += piece.len;
+        }
+        None
+    }
+
+    // ---- Edit log (D7) -------------------------------------------------
+
+    /// High-water mark of the edit log: the sequence number that will be
+    /// assigned to the *next* edit (zero on a fresh buffer, incremented
+    /// by one per `insert` / `delete`).
+    pub fn edit_seq(&self) -> usize {
+        self.edits.len()
+    }
+
+    /// Slice of all edits with sequence number `>= seq`. `seq` is the
+    /// high-water mark returned by `edit_seq`; an observer keeps a
+    /// cursor, polls `edits_since(cursor)` each cycle, then advances
+    /// its cursor by the returned slice's length.
+    ///
+    /// `seq` is clamped to the current log length, so a stale cursor
+    /// from before a `take_edits` drain simply sees the whole log.
+    pub fn edits_since(&self, seq: usize) -> &[BufferEdit] {
+        let start = seq.min(self.edits.len());
+        &self.edits[start..]
+    }
+
+    /// Drain the whole edit log and return it. Useful for tests and for
+    /// bounded-memory production callers that have caught up to the
+    /// current `edit_seq` and can discard history.
+    pub fn take_edits(&mut self) -> Vec<BufferEdit> {
+        std::mem::take(&mut self.edits)
     }
 
     // ---- Internals -------------------------------------------------------
@@ -422,7 +653,11 @@ impl TextBuffer {
     /// zero-length halves created. Otherwise the containing piece is split,
     /// the left half retains its id (with `len` shortened to the split
     /// offset) and the right half is inserted as a fresh piece behind it.
-    fn split_at(&mut self, at: usize) -> SplitLoc {
+    ///
+    /// If a strict interior split occurs, a `Split` record is pushed onto
+    /// `splits` so the caller can attach it to the `BufferEdit` event it
+    /// is constructing. Boundary-elided splits push nothing.
+    fn split_at(&mut self, at: usize, splits: &mut Vec<Split>) -> SplitLoc {
         // Empty buffer or insertion at the very end.
         if at == self.len() {
             return SplitLoc {
@@ -451,6 +686,7 @@ impl TextBuffer {
                 let right_len = p.len - left_len;
                 let right_start = p.start + left_len;
                 let backing = p.backing;
+                let old_id = p.id;
 
                 // Shorten the left half in place (retains id, start, backing).
                 p.len = left_len;
@@ -468,6 +704,13 @@ impl TextBuffer {
                         len: right_len,
                     },
                 );
+
+                // Record the split for the caller's edit-log event.
+                splits.push(Split {
+                    old_piece: old_id,
+                    split_offset: left_len,
+                    new_piece: right_id,
+                });
                 return SplitLoc { insert_at };
             }
             acc = p_end;
@@ -970,5 +1213,394 @@ mod tests {
         }
         assert_eq!(b.line_count(), expected.len(), "line count mismatch");
         assert_eq!(ls(&b), &expected[..], "line starts mismatch");
+    }
+
+    // ---- Position tokens (D2 / D7) -------------------------------------
+
+    #[test]
+    fn position_at_empty_buffer_returns_none() {
+        let b = TextBuffer::new();
+        assert!(b.position_at(0).is_none());
+    }
+
+    #[test]
+    fn position_at_zero_is_first_piece_offset_zero() {
+        let b = TextBuffer::from_text("abc");
+        let p = b.position_at(0).unwrap();
+        assert_eq!(p.piece(), b.pieces[0].id);
+        assert_eq!(p.offset(), 0);
+        assert_eq!(b.resolve(p), Some(0));
+    }
+
+    #[test]
+    fn position_at_end_is_last_piece_len_sticky_left() {
+        // Single piece "abc": at==3 returns (piece0, 3).
+        let b = TextBuffer::from_text("abc");
+        let p = b.position_at(3).unwrap();
+        assert_eq!(p.piece(), b.pieces[0].id);
+        assert_eq!(p.offset(), 3);
+        assert_eq!(b.resolve(p), Some(3));
+    }
+
+    #[test]
+    fn position_at_interior_of_piece() {
+        let b = TextBuffer::from_text("abcde");
+        let p = b.position_at(2).unwrap();
+        assert_eq!(p.piece(), b.pieces[0].id);
+        assert_eq!(p.offset(), 2);
+        assert_eq!(b.resolve(p), Some(2));
+    }
+
+    #[test]
+    fn position_at_piece_boundary_is_sticky_left() {
+        // Two pieces from prior edits; insert a boundary to make two
+        // pieces. After "ab" + insert(2, "cd") + insert(2, "X") we have:
+        //   piece A "ab" (id 1)
+        //   piece C "X"  (id 4 — the latest insert)
+        //   piece B "cd" (id 3)
+        // Boundary between A and C is offset 2; sticky-left → (A, 2).
+        let mut b = TextBuffer::from_text("ab");
+        b.insert(2, "cd"); // "abcd": A=ab, B=cd
+        b.insert(2, "X"); // "abXcd": elided inserts in front of B
+        // Layout: pieces = [A(ab), X("X"), B(cd)]. Find offsets.
+        // A.len=2, X.len=1, B.len=2 → total 5.
+        assert_eq!(s(&b), "abXcd");
+        let boundary_offset = 2; // between A and X
+        let p = b.position_at(boundary_offset).unwrap();
+        // Sticky-left → anchored to A whose end is at offset 2.
+        assert_eq!(p.piece(), b.pieces[0].id, "boundary should be sticky-left");
+        assert_eq!(p.offset(), 2);
+        assert_eq!(b.resolve(p), Some(2));
+    }
+
+    #[test]
+    fn position_round_trips_through_resolve_for_all_offsets() {
+        let b = TextBuffer::from_text("ab\ncd\nef");
+        for off in 0..=b.len() {
+            let p = b.position_at(off).unwrap();
+            assert_eq!(b.resolve(p), Some(off), "offset {off}");
+        }
+    }
+
+    #[test]
+    fn resolve_unknown_piece_id_returns_none() {
+        let b = TextBuffer::from_text("abc");
+        let bogus = Position { piece: 999, offset: 0 };
+        assert!(b.resolve(bogus).is_none());
+    }
+
+    #[test]
+    fn resolve_offset_past_piece_len_returns_none() {
+        // Construct a stale position past the piece's current length.
+        let b = TextBuffer::from_text("abc");
+        let stale = Position { piece: b.pieces[0].id, offset: 99 };
+        assert!(b.resolve(stale).is_none());
+    }
+
+    #[test]
+    fn left_half_position_survives_interior_split_unchanged() {
+        // "hello" → insert "X" at offset 2 splits the original piece:
+        // left half retains id (len 2), right half is a fresh piece.
+        // A position anchored to the left half stays valid and resolves
+        // to the same byte offset.
+        let mut b = TextBuffer::from_text("hello");
+        let left_pos = b.position_at(1).unwrap(); // (id0, 1) — left half
+        b.insert(2, "X");
+        assert_eq!(s(&b), "heXllo");
+        // (id0, 1) is still valid: id0 still exists with len 2.
+        assert_eq!(b.resolve(left_pos), Some(1));
+    }
+
+    #[test]
+    fn right_half_position_becomes_stale_after_split() {
+        // "hello" (id0, len 5). A position at offset 4 sits in the right
+        // half of an interior split at offset 2: id0 is shortened to len 2,
+        // so (id0, 4) is now stale (offset > current len).
+        let mut b = TextBuffer::from_text("hello");
+        let right_pos = b.position_at(4).unwrap(); // (id0, 4) — right half
+        assert_eq!(right_pos.piece(), b.pieces[0].id);
+        assert_eq!(right_pos.offset(), 4);
+        b.insert(2, "X");
+        // id0 has len 2 now; (id0, 4) is stale → resolve None.
+        assert_eq!(b.resolve(right_pos), None);
+    }
+
+    #[test]
+    fn position_in_deleted_piece_resolves_none() {
+        // Build a multi-piece buffer so we can have the token anchored in
+        // a piece that gets drained wholesale by a later delete.
+        let mut b = TextBuffer::from_text("hello");
+        b.insert(5, "world"); // pieces: id0 "hello", id1 "world"
+        assert_eq!(s(&b), "helloworld");
+        // Position anchored in id1 at offset 2 (= logical offset 7).
+        let p = b.position_at(7).unwrap();
+        assert_eq!(p.piece(), b.pieces[1].id);
+        // Delete from offset 5 to end (whole of id1).
+        b.delete(5..10);
+        assert_eq!(s(&b), "hello");
+        // id1 no longer exists → resolve returns None.
+        assert!(b.resolve(p).is_none());
+    }
+
+    #[test]
+    fn position_survives_unrelated_edit() {
+        // A position is stable across edits elsewhere: insert at one end
+        // of the buffer, position anchored at the other end stays valid.
+        let mut b = TextBuffer::from_text("abc");
+        let p = b.position_at(0).unwrap();
+        b.insert(3, "XYZ");
+        assert_eq!(s(&b), "abcXYZ");
+        assert_eq!(b.resolve(p), Some(0));
+    }
+
+    // ---- Edit log: BufferEdit surface ---------------------------------
+
+    #[test]
+    fn edit_seq_starts_at_zero_and_increments() {
+        let mut b = TextBuffer::from_text("abc");
+        assert_eq!(b.edit_seq(), 0);
+        b.insert(3, "X");
+        assert_eq!(b.edit_seq(), 1);
+        b.delete(0..1);
+        assert_eq!(b.edit_seq(), 2);
+        // No-op edits don't push events.
+        b.insert(0, "");
+        b.delete(2..2);
+        assert_eq!(b.edit_seq(), 2);
+    }
+
+    #[test]
+    fn edits_since_returns_incremental_slice() {
+        let mut b = TextBuffer::from_text("abc");
+        b.insert(3, "X");
+        b.insert(0, "Y");
+        let after_one = b.edit_seq() - 1;
+        let latest = b.edits_since(after_one);
+        assert_eq!(latest.len(), 1);
+        assert!(matches!(latest[0], BufferEdit::Insert { at: 0, .. }));
+        // Earlier edits still visible too.
+        assert_eq!(b.edits_since(0).len(), 2);
+        // Stale cursor past the end → empty slice (clamped).
+        assert!(b.edits_since(99).is_empty());
+    }
+
+    #[test]
+    fn take_edits_drains_log() {
+        let mut b = TextBuffer::from_text("abc");
+        b.insert(3, "X");
+        let drained = b.take_edits();
+        assert_eq!(drained.len(), 1);
+        assert_eq!(b.edit_seq(), 0);
+        // Subsequent edits start fresh.
+        b.delete(0..1);
+        let second = b.take_edits();
+        assert_eq!(second.len(), 1);
+        assert!(matches!(second[0], BufferEdit::Delete { .. }));
+    }
+
+    #[test]
+    fn insert_emits_insert_event_with_correct_at_and_len() {
+        let mut b = TextBuffer::from_text("abc");
+        // Insert at the very end: boundary-elided, no split.
+        b.insert(3, "XY");
+        let edits = b.edits_since(0);
+        assert_eq!(edits.len(), 1);
+        match &edits[0] {
+            BufferEdit::Insert { at, inserted_len, splits } => {
+                assert_eq!(*at, 3);
+                assert_eq!(*inserted_len, 2);
+                assert!(splits.is_empty(), "boundary insert must not split");
+            }
+            other => panic!("expected Insert, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn interior_insert_emits_one_split() {
+        let mut b = TextBuffer::from_text("hello");
+        let id0 = b.pieces[0].id;
+        b.insert(2, "X"); // strict interior split at offset 2
+        let edits = b.edits_since(0);
+        match &edits[0] {
+            BufferEdit::Insert { splits, .. } => {
+                assert_eq!(splits.len(), 1);
+                assert_eq!(
+                    splits[0],
+                    Split {
+                        old_piece: id0,
+                        split_offset: 2,
+                        new_piece: id0 + 1,
+                    }
+                );
+            }
+            other => panic!("expected Insert, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn boundary_insert_emits_no_splits() {
+        let mut b = TextBuffer::from_text("hello");
+        b.insert(0, "X"); // boundary, elided
+        match &b.edits_since(0)[0] {
+            BufferEdit::Insert { splits, .. } => {
+                assert!(splits.is_empty(), "boundary insert must not split");
+            }
+            other => panic!("expected Insert, got {other:?}"),
+        }
+        b.insert(b.len(), "Y"); // insert at end, no split
+        // Two insert events, both with empty splits.
+        for e in b.edits_since(0) {
+            if let BufferEdit::Insert { splits, .. } = e {
+                assert!(splits.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn delete_emits_delete_event_with_correct_range() {
+        let mut b = TextBuffer::from_text("hello world");
+        // Delete the whole content: both ends are piece-boundary-elided,
+        // so the event carries the correct `range` and zero splits.
+        b.delete(0..11);
+        match &b.edits_since(0)[0] {
+            BufferEdit::Delete { range, splits } => {
+                assert_eq!(*range, 0..11);
+                assert!(splits.is_empty(), "whole-buffer delete must not split");
+            }
+            other => panic!("expected Delete, got {other:?}"),
+        }
+        assert!(b.is_empty());
+    }
+
+    #[test]
+    fn delete_with_two_interior_ends_emits_two_splits() {
+        let mut b = TextBuffer::from_text("abcdefghij");
+        let id0 = b.pieces[0].id;
+        // Two interior splits: range.start=2 on the original piece, and
+        // range.end=8 on the right half (R1) created by the first split.
+        // R1 starts at logical offset 2 with len 8; the second split is
+        // therefore at R1's offset 8-2 = 6.
+        b.delete(2..8);
+        let r1_id = id0 + 1; // first split's right-half piece
+        let r2_id = id0 + 2; // second split's right-half piece
+        match &b.edits_since(0)[0] {
+            BufferEdit::Delete { range, splits } => {
+                assert_eq!(*range, 2..8);
+                assert_eq!(splits.len(), 2);
+                assert_eq!(splits[0].old_piece, id0);
+                assert_eq!(splits[0].split_offset, 2);
+                assert_eq!(splits[0].new_piece, r1_id);
+                assert_eq!(splits[1].old_piece, r1_id);
+                assert_eq!(splits[1].split_offset, 6);
+                assert_eq!(splits[1].new_piece, r2_id);
+            }
+            other => panic!("expected Delete, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn replace_emits_delete_then_insert_pair() {
+        let mut b = TextBuffer::from_text("hello world");
+        b.replace(0..5, "goodbye");
+        let edits = b.edits_since(0);
+        assert_eq!(edits.len(), 2);
+        assert!(matches!(edits[0], BufferEdit::Delete { .. }));
+        match &edits[1] {
+            BufferEdit::Insert { at, inserted_len, .. } => {
+                assert_eq!(*at, 0);
+                assert_eq!(*inserted_len, "goodbye".len());
+            }
+            other => panic!("expected Insert, got {other:?}"),
+        }
+        assert_eq!(s(&b), "goodbye world");
+    }
+
+    // ---- End-to-end remap-by-log (the design payoff of D7) -----------
+
+    /// Simulate step 5's job: hold a position token across an interior
+    /// split, find it stale, walk the edit log, remap it to the new
+    /// piece, and confirm the remapped token resolves to the same content
+    /// the original token pointed at.
+    #[test]
+    fn stale_right_half_position_remaps_via_edit_log() {
+        let mut b = TextBuffer::from_text("hello");
+        // Token at byte offset 3 (the second 'l').
+        let original = b.position_at(3).unwrap();
+        assert_eq!(original.offset(), 3);
+        let original_byte = b.resolve(original).unwrap();
+        let content_before: char = b.read_range(original_byte..original_byte + 1).chars().next().unwrap();
+        assert_eq!(content_before, 'l');
+
+        // Split at offset 2: original piece's right half moves to a new
+        // piece; (id0, 4) becomes stale.
+        b.insert(2, "X");
+        assert_eq!(s(&b), "heXllo");
+
+        // Stale detection.
+        assert!(b.resolve(original).is_none());
+
+        // Walk the edit log to find the matching Split and remap.
+        let remapped = remap_via_log(&b, original).expect("log should contain a matching Split");
+        // The remapped token should resolve to the same byte the
+        // original would have resolved to before the edit, *plus* the
+        // inserted span's length, since the insertion happened before
+        // our position (at offset 2 < 4). Note: the design's remap
+        // relocates us within the *new* piece; the byte offset shifts
+        // by the inserted span length because the insert was at a
+        // smaller offset than our position.
+        let remapped_byte = b.resolve(remapped).unwrap();
+        let content_after: char = b.read_range(remapped_byte..remapped_byte + 1).chars().next().unwrap();
+        assert_eq!(content_after, content_before, "remapped token must point at same content");
+        // And specifically the byte offset should have advanced by 1
+        // (the inserted 'X').
+        assert_eq!(remapped_byte, original_byte + 1);
+    }
+
+    /// Step-5-style helper: given a stale `Position`, walk the buffer's
+    /// edit log forward and apply the D7 remap rule for any matching
+    /// `Split`. Returns the remapped token, or `None` if no remap applies
+    /// (the position was deleted wholesale, or no longer stale).
+    fn remap_via_log(b: &TextBuffer, mut p: Position) -> Option<Position> {
+        for edit in b.edits_since(0) {
+            let splits = match edit {
+                BufferEdit::Insert { splits, .. } | BufferEdit::Delete { splits, .. } => splits,
+            };
+            for sp in splits {
+                if sp.old_piece == p.piece && (p.offset as usize) > sp.split_offset {
+                    p = Position {
+                        piece: sp.new_piece,
+                        offset: p.offset - sp.split_offset as u32,
+                    };
+                }
+            }
+        }
+        Some(p)
+    }
+
+    #[test]
+    fn remap_walks_multiple_splits_in_order() {
+        // Two interior splits on the same original piece: the original
+        // right half (which became a fresh piece) is split again later.
+        // A position at the far right of the original piece should
+        // remap through both splits.
+        let mut b = TextBuffer::from_text("abcdefghij"); // id0, len 10
+        let original = b.position_at(9).unwrap(); // anchored at id0, offset 9
+        // Split at offset 2: id0 shortens to 2; right half (offsets 2..10) becomes a fresh piece R1.
+        b.insert(2, "X"); // "abXcdefghij"
+        // Now split R1 at its interior by inserting at offset 5 (within R1, offset 5 - 3 = 2).
+        // Logical offset 5 is bytes 0..2 = "ab", "X", then within R1 ("cdefghij", len 8) offset 5 - 3 = 2.
+        b.insert(5, "Y"); // "abXcYdefghij"
+        // The original token (id0, 9) is stale after the first split;
+        // remapping gives (R1, 9-2=7). R1 is then split at its offset 2,
+        // so we remap again to (R2, 7-2=5). The final byte offset should
+        // point at the 'j' (the last byte).
+        assert!(b.resolve(original).is_none());
+        let remapped = remap_via_log(&b, original).unwrap();
+        let final_byte = b.resolve(remapped).unwrap();
+        assert_eq!(
+            b.read_range(final_byte..final_byte + 1),
+            "j",
+            "remapped token must point at 'j'"
+        );
     }
 }
