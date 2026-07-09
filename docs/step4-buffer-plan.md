@@ -281,8 +281,42 @@ performed (per D4).
    payload fields; boundary-vs-interior split counts; `replace`'s
    delete-then-insert pair; and two end-to-end log-driven remap
    simulations.
-4. Benchmark harness + randomized edit streams on the 1M-line fixture;
-   write up findings.
+4. ✅ Benchmark harness + randomized edit streams on the 1M-line
+   fixture; write up findings. — implemented in `src/bin/core_bench.rs`:
+
+   - **`core-bench` binary** linked as `[[bin]] name = "core-bench"` in
+     `Cargo.toml`. CLI: `--fixture/-f`, `--tile`, `--duration/-d`,
+     `--seed`, `--workload/-w {all,construct,edits,edits-noidx,
+     interleaved,lookup}`. Output is one TSV line per workload
+     (`<fixture>\t<workload>\tkey=value\t...`).
+   - **Fixture → buffer:** `build_buffer` joins `fixture.lines` with
+     `'\n'` (no trailing newline, no `\r` norm) into one
+     `TextBuffer::from_text`, starting from a single piece covering the
+     whole buffer (per the spec above).
+   - **Workloads:** `construct` (from_text + lazy line-index build),
+     `edits` (random insert/delete stream with line index live →
+     incremental `update_line_starts` path), `edits-noidx` (same RNG
+     stream with line index left lazy — the A/B isolating the line-
+     index update cost), `interleaved` (two-producer alternating edits
+     with `Position` tokens + `edits_since` cursor remap-by-log per D7),
+     `lookup` (random `line_of_offset` / `line_start` / `position_at` /
+     `resolve` queries on a pre-warmed 513-piece chain).
+   - **`apply_log` helper** walks `edits_since(cursor)` and applies the
+     D7 remap rule `(old_piece, k) → (new_piece, k - split_offset)` to a
+     stale-right-half token; logs the remap cost separately. Splits with
+     `split_offset < offset` relocate, splits at-or-above do not.
+   - **`Position::new(piece, offset)`** public constructor added to
+     buffer.rs so step-5 stand-ins (the bench's remap simulation) can
+     build the remapped token. Step 4 itself never calls it; the only
+     in-crate producer of tokens remains `position_at`.
+   - Findings + raw outputs written to `docs/step4-buffer-benchmark.md`.
+     Key result: piece table + Position surface has two orders of
+     magnitude headroom; the only bottleneck is the `Vec<usize>` line
+     index (~88% of per-edit latency on 1M lines), a localized upgrade
+     behind the existing `line_count` / `line_start` / `line_of_offset`
+     API (swap to `BTreeMap` or Fenwick for O(log n) per edit). Decision
+     checkpoint: **proceed with the stable-ID piece table**; defer the
+     line-index swap until step 5 surfaces a real need.
 5. **Decision checkpoint.** Based on throughput numbers and how the
    position/remap surface felt, confirm rope-vs-stable-ID-PT or reopen.
    Write the answer into `roadmap.md` step 4 and proceed to step 5.

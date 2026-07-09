@@ -39,3 +39,7 @@ path = "src/bin/bench.rs"
 [[bin]]
 name = "step3-gpui"
 path = "src/step3/gpui/main.rs"
+
+[[bin]]
+name = "core-bench"
+path = "src/bin/core_bench.rs"

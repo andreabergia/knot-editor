@@ -104,6 +104,16 @@ impl Position {
     pub fn offset(&self) -> u32 {
         self.offset
     }
+
+    /// Construct a token from raw `(piece, offset)` fields. Exposed so
+    /// callers (step 5's annotation layer, the benchmark's remap
+    /// simulation) can build the *remapped* token produced by applying
+    /// the D7 rule to a `Split` record — `(Split::new_piece,
+    /// old_offset - Split::split_offset)`. Step 4 itself never uses
+    /// this; the only in-crate producer of tokens is `position_at`.
+    pub fn new(piece: PieceId, offset: u32) -> Self {
+        Self { piece, offset }
+    }
 }
 
 /// One half of an interior split (D7).
@@ -252,6 +262,14 @@ impl TextBuffer {
     /// Total length of the logical text, in UTF-8 bytes.
     pub fn len(&self) -> usize {
         self.pieces.iter().map(|p| p.len).sum()
+    }
+
+    /// Number of pieces currently in the piece chain. Diagnostic only:
+    /// the chain grows under interior edits and is never coalesced (D7);
+    /// this count is exposed so benchmarks can report table size without
+    /// a separate internal probe. Not load-bearing for any operation.
+    pub fn piece_count(&self) -> usize {
+        self.pieces.len()
     }
 
     /// Whether the logical text is empty.
