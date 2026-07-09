@@ -107,16 +107,16 @@ granularity for caret/selection over ZWJ sequences.
 
 Plan and decisions recorded in `docs/step4-buffer-plan.md`.
 
-- ⏳ `TextBuffer` with a stable-ID piece-table backing store (built by hand, not wrapped — see D1/D2).
-- ⏳ `Position` token (opaque, stable across unrelated edits) + a `BufferEdit` edit-log surface that step 5 can subscribe to.
-- ⏳ Basic operations: insert, delete, replace, read_range, random access by byte offset.
-- ⏳ Line index (lazy build, incremental under edits); raw text storage, no `\r` normalization (D3/D4).
-- ⏳ Internal benchmark: per-edit cost on a 1M-line buffer (reuse step-2 `rust_sample.kfx --tile 635` fixture), randomized edit streams, interleaved-producer (single-threaded, D5) scenario. Output in `docs/step4-buffer-benchmark.md`.
-- ⏳ Decision checkpoint: confirm rope-vs-stable-ID-PT, write answer here, proceed to step 5.
+- ✅ `TextBuffer` with a stable-ID piece-table backing store (built by hand, not wrapped — see D1/D2).
+- ✅ `Position` token (opaque, stable across unrelated edits) + a `BufferEdit` edit-log surface that step 5 can subscribe to.
+- ✅ Basic operations: insert, delete, replace, read_range, random access by byte offset.
+- ✅ Line index (lazy build, incremental under edits); raw text storage, no `\r` normalization (D3/D4).
+- ✅ Internal benchmark: per-edit cost on a 1M-line buffer (reuse step-2 `rust_sample.kfx --tile 635` fixture), randomized edit streams, interleaved-producer (single-threaded, D5) scenario. Output in `docs/step4-buffer-benchmark.md`.
+- ✅ Decision checkpoint: confirm rope-vs-stable-ID-PT, write answer here, proceed to step 5. → **Stable-ID piece table confirmed.** The piece table alone runs at ~10k edits/sec on a 1M-line buffer (p50 75 µs on a 79k-piece chain), two orders of magnitude above single-user editing rates. `Position` tokens resolve in sub-µs on realistic warm chains, and the D7 remap-by-log path is ~41 ns idle / ~100 ns per matching `Split` — negligible. The only bottleneck is the `Vec<usize>` line index (~88% of per-edit latency with the index live is `update_line_starts`' O(line_count) suffix shift); that's a localized swap to a `BTreeMap`/Fenwick behind the existing `line_count` / `line_start` / `line_of_offset` API, deferred until step 5 surfaces a real need. A rope would have answered only the throughput question and forced the annotation layer (step 5) to remap every offset after every edit — exactly what step 5 is trying to avoid.
 
 **Deferred out of step 4:** undo/redo history; CRDT/collaborative editing; non-UTF-8 encodings; file save/load I/O; syntax-tree integration; the annotation model itself (step 5); views (step 7).
 
-**Question answered:** is there a buffer representation that is fast enough and exposes stable enough positions for the annotation layer?
+**Question answered:** is there a buffer representation that is fast enough and exposes stable enough positions for the annotation layer? → **Yes.** Proceed with the stable-ID piece table.
 
 ---
 
