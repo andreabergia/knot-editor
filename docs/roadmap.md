@@ -103,6 +103,25 @@ granularity for caret/selection over ZWJ sequences.
 
 ---
 
+## 3b. Linux gpui portability smoke test
+
+This is an opportunistic checkpoint, not a reopening of step 2 or step 3. It
+should happen before step 7 invests heavily in a gpui-shaped public `View`
+abstraction, because step 3's successful bidi/IME/text spike was verified on
+macOS and the RTL workaround leans on gpui/Core Text layout behavior.
+
+- Run the step-3 editor widget on Linux.
+- Verify the same text fixtures: Arabic/bidi, CJK, emoji/ZWJ, minified long-line, and large Rust source.
+- Check whether the RTL alignment and custom `x_for_index_dir` workaround still hold outside Core Text.
+- Smoke-test IME if the local environment makes that practical.
+- Record any platform-specific shaping, fallback-font, input-method, or windowing assumptions before step 7 bakes the view API around them.
+
+⏭️ Opportunistic / before serious step-7 work.
+
+**Question answered:** does the gpui decision rely on macOS-only text or input behavior that would materially change the view abstraction?
+
+---
+
 ## 4. Buffer model
 
 Plan and decisions recorded in `docs/step4-buffer-plan.md`.
@@ -128,6 +147,8 @@ Plan and decisions recorded in `docs/step4-buffer-plan.md`.
 - Measure: stabilization cost per edit, correctness under concurrent feature sources, behavior at edit boundaries (sticky-before vs sticky-after).
 - Decide representation and the semantics exposed to extensions.
 
+🚧 In progress — plan at `docs/step5-annotation-plan.md`. Representation chosen up front: `Position`-token anchors (the stable-ID piece table approach) as the production representation, with an interval tree as the query index (D1/D3) and a naive offset-remap baseline only for measurement (D5).
+
 **Question answered:** can annotations track positions cheaply and correctly enough to be the universal composition mechanism the design claims?
 
 ---
@@ -135,10 +156,12 @@ Plan and decisions recorded in `docs/step4-buffer-plan.md`.
 ## 6. Annotation composition
 
 - Multiple annotation sources (diagnostics, search matches, git hunks, folding, breakpoints) active on a single buffer simultaneously.
-- Confirm no precedence surprises and no rendering conflicts when a sixth source is added without re-plumbing.
-- Identify any case where composition requires privileged coordination and document it.
+- Confirm that adding a sixth source does not require re-plumbing the annotation store, buffer model, or capability model.
+- Exercise basic query composition for overlapping sources across editor, minimap, and gutter-style consumers.
+- Document any case where data-level composition requires privileged coordination.
+- Defer rich visual precedence, layering, hit-testing, and annotation conflict policy until the real editor view needs them.
 
-**Question answered:** does the "annotations compose naturally" claim hold beyond toy cases?
+**Question answered:** do independent annotation sources compose at the data/query level, without forcing special coordination into the core?
 
 ---
 
@@ -194,6 +217,7 @@ This step is portable across host choices and can be deferred until after the re
 - A command that appears synchronous to its author but auto-suspends across await points without callback hell.
 - Cancellation propagating cleanly across an await chain spanning a capability provider, an LSP request, and a UI update.
 - An extension that hangs; confirm detection, interruption, and isolation without taking down the editor.
+- Identify which runtime mechanism makes that possible: cancellable tasks, runtime interruption, workers/realms, fuel metering, or a process boundary for selected extension classes.
 - Benchmark against Emacs' synchronous model for writability.
 
 **Question answered:** is the "asynchronous by default" commitment writable by ordinary users, or only by engine authors?

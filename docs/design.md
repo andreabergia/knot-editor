@@ -8,7 +8,7 @@ The goal is not to recreate Emacs, nor to build another IDE. Instead, the object
 
 - the editor itself is programmable;
 - commands are first-class objects;
-- all functionality is implemented in the extension language;
+- user-visible editor behavior is exposed through the extension API;
 - the user interface is customizable;
 - text remains central;
 - modern tooling such as Tree-sitter and LSP integrate naturally.
@@ -21,9 +21,9 @@ The editor should feel lightweight, fast, inspectable, and extensible.
 
 ## Everything is programmable
 
-The editor is fundamentally an embedded runtime.
+The editor is fundamentally an embedded runtime wrapped around a small native core.
 
-Configuration, extensions, commands, keybindings, UI customizations, and workflows are all written in the embedded language.
+Configuration, extensions, commands, keybindings, UI customizations, and workflows are written in the embedded language.
 
 There is no strong distinction between:
 
@@ -32,6 +32,8 @@ There is no strong distinction between:
 - built-in functionality.
 
 Packages are simply collections of code.
+
+The native core provides the performance-critical substrate: buffers, rendering integration, scheduling, capability aggregation, and the host API. Built-in behavior should be authored against the same public APIs exposed to extensions wherever practical. The important invariant is not that every byte of editor implementation is scripted, but that built-ins do not rely on privileged editor APIs unavailable to users.
 
 ---
 
@@ -71,7 +73,7 @@ Examples:
 - `ssh://host/path/to/file` — remote file;
 - `zip:///archive.zip!/entry.txt` — archive entry.
 
-A `FileSystemProvider` interface defines the operations: open, read, write, watch, stat. This allows remote and virtual filesystems to participate naturally without changing the core workspace model.
+A `FileSystemProvider` interface defines the operations needed for filesystems to participate in editor workflows. The minimum surface includes open, read, write, watch, stat, directory enumeration, URI normalization, and capability discovery. Providers may also expose optimized operations such as search, atomic write/rename, and remote process integration. This allows remote and virtual filesystems to participate naturally without changing the core workspace model.
 
 Workspaces are created implicitly when a file or folder is open, though multiple files and folders can be added to a workspace. A workspace can be saved as a simple text file in the filesystem, if they contain more than one root directory or files.
 
@@ -337,6 +339,8 @@ Views decide how annotations are rendered.
 
 This allows features to compose naturally.
 
+Some annotations describe shared facts about a buffer, while views own presentation choices. For example, a folding provider may contribute foldable regions as annotations, but whether a particular region is currently collapsed belongs to each view. Rich visual conflict policy between overlapping annotations is a UI concern that can evolve after the storage and query model is proven.
+
 ---
 
 # Extension System
@@ -362,6 +366,12 @@ Extensions may provide:
 - filesystem providers;
 - UI surface implementations;
 - capability providers.
+
+## Isolation and cancellation
+
+The single-runtime model still needs an isolation story. A misbehaving extension must not be able to freeze the editor indefinitely, corrupt core state, or prevent cancellation of work it started.
+
+The exact mechanism is an open runtime question. Candidate approaches include cancellable tasks, runtime-level interruption, worker/realm isolation, fuel metering, or eventually a process boundary for selected extension classes. The design assumes a single embedded runtime by default, but the runtime must provide enough isolation for asynchronous-by-default editing to remain reliable.
 
 ---
 
