@@ -216,13 +216,13 @@ impl<'buf> AnnotationStore<'buf> {
 
 ## Sequenced work
 
-1. [ ] `core/annotation.rs`: `Stickiness`, `Anchor`, `Annotation`,
+1. [✅] `core/annotation.rs`: `Stickiness`, `Anchor`, `Annotation`,
    `AnnotationKind`/`AnnotationData`, `AnnotationStore::new` / `add` /
    `remove`. `add` issues `Position` tokens via `position_at`. Unit
    tests: add/remove, `position_at` boundary anchoring, token stability
    across unrelated edits (reuse step-4 `Position` tests as a harness),
    `resolve` round-trips.
-2. [ ] Stabilization core (`stabilize`, D2 + D7 repair): per-edit
+2. [✅] Stabilization core (`stabilize`, D2 + D7 repair): per-edit
    token repair from the edit log and sticky relocation. Unit tests:
    - insert at a `Before` start → annotation does not grow.
    - insert at an `After` end → annotation grows to include.
@@ -231,15 +231,15 @@ impl<'buf> AnnotationStore<'buf> {
      preserved.
    - two annotations, one untouched by an edit, stays put (O(affected)
      not O(all)).
-3. [ ] Interval query index (D3): `query_range`. Unit tests: overlapping
+3. [✅] Interval query index (D3): `query_range`. Unit tests: overlapping
    ranges returned; non-overlapping excluded; index stays consistent
    after `stabilize` (compare against a linear scan oracle).
-4. [ ] Correctness oracle in the bench: brute-force `String`-replay that
+4. [✅] Correctness oracle in the bench: brute-force `String`-replay that
    recomputes every annotation's expected byte range from original
    offsets + the same edit stream; assert equals `store.resolve` after
    each edit for every annotation, every `Stickiness` combination. This
    is the real "correctness under concurrent feature sources" gate.
-5. [ ] Benchmark harness (`src/bin/anno_bench.rs`, `[[bin]]`):
+5. [✅] Benchmark harness (`src/bin/anno_bench.rs`, `[[bin]]`):
    - Reuse step 4's `rust_sample.kfx --tile 635` 1M-line fixture and
      `build_buffer` path.
    - N annotation sources (default 3, then 6 to foreshadow step 6),
