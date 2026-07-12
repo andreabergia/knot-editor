@@ -141,6 +141,13 @@ pub struct Split {
 /// issued. `splits` is normally length 0 (the edit landed on a piece
 /// boundary and was elided) or 1 (one interior split); a `delete`
 /// spanning two interiors may carry up to 2.
+///
+/// In addition to the splits, each variant carries enough
+/// affected-piece metadata for step 5's annotation store to repair
+/// stale tokens in `O(affected)` time per edit (D7),
+/// without walking the whole piece chain: the annotation store keys
+/// anchors by `piece_id`, looks up only the pieces this edit touches,
+/// and re-binds them via these fields.
 #[derive(Clone, Debug)]
 pub enum BufferEdit {
     /// Bytes were inserted at `at`; the inserted span has byte length
@@ -149,6 +156,33 @@ pub enum BufferEdit {
     Insert {
         at: usize,
         inserted_len: usize,
+        /// Id of the freshly-inserted piece (the new piece added to
+        /// the chain at `split.insert_at`). Sticky-`After` anchors
+        /// sitting on a boundary-elided insert relocate to
+        /// `(inserted_piece, inserted_len)`.
+        inserted_piece: PieceId,
+        /// The piece ending at logical offset `at` *pre-insert*, and
+        /// the offset-within-that-piece corresponding to the boundary
+        /// `at`. `None` iff `at == 0` (no piece to the left of the
+        /// buffer start). A sticky-`After` anchor whose token is
+        /// `(left_piece.id, left_piece_offset)` (i.e. sitting exactly
+        /// at the boundary) relocates to `(inserted_piece, inserted_len)`;
+        /// a sticky-`Before` anchor keeps its token and resolves to
+        /// `at` post-edit, matching D2 "Before → unchanged".
+        ///
+        /// For an interior-split insert, `left_piece` is
+        /// `(splits[0].old_piece, splits[0].split_offset)` (the
+        /// original piece, now shortened to the split offset) —
+        /// equivalent boundary semantics, already covered by the split
+        /// remap rule. Stabilize only consults `left_piece` when
+        /// `splits` is empty (the boundary-elided case).
+        left_piece: Option<(PieceId, usize)>,
+        /// The `pieces[0]` id *pre-insert*. Used only when `at == 0`
+        /// to relocate sticky-`Before` anchors anchored to the buffer's
+        /// first piece at offset 0 — those would otherwise resolve to
+        /// `n` post-edit (chain shift), but D2 strict requires them to
+        /// stay at `0`. Relocate to `(inserted_piece, 0)`.
+        pre_first_piece: Option<PieceId>,
         splits: Vec<Split>,
     },
     /// Bytes in `range` were removed. Splits describe any interior
@@ -156,6 +190,24 @@ pub enum BufferEdit {
     /// `range.end`).
     Delete {
         range: Range<usize>,
+        /// Piece ids drained by this delete (the contents of
+        /// `[left.insert_at, right.insert_at)` post-both-splits,
+        /// pre-drain). Anchors whose token.piece is in this set were
+        /// inside the deleted span and are re-bound to a surviving
+        /// edge piece below.
+        deleted_pieces: Vec<PieceId>,
+        /// The piece ending at logical `range.start` (= `s`) post-edit
+        /// and its post-edit length. `None` iff `range.start == 0`
+        /// (no piece to the left of the delete). Sticky-`Before`
+        /// anchors inside `(s, e)` snap to `(left_survivor.0,
+        /// left_survivor.1)`, which resolves to `s` post-edit.
+        left_survivor: Option<(PieceId, usize)>,
+        /// The piece starting at logical `range.start` (= `e` pre-edit,
+        /// shifted to `s` post-edit) post-delete. `None` iff the buffer
+        /// is empty after the delete. Sticky-`After` anchors inside
+        /// `(s, e)` snap to `(right_survivor, 0)`, which resolves to
+        /// `s` post-edit.
+        right_survivor: Option<PieceId>,
         splits: Vec<Split>,
     },
 }
@@ -328,10 +380,29 @@ impl TextBuffer {
 
         // Locate the insertion point in the piece chain. Splits are
         // recorded so they can be attached to the BufferEdit event.
+        let pre_first_piece = self.pieces.first().map(|p| p.id);
         let mut splits = Vec::new();
         let split = self.split_at(at, &mut splits);
+
+        // Compute the piece ending at logical `at` pre-insert (and the
+        // offset-within-that-piece corresponding to the boundary `at`).
+        // For interior-split inserts this is `(splits[0].old_piece,
+        // splits[0].split_offset)` (post-split, the old_piece is
+        // shortened to the split offset); stabilize relies only on the
+        // splits list in that case, so this is dormant but kept
+        // consistent. For boundary-elided inserts (no splits) the
+        // piece chain is unchanged and `pieces[split.insert_at - 1]`
+        // is the piece ending at `at`.
+        let left_piece = if at == 0 {
+            None
+        } else {
+            let p = self.pieces[split.insert_at - 1];
+            Some((p.id, p.len))
+        };
+
+        let inserted_piece = self.next_id;
         let new_piece = Piece {
-            id: self.next_id,
+            id: inserted_piece,
             backing: Backing::Add,
             start: add_start,
             len: text.len(),
@@ -347,6 +418,9 @@ impl TextBuffer {
         self.edits.push(BufferEdit::Insert {
             at,
             inserted_len: text.len(),
+            inserted_piece,
+            left_piece,
+            pre_first_piece,
             splits,
         });
     }
@@ -379,13 +453,47 @@ impl TextBuffer {
         // deleted span and is removed wholesale. The right-edge split may
         // have shortened a piece to the post-end remainder; that remainder
         // sits at `right.insert_at` and survives the drain.
+        //
+        // Collect the affected-piece metadata D7 stabilize needs to
+        // repair stale tokens in O(affected) without walking the chain.
+        // `left_survivor` is the piece ending at `range.start` (= `s`)
+        // post-edit — `pieces[left.insert_at - 1]`, which (if a split
+        // happened at `s`) is the original piece now shortened to the
+        // split offset, or (if no split) the boundary piece unchanged.
+        // `right_survivor` is `pieces[right.insert_at]` — the piece that
+        // pre-edit starts at `range.end` and post-edit shifts to start
+        // at `s`. `None` iff the delete reaches the buffer's start or
+        // end respectively (no left/right edge survives).
+        let deleted_pieces: Vec<PieceId> =
+            self.pieces[left.insert_at..right.insert_at]
+                .iter()
+                .map(|p| p.id)
+                .collect();
+        let left_survivor = if left.insert_at == 0 {
+            None
+        } else {
+            let p = self.pieces[left.insert_at - 1];
+            Some((p.id, p.len))
+        };
+        let right_survivor = if right.insert_at == self.pieces.len() {
+            None
+        } else {
+            Some(self.pieces[right.insert_at].id)
+        };
+
         self.pieces.drain(left.insert_at..right.insert_at);
 
         // Keep the line index valid for the edited span.
         self.update_line_starts(range.clone(), "");
 
         // Record the edit event (D7). `range` is the pre-edit byte span.
-        self.edits.push(BufferEdit::Delete { range, splits });
+        self.edits.push(BufferEdit::Delete {
+            range,
+            deleted_pieces,
+            left_survivor,
+            right_survivor,
+            splits,
+        });
     }
 
     /// Replace `[range.start, range.end)` with `text`.
@@ -1424,7 +1532,7 @@ mod tests {
         let edits = b.edits_since(0);
         assert_eq!(edits.len(), 1);
         match &edits[0] {
-            BufferEdit::Insert { at, inserted_len, splits } => {
+            BufferEdit::Insert { at, inserted_len, splits, .. } => {
                 assert_eq!(*at, 3);
                 assert_eq!(*inserted_len, 2);
                 assert!(splits.is_empty(), "boundary insert must not split");
@@ -1481,7 +1589,7 @@ mod tests {
         // so the event carries the correct `range` and zero splits.
         b.delete(0..11);
         match &b.edits_since(0)[0] {
-            BufferEdit::Delete { range, splits } => {
+            BufferEdit::Delete { range, splits, .. } => {
                 assert_eq!(*range, 0..11);
                 assert!(splits.is_empty(), "whole-buffer delete must not split");
             }
@@ -1502,7 +1610,7 @@ mod tests {
         let r1_id = id0 + 1; // first split's right-half piece
         let r2_id = id0 + 2; // second split's right-half piece
         match &b.edits_since(0)[0] {
-            BufferEdit::Delete { range, splits } => {
+            BufferEdit::Delete { range, splits, .. } => {
                 assert_eq!(*range, 2..8);
                 assert_eq!(splits.len(), 2);
                 assert_eq!(splits[0].old_piece, id0);
