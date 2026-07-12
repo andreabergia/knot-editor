@@ -725,12 +725,18 @@ mod tests {
         BufferEdit::Insert {
             at,
             inserted_len: len,
+            inserted_piece: 0,
+            left_piece: None,
+            pre_first_piece: None,
             splits: vec![],
         }
     }
     fn edit_delete(s: usize, e: usize) -> BufferEdit {
         BufferEdit::Delete {
             range: s..e,
+            deleted_pieces: vec![],
+            left_survivor: None,
+            right_survivor: None,
             splits: vec![],
         }
     }

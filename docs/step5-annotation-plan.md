@@ -222,15 +222,22 @@ impl<'buf> AnnotationStore<'buf> {
    tests: add/remove, `position_at` boundary anchoring, token stability
    across unrelated edits (reuse step-4 `Position` tests as a harness),
    `resolve` round-trips.
-2. [✅] Stabilization core (`stabilize`, D2 + D7 repair): per-edit
-   token repair from the edit log and sticky relocation. Unit tests:
+2. [⚠️] Stabilization core (`stabilize`, D2 + D7 repair): correctness is
+   implemented and covered, but the current store is a full-pass
+   correctness fallback, not the intended affected-anchor implementation.
+   `AnnotationStore::stabilize` applies the same byte-offset transform as
+   the oracle to every live annotation, then re-anchors endpoints and
+   rebuilds the interval index. This pins semantics before optimization,
+   but it is `O(all annotations)` per edit and does not yet prove D1's
+   cheap-token claim. Unit tests:
    - insert at a `Before` start → annotation does not grow.
    - insert at an `After` end → annotation grows to include.
    - delete spanning an annotation → collapses to zero at `s`.
    - interior split stale right-half token repaired via log, content
-     preserved.
-   - two annotations, one untouched by an edit, stays put (O(affected)
-     not O(all)).
+     preserved at the resolved-range level.
+   - two annotations, one untouched by an edit, resolves correctly after
+     the edit; this is currently correctness coverage, not an `O(affected)`
+     proof.
 3. [✅] Interval query index (D3): `query_range`. Unit tests: overlapping
    ranges returned; non-overlapping excluded; index stays consistent
    after `stabilize` (compare against a linear scan oracle).
@@ -239,7 +246,7 @@ impl<'buf> AnnotationStore<'buf> {
    offsets + the same edit stream; assert equals `store.resolve` after
    each edit for every annotation, every `Stickiness` combination. This
    is the real "correctness under concurrent feature sources" gate.
-5. [✅] Benchmark harness (`src/bin/anno_bench.rs`, `[[bin]]`):
+5. [⚠️] Benchmark harness (`src/bin/anno_bench.rs`, `[[bin]]`):
    - Reuse step 4's `rust_sample.kfx --tile 635` 1M-line fixture and
      `build_buffer` path.
    - N annotation sources (default 3, then 6 to foreshadow step 6),
@@ -252,7 +259,27 @@ impl<'buf> AnnotationStore<'buf> {
      (D5 naive comparison). Output one TSV line per workload; write
      findings to `docs/step5-annotation-benchmark.md`.
    - Measure RSS with 10k annotations live.
-6. [ ] Decision checkpoint: fill in `roadmap.md` step 5 with the chosen
+   - ✅ Harness exists and smoke-runs.
+   - ❌ Full 1M-line / 10k-annotation findings have not been recorded in
+     `docs/step5-annotation-benchmark.md`.
+   - ❌ Current smoke data shows the token store is slower than the
+     offset-remap baseline because stabilization re-anchors/reindexes all
+     annotations per edit; this is expected for the fallback, but it means
+     the cheapness question remains open.
+6. [ ] Real affected-anchor implementation:
+   - Replace the full-pass `apply_edit_all` / `reindex_all` path with an
+     edit-driven anchor index keyed by piece id and boundary offsets.
+   - Use `BufferEdit` metadata (`inserted_piece`, `left_piece`,
+     `pre_first_piece`, `deleted_pieces`, `left_survivor`,
+     `right_survivor`, `splits`) to repair only anchors touched by an edit
+     or made stale by a split/delete.
+   - Update index entries only for moved annotations; untouched
+     annotations should not be scanned on unrelated edits.
+   - Keep the current oracle and query linear-scan tests as the semantic
+     guardrail while optimizing.
+   - Re-run the full 1M-line / 10k-annotation benchmark and write
+     `docs/step5-annotation-benchmark.md`.
+7. [ ] Decision checkpoint: fill in `roadmap.md` step 5 with the chosen
    representation (token anchors, D1) and the extension-facing
    semantics (`Stickiness::{Before,After}`, defaults documented). Mark
    the question answered or reopen step 4 if token stability proves
@@ -260,6 +287,12 @@ impl<'buf> AnnotationStore<'buf> {
 
 ## Carry-forward risks
 
+- **Correctness fallback is not the final representation proof.** The
+  current store intentionally matches the oracle by transforming cached
+  offsets for every live annotation and rebuilding derived indexes. That
+  keeps semantics stable, but it measures closer to the D5 baseline than
+  the desired token-anchor design. The real step-5 gate remains the
+  affected-anchor implementation above.
 - **Edit-log retention vs `take_edits`.** The store's stale-token
   repair needs the `Split` records (D4/D7). If any other subsystem
   drains the log, repair silently loses information. Mitigation: the
