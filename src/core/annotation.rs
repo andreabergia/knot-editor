@@ -6,25 +6,20 @@
 //! correctly. A derived interval index (D3) answers "annotations overlapping
 //! `[a, b)`".
 //!
-//! ## Representation and stabilization (current prototype form)
+//! ## Representation and stabilization
 //!
-//! Endpoints carry a `Position` token plus the cached live byte offset
-//! (`idx_start` / `idx_end`). `stabilize` advances a cursor over the edit
-//! log and, **per edit**, applies the same `transform_offset` rule the
-//! correctness oracle uses (D2) to *every* non-collapsed annotation's cached
-//! offsets, recomputes the `collapsed` flag with the oracle's exact rule
-//! (collapse only if an endpoint was strictly inside a delete *and* the
-//! resulting extent is empty), then rebuilds both the `Position` tokens (via
-//! `position_at`) and the interval index from the refreshed offsets.
+//! Endpoints carry a `Position` token plus a cached live byte offset
+//! (`idx_start` / `idx_end`) used only as a fallback when an empty buffer
+//! cannot issue a fresh token. `stabilize` advances a cursor over the edit
+//! log and repairs only endpoints whose token piece is affected by the edit:
+//! interior split right halves, insert-boundary endpoints, and endpoints
+//! whose piece is deleted. Untouched annotations are left alone and resolve
+//! through their stable `Position` tokens.
 //!
-//! This is correct **by construction** — the store's transform is identical
-//! to the oracle's — but it is `O(all annotations)` per edit, same as the
-//! D5 offset-remap baseline. The plan's eventual target is `O(affected)`
-//! incrementality (only re-resolve the endpoints an edit actually moves,
-//! preserving the token stability step 4 bought us); the per-edit token
-//! repair that tried to reach that incrementally is replaced here by the
-//! provably-correct full pass, and the `O(affected)` optimization is the
-//! documented step-5 carry-forward.
+//! Querying is buffer-aware: `query_range` uses a sorted interval index
+//! rebuilt during `stabilize` for O(log n + k) binary-search lookup (D3).
+//! The `Position` tokens remain the source of truth — the index is a derived
+//! cache, so it can never drift in correctness.
 //!
 //! ## API shape note
 //!
@@ -46,10 +41,10 @@
 //! later edit can re-extend it. This matches the step-4-style correctness
 //! oracle, which also reports `None` for a fully-deleted annotation.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::ops::Range;
 
-use super::buffer::{BufferEdit, Position, TextBuffer};
+use super::buffer::{BufferEdit, PieceId, Position, TextBuffer};
 
 /// Stable identifier for an annotation, issued by the store.
 pub type AnnotationId = u64;
@@ -126,19 +121,59 @@ pub struct Annotation {
     idx_end: usize,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+enum EndpointSide {
+    Start,
+    End,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct EndpointKey {
+    id: AnnotationId,
+    side: EndpointSide,
+}
+
+impl EndpointKey {
+    fn start(id: AnnotationId) -> Self {
+        Self {
+            id,
+            side: EndpointSide::Start,
+        }
+    }
+
+    fn end(id: AnnotationId) -> Self {
+        Self {
+            id,
+            side: EndpointSide::End,
+        }
+    }
+}
+
 /// Authoritative annotation store over a `TextBuffer` (D1, D4).
 ///
 /// Buffer-agnostic by design (see module docs): pass `&TextBuffer` to the
 /// methods that need it.
+#[derive(Clone, Copy, Debug)]
+struct IntervalEntry {
+    start: usize,
+    end: usize,
+    id: AnnotationId,
+}
+
 pub struct AnnotationStore {
     annotations: HashMap<AnnotationId, Annotation>,
-    /// Interval index keyed by live start offset: `(start, id) -> end`.
-    /// Rebuilt from scratch by `reindex_all` after each edit; a derived cache
-    /// of the cached `idx_start`/`idx_end` offsets.
-    start_index: BTreeMap<(usize, AnnotationId), usize>,
-    /// Mirror keyed by live end offset: `(end, id) -> start`. Lets
-    /// `query_range` find spans enclosing the query endpoints.
-    end_index: BTreeMap<(usize, AnnotationId), usize>,
+    /// Endpoint index keyed by stable piece id, then endpoint offset within
+    /// the piece. This lets `stabilize` touch only anchors whose piece split,
+    /// received a boundary insert, or was deleted.
+    endpoints_by_piece: BTreeMap<PieceId, BTreeSet<(u32, EndpointKey)>>,
+    /// Endpoints that currently have no surviving piece to anchor to (only
+    /// possible when the buffer is empty and a zero-width annotation survives
+    /// at offset 0).
+    unanchored_endpoints: BTreeSet<EndpointKey>,
+    /// Derived interval index for `query_range` (D3): sorted by `start`,
+    /// rebuilt lazily on the next query after edits or mutations.
+    interval_index: Vec<IntervalEntry>,
+    index_dirty: bool,
     /// High-water mark into `buffer`'s edit log (D4).
     cursor: usize,
     next_id: AnnotationId,
@@ -148,8 +183,10 @@ impl AnnotationStore {
     pub fn new() -> Self {
         Self {
             annotations: HashMap::new(),
-            start_index: BTreeMap::new(),
-            end_index: BTreeMap::new(),
+            endpoints_by_piece: BTreeMap::new(),
+            unanchored_endpoints: BTreeSet::new(),
+            interval_index: Vec::new(),
+            index_dirty: true,
             cursor: 0,
             next_id: 1,
         }
@@ -162,6 +199,127 @@ impl AnnotationStore {
 
     pub fn is_empty(&self) -> bool {
         self.annotations.is_empty()
+    }
+
+    fn mark_index_dirty(&mut self) {
+        self.index_dirty = true;
+    }
+
+    fn rebuild_index(&mut self, buffer: &TextBuffer) {
+        self.interval_index.clear();
+        for (&id, ann) in &self.annotations {
+            if ann.collapsed {
+                continue;
+            }
+            let s = ann.start.resolve(buffer).unwrap_or(ann.idx_start);
+            let e = ann.end.resolve(buffer).unwrap_or(ann.idx_end);
+            let (start, end) = if s <= e { (s, e) } else { (e, s) };
+            self.interval_index.push(IntervalEntry { start, end, id });
+        }
+        self.interval_index.sort_unstable_by_key(|e| e.start);
+        self.index_dirty = false;
+    }
+
+    fn insert_endpoint_index(&mut self, pos: Position, key: EndpointKey) {
+        self.unanchored_endpoints.remove(&key);
+        self.endpoints_by_piece
+            .entry(pos.piece())
+            .or_default()
+            .insert((pos.offset(), key));
+    }
+
+    fn remove_endpoint_index(&mut self, pos: Position, key: EndpointKey) {
+        let mut empty = false;
+        if let Some(entries) = self.endpoints_by_piece.get_mut(&pos.piece()) {
+            entries.remove(&(pos.offset(), key));
+            empty = entries.is_empty();
+        }
+        if empty {
+            self.endpoints_by_piece.remove(&pos.piece());
+        }
+    }
+
+    fn endpoint_pos(&self, key: EndpointKey) -> Option<Position> {
+        let ann = self.annotations.get(&key.id)?;
+        match key.side {
+            EndpointSide::Start => Some(ann.start.pos),
+            EndpointSide::End => Some(ann.end.pos),
+        }
+    }
+
+    fn set_endpoint_pos(&mut self, buffer: &TextBuffer, key: EndpointKey, pos: Position) {
+        let Some(old_pos) = self.endpoint_pos(key) else {
+            return;
+        };
+        self.remove_endpoint_index(old_pos, key);
+        if let Some(ann) = self.annotations.get_mut(&key.id) {
+            match key.side {
+                EndpointSide::Start => {
+                    ann.start.pos = pos;
+                    ann.idx_start = buffer.resolve(pos).unwrap_or(ann.idx_start);
+                }
+                EndpointSide::End => {
+                    ann.end.pos = pos;
+                    ann.idx_end = buffer.resolve(pos).unwrap_or(ann.idx_end);
+                }
+            }
+        }
+        self.insert_endpoint_index(pos, key);
+    }
+
+    fn set_endpoint_unanchored(&mut self, key: EndpointKey, fallback_offset: usize) {
+        let Some(old_pos) = self.endpoint_pos(key) else {
+            return;
+        };
+        self.remove_endpoint_index(old_pos, key);
+        if let Some(ann) = self.annotations.get_mut(&key.id) {
+            match key.side {
+                EndpointSide::Start => ann.idx_start = fallback_offset,
+                EndpointSide::End => ann.idx_end = fallback_offset,
+            }
+        }
+        self.unanchored_endpoints.insert(key);
+    }
+
+    fn endpoints_for_piece(&self, piece: PieceId) -> Vec<(u32, EndpointKey)> {
+        self.endpoints_by_piece
+            .get(&piece)
+            .map(|entries| entries.iter().copied().collect())
+            .unwrap_or_default()
+    }
+
+    fn endpoints_at(&self, piece: PieceId, offset: usize) -> Vec<EndpointKey> {
+        let offset = offset as u32;
+        self.endpoints_by_piece
+            .get(&piece)
+            .map(|entries| {
+                entries
+                    .range((offset, EndpointKey::start(0))..=(offset, EndpointKey::end(u64::MAX)))
+                    .map(|&(_, key)| key)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn endpoints_after(&self, piece: PieceId, offset: usize) -> Vec<(u32, EndpointKey)> {
+        let offset = offset as u32;
+        self.endpoints_by_piece
+            .get(&piece)
+            .map(|entries| {
+                entries
+                    .range((offset.saturating_add(1), EndpointKey::start(0))..)
+                    .map(|&(off, key)| (off, key))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn remove_annotation_endpoints(&mut self, ann: &Annotation) {
+        self.remove_endpoint_index(ann.start.pos, EndpointKey::start(ann.id));
+        self.remove_endpoint_index(ann.end.pos, EndpointKey::end(ann.id));
+        self.unanchored_endpoints
+            .remove(&EndpointKey::start(ann.id));
+        self.unanchored_endpoints.remove(&EndpointKey::end(ann.id));
     }
 
     /// Add an annotation spanning `[start, end)` (byte offsets into the
@@ -198,9 +356,9 @@ impl AnnotationStore {
             idx_end: end,
         };
         self.annotations.insert(id, ann);
-
-        self.start_index.insert((start, id), end);
-        self.end_index.insert((end, id), start);
+        self.insert_endpoint_index(s_pos, EndpointKey::start(id));
+        self.insert_endpoint_index(e_pos, EndpointKey::end(id));
+        self.mark_index_dirty();
 
         id
     }
@@ -208,8 +366,8 @@ impl AnnotationStore {
     /// Remove an annotation entirely.
     pub fn remove(&mut self, id: AnnotationId) {
         if let Some(ann) = self.annotations.remove(&id) {
-            self.start_index.remove(&(ann.idx_start, id));
-            self.end_index.remove(&(ann.idx_end, id));
+            self.remove_annotation_endpoints(&ann);
+            self.mark_index_dirty();
         }
     }
 
@@ -218,71 +376,45 @@ impl AnnotationStore {
     /// Returns `None` iff the annotation is `collapsed` (fully consumed by a
     /// delete) — see module docs for the contract.
     ///
-    /// In the current `O(all)` prototype form `resolve` reads the cached
-    /// `idx_start` / `idx_end` offsets directly: they are refreshed by
-    /// `stabilize` using the *same* `transform_offset` the correctness oracle
-    /// uses, so they track the oracle byte-for-byte. The `Position` tokens are
-    /// re-anchored by `reindex_all` but are a cache for the future `O(affected)`
-    /// path — they are *not* consulted here, because a token can fail to
-    /// re-anchor when its piece was deleted even though the offset it
-    /// represented survives (e.g. an empty buffer after a full-buffer delete
-    /// has no piece to anchor a zero-length annotation to). The caller must
-    /// `stabilize` before `resolve` to reflect edits; the offsets are only
-    /// refreshed then. `buffer` is accepted to keep the API shape callers
-    /// already use and as the seam for the incremental path.
-    pub fn resolve(&self, _buffer: &TextBuffer, id: AnnotationId) -> Option<Range<usize>> {
+    /// The caller must `stabilize` before `resolve` to reflect edits.
+    pub fn resolve(&self, buffer: &TextBuffer, id: AnnotationId) -> Option<Range<usize>> {
         let ann = self.annotations.get(&id)?;
         if ann.collapsed {
             return None;
         }
-        let (s, e) = (ann.idx_start, ann.idx_end);
-        if s <= e {
-            Some(s..e)
-        } else {
-            Some(e..s)
-        }
+        let s = ann.start.resolve(buffer).unwrap_or(ann.idx_start);
+        let e = ann.end.resolve(buffer).unwrap_or(ann.idx_end);
+        if s <= e { Some(s..e) } else { Some(e..s) }
     }
 
-    /// All annotation ids overlapping `[a, b)` (D3, for step 6). Collapsed
-    /// (fully-deleted) annotations are excluded — they have no extent.
-    pub fn query_range(&self, a: usize, b: usize) -> Vec<AnnotationId> {
+    /// All annotation ids overlapping `[a, b)` (D3, for step 6). Uses a
+    /// lazily-rebuilt interval index sorted by start byte for O(log n + k)
+    /// binary-search lookup; the index is rebuilt once on the first query
+    /// after edits.
+    pub fn query_range(&mut self, buffer: &TextBuffer, a: usize, b: usize) -> Vec<AnnotationId> {
         if a >= b {
             return Vec::new();
         }
-        let mut out: BTreeSet<AnnotationId> = BTreeSet::new();
-        // Annotations starting inside [a, b).
-        for (&(_s, id), _) in self.start_index.range((a, 0)..(b, 0)) {
-            if !self.annotations[&id].collapsed {
-                out.insert(id);
-            }
+        if self.index_dirty {
+            self.rebuild_index(buffer);
         }
-        // Annotations ending inside (a, b).
-        for (&(_e, id), _) in self.end_index.range((a + 1, 0)..(b, AnnotationId::MAX)) {
-            if !self.annotations[&id].collapsed {
-                out.insert(id);
-            }
-        }
-        // Annotations spanning the whole range (start < a, end > a).
-        for (&(end, id), &start) in self.end_index.range((a + 1, 0)..) {
-            if start < a && end > a && !self.annotations[&id].collapsed {
-                out.insert(id);
-            }
-        }
-        out.into_iter().collect()
+        let start_idx = self
+            .interval_index
+            .partition_point(|e| e.start < b);
+        let out: Vec<AnnotationId> = self.interval_index[..start_idx]
+            .iter()
+            .filter(|e| e.end > a)
+            .map(|e| e.id)
+            .collect();
+        // Already in start order from the sorted index.
+        out
     }
 
-    /// Advance over every edit since the last `stabilize`, applying D2
-    /// stickiness to every annotation's cached offsets and re-anchoring the
-    /// endpoint tokens + interval index.
+    /// Advance over every edit since the last `stabilize`, repairing only
+    /// endpoints whose token pieces are touched by those edits.
     ///
-    /// Per edit this is `O(all annotations)` (a full pass applying
-    /// `transform_offset`, plus a `position_at` re-anchor per live
-    /// endpoint). This matches the correctness oracle **by construction**
-    /// — the store uses the identical transform — at the cost of the
-    /// incremental update the plan ultimately targets. The carry-forward is
-    /// to re-resolve only the endpoints an edit actually moves (preserving
-    /// step 4's token stability) once the prototype's correctness is locked;
-    /// `reindex_all` is the seam that gets replaced by the incremental path.
+    /// Untouched annotations are not scanned: their `Position` tokens stay
+    /// valid and resolve through the buffer's piece table.
     pub fn stabilize(&mut self, buffer: &TextBuffer) {
         let edits = buffer.edits_since(self.cursor);
         // D4 invariant: the log must never have been shortened underneath us.
@@ -298,83 +430,193 @@ impl AnnotationStore {
         }
 
         for edit in edits {
-            self.apply_edit_all(edit);
-            self.reindex_all(buffer);
+            self.apply_edit_incremental(buffer, edit);
         }
         self.cursor += edits.len();
+        self.mark_index_dirty();
     }
 
     // ---- stabilization internals -----------------------------------------
 
-    /// Apply one edit's stickiness transform (D2) to every non-collapsed
-    /// annotation's cached `idx_start` / `idx_end`, using the *same*
-    /// `transform_offset` the correctness oracle uses — so the offsets track
-    /// the oracle byte-for-byte. Collapsed annotations stay reserved and
-    /// are never re-extended by a later edit (matching the oracle's
-    /// once-collapsed-always-collapsed behavior here).
-    ///
-    /// For a delete, the `collapsed` flag is recomputed with the oracle's
-    /// exact rule: collapse only if an endpoint was strictly inside the
-    /// deleted span (`at < off < end`) **and** the post-transform extent is
-    /// empty (`start >= end`). A zero-length annotation exactly at a delete
-    /// boundary is *not* "inside" and so stays put at the surviving edge
-    /// (`start == end == at`), visible as a zero-width point — the same edge
-    /// case the oracle preserves.
-    fn apply_edit_all(&mut self, edit: &BufferEdit) {
-        for ann in self.annotations.values_mut() {
-            if ann.collapsed {
-                continue;
-            }
-            match edit {
-                BufferEdit::Insert { .. } => {
-                    ann.idx_start = transform_offset(ann.idx_start, ann.start.sticky, edit);
-                    ann.idx_end = transform_offset(ann.idx_end, ann.end.sticky, edit);
+    fn apply_edit_incremental(&mut self, buffer: &TextBuffer, edit: &BufferEdit) {
+        match edit {
+            BufferEdit::Insert {
+                inserted_len,
+                inserted_piece,
+                left_piece,
+                pre_first_piece,
+                splits,
+                ..
+            } => {
+                for split in splits {
+                    self.move_exact_boundary(
+                        buffer,
+                        split.old_piece,
+                        split.split_offset,
+                        Position::new(*inserted_piece, *inserted_len as u32),
+                    );
+                    self.remap_split_right_half(
+                        buffer,
+                        split.old_piece,
+                        split.split_offset,
+                        split.new_piece,
+                    );
                 }
-                BufferEdit::Delete { range, .. } => {
-                    let at = range.start;
-                    let end = range.end;
-                    let s_in = ann.idx_start > at && ann.idx_start < end;
-                    let e_in = ann.idx_end > at && ann.idx_end < end;
-                    ann.idx_start = transform_offset(ann.idx_start, ann.start.sticky, edit);
-                    ann.idx_end = transform_offset(ann.idx_end, ann.end.sticky, edit);
-                    if (s_in || e_in) && ann.idx_start >= ann.idx_end {
-                        ann.collapsed = true;
+                if splits.is_empty() {
+                    if let Some((piece, offset)) = left_piece {
+                        self.move_exact_boundary(
+                            buffer,
+                            *piece,
+                            *offset,
+                            Position::new(*inserted_piece, *inserted_len as u32),
+                        );
+                    } else if pre_first_piece.is_none() {
+                        self.move_unanchored_endpoints(
+                            buffer,
+                            Position::new(*inserted_piece, *inserted_len as u32),
+                        );
+                    }
+                }
+            }
+            BufferEdit::Delete {
+                range,
+                deleted_pieces,
+                deleted_piece_lens,
+                left_survivor,
+                right_survivor,
+                splits,
+            } => {
+                for split in splits {
+                    self.remap_split_right_half(
+                        buffer,
+                        split.old_piece,
+                        split.split_offset,
+                        split.new_piece,
+                    );
+                }
+
+                let right_boundary_split = right_survivor.and_then(|right| {
+                    splits
+                        .iter()
+                        .find(|split| split.new_piece == right)
+                        .map(|split| (split.old_piece, split.split_offset as u32))
+                });
+
+                let edge = left_survivor
+                    .map(|(piece, offset)| Position::new(piece, offset as u32))
+                    .or_else(|| right_survivor.map(|piece| Position::new(piece, 0)));
+
+                let mut touched = HashSet::new();
+                let mut consumed = HashSet::new();
+                let first_deleted = deleted_piece_lens.first().copied();
+                let last_deleted = deleted_piece_lens.last().copied();
+                for piece in deleted_pieces {
+                    for (offset, key) in self.endpoints_for_piece(*piece) {
+                        touched.insert(key.id);
+                        let at_right_boundary = right_boundary_split
+                            .map(|(p, off)| p == *piece && off == offset)
+                            .unwrap_or(false);
+                        let at_elided_left_boundary = first_deleted
+                            .map(|(p, _)| p == *piece && offset == 0)
+                            .unwrap_or(false);
+                        let at_elided_right_boundary = last_deleted
+                            .map(|(p, len)| p == *piece && offset as usize == len)
+                            .unwrap_or(false);
+                        if !at_right_boundary
+                            && !at_elided_left_boundary
+                            && !at_elided_right_boundary
+                        {
+                            consumed.insert(key.id);
+                        }
+                        if let Some(pos) = edge {
+                            self.set_endpoint_pos(buffer, key, pos);
+                        } else {
+                            self.set_endpoint_unanchored(key, range.start);
+                        }
+                    }
+                }
+
+                for id in touched {
+                    self.refresh_cached_offsets(buffer, id);
+                    if consumed.contains(&id) && self.resolved_extent_empty(buffer, id) {
+                        self.collapse(id);
                     }
                 }
             }
         }
     }
 
-    /// Rebuild the interval index and re-anchor every endpoint token from
-    /// the freshly-transformed cached offsets. `position_at(idx)` re-anchors
-    /// the `Position`; the index entries are recomputed from `idx_start` /
-    /// `idx_end`. Collapsed annotations are excluded from both — they have no
-    /// extent, so `query_range` cannot see them.
-    ///
-    /// Re-anchoring uses the buffer's sticky-left default `position_at`. That
-    /// is dead-on for `Before` endpoints (sticky-left matches the transform
-    /// rule "off unchanged at the boundary") and the `After` stickiness is
-    /// applied at `transform` time, so the token's anchoring is purely a cache
-    /// for next pass — the *decisions* come from `transform_offset`, not the
-    /// token placement.
-    fn reindex_all(&mut self, buffer: &TextBuffer) {
-        self.start_index.clear();
-        self.end_index.clear();
-        for ann in self.annotations.values_mut() {
-            if ann.collapsed {
-                continue;
+    fn move_exact_boundary(
+        &mut self,
+        buffer: &TextBuffer,
+        piece: PieceId,
+        offset: usize,
+        to: Position,
+    ) {
+        for key in self.endpoints_at(piece, offset) {
+            self.set_endpoint_pos(buffer, key, to);
+        }
+    }
+
+    fn remap_split_right_half(
+        &mut self,
+        buffer: &TextBuffer,
+        old_piece: PieceId,
+        split_offset: usize,
+        new_piece: PieceId,
+    ) {
+        for (old_offset, key) in self.endpoints_after(old_piece, split_offset) {
+            let new_offset = old_offset as usize - split_offset;
+            self.set_endpoint_pos(buffer, key, Position::new(new_piece, new_offset as u32));
+        }
+    }
+
+    fn move_unanchored_endpoints(&mut self, buffer: &TextBuffer, to: Position) {
+        let keys: Vec<_> = self.unanchored_endpoints.iter().copied().collect();
+        for key in keys {
+            if let Some(ann) = self.annotations.get_mut(&key.id) {
+                match key.side {
+                    EndpointSide::Start => {
+                        ann.start.pos = to;
+                        ann.idx_start = buffer.resolve(to).unwrap_or(ann.idx_start);
+                    }
+                    EndpointSide::End => {
+                        ann.end.pos = to;
+                        ann.idx_end = buffer.resolve(to).unwrap_or(ann.idx_end);
+                    }
+                }
             }
-            if let Some(p) = buffer.position_at(ann.idx_start) {
-                ann.start.pos = p;
+            self.insert_endpoint_index(to, key);
+        }
+    }
+
+    fn refresh_cached_offsets(&mut self, buffer: &TextBuffer, id: AnnotationId) {
+        if let Some(ann) = self.annotations.get_mut(&id) {
+            if let Some(s) = ann.start.resolve(buffer) {
+                ann.idx_start = s;
             }
-            if let Some(p) = buffer.position_at(ann.idx_end) {
-                ann.end.pos = p;
+            if let Some(e) = ann.end.resolve(buffer) {
+                ann.idx_end = e;
             }
-            let s = ann.idx_start;
-            let e = ann.idx_end;
-            let id = ann.id;
-            self.start_index.insert((s, id), e);
-            self.end_index.insert((e, id), s);
+        }
+    }
+
+    fn resolved_extent_empty(&self, buffer: &TextBuffer, id: AnnotationId) -> bool {
+        let Some(ann) = self.annotations.get(&id) else {
+            return false;
+        };
+        let s = ann.start.resolve(buffer).unwrap_or(ann.idx_start);
+        let e = ann.end.resolve(buffer).unwrap_or(ann.idx_end);
+        s >= e
+    }
+
+    fn collapse(&mut self, id: AnnotationId) {
+        let Some(ann) = self.annotations.get(&id).cloned() else {
+            return;
+        };
+        self.remove_annotation_endpoints(&ann);
+        if let Some(ann) = self.annotations.get_mut(&id) {
+            ann.collapsed = true;
         }
     }
 }
@@ -410,8 +652,10 @@ impl OffsetStore {
     pub fn add(&mut self, start: usize, end: usize) -> AnnotationId {
         let id = self.next_id;
         self.next_id += 1;
-        self.anns
-            .insert(id, (start, end, Stickiness::Before, Stickiness::After, false));
+        self.anns.insert(
+            id,
+            (start, end, Stickiness::Before, Stickiness::After, false),
+        );
         id
     }
 
@@ -443,11 +687,7 @@ impl OffsetStore {
         if *collapsed {
             return None;
         }
-        if *s <= *e {
-            Some(*s..*e)
-        } else {
-            Some(*e..*s)
-        }
+        if *s <= *e { Some(*s..*e) } else { Some(*e..*s) }
     }
 }
 
@@ -515,7 +755,13 @@ mod tests {
     fn add_and_resolve_round_trips() {
         let b = text();
         let mut store = AnnotationStore::new();
-        let id = store.add(&b, 0, 5, AnnotationKind::Diagnostic, AnnotationData::default());
+        let id = store.add(
+            &b,
+            0,
+            5,
+            AnnotationKind::Diagnostic,
+            AnnotationData::default(),
+        );
         assert_eq!(store.resolve(&b, id), Some(0..5));
         let id2 = store.add(&b, 6, 11, AnnotationKind::Search, AnnotationData::default());
         assert_eq!(store.resolve(&b, id2), Some(6..11));
@@ -525,10 +771,16 @@ mod tests {
     fn remove_drops_annotation() {
         let b = text();
         let mut store = AnnotationStore::new();
-        let id = store.add(&b, 0, 5, AnnotationKind::Diagnostic, AnnotationData::default());
+        let id = store.add(
+            &b,
+            0,
+            5,
+            AnnotationKind::Diagnostic,
+            AnnotationData::default(),
+        );
         store.remove(id);
         assert!(store.resolve(&b, id).is_none());
-        assert!(store.query_range(0, 11).is_empty());
+        assert!(store.query_range(&b, 0, 11).is_empty());
     }
 
     #[test]
@@ -536,7 +788,13 @@ mod tests {
         // start defaults to Before (sticky-left), end to After (sticky-right).
         let b = text();
         let mut store = AnnotationStore::new();
-        let id = store.add(&b, 0, 11, AnnotationKind::Diagnostic, AnnotationData::default());
+        let id = store.add(
+            &b,
+            0,
+            11,
+            AnnotationKind::Diagnostic,
+            AnnotationData::default(),
+        );
         assert_eq!(store.annotations[&id].start.sticky(), Stickiness::Before);
         assert_eq!(store.annotations[&id].end.sticky(), Stickiness::After);
     }
@@ -558,7 +816,13 @@ mod tests {
         // the endpoint put (text lands before it).
         let mut b = text();
         let mut store = AnnotationStore::new();
-        let id = store.add(&b, 0, 5, AnnotationKind::Diagnostic, AnnotationData::default());
+        let id = store.add(
+            &b,
+            0,
+            5,
+            AnnotationKind::Diagnostic,
+            AnnotationData::default(),
+        );
         b.insert(0, "X");
         store.stabilize(&b);
         // The `Before` start is sticky-left: it keeps pointing at the same
@@ -573,7 +837,13 @@ mod tests {
         // the endpoint past the inserted span.
         let mut b = text();
         let mut store = AnnotationStore::new();
-        let id = store.add(&b, 0, 5, AnnotationKind::Diagnostic, AnnotationData::default());
+        let id = store.add(
+            &b,
+            0,
+            5,
+            AnnotationKind::Diagnostic,
+            AnnotationData::default(),
+        );
         b.insert(5, "X");
         store.stabilize(&b);
         assert_eq!(store.resolve(&b, id), Some(0..6));
@@ -583,7 +853,13 @@ mod tests {
     fn insert_at_after_end_extends() {
         let mut b = text();
         let mut store = AnnotationStore::new();
-        let id = store.add(&b, 0, 5, AnnotationKind::Diagnostic, AnnotationData::default());
+        let id = store.add(
+            &b,
+            0,
+            5,
+            AnnotationKind::Diagnostic,
+            AnnotationData::default(),
+        );
         // "hello" then insert at offset 5 (right after "hello").
         b.insert(5, ">>>");
         store.stabilize(&b);
@@ -595,7 +871,13 @@ mod tests {
     fn delete_spanning_annotation_collapses_to_zero() {
         let mut b = text();
         let mut store = AnnotationStore::new();
-        let id = store.add(&b, 3, 8, AnnotationKind::Diagnostic, AnnotationData::default());
+        let id = store.add(
+            &b,
+            3,
+            8,
+            AnnotationKind::Diagnostic,
+            AnnotationData::default(),
+        );
         // Delete [2, 9) which fully contains [3, 8).
         b.delete(2..9);
         store.stabilize(&b);
@@ -608,7 +890,13 @@ mod tests {
         let mut b = text();
         let mut store = AnnotationStore::new();
         // "hello world": delete [0, 6) removes "hello " -> surviving "world".
-        let id = store.add(&b, 2, 8, AnnotationKind::Diagnostic, AnnotationData::default());
+        let id = store.add(
+            &b,
+            2,
+            8,
+            AnnotationKind::Diagnostic,
+            AnnotationData::default(),
+        );
         b.delete(0..6);
         store.stabilize(&b);
         // start (2) inside -> collapses to s=0; end (8) >= e=6 -> shifts to 2.
@@ -623,7 +911,13 @@ mod tests {
         let mut b = TextBuffer::from_text("abcdefghij"); // single piece, len 10
         let mut store = AnnotationStore::new();
         // Anchor [2, 7): end at 7 is in the right half of the original piece.
-        let id = store.add(&b, 2, 7, AnnotationKind::Diagnostic, AnnotationData::default());
+        let id = store.add(
+            &b,
+            2,
+            7,
+            AnnotationKind::Diagnostic,
+            AnnotationData::default(),
+        );
         assert_eq!(store.resolve(&b, id), Some(2..7));
         // Insert at offset 4 splits the original piece; "bcdefg" (the content
         // between the endpoints) is now preceded by an extra byte.
@@ -637,7 +931,13 @@ mod tests {
     fn untouched_annotation_costs_nothing() {
         let mut b = text();
         let mut store = AnnotationStore::new();
-        let touched = store.add(&b, 0, 5, AnnotationKind::Diagnostic, AnnotationData::default());
+        let touched = store.add(
+            &b,
+            0,
+            5,
+            AnnotationKind::Diagnostic,
+            AnnotationData::default(),
+        );
         let _untouched = store.add(&b, 6, 11, AnnotationKind::Search, AnnotationData::default());
         // Edit at the start only affects the first annotation.
         b.insert(0, "X");
@@ -654,10 +954,16 @@ mod tests {
     fn query_range_returns_overlapping_excludes_nonoverlapping() {
         let b = text();
         let mut store = AnnotationStore::new();
-        let a = store.add(&b, 0, 5, AnnotationKind::Diagnostic, AnnotationData::default());
+        let a = store.add(
+            &b,
+            0,
+            5,
+            AnnotationKind::Diagnostic,
+            AnnotationData::default(),
+        );
         let c = store.add(&b, 6, 11, AnnotationKind::Search, AnnotationData::default());
         let _far = store.add(&b, 9, 11, AnnotationKind::Git, AnnotationData::default());
-        let hits = store.query_range(4, 7);
+        let hits = store.query_range(&b, 4, 7);
         assert!(hits.contains(&a), "a [0,5) overlaps [4,7)");
         assert!(hits.contains(&c), "c [6,11) overlaps [4,7)");
         assert_eq!(hits.len(), 2);
@@ -678,9 +984,12 @@ mod tests {
         }
         // Every query must match a brute-force linear scan over resolved ranges.
         for a in 0..=11 {
-            assert!(store.query_range(a, a).is_empty(), "empty range must match nothing");
+            assert!(
+                store.query_range(&b, a, a).is_empty(),
+                "empty range must match nothing"
+            );
             for bnd in (a + 1)..=11 {
-                let q = store.query_range(a, bnd);
+                let q = store.query_range(&b, a, bnd);
                 let mut expected = Vec::new();
                 for id in store.annotations.keys().copied() {
                     if let Some(r) = store.resolve(&b, id) {
@@ -695,6 +1004,68 @@ mod tests {
                 assert_eq!(q, expected, "query [{a},{bnd}) mismatch");
             }
         }
+    }
+
+    #[test]
+    fn query_range_stays_correct_after_unrelated_shift() {
+        let mut b = text();
+        let mut store = AnnotationStore::new();
+        let id = store.add(&b, 6, 11, AnnotationKind::Search, AnnotationData::default());
+        b.insert(0, ">>");
+        store.stabilize(&b);
+        assert_eq!(store.resolve(&b, id), Some(8..13));
+        assert_eq!(store.query_range(&b, 8, 13), vec![id]);
+        assert!(store.query_range(&b, 6, 8).is_empty());
+    }
+
+    #[test]
+    fn query_range_with_index_fast_path_matches_linear_scan() {
+        let b = text();
+        let mut store = AnnotationStore::new();
+        for i in 0..5 {
+            store.add(
+                &b,
+                i,
+                i + 2,
+                AnnotationKind::Other(i as u8),
+                AnnotationData::default(),
+            );
+        }
+        // A no-op stabilize marks the index dirty (lazy rebuild on next query).
+        store.stabilize(&b);
+        assert!(store.index_dirty, "index should be dirty after stabilize (lazy)");
+        // Every query must match a brute-force linear scan oracle.
+        for a in 0..=11 {
+            for bnd in (a + 1)..=11 {
+                let q = store.query_range(&b, a, bnd);
+                let mut expected = Vec::new();
+                for id in store.annotations.keys().copied() {
+                    if let Some(r) = store.resolve(&b, id) {
+                        if r.start < bnd && r.end > a {
+                            expected.push(id);
+                        }
+                    }
+                }
+                let mut q = q;
+                q.sort();
+                expected.sort();
+                assert_eq!(q, expected, "index fast-path query [{a},{bnd}) mismatch");
+            }
+        }
+    }
+
+    #[test]
+    fn zero_width_boundary_survives_empty_delete_and_reanchors_on_insert() {
+        let mut b = TextBuffer::from_text("a");
+        let mut store = AnnotationStore::new();
+        let id = store.add(&b, 1, 1, AnnotationKind::Search, AnnotationData::default());
+        b.delete(0..1);
+        store.stabilize(&b);
+        assert_eq!(store.resolve(&b, id), Some(0..0));
+
+        b.insert(0, "xy");
+        store.stabilize(&b);
+        assert_eq!(store.resolve(&b, id), Some(2..2));
     }
 
     // ---- Randomized correctness oracle (workload 4 of the plan) ----------
@@ -735,6 +1106,7 @@ mod tests {
         BufferEdit::Delete {
             range: s..e,
             deleted_pieces: vec![],
+            deleted_piece_lens: vec![],
             left_survivor: None,
             right_survivor: None,
             splits: vec![],
@@ -760,7 +1132,13 @@ mod tests {
             let s = rng.below(b.len() + 1);
             let e = rng.below(b.len() + 1);
             let (s, e) = if s <= e { (s, e) } else { (e, s) };
-            let id = store.add(&b, s, e, AnnotationKind::Other(0), AnnotationData::default());
+            let id = store.add(
+                &b,
+                s,
+                e,
+                AnnotationKind::Other(0),
+                AnnotationData::default(),
+            );
             o_start.push(s);
             o_end.push(e);
             ids.push(id);

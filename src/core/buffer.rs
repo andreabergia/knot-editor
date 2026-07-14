@@ -196,6 +196,11 @@ pub enum BufferEdit {
         /// inside the deleted span and are re-bound to a surviving
         /// edge piece below.
         deleted_pieces: Vec<PieceId>,
+        /// `(piece_id, post-split_len)` for the drained pieces, in chain
+        /// order. Step 5 uses this to tell true interior endpoints from
+        /// sticky-left tokens exactly at the delete's start/end boundary
+        /// when a boundary split was elided.
+        deleted_piece_lens: Vec<(PieceId, usize)>,
         /// The piece ending at logical `range.start` (= `s`) post-edit
         /// and its post-edit length. `None` iff `range.start == 0`
         /// (no piece to the left of the delete). Sticky-`Before`
@@ -464,11 +469,12 @@ impl TextBuffer {
         // pre-edit starts at `range.end` and post-edit shifts to start
         // at `s`. `None` iff the delete reaches the buffer's start or
         // end respectively (no left/right edge survives).
-        let deleted_pieces: Vec<PieceId> =
-            self.pieces[left.insert_at..right.insert_at]
-                .iter()
-                .map(|p| p.id)
-                .collect();
+        let deleted_piece_lens: Vec<(PieceId, usize)> = self.pieces
+            [left.insert_at..right.insert_at]
+            .iter()
+            .map(|p| (p.id, p.len))
+            .collect();
+        let deleted_pieces: Vec<PieceId> = deleted_piece_lens.iter().map(|(id, _)| *id).collect();
         let left_survivor = if left.insert_at == 0 {
             None
         } else {
@@ -490,6 +496,7 @@ impl TextBuffer {
         self.edits.push(BufferEdit::Delete {
             range,
             deleted_pieces,
+            deleted_piece_lens,
             left_survivor,
             right_survivor,
             splits,
@@ -530,7 +537,11 @@ impl TextBuffer {
     pub fn line_start(&mut self, line: usize) -> usize {
         self.ensure_line_starts();
         let starts = self.line_starts.as_ref().unwrap();
-        assert!(line < starts.len(), "line {line} out of range ({})", starts.len());
+        assert!(
+            line < starts.len(),
+            "line {line} out of range ({})",
+            starts.len()
+        );
         starts[line]
     }
 
@@ -711,8 +722,7 @@ impl TextBuffer {
             return;
         };
 
-        let delta: isize =
-            new_text.len() as isize - (range.end - range.start) as isize;
+        let delta: isize = new_text.len() as isize - (range.end - range.start) as isize;
         let lo = starts.partition_point(|&s| s < range.start);
         let hi = starts.partition_point(|&s| s <= range.end);
 
@@ -1315,7 +1325,11 @@ mod tests {
             let len = b.len();
             let start = (next_rand() % (len as u64 + 1)) as usize;
             let end = (next_rand() % (len as u64 + 1)) as usize;
-            let (start, end) = if start <= end { (start, end) } else { (end, start) };
+            let (start, end) = if start <= end {
+                (start, end)
+            } else {
+                (end, start)
+            };
             // Pick one of a few candidate replacements.
             let pick = next_rand() % 4;
             let new_text = match pick {
@@ -1411,7 +1425,10 @@ mod tests {
     #[test]
     fn resolve_unknown_piece_id_returns_none() {
         let b = TextBuffer::from_text("abc");
-        let bogus = Position { piece: 999, offset: 0 };
+        let bogus = Position {
+            piece: 999,
+            offset: 0,
+        };
         assert!(b.resolve(bogus).is_none());
     }
 
@@ -1419,7 +1436,10 @@ mod tests {
     fn resolve_offset_past_piece_len_returns_none() {
         // Construct a stale position past the piece's current length.
         let b = TextBuffer::from_text("abc");
-        let stale = Position { piece: b.pieces[0].id, offset: 99 };
+        let stale = Position {
+            piece: b.pieces[0].id,
+            offset: 99,
+        };
         assert!(b.resolve(stale).is_none());
     }
 
@@ -1532,7 +1552,12 @@ mod tests {
         let edits = b.edits_since(0);
         assert_eq!(edits.len(), 1);
         match &edits[0] {
-            BufferEdit::Insert { at, inserted_len, splits, .. } => {
+            BufferEdit::Insert {
+                at,
+                inserted_len,
+                splits,
+                ..
+            } => {
                 assert_eq!(*at, 3);
                 assert_eq!(*inserted_len, 2);
                 assert!(splits.is_empty(), "boundary insert must not split");
@@ -1632,7 +1657,9 @@ mod tests {
         assert_eq!(edits.len(), 2);
         assert!(matches!(edits[0], BufferEdit::Delete { .. }));
         match &edits[1] {
-            BufferEdit::Insert { at, inserted_len, .. } => {
+            BufferEdit::Insert {
+                at, inserted_len, ..
+            } => {
                 assert_eq!(*at, 0);
                 assert_eq!(*inserted_len, "goodbye".len());
             }
@@ -1654,7 +1681,11 @@ mod tests {
         let original = b.position_at(3).unwrap();
         assert_eq!(original.offset(), 3);
         let original_byte = b.resolve(original).unwrap();
-        let content_before: char = b.read_range(original_byte..original_byte + 1).chars().next().unwrap();
+        let content_before: char = b
+            .read_range(original_byte..original_byte + 1)
+            .chars()
+            .next()
+            .unwrap();
         assert_eq!(content_before, 'l');
 
         // Split at offset 2: original piece's right half moves to a new
@@ -1675,8 +1706,15 @@ mod tests {
         // by the inserted span length because the insert was at a
         // smaller offset than our position.
         let remapped_byte = b.resolve(remapped).unwrap();
-        let content_after: char = b.read_range(remapped_byte..remapped_byte + 1).chars().next().unwrap();
-        assert_eq!(content_after, content_before, "remapped token must point at same content");
+        let content_after: char = b
+            .read_range(remapped_byte..remapped_byte + 1)
+            .chars()
+            .next()
+            .unwrap();
+        assert_eq!(
+            content_after, content_before,
+            "remapped token must point at same content"
+        );
         // And specifically the byte offset should have advanced by 1
         // (the inserted 'X').
         assert_eq!(remapped_byte, original_byte + 1);

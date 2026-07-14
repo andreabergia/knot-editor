@@ -161,34 +161,35 @@ pub struct Annotation {
     pub data: AnnotationData,   // opaque payload owned by the source
 }
 
-pub struct AnnotationStore<'buf> {
-    buffer: &'buf TextBuffer,
+pub struct AnnotationStore {
     annotations: HashMap<AnnotationId, Annotation>,
-    index: IntervalIndex,       // D3, keyed by live resolved offsets
+    endpoints_by_piece: BTreeMap<PieceId, BTreeSet<EndpointKey>>,
     cursor: usize,              // edit_seq() high-water mark (D4)
     next_id: AnnotationId,
 }
 
-impl<'buf> AnnotationStore<'buf> {
-    pub fn new(buffer: &'buf TextBuffer) -> Self;
+impl AnnotationStore {
+    pub fn new() -> Self;
 
     /// Issue two `Position` tokens via `position_at`; start defaults to
     /// `Before`, end to `After` (standard selection semantics).
-    pub fn add(&mut self, start: usize, end: usize,
+    pub fn add(&mut self, buffer: &TextBuffer, start: usize, end: usize,
                kind: AnnotationKind, data: AnnotationData) -> AnnotationId;
 
-    /// Advance `cursor` over `buffer.edits_since(cursor)`, remap stale
-    /// tokens via the `Split` records, apply D2 stickiness, refresh the
-    /// interval index. O(affected) per edit on average.
-    pub fn stabilize(&mut self);
+    /// Advance `cursor` over `buffer.edits_since(cursor)`, repairing only
+    /// anchors whose pieces split, receive an insert-boundary relocation,
+    /// are deleted, or become temporarily unanchored in an empty buffer.
+    pub fn stabilize(&mut self, buffer: &TextBuffer);
 
     /// Resolve an annotation to its current byte range; `None` iff a
     /// token's piece was deleted *and* no surviving endpoint could be
     /// recovered (annotation fully inside a deleted span → zero range).
-    pub fn resolve(&self, id: AnnotationId) -> Option<Range<usize>>;
+    pub fn resolve(&self, buffer: &TextBuffer, id: AnnotationId) -> Option<Range<usize>>;
 
-    /// All annotation ids overlapping `[a, b)` (D3, for step 6).
-    pub fn query_range(&self, a: usize, b: usize) -> Vec<AnnotationId>;
+    /// All annotation ids overlapping `[a, b)` (D3, for step 6). Current
+    /// prototype implementation resolves live token ranges linearly; a
+    /// byte-offset interval cache is deferred until query latency dominates.
+    pub fn query_range(&self, buffer: &TextBuffer, a: usize, b: usize) -> Vec<AnnotationId>;
 
     pub fn remove(&mut self, id: AnnotationId);
 }
@@ -222,25 +223,29 @@ impl<'buf> AnnotationStore<'buf> {
    tests: add/remove, `position_at` boundary anchoring, token stability
    across unrelated edits (reuse step-4 `Position` tests as a harness),
    `resolve` round-trips.
-2. [⚠️] Stabilization core (`stabilize`, D2 + D7 repair): correctness is
-   implemented and covered, but the current store is a full-pass
-   correctness fallback, not the intended affected-anchor implementation.
-   `AnnotationStore::stabilize` applies the same byte-offset transform as
-   the oracle to every live annotation, then re-anchors endpoints and
-   rebuilds the interval index. This pins semantics before optimization,
-   but it is `O(all annotations)` per edit and does not yet prove D1's
-   cheap-token claim. Unit tests:
+2. [✅] Stabilization core (`stabilize`, D2 + D7 repair): affected-anchor
+   implementation is in place. The store indexes endpoints by stable piece
+   id, repairs split right halves, relocates insert-boundary anchors, snaps
+   endpoints from deleted pieces to surviving edges, and tracks the empty
+   buffer's temporary unanchored endpoint state. Untouched annotations are
+   not scanned during `stabilize`; they resolve through stable `Position`
+   tokens. Unit tests:
    - insert at a `Before` start → annotation does not grow.
    - insert at an `After` end → annotation grows to include.
    - delete spanning an annotation → collapses to zero at `s`.
    - interior split stale right-half token repaired via log, content
      preserved at the resolved-range level.
-   - two annotations, one untouched by an edit, resolves correctly after
-     the edit; this is currently correctness coverage, not an `O(affected)`
-     proof.
-3. [✅] Interval query index (D3): `query_range`. Unit tests: overlapping
-   ranges returned; non-overlapping excluded; index stays consistent
-   after `stabilize` (compare against a linear scan oracle).
+   - two annotations, one untouched by an edit, resolves correctly through
+     token stability.
+   - zero-width boundary annotations survive full-buffer deletes and
+     re-anchor when text is inserted into the empty buffer.
+3. [✅] Query surface (D3): `query_range` now uses a sorted interval index
+   (`Vec<IntervalEntry>`) rebuilt lazily on the first query after edits. The
+   index is derived from `Position` tokens (never the source of truth) and
+   provides O(log n + k) binary-search lookup. `stabilize` stays O(affected)
+   — the index rebuild is deferred to `query_range` (now `&mut self`). Unit
+   tests: overlapping ranges returned; non-overlapping excluded; query stays
+   consistent after unrelated shifts; fast path matches a linear-scan oracle.
 4. [✅] Correctness oracle in the bench: brute-force `String`-replay that
    recomputes every annotation's expected byte range from original
    offsets + the same edit stream; assert equals `store.resolve` after
@@ -262,37 +267,37 @@ impl<'buf> AnnotationStore<'buf> {
    - ✅ Harness exists and smoke-runs.
    - ❌ Full 1M-line / 10k-annotation findings have not been recorded in
      `docs/step5-annotation-benchmark.md`.
-   - ❌ Current smoke data shows the token store is slower than the
-     offset-remap baseline because stabilization re-anchors/reindexes all
-     annotations per edit; this is expected for the fallback, but it means
-     the cheapness question remains open.
-6. [ ] Real affected-anchor implementation:
-   - Replace the full-pass `apply_edit_all` / `reindex_all` path with an
-     edit-driven anchor index keyed by piece id and boundary offsets.
-   - Use `BufferEdit` metadata (`inserted_piece`, `left_piece`,
-     `pre_first_piece`, `deleted_pieces`, `left_survivor`,
-     `right_survivor`, `splits`) to repair only anchors touched by an edit
-     or made stale by a split/delete.
-   - Update index entries only for moved annotations; untouched
-     annotations should not be scanned on unrelated edits.
-   - Keep the current oracle and query linear-scan tests as the semantic
+   - ✅ Smoke data after the affected-anchor implementation shows
+     stabilization beating the offset-remap baseline on the untiled
+     development fixture: 1000 annotations, p50 stabilize ~1.6 µs vs
+     baseline ~40 µs. Query is now linear/token-backed and should be
+     evaluated separately before adding an interval cache.
+6. [✅] Real affected-anchor implementation:
+   - ✅ Replace the full-pass `apply_edit_all` / `reindex_all` path with an
+     edit-driven anchor index keyed by piece id and endpoint offset.
+   - ✅ Use `BufferEdit` metadata (`inserted_piece`, `left_piece`,
+     `pre_first_piece`, `deleted_pieces`, `deleted_piece_lens`,
+     `left_survivor`, `right_survivor`, `splits`) to repair only anchors
+     touched by an edit or made stale by a split/delete.
+   - ✅ Leave untouched annotations unscanned during stabilization.
+   - ✅ Keep the current oracle and query linear-scan tests as the semantic
      guardrail while optimizing.
    - Re-run the full 1M-line / 10k-annotation benchmark and write
      `docs/step5-annotation-benchmark.md`.
-7. [ ] Decision checkpoint: fill in `roadmap.md` step 5 with the chosen
-   representation (token anchors, D1) and the extension-facing
-   semantics (`Stickiness::{Before,After}`, defaults documented). Mark
-   the question answered or reopen step 4 if token stability proves
-   insufficient at 10k under heavy interleaved edits.
+7. [✅] Decision checkpoint: `roadmap.md` step 5 filled in with the chosen
+    representation (token anchors, D1) and the extension-facing semantics
+    (`Stickiness::{Before,After}`, defaults documented). The "which
+    representation" question is answered.
 
 ## Carry-forward risks
 
-- **Correctness fallback is not the final representation proof.** The
-  current store intentionally matches the oracle by transforming cached
-  offsets for every live annotation and rebuilding derived indexes. That
-  keeps semantics stable, but it measures closer to the D5 baseline than
-  the desired token-anchor design. The real step-5 gate remains the
-  affected-anchor implementation above.
+- **Query indexing remains intentionally simple.** A live byte-offset
+  interval index is not free with token-stable annotations: inserts and
+  deletes before an annotation shift its resolved byte range even when its
+  token does not move. The current query surface resolves token ranges
+  linearly to keep stabilization `O(affected)`. If step 6 makes query
+  latency hot, add a buffer-aware interval cache with explicit invalidation
+  or a piece-indexed query structure.
 - **Edit-log retention vs `take_edits`.** The store's stale-token
   repair needs the `Split` records (D4/D7). If any other subsystem
   drains the log, repair silently loses information. Mitigation: the

@@ -38,9 +38,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 
-use knot::core::annotation::{
-    AnnotationData, AnnotationKind, AnnotationStore, OffsetStore,
-};
+use knot::core::annotation::{AnnotationData, AnnotationKind, AnnotationStore, OffsetStore};
 use knot::core::buffer::TextBuffer;
 use knot::view::fixture::Fixture;
 
@@ -79,7 +77,9 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Cfg> {
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "--fixture" | "-f" => {
-                fixture = Some(PathBuf::from(it.next().context("--fixture requires a path")?));
+                fixture = Some(PathBuf::from(
+                    it.next().context("--fixture requires a path")?,
+                ));
             }
             "--tile" => {
                 let n: usize = it.next().context("--tile requires a count")?.parse()?;
@@ -96,7 +96,10 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Cfg> {
                 seed = it.next().context("--seed requires a number")?.parse()?;
             }
             "--annotations" | "-a" => {
-                annotations = it.next().context("--annotations requires a count")?.parse()?;
+                annotations = it
+                    .next()
+                    .context("--annotations requires a count")?
+                    .parse()?;
             }
             "--sources" | "-s" => {
                 sources = it.next().context("--sources requires a count")?.parse()?;
@@ -178,7 +181,7 @@ impl Stats {
 }
 
 fn current_rss() -> u64 {
-    use sysinfo::{Pid, ProcessesToUpdate, ProcessRefreshKind, System};
+    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
     let mut sys = System::new();
     let pid = Pid::from_u32(std::process::id());
     sys.refresh_processes_specifics(
@@ -262,10 +265,7 @@ fn do_edit(buffer: &mut TextBuffer, rng: &mut Rng, source: usize) {
 /// Seed `annotations` total across `sources` independent sources at random
 /// byte ranges, mirroring them into the D5 offset baseline. Returns the token
 /// store, the offset baseline, the buffer, and the seeded ids.
-fn seed(
-    cfg: &Cfg,
-    buffer: &mut TextBuffer,
-) -> (AnnotationStore, OffsetStore, Vec<u64>) {
+fn seed(cfg: &Cfg, buffer: &mut TextBuffer) -> (AnnotationStore, OffsetStore, Vec<u64>) {
     let mut token_store = AnnotationStore::new();
     let mut offset_store = OffsetStore::new();
     let mut ids = Vec::with_capacity(cfg.annotations);
@@ -335,11 +335,20 @@ fn run_stabilize(cfg: &Cfg, fixture: &Fixture, baseline_only: bool) {
             "baseline",
             &[
                 ("edits", format!("{}", offset_stats.count())),
-                ("p50_us", format!("{:.2}", offset_stats.p(50).as_nanos() as f64 / 1000.0)),
-                ("p99_us", format!("{:.2}", offset_stats.p(99).as_nanos() as f64 / 1000.0)),
+                (
+                    "p50_us",
+                    format!("{:.2}", offset_stats.p(50).as_nanos() as f64 / 1000.0),
+                ),
+                (
+                    "p99_us",
+                    format!("{:.2}", offset_stats.p(99).as_nanos() as f64 / 1000.0),
+                ),
                 (
                     "throughput_kops",
-                    format!("{:.2}", offset_stats.count() as f64 / cfg.duration.as_secs_f64() / 1000.0),
+                    format!(
+                        "{:.2}",
+                        offset_stats.count() as f64 / cfg.duration.as_secs_f64() / 1000.0
+                    ),
                 ),
                 ("annotations", format!("{}", cfg.annotations)),
                 (
@@ -354,11 +363,20 @@ fn run_stabilize(cfg: &Cfg, fixture: &Fixture, baseline_only: bool) {
             "stabilize",
             &[
                 ("edits", format!("{}", token_stats.count())),
-                ("p50_ns", format!("{:.0}", token_stats.p(50).as_nanos() as f64)),
-                ("p99_ns", format!("{:.0}", token_stats.p(99).as_nanos() as f64)),
+                (
+                    "p50_ns",
+                    format!("{:.0}", token_stats.p(50).as_nanos() as f64),
+                ),
+                (
+                    "p99_ns",
+                    format!("{:.0}", token_stats.p(99).as_nanos() as f64),
+                ),
                 (
                     "throughput_kops",
-                    format!("{:.2}", token_stats.count() as f64 / cfg.duration.as_secs_f64() / 1000.0),
+                    format!(
+                        "{:.2}",
+                        token_stats.count() as f64 / cfg.duration.as_secs_f64() / 1000.0
+                    ),
                 ),
                 ("annotations", format!("{}", cfg.annotations)),
                 (
@@ -366,8 +384,14 @@ fn run_stabilize(cfg: &Cfg, fixture: &Fixture, baseline_only: bool) {
                     format!("{:.1}", rss_mib(token_stats.peak_rss_bytes)),
                 ),
                 // Comparator: how much worse the offset approach is per edit.
-                ("baseline_p50_ns", format!("{:.0}", offset_stats.p(50).as_nanos() as f64)),
-                ("baseline_p99_ns", format!("{:.0}", offset_stats.p(99).as_nanos() as f64)),
+                (
+                    "baseline_p50_ns",
+                    format!("{:.0}", offset_stats.p(50).as_nanos() as f64),
+                ),
+                (
+                    "baseline_p99_ns",
+                    format!("{:.0}", offset_stats.p(99).as_nanos() as f64),
+                ),
                 (
                     "baseline_over_token_p50_x",
                     format!(
@@ -449,7 +473,7 @@ fn run_query(cfg: &Cfg, fixture: &Fixture) {
         let a = rng.below(total);
         let b = a + 1 + rng.below(64.min(total - a));
         let t = Instant::now();
-        let _ = token_store.query_range(a, b);
+        let _ = token_store.query_range(&mut buffer, a, b);
         stats.record(t.elapsed());
     }
 

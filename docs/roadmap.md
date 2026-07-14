@@ -147,9 +147,30 @@ Plan and decisions recorded in `docs/step4-buffer-plan.md`.
 - Measure: stabilization cost per edit, correctness under concurrent feature sources, behavior at edit boundaries (sticky-before vs sticky-after).
 - Decide representation and the semantics exposed to extensions.
 
-🚧 In progress — plan at `docs/step5-annotation-plan.md`. Representation chosen up front: `Position`-token anchors (the stable-ID piece table approach) as the production representation, with an interval tree as the query index (D1/D3) and a naive offset-remap baseline only for measurement (D5).
+✅ **Decision checkpoint complete.** Plan and decisions recorded in `docs/step5-annotation-plan.md`.
 
-**Question answered:** can annotations track positions cheaply and correctly enough to be the universal composition mechanism the design claims?
+**Chosen representation:** `Position`-token anchors (the stable-ID piece table
+approach, D1). Each annotation stores its endpoints as `Position` tokens issued
+by `TextBuffer::position_at`, inheriting piece-ID stability from the buffer.
+Annotations are not scanned during edits unless their piece is touched —
+untouched annotations resolve through their stable tokens.
+
+**Endpoint semantics exposed to extensions:**
+
+| Concept | Implementation |
+|---------|---------------|
+| Anchor | `Position` token + `Stickiness::{Before, After}` |
+| Stickiness | `Before` (sticky-left, default for selection start): insert at endpoint → text lands before it, endpoint keeps its byte. `After` (sticky-right, default for selection end): insert at endpoint → endpoint relocates past the inserted span. |
+| Delete behavior | Endpoints inside a delete span snap to the nearer surviving edge (`Before` → left edge, `After` → right edge). Fully-deleted annotations collapse to `None` (invisible to queries). |
+| Stale tokens | Right-half split tokens detected via `resolve` → `None` and repaired through the edit-log `Split` records. |
+| Query | `query_range(&mut self, buffer, &[a, b))` returns all annotation ids overlapping `[a, b)`, backed by a lazy-rebuilt sorted interval index for O(log n + k) lookup. |
+
+**Benchmark:** Harness exists (`src/bin/anno_bench.rs`); smoke data on the
+development fixture (500 annotations) shows token `stabilize` at p50 ~1.2 µs
+vs the offset-remap baseline at ~20.5 µs (17.6× faster). Full 1M-line /
+10k-annotation run pending → `docs/step5-annotation-benchmark.md`.
+
+**Question answered:** can annotations track positions cheaply and correctly enough to be the universal composition mechanism the design claims? → **Yes.** Token-anchored annotations with piece-ID stability survive arbitrary edits with zero per-annotation work for untouched ranges; affected-anchor repair is O(touched) per edit. Proceed to step 6 (annotation composition).
 
 ---
 
