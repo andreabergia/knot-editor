@@ -274,11 +274,12 @@ fn seed(cfg: &Cfg, buffer: &mut TextBuffer) -> (AnnotationStore, OffsetStore, Ve
     let total = buffer.len();
     let per_source = cfg.annotations / cfg.sources.max(1);
     for src in 0..cfg.sources {
-        let kind = match src % 5 {
+        let kind = match src % 6 {
             0 => AnnotationKind::Diagnostic,
             1 => AnnotationKind::Search,
             2 => AnnotationKind::Git,
             3 => AnnotationKind::Breakpoint,
+            4 => AnnotationKind::Folding,
             _ => AnnotationKind::Other(src as u8),
         };
         for _ in 0..per_source {

@@ -88,13 +88,14 @@ impl Anchor {
     }
 }
 
-/// Classification of an annotation's source (step 6 will render by kind).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Classification of an annotation's source (step 6 composes by kind).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum AnnotationKind {
     Diagnostic,
     Search,
     Git,
     Breakpoint,
+    Folding,
     Other(u8),
 }
 
@@ -408,6 +409,43 @@ impl AnnotationStore {
             .collect();
         // Already in start order from the sorted index.
         out
+    }
+
+    /// Like `query_range` but only returns annotations whose `kind` is in
+    /// `kinds`. This is the composition surface for consumers that care about
+    /// only specific source types (e.g. gutter: diagnostics + breakpoints;
+    /// minimap: diagnostics + search + git).
+    pub fn query_range_for_kinds(
+        &mut self,
+        buffer: &TextBuffer,
+        a: usize,
+        b: usize,
+        kinds: &[AnnotationKind],
+    ) -> Vec<AnnotationId> {
+        if a >= b || kinds.is_empty() {
+            return Vec::new();
+        }
+        if self.index_dirty {
+            self.rebuild_index(buffer);
+        }
+        let kind_set: HashSet<AnnotationKind> = kinds.iter().copied().collect();
+        let start_idx = self.interval_index.partition_point(|e| e.start < b);
+        self.interval_index[..start_idx]
+            .iter()
+            .filter(|e| e.end > a)
+            .filter(|e| {
+                self.annotations
+                    .get(&e.id)
+                    .map_or(false, |ann| kind_set.contains(&ann.kind))
+            })
+            .map(|e| e.id)
+            .collect()
+    }
+
+    /// Iterate over all live (non-collapsed) annotations. Useful for consumers
+    /// that need to scan the full set (e.g. a minimap building a heatmap).
+    pub fn iter_live(&self) -> impl Iterator<Item = (&AnnotationId, &Annotation)> {
+        self.annotations.iter().filter(|(_, ann)| !ann.collapsed)
     }
 
     /// Advance over every edit since the last `stabilize`, repairing only
@@ -1239,5 +1277,238 @@ mod tests {
             // Cross-check the buffer text itself stayed faithful.
             assert_eq!(b.read_range(0..b.len()), text, "buffer text drifted");
         }
+    }
+
+    // ---- Step 6 composition stress test ---------------------------------
+
+    /// Build a multi-line buffer. Each line is `"line {:>3}"` for n lines.
+    fn multi_line(n: usize) -> TextBuffer {
+        let mut s = String::new();
+        for i in 0..n {
+            use std::fmt::Write;
+            let _ = writeln!(s, "line {:>3}", i);
+        }
+        TextBuffer::from_text(&*s)
+    }
+
+    /// Byte offset of the start of line `ln` in a buffer built by `multi_line`.
+    fn line_start(n: usize) -> usize {
+        // "line {:>3}\n" = 9 bytes per line.
+        n * 9
+    }
+
+    #[test]
+    fn composition_five_sources_three_consumers() {
+        let b = multi_line(80);
+        let mut store = AnnotationStore::new();
+
+        // ---- 5 independent sources ----
+
+        // Source 1: Diagnostics — error on line 5, warning on line 20, info on line 50.
+        let diag1 = store.add(
+            &b, line_start(5), line_start(5) + 8,
+            AnnotationKind::Diagnostic,
+            AnnotationData("error: unused variable".into()),
+        );
+        let diag2 = store.add(
+            &b, line_start(20), line_start(20) + 8,
+            AnnotationKind::Diagnostic,
+            AnnotationData("warning: snake_case".into()),
+        );
+        let diag3 = store.add(
+            &b, line_start(50), line_start(50) + 8,
+            AnnotationKind::Diagnostic,
+            AnnotationData("info: dead code".into()),
+        );
+
+        // Source 2: Search — matches on lines 2, 5, 18, 20, 75.
+        let _sr1 = store.add(
+            &b, line_start(2), line_start(2) + 4,
+            AnnotationKind::Search,
+            AnnotationData("match".into()),
+        );
+        let sr2 = store.add(
+            &b, line_start(5), line_start(5) + 4,
+            AnnotationKind::Search,
+            AnnotationData("match".into()),
+        );
+        let _sr3 = store.add(
+            &b, line_start(18), line_start(18) + 4,
+            AnnotationKind::Search,
+            AnnotationData("match".into()),
+        );
+        let _sr4 = store.add(
+            &b, line_start(20), line_start(20) + 4,
+            AnnotationKind::Search,
+            AnnotationData("match".into()),
+        );
+        let _sr5 = store.add(
+            &b, line_start(75), line_start(75) + 4,
+            AnnotationKind::Search,
+            AnnotationData("match".into()),
+        );
+
+        // Source 3: Git hunks — added lines 10-15, modified lines 60-65.
+        let git1 = store.add(
+            &b, line_start(10), line_start(15) + 8,
+            AnnotationKind::Git,
+            AnnotationData("added".into()),
+        );
+        let _git2 = store.add(
+            &b, line_start(60), line_start(65) + 8,
+            AnnotationKind::Git,
+            AnnotationData("modified".into()),
+        );
+
+        // Source 4: Breakpoints — line 10 and line 40 (1-byte for range query).
+        let bp1 = store.add(
+            &b, line_start(10), line_start(10) + 1,
+            AnnotationKind::Breakpoint,
+            AnnotationData("".into()),
+        );
+        let bp2 = store.add(
+            &b, line_start(40), line_start(40) + 1,
+            AnnotationKind::Breakpoint,
+            AnnotationData("".into()),
+        );
+
+        // Source 5: Folding — region spanning lines 30-45.
+        let fold1 = store.add(
+            &b, line_start(30), line_start(45) + 8,
+            AnnotationKind::Folding,
+            AnnotationData("collapsed region".into()),
+        );
+
+        // ---- Verify total count (13 = 3+5+2+2+1) ----
+        assert_eq!(store.len(), 13, "total annotation count");
+        let live_count = store.iter_live().count();
+        assert_eq!(live_count, 13, "all should be live");
+
+        // ---- Consumer: editor view (all kinds) ----
+        let editor_visible = store.query_range(&b, 0, b.len());
+        assert_eq!(editor_visible.len(), 13);
+
+        // ---- Consumer: gutter (diagnostics + breakpoints) ----
+        let gutter = store.query_range_for_kinds(
+            &b, 0, b.len(),
+            &[AnnotationKind::Diagnostic, AnnotationKind::Breakpoint],
+        );
+        assert_eq!(gutter.len(), 5, "gutter: 3 diagnostics + 2 breakpoints");
+        assert!(gutter.contains(&diag1));
+        assert!(gutter.contains(&diag2));
+        assert!(gutter.contains(&diag3));
+        assert!(gutter.contains(&bp1));
+        assert!(gutter.contains(&bp2));
+
+        // ---- Consumer: minimap (diagnostics + search + git) ----
+        let minimap = store.query_range_for_kinds(
+            &b, 0, b.len(),
+            &[AnnotationKind::Diagnostic, AnnotationKind::Search, AnnotationKind::Git],
+        );
+        assert_eq!(minimap.len(), 10, "minimap: 3+5+2");
+        // Should NOT include breakpoints or folding.
+        assert!(!minimap.contains(&bp1));
+        assert!(!minimap.contains(&bp2));
+        assert!(!minimap.contains(&fold1));
+
+        // ---- Sub-range query: line 5 area (diagnostic + search overlap) ----
+        let line5_range = store.query_range(&b, line_start(5), line_start(6));
+        assert!(line5_range.contains(&diag1), "diagnostic on line 5");
+        assert!(line5_range.contains(&sr2), "search match on line 5");
+        assert_eq!(line5_range.len(), 2, "exactly two on line 5");
+        // Filter to only diagnostics:
+        let line5_diag = store.query_range_for_kinds(
+            &b, line_start(5), line_start(6),
+            &[AnnotationKind::Diagnostic],
+        );
+        assert_eq!(line5_diag, vec![diag1]);
+        // Filter to only search:
+        let line5_search = store.query_range_for_kinds(
+            &b, line_start(5), line_start(6),
+            &[AnnotationKind::Search],
+        );
+        assert_eq!(line5_search, vec![sr2]);
+
+        // ---- Sub-range query: line 10 (git + breakpoint overlap) ----
+        let line10_range = store.query_range(&b, line_start(10), line_start(11));
+        assert!(line10_range.contains(&git1));
+        assert!(line10_range.contains(&bp1));
+
+        // ---- 6th source: no store changes needed ----
+        let lint1 = store.add(
+            &b, line_start(3), line_start(3) + 8,
+            AnnotationKind::Other(0),
+            AnnotationData("lint: prefer const".into()),
+        );
+        assert_eq!(store.len(), 14, "6th source added without store changes");
+        // Lint appears in all-kinds query:
+        let all = store.query_range(&b, 0, b.len());
+        assert!(all.contains(&lint1));
+        assert_eq!(all.len(), 14);
+        // Lint is excluded from gutter:
+        let gutter2 = store.query_range_for_kinds(
+            &b, 0, b.len(),
+            &[AnnotationKind::Diagnostic, AnnotationKind::Breakpoint],
+        );
+        assert!(!gutter2.contains(&lint1));
+        // Query by Other(0) only:
+        let lint_only = store.query_range_for_kinds(
+            &b, 0, b.len(),
+            &[AnnotationKind::Other(0)],
+        );
+        assert_eq!(lint_only, vec![lint1]);
+
+        // ---- iter_live vs collapsed ----
+        store.remove(lint1);
+        assert_eq!(store.iter_live().count(), 13, "removed annotation excluded from iter_live");
+        assert_eq!(store.len(), 13, "len reflects removal too");
+    }
+
+    #[test]
+    fn composition_survives_edits() {
+        // Multiple sources, edits shift annotations independently.
+        let mut b = multi_line(20);
+        let mut store = AnnotationStore::new();
+
+        let d = store.add(
+            &b, line_start(3), line_start(3) + 8,
+            AnnotationKind::Diagnostic,
+            AnnotationData::default(),
+        );
+        let s = store.add(
+            &b, line_start(5), line_start(5) + 4,
+            AnnotationKind::Search,
+            AnnotationData::default(),
+        );
+        let g = store.add(
+            &b, line_start(8), line_start(12) + 8,
+            AnnotationKind::Git,
+            AnnotationData::default(),
+        );
+
+        // Insert 2 lines at line 0: all annotations shift.
+        b.insert(0, "preamble A\n");
+        b.insert(0, "preamble B\n");
+        store.stabilize(&b);
+
+        let all = store.query_range(&b, 0, b.len());
+        assert_eq!(all.len(), 3, "all three survive the edit");
+
+        // Per-kind queries still work after edit.
+        let diags = store.query_range_for_kinds(&b, 0, b.len(), &[AnnotationKind::Diagnostic]);
+        assert_eq!(diags, vec![d]);
+        let search = store.query_range_for_kinds(&b, 0, b.len(), &[AnnotationKind::Search]);
+        assert_eq!(search, vec![s]);
+        let git = store.query_range_for_kinds(&b, 0, b.len(), &[AnnotationKind::Git]);
+        assert_eq!(git, vec![g]);
+
+        // Delete the first 4 lines (the two preamble + original lines 0-1).
+        // Each line is 9 bytes, so delete [0, 36).
+        b.delete(0..36);
+        store.stabilize(&b);
+
+        // All three should still be live (they were on lines 3,5,8-12, now
+        // shifted up by 2 lines = 20 bytes).
+        assert_eq!(store.query_range(&b, 0, b.len()).len(), 3);
     }
 }

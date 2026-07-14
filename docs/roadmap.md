@@ -182,7 +182,17 @@ vs the offset-remap baseline at ~20.5 µs (17.6× faster). Full 1M-line /
 - Document any case where data-level composition requires privileged coordination.
 - Defer rich visual precedence, layering, hit-testing, and annotation conflict policy until the real editor view needs them.
 
-**Question answered:** do independent annotation sources compose at the data/query level, without forcing special coordination into the core?
+✅ **Done.** Plan and findings recorded in `docs/step6-annotation-composition.md`.
+
+**Changes made:**
+- `AnnotationKind` extended with `Folding` variant and `Hash` derive.
+- `AnnotationStore::query_range_for_kinds(&mut self, buffer, a, b, kinds: &[AnnotationKind])` — per-kind query filtering for consumers (gutter, minimap).
+- `AnnotationStore::iter_live(&self)` — iterate all live annotations.
+- Composition stress test: 5 sources overlapping on an 80-line buffer, queried by 3 consumer perspectives (editor: all, gutter: diag+bp, minimap: diag+search+git). A 6th source (`Other(0)`) added with zero store changes.
+- Per-source `AnnotationData(String)` remains opaque; rich payloads deferred to view layer.
+- No privileged coordination required: sources never intersect, consumers filter by kind at query time.
+
+**Question answered:** do independent annotation sources compose at the data/query level, without forcing special coordination into the core? → **Yes.** Sources are independent callers of `add()`. Consumers compose per-kind with `query_range_for_kinds`. Adding a 6th source needs only `store.add(…, Other(n), …)`. Deferred to step 10: source lifecycle (registration/deregistration), dedup/priority at the consumer level.
 
 ---
 
