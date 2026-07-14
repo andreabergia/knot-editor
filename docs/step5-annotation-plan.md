@@ -251,27 +251,26 @@ impl AnnotationStore {
    offsets + the same edit stream; assert equals `store.resolve` after
    each edit for every annotation, every `Stickiness` combination. This
    is the real "correctness under concurrent feature sources" gate.
-5. [⚠️] Benchmark harness (`src/bin/anno_bench.rs`, `[[bin]]`):
-   - Reuse step 4's `rust_sample.kfx --tile 635` 1M-line fixture and
-     `build_buffer` path.
-   - N annotation sources (default 3, then 6 to foreshadow step 6),
-     each seeding ~3.3k annotations (→ 10k total) at random byte
-     ranges; sources issue interleaved edits (step 4 `interleaved`
-     model generalized to N producers on one thread, D4/D5 of step 4).
-   - Workloads: `stabilize` (per-edit p50/p99 over the stream),
-     `resolve-all` (resolve every annotation, 10k/frame, p50),
-     `query` (random `query_range` hits), `baseline-offset-remap`
-     (D5 naive comparison). Output one TSV line per workload; write
-     findings to `docs/step5-annotation-benchmark.md`.
-   - Measure RSS with 10k annotations live.
-   - ✅ Harness exists and smoke-runs.
-   - ❌ Full 1M-line / 10k-annotation findings have not been recorded in
-     `docs/step5-annotation-benchmark.md`.
-   - ✅ Smoke data after the affected-anchor implementation shows
-     stabilization beating the offset-remap baseline on the untiled
-     development fixture: 1000 annotations, p50 stabilize ~1.6 µs vs
-     baseline ~40 µs. Query is now linear/token-backed and should be
-     evaluated separately before adding an interval cache.
+5. [✅] Benchmark harness (`src/bin/anno_bench.rs`, `[[bin]]`):
+    - Reuse step 4's `rust_sample.kfx --tile 635` 1M-line fixture and
+      `build_buffer` path.
+    - N annotation sources (default 3, then 6 to foreshadow step 6),
+      each seeding ~3.3k annotations (→ 10k total) at random byte
+      ranges; sources issue interleaved edits (step 4 `interleaved`
+      model generalized to N producers on one thread, D4/D5 of step 4).
+    - Workloads: `stabilize` (per-edit p50/p99 over the stream),
+      `resolve-all` (resolve every annotation, 10k/frame, p50),
+      `query` (random `query_range` hits), `baseline-offset-remap`
+      (D5 naive comparison). Output one TSV line per workload; wrote
+      findings to `docs/step5-annotation-benchmark.md`.
+    - Measure RSS with 10k annotations live.
+    - ✅ Harness exists and smoke-runs.
+    - ✅ Full 1M-line / 10k-annotation findings recorded in
+      `docs/step5-annotation-benchmark.md`.
+    - ✅ Smoke and full-run data confirm stabilization beats the offset-remap
+      baseline: 5.7× faster at 10k annotations, 6 sources indistinguishable
+      from 3. Query p50 ~15.5 µs with the interval index. Resolve-all
+      p50 ~1.79 ms for 10k annotations (~179 ns per annotation).
 6. [✅] Real affected-anchor implementation:
    - ✅ Replace the full-pass `apply_edit_all` / `reindex_all` path with an
      edit-driven anchor index keyed by piece id and endpoint offset.
@@ -282,8 +281,8 @@ impl AnnotationStore {
    - ✅ Leave untouched annotations unscanned during stabilization.
    - ✅ Keep the current oracle and query linear-scan tests as the semantic
      guardrail while optimizing.
-   - Re-run the full 1M-line / 10k-annotation benchmark and write
-     `docs/step5-annotation-benchmark.md`.
+    - ✅ Re-run the full 1M-line / 10k-annotation benchmark and wrote
+      `docs/step5-annotation-benchmark.md`.
 7. [✅] Decision checkpoint: `roadmap.md` step 5 filled in with the chosen
     representation (token anchors, D1) and the extension-facing semantics
     (`Stickiness::{Before,After}`, defaults documented). The "which
