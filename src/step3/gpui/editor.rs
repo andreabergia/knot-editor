@@ -596,9 +596,10 @@ impl EditorView {
     }
 
     /// Map a window-space point to a (line, byte_col) caret position using the
-    /// last paint's `bounds`. Line is clamped to the last line; column comes
-    /// from `closest_index_for_x` on the shaped line, falling back to 0 for
-    /// empty lines.
+    /// last paint's `bounds`. The candidate positions are grapheme boundaries,
+    /// not glyph starts: a single emoji glyph may cover multiple UTF-8 code
+    /// points, and its start alone is not enough to place a caret on either
+    /// visible edge.
     fn hit_test(&self, p: Point<Pixels>, window: &Window) -> (usize, usize) {
         let origin = self.bounds.origin;
         let line = ((f32::from(p.y - origin.y) + self.scroll) / LINE_HEIGHT).floor() as usize;
@@ -614,7 +615,21 @@ impl EditorView {
                 None,
             );
             let x_off = self.line_x_offset(line, shaped.width, self.bounds.size.width);
-            shaped.closest_index_for_x(p.x - origin.x - x_off)
+            let x = p.x - origin.x - x_off;
+            let text = &self.lines[line];
+            let mut boundaries: Vec<usize> = text
+                .grapheme_indices(true)
+                .map(|(start, _)| start)
+                .collect();
+            boundaries.push(text.len());
+            boundaries
+                .into_iter()
+                .min_by(|a, b| {
+                    let a_distance = f32::from((x_for_index_dir(&shaped, *a, text) - x).abs());
+                    let b_distance = f32::from((x_for_index_dir(&shaped, *b, text) - x).abs());
+                    a_distance.total_cmp(&b_distance)
+                })
+                .unwrap_or(0)
         };
         (line, col)
     }
