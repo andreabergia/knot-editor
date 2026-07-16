@@ -1558,9 +1558,16 @@ fn x_for_index_dir(s: &ShapedLine, index: usize, line_str: &str) -> Pixels {
         s.runs.iter().flat_map(|r| r.glyphs.iter()).collect();
 
     if !rtl {
-        if let Some(g) = all_glyphs.iter().find(|g| g.index == index) {
-            return g.position.x;
-        }
+        // A grapheme boundary can fall after a single glyph representing an
+        // entire emoji/ZWJ cluster. In that case there is no glyph *at* the
+        // boundary: use the next glyph's left edge, or the line's right edge
+        // at end-of-line. Falling back to the preceding glyph's position
+        // would paint the caret on the emoji's left edge.
+        return all_glyphs
+            .iter()
+            .filter(|g| g.index >= index)
+            .min_by_key(|g| g.index)
+            .map_or(s.width, |g| g.position.x);
     }
 
     let mut best: Option<Pixels> = None;
