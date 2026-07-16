@@ -35,6 +35,7 @@
 
 use gpui::{prelude::*, *};
 use std::ops::Range;
+use unicode_segmentation::UnicodeSegmentation;
 
 /// Owned, frame-stable copy of one styled segment of one line.
 /// Mirrors `knot::view::fixture`'s borrowed `Segment`/`SegSpec` but holds
@@ -348,7 +349,14 @@ impl EditorView {
                     } else {
                         let caret = self.to_flat_utf16(self.cursor_line, self.cursor_col);
                         if caret > 0 {
-                            Some(caret - 1..caret)
+                            let doc = self.flat_doc();
+                            let caret_byte = self.utf16_to_byte_col(&doc, caret);
+                            doc.grapheme_indices(true)
+                                .take_while(|(start, _)| *start < caret_byte)
+                                .last()
+                                .map(|(start, _)| {
+                                    self.byte_col_to_utf16(&doc, start)..caret
+                                })
                         } else {
                             None
                         }
@@ -369,9 +377,13 @@ impl EditorView {
                     } else {
                         let caret = self.to_flat_utf16(self.cursor_line, self.cursor_col);
                         let doc = self.flat_doc();
-                        let doc_utf16_len: usize = doc.chars().map(|c| c.len_utf16()).sum();
-                        if caret < doc_utf16_len {
-                            Some(caret..caret + 1)
+                        let caret_byte = self.utf16_to_byte_col(&doc, caret);
+                        if caret_byte < doc.len() {
+                            let end_byte = doc
+                                .grapheme_indices(true)
+                                .find(|(start, _)| *start > caret_byte)
+                                .map_or(doc.len(), |(start, _)| start);
+                            Some(caret..self.byte_col_to_utf16(&doc, end_byte))
                         } else {
                             None
                         }
@@ -642,9 +654,9 @@ impl EditorView {
         let mut off = 0usize;
         for (i, l) in self.lines.iter().enumerate() {
             if i == line {
-                return off + self.utf16_to_byte_col(l, byte_col);
+                return off + self.byte_col_to_utf16(l, byte_col);
             }
-            off += l.chars().count() + 1; // +1 for "\n"
+            off += l.chars().map(char::len_utf16).sum::<usize>() + 1; // +1 for "\n"
         }
         off
     }

@@ -2811,6 +2811,7 @@ dependencies = [
  "raw-window-handle",
  "skia-safe",
  "sysinfo",
+ "unicode-segmentation",
  "wgpu",
  "winit",
 ]
