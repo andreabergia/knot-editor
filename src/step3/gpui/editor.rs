@@ -253,37 +253,38 @@ impl EditorView {
         self.lines.get(line).map(|s| s.len()).unwrap_or(0)
     }
 
-    /// Previous utf-8 char boundary before `col` on `line`; 0 if already 0.
+    /// Previous grapheme-cluster boundary before `col` on `line`; 0 if
+    /// already at the start. This keeps the caret out of emoji ZWJ and
+    /// modifier sequences, which must be edited as a single user-perceived
+    /// character.
     fn prev_boundary(&self, line: usize, col: usize) -> usize {
         let s = match self.lines.get(line) {
-            Some(s) => s.as_bytes(),
+            Some(s) => s,
             None => return 0,
         };
-        if col == 0 || col > s.len() {
+        if col == 0 {
             return 0;
         }
-        let mut i = col - 1;
-        while i > 0 && (s[i] & 0xC0) == 0x80 {
-            i -= 1;
-        }
-        i
+        s.grapheme_indices(true)
+            .take_while(|(start, _)| *start < col)
+            .last()
+            .map_or(0, |(start, _)| start)
     }
 
-    /// Next utf-8 char boundary after `col` on `line`; line end if at end.
+    /// Next grapheme-cluster boundary after `col` on `line`; line end if at
+    /// the end.
     fn next_boundary(&self, line: usize, col: usize) -> usize {
         let s = match self.lines.get(line) {
-            Some(s) => s.as_bytes(),
+            Some(s) => s,
             None => return 0,
         };
-        let n = s.len();
-        if col >= n {
-            return n;
+        if col >= s.len() {
+            return s.len();
         }
-        let mut i = col + 1;
-        while i < n && (s[i] & 0xC0) == 0x80 {
-            i += 1;
-        }
-        i
+        s.grapheme_indices(true)
+            .map(|(start, _)| start)
+            .find(|start| *start > col)
+            .unwrap_or(s.len())
     }
 
     /// After any cursor move, scroll just enough to keep the caret inside
