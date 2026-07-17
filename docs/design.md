@@ -159,6 +159,12 @@ Examples:
 
 Represents a terminal session attached to a subprocess.
 
+Terminal support is a core editor capability, not an optional extension or a
+text-buffer emulation. A `TerminalBuffer` owns the pseudoterminal session and
+terminal state, while its terminal view owns presentation state such as scroll
+position. Knot should reuse a mature terminal parser/state machine rather than
+implement escape-sequence handling from scratch.
+
 ---
 
 ## Views

@@ -326,7 +326,32 @@ high-level views?
 
 ---
 
-## 9. Text-as-primary-surface stress test
+## 9. Terminal buffer and view experiment
+
+Terminal support is a required part of Knot. This experiment validates its
+architectural fit without building a production-complete terminal emulator.
+
+- Use a mature terminal parser/state crate; do not implement VT escape parsing
+  from scratch.
+- Implement a `TerminalBuffer` that owns a local pseudoterminal subprocess and
+  terminal state, plus a native terminal view rendered through gpui.
+- Run an interactive shell with keyboard input, asynchronous output, ANSI
+  color, cursor state, and scrollback.
+- Resize the view and propagate the new terminal dimensions to the PTY.
+- Run one full-screen TUI using the alternate screen to expose assumptions that
+  a line-oriented shell session would miss.
+- Close and restart the subprocess cleanly, and confirm terminal output cannot
+  block the UI event loop.
+- Defer exhaustive escape-sequence compatibility, mouse reporting, hyperlinks,
+  shell integration, remote PTYs, and cross-platform polish.
+
+**Question answered:** do `TerminalBuffer`, PTY lifecycle, terminal state, and a
+native terminal view fit Knot's buffer/view and async architecture well enough
+to make first-class terminal support viable?
+
+---
+
+## 10. Text-as-primary-surface stress test
 
 - Implement one representative generated surface, initially search results, as
   an inspectable `TextBuffer` rather than a widget. It may be read-only.
@@ -340,7 +365,7 @@ high-level views?
 
 ---
 
-## 10. Command and keymap dispatch
+## 11. Command and keymap dispatch
 
 - Command objects as first-class values: name, arguments, invokable programmatically.
 - Keymap resolution with transient and active keymaps.
@@ -355,7 +380,7 @@ high-level views?
 
 ---
 
-## 11. Capability aggregation and replaceable UI surface
+## 12. Capability aggregation and replaceable UI surface
 
 - Two independent completion providers feed one shared UI surface; one responds
   immediately and one later.
@@ -372,7 +397,7 @@ high-level views?
 
 ---
 
-## 12. URI / filesystem provider abstraction
+## 13. URI / filesystem provider abstraction
 
 - A simple in-memory provider rooted at a non-`file://` URI, supporting URI
   normalization, directory enumeration, read, write, and stat.
@@ -394,7 +419,8 @@ The following are explicitly deferred and should not be attempted during the pro
 - Persistent buffer snapshots and production undo/history semantics beyond the reversible-transaction proof.
 - Piece-table compaction and long-session reclamation policy.
 - Session persistence semantics.
-- Binary and terminal buffer types.
+- Binary buffer types.
+- Production terminal compatibility and polish beyond the step-9 experiment.
 - AI integration as a standardized capability.
 - Any feature whose feasibility is not directly load-bearing on the design commitments.
 
