@@ -273,11 +273,21 @@ reversible transactional edits without violating their core invariants?
 
 ---
 
-## 7. Minimal scripting runtime and extension boundary
+## 7. Scripting engine decision and extension boundary
 
-Choose one provisional embedded-language runtime and build the smallest real
-vertical slice through it. This is not the final runtime comparison or a
-production extension host.
+Make and record the scripting-engine decision in this step. Compare the
+credible candidates through documentation, existing ecosystem evidence, and
+small targeted probes where necessary; implementing every candidate is not a
+requirement. Then build the smallest real vertical slice with the selected
+engine. The choice may be revisited if later evidence invalidates it, but it is
+not left unresolved by the prototype.
+
+- Evaluate the candidates on Rust embedding quality, startup and memory cost,
+  host-binding ergonomics, async/event-loop integration, cross-platform reach,
+  and the feasibility of interruption or isolation later.
+- Record the selected engine, rejected alternatives, decisive evidence, and
+  known risks. If one criterion cannot be resolved without code, write only the
+  smallest candidate-specific probe needed to decide.
 
 - Register and invoke a scripted command.
 - Read and edit a buffer, observe a buffer change, and create or update an
@@ -291,9 +301,9 @@ production extension host.
 - Defer packaging, dependency resolution, generated bindings, forced
   interruption, memory isolation, workers/realms, and adversarial extensions.
 
-**Question answered:** can a plausible real runtime support Knot's basic host
-API, lifecycle, and async programming model without designing the extension API
-against an imaginary boundary?
+**Questions answered:** which scripting engine will Knot use, and can it support
+Knot's basic host API, lifecycle, and async programming model without designing
+the extension API against an imaginary boundary?
 
 ---
 
@@ -379,7 +389,6 @@ high-level views?
 
 The following are explicitly deferred and should not be attempted during the prototype phase:
 
-- Final comparative choice between V8, JavaScriptCore, and WebAssembly as the scripting runtime.
 - Packaging format, dependency resolution, load order.
 - Production extension isolation, forced interruption, workers/realms, and memory limits.
 - Persistent buffer snapshots and production undo/history semantics beyond the reversible-transaction proof.
