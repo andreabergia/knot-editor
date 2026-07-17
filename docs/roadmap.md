@@ -313,21 +313,16 @@ fresh annotation (step 7 / 10).
 
 ---
 
-## 7. Scripting engine decision and extension boundary
+## 7. V8 scripting runtime and extension boundary
 
-Make and record the scripting-engine decision in this step. Compare the
-credible candidates through documentation, existing ecosystem evidence, and
-small targeted probes where necessary; implementing every candidate is not a
-requirement. Then build the smallest real vertical slice with the selected
-engine. The choice may be revisited if later evidence invalidates it, but it is
-not left unresolved by the prototype.
+✅ **Language and engine decided.** Knot uses JavaScript on V8 for configuration,
+built-in behavior, and extensions. The prototype starts from `deno_core`, kept
+behind a strict Knot-owned V8 wrapper; this is not a generic scripting-engine
+abstraction and does not preserve hypothetical language or engine
+replaceability. Decisions and open implementation questions are recorded in
+`docs/step7-v8-runtime.md`.
 
-- Evaluate the candidates on Rust embedding quality, startup and memory cost,
-  host-binding ergonomics, async/event-loop integration, cross-platform reach,
-  and the feasibility of interruption or isolation later.
-- Record the selected engine, rejected alternatives, decisive evidence, and
-  known risks. If one criterion cannot be resolved without code, write only the
-  smallest candidate-specific probe needed to decide.
+Build the smallest real vertical slice through that boundary:
 
 - Register and invoke a scripted command.
 - Read and edit a buffer, observe a buffer change, and create or update an
@@ -341,9 +336,12 @@ not left unresolved by the prototype.
 - Defer packaging, dependency resolution, generated bindings, forced
   interruption, memory isolation, workers/realms, and adversarial extensions.
 
-**Questions answered:** which scripting engine will Knot use, and can it support
-Knot's basic host API, lifecycle, and async programming model without designing
-the extension API against an imaginary boundary?
+**Question answered:** which language and engine will Knot use? → **JavaScript
+on V8.**
+
+**Question remaining:** can the Knot-owned V8 wrapper support the basic host
+API, lifecycle, event fan-out, and async programming model while keeping
+`deno_core` details out of the editor architecture and public JavaScript API?
 
 ---
 
