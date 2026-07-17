@@ -10,7 +10,7 @@ The order reflects dependency: earlier steps produce abstractions and evidence t
 
 - ✅ Crate project skeleton.
 - ✅ Crate layout separating core (model), view (rendering), and host (future scripting runtime).
-  - Implemented as modules within a single `knot` binary crate (`core`, `view`, `host`, `app`); crate-splitting deferred until step 7's no-internal-path experiment demands compile-time enforcement.
+  - Implemented as modules within a single `knot` binary crate (`core`, `view`, `host`, `app`); crate-splitting deferred until a concrete module boundary benefits from compile-time enforcement.
 - ✅ A minimal event loop and window capable of presenting a frame.
   - winit event loop opens a macOS window. GPU/rendering deferred to step 2.
 - ⏭️ Logging, basic profiling hooks, and a reproducible benchmark harness for later steps.
@@ -35,10 +35,10 @@ This step does not depend on the editable buffer model: a synthetic 1M-line text
 
 - HarfBuzz-shaped text on a 1M-line workload scrolled at 120fps.
 - Measure frame time, RSS, cold-start, and platform availability.
-- Note constraints each candidate imposes on the future view API and on the no-internal-path commitment (step 7) — a renderer that forces privileged paths into the view is itself a finding.
+- Note constraints each candidate imposes on the future native view API and extension contribution points (step 8).
 - Decide primary renderer, or decide that more than one candidate survives and revisit after step 3.
 
-**✅ Done — with a deferral.** The benchmark ran; see `docs/step2-renderer-benchmark.md` for raw numbers and findings. At the rendering-primitive level, Skia is the clear winner (lowest p50 on every fixture; survives BiDi/CJK/emoji without API surgery; cosmic-text has a real CJK defect). However, the benchmark compared rendering *primitives*, not UI frameworks, and could not answer the product-level question of what to build the editor UI on. A framework with its own sufficiently mature text-rendering path might make the primitive-level choice moot. That framework-level evaluation is step 3 below. The "no internal path" objection was overapplied to frameworks: that commitment (step 7) governs the buffer/view boundary, not whether the rendering stack is hand-written.
+**✅ Done — with a deferral.** The benchmark ran; see `docs/step2-renderer-benchmark.md` for raw numbers and findings. At the rendering-primitive level, Skia is the clear winner (lowest p50 on every fixture; survives BiDi/CJK/emoji without API surgery; cosmic-text has a real CJK defect). However, the benchmark compared rendering *primitives*, not UI frameworks, and could not answer the product-level question of what to build the editor UI on. A framework with its own sufficiently mature text-rendering path might make the primitive-level choice moot. That framework-level evaluation is step 3 below. Renderer internals do not need to cross the scripting boundary; step 8 instead tests the public contribution points and custom-view API built above them.
 
 **Question answered (at the primitive level):** Skia meets the performance bar; the framework-level bar is step 3's question.
 
@@ -49,7 +49,8 @@ This step does not depend on the editable buffer model: a synthetic 1M-line text
 Step 2 answered the rendering-primitive question (Skia wins) but left open the product question: what does the editor build its UI on? A framework may bundle a mature text-rendering path, making direct use of Skia unnecessary; or it may expose Skia as its primitive, in which case step 2's evidence carries forward. The "renderer primitive" and "UI framework" questions may turn out not to be separable at all. This step evaluates frameworks against criteria including:
 
 - text-rendering maturity (shaping, BiDi, CJK fallback, color emoji);
-- extension-level access to the same rendering/text primitives the built-in views use (the sharpened form of the step-7 "no internal path" commitment);
+- public rendering/text primitives sufficient for extension-owned custom views,
+  without requiring extensions to replace the native text editor view;
 - platform reach and embedding story.
 
 The candidate list is now fixed. Frameworks to evaluate:
@@ -91,7 +92,7 @@ fast to build, the comparison is unnecessary for a decision. The iced
 and floem spikes (steps 6 and 7 of the execution plan) are cancelled;
 their findings noted only as research risk in `docs/step3-framework-
 comparison.md`. Step 9 (seed the `View` abstraction from the surviving
-framework's widget surface) is left for step 7 proper.
+framework's widget surface) is left for step 8 proper.
 
 Caveats carrying forward: the RTL workaround requires undocumented
 knowledge of the glyph layout contract (the widget author reimplements
@@ -106,7 +107,7 @@ granularity for caret/selection over ZWJ sequences.
 ## 3b. Linux gpui portability smoke test
 
 This is an opportunistic checkpoint, not a reopening of step 2 or step 3. It
-should happen before step 7 invests heavily in a gpui-shaped public `View`
+should happen before step 8 invests heavily in a gpui-shaped native `View`
 abstraction, because step 3's successful bidi/IME/text spike was verified on
 macOS and the RTL workaround leans on gpui/Core Text layout behavior.
 
@@ -114,9 +115,9 @@ macOS and the RTL workaround leans on gpui/Core Text layout behavior.
 - Verify the same text fixtures: Arabic/bidi, CJK, emoji/ZWJ, minified long-line, and large Rust source.
 - Check whether the RTL alignment and custom `x_for_index_dir` workaround still hold outside Core Text.
 - Smoke-test IME if the local environment makes that practical.
-- Record any platform-specific shaping, fallback-font, input-method, or windowing assumptions before step 7 bakes the view API around them.
+- Record any platform-specific shaping, fallback-font, input-method, or windowing assumptions before step 8 bakes the native view API around them.
 
-⏭️ Opportunistic / before serious step-7 work.
+⏭️ Opportunistic / before serious step-8 work.
 
 **Question answered:** does the gpui decision rely on macOS-only text or input behavior that would materially change the view abstraction?
 
@@ -124,7 +125,7 @@ macOS and the RTL workaround leans on gpui/Core Text layout behavior.
 
 ## 3c. Windows gpui portability smoke test
 
-This is the Windows counterpart to 3b. It happened before step 7 work, on a
+This is the Windows counterpart to 3b. It happened before step 8 work, on a
 Windows 10 development machine, using the same step-3 editor widget and
 fixtures.
 
@@ -152,8 +153,8 @@ fixtures.
   portable to Windows.
 
 **Decision:** keep the gpui framework decision, but do not bake its current
-editor-widget input behavior into the step-7 `View` abstraction. Before
-serious step-7 work, reproduce the Windows emoji deletion failure in a
+editor-widget input behavior into the step-8 native `View` abstraction. Before
+serious step-8 work, reproduce the Windows emoji deletion failure in a
 minimal case and either correct it using public gpui APIs or record an
 upstream/framework limitation. Run the Linux checkpoint only after that
 Windows blocker has a conclusion.
@@ -175,7 +176,16 @@ Plan and decisions recorded in `docs/step4-buffer-plan.md`.
 - ✅ Internal benchmark: per-edit cost on a 1M-line buffer (reuse step-2 `rust_sample.kfx --tile 635` fixture), randomized edit streams, interleaved-producer (single-threaded, D5) scenario. Output in `docs/step4-buffer-benchmark.md`.
 - ✅ Decision checkpoint: confirm rope-vs-stable-ID-PT, write answer here, proceed to step 5. → **Stable-ID piece table confirmed.** The piece table alone runs at ~10k edits/sec on a 1M-line buffer (p50 75 µs on a 79k-piece chain), two orders of magnitude above single-user editing rates. `Position` tokens resolve in sub-µs on realistic warm chains, and the D7 remap-by-log path is ~41 ns idle / ~100 ns per matching `Split` — negligible. The only bottleneck is the `Vec<usize>` line index (~88% of per-edit latency with the index live is `update_line_starts`' O(line_count) suffix shift); that's a localized swap to a `BTreeMap`/Fenwick behind the existing `line_count` / `line_start` / `line_of_offset` API, deferred until step 5 surfaces a real need. A rope would have answered only the throughput question and forced the annotation layer (step 5) to remap every offset after every edit — exactly what step 5 is trying to avoid.
 
-**Deferred out of step 4:** undo/redo history; CRDT/collaborative editing; non-UTF-8 encodings; file save/load I/O; syntax-tree integration; the annotation model itself (step 5); views (step 7).
+**Accepted prototype limitation:** because pieces split but never merge, piece
+count and retained inserted text grow with edit history (`O(edits)`). Stable
+positions make transparent compaction an architectural follow-up rather than a
+localized optimization. The existing benchmark supplies sufficient constants
+for the prototype; no additional long-session benchmark is planned unless
+ordinary prototype use exposes the problem.
+
+**Deferred out of step 4:** full undo/redo history; CRDT/collaborative editing;
+non-UTF-8 encodings; file save/load I/O; syntax-tree integration; the annotation
+model itself (step 5); views (step 8).
 
 **Question answered:** is there a buffer representation that is fast enough and exposes stable enough positions for the annotation layer? → **Yes.** Proceed with the stable-ID piece table.
 
@@ -236,72 +246,125 @@ p50 15.5–15.6 µs.
 - Per-source `AnnotationData(String)` remains opaque; rich payloads deferred to view layer.
 - No privileged coordination required: sources never intersect, consumers filter by kind at query time.
 
-**Question answered:** do independent annotation sources compose at the data/query level, without forcing special coordination into the core? → **Yes.** Sources are independent callers of `add()`. Consumers compose per-kind with `query_range_for_kinds`. Adding a 6th source needs only `store.add(…, Other(n), …)`. Deferred to step 10: source lifecycle (registration/deregistration), dedup/priority at the consumer level.
+**Question answered:** do independent annotation sources compose at the static
+data/query level, without forcing special coordination into the core? → **Yes.**
+Sources are independent callers of `add()`. Consumers compose per-kind with
+`query_range_for_kinds`. `AnnotationKind` describes category, not provider
+ownership; add an opaque source identity when a real provider lifecycle needs
+teardown rather than treating that routine modeling detail as a separate
+experiment.
 
 ---
 
-## 7. View abstraction and the no-internal-path stress test
+## 6b. Reversible edit transaction proof
+
+- Represent one transaction as one or more primitive buffer edits.
+- Record enough information to invert insert, delete, and replace.
+- Undo and redo one transaction; verify text correctness and pass annotations
+  through the inverse edits using their existing stabilization rules.
+- Defer history trees, grouping heuristics, persistence, view-state restoration,
+  command integration, and memory reclamation.
+
+**Question answered:** can the selected buffer and stable-position model support
+reversible transactional edits without violating their core invariants?
+
+---
+
+## 7. Minimal scripting runtime and extension boundary
+
+Choose one provisional embedded-language runtime and build the smallest real
+vertical slice through it. This is not the final runtime comparison or a
+production extension host.
+
+- Register and invoke a scripted command.
+- Read and edit a buffer, observe a buffer change, and create or update an
+  annotation through the host API.
+- Run a scripted command across an await point while the editor stays
+  responsive; cooperatively cancel it and prevent its final state update.
+- Report an ordinary thrown error without crashing the editor, and remove the
+  spike's commands/subscriptions when it is disposed.
+- Pass buffer revisions across the boundary so later async provider results can
+  identify the document state they used.
+- Defer packaging, dependency resolution, generated bindings, forced
+  interruption, memory isolation, workers/realms, and adversarial extensions.
+
+**Question answered:** can a plausible real runtime support Knot's basic host
+API, lifecycle, and async programming model without designing the extension API
+against an imaginary boundary?
+
+---
+
+## 8. Native view abstraction and extension contribution points
 
 - A `View` trait carrying presentation state: scroll, cursor, selections, rendering options.
 - Two views of one buffer (one folded, one not) with independent state, plus a minimap view and a "different zoom" view.
 - Verify the buffer never needs to know about folding, scroll, or cursor to serve a view.
-- The load-bearing experiment: implement the built-in text editor view *purely* against the public view API, with no backdoor into the buffer or renderer internals.
-- If it cannot be done, iterate the API until it can, or record that the claim must be softened before building further.
+- Exercise public text-view contributions for annotations/decorations, gutters,
+  and contextual behavior without exposing gpui or native rendering internals.
+- Implement one nontrivial custom non-editor view through the public extension
+  UI API.
+- Investigate whether gpui exposes a plausible public accessibility-tree path
+  for custom text content, selection, focus, and actions. Record feasibility;
+  do not implement production accessibility support.
 
-**Question answered:** is the "no internal path extensions cannot reach" commitment actually achievable for the most demanding built-in surface?
+**Question answered:** does the native view/buffer split support independent
+presentation while giving extensions useful contribution points and custom
+high-level views?
 
 ---
 
-## 8. Text-as-universal-surface stress test
+## 9. Text-as-primary-surface stress test
 
-- A git-status buffer and a search-results buffer implemented as real editable `TextBuffer`s with backing features, not widgets.
-- Drive them through the same view pipeline as source files.
+- Implement one representative generated surface, initially search results, as
+  an inspectable `TextBuffer` rather than a widget. It may be read-only.
+- Drive it through the normal text-view pipeline, attach commands to result
+  regions, and refresh its contents once.
+- Try a second surface such as git status only if search results do not expose
+  meaningful limitations.
 - Identify the point, if any, at which representing a surface as text becomes a liability, and what widgets would then be required.
 
 **Question answered:** does the "text remains central" philosophy hold for non-source surfaces?
 
 ---
 
-## 9. Command and keymap dispatch
+## 10. Command and keymap dispatch
 
 - Command objects as first-class values: name, arguments, invokable programmatically.
 - Keymap resolution with transient and active keymaps.
 - Programmable dispatch: prefix-arg or `M-x`-style invocation.
 - Composition of commands.
-- Verify every user action is addressable as a command object with the same arguments a keypress would supply.
+- Invoke the same semantic operation from a keybinding, command palette, and
+  script code with the same explicit arguments.
+- Confirm raw input protocols such as IME composition can update interaction
+  state without becoming registered commands.
 
 **Question answered:** are commands a sound substrate for keybindings, programmatic invocation, and composition?
 
 ---
 
-## 10. Capability aggregation and replaceable UI surface
+## 11. Capability aggregation and replaceable UI surface
 
-- Two independent completion providers and one diagnostic provider feeding a single shared UI surface.
-- Core merges, dedupes, and routes results; providers can be added and removed at runtime.
-- Replace the completion surface mid-session without dropping in-flight results or restarting providers.
-- Verify the new surface receives aggregated results with no special wiring.
+- Two independent completion providers feed one shared UI surface; one responds
+  immediately and one later.
+- Update the surface as results arrive. Tag requests/results with the relevant
+  request or document revision and discard a late result after a newer request
+  makes it stale.
+- Replace the completion surface mid-session without restarting providers; the
+  new surface receives the current aggregate with no special wiring.
+- An error from one provider does not erase the other's result.
+- Use a deliberately simple completion-specific merge policy. Do not infer a
+  universal ranking, deduplication, streaming, or backpressure model.
 
 **Question answered:** is the provider/surface split actually implementable as described, not just as a diagram?
 
 ---
 
-## 11. Async ergonomics prototype
-
-This step is portable across host choices and can be deferred until after the renderer/UI questions are settled. It is included here because it constrains the eventual scripting runtime and the core API shape.
-
-- A command that appears synchronous to its author but auto-suspends across await points without callback hell.
-- Cancellation propagating cleanly across an await chain spanning a capability provider, an LSP request, and a UI update.
-- An extension that hangs; confirm detection, interruption, and isolation without taking down the editor.
-- Identify which runtime mechanism makes that possible: cancellable tasks, runtime interruption, workers/realms, fuel metering, or a process boundary for selected extension classes.
-- Benchmark against Emacs' synchronous model for writability.
-
-**Question answered:** is the "asynchronous by default" commitment writable by ordinary users, or only by engine authors?
-
----
-
 ## 12. URI / filesystem provider abstraction
 
-- A remote `ssh://` provider participating in workspace enumeration, search, and an LSP session, identically to the built-in `file://` provider.
+- A simple in-memory provider rooted at a non-`file://` URI, supporting URI
+  normalization, directory enumeration, read, write, and stat.
+- Open a workspace and buffer through it despite the resource having no
+  corresponding OS path.
 - Identify any core path that bypasses the provider interface and hard-codes `file://` semantics.
 - Fix or document leaks.
 
@@ -313,11 +376,16 @@ This step is portable across host choices and can be deferred until after the re
 
 The following are explicitly deferred and should not be attempted during the prototype phase:
 
-- Choosing between V8, JavaScriptCore, and WebAssembly as the scripting runtime.
+- Final comparative choice between V8, JavaScriptCore, and WebAssembly as the scripting runtime.
 - Packaging format, dependency resolution, load order.
+- Production extension isolation, forced interruption, workers/realms, and memory limits.
+- Persistent buffer snapshots and production undo/history semantics beyond the reversible-transaction proof.
+- Piece-table compaction and long-session reclamation policy.
 - Session persistence semantics.
 - Binary and terminal buffer types.
 - AI integration as a standardized capability.
 - Any feature whose feasibility is not directly load-bearing on the design commitments.
 
-These become relevant only after the prototype has produced tentative answers to the no-internal-path, renderer, annotation, and async-ergonomics questions.
+These become relevant only after the prototype has produced tentative answers
+to the renderer, annotation, scripting-boundary, view-contribution, and async
+programming-model questions.
