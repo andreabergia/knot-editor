@@ -18,7 +18,7 @@ The order reflects dependency: earlier steps produce abstractions and evidence t
 - ✅ Decide: which platforms to target for the prototype (at minimum macOS and Linux; Windows deferred unless a BiDi/IME regression appears).
   - macOS only for the prototype. Linux revisited if/when renderer choice (step 2) calls for it.
 
-**Question answered:** can the project stand up a GPU-backed window with the desired layering?
+**Question answered:** can the project stand up a native event-loop window with the desired module layering? → **Yes.** GPU presentation and renderer performance are answered by step 2.
 
 ---
 
@@ -207,10 +207,12 @@ untouched annotations resolve through their stable tokens.
 | Stale tokens | Right-half split tokens detected via `resolve` → `None` and repaired through the edit-log `Split` records. |
 | Query | `query_range(&mut self, buffer, &[a, b))` returns all annotation ids overlapping `[a, b)`, backed by a lazy-rebuilt sorted interval index for O(log n + k) lookup. |
 
-**Benchmark:** Harness exists (`src/bin/anno_bench.rs`); smoke data on the
-development fixture (500 annotations) shows token `stabilize` at p50 ~1.2 µs
-vs the offset-remap baseline at ~20.5 µs (17.6× faster). Full 1M-line /
-10k-annotation run pending → `docs/step5-annotation-benchmark.md`.
+**Benchmark:** ✅ Full stress test completed (`src/bin/anno_bench.rs`; findings
+in `docs/step5-annotation-benchmark.md`). On a 1M-line buffer with 10k
+annotations, token stabilization measured p50 12.2–12.4 µs across the 3-source
+and 6-source workloads, versus 69.5–69.7 µs for the offset-remap baseline
+(5.6–5.7× faster). Resolve-all measured p50 1.79 ms and range queries measured
+p50 15.5–15.6 µs.
 
 **Question answered:** can annotations track positions cheaply and correctly enough to be the universal composition mechanism the design claims? → **Yes.** Token-anchored annotations with piece-ID stability survive arbitrary edits with zero per-annotation work for untouched ranges; affected-anchor repair is O(touched) per edit. Proceed to step 6 (annotation composition).
 
