@@ -183,9 +183,12 @@ localized optimization. The existing benchmark supplies sufficient constants
 for the prototype; no additional long-session benchmark is planned unless
 ordinary prototype use exposes the problem.
 
-**Deferred out of step 4:** full undo/redo history; CRDT/collaborative editing;
-non-UTF-8 encodings; file save/load I/O; syntax-tree integration; the annotation
-model itself (step 5); views (step 8).
+**Deferred out of step 4:** full undo/redo history; non-UTF-8 encodings; file
+save/load I/O; syntax-tree integration; the annotation model itself (step 5);
+views (step 8).
+
+**Non-goal:** CRDTs and real-time collaborative editing will not be implemented.
+The prototype and its APIs should not reserve complexity for them.
 
 **Question answered:** is there a buffer representation that is fast enough and exposes stable enough positions for the annotation layer? → **Yes.** Proceed with the stable-ID piece table.
 

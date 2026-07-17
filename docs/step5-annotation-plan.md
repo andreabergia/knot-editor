@@ -139,11 +139,13 @@ offset approach is O(all annotations) per edit.
 
 - The composition/rendering itself (roadmap step 6) — only the query
   surface it needs is built here.
-- Multiple views / folding (step 7).
+- Multiple views / folding (step 8).
 - Grapheme-cluster granularity for sticky endpoints (step 3 caveat /
-  step 7) — annotations declare stickiness in *byte* terms, as do
+  step 8) — annotations declare stickiness in *byte* terms, as do
   `Position` tokens (D3 of step 4).
-- Undo/redo, CRDT, persistence — unchanged from step 4 deferrals.
+- Undo/redo and persistence — unchanged from step 4 deferrals.
+- CRDTs and real-time collaborative editing remain an explicit project
+  non-goal.
 
 ## Type sketch (target API)
 

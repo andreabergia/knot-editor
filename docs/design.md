@@ -457,6 +457,18 @@ Future experience may reveal whether additional buffer types are necessary.
 
 # Rejected Ideas
 
+## Collaborative editing
+
+Real-time collaborative editing is not a goal for Knot. The editor will not
+adopt CRDTs or another shared-document model, and its buffer, position, history,
+workspace, and extension APIs should not be designed around future
+collaborative-editing requirements.
+
+Screen sharing and external communication tools are sufficient for the
+collaborative workflows Knot intends to support.
+
+---
+
 ## Everything is a generic model
 
 Too abstract.

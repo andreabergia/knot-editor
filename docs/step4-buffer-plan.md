@@ -103,13 +103,15 @@ runtime).
 
 **Deferred (do not implement in step 4):**
 - Undo / redo history.
-- CRDT / collaborative editing.
 - Non-UTF-8 encodings.
 - File save / load I/O.
 - Syntax-tree / Tree-sitter integration.
 - Annotation model itself (step 5).
-- Views, rendering (step 7).
+- Views, rendering (step 8).
 - Persistence semantics (roadmap out-of-scope).
+
+**Non-goal:** CRDTs and real-time collaborative editing are not planned for
+Knot; the buffer model should not reserve complexity for them.
 
 The deferred list is long on purpose: step 4 is the smallest
 representation that can answer the throughput-and-stability question.
