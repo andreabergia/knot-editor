@@ -15,3 +15,4 @@ from scratch after the core choices are validated.
 updated. Use ✅ and other emoji to mark executed steps.
 - When executing multiple steps or tasks, split them into logical commits as
 you go.
+* Don't use conventional commits
