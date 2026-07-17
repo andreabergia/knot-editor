@@ -216,7 +216,7 @@ untouched annotations resolve through their stable tokens.
 |---------|---------------|
 | Anchor | `Position` token + `Stickiness::{Before, After}` |
 | Stickiness | `Before` (sticky-left, default for selection start): insert at endpoint → text lands before it, endpoint keeps its byte. `After` (sticky-right, default for selection end): insert at endpoint → endpoint relocates past the inserted span. |
-| Delete behavior | Endpoints inside a delete span snap to the nearer surviving edge (`Before` → left edge, `After` → right edge). Fully-deleted annotations collapse to `None` (invisible to queries). |
+| Delete behavior | Endpoints inside a delete span snap to the nearer surviving edge (`Before` → left edge, `After` → right edge). Fully-deleted annotations are removed entirely (step 6b: no tombstone; undo does not revive them). |
 | Stale tokens | Right-half split tokens detected via `resolve` → `None` and repaired through the edit-log `Split` records. |
 | Query | `query_range(&mut self, buffer, &[a, b))` returns all annotation ids overlapping `[a, b)`, backed by a lazy-rebuilt sorted interval index for O(log n + k) lookup. |
 
@@ -268,8 +268,48 @@ experiment.
 - Defer history trees, grouping heuristics, persistence, view-state restoration,
   command integration, and memory reclamation.
 
+✅ **Done.** Plan and findings recorded in `docs/step-6b-plan.md`.
+
+**Changes made:**
+- `core::transaction::EditTransaction` (`src/core/transaction.rs`): a single-use
+  stateful recorder over `TextBuffer` with `insert` / `delete` / `replace` /
+  `undo` / `redo`. The mutation methods apply immediately, capture the bytes
+  needed to invert each primitive via `read_range` before mutating, and skip
+  no-op primitives. `undo` applies recorded inverses in reverse primitive
+  order; `redo` reapplies the originals in forward order. Both route
+  exclusively through `TextBuffer::{insert, delete, replace}`, so each
+  direction emits the normal `BufferEdit` log entries and preserves line-index
+  maintenance. The transaction checkpoints both the originating buffer's
+  stable instance identity and `edit_seq` before every recorded primitive and
+  before `undo` / `redo`, panicking on an out-of-band edit or buffer swap
+  rather than applying stale raw offsets. Invalid orderings panic (double-`undo`, `redo` without
+  `undo`, mutate-after-`undo`), matching `TextBuffer`'s precondition style.
+- Annotation consumption semantics: a fully consumed annotation is now
+  **removed** (annotation id, both endpoint-index entries, cached offsets)
+  instead of being retained as a `collapsed` tombstone. `resolve` returns
+  `None` for that id, `query_range` / `query_range_for_kinds` / `iter_live`
+  cannot return it, and the id is never reused (monotonic counter). Undoing
+  the consuming text edit does not revive the annotation — a provider may
+  re-publish under a fresh id later (step 10's lifecycle owner).
+- `core::transaction` acceptance tests: multi-primitive UTF-8 round-trip,
+  two-cycle undo/redo, line-index validity through undo/redo, no-op
+  primitives not recorded, `replace`-decomposition into insert/delete
+  primitives, panic tests for invalid orderings, and a combined
+  forward/undo/redo + annotation flow that verifies unaffected /
+  boundary-sticky / partially-overlapped annotations remain queryable while
+  the wholly-consumed annotation is removed at every pass.
+- `cargo test core` green: 103 tests, 0 failures.
+
 **Question answered:** can the selected buffer and stable-position model support
-reversible transactional edits without violating their core invariants?
+reversible transactional edits without violating their core invariants? →
+**Yes.** `EditTransaction` routes everything through the existing `TextBuffer`
+mutation surface, so piece IDs, the append-only `Add` store, the unbounded edit
+log, line-index maintenance, and annotation stabilization all retain their
+invariants across forward, undo, and redo. Annotation removal-on-consumption
+keeps the store free of invisible collapsed tombstones; undo does not need to
+revive annotations because annotations are provider-derived state, not
+transaction state — a provider observing a new buffer revision publishes a
+fresh annotation (step 7 / 10).
 
 ---
 

@@ -36,6 +36,10 @@ The crate modules exported by `src/lib.rs` are:
 - `view`: the step-2 renderer benchmark abstraction, not the future editor
   `View` API.
 
+`core` itself contains `buffer` (the piece table and edit log), `annotation`
+(token-anchored ranges over the buffer), and `transaction` (one reversible
+primitive-edit transaction that routes through `buffer`).
+
 ## Build targets
 
 `Cargo.toml` defines one library and five binaries:
@@ -124,7 +128,7 @@ BufferEdit appended
 AnnotationStore::stabilize(&buffer)
         |
         +-- repair endpoints on touched pieces
-        +-- collapse fully consumed annotations
+        +-- remove annotations fully consumed by a delete
         +-- mark the interval index dirty
         |
         v
@@ -135,9 +139,35 @@ Callers must stabilize a store before expecting it to reflect new edits.
 Annotations from diagnostics, search, git, breakpoints, folding, and other
 providers share one store. `AnnotationKind` is a category, not provider
 identity; payload data remains an opaque string. Consumers compose sources by
-querying all kinds or a selected set. `OffsetStore` is the intentionally naive
-O(all annotations) comparison implementation used by benchmarks, not the
-selected product model.
+querying all kinds or a selected set. A fully consumed annotation (both
+endpoints land strictly inside a deleted span and collapse onto the same
+surviving edge) is removed entirely — its id, endpoint-index entries, and
+cached offsets are dropped. `resolve` returns `None` for that id; queries and
+`iter_live` cannot return it. Undoing the consuming text edit does not revive
+the annotation; a provider re-publishes under a fresh id later. `OffsetStore`
+is the intentionally naive O(all annotations) comparison implementation used
+by benchmarks, not the selected product model.
+
+### Edit transaction
+
+`core::transaction::EditTransaction` is a single-use, stateful recorder over a
+`TextBuffer` (roadmap step 6b). Its `insert` / `delete` / `replace` apply
+immediately and record the bytes needed to invert each primitive (captured via
+`read_range` before mutating). `undo` applies the recorded inverses in reverse
+primitive order; `redo` reapplies the originals in forward order. Both route
+exclusively through `TextBuffer::{insert, delete, replace}`, so each direction
+emits the normal `BufferEdit` log entries and preserves line-index
+maintenance. No piece IDs are restored, the append-only `Add` store is never
+truncated, and annotations are not mutated by the transaction — the
+`AnnotationStore` owner calls `stabilize(&buffer)` after forward, undo, and
+redo just as it does after any other buffer edit. The transaction checkpoints
+both its originating buffer's stable instance identity and `edit_seq` before
+every recorded primitive and before each `undo` / `redo` pass, and panics on
+an out-of-band edit or buffer swap rather than applying stale raw byte
+offsets. Invalid orderings (double `undo`, `redo`
+without `undo`, mutate-after-`undo`) panic, matching `TextBuffer`'s
+precondition style. It is not a history manager: branching history after
+`undo` is out of scope, callers create a new transaction.
 
 ## Application, UI, and rendering
 
@@ -203,7 +233,8 @@ design constraint, not yet an implemented module graph.
 | Change | Primary location | Notes |
 | --- | --- | --- |
 | Text storage, edits, positions, or line lookup | `src/core/buffer.rs` | Preserve byte-offset and edit-log invariants. |
-| Annotation tracking or range composition | `src/core/annotation.rs` | Stabilize after edits; do not build on `OffsetStore`. |
+| Annotation tracking or range composition | `src/core/annotation.rs` | Stabilize after edits; do not build on `OffsetStore`. Fully consumed annotations are removed, not tombstoned. |
+| Reversible primitive-edit transaction | `src/core/transaction.rs` | Routes through `TextBuffer::{insert, delete, replace}` only; no history tree or annotation API. |
 | Current executable lifecycle | `src/app.rs` | Still the blank winit skeleton. |
 | gpui behavior or framework investigation | `src/step3/gpui` | Spike-local state is not the core model. |
 | Renderer benchmark or fixtures | `src/view`, `src/bin/bench.rs` | Comparative experiment only. |
@@ -222,9 +253,11 @@ design constraint, not yet an implemented module graph.
   hit testing, and rich presentation belong to the future view layer.
 - gpui is the selected UI framework, but the default app has not migrated to
   it and the real core-backed `View` abstraction does not exist yet.
-- Undo/redo transactions, scripting, terminal state, filesystem providers,
-  commands, and capability aggregation remain roadmap work, not hidden
-  subsystems in the current code.
+- Undo/redo transactions (one-shot, no history tree) live in
+  `core::transaction`; history trees, edit grouping, persistence, and
+  view-state restoration remain roadmap work. Scripting, terminal state,
+  filesystem providers, commands, and capability aggregation remain roadmap
+  work, not hidden subsystems in the current code.
 
 When one of these facts changes, update this document in the same change as
 the code. Use `design.md` for the target product philosophy and `roadmap.md`

@@ -36,10 +36,12 @@
 //! `resolve` returns `Some(start..end)` with `start <= end` for every live
 //! annotation. When an annotation's extent is fully consumed by a delete
 //! (both endpoints land strictly inside a deleted span and collapse onto the
-//! same point), it has no surviving extent: `resolve` returns `None` and the
-//! annotation becomes invisible to `query_range`. The id stays reserved; a
-//! later edit can re-extend it. This matches the step-4-style correctness
-//! oracle, which also reports `None` for a fully-deleted annotation.
+//! same point), it has no surviving extent: `AnnotationStore` **removes** the
+//! annotation entirely — its id, both endpoint-index entries, and any cached
+//! offsets. `resolve` returns `None` for that id thereafter, and `query_range`
+//! / `iter_live` cannot return it. The id is not reserved; a provider may add
+//! a fresh annotation later that receives a new id (undo does not revive a
+//! consumed annotation — see step 6b).
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::ops::Range;
@@ -112,9 +114,6 @@ pub struct Annotation {
     pub end: Anchor,
     pub kind: AnnotationKind,
     pub data: AnnotationData,
-    /// True iff the annotation was fully consumed by a delete and now has no
-    /// surviving extent (`resolve` returns `None`).
-    collapsed: bool,
     /// Cached live resolved byte offsets, the authoritative transient state
     /// `stabilize` refreshes after every edit (see module docs). The
     /// `Position` tokens are re-anchored against these via `position_at`.
@@ -193,7 +192,8 @@ impl AnnotationStore {
         }
     }
 
-    /// Number of annotations currently held (collapsed or live).
+    /// Number of annotations currently held (all live; fully consumed
+    /// annotations are removed, not tombstoned).
     pub fn len(&self) -> usize {
         self.annotations.len()
     }
@@ -209,9 +209,6 @@ impl AnnotationStore {
     fn rebuild_index(&mut self, buffer: &TextBuffer) {
         self.interval_index.clear();
         for (&id, ann) in &self.annotations {
-            if ann.collapsed {
-                continue;
-            }
             let s = ann.start.resolve(buffer).unwrap_or(ann.idx_start);
             let e = ann.end.resolve(buffer).unwrap_or(ann.idx_end);
             let (start, end) = if s <= e { (s, e) } else { (e, s) };
@@ -352,7 +349,6 @@ impl AnnotationStore {
             end: end_a,
             kind,
             data,
-            collapsed: false,
             idx_start: start,
             idx_end: end,
         };
@@ -374,15 +370,12 @@ impl AnnotationStore {
 
     /// Resolve an annotation to its current byte range.
     ///
-    /// Returns `None` iff the annotation is `collapsed` (fully consumed by a
-    /// delete) — see module docs for the contract.
+    /// Returns `None` iff the annotation has been removed (e.g. it was
+    /// fully consumed by a delete) — see module docs for the contract.
     ///
     /// The caller must `stabilize` before `resolve` to reflect edits.
     pub fn resolve(&self, buffer: &TextBuffer, id: AnnotationId) -> Option<Range<usize>> {
         let ann = self.annotations.get(&id)?;
-        if ann.collapsed {
-            return None;
-        }
         let s = ann.start.resolve(buffer).unwrap_or(ann.idx_start);
         let e = ann.end.resolve(buffer).unwrap_or(ann.idx_end);
         if s <= e { Some(s..e) } else { Some(e..s) }
@@ -442,10 +435,11 @@ impl AnnotationStore {
             .collect()
     }
 
-    /// Iterate over all live (non-collapsed) annotations. Useful for consumers
-    /// that need to scan the full set (e.g. a minimap building a heatmap).
+    /// Iterate over all live annotations. Fully consumed annotations are
+    /// removed rather than retained as tombstones, so every entry in the
+    /// map is live.
     pub fn iter_live(&self) -> impl Iterator<Item = (&AnnotationId, &Annotation)> {
-        self.annotations.iter().filter(|(_, ann)| !ann.collapsed)
+        self.annotations.iter()
     }
 
     /// Advance over every edit since the last `stabilize`, repairing only
@@ -577,7 +571,7 @@ impl AnnotationStore {
                 for id in touched {
                     self.refresh_cached_offsets(buffer, id);
                     if consumed.contains(&id) && self.resolved_extent_empty(buffer, id) {
-                        self.collapse(id);
+                        self.consume(id);
                     }
                 }
             }
@@ -648,13 +642,15 @@ impl AnnotationStore {
         s >= e
     }
 
-    fn collapse(&mut self, id: AnnotationId) {
-        let Some(ann) = self.annotations.get(&id).cloned() else {
-            return;
-        };
-        self.remove_annotation_endpoints(&ann);
-        if let Some(ann) = self.annotations.get_mut(&id) {
-            ann.collapsed = true;
+    /// Fully consume an annotation whose extent has collapsed to zero (both
+    /// endpoints snapped onto the same surviving edge of a delete). Removes
+    /// the annotation, its endpoint-index entries, and any cached offsets.
+    /// `resolve` will return `None` for `id` thereafter; there is no
+    /// tombstone. Undoing the text edit does not revive the annotation —
+    /// a provider must re-publish it under a fresh id (step 6b).
+    fn consume(&mut self, id: AnnotationId) {
+        if let Some(ann) = self.annotations.remove(&id) {
+            self.remove_annotation_endpoints(&ann);
         }
     }
 }
@@ -919,7 +915,7 @@ mod tests {
         // Delete [2, 9) which fully contains [3, 8).
         b.delete(2..9);
         store.stabilize(&b);
-        // Fully deleted -> collapsed, no extent.
+        // Fully deleted -> consumed, no extent; annotation is removed entirely.
         assert_eq!(store.resolve(&b, id), None);
     }
 
@@ -1104,6 +1100,85 @@ mod tests {
         b.insert(0, "xy");
         store.stabilize(&b);
         assert_eq!(store.resolve(&b, id), Some(2..2));
+    }
+
+    // ---- Step 6b: removal-on-consumption semantics ---------------------
+
+    #[test]
+    fn fully_consumed_annotation_removed_not_tombstoned() {
+        let mut b = TextBuffer::from_text("hello world");
+        let mut store = AnnotationStore::new();
+        let victim = store.add(
+            &b,
+            6,
+            7,
+            AnnotationKind::Breakpoint,
+            AnnotationData::default(),
+        );
+        let other = store.add(&b, 0, 2, AnnotationKind::Search, AnnotationData::default());
+
+        // Delete [5, 8) on "hello world" — fully contains [6, 7).
+        b.delete(5..8);
+        store.stabilize(&b);
+        assert_eq!(b.read_range(0..b.len()), "hellorld");
+
+        // Removed entirely — no tombstone, no query presence, no iter_live
+        // entry.
+        assert_eq!(store.resolve(&b, victim), None, "victim fully consumed");
+        assert!(
+            !store.query_range(&b, 0, b.len()).contains(&victim),
+            "victim must not appear in query_range"
+        );
+        assert!(
+            !store.iter_live().any(|(id, _)| *id == victim),
+            "victim must not appear in iter_live"
+        );
+        assert_eq!(store.len(), 1, "only the unaffected annotation remains");
+        assert_eq!(store.resolve(&b, other), Some(0..2));
+
+        // A later add re-uses no id; the victim's id is gone for good.
+        let replacement = store.add(
+            &b,
+            6,
+            7,
+            AnnotationKind::Breakpoint,
+            AnnotationData::default(),
+        );
+        assert_ne!(replacement, victim, "monotonic ids; victim id not reused");
+        assert_eq!(store.resolve(&b, replacement), Some(6..7));
+    }
+
+    #[test]
+    fn consumed_annotation_stays_removed_through_undo_redo() {
+        // The text-edit inverse (re-insert) does not revive a consumed
+        // annotation; the provider must re-publish under a fresh id.
+        let mut b = TextBuffer::from_text("hello world");
+        let mut store = AnnotationStore::new();
+        let victim = store.add(
+            &b,
+            6,
+            7,
+            AnnotationKind::Breakpoint,
+            AnnotationData::default(),
+        );
+
+        b.delete(5..8); // "hellorld", victim fully consumed
+        store.stabilize(&b);
+        assert_eq!(store.resolve(&b, victim), None);
+
+        // Undo the delete: the log re-emits a forward insert at byte 5;
+        // stabilize re-runs through it, but the victim is already removed
+        // and is not re-added.
+        b.insert(5, " wo");
+        store.stabilize(&b);
+        assert_eq!(b.read_range(0..b.len()), "hello world");
+        assert_eq!(store.resolve(&b, victim), None, "undo does not revive victim");
+
+        // Redo: delete again. The victim is still gone.
+        b.delete(5..8);
+        store.stabilize(&b);
+        assert_eq!(b.read_range(0..b.len()), "hellorld");
+        assert_eq!(store.resolve(&b, victim), None, "redo still finds no victim");
     }
 
     // ---- Randomized correctness oracle (workload 4 of the plan) ----------
@@ -1458,7 +1533,7 @@ mod tests {
         );
         assert_eq!(lint_only, vec![lint1]);
 
-        // ---- iter_live vs collapsed ----
+        // ---- iter_live reflects removal ----
         store.remove(lint1);
         assert_eq!(store.iter_live().count(), 13, "removed annotation excluded from iter_live");
         assert_eq!(store.len(), 13, "len reflects removal too");

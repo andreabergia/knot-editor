@@ -43,7 +43,7 @@ types they care about:
 | Method | Signature | Purpose |
 |--------|-----------|---------|
 | `query_range_for_kinds` | `(&mut self, &TextBuffer, a: usize, b: usize, kinds: &[AnnotationKind]) -> Vec<AnnotationId>` | Like `query_range` but filtered to the given kind set. |
-| `iter_live` | `(&self) -> impl Iterator<Item = (&AnnotationId, &Annotation)>` | Iterate all live (non-collapsed) annotations — full-scan consumer (e.g. minimap heatmap). |
+| `iter_live` | `(&self) -> impl Iterator<Item = (&AnnotationId, &Annotation)>` | Iterate all live annotations — fully consumed annotations are removed (not tombstoned) in step 6b, so every map entry is live. Full-scan consumer (e.g. minimap heatmap). |
 
 `query_range_for_kinds` extends the existing interval-index fast path: it
 builds a `HashSet<AnnotationKind>` from the caller's slice and filters the
