@@ -94,13 +94,22 @@ Examples include:
 
 ---
 
-## The UI is fully customizable
+## The UI is extensively customizable
 
-The user interface is not a privileged layer. UI elements are scriptable and replaceable by extensions.
+Extensions can contribute custom views, panels, sidebars, popups, status items,
+annotations, decorations, gutters, and contextual actions. Selected high-level
+surfaces, such as completion, hover, and the command palette, are replaceable.
 
-The built-in UI components are implemented using the same APIs available to extensions. There is no internal path that extensions cannot reach.
+The native platform shell and the fundamental text editor view are part of the
+trusted core. Extensions are not expected to reimplement text shaping, hit
+testing, selection, IME, accessibility, or low-level rendering. Instead, the
+text view exposes public contribution points that allow extensions to alter its
+presentation and behavior substantially.
 
-This commitment is strict: if built-in components use a separate internal path, that path becomes a ceiling on what extensions can achieve.
+Built-in high-level behavior should use the same editor-state and contribution
+APIs exposed to extensions wherever practical. This is a promise of
+user-visible extensibility, not literal access to native Rust, gpui, GPU, or
+platform internals.
 
 ---
 
@@ -197,9 +206,12 @@ The editor discourages specialized UI components that bypass the buffer/view mod
 
 # Commands
 
-Commands are first-class objects.
+Commands are first-class objects representing reusable semantic editor
+operations.
 
-Everything the user can do is a command.
+Commands are distinct from raw input events such as pointer motion, scroll
+deltas, focus changes, and IME composition updates. Input handlers and widgets
+may translate interactions into commands where doing so is useful.
 
 Examples:
 
@@ -289,17 +301,18 @@ This replaces the traditional distinction Emacs has between major and minor mode
 
 # Semantic Information
 
-The editor progressively enriches documents.
+The editor enriches documents through independent providers.
 
 ```text
-Text
-    ↓
-Tree-sitter
-    ↓
-LSP
-    ↓
-Additional providers
+Tree-sitter ─┐
+LSP         ├─→ capability aggregation ─→ views and commands
+Providers   ─┘
 ```
+
+Providers may run concurrently, operate on different document revisions,
+overlap in what they contribute, or be temporarily unavailable. The model does
+not assume that one provider consumes or supersedes another; composition rules
+belong to each capability.
 
 Tree-sitter provides:
 
@@ -398,7 +411,9 @@ The interface should be:
 - GPU accelerated;
 - highly configurable.
 
-UI elements are scriptable and replaceable by extensions. The built-in implementations use the same APIs available to all extensions.
+Extensions can contribute UI elements through the public view and contribution
+APIs. High-level surfaces intended for replacement use the same editor-state
+APIs whether their implementation is built in or supplied by an extension.
 
 Examples of replaceable UI surfaces:
 
