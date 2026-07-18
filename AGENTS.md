@@ -19,3 +19,5 @@ updated. Use ✅ and other emoji to mark executed steps.
 - When executing multiple steps or tasks, split them into logical commits as
 you go.
 * Don't use conventional commits
+- Run `cargo fmt` once at the end of Rust work, before committing. Do not use
+  `cargo fmt --check` or manually format individual files.
