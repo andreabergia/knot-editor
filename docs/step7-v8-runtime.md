@@ -1,117 +1,220 @@
 # Step 7 — V8 scripting runtime
 
-Status: language and engine decided; implementation not started.
+Status: plan agreed; implementation not started.
 
-## Decisions
+## Goal and decisions
 
-- Knot uses JavaScript on V8 as its embedded application language.
-  Configuration, built-in behavior, and third-party extensions are ordinary
-  JavaScript using the same public APIs. There is no separate configuration
-  format or privileged built-in scripting surface.
-- The native Rust core owns performance-sensitive substrates, including text
-  storage and editing primitives. Most higher-level editor behavior lives in
-  JavaScript so that it can be inspected, replaced, and extended.
-- The Rust/JavaScript boundary must be coarse enough to avoid an FFI crossing
-  for every small operation. Native APIs should expose semantic operations and
-  batch data transfer where appropriate.
-- Each extension runs in its own V8 isolate. Isolates separate JavaScript state
-  and failures, but are not a complete security boundary.
-- Isolates are scheduled over a bounded worker pool away from the UI thread.
-  Different extension isolates may execute callbacks concurrently. A single
-  isolate executes at most one callback at a time and should be able to move
-  between workers between callbacks if V8 and `deno_core` permit it cleanly.
-- Tokio handles asynchronous host work, timers, cancellation, and message
-  routing. CPU-bound JavaScript execution does not run on Tokio's general
-  worker threads.
-- The prototype uses `deno_core` for V8 lifecycle, modules, promises, async Rust
-  operations, and related runtime plumbing.
-- `deno_core` is private implementation machinery behind a strict Knot-owned
-  V8 wrapper. Knot's core model and public JavaScript API must not expose Deno
-  operations, resource tables, extension modules, state containers, or other
-  Deno-specific concepts.
-- The wrapper is deliberately specific to Knot's V8 runtime. It is not a
-  generic `ScriptingEngine`, does not support multiple implementations, and
-  does not abstract JavaScript or V8 semantics away.
-- Public JavaScript modules and objects are Knot-owned. Private native bindings
-  may use `deno_core` facilities, but package and built-in code consume only the
-  Knot API layered above them.
-- The prototype must exercise forced interruption, CPU and memory limits, and
-  noisy-neighbor behavior enough to validate the shared-pool architecture.
-  Production quota policy and process isolation are deferred.
+Validate that JavaScript on V8 can provide Knot's first real extension boundary
+without blocking gpui or leaking runtime internals into the editor architecture.
+The experiment covers runtime lifecycle, commands, buffer access, events,
+cancellation, failure isolation, and the cost of crossing the Rust/JavaScript
+boundary. Views and native editor contributions remain step 8.
 
-## Questions for the prototype
+- `deno_core` is prototype machinery behind a Knot-owned wrapper. Public
+  modules expose Knot concepts only; extensions cannot consume Deno ops,
+  resource IDs, `ext:` modules, `OpState`, or Rust data structures.
+- The target architecture remains one isolate per extension on a bounded V8
+  worker pool, implemented directly with `rusty_v8`. Because
+  `deno_core::JsRuntime` is `!Send`, this prototype gives each extension one OS
+  thread for its lifetime. Thread affinity is a prototype trade-off, not an
+  architectural decision.
+- A shared Tokio runtime performs asynchronous native work, timers,
+  cancellation, and message routing. JavaScript executes only on extension
+  threads; the gpui foreground thread remains the sole owner of editor state.
+- Knot is UTF-8-native. Public text ranges are half-open UTF-8 byte ranges;
+  field names say `byteOffset` rather than the ambiguous `character`. UTF-16
+  conversion exists only at boundaries that require it, such as DAP, an LSP
+  server that does not negotiate UTF-8, or JavaScript string indices.
+- Forced interruption is fatal to the affected extension. Its isolate,
+  commands, subscriptions, pending operations, and queued callbacks are all
+  disposed; it is not automatically restarted.
+- Slow-consumer/backpressure policy is deliberately deferred. The prototype
+  verifies ordering with finite bursts and records queue depth and lag without
+  claiming a production policy.
+- Extension loading is limited to static fixture modules and Knot's built-in
+  API module. Filesystem resolution, TypeScript, npm, manifests, dependency
+  resolution, hot reload, generated bindings, and packaging are out of scope.
 
-### Runtime foundation
+## Public JavaScript surface
 
-- Can separate isolates genuinely execute in parallel over a bounded pool?
-- Can an isolate safely move between pool workers between callbacks, without
-  ever being entered concurrently?
-- What are the startup-time and memory costs per extension isolate?
-- Can interruption and basic CPU/memory limits stop one extension from
-  monopolizing a worker or exhausting the host?
-- How are an extension's pending work and registrations disposed together?
+Load extensions as ES modules which import from `knot:editor`. Bootstrap code
+captures private native bindings, builds the public facade, then removes Deno's
+binding globals before any extension module executes.
 
-### Native boundary
+The prototype API is intentionally small and extension-oriented:
 
-- Which editor values cross as snapshots, stable handles, or owned data?
-- What is the lifetime model for buffers, views, workspaces, annotations, and
-  commands referenced by JavaScript?
-- Which calls need batching or zero-copy buffers to keep boundary overhead
-  negligible?
-- How are buffer revisions carried through asynchronous work so stale results
-  can be detected before they mutate editor state?
+```ts
+type ByteRange = { startByteOffset: number; endByteOffset: number };
+type TextEdit = { range: ByteRange; text: string };
 
-### `deno_core` containment
+interface TextSnapshot {
+  readonly text: string;
+  readonly range: ByteRange;
+  readonly revision: number;
 
-- Can module loading, event-loop driving, promise rejection reporting,
-  inspector support, and native bindings remain entirely inside the V8 wrapper?
-- Can the public API be expressed as Knot-owned JavaScript modules without
-  leaking `Deno.core`, `ext:` modules, op identifiers, `OpState`, or resource
-  table semantics?
-- Do `op2` and CppGC provide the required host-object ergonomics and performance
-  without forcing Deno-specific types into the core model?
-- Which `deno_core` facilities are essential, and which should Knot avoid so
-  the wrapper remains small and understandable?
+  // Explicit adapter helpers. Both reject offsets that split an encoded value.
+  byteOffsetAtUtf16(utf16CodeUnitOffset: number): number;
+  utf16OffsetAtByte(byteOffset: number): number;
+}
 
-### Commands
+interface TextBuffer {
+  snapshot(range?: ByteRange): Promise<TextSnapshot>;
+  applyEdits(
+    edits: readonly TextEdit[],
+    options: { ifRevision: number },
+  ): Promise<{ revision: number }>;
+  onDidChange(listener: (event: BufferChangeEvent) => void | Promise<void>): Disposable;
+}
 
-- Can an extension register and invoke a command, read and edit a buffer, await
-  host work, and be cancelled without a late mutation?
-- Are thrown and rejected errors contained and reported with useful source
-  information?
+interface BufferChangeEvent {
+  readonly buffer: TextBuffer;
+  readonly beforeRevision: number;
+  readonly revision: number;
+  readonly edits: readonly TextEdit[];
+}
 
-### Events
+interface CommandContext {
+  readonly buffer: TextBuffer | null;
+  readonly signal: AbortSignal;
+}
 
-- Can committed, revisioned buffer changes fan out to extension isolates in
-  parallel while remaining ordered within each extension?
-- What backpressure rule prevents a slow extension from accumulating an
-  unbounded event queue?
-- Does disposing a subscription reliably remove it and its queued delivery?
+interface Disposable { dispose(): void; }
 
-### Errors and tooling
+export const editor: {
+  activeBuffer(): Promise<TextBuffer | null>;
+};
 
-- How are JavaScript exceptions, asynchronous rejection stacks, and source
-  locations presented inside Knot?
-- What minimum Inspector Protocol integration is needed during the prototype?
-- How are failures in one event subscriber reported without suppressing other
-  subscribers?
+export const commands: {
+  register(
+    name: string,
+    handler: (context: CommandContext, ...args: unknown[]) => unknown | Promise<unknown>,
+  ): Disposable;
+};
+```
 
-### Performance evidence
+`TextBuffer` is a JavaScript proxy over an opaque private handle. Handle values,
+transport messages, Rust references, and locking primitives are never public.
+A closed buffer rejects future operations with a stable `BufferClosedError`.
 
-- Measure cold startup, idle memory, and Knot built-in module initialization
-  cost per isolate, separating any process-wide shared cost where possible.
-- Measure synchronous and asynchronous Rust/JavaScript calls with realistic
-  arguments rather than arithmetic-only engine benchmarks.
-- Measure parallel event fan-out, promise scheduling latency, JIT warm-up,
-  sustained workloads, and large data transfers.
-- Confirm that scripted higher-level behavior remains responsive while native
-  text editing and rendering continue on their owning threads.
+All edit ranges refer to the snapshot revision supplied in `ifRevision`.
+`applyEdits` validates UTF-8 boundaries, requires ranges to be sorted and
+non-overlapping in that revision, applies them in reverse order as one
+editor-visible commit, and rejects stale revisions with `RevisionConflictError`.
+No-op batches return the current revision and emit no event. Events contain the
+committed batch in pre-commit coordinates and are delivered serially, in order,
+within each extension; different extension threads may process them in parallel.
 
-## Deliberately separate explorations
+String conversion is not hidden by pretending it is free. `snapshot(range)`
+transfers only requested text, `applyEdits` crosses once per batch, and change
+events carry inserted text rather than a fresh buffer snapshot. The benchmark
+must measure UTF-8↔V8-string conversion separately from channel and op overhead
+at 1 KiB, 100 KiB, and 10 MiB. Do not add a public `Uint8Array`/zero-copy API in
+this step unless the evidence shows the string API is an actual bottleneck;
+record that finding for the API design instead.
 
-- Views and native editor contribution points are a UI problem, not part of
-  this runtime/command/event experiment.
-- Generic providers are deferred until a concrete capability needs aggregation.
-- Parallel callbacks within one extension require multiple isolates and
-  duplicated module state. They are not implicit; an explicit worker API may
-  be explored later.
+## Implementation plan
+
+### 1. Runtime foundation
+
+- [ ] Add `deno_core` and Tokio, initialize the V8 platform on the process's
+  parent thread, and implement `host::V8Host` plus one thread-affine
+  `ExtensionRuntime` per loaded extension.
+- [ ] Drive each `JsRuntime` from its owning thread while entering the shared
+  Tokio runtime for async ops. Use typed Knot-owned request/response messages;
+  keep all `deno_core` types inside `host`.
+- [ ] Implement the static module loader, private bootstrap bindings,
+  `knot:editor` facade, source-aware exception/rejection reporting, and a test
+  proving extension code cannot access `Deno.core` or import private modules.
+- [ ] Give each extension a lifecycle token owning its commands,
+  subscriptions, queued callbacks, pending promises, and cancellation state.
+  Normal unload and initialization failure run the same idempotent teardown.
+- [ ] Expose V8's thread-safe isolate handle to a watchdog. A synchronous CPU
+  runaway is terminated and then tears down the extension. Configure a small
+  test heap limit/near-limit callback and run heap exhaustion in a sacrificial
+  test process first; record a limitation rather than risking editor-process
+  abort if V8 cannot recover safely.
+
+### 2. Editor model and public boundary
+
+- [ ] Replace the blank winit application with a minimal gpui application.
+  A gpui entity owns the real `TextBuffer`, its public revision, and buffer
+  lifecycle. The window displays buffer text, runtime status, errors, and an
+  independently ticking heartbeat.
+- [ ] Route host requests onto gpui's foreground executor and return results by
+  one-shot response. Never share `TextBuffer` through `Arc<Mutex<_>>` and never
+  block the gpui thread waiting for JavaScript.
+- [ ] Implement snapshot/range reads, UTF-8 boundary validation, atomic edit
+  batches, revision conflicts, opaque-handle invalidation, and the two explicit
+  UTF-16 adapter helpers. Keep byte/UTF-16 index construction lazy so ordinary
+  UTF-8 operations do no re-encoding work.
+- [ ] Implement extension-owned command registration and invocation. Pass an
+  `AbortSignal`; cancellation rejects awaited host work and invalidates the
+  invocation token so a response arriving later cannot mutate editor state.
+- [ ] Implement buffer-change subscriptions and disposables. Fan one committed
+  change out to several extension threads while preserving per-extension
+  ordering and isolating thrown/rejected subscriber failures.
+
+### 3. Integrated proof and evidence
+
+- [ ] Load fixture extensions that register a command, read the active buffer,
+  edit it after an await, and observe the resulting revisioned event. Invoke
+  the command from the gpui window and show the changed text without pausing
+  the heartbeat.
+- [ ] Cancel an awaiting command and prove that its late completion cannot edit
+  the buffer. Exercise thrown handlers, rejected promises, explicit disposal,
+  buffer closure, extension initialization failure, and forced CPU termination;
+  another extension and gpui must remain responsive.
+- [ ] Demonstrate real parallel execution with finite CPU callbacks in two
+  extension isolates. Verify callbacks within one extension never overlap.
+- [ ] Benchmark cold isolate startup, built-in module initialization, idle RSS
+  per isolate, host-call latency, batched edit latency, event fan-out/lag,
+  UTF-8↔V8 string marshalling, UTF-16 adapter conversion, JIT warm-up, and
+  large transfers. Separate process-wide V8 cost from incremental isolate cost.
+- [ ] Use a finite slow-subscriber burst to record maximum queue depth and lag;
+  do not implement dropping, coalescing, producer blocking, or subscriber
+  eviction in this prototype.
+
+### 4. Decision checkpoint and documentation
+
+- [ ] Record measurements and answer whether thread-per-extension
+  `deno_core` validates the public boundary and failure model well enough to
+  proceed, including any evidence that changes the eventual `rusty_v8` pool.
+- [ ] Record whether string marshalling is acceptable, which operations require
+  batching, and whether a future byte-oriented transfer API is justified.
+- [ ] Update this checklist with ✅/⚠️ findings as work lands. Update
+  `roadmap.md` with the conclusion and `architecture.md` whenever runtime,
+  application ownership, or message flow changes.
+
+## Verification and acceptance
+
+Keep automated testing narrow: unit-test boundary validation/conversion and use
+one integration harness plus the gpui proof for lifecycle behavior.
+
+- ASCII, CJK, Arabic, combining marks, emoji, and ZWJ text round-trip through
+  snapshots and edits without changing UTF-8 byte ranges.
+- Byte ranges that split a UTF-8 scalar, malformed edit batches, stale
+  revisions, disposed registrations, and closed handles fail predictably.
+- UTF-16 adapter helpers round-trip valid boundaries and reject a split
+  surrogate or a non-boundary UTF-8 offset.
+- Multi-edit commits are atomic to observers and produce one ordered event per
+  extension with the expected before/after revisions.
+- Await, cancellation, exceptions, rejection, unload, CPU interruption, and
+  heap-limit probing never freeze gpui or suppress work in another extension.
+- No public Rust, gpui, V8, or Deno type/name appears in the JavaScript API.
+- `cargo test`, the runtime benchmark, and the interactive gpui proof complete
+  on macOS. Linux/Windows portability and the known Windows editor-widget
+  Unicode issue remain their existing roadmap checkpoints.
+
+## Commit sequence
+
+Every checklist item above is a separate, independently reviewable commit.
+Never combine adjacent checklist items merely because they belong to the same
+numbered section. Split an item further when it contains multiple useful
+review/revert boundaries—for example, driving `JsRuntime` and integrating its
+async event loop may warrant more than one commit—but do not split out changes
+that would leave the tree uncompilable.
+
+Use descriptive, non-conventional commit messages and mark the corresponding
+checklist item with ✅ in the same commit that completes it. Documentation and
+architecture updates required by that item belong in that item's commit rather
+than in a final cleanup commit.

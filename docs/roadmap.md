@@ -328,12 +328,13 @@ one vertical slice.
 ### Runtime foundation
 
 - Run each extension in its own V8 isolate.
-- Schedule isolates on a bounded worker pool, separate from both the UI thread
-  and Tokio's general async workers. Use Tokio for asynchronous host work,
-  timers, cancellation, and message routing.
-- Prove that callbacks from different extensions execute in parallel and that
-  an isolate can move between pool workers between callbacks, while never
-  executing two callbacks in the same isolate concurrently.
+- The target architecture schedules isolates on a bounded V8 worker pool, but
+  `deno_core::JsRuntime` is thread-affine. For this prototype, give each
+  extension one OS thread for its lifetime; retain the bounded movable-isolate
+  pool as the later `rusty_v8` design. Use a shared Tokio runtime for
+  asynchronous host work, timers, cancellation, and message routing.
+- Prove that callbacks from different extensions execute in parallel while
+  never executing two callbacks in the same isolate concurrently.
 - Measure isolate startup and memory overhead. Exercise V8 interruption, CPU
   limits, memory limits, and noisy-neighbor behavior enough to validate that
   the pool can isolate failures; production quota policy is not required.
@@ -356,8 +357,8 @@ one vertical slice.
 - Subscribe to and dispose a buffer-change listener.
 - Deliver committed, revisioned changes to multiple extension isolates in
   parallel while preserving ordering within each extension.
-- Explore backpressure for an extension that consumes events slower than they
-  are produced.
+- Measure queue growth and lag for a finite slow-consumer workload; defer the
+  production backpressure policy.
 
 Views are a separate exploration in the next section. Other scope boundaries
 for this experiment are maintained in `docs/step7-v8-runtime.md`.
@@ -365,9 +366,11 @@ for this experiment are maintained in `docs/step7-v8-runtime.md`.
 **Question answered:** which language and engine will Knot use? → **JavaScript
 on V8.**
 
-**Questions remaining:** does isolate-per-extension scheduling over a shared
-pool provide useful parallelism and bounded failure isolation, and do commands
-and events form a sound first public API without leaking `deno_core` details?
+**Questions remaining:** does the thread-per-extension `deno_core` prototype
+provide useful parallelism and bounded failure isolation, and do commands and
+events form a sound first public API without leaking `deno_core` details? Does
+UTF-8/V8-string marshalling require any additional batched or byte-oriented
+API?
 
 ---
 
