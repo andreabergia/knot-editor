@@ -220,10 +220,12 @@ and is explicitly not the future native editor `View` abstraction.
 `src/host/mod.rs` contains the initial Step-7 runtime shell. `V8Host` is
 constructed on the process's parent thread, initializes V8 once through
 `deno_core`, and owns the shared Tokio runtime for future native asynchronous
-work. It does not yet load extensions or expose JavaScript: no command
-registry, extension lifecycle, capability provider, request/response bridge,
-or `JsRuntime` exists yet. Those runtime internals remain contained in `host`;
-the rest of the editor will receive Knot-owned messages only.
+work. `host::protocol` defines the initial typed request/response messages for
+buffer access: opaque extension, request, and buffer identities; UTF-8 byte
+ranges; snapshots; edit batches; revisions; and stable request failures. It
+contains no V8, Deno, gpui, or `core::TextBuffer` reference. There is still no
+request routing, extension lifecycle, command registry, capability provider,
+or `JsRuntime`; those runtime internals will remain contained in `host`.
 
 The intended boundary from `design.md` is that performance-sensitive buffer,
 view, scheduling, and host integration remain native, while built-ins and

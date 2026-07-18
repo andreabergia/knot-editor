@@ -1,10 +1,12 @@
 //! Knot-owned scripting runtime boundary.
 //!
 //! `deno_core` is deliberately contained in this module. The rest of the
-//! editor will communicate with it through Knot request/response types added
-//! in later Step 7 slices, rather than through V8 or Deno runtime objects.
+//! editor will communicate with it through Knot request/response types rather
+//! than through V8 or Deno runtime objects.
 
 use std::sync::Arc;
+
+pub mod protocol;
 
 /// Process-wide owner of the V8 platform and host asynchronous work.
 ///

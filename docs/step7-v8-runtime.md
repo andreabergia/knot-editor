@@ -121,6 +121,9 @@ record that finding for the API design instead.
   `ExtensionRuntime` per loaded extension.
   - [x] Add `deno_core` and Tokio; `host::V8Host` initializes V8 on its
     construction thread and owns the shared Tokio runtime. ✅
+  - [x] Define Knot-owned typed request/response messages for the initial
+    buffer API boundary; their opaque identities and payloads contain no V8,
+    Deno, gpui, or editor-model references. ✅
   - [ ] Add the thread-affine `ExtensionRuntime` once the typed host
     request/response protocol exists.
 - [ ] Drive each `JsRuntime` from its owning thread while entering the shared
