@@ -9,13 +9,13 @@
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct ExtensionId(u64);
 
-#[allow(
-    dead_code,
-    reason = "the extension-runtime owner will allocate opaque identities in the next Step 7 slice"
-)]
 impl ExtensionId {
     pub(crate) const fn new(value: u64) -> Self {
         Self(value)
+    }
+
+    pub(crate) const fn value(self) -> u64 {
+        self.0
     }
 }
 
@@ -23,10 +23,6 @@ impl ExtensionId {
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct RequestId(u64);
 
-#[allow(
-    dead_code,
-    reason = "the extension-runtime owner will allocate opaque identities in the next Step 7 slice"
-)]
 impl RequestId {
     pub(crate) const fn new(value: u64) -> Self {
         Self(value)

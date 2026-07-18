@@ -220,12 +220,16 @@ and is explicitly not the future native editor `View` abstraction.
 `src/host/mod.rs` contains the initial Step-7 runtime shell. `V8Host` is
 constructed on the process's parent thread, initializes V8 once through
 `deno_core`, and owns the shared Tokio runtime for future native asynchronous
-work. `host::protocol` defines the initial typed request/response messages for
-buffer access: opaque extension, request, and buffer identities; UTF-8 byte
-ranges; snapshots; edit batches; revisions; and stable request failures. It
-contains no V8, Deno, gpui, or `core::TextBuffer` reference. There is still no
-request routing, extension lifecycle, command registry, capability provider,
-or `JsRuntime`; those runtime internals will remain contained in `host`.
+work. It starts one `ExtensionRuntime` OS thread per extension and retains an
+`ExtensionRuntimeHandle` as its host-side endpoint. That endpoint exchanges
+typed messages only: the extension thread allocates request identities and
+validates replies, and its future `JsRuntime` will remain owned by that thread.
+`host::protocol` defines the initial typed request/response
+messages for buffer access: opaque extension, request, and buffer identities;
+UTF-8 byte ranges; snapshots; edit batches; revisions; and stable request
+failures. It contains no V8, Deno, gpui, or `core::TextBuffer` reference.
+There is still no request routing, command registry, capability provider, or
+`JsRuntime` driving; those runtime internals will remain contained in `host`.
 
 An extension's host-bound identity will be its stable, case-sensitive,
 globally namespaced string ID (initially a fixture/module identity and later a

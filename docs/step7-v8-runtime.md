@@ -124,8 +124,10 @@ record that finding for the API design instead.
   - [x] Define Knot-owned typed request/response messages for the initial
     buffer API boundary; their opaque identities and payloads contain no V8,
     Deno, gpui, or editor-model references. ✅
-  - [ ] Add the thread-affine `ExtensionRuntime` once the typed host
-    request/response protocol exists.
+  - [x] Add the thread-affine `ExtensionRuntime` once the typed host
+    request/response protocol exists. It owns request-ID allocation and typed
+    response validation on a dedicated extension OS thread; `JsRuntime`
+    construction and promise resolution remain the next runtime-driving slice. ✅
 - [ ] Drive each `JsRuntime` from its owning thread while entering the shared
   Tokio runtime for async ops. Use typed Knot-owned request/response messages;
   keep all `deno_core` types inside `host`.
