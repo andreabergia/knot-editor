@@ -46,10 +46,26 @@ The "text remains central" claim is load-bearing for the whole philosophy. Stres
 
 ### No-internal-path stress test
 
-The strongest claim in the design is that built-in UI components use the same APIs as extensions, with no privileged path. This is the riskiest sentence in the document.
+The native text editor owns shaping, hit testing, selection, IME,
+accessibility, and low-level rendering. The extensibility claim applies to its
+high-level behavior and contribution points, not to those internals.
 
-- Prototype: the built-in text editor view implemented *purely* against the public view API, with no backdoor into the buffer or renderer.
-- If it cannot be done, the commitment is false; either fix the API until it can, or soften the claim before anything else is built on it.
+- Prototype: built-in and extension-authored decorations, gutters, and
+  contextual behavior using the same public contribution APIs.
+- Identify any user-visible high-level behavior that still requires a
+  privileged path.
+
+### Extension view boundary
+
+Extension views cross from isolated JavaScript execution to the native UI
+thread, so exposing framework objects directly is not viable.
+
+- Prototype: one nontrivial custom non-editor view through a Knot-owned public
+  UI model, including updates, input, failure, and disposal.
+- Verify: rendering never waits on synchronous JavaScript execution, and the
+  model has a plausible accessibility path.
+- Decide: where the API boundary lies between custom views and contributions
+  to the native text editor view.
 
 ### Renderer choice
 
@@ -78,21 +94,20 @@ This area has the largest cluster of unknowns and should be broken into sub-expe
 
 ### Runtime choice
 
-Candidates: V8, JavaScriptCore, WebAssembly with a standard SDK.
-
-- Prototype: each runtime, measured on:
-  - startup time of an empty editor;
-  - RSS at idle;
-  - working set with 10k open buffers;
-  - cold-start of a non-trivial package set.
-- Memory and startup are the most likely deciders.
+✅ JavaScript on V8 is selected, using `deno_core` behind a Knot-owned wrapper.
+The remaining measurements concern isolate startup and memory cost rather than
+engine selection.
 
 ### Concurrency model
 
-The design says "single embedded runtime" but does not say how concurrent work runs.
+✅ **Target chosen, validation pending:** one isolate per extension, scheduled
+over a bounded V8 worker pool. Tokio handles asynchronous host work and message
+routing rather than executing CPU-bound JavaScript.
 
-- Prototype: a single-threaded script runtime with an async scheduler, vs. an isolate-per-package model, vs. worker isolation for untrusted code.
-- Measure: cost of cross-isolate calls, isolation of failures, and whether the chosen model supports the "no distinction between config/package/built-in" claim.
+- Prototype: prove parallel callbacks across isolates, safe movement between
+  workers, interruption, basic CPU/memory limits, and failure isolation.
+- Measure: isolate startup/RSS, scheduling and host-call overhead, and
+  noisy-neighbor behavior.
 
 ### Core ↔ script FFI ergonomics
 

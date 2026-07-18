@@ -364,9 +364,8 @@ Some annotations describe shared facts about a buffer, while views own presentat
 
 # Extension System
 
-The editor contains a single embedded runtime.
-
-All extensions execute inside this runtime.
+Extensions execute in isolated runtime contexts. Independent extensions may
+run concurrently and must not block the user interface.
 
 There is no strict distinction between:
 
@@ -388,9 +387,12 @@ Extensions may provide:
 
 ## Isolation and cancellation
 
-The single-runtime model still needs an isolation story. A misbehaving extension must not be able to freeze the editor indefinitely, corrupt core state, or prevent cancellation of work it started.
-
-The exact mechanism is an open runtime question. Candidate approaches include cancellable tasks, runtime-level interruption, worker/realm isolation, fuel metering, or eventually a process boundary for selected extension classes. The design assumes a single embedded runtime by default, but the runtime must provide enough isolation for asynchronous-by-default editing to remain reliable.
+Runtime isolation is not by itself a security boundary. A misbehaving extension
+must not be able to freeze the editor indefinitely, exhaust resources
+unchecked, corrupt core state, or prevent cancellation of work it started.
+The scheduling and enforcement mechanisms are implementation decisions to be
+validated by the prototype. The current runtime experiments and candidate
+mechanisms are tracked in roadmap step 7 and `step7-v8-runtime.md`.
 
 ---
 
@@ -487,7 +489,8 @@ The editor currently prefers a small number of concrete buffer types.
 
 Running extensions out-of-process adds complexity.
 
-The current design assumes a single embedded runtime.
+The current design prefers in-process isolation. A process boundary remains an
+option where stronger isolation proves necessary.
 
 ---
 

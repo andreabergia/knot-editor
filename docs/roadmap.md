@@ -322,45 +322,84 @@ abstraction and does not preserve hypothetical language or engine
 replaceability. Decisions and open implementation questions are recorded in
 `docs/step7-v8-runtime.md`.
 
-Build the smallest real vertical slice through that boundary:
+Explore three concerns separately rather than treating the host boundary as
+one vertical slice.
+
+### Runtime foundation
+
+- Run each extension in its own V8 isolate.
+- Schedule isolates on a bounded worker pool, separate from both the UI thread
+  and Tokio's general async workers. Use Tokio for asynchronous host work,
+  timers, cancellation, and message routing.
+- Prove that callbacks from different extensions execute in parallel and that
+  an isolate can move between pool workers between callbacks, while never
+  executing two callbacks in the same isolate concurrently.
+- Measure isolate startup and memory overhead. Exercise V8 interruption, CPU
+  limits, memory limits, and noisy-neighbor behavior enough to validate that
+  the pool can isolate failures; production quota policy is not required.
+  "Basic limits" means proving that runaway CPU and heap growth can be stopped;
+  budget accounting, configurability, diagnostics, and quota policy are
+  production concerns.
+- Confirm that an extension can fail or be disposed without taking down other
+  isolates or leaking its registered work.
+
+### Commands
 
 - Register and invoke a scripted command.
-- Read and edit a buffer, observe a buffer change, and create or update an
-  annotation through the host API.
-- Run a scripted command across an await point while the editor stays
-  responsive; cooperatively cancel it and prevent its final state update.
-- Report an ordinary thrown error without crashing the editor, and remove the
-  spike's commands/subscriptions when it is disposed.
-- Pass buffer revisions across the boundary so later async provider results can
-  identify the document state they used.
-- Defer packaging, dependency resolution, generated bindings, forced
-  interruption, memory isolation, workers/realms, and adversarial extensions.
+- Let a command read and edit a buffer through the host API.
+- Run across an await point while the editor stays responsive; cancel the
+  command and prevent a late state update.
+- Report thrown and rejected errors without crashing the editor.
+
+### Events
+
+- Subscribe to and dispose a buffer-change listener.
+- Deliver committed, revisioned changes to multiple extension isolates in
+  parallel while preserving ordering within each extension.
+- Explore backpressure for an extension that consumes events slower than they
+  are produced.
+
+Views are a separate exploration in the next section. Other scope boundaries
+for this experiment are maintained in `docs/step7-v8-runtime.md`.
 
 **Question answered:** which language and engine will Knot use? → **JavaScript
 on V8.**
 
-**Question remaining:** can the Knot-owned V8 wrapper support the basic host
-API, lifecycle, event fan-out, and async programming model while keeping
-`deno_core` details out of the editor architecture and public JavaScript API?
+**Questions remaining:** does isolate-per-extension scheduling over a shared
+pool provide useful parallelism and bounded failure isolation, and do commands
+and events form a sound first public API without leaking `deno_core` details?
 
 ---
 
-## 8. Native view abstraction and extension contribution points
+## 8. Extension view API
 
-- A `View` trait carrying presentation state: scroll, cursor, selections, rendering options.
-- Two views of one buffer (one folded, one not) with independent state, plus a minimap view and a "different zoom" view.
-- Verify the buffer never needs to know about folding, scroll, or cursor to serve a view.
-- Exercise public text-view contributions for annotations/decorations, gutters,
-  and contextual behavior without exposing gpui or native rendering internals.
-- Implement one nontrivial custom non-editor view through the public extension
-  UI API.
-- Investigate whether gpui exposes a plausible public accessibility-tree path
-  for custom text content, selection, focus, and actions. Record feasibility;
-  do not implement production accessibility support.
+Views are a separate exploration from commands and events. Extension code runs
+away from the UI thread and must not receive gpui or native rendering objects,
+so the important question is what public UI model crosses that boundary.
 
-**Question answered:** does the native view/buffer split support independent
-presentation while giving extensions useful contribution points and custom
-high-level views?
+Explore two related but distinct surfaces:
+
+- **Custom views:** find the smallest Knot-owned UI model that lets JavaScript
+  describe a useful non-editor view, update it, and handle user interaction.
+  Prototype one nontrivial view and verify that rendering never waits on
+  synchronous JavaScript execution. Confirm failure and disposal remove the
+  view cleanly.
+- **Native editor contributions:** keep text shaping, selection, IME,
+  accessibility, and low-level rendering native, while extensions contribute
+  decorations, gutters, and contextual behavior through public APIs. Built-in
+  high-level features should use those same contribution points.
+
+Use two views of one buffer to confirm that cursor, selection, folding, scroll,
+and rendering choices remain per-view state. Investigate whether the chosen
+custom-view model has a plausible accessibility path; production accessibility
+support is not part of the prototype.
+
+Do not mix capability-provider aggregation or replaceable capability surfaces
+into this experiment; those need their own concrete feature later.
+
+**Question answered:** what extension-facing view model is expressive and
+responsive across the isolate/UI-thread boundary, and where is the boundary
+between custom views and contributions to the native editor view?
 
 ---
 

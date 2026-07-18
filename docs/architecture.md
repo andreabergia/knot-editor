@@ -219,9 +219,10 @@ and is explicitly not the future native editor `View` abstraction.
 
 `src/host/mod.rs` is empty except for documentation. No scripting engine,
 command registry, extension lifecycle, capability provider, or async host
-bridge exists yet. Roadmap step 7 will select the scripting engine and build
-the first vertical slice. Avoid designing code against an assumed runtime
-before that decision is recorded.
+bridge exists yet. JavaScript on V8 is selected, with one isolate per extension
+scheduled over a bounded worker pool and Tokio handling asynchronous host work.
+That target topology is recorded but not implemented; roadmap step 7 will test
+it before the host module takes shape.
 
 The intended boundary from `design.md` is that performance-sensitive buffer,
 view, scheduling, and host integration remain native, while built-ins and

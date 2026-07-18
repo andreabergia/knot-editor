@@ -14,12 +14,15 @@ Status: language and engine decided; implementation not started.
 - The Rust/JavaScript boundary must be coarse enough to avoid an FFI crossing
   for every small operation. Native APIs should expose semantic operations and
   batch data transfer where appropriate.
-- Knot has one shared V8 runtime. Installed code is trusted to coexist in that
-  shared environment; package isolation is not a security boundary.
-- V8 runs away from the UI thread. Extension callbacks are scheduled as
-  independent tasks so asynchronous work can overlap and one extension's
-  failure does not prevent other subscribers from being notified. JavaScript
-  execution within the isolate remains serial.
+- Each extension runs in its own V8 isolate. Isolates separate JavaScript state
+  and failures, but are not a complete security boundary.
+- Isolates are scheduled over a bounded worker pool away from the UI thread.
+  Different extension isolates may execute callbacks concurrently. A single
+  isolate executes at most one callback at a time and should be able to move
+  between workers between callbacks if V8 and `deno_core` permit it cleanly.
+- Tokio handles asynchronous host work, timers, cancellation, and message
+  routing. CPU-bound JavaScript execution does not run on Tokio's general
+  worker threads.
 - The prototype uses `deno_core` for V8 lifecycle, modules, promises, async Rust
   operations, and related runtime plumbing.
 - `deno_core` is private implementation machinery behind a strict Knot-owned
@@ -32,20 +35,21 @@ Status: language and engine decided; implementation not started.
 - Public JavaScript modules and objects are Knot-owned. Private native bindings
   may use `deno_core` facilities, but package and built-in code consume only the
   Knot API layered above them.
-- Forced interruption, watchdog policy, hostile-extension containment, and
-  worker or process isolation are deferred beyond the first vertical slice.
+- The prototype must exercise forced interruption, CPU and memory limits, and
+  noisy-neighbor behavior enough to validate the shared-pool architecture.
+  Production quota policy and process isolation are deferred.
 
 ## Questions for the prototype
 
-### Runtime ownership and scheduling
+### Runtime foundation
 
-- How does the dedicated V8 thread integrate with the gpui thread and native
-  worker executors without making ordinary editor operations excessively
-  chatty?
-- What ordering and backpressure rules apply when several extensions subscribe
-  to a high-frequency event such as a buffer change?
-- How are extension tasks, subscriptions, pending promises, and cancellation
-  grouped so unloading an extension reliably disposes all of its work?
+- Can separate isolates genuinely execute in parallel over a bounded pool?
+- Can an isolate safely move between pool workers between callbacks, without
+  ever being entered concurrently?
+- What are the startup-time and memory costs per extension isolate?
+- Can interruption and basic CPU/memory limits stop one extension from
+  monopolizing a worker or exhausting the host?
+- How are an extension's pending work and registrations disposed together?
 
 ### Native boundary
 
@@ -69,14 +73,20 @@ Status: language and engine decided; implementation not started.
 - Which `deno_core` facilities are essential, and which should Knot avoid so
   the wrapper remains small and understandable?
 
-### JavaScript API and modules
+### Commands
 
-- What is the initial module namespace and resolution model for built-ins,
-  user configuration, and extensions?
-- How are commands, event subscriptions, options, and editor services exposed
-  idiomatically while preserving useful validation and source diagnostics?
-- What state survives module reload, and how are replaced registrations and
-  subscriptions disposed?
+- Can an extension register and invoke a command, read and edit a buffer, await
+  host work, and be cancelled without a late mutation?
+- Are thrown and rejected errors contained and reported with useful source
+  information?
+
+### Events
+
+- Can committed, revisioned buffer changes fan out to extension isolates in
+  parallel while remaining ordered within each extension?
+- What backpressure rule prevents a slow extension from accumulating an
+  unbounded event queue?
+- Does disposing a subscription reliably remove it and its queued delivery?
 
 ### Errors and tooling
 
@@ -88,12 +98,20 @@ Status: language and engine decided; implementation not started.
 
 ### Performance evidence
 
-- Measure cold startup, idle memory, and the cost of initializing Knot's
-  built-in JavaScript modules.
+- Measure cold startup, idle memory, and Knot built-in module initialization
+  cost per isolate, separating any process-wide shared cost where possible.
 - Measure synchronous and asynchronous Rust/JavaScript calls with realistic
   arguments rather than arithmetic-only engine benchmarks.
-- Measure event fan-out to multiple extensions, promise scheduling latency,
-  JIT warm-up, sustained built-in workloads, and large data transfers.
+- Measure parallel event fan-out, promise scheduling latency, JIT warm-up,
+  sustained workloads, and large data transfers.
 - Confirm that scripted higher-level behavior remains responsive while native
   text editing and rendering continue on their owning threads.
 
+## Deliberately separate explorations
+
+- Views and native editor contribution points are a UI problem, not part of
+  this runtime/command/event experiment.
+- Generic providers are deferred until a concrete capability needs aggregation.
+- Parallel callbacks within one extension require multiple isolates and
+  duplicated module state. They are not implicit; an explicit worker API may
+  be explored later.
