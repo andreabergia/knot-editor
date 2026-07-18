@@ -227,6 +227,12 @@ contains no V8, Deno, gpui, or `core::TextBuffer` reference. There is still no
 request routing, extension lifecycle, command registry, capability provider,
 or `JsRuntime`; those runtime internals will remain contained in `host`.
 
+An extension's host-bound identity will be its stable, case-sensitive,
+globally namespaced string ID (initially a fixture/module identity and later a
+manifest ID). Runtime lookup slots and generation counters may be numeric, but
+remain private implementation details for efficient routing and stale-message
+detection.
+
 The intended boundary from `design.md` is that performance-sensitive buffer,
 view, scheduling, and host integration remain native, while built-ins and
 extensions use the same public editor APIs wherever practical. That is a
