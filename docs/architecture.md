@@ -31,8 +31,8 @@ The crate modules exported by `src/lib.rs` are:
 - `core`: editor-owned data models. This is independent of windowing and
   rendering.
 - `app`: the current minimal winit application entry point.
-- `host`: placeholder for the future scripting runtime and extension-facing
-  host API.
+- `host`: Knot-owned V8 initialization and shared asynchronous-runtime
+  ownership. It is the future extension-facing host API boundary.
 - `view`: the step-2 renderer benchmark abstraction, not the future editor
   `View` API.
 
@@ -217,12 +217,13 @@ and is explicitly not the future native editor `View` abstraction.
 
 ## Scripting and extension boundary
 
-`src/host/mod.rs` is empty except for documentation. No scripting engine,
-command registry, extension lifecycle, capability provider, or async host
-bridge exists yet. JavaScript on V8 is selected, with one isolate per extension
-scheduled over a bounded worker pool and Tokio handling asynchronous host work.
-That target topology is recorded but not implemented; roadmap step 7 will test
-it before the host module takes shape.
+`src/host/mod.rs` contains the initial Step-7 runtime shell. `V8Host` is
+constructed on the process's parent thread, initializes V8 once through
+`deno_core`, and owns the shared Tokio runtime for future native asynchronous
+work. It does not yet load extensions or expose JavaScript: no command
+registry, extension lifecycle, capability provider, request/response bridge,
+or `JsRuntime` exists yet. Those runtime internals remain contained in `host`;
+the rest of the editor will receive Knot-owned messages only.
 
 The intended boundary from `design.md` is that performance-sensitive buffer,
 view, scheduling, and host integration remain native, while built-ins and

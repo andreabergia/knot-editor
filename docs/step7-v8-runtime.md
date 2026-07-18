@@ -119,6 +119,10 @@ record that finding for the API design instead.
 - [ ] Add `deno_core` and Tokio, initialize the V8 platform on the process's
   parent thread, and implement `host::V8Host` plus one thread-affine
   `ExtensionRuntime` per loaded extension.
+  - [x] Add `deno_core` and Tokio; `host::V8Host` initializes V8 on its
+    construction thread and owns the shared Tokio runtime. ✅
+  - [ ] Add the thread-affine `ExtensionRuntime` once the typed host
+    request/response protocol exists.
 - [ ] Drive each `JsRuntime` from its owning thread while entering the shared
   Tokio runtime for async ops. Use typed Knot-owned request/response messages;
   keep all `deno_core` types inside `host`.
