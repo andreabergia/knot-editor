@@ -1249,7 +1249,7 @@ mod tests {
     #[test]
     fn line_index_delete_removes_newline_in_span() {
         let mut b = TextBuffer::from_text("abc\ndef\nghi"); // [0, 4, 8]
-                                                            // Delete "\ndef" (offsets 3..8), collapse to one line "abcghi"
+        // Delete "\ndef" (offsets 3..8), collapse to one line "abcghi"
         b.delete(3..8);
         assert_eq!(s(&b), "abcghi");
         assert_eq!(b.line_count(), 1);
@@ -1289,7 +1289,7 @@ mod tests {
     #[test]
     fn line_index_replace_with_multiline_text() {
         let mut b = TextBuffer::from_text("abc\ndef\nghi"); // [0, 4, 8]
-                                                            // Replace "\ndef" → "X\nY": result "abcX\nYghi", starts [0, 5]
+        // Replace "\ndef" → "X\nY": result "abcX\nYghi", starts [0, 5]
         b.replace(3..8, "X\nY");
         assert_eq!(s(&b), "abcX\nYghi");
         assert_eq!(b.line_count(), 2);
@@ -1299,7 +1299,7 @@ mod tests {
     #[test]
     fn line_index_replace_collapsing_lines() {
         let mut b = TextBuffer::from_text("abc\ndef\nghi"); // [0, 4, 8]
-                                                            // Replace "\ndef\n" (offsets 3..8) with "": result "abcghi", 1 line.
+        // Replace "\ndef\n" (offsets 3..8) with "": result "abcghi", 1 line.
         b.replace(3..8, "");
         assert_eq!(s(&b), "abcghi");
         assert_eq!(b.line_count(), 1);
@@ -1309,7 +1309,7 @@ mod tests {
     #[test]
     fn line_index_replace_inserts_new_lines_at_start() {
         let mut b = TextBuffer::from_text("abc"); // [0]
-                                                  // Replace whole buffer with multi-line content.
+        // Replace whole buffer with multi-line content.
         b.replace(0..3, "ab\ncd\nef");
         assert_eq!(s(&b), "ab\ncd\nef");
         assert_eq!(b.line_count(), 3);
@@ -1422,8 +1422,8 @@ mod tests {
         let mut b = TextBuffer::from_text("ab");
         b.insert(2, "cd"); // "abcd": A=ab, B=cd
         b.insert(2, "X"); // "abXcd": elided inserts in front of B
-                          // Layout: pieces = [A(ab), X("X"), B(cd)]. Find offsets.
-                          // A.len=2, X.len=1, B.len=2 → total 5.
+        // Layout: pieces = [A(ab), X("X"), B(cd)]. Find offsets.
+        // A.len=2, X.len=1, B.len=2 → total 5.
         assert_eq!(s(&b), "abXcd");
         let boundary_offset = 2; // between A and X
         let p = b.position_at(boundary_offset).unwrap();
@@ -1619,7 +1619,7 @@ mod tests {
             other => panic!("expected Insert, got {other:?}"),
         }
         b.insert(b.len(), "Y"); // insert at end, no split
-                                // Two insert events, both with empty splits.
+        // Two insert events, both with empty splits.
         for e in b.edits_since(0) {
             if let BufferEdit::Insert { splits, .. } = e {
                 assert!(splits.is_empty());
@@ -1769,15 +1769,15 @@ mod tests {
         // remap through both splits.
         let mut b = TextBuffer::from_text("abcdefghij"); // id0, len 10
         let original = b.position_at(9).unwrap(); // anchored at id0, offset 9
-                                                  // Split at offset 2: id0 shortens to 2; right half (offsets 2..10) becomes a fresh piece R1.
+        // Split at offset 2: id0 shortens to 2; right half (offsets 2..10) becomes a fresh piece R1.
         b.insert(2, "X"); // "abXcdefghij"
-                          // Now split R1 at its interior by inserting at offset 5 (within R1, offset 5 - 3 = 2).
-                          // Logical offset 5 is bytes 0..2 = "ab", "X", then within R1 ("cdefghij", len 8) offset 5 - 3 = 2.
+        // Now split R1 at its interior by inserting at offset 5 (within R1, offset 5 - 3 = 2).
+        // Logical offset 5 is bytes 0..2 = "ab", "X", then within R1 ("cdefghij", len 8) offset 5 - 3 = 2.
         b.insert(5, "Y"); // "abXcYdefghij"
-                          // The original token (id0, 9) is stale after the first split;
-                          // remapping gives (R1, 9-2=7). R1 is then split at its offset 2,
-                          // so we remap again to (R2, 7-2=5). The final byte offset should
-                          // point at the 'j' (the last byte).
+        // The original token (id0, 9) is stale after the first split;
+        // remapping gives (R1, 9-2=7). R1 is then split at its offset 2,
+        // so we remap again to (R2, 7-2=5). The final byte offset should
+        // point at the 'j' (the last byte).
         assert!(b.resolve(original).is_none());
         let remapped = remap_via_log(&b, original).unwrap();
         let final_byte = b.resolve(remapped).unwrap();

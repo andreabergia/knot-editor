@@ -82,10 +82,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Cfg> {
                 seed = it.next().context("--seed requires a number")?.parse()?;
             }
             "--workload" | "-w" => {
-                workload = it
-                    .next()
-                    .context("--workload requires a name")?
-                    .to_owned();
+                workload = it.next().context("--workload requires a name")?.to_owned();
             }
             other => bail!("unknown argument `{other}`"),
         }
@@ -167,7 +164,7 @@ impl Stats {
 }
 
 fn current_rss() -> u64 {
-    use sysinfo::{Pid, ProcessesToUpdate, ProcessRefreshKind, System};
+    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
     let mut sys = System::new();
     let pid = Pid::from_u32(std::process::id());
     sys.refresh_processes_specifics(
@@ -390,23 +387,42 @@ fn run_edits_mode(cfg: &Cfg, fixture: &Fixture, prefill_index: bool) {
 
     let final_lines = buf.line_count();
     let final_len = buf.len();
-    let name = if prefill_index { "edits" } else { "edits-noidx" };
+    let name = if prefill_index {
+        "edits"
+    } else {
+        "edits-noidx"
+    };
     emit(
         &cfg.display_fixture(),
         name,
         &[
             ("edits", format!("{}", stats.count())),
-            ("p50_us", format!("{:.2}", stats.p(50).as_nanos() as f64 / 1000.0)),
-            ("p99_us", format!("{:.2}", stats.p(99).as_nanos() as f64 / 1000.0)),
-            ("p999_us", format!("{:.2}", stats.p(100).as_nanos() as f64 / 1000.0)),
+            (
+                "p50_us",
+                format!("{:.2}", stats.p(50).as_nanos() as f64 / 1000.0),
+            ),
+            (
+                "p99_us",
+                format!("{:.2}", stats.p(99).as_nanos() as f64 / 1000.0),
+            ),
+            (
+                "p999_us",
+                format!("{:.2}", stats.p(100).as_nanos() as f64 / 1000.0),
+            ),
             (
                 "throughput_kops",
-                format!("{:.2}", stats.count() as f64 / cfg.duration.as_secs_f64() / 1000.0),
+                format!(
+                    "{:.2}",
+                    stats.count() as f64 / cfg.duration.as_secs_f64() / 1000.0
+                ),
             ),
             ("pieces", format!("{}", buf.piece_count())),
             ("bytes_after", format!("{}", final_len)),
             ("lines_after", format!("{}", final_lines)),
-            ("peak_rss_MiB", format!("{:.1}", stats.peak_rss_bytes as f64 / ((1u64 << 20) as f64))),
+            (
+                "peak_rss_MiB",
+                format!("{:.1}", stats.peak_rss_bytes as f64 / ((1u64 << 20) as f64)),
+            ),
         ],
     );
 }
@@ -526,12 +542,24 @@ fn run_interleaved(cfg: &Cfg, fixture: &Fixture) {
         "interleaved",
         &[
             ("edits", format!("{}", stats.count())),
-            ("p50_us", format!("{:.2}", stats.p(50).as_nanos() as f64 / 1000.0)),
-            ("p99_us", format!("{:.2}", stats.p(99).as_nanos() as f64 / 1000.0)),
-            ("p999_us", format!("{:.2}", stats.p(100).as_nanos() as f64 / 1000.0)),
+            (
+                "p50_us",
+                format!("{:.2}", stats.p(50).as_nanos() as f64 / 1000.0),
+            ),
+            (
+                "p99_us",
+                format!("{:.2}", stats.p(99).as_nanos() as f64 / 1000.0),
+            ),
+            (
+                "p999_us",
+                format!("{:.2}", stats.p(100).as_nanos() as f64 / 1000.0),
+            ),
             (
                 "throughput_kops",
-                format!("{:.2}", stats.count() as f64 / cfg.duration.as_secs_f64() / 1000.0),
+                format!(
+                    "{:.2}",
+                    stats.count() as f64 / cfg.duration.as_secs_f64() / 1000.0
+                ),
             ),
             ("remaps", format!("{remap_count}")),
             (
@@ -605,10 +633,10 @@ fn run_lookup(cfg: &Cfg, fixture: &Fixture) {
     }
 
     /// Build the 4-entry summary block for one query kind:
-/// `{prefix}_count`, `{prefix}_p50_ns`, `{prefix}_p99_ns`,
-/// `{prefix}_p999_ns`. The leaked `&'static str` labels are intentional:
-/// the lookup workload runs once per bench invocation, and the few dozen
-/// bytes leaked per call are a rounding error for a CLI bench tool.
+    /// `{prefix}_count`, `{prefix}_p50_ns`, `{prefix}_p99_ns`,
+    /// `{prefix}_p999_ns`. The leaked `&'static str` labels are intentional:
+    /// the lookup workload runs once per bench invocation, and the few dozen
+    /// bytes leaked per call are a rounding error for a CLI bench tool.
     fn block(s: &Stats, prefix: &'static str) -> Vec<(&'static str, String)> {
         vec![
             (
@@ -636,7 +664,10 @@ fn run_lookup(cfg: &Cfg, fixture: &Fixture) {
     all.extend(block(&res_stats, "res"));
     all.push((
         "peak_rss_MiB",
-        format!("{:.1}", loo_stats.peak_rss_bytes as f64 / ((1u64 << 20) as f64)),
+        format!(
+            "{:.1}",
+            loo_stats.peak_rss_bytes as f64 / ((1u64 << 20) as f64)
+        ),
     ));
 
     emit(&cfg.display_fixture(), "lookup", &all);

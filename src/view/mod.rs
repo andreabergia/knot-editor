@@ -36,7 +36,9 @@ pub trait Renderer {
 pub fn create_backend(name: &str) -> anyhow::Result<Box<dyn Renderer>> {
     match name {
         "stub" => Ok(Box::new(backends::stub::Stub::new()) as Box<dyn Renderer>),
-        "wgpu_cosmic" => Ok(Box::new(backends::wgpu_cosmic::WgpuCosmic::new()) as Box<dyn Renderer>),
+        "wgpu_cosmic" => {
+            Ok(Box::new(backends::wgpu_cosmic::WgpuCosmic::new()) as Box<dyn Renderer>)
+        }
         #[cfg(target_os = "macos")]
         "skia" => Ok(Box::new(backends::skia::Skia::new()) as Box<dyn Renderer>),
         other => anyhow::bail!(
@@ -48,7 +50,11 @@ pub fn create_backend(name: &str) -> anyhow::Result<Box<dyn Renderer>> {
 
 pub fn available_backends() -> &'static [&'static str] {
     #[cfg(target_os = "macos")]
-    { &["stub", "wgpu_cosmic", "skia"] }
+    {
+        &["stub", "wgpu_cosmic", "skia"]
+    }
     #[cfg(not(target_os = "macos"))]
-    { &["stub", "wgpu_cosmic"] }
+    {
+        &["stub", "wgpu_cosmic"]
+    }
 }

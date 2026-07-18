@@ -228,8 +228,10 @@ validates replies, and its future `JsRuntime` will remain owned by that thread.
 messages for buffer access: opaque extension, request, and buffer identities;
 UTF-8 byte ranges; snapshots; edit batches; revisions; and stable request
 failures. It contains no V8, Deno, gpui, or `core::TextBuffer` reference.
-There is still no request routing, command registry, capability provider, or
-`JsRuntime` driving; those runtime internals will remain contained in `host`.
+Each extension thread now constructs and drives its own `JsRuntime`, retaining
+isolate-local state across host fixture scripts. There is still no request
+routing, command registry, capability provider, async-op bridge, or module
+loading; those runtime internals will remain contained in `host`.
 
 An extension's host-bound identity will be its stable, case-sensitive,
 globally namespaced string ID (initially a fixture/module identity and later a

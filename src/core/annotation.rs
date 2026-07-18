@@ -392,9 +392,7 @@ impl AnnotationStore {
         if self.index_dirty {
             self.rebuild_index(buffer);
         }
-        let start_idx = self
-            .interval_index
-            .partition_point(|e| e.start < b);
+        let start_idx = self.interval_index.partition_point(|e| e.start < b);
         let out: Vec<AnnotationId> = self.interval_index[..start_idx]
             .iter()
             .filter(|e| e.end > a)
@@ -1067,7 +1065,10 @@ mod tests {
         }
         // A no-op stabilize marks the index dirty (lazy rebuild on next query).
         store.stabilize(&b);
-        assert!(store.index_dirty, "index should be dirty after stabilize (lazy)");
+        assert!(
+            store.index_dirty,
+            "index should be dirty after stabilize (lazy)"
+        );
         // Every query must match a brute-force linear scan oracle.
         for a in 0..=11 {
             for bnd in (a + 1)..=11 {
@@ -1172,13 +1173,21 @@ mod tests {
         b.insert(5, " wo");
         store.stabilize(&b);
         assert_eq!(b.read_range(0..b.len()), "hello world");
-        assert_eq!(store.resolve(&b, victim), None, "undo does not revive victim");
+        assert_eq!(
+            store.resolve(&b, victim),
+            None,
+            "undo does not revive victim"
+        );
 
         // Redo: delete again. The victim is still gone.
         b.delete(5..8);
         store.stabilize(&b);
         assert_eq!(b.read_range(0..b.len()), "hellorld");
-        assert_eq!(store.resolve(&b, victim), None, "redo still finds no victim");
+        assert_eq!(
+            store.resolve(&b, victim),
+            None,
+            "redo still finds no victim"
+        );
     }
 
     // ---- Randomized correctness oracle (workload 4 of the plan) ----------
@@ -1381,75 +1390,101 @@ mod tests {
 
         // Source 1: Diagnostics — error on line 5, warning on line 20, info on line 50.
         let diag1 = store.add(
-            &b, line_start(5), line_start(5) + 8,
+            &b,
+            line_start(5),
+            line_start(5) + 8,
             AnnotationKind::Diagnostic,
             AnnotationData("error: unused variable".into()),
         );
         let diag2 = store.add(
-            &b, line_start(20), line_start(20) + 8,
+            &b,
+            line_start(20),
+            line_start(20) + 8,
             AnnotationKind::Diagnostic,
             AnnotationData("warning: snake_case".into()),
         );
         let diag3 = store.add(
-            &b, line_start(50), line_start(50) + 8,
+            &b,
+            line_start(50),
+            line_start(50) + 8,
             AnnotationKind::Diagnostic,
             AnnotationData("info: dead code".into()),
         );
 
         // Source 2: Search — matches on lines 2, 5, 18, 20, 75.
         let _sr1 = store.add(
-            &b, line_start(2), line_start(2) + 4,
+            &b,
+            line_start(2),
+            line_start(2) + 4,
             AnnotationKind::Search,
             AnnotationData("match".into()),
         );
         let sr2 = store.add(
-            &b, line_start(5), line_start(5) + 4,
+            &b,
+            line_start(5),
+            line_start(5) + 4,
             AnnotationKind::Search,
             AnnotationData("match".into()),
         );
         let _sr3 = store.add(
-            &b, line_start(18), line_start(18) + 4,
+            &b,
+            line_start(18),
+            line_start(18) + 4,
             AnnotationKind::Search,
             AnnotationData("match".into()),
         );
         let _sr4 = store.add(
-            &b, line_start(20), line_start(20) + 4,
+            &b,
+            line_start(20),
+            line_start(20) + 4,
             AnnotationKind::Search,
             AnnotationData("match".into()),
         );
         let _sr5 = store.add(
-            &b, line_start(75), line_start(75) + 4,
+            &b,
+            line_start(75),
+            line_start(75) + 4,
             AnnotationKind::Search,
             AnnotationData("match".into()),
         );
 
         // Source 3: Git hunks — added lines 10-15, modified lines 60-65.
         let git1 = store.add(
-            &b, line_start(10), line_start(15) + 8,
+            &b,
+            line_start(10),
+            line_start(15) + 8,
             AnnotationKind::Git,
             AnnotationData("added".into()),
         );
         let _git2 = store.add(
-            &b, line_start(60), line_start(65) + 8,
+            &b,
+            line_start(60),
+            line_start(65) + 8,
             AnnotationKind::Git,
             AnnotationData("modified".into()),
         );
 
         // Source 4: Breakpoints — line 10 and line 40 (1-byte for range query).
         let bp1 = store.add(
-            &b, line_start(10), line_start(10) + 1,
+            &b,
+            line_start(10),
+            line_start(10) + 1,
             AnnotationKind::Breakpoint,
             AnnotationData("".into()),
         );
         let bp2 = store.add(
-            &b, line_start(40), line_start(40) + 1,
+            &b,
+            line_start(40),
+            line_start(40) + 1,
             AnnotationKind::Breakpoint,
             AnnotationData("".into()),
         );
 
         // Source 5: Folding — region spanning lines 30-45.
         let fold1 = store.add(
-            &b, line_start(30), line_start(45) + 8,
+            &b,
+            line_start(30),
+            line_start(45) + 8,
             AnnotationKind::Folding,
             AnnotationData("collapsed region".into()),
         );
@@ -1465,7 +1500,9 @@ mod tests {
 
         // ---- Consumer: gutter (diagnostics + breakpoints) ----
         let gutter = store.query_range_for_kinds(
-            &b, 0, b.len(),
+            &b,
+            0,
+            b.len(),
             &[AnnotationKind::Diagnostic, AnnotationKind::Breakpoint],
         );
         assert_eq!(gutter.len(), 5, "gutter: 3 diagnostics + 2 breakpoints");
@@ -1477,8 +1514,14 @@ mod tests {
 
         // ---- Consumer: minimap (diagnostics + search + git) ----
         let minimap = store.query_range_for_kinds(
-            &b, 0, b.len(),
-            &[AnnotationKind::Diagnostic, AnnotationKind::Search, AnnotationKind::Git],
+            &b,
+            0,
+            b.len(),
+            &[
+                AnnotationKind::Diagnostic,
+                AnnotationKind::Search,
+                AnnotationKind::Git,
+            ],
         );
         assert_eq!(minimap.len(), 10, "minimap: 3+5+2");
         // Should NOT include breakpoints or folding.
@@ -1493,13 +1536,17 @@ mod tests {
         assert_eq!(line5_range.len(), 2, "exactly two on line 5");
         // Filter to only diagnostics:
         let line5_diag = store.query_range_for_kinds(
-            &b, line_start(5), line_start(6),
+            &b,
+            line_start(5),
+            line_start(6),
             &[AnnotationKind::Diagnostic],
         );
         assert_eq!(line5_diag, vec![diag1]);
         // Filter to only search:
         let line5_search = store.query_range_for_kinds(
-            &b, line_start(5), line_start(6),
+            &b,
+            line_start(5),
+            line_start(6),
             &[AnnotationKind::Search],
         );
         assert_eq!(line5_search, vec![sr2]);
@@ -1511,7 +1558,9 @@ mod tests {
 
         // ---- 6th source: no store changes needed ----
         let lint1 = store.add(
-            &b, line_start(3), line_start(3) + 8,
+            &b,
+            line_start(3),
+            line_start(3) + 8,
             AnnotationKind::Other(0),
             AnnotationData("lint: prefer const".into()),
         );
@@ -1522,20 +1571,23 @@ mod tests {
         assert_eq!(all.len(), 14);
         // Lint is excluded from gutter:
         let gutter2 = store.query_range_for_kinds(
-            &b, 0, b.len(),
+            &b,
+            0,
+            b.len(),
             &[AnnotationKind::Diagnostic, AnnotationKind::Breakpoint],
         );
         assert!(!gutter2.contains(&lint1));
         // Query by Other(0) only:
-        let lint_only = store.query_range_for_kinds(
-            &b, 0, b.len(),
-            &[AnnotationKind::Other(0)],
-        );
+        let lint_only = store.query_range_for_kinds(&b, 0, b.len(), &[AnnotationKind::Other(0)]);
         assert_eq!(lint_only, vec![lint1]);
 
         // ---- iter_live reflects removal ----
         store.remove(lint1);
-        assert_eq!(store.iter_live().count(), 13, "removed annotation excluded from iter_live");
+        assert_eq!(
+            store.iter_live().count(),
+            13,
+            "removed annotation excluded from iter_live"
+        );
         assert_eq!(store.len(), 13, "len reflects removal too");
     }
 
@@ -1546,17 +1598,23 @@ mod tests {
         let mut store = AnnotationStore::new();
 
         let d = store.add(
-            &b, line_start(3), line_start(3) + 8,
+            &b,
+            line_start(3),
+            line_start(3) + 8,
             AnnotationKind::Diagnostic,
             AnnotationData::default(),
         );
         let s = store.add(
-            &b, line_start(5), line_start(5) + 4,
+            &b,
+            line_start(5),
+            line_start(5) + 4,
             AnnotationKind::Search,
             AnnotationData::default(),
         );
         let g = store.add(
-            &b, line_start(8), line_start(12) + 8,
+            &b,
+            line_start(8),
+            line_start(12) + 8,
             AnnotationKind::Git,
             AnnotationData::default(),
         );

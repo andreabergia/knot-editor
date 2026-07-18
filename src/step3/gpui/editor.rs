@@ -117,11 +117,7 @@ impl EditorView {
         let mut lines = Vec::with_capacity(n);
         let mut segs = Vec::with_capacity(n);
         for i in 0..n {
-            let line = fixture
-                .lines
-                .get(i)
-                .cloned()
-                .unwrap_or_default();
+            let line = fixture.lines.get(i).cloned().unwrap_or_default();
             lines.push(line);
             let specs = fixture.segments_of(i);
             let mut row = Vec::with_capacity(specs.len() + 1);
@@ -193,13 +189,22 @@ impl EditorView {
         // without wiring one up.
         let mut annotations = Vec::new();
         for (ix, line) in lines.iter().enumerate() {
-            for pat in [("LEAF_MAX", WARNING_COLOR), ("INTERNAL_MIN", WARNING_COLOR), ("unsafe", ERROR_COLOR)] {
+            for pat in [
+                ("LEAF_MAX", WARNING_COLOR),
+                ("INTERNAL_MIN", WARNING_COLOR),
+                ("unsafe", ERROR_COLOR),
+            ] {
                 let (needle, color) = pat;
                 let mut from = 0;
                 while let Some(pos) = line[from..].find(needle) {
                     let start = from + pos;
                     let end = start + needle.len();
-                    annotations.push(Annotation { line: ix, start, end, color });
+                    annotations.push(Annotation {
+                        line: ix,
+                        start,
+                        end,
+                        color,
+                    });
                     from = end;
                 }
             }
@@ -207,7 +212,9 @@ impl EditorView {
                 // Annotate the function name after `fn ` as info.
                 let name_start = pos + 3;
                 let rest = &line[name_start..];
-                let name_end_in_rest = rest.find(|c: char| !c.is_alphanumeric() && c != '_').unwrap_or(rest.len());
+                let name_end_in_rest = rest
+                    .find(|c: char| !c.is_alphanumeric() && c != '_')
+                    .unwrap_or(rest.len());
                 if name_end_in_rest > 0 {
                     annotations.push(Annotation {
                         line: ix,
@@ -355,9 +362,7 @@ impl EditorView {
                             doc.grapheme_indices(true)
                                 .take_while(|(start, _)| *start < caret_byte)
                                 .last()
-                                .map(|(start, _)| {
-                                    self.byte_col_to_utf16(&doc, start)..caret
-                                })
+                                .map(|(start, _)| self.byte_col_to_utf16(&doc, start)..caret)
                         } else {
                             None
                         }
@@ -403,68 +408,80 @@ impl EditorView {
         // end of buffer, used for collapse-tiebreak), whether it's a
         // horizontal motion (which resets `preferred_col` to the new col),
         // and a scroll delta (pageup/pagedown nudge the viewport too).
-        let (target, forward, horizontal, scroll_delta): (
-            (usize, usize),
-            bool,
-            bool,
-            f32,
-        ) = match (cmd, key.as_str()) {
-            (true, "left") => ((self.cursor_line, 0), false, true, 0.),
-            (true, "right") => {
-                ((self.cursor_line, self.line_end(self.cursor_line)), true, true, 0.)
-            }
-            (false, "left") => {
-                let (l, c) = if self.cursor_col > 0 {
-                    (self.cursor_line, self.prev_boundary(self.cursor_line, self.cursor_col))
-                } else if self.cursor_line > 0 {
-                    (self.cursor_line - 1, self.line_end(self.cursor_line - 1))
-                } else {
-                    (self.cursor_line, 0)
-                };
-                ((l, c), false, true, 0.)
-            }
-            (false, "right") => {
-                let (l, c) = if self.cursor_col < self.line_end(self.cursor_line) {
-                    (self.cursor_line, self.next_boundary(self.cursor_line, self.cursor_col))
-                } else if self.cursor_line < last_line {
-                    (self.cursor_line + 1, 0)
-                } else {
-                    (self.cursor_line, self.cursor_col)
-                };
-                ((l, c), true, true, 0.)
-            }
-            (false, "up") => {
-                let l = if self.cursor_line > 0 { self.cursor_line - 1 } else { self.cursor_line };
-                let c = self.clamp_col_to_line(l, self.preferred_col);
-                ((l, c), false, false, 0.)
-            }
-            (false, "down") => {
-                let l = if self.cursor_line < last_line {
-                    self.cursor_line + 1
-                } else {
-                    self.cursor_line
-                };
-                let c = self.clamp_col_to_line(l, self.preferred_col);
-                ((l, c), true, false, 0.)
-            }
-            (false, "home") => ((self.cursor_line, 0), false, true, 0.),
-            (false, "end") => {
-                ((self.cursor_line, self.line_end(self.cursor_line)), true, true, 0.)
-            }
-            (false, "pageup") => {
-                let rows = self.page_rows(window);
-                let l = self.cursor_line.saturating_sub(rows).min(last_line);
-                let c = self.clamp_col_to_line(l, self.preferred_col);
-                ((l, c), false, false, -(rows as f32 * LINE_HEIGHT))
-            }
-            (false, "pagedown") => {
-                let rows = self.page_rows(window);
-                let l = (self.cursor_line + rows).min(last_line);
-                let c = self.clamp_col_to_line(l, self.preferred_col);
-                ((l, c), true, false, rows as f32 * LINE_HEIGHT)
-            }
-            _ => return,
-        };
+        let (target, forward, horizontal, scroll_delta): ((usize, usize), bool, bool, f32) =
+            match (cmd, key.as_str()) {
+                (true, "left") => ((self.cursor_line, 0), false, true, 0.),
+                (true, "right") => (
+                    (self.cursor_line, self.line_end(self.cursor_line)),
+                    true,
+                    true,
+                    0.,
+                ),
+                (false, "left") => {
+                    let (l, c) = if self.cursor_col > 0 {
+                        (
+                            self.cursor_line,
+                            self.prev_boundary(self.cursor_line, self.cursor_col),
+                        )
+                    } else if self.cursor_line > 0 {
+                        (self.cursor_line - 1, self.line_end(self.cursor_line - 1))
+                    } else {
+                        (self.cursor_line, 0)
+                    };
+                    ((l, c), false, true, 0.)
+                }
+                (false, "right") => {
+                    let (l, c) = if self.cursor_col < self.line_end(self.cursor_line) {
+                        (
+                            self.cursor_line,
+                            self.next_boundary(self.cursor_line, self.cursor_col),
+                        )
+                    } else if self.cursor_line < last_line {
+                        (self.cursor_line + 1, 0)
+                    } else {
+                        (self.cursor_line, self.cursor_col)
+                    };
+                    ((l, c), true, true, 0.)
+                }
+                (false, "up") => {
+                    let l = if self.cursor_line > 0 {
+                        self.cursor_line - 1
+                    } else {
+                        self.cursor_line
+                    };
+                    let c = self.clamp_col_to_line(l, self.preferred_col);
+                    ((l, c), false, false, 0.)
+                }
+                (false, "down") => {
+                    let l = if self.cursor_line < last_line {
+                        self.cursor_line + 1
+                    } else {
+                        self.cursor_line
+                    };
+                    let c = self.clamp_col_to_line(l, self.preferred_col);
+                    ((l, c), true, false, 0.)
+                }
+                (false, "home") => ((self.cursor_line, 0), false, true, 0.),
+                (false, "end") => (
+                    (self.cursor_line, self.line_end(self.cursor_line)),
+                    true,
+                    true,
+                    0.,
+                ),
+                (false, "pageup") => {
+                    let rows = self.page_rows(window);
+                    let l = self.cursor_line.saturating_sub(rows).min(last_line);
+                    let c = self.clamp_col_to_line(l, self.preferred_col);
+                    ((l, c), false, false, -(rows as f32 * LINE_HEIGHT))
+                }
+                (false, "pagedown") => {
+                    let rows = self.page_rows(window);
+                    let l = (self.cursor_line + rows).min(last_line);
+                    let c = self.clamp_col_to_line(l, self.preferred_col);
+                    ((l, c), true, false, rows as f32 * LINE_HEIGHT)
+                }
+                _ => return,
+            };
 
         let did_page;
         if shift {
@@ -644,11 +661,7 @@ impl EditorView {
         }
         let a = (self.anchor_line, self.anchor_col);
         let c = (self.cursor_line, self.cursor_col);
-        if a <= c {
-            Some((a, c))
-        } else {
-            Some((c, a))
-        }
+        if a <= c { Some((a, c)) } else { Some((c, a)) }
     }
 
     // ── Flat-UTF16 document model ───────────────────────────────────────
@@ -954,9 +967,7 @@ impl EntityInputHandler for EditorView {
         let (end_line, end_col) = self.from_flat_utf16(range_utf16.end);
         let line = start_line;
         let line_str = self.lines.get(line)?;
-        let top = element_bounds.origin.y
-            + px(line as f32 * LINE_HEIGHT)
-            - px(self.scroll);
+        let top = element_bounds.origin.y + px(line as f32 * LINE_HEIGHT) - px(self.scroll);
 
         if line_str.is_empty() {
             return Some(Bounds {
@@ -1191,11 +1202,7 @@ impl Element for EditorElement {
         // `EntityInputHandler` impl and forwards all calls through
         // `entity.update`.
         if focus_handle.is_focused(window) {
-            window.handle_input(
-                &focus_handle,
-                ElementInputHandler::new(bounds, entity),
-                cx,
-            );
+            window.handle_input(&focus_handle, ElementInputHandler::new(bounds, entity), cx);
         }
 
         let font_size = px(FONT_SIZE);
@@ -1339,9 +1346,7 @@ impl Element for EditorElement {
                     } else {
                         (px(0.), pane_w)
                     };
-                    let top = bounds.origin.y
-                        + px(*ix as f32 * LINE_HEIGHT)
-                        - px(scroll)
+                    let top = bounds.origin.y + px(*ix as f32 * LINE_HEIGHT) - px(scroll)
                         + line_height
                         - underline_h;
                     let rect = Bounds {
@@ -1404,8 +1409,7 @@ impl Element for EditorElement {
                     let ascent = shaped_line.ascent;
                     let descent = shaped_line.descent;
                     let padding_top = (line_height - ascent - descent) / 2.;
-                    let underline_y = bounds.origin.y
-                        + px(ann.line as f32 * LINE_HEIGHT)
+                    let underline_y = bounds.origin.y + px(ann.line as f32 * LINE_HEIGHT)
                         - px(scroll)
                         + padding_top
                         + ascent
@@ -1436,10 +1440,7 @@ impl Element for EditorElement {
             let origin_y = f32::from(bounds.origin.y);
             let thumb_y = origin_y + (scroll.max(0.) / content_h) * (viewport_h - thumb_h);
             let thumb_bounds = Bounds {
-                origin: point(
-                    bounds.origin.x + bounds.size.width - px(track),
-                    px(thumb_y),
-                ),
+                origin: point(bounds.origin.x + bounds.size.width - px(track), px(thumb_y)),
                 size: size(px(track), px(thumb_h)),
             };
             let _ = window.paint_quad(fill(thumb_bounds, hsla(0., 0., 0.6, 0.4)));
@@ -1513,7 +1514,7 @@ fn char_is_strong_rtl(ch: char) -> bool {
         || (0x08A0..=0x08FF).contains(&c)      // Arabic Extended-A
         || (0xFB1D..=0xFB4F).contains(&c)      // Hebrew presentation forms
         || (0xFB50..=0xFDFF).contains(&c)      // Arabic presentation forms-A
-        || (0xFE70..=0xFEFF).contains(&c)      // Arabic presentation forms-B
+        || (0xFE70..=0xFEFF).contains(&c) // Arabic presentation forms-B
 }
 
 /// Direction-aware `x_for_index`. gpui's `ShapedLine::x_for_index` walks
@@ -1554,8 +1555,7 @@ fn x_for_index_dir(s: &ShapedLine, index: usize, line_str: &str) -> Pixels {
         .map(char_is_strong_rtl)
         .unwrap_or(rtl_base);
 
-    let all_glyphs: Vec<&ShapedGlyph> =
-        s.runs.iter().flat_map(|r| r.glyphs.iter()).collect();
+    let all_glyphs: Vec<&ShapedGlyph> = s.runs.iter().flat_map(|r| r.glyphs.iter()).collect();
 
     if !rtl {
         // A grapheme boundary can fall after a single glyph representing an

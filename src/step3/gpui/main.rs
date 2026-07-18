@@ -67,17 +67,18 @@ impl Shell {
     /// styled text to render. Fixture resolution is relative to the crate
     /// root so the binary runs from any cwd.
     fn new(cx: &mut Context<Self>) -> Self {
-        let fixture_name = std::env::args().nth(1).unwrap_or_else(|| "rust_sample".into());
+        let fixture_name = std::env::args()
+            .nth(1)
+            .unwrap_or_else(|| "rust_sample".into());
         let fixture_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("bench/fixtures")
             .join(format!("{fixture_name}.kfx"));
-        let fixture = ::knot::view::fixture::Fixture::load(&fixture_path)
-            .unwrap_or_else(|e| {
-                eprintln!("[step3-gpui] failed to load fixture {fixture_path:?}: {e}");
-                ::knot::view::fixture::Fixture::from_lines(vec![format!(
-                    "(no fixture at {fixture_path:?}: {e})"
-                )])
-            });
+        let fixture = ::knot::view::fixture::Fixture::load(&fixture_path).unwrap_or_else(|e| {
+            eprintln!("[step3-gpui] failed to load fixture {fixture_path:?}: {e}");
+            ::knot::view::fixture::Fixture::from_lines(vec![format!(
+                "(no fixture at {fixture_path:?}: {e})"
+            )])
+        });
         let editor = cx.new(|cx| EditorView::from_fixture(&fixture, cx));
         Shell {
             left_files: vec![
@@ -158,24 +159,20 @@ impl Shell {
         which_pane: usize,
     ) -> impl IntoElement {
         let items: Vec<SharedString> = items.to_vec();
-        uniform_list(
-            id_prefix,
-            items.len(),
-            move |range, _window, _cx| {
-                range
-                    .map(|ix| {
-                        Self::row(
-                            id_prefix,
-                            ix,
-                            items[ix].clone(),
-                            selected,
-                            entity.clone(),
-                            which_pane,
-                        )
-                    })
-                    .collect()
-            },
-        )
+        uniform_list(id_prefix, items.len(), move |range, _window, _cx| {
+            range
+                .map(|ix| {
+                    Self::row(
+                        id_prefix,
+                        ix,
+                        items[ix].clone(),
+                        selected,
+                        entity.clone(),
+                        which_pane,
+                    )
+                })
+                .collect()
+        })
         .h_full()
     }
 
@@ -211,7 +208,7 @@ impl Render for Shell {
             // Drag resize listeners on the root: on_drag_move fires (capture phase)
             // for every move while a DividerDrag is active, regardless of mouse
             // position, so the root — not the handle — owns the resize math.
-.on_drag_move::<DividerDrag>(cx.listener(
+            .on_drag_move::<DividerDrag>(cx.listener(
                 |this, event: &DragMoveEvent<DividerDrag>, _window, cx| {
                     let which = event.drag(cx).which;
                     let pos_x = event.event.position.x;
@@ -228,13 +225,13 @@ impl Render for Shell {
                             o
                         }
                     };
-let delta = f32::from(pos_x - start_x);
-                let new_w = if which == 0 {
-                    start_w + delta
-                } else {
-                    start_w - delta
-                }
-                .max(MIN_PANE);
+                    let delta = f32::from(pos_x - start_x);
+                    let new_w = if which == 0 {
+                        start_w + delta
+                    } else {
+                        start_w - delta
+                    }
+                    .max(MIN_PANE);
                     if which == 0 {
                         this.left_width = new_w;
                     } else {
@@ -262,13 +259,7 @@ let delta = f32::from(pos_x - start_x);
                             .text_color(rgb(0x888888))
                             .child("EXPLORER"),
                     )
-                    .child(self.pane(
-                        "left",
-                        &left_files,
-                        left_selected,
-                        entity.clone(),
-                        0,
-                    )),
+                    .child(self.pane("left", &left_files, left_selected, entity.clone(), 0)),
             )
             .child(Self::divider(0))
             .child(
@@ -305,13 +296,7 @@ let delta = f32::from(pos_x - start_x);
                             .text_color(rgb(0x888888))
                             .child("OUTLINE"),
                     )
-                    .child(self.pane(
-                        "right",
-                        &right_outline,
-                        right_selected,
-                        entity,
-                        1,
-                    )),
+                    .child(self.pane("right", &right_outline, right_selected, entity, 1)),
             )
     }
 }
@@ -320,9 +305,9 @@ fn main() {
     Application::new().run(|app: &mut App| {
         app.on_action(|_action: &Quit, app: &mut App| app.quit());
 
-        app.key_bindings().borrow_mut().add_bindings([
-            KeyBinding::new("cmd-q", Quit, None),
-        ]);
+        app.key_bindings()
+            .borrow_mut()
+            .add_bindings([KeyBinding::new("cmd-q", Quit, None)]);
 
         let bounds = Bounds::centered(None, size(px(1200.), px(800.)), app);
         app.open_window(

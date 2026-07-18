@@ -32,9 +32,7 @@ use objc2_quartz_core::{CAMetalDrawable, CAMetalLayer};
 use skia_safe::{
     Color, Color4f, ColorType, FontMgr, FontStyle, Point,
     gpu::{self, DirectContext, SurfaceOrigin, backend_render_targets, mtl},
-    textlayout::{
-        FontCollection, ParagraphBuilder, ParagraphStyle, TextDirection, TextStyle,
-    },
+    textlayout::{FontCollection, ParagraphBuilder, ParagraphStyle, TextDirection, TextStyle},
 };
 use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use winit::window::Window;
@@ -103,15 +101,11 @@ impl Renderer for Skia {
             layer.setDisplaySyncEnabled(false);
             layer.setDrawableSize(CGSize::new(w as f64, h as f64));
 
-            let view_ptr = match window
-                .window_handle()
-                .context("window handle")?
-                .as_raw()
-            {
+            let view_ptr = match window.window_handle().context("window handle")?.as_raw() {
                 RawWindowHandle::AppKit(appkit) => appkit.ns_view.as_ptr() as *mut NSView,
-                other => anyhow::bail!(
-                    "skia backend expects an AppKit window handle, got {other:?}"
-                ),
+                other => {
+                    anyhow::bail!("skia backend expects an AppKit window handle, got {other:?}")
+                }
             };
             let view = unsafe { view_ptr.as_ref() }.context("NSView pointer was null")?;
             view.setWantsLayer(true);
@@ -125,8 +119,8 @@ impl Renderer for Skia {
                 Retained::as_ptr(&command_queue) as mtl::Handle,
             )
         };
-        let context = gpu::direct_contexts::make_metal(&backend, None)
-            .context("make_metal DirectContext")?;
+        let context =
+            gpu::direct_contexts::make_metal(&backend, None).context("make_metal DirectContext")?;
 
         // Platform FontMgr + monospace default: this is the load-bearing
         // "for free" piece for CJK/Arabic/emoji fallback that the step-2
@@ -184,8 +178,7 @@ impl Renderer for Skia {
         let mut surface = {
             let texture_info =
                 unsafe { mtl::TextureInfo::new(Retained::as_ptr(&tex) as mtl::Handle) };
-            let backend_render_target =
-                backend_render_targets::make_mtl((dw, dh), &texture_info);
+            let backend_render_target = backend_render_targets::make_mtl((dw, dh), &texture_info);
             gpu::surfaces::wrap_backend_render_target(
                 &mut gpu.context,
                 &backend_render_target,
@@ -267,10 +260,7 @@ impl Renderer for Skia {
 
         // Present the drawable via a Metal command buffer (skia's GPU
         // work is already submitted; this is just the present blit).
-        let command_buffer = gpu
-            .command_queue
-            .commandBuffer()
-            .context("commandBuffer")?;
+        let command_buffer = gpu.command_queue.commandBuffer().context("commandBuffer")?;
         let drawable_ref: Retained<ProtocolObject<dyn MTLDrawable>> = (&drawable).into();
         command_buffer.presentDrawable(&drawable_ref);
         command_buffer.commit();

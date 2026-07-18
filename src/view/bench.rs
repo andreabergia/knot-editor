@@ -8,11 +8,9 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
-use sysinfo::{
-    MemoryRefreshKind, Pid, ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System,
-};
+use sysinfo::{MemoryRefreshKind, Pid, ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System};
 use winit::application::ApplicationHandler;
-use winit::event::{WindowEvent};
+use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::window::{Window, WindowId};
 
@@ -162,9 +160,10 @@ impl ApplicationHandler for Harness {
             )
             .expect("window creation failed");
 
-        let mut renderer = self.pending_renderer.take().expect(
-            "resumed called twice without a renderer; this is a harness bug",
-        );
+        let mut renderer = self
+            .pending_renderer
+            .take()
+            .expect("resumed called twice without a renderer; this is a harness bug");
         renderer.init(&window).expect("backend init failed");
 
         let now = Instant::now();
@@ -306,11 +305,7 @@ fn visible_line_count() -> usize {
     ((WIN_H / LINE_HEIGHT_PX) as usize).max(1)
 }
 
-fn summarize(
-    mut frame_times: Vec<Duration>,
-    peak_rss: u64,
-    cpu_samples: &[f32],
-) -> Summary {
+fn summarize(mut frame_times: Vec<Duration>, peak_rss: u64, cpu_samples: &[f32]) -> Summary {
     frame_times.sort();
     let frames = frame_times.len();
     let p50 = percentile(&frame_times, 50).as_micros() as u64;
@@ -373,10 +368,7 @@ pub fn parse_args(args: impl Iterator<Item = String>) -> Result<BenchConfig> {
                 duration = Some(Duration::from_secs(secs));
             }
             "--tile" => {
-                let n: usize = it
-                    .next()
-                    .context("--tile requires a count")?
-                    .parse()?;
+                let n: usize = it.next().context("--tile requires a count")?.parse()?;
                 tile = Some(n);
             }
             "--list-backends" => {

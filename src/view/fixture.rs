@@ -66,7 +66,12 @@ impl Fixture {
 
         let mut text_lines = Vec::with_capacity(count);
         for _ in 0..count {
-            text_lines.push(lines.next().context("fixture truncated in text body")?.to_owned());
+            text_lines.push(
+                lines
+                    .next()
+                    .context("fixture truncated in text body")?
+                    .to_owned(),
+            );
         }
 
         let mut styles = vec![Vec::new(); count];

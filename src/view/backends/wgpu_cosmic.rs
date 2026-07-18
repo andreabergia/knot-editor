@@ -200,8 +200,8 @@ impl Renderer for WgpuCosmic {
             wgpu::SurfaceTargetUnsafe::from_display_and_window(window, window)
                 .map_err(|e| anyhow::anyhow!("window handle error: {e}"))?
         };
-        let surface = unsafe { instance.create_surface_unsafe(target) }
-            .context("creating wgpu surface")?;
+        let surface =
+            unsafe { instance.create_surface_unsafe(target) }.context("creating wgpu surface")?;
 
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
@@ -332,7 +332,8 @@ impl Renderer for WgpuCosmic {
         let vertex_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("knot vertices"),
             size: INITIAL_VERTEX_CAPACITY,
-            usage: BufferUsages::VERTEX | BufferUsages::COPY_DST, mapped_at_creation: false,
+            usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
 
         let font_system = FontSystem::new();
@@ -341,8 +342,7 @@ impl Renderer for WgpuCosmic {
             .db()
             .faces()
             .filter(|f| {
-                f.post_script_name
-                    .contains("PingFang")
+                f.post_script_name.contains("PingFang")
                     || f.post_script_name.contains("Hei")
                     || f.post_script_name.contains("Song")
             })
@@ -438,8 +438,16 @@ impl Renderer for WgpuCosmic {
                 let attrs = default_attrs
                     .clone()
                     .color(color_to_cosmic(seg.color))
-                    .weight(if seg.bold { Weight::BOLD } else { Weight::NORMAL })
-                    .style(if seg.italic { Style::Italic } else { Style::Normal });
+                    .weight(if seg.bold {
+                        Weight::BOLD
+                    } else {
+                        Weight::NORMAL
+                    })
+                    .style(if seg.italic {
+                        Style::Italic
+                    } else {
+                        Style::Normal
+                    });
                 ranges.push((start, text.len(), attrs));
             }
         }
@@ -447,19 +455,17 @@ impl Renderer for WgpuCosmic {
             .iter()
             .map(|(s, e, a)| (&text[*s..*e], a.clone()))
             .collect();
-        buffer.set_rich_text(
-            spans.into_iter(),
-            &default_attrs,
-            Shaping::Advanced,
-            None,
-        );
+        buffer.set_rich_text(spans.into_iter(), &default_attrs, Shaping::Advanced, None);
 
         // 2. Shape + lay out. We avoid `borrow_with` here because it
         //    holds `&mut FontSystem` for as long as we walk layout runs,
         //    and we need `&mut FontSystem` again inside `ensure_glyph`
         //    (via swash). `shape_until_scroll` resolves dirty state up
         //    front; `layout_runs` borrows only `&buffer`.
-        buffer.set_size(Some(gpu.config.width as f32), Some(gpu.config.height as f32));
+        buffer.set_size(
+            Some(gpu.config.width as f32),
+            Some(gpu.config.height as f32),
+        );
         buffer.shape_until_scroll(font_system, true);
 
         // 3. Walk layout runs, rasterize new glyphs into the atlas, and
@@ -520,8 +526,15 @@ impl Renderer for WgpuCosmic {
         if self.frames < 3 {
             eprintln!(
                 "[wgpu_cosmic] size={}x{} runs={} glyphs={} notdef={} no_entry={} verts={} y_range=[{}..{}]",
-                gpu.config.width, gpu.config.height, dbg_runs, dbg_glyphs,
-                dbg_notdef, dbg_no_entry, vertices.len(), dbg_min_y, dbg_max_y
+                gpu.config.width,
+                gpu.config.height,
+                dbg_runs,
+                dbg_glyphs,
+                dbg_notdef,
+                dbg_no_entry,
+                vertices.len(),
+                dbg_min_y,
+                dbg_max_y
             );
         }
 
@@ -529,13 +542,13 @@ impl Renderer for WgpuCosmic {
         let frame = match gpu.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(t) => t,
             wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
-            wgpu::CurrentSurfaceTexture::Outdated
-            | wgpu::CurrentSurfaceTexture::Lost => {
+            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
                 gpu.surface.configure(&gpu.device, &gpu.config);
                 return Ok(());
             }
-            wgpu::CurrentSurfaceTexture::Timeout
-            | wgpu::CurrentSurfaceTexture::Occluded => return Ok(()),
+            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
+                return Ok(());
+            }
             wgpu::CurrentSurfaceTexture::Validation => {
                 anyhow::bail!("surface validation error");
             }
@@ -580,7 +593,8 @@ impl Renderer for WgpuCosmic {
                 gpu.vertex_buf = gpu.device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("knot vertices"),
                     size: new_cap,
-                    usage: BufferUsages::VERTEX | BufferUsages::COPY_DST, mapped_at_creation: false,
+                    usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
                 });
                 gpu.vertex_capacity = new_cap;
             }
@@ -615,7 +629,11 @@ impl Renderer for WgpuCosmic {
     }
 
     fn teardown(&mut self) {
-        let cached = self.gpu.as_ref().map(|g| g.atlas.entries.len()).unwrap_or(0);
+        let cached = self
+            .gpu
+            .as_ref()
+            .map(|g| g.atlas.entries.len())
+            .unwrap_or(0);
         eprintln!(
             "[wgpu_cosmic] rendered {} frames, {} glyphs cached",
             self.frames, cached
@@ -749,9 +767,8 @@ fn push_quad(
 ) {
     // Pixel coords → NDC. Y is flipped: screen-space y grows downward,
     // NDC y grows upward.
-    let to_ndc = |px: f32, py: f32| -> [f32; 2] {
-        [px / surf_w * 2.0 - 1.0, 1.0 - py / surf_h * 2.0]
-    };
+    let to_ndc =
+        |px: f32, py: f32| -> [f32; 2] { [px / surf_w * 2.0 - 1.0, 1.0 - py / surf_h * 2.0] };
     let [u0, v0, u1, v1] = uv_rect;
     let p00 = to_ndc(pos[0], pos[1]);
     let p10 = to_ndc(pos[0] + size[0], pos[1]);

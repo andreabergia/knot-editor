@@ -52,9 +52,9 @@ impl V8Host {
 
     /// Start one extension-owned runtime thread.
     ///
-    /// The thread owns all state that will later include a `JsRuntime`; this
-    /// initial slice only proves the typed request/response transport and its
-    /// ownership boundary.
+    /// The thread owns its `JsRuntime` and all extension-local state. The
+    /// initial scripts are host fixtures; module loading follows in a later
+    /// Step 7 slice.
     pub fn spawn_extension(&self, extension: ExtensionId) -> ExtensionRuntimeHandle {
         ExtensionRuntimeHandle::spawn(extension)
     }
@@ -95,6 +95,26 @@ impl ExtensionRuntimeHandle {
         self.commands
             .send(RuntimeCommand::Request(operation))
             .map_err(|_| ExtensionRuntimeClosed)
+    }
+
+    /// Execute a fixture script inside this extension's thread-affine
+    /// runtime. This is intentionally not an extension-loading API.
+    pub fn execute_fixture_script(
+        &self,
+        name: impl Into<String>,
+        source: impl Into<String>,
+    ) -> Result<(), ExtensionRuntimeExecutionError> {
+        let (completion, completed) = mpsc::sync_channel(0);
+        self.commands
+            .send(RuntimeCommand::ExecuteFixtureScript {
+                name: name.into(),
+                source: source.into(),
+                completion,
+            })
+            .map_err(|_| ExtensionRuntimeExecutionError::Closed)?;
+        completed
+            .recv()
+            .unwrap_or(Err(ExtensionRuntimeExecutionError::Closed))
     }
 
     /// Receive the next request emitted by the extension thread.
@@ -152,8 +172,20 @@ pub enum ExtensionRuntimeResponseError {
     UnknownRequest,
 }
 
+/// Returned when a fixture script cannot run in an extension runtime.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ExtensionRuntimeExecutionError {
+    Closed,
+    JavaScriptException,
+}
+
 enum RuntimeCommand {
     Request(HostOperation),
+    ExecuteFixtureScript {
+        name: String,
+        source: String,
+        completion: mpsc::SyncSender<Result<(), ExtensionRuntimeExecutionError>>,
+    },
     Response {
         response: HostResponse,
         completion: mpsc::SyncSender<Result<(), ExtensionRuntimeResponseError>>,
@@ -171,6 +203,7 @@ struct ExtensionRuntime {
     next_request_id: u64,
     pending_requests: HashSet<RequestId>,
     request_sender: Sender<HostRequest>,
+    js_runtime: deno_core::JsRuntime,
     _thread_affine: PhantomData<Rc<()>>,
 }
 
@@ -181,6 +214,7 @@ impl ExtensionRuntime {
             next_request_id: 0,
             pending_requests: HashSet::new(),
             request_sender,
+            js_runtime: deno_core::JsRuntime::new(Default::default()),
             _thread_affine: PhantomData,
         }
     }
@@ -203,6 +237,18 @@ impl ExtensionRuntime {
                         break;
                     }
                 }
+                RuntimeCommand::ExecuteFixtureScript {
+                    name,
+                    source,
+                    completion,
+                } => {
+                    let result = self
+                        .js_runtime
+                        .execute_script(name, source)
+                        .map(|_| ())
+                        .map_err(|_| ExtensionRuntimeExecutionError::JavaScriptException);
+                    let _ = completion.send(result);
+                }
                 RuntimeCommand::Response {
                     response,
                     completion,
@@ -224,7 +270,7 @@ impl ExtensionRuntime {
 
 #[cfg(test)]
 mod tests {
-    use super::{ExtensionRuntimeResponseError, V8Host};
+    use super::{ExtensionRuntimeExecutionError, ExtensionRuntimeResponseError, V8Host};
     use crate::host::protocol::{
         ExtensionId, HostOperation, HostResponse, HostResponseValue, RequestId,
     };
@@ -259,6 +305,28 @@ mod tests {
                 result: Ok(HostResponseValue::ActiveBuffer(None)),
             })
             .unwrap();
+        runtime.shutdown();
+    }
+
+    #[test]
+    fn extension_runtime_owns_and_drives_one_javascript_isolate() {
+        let host = V8Host::new();
+        let runtime = host.spawn_extension(ExtensionId::new(7));
+
+        runtime
+            .execute_fixture_script("initialize.js", "globalThis.runs = 1")
+            .unwrap();
+        runtime
+            .execute_fixture_script(
+                "verify.js",
+                "if (globalThis.runs !== 1) throw new Error('isolate was not retained')",
+            )
+            .unwrap();
+
+        assert_eq!(
+            runtime.execute_fixture_script("failure.js", "throw new Error('expected')"),
+            Err(ExtensionRuntimeExecutionError::JavaScriptException)
+        );
         runtime.shutdown();
     }
 
