@@ -8,6 +8,7 @@ anyhow = "1"
 bytemuck = { version = "1", features = ["derive"] }
 cosmic-text = "0.19"
 deno_core = "0.408"
+deno_error = "0.7"
 gpui = { version = "0.2", default-features = false, features = ["font-kit", "windows-manifest"] }
 pollster = "0.4"
 sysinfo = "0.32"

@@ -141,6 +141,8 @@ record that finding for the API design instead.
   keep all `deno_core` types inside `host`.
   - [x] Prove an internal async op can await `Send` native work on `V8Host`'s
     shared Tokio runtime while V8 remains driven by its extension thread. ✅
+  - [x] Bridge the fixture `ActiveBuffer` op through typed host messages and
+    resolve its JavaScript promise from the matching typed response. ✅
 - [ ] Implement the static module loader, private bootstrap bindings,
   `knot:editor` facade, source-aware exception/rejection reporting, and a test
   proving extension code cannot access `Deno.core` or import private modules.

@@ -6,7 +6,7 @@
 
 use std::{
     cell::RefCell,
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     marker::PhantomData,
     rc::Rc,
     sync::{
@@ -17,12 +17,16 @@ use std::{
 };
 
 use deno_core::OpState;
+use deno_error::JsErrorBox;
 
 pub mod protocol;
 
 use protocol::{ExtensionId, HostOperation, HostRequest, HostResponse, RequestId};
 
-deno_core::extension!(knot_runtime, ops = [op_fixture_shared_host_runtime],);
+deno_core::extension!(
+    knot_runtime,
+    ops = [op_fixture_active_buffer, op_fixture_shared_host_runtime],
+);
 
 /// Shared native work available to ops without moving V8 off its extension
 /// thread.
@@ -44,6 +48,28 @@ async fn op_fixture_shared_host_runtime(state: Rc<RefCell<OpState>>) -> String {
         .expect("Knot shared host runtime task panicked")
 }
 
+#[deno_core::op2]
+async fn op_fixture_active_buffer(state: Rc<RefCell<OpState>>) -> Result<bool, JsErrorBox> {
+    let response = state
+        .borrow_mut()
+        .borrow_mut::<ExtensionRequestRouter>()
+        .request_active_buffer()
+        .map_err(|_| JsErrorBox::generic("Knot host closed the active-buffer request"))?;
+    let response = response
+        .await
+        .map_err(|_| JsErrorBox::generic("Knot host closed the active-buffer request"))?;
+
+    match response.result {
+        Ok(protocol::HostResponseValue::ActiveBuffer(buffer)) => Ok(buffer.is_some()),
+        Ok(_) => Err(JsErrorBox::generic(
+            "Knot host returned the wrong response type",
+        )),
+        Err(error) => Err(JsErrorBox::generic(format!(
+            "Knot host rejected active-buffer request: {error:?}"
+        ))),
+    }
+}
+
 /// Process-wide owner of the V8 platform and host asynchronous work.
 ///
 /// Construct this on the process's parent thread before loading any
@@ -51,10 +77,6 @@ async fn op_fixture_shared_host_runtime(state: Rc<RefCell<OpState>>) -> String {
 /// process-global resource, so `V8Host` intentionally does not offer a
 /// per-extension initializer.
 pub struct V8Host {
-    #[allow(
-        dead_code,
-        reason = "typed host requests consume this in the next Step 7 slice"
-    )]
     async_runtime: Arc<tokio::runtime::Runtime>,
 }
 
@@ -95,6 +117,7 @@ pub struct ExtensionRuntimeHandle {
     extension: ExtensionId,
     commands: Sender<RuntimeCommand>,
     requests: Receiver<HostRequest>,
+    pending_requests: Arc<std::sync::Mutex<PendingRequests>>,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -102,11 +125,18 @@ impl ExtensionRuntimeHandle {
     fn spawn(extension: ExtensionId, async_runtime: Arc<tokio::runtime::Runtime>) -> Self {
         let (commands, command_receiver) = mpsc::channel();
         let (request_sender, requests) = mpsc::channel();
+        let pending_requests = Arc::new(std::sync::Mutex::new(PendingRequests::default()));
+        let extension_pending_requests = Arc::clone(&pending_requests);
         let thread = thread::Builder::new()
             .name(format!("knot-extension-{}", extension.value()))
             .spawn(move || {
-                ExtensionRuntime::new(extension, request_sender, async_runtime)
-                    .run(command_receiver)
+                ExtensionRuntime::new(
+                    extension,
+                    request_sender,
+                    extension_pending_requests,
+                    async_runtime,
+                )
+                .run(command_receiver)
             })
             .expect("Knot extension runtime thread construction failed");
 
@@ -114,6 +144,7 @@ impl ExtensionRuntimeHandle {
             extension,
             commands,
             requests,
+            pending_requests,
             thread: Some(thread),
         }
     }
@@ -156,16 +187,10 @@ impl ExtensionRuntimeHandle {
             return Err(ExtensionRuntimeResponseError::WrongExtension);
         }
 
-        let (completion, completed) = mpsc::sync_channel(0);
-        self.commands
-            .send(RuntimeCommand::Response {
-                response,
-                completion,
-            })
-            .map_err(|_| ExtensionRuntimeResponseError::Closed)?;
-        completed
-            .recv()
-            .unwrap_or(Err(ExtensionRuntimeResponseError::Closed))
+        self.pending_requests
+            .lock()
+            .expect("Knot extension pending requests lock poisoned")
+            .respond(response)
     }
 
     /// Stop the extension thread and wait for its thread-affine state to drop.
@@ -214,11 +239,79 @@ enum RuntimeCommand {
         source: String,
         completion: mpsc::SyncSender<Result<(), ExtensionRuntimeExecutionError>>,
     },
-    Response {
-        response: HostResponse,
-        completion: mpsc::SyncSender<Result<(), ExtensionRuntimeResponseError>>,
-    },
     Shutdown,
+}
+
+#[derive(Default)]
+struct PendingRequests {
+    manual: HashSet<RequestId>,
+    javascript: HashMap<RequestId, tokio::sync::oneshot::Sender<HostResponse>>,
+}
+
+impl PendingRequests {
+    fn respond(&mut self, response: HostResponse) -> Result<(), ExtensionRuntimeResponseError> {
+        if let Some(sender) = self.javascript.remove(&response.id) {
+            sender
+                .send(response)
+                .map_err(|_| ExtensionRuntimeResponseError::UnknownRequest)
+        } else if self.manual.remove(&response.id) {
+            Ok(())
+        } else {
+            Err(ExtensionRuntimeResponseError::UnknownRequest)
+        }
+    }
+}
+
+/// Extension-thread request allocator and JavaScript-promise response router.
+struct ExtensionRequestRouter {
+    extension: ExtensionId,
+    next_request_id: u64,
+    request_sender: Sender<HostRequest>,
+    pending_requests: Arc<std::sync::Mutex<PendingRequests>>,
+}
+
+impl ExtensionRequestRouter {
+    fn next_request_id(&mut self) -> RequestId {
+        self.next_request_id = self
+            .next_request_id
+            .checked_add(1)
+            .expect("extension request id overflowed");
+        RequestId::new(self.next_request_id)
+    }
+
+    fn send(&self, id: RequestId, operation: HostOperation) -> Result<(), ExtensionRuntimeClosed> {
+        self.request_sender
+            .send(HostRequest {
+                extension: self.extension,
+                id,
+                operation,
+            })
+            .map_err(|_| ExtensionRuntimeClosed)
+    }
+
+    fn request_manual(&mut self, operation: HostOperation) -> Result<(), ExtensionRuntimeClosed> {
+        let id = self.next_request_id();
+        self.pending_requests
+            .lock()
+            .expect("Knot extension pending requests lock poisoned")
+            .manual
+            .insert(id);
+        self.send(id, operation)
+    }
+
+    fn request_active_buffer(
+        &mut self,
+    ) -> Result<tokio::sync::oneshot::Receiver<HostResponse>, ExtensionRuntimeClosed> {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        let id = self.next_request_id();
+        self.pending_requests
+            .lock()
+            .expect("Knot extension pending requests lock poisoned")
+            .javascript
+            .insert(id, sender);
+        self.send(id, HostOperation::ActiveBuffer)?;
+        Ok(receiver)
+    }
 }
 
 /// State confined to one extension's OS thread.
@@ -227,10 +320,6 @@ enum RuntimeCommand {
 /// `deno_core::JsRuntime`, neither Rust's type system nor this host endpoint
 /// can accidentally move it to another thread.
 struct ExtensionRuntime {
-    extension: ExtensionId,
-    next_request_id: u64,
-    pending_requests: HashSet<RequestId>,
-    request_sender: Sender<HostRequest>,
     event_loop_runtime: tokio::runtime::Runtime,
     js_runtime: deno_core::JsRuntime,
     _thread_affine: PhantomData<Rc<()>>,
@@ -240,6 +329,7 @@ impl ExtensionRuntime {
     fn new(
         extension: ExtensionId,
         request_sender: Sender<HostRequest>,
+        pending_requests: Arc<std::sync::Mutex<PendingRequests>>,
         async_runtime: Arc<tokio::runtime::Runtime>,
     ) -> Self {
         let js_runtime = deno_core::JsRuntime::new(deno_core::RuntimeOptions {
@@ -250,12 +340,17 @@ impl ExtensionRuntime {
             .op_state()
             .borrow_mut()
             .put(HostAsyncRuntime(async_runtime.handle().clone()));
+        js_runtime
+            .op_state()
+            .borrow_mut()
+            .put(ExtensionRequestRouter {
+                extension,
+                next_request_id: 0,
+                request_sender,
+                pending_requests,
+            });
 
         Self {
-            extension,
-            next_request_id: 0,
-            pending_requests: HashSet::new(),
-            request_sender,
             event_loop_runtime: tokio::runtime::Builder::new_current_thread()
                 .enable_time()
                 .build()
@@ -269,17 +364,14 @@ impl ExtensionRuntime {
         while let Ok(command) = commands.recv() {
             match command {
                 RuntimeCommand::Request(operation) => {
-                    self.next_request_id = self
-                        .next_request_id
-                        .checked_add(1)
-                        .expect("extension request id overflowed");
-                    let request = HostRequest {
-                        extension: self.extension,
-                        id: RequestId::new(self.next_request_id),
-                        operation,
-                    };
-                    self.pending_requests.insert(request.id);
-                    if self.request_sender.send(request).is_err() {
+                    if self
+                        .js_runtime
+                        .op_state()
+                        .borrow_mut()
+                        .borrow_mut::<ExtensionRequestRouter>()
+                        .request_manual(operation)
+                        .is_err()
+                    {
                         break;
                     }
                 }
@@ -300,19 +392,6 @@ impl ExtensionRuntime {
                         });
                     let _ = completion.send(result);
                 }
-                RuntimeCommand::Response {
-                    response,
-                    completion,
-                } => {
-                    debug_assert_eq!(response.extension, self.extension);
-                    let result = if self.pending_requests.remove(&response.id) {
-                        // Promise resolution is added with the JsRuntime driver.
-                        Ok(())
-                    } else {
-                        Err(ExtensionRuntimeResponseError::UnknownRequest)
-                    };
-                    let _ = completion.send(result);
-                }
                 RuntimeCommand::Shutdown => break,
             }
         }
@@ -321,7 +400,11 @@ impl ExtensionRuntime {
 
 #[cfg(test)]
 mod tests {
-    use super::{ExtensionRuntimeExecutionError, ExtensionRuntimeResponseError, V8Host};
+    use std::sync::mpsc;
+
+    use super::{
+        ExtensionRuntimeExecutionError, ExtensionRuntimeResponseError, RuntimeCommand, V8Host,
+    };
     use crate::host::protocol::{
         ExtensionId, HostOperation, HostResponse, HostResponseValue, RequestId,
     };
@@ -406,6 +489,47 @@ mod tests {
                         throw new Error(`native work ran on ${globalThis.hostThread}`)
                     }
                 "#,
+            )
+            .unwrap();
+        runtime.shutdown();
+    }
+
+    #[test]
+    fn javascript_host_op_resolves_from_its_typed_host_response() {
+        let host = V8Host::new();
+        let extension = ExtensionId::new(7);
+        let runtime = host.spawn_extension(extension);
+        let (completion, completed) = mpsc::sync_channel(0);
+
+        runtime
+            .commands
+            .send(RuntimeCommand::ExecuteFixtureScript {
+                name: "active-buffer.js".into(),
+                source: r#"
+                    Deno.core.ops.op_fixture_active_buffer()
+                        .then((hasBuffer) => globalThis.hasBuffer = hasBuffer)
+                "#
+                .into(),
+                completion,
+            })
+            .unwrap();
+
+        let request = runtime.receive_request().unwrap();
+        assert_eq!(request.extension, extension);
+        assert_eq!(request.operation, HostOperation::ActiveBuffer);
+        runtime
+            .respond(HostResponse {
+                extension,
+                id: request.id,
+                result: Ok(HostResponseValue::ActiveBuffer(None)),
+            })
+            .unwrap();
+        completed.recv().unwrap().unwrap();
+
+        runtime
+            .execute_fixture_script(
+                "verify-active-buffer.js",
+                "if (globalThis.hasBuffer !== false) throw new Error('unexpected active buffer')",
             )
             .unwrap();
         runtime.shutdown();
