@@ -129,7 +129,10 @@ record that finding for the API design instead.
     response validation on a dedicated extension OS thread. ✅
   - [x] Construct and drive one `JsRuntime` exclusively on each extension
     thread. The fixture-script proof retains isolate state across executions;
-    async host ops, promise resolution, and module loading remain later slices. ✅
+    async host ops and module loading remain later slices. ✅
+  - [x] Enter the shared Tokio runtime on the owning extension thread to drain
+    V8's event loop after fixture execution; promise resolution remains
+    isolate-local. ✅
 - [ ] Drive each `JsRuntime` from its owning thread while entering the shared
   Tokio runtime for async ops. Use typed Knot-owned request/response messages;
   keep all `deno_core` types inside `host`.

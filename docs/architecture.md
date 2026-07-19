@@ -229,9 +229,11 @@ messages for buffer access: opaque extension, request, and buffer identities;
 UTF-8 byte ranges; snapshots; edit batches; revisions; and stable request
 failures. It contains no V8, Deno, gpui, or `core::TextBuffer` reference.
 Each extension thread now constructs and drives its own `JsRuntime`, retaining
-isolate-local state across host fixture scripts. There is still no request
-routing, command registry, capability provider, async-op bridge, or module
-loading; those runtime internals will remain contained in `host`.
+isolate-local state across host fixture scripts. After each fixture script, its
+owning thread enters the shared Tokio runtime to drain V8's event loop, so
+promise continuations remain isolate-local. There is still no request routing,
+command registry, capability provider, async-op bridge, or module loading;
+those runtime internals will remain contained in `host`.
 
 An extension's host-bound identity will be its stable, case-sensitive,
 globally namespaced string ID (initially a fixture/module identity and later a

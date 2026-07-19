@@ -56,7 +56,7 @@ impl V8Host {
     /// initial scripts are host fixtures; module loading follows in a later
     /// Step 7 slice.
     pub fn spawn_extension(&self, extension: ExtensionId) -> ExtensionRuntimeHandle {
-        ExtensionRuntimeHandle::spawn(extension)
+        ExtensionRuntimeHandle::spawn(extension, Arc::clone(&self.async_runtime))
     }
 }
 
@@ -74,12 +74,15 @@ pub struct ExtensionRuntimeHandle {
 }
 
 impl ExtensionRuntimeHandle {
-    fn spawn(extension: ExtensionId) -> Self {
+    fn spawn(extension: ExtensionId, async_runtime: Arc<tokio::runtime::Runtime>) -> Self {
         let (commands, command_receiver) = mpsc::channel();
         let (request_sender, requests) = mpsc::channel();
         let thread = thread::Builder::new()
             .name(format!("knot-extension-{}", extension.value()))
-            .spawn(move || ExtensionRuntime::new(extension, request_sender).run(command_receiver))
+            .spawn(move || {
+                ExtensionRuntime::new(extension, request_sender, async_runtime)
+                    .run(command_receiver)
+            })
             .expect("Knot extension runtime thread construction failed");
 
         Self {
@@ -203,17 +206,23 @@ struct ExtensionRuntime {
     next_request_id: u64,
     pending_requests: HashSet<RequestId>,
     request_sender: Sender<HostRequest>,
+    async_runtime: Arc<tokio::runtime::Runtime>,
     js_runtime: deno_core::JsRuntime,
     _thread_affine: PhantomData<Rc<()>>,
 }
 
 impl ExtensionRuntime {
-    fn new(extension: ExtensionId, request_sender: Sender<HostRequest>) -> Self {
+    fn new(
+        extension: ExtensionId,
+        request_sender: Sender<HostRequest>,
+        async_runtime: Arc<tokio::runtime::Runtime>,
+    ) -> Self {
         Self {
             extension,
             next_request_id: 0,
             pending_requests: HashSet::new(),
             request_sender,
+            async_runtime,
             js_runtime: deno_core::JsRuntime::new(Default::default()),
             _thread_affine: PhantomData,
         }
@@ -245,8 +254,12 @@ impl ExtensionRuntime {
                     let result = self
                         .js_runtime
                         .execute_script(name, source)
-                        .map(|_| ())
-                        .map_err(|_| ExtensionRuntimeExecutionError::JavaScriptException);
+                        .map_err(|_| ExtensionRuntimeExecutionError::JavaScriptException)
+                        .and_then(|_| {
+                            self.async_runtime
+                                .block_on(self.js_runtime.run_event_loop(Default::default()))
+                                .map_err(|_| ExtensionRuntimeExecutionError::JavaScriptException)
+                        });
                     let _ = completion.send(result);
                 }
                 RuntimeCommand::Response {
@@ -314,12 +327,15 @@ mod tests {
         let runtime = host.spawn_extension(ExtensionId::new(7));
 
         runtime
-            .execute_fixture_script("initialize.js", "globalThis.runs = 1")
+            .execute_fixture_script(
+                "initialize.js",
+                "globalThis.runs = 1; Promise.resolve().then(() => globalThis.runs = 2)",
+            )
             .unwrap();
         runtime
             .execute_fixture_script(
                 "verify.js",
-                "if (globalThis.runs !== 1) throw new Error('isolate was not retained')",
+                "if (globalThis.runs !== 2) throw new Error('event loop was not driven')",
             )
             .unwrap();
 
