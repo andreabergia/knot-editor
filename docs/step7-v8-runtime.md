@@ -130,9 +130,9 @@ record that finding for the API design instead.
   - [x] Construct and drive one `JsRuntime` exclusively on each extension
     thread. The fixture-script proof retains isolate state across executions;
     async host ops and module loading remain later slices. ✅
-  - [x] Enter the shared Tokio runtime on the owning extension thread to drain
-    V8's event loop after fixture execution; promise resolution remains
-    isolate-local. ✅
+  - [x] Give each extension thread a current-thread Tokio driver for V8 and
+    `!Send` Deno futures. `V8Host` retains the shared multi-thread Tokio
+    runtime for future `Send` native work. ✅
   - [x] Cover the initial runtime shell with focused tests for V8/Tokio
     initialization, isolate persistence, JavaScript failure isolation, and
     typed request/response validation. ✅

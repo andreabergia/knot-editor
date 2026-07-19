@@ -56,7 +56,7 @@ impl V8Host {
     /// initial scripts are host fixtures; module loading follows in a later
     /// Step 7 slice.
     pub fn spawn_extension(&self, extension: ExtensionId) -> ExtensionRuntimeHandle {
-        ExtensionRuntimeHandle::spawn(extension, Arc::clone(&self.async_runtime))
+        ExtensionRuntimeHandle::spawn(extension)
     }
 }
 
@@ -74,15 +74,12 @@ pub struct ExtensionRuntimeHandle {
 }
 
 impl ExtensionRuntimeHandle {
-    fn spawn(extension: ExtensionId, async_runtime: Arc<tokio::runtime::Runtime>) -> Self {
+    fn spawn(extension: ExtensionId) -> Self {
         let (commands, command_receiver) = mpsc::channel();
         let (request_sender, requests) = mpsc::channel();
         let thread = thread::Builder::new()
             .name(format!("knot-extension-{}", extension.value()))
-            .spawn(move || {
-                ExtensionRuntime::new(extension, request_sender, async_runtime)
-                    .run(command_receiver)
-            })
+            .spawn(move || ExtensionRuntime::new(extension, request_sender).run(command_receiver))
             .expect("Knot extension runtime thread construction failed");
 
         Self {
@@ -206,23 +203,22 @@ struct ExtensionRuntime {
     next_request_id: u64,
     pending_requests: HashSet<RequestId>,
     request_sender: Sender<HostRequest>,
-    async_runtime: Arc<tokio::runtime::Runtime>,
+    event_loop_runtime: tokio::runtime::Runtime,
     js_runtime: deno_core::JsRuntime,
     _thread_affine: PhantomData<Rc<()>>,
 }
 
 impl ExtensionRuntime {
-    fn new(
-        extension: ExtensionId,
-        request_sender: Sender<HostRequest>,
-        async_runtime: Arc<tokio::runtime::Runtime>,
-    ) -> Self {
+    fn new(extension: ExtensionId, request_sender: Sender<HostRequest>) -> Self {
         Self {
             extension,
             next_request_id: 0,
             pending_requests: HashSet::new(),
             request_sender,
-            async_runtime,
+            event_loop_runtime: tokio::runtime::Builder::new_current_thread()
+                .enable_time()
+                .build()
+                .expect("Knot extension Tokio runtime construction failed"),
             js_runtime: deno_core::JsRuntime::new(Default::default()),
             _thread_affine: PhantomData,
         }
@@ -251,12 +247,13 @@ impl ExtensionRuntime {
                     source,
                     completion,
                 } => {
+                    let _runtime_guard = self.event_loop_runtime.enter();
                     let result = self
                         .js_runtime
                         .execute_script(name, source)
                         .map_err(|_| ExtensionRuntimeExecutionError::JavaScriptException)
                         .and_then(|_| {
-                            self.async_runtime
+                            self.event_loop_runtime
                                 .block_on(self.js_runtime.run_event_loop(Default::default()))
                                 .map_err(|_| ExtensionRuntimeExecutionError::JavaScriptException)
                         });
@@ -329,7 +326,7 @@ mod tests {
         runtime
             .execute_fixture_script(
                 "initialize.js",
-                "globalThis.runs = 1; Promise.resolve().then(() => globalThis.runs = 2)",
+                "globalThis.runs = 1; Deno.core.ops.op_void_async_deferred().then(() => globalThis.runs = 2)",
             )
             .unwrap();
         runtime

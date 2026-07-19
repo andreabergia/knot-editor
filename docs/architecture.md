@@ -229,9 +229,10 @@ messages for buffer access: opaque extension, request, and buffer identities;
 UTF-8 byte ranges; snapshots; edit batches; revisions; and stable request
 failures. It contains no V8, Deno, gpui, or `core::TextBuffer` reference.
 Each extension thread now constructs and drives its own `JsRuntime`, retaining
-isolate-local state across host fixture scripts. After each fixture script, its
-owning thread enters the shared Tokio runtime to drain V8's event loop, so
-promise continuations remain isolate-local. There is still no request routing,
+isolate-local state across host fixture scripts. Each extension thread also
+owns a current-thread Tokio runtime, which drives V8 and `!Send` Deno futures
+on that same thread. `V8Host` separately retains a shared multi-thread Tokio
+runtime for future `Send` native work. There is still no request routing,
 command registry, capability provider, async-op bridge, or module loading;
 those runtime internals will remain contained in `host`.
 
