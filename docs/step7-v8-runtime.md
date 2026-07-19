@@ -139,6 +139,8 @@ record that finding for the API design instead.
 - [ ] Drive each `JsRuntime` from its owning thread while entering the shared
   Tokio runtime for async ops. Use typed Knot-owned request/response messages;
   keep all `deno_core` types inside `host`.
+  - [x] Prove an internal async op can await `Send` native work on `V8Host`'s
+    shared Tokio runtime while V8 remains driven by its extension thread. ✅
 - [ ] Implement the static module loader, private bootstrap bindings,
   `knot:editor` facade, source-aware exception/rejection reporting, and a test
   proving extension code cannot access `Deno.core` or import private modules.

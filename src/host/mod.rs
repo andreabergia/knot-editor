@@ -5,6 +5,7 @@
 //! than through V8 or Deno runtime objects.
 
 use std::{
+    cell::RefCell,
     collections::HashSet,
     marker::PhantomData,
     rc::Rc,
@@ -15,9 +16,33 @@ use std::{
     thread::{self, JoinHandle},
 };
 
+use deno_core::OpState;
+
 pub mod protocol;
 
 use protocol::{ExtensionId, HostOperation, HostRequest, HostResponse, RequestId};
+
+deno_core::extension!(knot_runtime, ops = [op_fixture_shared_host_runtime],);
+
+/// Shared native work available to ops without moving V8 off its extension
+/// thread.
+#[derive(Clone)]
+struct HostAsyncRuntime(tokio::runtime::Handle);
+
+#[deno_core::op2]
+#[string]
+async fn op_fixture_shared_host_runtime(state: Rc<RefCell<OpState>>) -> String {
+    let runtime = state.borrow().borrow::<HostAsyncRuntime>().0.clone();
+    runtime
+        .spawn(async {
+            std::thread::current()
+                .name()
+                .unwrap_or("unnamed")
+                .to_owned()
+        })
+        .await
+        .expect("Knot shared host runtime task panicked")
+}
 
 /// Process-wide owner of the V8 platform and host asynchronous work.
 ///
@@ -56,7 +81,7 @@ impl V8Host {
     /// initial scripts are host fixtures; module loading follows in a later
     /// Step 7 slice.
     pub fn spawn_extension(&self, extension: ExtensionId) -> ExtensionRuntimeHandle {
-        ExtensionRuntimeHandle::spawn(extension)
+        ExtensionRuntimeHandle::spawn(extension, Arc::clone(&self.async_runtime))
     }
 }
 
@@ -74,12 +99,15 @@ pub struct ExtensionRuntimeHandle {
 }
 
 impl ExtensionRuntimeHandle {
-    fn spawn(extension: ExtensionId) -> Self {
+    fn spawn(extension: ExtensionId, async_runtime: Arc<tokio::runtime::Runtime>) -> Self {
         let (commands, command_receiver) = mpsc::channel();
         let (request_sender, requests) = mpsc::channel();
         let thread = thread::Builder::new()
             .name(format!("knot-extension-{}", extension.value()))
-            .spawn(move || ExtensionRuntime::new(extension, request_sender).run(command_receiver))
+            .spawn(move || {
+                ExtensionRuntime::new(extension, request_sender, async_runtime)
+                    .run(command_receiver)
+            })
             .expect("Knot extension runtime thread construction failed");
 
         Self {
@@ -209,7 +237,20 @@ struct ExtensionRuntime {
 }
 
 impl ExtensionRuntime {
-    fn new(extension: ExtensionId, request_sender: Sender<HostRequest>) -> Self {
+    fn new(
+        extension: ExtensionId,
+        request_sender: Sender<HostRequest>,
+        async_runtime: Arc<tokio::runtime::Runtime>,
+    ) -> Self {
+        let js_runtime = deno_core::JsRuntime::new(deno_core::RuntimeOptions {
+            extensions: vec![knot_runtime::init()],
+            ..Default::default()
+        });
+        js_runtime
+            .op_state()
+            .borrow_mut()
+            .put(HostAsyncRuntime(async_runtime.handle().clone()));
+
         Self {
             extension,
             next_request_id: 0,
@@ -219,7 +260,7 @@ impl ExtensionRuntime {
                 .enable_time()
                 .build()
                 .expect("Knot extension Tokio runtime construction failed"),
-            js_runtime: deno_core::JsRuntime::new(Default::default()),
+            js_runtime,
             _thread_affine: PhantomData,
         }
     }
@@ -340,6 +381,33 @@ mod tests {
             runtime.execute_fixture_script("failure.js", "throw new Error('expected')"),
             Err(ExtensionRuntimeExecutionError::JavaScriptException)
         );
+        runtime.shutdown();
+    }
+
+    #[test]
+    fn extension_async_op_runs_native_work_on_the_shared_host_runtime() {
+        let host = V8Host::new();
+        let runtime = host.spawn_extension(ExtensionId::new(7));
+
+        runtime
+            .execute_fixture_script(
+                "shared-runtime.js",
+                r#"
+                    Deno.core.ops.op_fixture_shared_host_runtime()
+                        .then((threadName) => globalThis.hostThread = threadName)
+                "#,
+            )
+            .unwrap();
+        runtime
+            .execute_fixture_script(
+                "verify-shared-runtime.js",
+                r#"
+                    if (!globalThis.hostThread.startsWith('knot-host')) {
+                        throw new Error(`native work ran on ${globalThis.hostThread}`)
+                    }
+                "#,
+            )
+            .unwrap();
         runtime.shutdown();
     }
 

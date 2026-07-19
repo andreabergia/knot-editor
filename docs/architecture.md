@@ -232,9 +232,11 @@ Each extension thread now constructs and drives its own `JsRuntime`, retaining
 isolate-local state across host fixture scripts. Each extension thread also
 owns a current-thread Tokio runtime, which drives V8 and `!Send` Deno futures
 on that same thread. `V8Host` separately retains a shared multi-thread Tokio
-runtime for future `Send` native work. There is still no request routing,
-command registry, capability provider, async-op bridge, or module loading;
-those runtime internals will remain contained in `host`.
+runtime for `Send` native work. An internal fixture op proves the handoff: it
+awaits work spawned on that shared runtime while the extension thread drives
+the V8 event loop. This is not yet the typed request/response async-op bridge.
+There is still no request routing, command registry, capability provider, or
+module loading; those runtime internals will remain contained in `host`.
 
 An extension's host-bound identity will be its stable, case-sensitive,
 globally namespaced string ID (initially a fixture/module identity and later a
