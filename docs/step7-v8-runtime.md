@@ -133,6 +133,9 @@ record that finding for the API design instead.
   - [x] Enter the shared Tokio runtime on the owning extension thread to drain
     V8's event loop after fixture execution; promise resolution remains
     isolate-local. ✅
+  - [x] Cover the initial runtime shell with focused tests for V8/Tokio
+    initialization, isolate persistence, JavaScript failure isolation, and
+    typed request/response validation. ✅
 - [ ] Drive each `JsRuntime` from its owning thread while entering the shared
   Tokio runtime for async ops. Use typed Knot-owned request/response messages;
   keep all `deno_core` types inside `host`.

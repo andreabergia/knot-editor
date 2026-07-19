@@ -347,6 +347,21 @@ mod tests {
     }
 
     #[test]
+    fn javascript_exception_does_not_poison_the_extension_runtime() {
+        let host = V8Host::new();
+        let runtime = host.spawn_extension(ExtensionId::new(7));
+
+        assert_eq!(
+            runtime.execute_fixture_script("failure.js", "throw new Error('expected')"),
+            Err(ExtensionRuntimeExecutionError::JavaScriptException)
+        );
+        runtime
+            .execute_fixture_script("recovery.js", "globalThis.recovered = true")
+            .unwrap();
+        runtime.shutdown();
+    }
+
+    #[test]
     fn extension_runtime_rejects_a_response_for_another_extension() {
         let host = V8Host::new();
         let runtime = host.spawn_extension(ExtensionId::new(7));
