@@ -214,11 +214,9 @@ impl V8Host {
 /// allocation and response validation stay on the extension's dedicated
 /// thread.
 pub struct ExtensionRuntimeHandle {
-    extension: ExtensionId,
-    commands: Sender<RuntimeCommand>,
-    requests: tokio::sync::mpsc::UnboundedReceiver<HostRequest>,
-    lifecycle: Arc<ExtensionLifecycle>,
-    thread: Option<JoinHandle<()>>,
+    control: ExtensionRuntimeControl,
+    requests: ExtensionRequestInbox,
+    thread: ExtensionRuntimeThread,
 }
 
 impl ExtensionRuntimeHandle {
@@ -244,20 +242,35 @@ impl ExtensionRuntimeHandle {
             })
             .expect("Knot extension runtime thread construction failed");
 
-        Self {
+        let control = ExtensionRuntimeControl {
             extension,
             commands,
-            requests,
             lifecycle,
-            thread: Some(thread),
+        };
+
+        Self {
+            control: control.clone(),
+            requests: ExtensionRequestInbox { requests },
+            thread: ExtensionRuntimeThread {
+                control,
+                thread: Some(thread),
+            },
+        }
+    }
+
+    /// Separate the unique request stream from clonable runtime controls and
+    /// blocking thread ownership.
+    pub fn into_parts(self) -> ExtensionRuntimeParts {
+        ExtensionRuntimeParts {
+            control: self.control,
+            requests: self.requests,
+            thread: self.thread,
         }
     }
 
     /// Ask the extension thread to issue one typed host request.
     pub fn request(&self, operation: HostOperation) -> Result<(), ExtensionRuntimeClosed> {
-        self.commands
-            .send(RuntimeCommand::Request(operation))
-            .map_err(|_| ExtensionRuntimeClosed)
+        self.control.request(operation)
     }
 
     /// Schedule a fixture script on this extension's thread-affine runtime.
@@ -265,6 +278,69 @@ impl ExtensionRuntimeHandle {
     /// The returned completion can be awaited independently while the caller
     /// pumps and responds to host requests. This is intentionally not an
     /// extension-loading API.
+    pub fn execute_fixture_script(
+        &self,
+        name: impl Into<String>,
+        source: impl Into<String>,
+    ) -> ExtensionRuntimeExecution {
+        self.control.execute_fixture_script(name, source)
+    }
+
+    /// Schedule one fixture ES module from the prototype's static in-memory
+    /// module set. `specifier` must be an absolute URL. The returned completion
+    /// can be awaited independently while the caller handles host requests.
+    pub fn execute_fixture_module(
+        &self,
+        specifier: impl Into<String>,
+        source: impl Into<String>,
+    ) -> ExtensionRuntimeExecution {
+        self.control.execute_fixture_module(specifier, source)
+    }
+
+    /// Asynchronously receive the next request emitted by the extension thread.
+    pub async fn receive_request(&mut self) -> Option<HostRequest> {
+        self.requests.receive().await
+    }
+
+    /// Return a host response to the extension thread that issued it.
+    pub fn respond(&self, response: HostResponse) -> Result<(), ExtensionRuntimeResponseError> {
+        self.control.respond(response)
+    }
+
+    /// Return the host-side watchdog for this extension's isolate.
+    pub fn watchdog(&self) -> ExtensionWatchdog {
+        self.control.watchdog()
+    }
+
+    /// Stop the extension thread and wait for its thread-affine state to drop.
+    pub fn shutdown(self) {
+        self.thread.shutdown();
+    }
+}
+
+/// Independently owned endpoints for an extension runtime.
+pub struct ExtensionRuntimeParts {
+    pub control: ExtensionRuntimeControl,
+    pub requests: ExtensionRequestInbox,
+    pub thread: ExtensionRuntimeThread,
+}
+
+/// Clonable, non-blocking access to an extension runtime and its response path.
+#[derive(Clone)]
+pub struct ExtensionRuntimeControl {
+    extension: ExtensionId,
+    commands: Sender<RuntimeCommand>,
+    lifecycle: Arc<ExtensionLifecycle>,
+}
+
+impl ExtensionRuntimeControl {
+    /// Ask the extension thread to issue one typed host request.
+    pub fn request(&self, operation: HostOperation) -> Result<(), ExtensionRuntimeClosed> {
+        self.commands
+            .send(RuntimeCommand::Request(operation))
+            .map_err(|_| ExtensionRuntimeClosed)
+    }
+
     pub fn execute_fixture_script(
         &self,
         name: impl Into<String>,
@@ -281,9 +357,6 @@ impl ExtensionRuntimeHandle {
         }
     }
 
-    /// Schedule one fixture ES module from the prototype's static in-memory
-    /// module set. `specifier` must be an absolute URL. The returned completion
-    /// can be awaited independently while the caller handles host requests.
     pub fn execute_fixture_module(
         &self,
         specifier: impl Into<String>,
@@ -300,12 +373,7 @@ impl ExtensionRuntimeHandle {
         }
     }
 
-    /// Asynchronously receive the next request emitted by the extension thread.
-    pub async fn receive_request(&mut self) -> Option<HostRequest> {
-        self.requests.recv().await
-    }
-
-    /// Return a host response to the extension thread that issued it.
+    /// Return a host response to this extension runtime.
     pub fn respond(&self, response: HostResponse) -> Result<(), ExtensionRuntimeResponseError> {
         if response.extension != self.extension {
             return Err(ExtensionRuntimeResponseError::WrongExtension);
@@ -321,21 +389,44 @@ impl ExtensionRuntimeHandle {
         }
     }
 
-    /// Stop the extension thread and wait for its thread-affine state to drop.
+    /// Request teardown without waiting for the extension thread to exit.
+    pub fn request_shutdown(&self) {
+        // Keep the isolate handle alive until the extension thread tears down.
+        // The queued command alone cannot stop JavaScript which is not yielding.
+        self.lifecycle.request_shutdown();
+        let _ = self.commands.send(RuntimeCommand::Shutdown);
+    }
+}
+
+/// Unique receiver for requests emitted by one extension runtime.
+pub struct ExtensionRequestInbox {
+    requests: tokio::sync::mpsc::UnboundedReceiver<HostRequest>,
+}
+
+impl ExtensionRequestInbox {
+    pub async fn receive(&mut self) -> Option<HostRequest> {
+        self.requests.recv().await
+    }
+}
+
+/// Blocking ownership of an extension's OS thread.
+pub struct ExtensionRuntimeThread {
+    control: ExtensionRuntimeControl,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl ExtensionRuntimeThread {
     pub fn shutdown(mut self) {
         self.stop().expect("Knot extension runtime thread panicked");
     }
 
     fn stop(&mut self) -> std::thread::Result<()> {
-        // Keep the isolate handle alive until the extension thread tears down.
-        // The queued command alone cannot stop JavaScript which is not yielding.
-        self.lifecycle.request_shutdown();
-        let _ = self.commands.send(RuntimeCommand::Shutdown);
+        self.control.request_shutdown();
         self.thread.take().map_or(Ok(()), JoinHandle::join)
     }
 }
 
-impl Drop for ExtensionRuntimeHandle {
+impl Drop for ExtensionRuntimeThread {
     fn drop(&mut self) {
         let _ = self.stop();
     }
@@ -1091,6 +1182,7 @@ mod tests {
         .unwrap();
         assert!(
             runtime
+                .control
                 .lifecycle
                 .state
                 .lock()
@@ -1099,6 +1191,27 @@ mod tests {
                 .is_attached()
         );
         runtime.shutdown();
+    }
+
+    #[test]
+    fn runtime_endpoints_have_independent_ownership() {
+        let host = V8Host::new();
+        let extension = ExtensionId::new(7);
+        let parts = host.spawn_extension(extension).into_parts();
+        let control = parts.control.clone();
+        let mut requests = parts.requests;
+
+        control.request(HostOperation::ActiveBuffer).unwrap();
+        let request = pollster::block_on(requests.receive()).unwrap();
+        control
+            .respond(HostResponse {
+                extension,
+                id: request.id,
+                result: Ok(HostResponseValue::ActiveBuffer(None)),
+            })
+            .unwrap();
+
+        parts.thread.shutdown();
     }
 
     #[test]

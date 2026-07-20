@@ -234,13 +234,13 @@ record that finding for the API design instead.
     one revision increment per local commit, and projection refresh from the
     authoritative `TextBuffer`. Update `architecture.md` as this commit makes
     gpui and `BufferModel` the real application/model ownership path. ✅
+- [x] Separate extension runtime endpoint ownership so request reception,
+  clonable response/control access, and thread joining can move independently.
+  The gpui bridge owns the unique request inbox; it must not borrow an entity
+  across an `.await`. ✅
 - [ ] Route host requests onto gpui's foreground executor and return results by
   one-shot response. Never share `TextBuffer` through `Arc<Mutex<_>>` and never
   block the gpui thread waiting for JavaScript.
-  - [ ] Refactor `ExtensionRuntimeHandle` so request reception, clonable
-    response/control access, and thread joining have distinct ownership. The
-    gpui bridge owns the unique request inbox; it must not borrow an entity
-    across an `.await`.
   - [ ] Keep V8 initialization on the process parent thread, then transfer only
     Knot-owned runtime controls and messages into application state. No gpui
     entity, `TextBuffer`, or V8/Deno value crosses a thread boundary.
@@ -251,6 +251,12 @@ record that finding for the API design instead.
   - [ ] Dispatch `ActiveBuffer` first: return the active registry handle or
     `None`, and prove that the handle resolves to the same real `BufferModel`
     displayed by `EditorView`.
+  - [ ] Add a focused integration test using gpui's test context: issue an
+    `ActiveBuffer` request from a real extension runtime, let the foreground
+    executor dispatch it, and verify the opaque handle resolves to the
+    displayed model.
+- [ ] Make runtime teardown and bridge failure handling non-blocking and
+  visible in the gpui shell.
   - [ ] Keep runtime shutdown and OS-thread joining off the gpui foreground
     executor. Dropping a view or closing the window may request shutdown on
     the foreground thread, but waiting for extension teardown happens on
@@ -258,10 +264,9 @@ record that finding for the API design instead.
   - [ ] Surface bridge/runtime state and failures in the status area rather
     than logging them only to stderr. A closed bridge rejects or disposes
     pending work without freezing the application.
-  - [ ] Add a focused integration test using gpui's test context: issue an
-    `ActiveBuffer` request from a real extension runtime, let the foreground
-    executor dispatch it, and verify the opaque handle and heartbeat progress.
-    Update `architecture.md` with the real request flow. ✅ when implemented.
+  - [ ] Verify that the heartbeat progresses while the bridge is active and
+    after it closes. Update `architecture.md` with the real request flow. ✅
+    when implemented.
 - [ ] Implement snapshot/range reads, UTF-8 boundary validation, atomic edit
   batches, revision conflicts, opaque-handle invalidation, and the two explicit
   UTF-16 adapter helpers. Keep byte/UTF-16 index construction lazy so ordinary
