@@ -16,12 +16,69 @@ use std::{
     thread::{self, JoinHandle},
 };
 
-use deno_core::OpState;
+use deno_core::{ModuleLoadOptions, ModuleLoadReferrer, ModuleLoadResponse, ModuleLoader};
+use deno_core::{ModuleResolveResponse, ModuleSource, ModuleSourceCode, ModuleSpecifier, OpState};
 use deno_error::JsErrorBox;
 
 pub mod protocol;
 
 use protocol::{ExtensionId, HostOperation, HostRequest, HostResponse, RequestId};
+
+/// Static source storage for the prototype's fixture-only module loader.
+///
+/// Sources enter this map only through an extension runtime command before
+/// evaluation. There is deliberately no filesystem or package resolution in
+/// this slice.
+#[derive(Clone, Default)]
+struct FixtureModuleLoader {
+    sources: Arc<std::sync::Mutex<HashMap<ModuleSpecifier, String>>>,
+}
+
+impl FixtureModuleLoader {
+    fn insert(&self, specifier: ModuleSpecifier, source: String) {
+        self.sources
+            .lock()
+            .expect("Knot fixture module source lock poisoned")
+            .insert(specifier, source);
+    }
+}
+
+impl ModuleLoader for FixtureModuleLoader {
+    fn resolve(
+        &self,
+        specifier: &str,
+        referrer: &str,
+        _kind: deno_core::ResolutionKind,
+    ) -> ModuleResolveResponse {
+        deno_core::resolve_import(specifier, referrer).map_err(JsErrorBox::from_err)
+    }
+
+    fn load(
+        &self,
+        specifier: &ModuleSpecifier,
+        _referrer: Option<&ModuleLoadReferrer>,
+        _options: ModuleLoadOptions,
+    ) -> ModuleLoadResponse {
+        let source = self
+            .sources
+            .lock()
+            .expect("Knot fixture module source lock poisoned")
+            .get(specifier)
+            .cloned()
+            .ok_or_else(|| {
+                JsErrorBox::generic(format!("Knot fixture module not found: {specifier}"))
+            });
+
+        ModuleLoadResponse::Sync(source.map(|source| {
+            ModuleSource::new(
+                deno_core::ModuleType::JavaScript,
+                ModuleSourceCode::String(source.into()),
+                specifier,
+                None,
+            )
+        }))
+    }
+}
 
 deno_core::extension!(
     knot_runtime,
@@ -176,6 +233,26 @@ impl ExtensionRuntimeHandle {
             .unwrap_or(Err(ExtensionRuntimeExecutionError::Closed))
     }
 
+    /// Load and evaluate one fixture ES module from the prototype's static
+    /// in-memory module set. `specifier` must be an absolute URL.
+    pub fn execute_fixture_module(
+        &self,
+        specifier: impl Into<String>,
+        source: impl Into<String>,
+    ) -> Result<(), ExtensionRuntimeExecutionError> {
+        let (completion, completed) = mpsc::sync_channel(0);
+        self.commands
+            .send(RuntimeCommand::ExecuteFixtureModule {
+                specifier: specifier.into(),
+                source: source.into(),
+                completion,
+            })
+            .map_err(|_| ExtensionRuntimeExecutionError::Closed)?;
+        completed
+            .recv()
+            .unwrap_or(Err(ExtensionRuntimeExecutionError::Closed))
+    }
+
     /// Receive the next request emitted by the extension thread.
     pub fn receive_request(&self) -> Option<HostRequest> {
         self.requests.recv().ok()
@@ -229,6 +306,7 @@ pub enum ExtensionRuntimeResponseError {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ExtensionRuntimeExecutionError {
     Closed,
+    InvalidModuleSpecifier,
     JavaScriptException,
 }
 
@@ -236,6 +314,11 @@ enum RuntimeCommand {
     Request(HostOperation),
     ExecuteFixtureScript {
         name: String,
+        source: String,
+        completion: mpsc::SyncSender<Result<(), ExtensionRuntimeExecutionError>>,
+    },
+    ExecuteFixtureModule {
+        specifier: String,
         source: String,
         completion: mpsc::SyncSender<Result<(), ExtensionRuntimeExecutionError>>,
     },
@@ -322,6 +405,7 @@ impl ExtensionRequestRouter {
 struct ExtensionRuntime {
     event_loop_runtime: tokio::runtime::Runtime,
     js_runtime: deno_core::JsRuntime,
+    fixture_modules: FixtureModuleLoader,
     _thread_affine: PhantomData<Rc<()>>,
 }
 
@@ -332,8 +416,10 @@ impl ExtensionRuntime {
         pending_requests: Arc<std::sync::Mutex<PendingRequests>>,
         async_runtime: Arc<tokio::runtime::Runtime>,
     ) -> Self {
+        let fixture_modules = FixtureModuleLoader::default();
         let js_runtime = deno_core::JsRuntime::new(deno_core::RuntimeOptions {
             extensions: vec![knot_runtime::init()],
+            module_loader: Some(Rc::new(fixture_modules.clone())),
             ..Default::default()
         });
         js_runtime
@@ -356,6 +442,7 @@ impl ExtensionRuntime {
                 .build()
                 .expect("Knot extension Tokio runtime construction failed"),
             js_runtime,
+            fixture_modules,
             _thread_affine: PhantomData,
         }
     }
@@ -388,6 +475,31 @@ impl ExtensionRuntime {
                         .and_then(|_| {
                             self.event_loop_runtime
                                 .block_on(self.js_runtime.run_event_loop(Default::default()))
+                                .map_err(|_| ExtensionRuntimeExecutionError::JavaScriptException)
+                        });
+                    let _ = completion.send(result);
+                }
+                RuntimeCommand::ExecuteFixtureModule {
+                    specifier,
+                    source,
+                    completion,
+                } => {
+                    let _runtime_guard = self.event_loop_runtime.enter();
+                    let result = ModuleSpecifier::parse(&specifier)
+                        .map_err(|_| ExtensionRuntimeExecutionError::InvalidModuleSpecifier)
+                        .and_then(|specifier| {
+                            self.fixture_modules.insert(specifier.clone(), source);
+                            self.event_loop_runtime
+                                .block_on(self.js_runtime.load_main_es_module(&specifier))
+                                .map_err(|_| ExtensionRuntimeExecutionError::JavaScriptException)
+                        })
+                        .and_then(|module_id| {
+                            let evaluation = self.js_runtime.mod_evaluate(module_id);
+                            self.event_loop_runtime
+                                .block_on(self.js_runtime.run_event_loop(Default::default()))
+                                .map_err(|_| ExtensionRuntimeExecutionError::JavaScriptException)?;
+                            self.event_loop_runtime
+                                .block_on(evaluation)
                                 .map_err(|_| ExtensionRuntimeExecutionError::JavaScriptException)
                         });
                     let _ = completion.send(result);
@@ -463,6 +575,31 @@ mod tests {
         assert_eq!(
             runtime.execute_fixture_script("failure.js", "throw new Error('expected')"),
             Err(ExtensionRuntimeExecutionError::JavaScriptException)
+        );
+        runtime.shutdown();
+    }
+
+    #[test]
+    fn extension_runtime_loads_static_fixture_modules() {
+        let host = V8Host::new();
+        let runtime = host.spawn_extension(ExtensionId::new(7));
+
+        runtime
+            .execute_fixture_module(
+                "file:///fixtures/extension.js",
+                "globalThis.fixtureModuleLoaded = 7",
+            )
+            .unwrap();
+        runtime
+            .execute_fixture_script(
+                "verify-module.js",
+                "if (globalThis.fixtureModuleLoaded !== 7) throw new Error('module did not run')",
+            )
+            .unwrap();
+
+        assert_eq!(
+            runtime.execute_fixture_module("not a URL", ""),
+            Err(ExtensionRuntimeExecutionError::InvalidModuleSpecifier)
         );
         runtime.shutdown();
     }

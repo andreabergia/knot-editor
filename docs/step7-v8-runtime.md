@@ -146,6 +146,9 @@ record that finding for the API design instead.
 - [ ] Implement the static module loader, private bootstrap bindings,
   `knot:editor` facade, source-aware exception/rejection reporting, and a test
   proving extension code cannot access `Deno.core` or import private modules.
+  - [x] Add a static in-memory loader and evaluate fixture ES modules on their
+    owning extension thread. It accepts absolute URL specifiers only and has
+    no filesystem or package resolution. ✅
 - [ ] Give each extension a lifecycle token owning its commands,
   subscriptions, queued callbacks, pending promises, and cancellation state.
   Normal unload and initialization failure run the same idempotent teardown.
