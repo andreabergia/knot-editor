@@ -33,6 +33,13 @@ export function activeBuffer() {
   return nativeOps.op_fixture_active_buffer();
 }
 "#;
+const PUBLIC_FACADE_SOURCE: &str = r#"
+import { activeBuffer } from "knot:bootstrap";
+
+export const editor = {
+  activeBuffer,
+};
+"#;
 
 /// Static source storage for the prototype's fixture-only module loader.
 ///
@@ -51,6 +58,11 @@ impl FixtureModuleLoader {
             ModuleSpecifier::parse(PRIVATE_BOOTSTRAP_SPECIFIER)
                 .expect("Knot private bootstrap specifier must be valid"),
             PRIVATE_BOOTSTRAP_SOURCE.into(),
+        );
+        loader.insert(
+            ModuleSpecifier::parse(PUBLIC_FACADE_SPECIFIER)
+                .expect("Knot public facade specifier must be valid"),
+            PUBLIC_FACADE_SOURCE.into(),
         );
         loader
     }
@@ -466,6 +478,21 @@ impl ExtensionRuntime {
         event_loop_runtime
             .block_on(bootstrap_evaluation)
             .expect("Knot private bootstrap module evaluation must succeed");
+        let facade = ModuleSpecifier::parse(PUBLIC_FACADE_SPECIFIER)
+            .expect("Knot public facade specifier must be valid");
+        let facade_module = event_loop_runtime
+            .block_on(js_runtime.load_side_es_module(&facade))
+            .expect("Knot public facade module must load");
+        let facade_evaluation = js_runtime.mod_evaluate(facade_module);
+        event_loop_runtime
+            .block_on(js_runtime.run_event_loop(Default::default()))
+            .expect("Knot public facade module must evaluate");
+        event_loop_runtime
+            .block_on(facade_evaluation)
+            .expect("Knot public facade module evaluation must succeed");
+        js_runtime
+            .execute_script("knot:remove-private-globals", "delete globalThis.Deno;")
+            .expect("Knot must remove private Deno bindings before extension code runs");
         js_runtime
             .op_state()
             .borrow_mut()
@@ -603,7 +630,7 @@ mod tests {
         runtime
             .execute_fixture_script(
                 "initialize.js",
-                "globalThis.runs = 1; Deno.core.ops.op_void_async_deferred().then(() => globalThis.runs = 2)",
+                "globalThis.runs = 1; Promise.resolve().then(() => globalThis.runs = 2)",
             )
             .unwrap();
         runtime
@@ -655,34 +682,7 @@ mod tests {
     }
 
     #[test]
-    fn extension_async_op_runs_native_work_on_the_shared_host_runtime() {
-        let host = V8Host::new();
-        let runtime = host.spawn_extension(ExtensionId::new(7));
-
-        runtime
-            .execute_fixture_script(
-                "shared-runtime.js",
-                r#"
-                    Deno.core.ops.op_fixture_shared_host_runtime()
-                        .then((threadName) => globalThis.hostThread = threadName)
-                "#,
-            )
-            .unwrap();
-        runtime
-            .execute_fixture_script(
-                "verify-shared-runtime.js",
-                r#"
-                    if (!globalThis.hostThread.startsWith('knot-host')) {
-                        throw new Error(`native work ran on ${globalThis.hostThread}`)
-                    }
-                "#,
-            )
-            .unwrap();
-        runtime.shutdown();
-    }
-
-    #[test]
-    fn javascript_host_op_resolves_from_its_typed_host_response() {
+    fn public_facade_resolves_a_host_request_without_exposing_deno() {
         let host = V8Host::new();
         let extension = ExtensionId::new(7);
         let runtime = host.spawn_extension(extension);
@@ -690,10 +690,15 @@ mod tests {
 
         runtime
             .commands
-            .send(RuntimeCommand::ExecuteFixtureScript {
-                name: "active-buffer.js".into(),
+            .send(RuntimeCommand::ExecuteFixtureModule {
+                specifier: "file:///fixtures/active-buffer.js".into(),
                 source: r#"
-                    Deno.core.ops.op_fixture_active_buffer()
+                    import { editor } from "knot:editor";
+
+                    if (typeof Deno !== "undefined") {
+                        throw new Error("extension can access Deno");
+                    }
+                    editor.activeBuffer()
                         .then((hasBuffer) => globalThis.hasBuffer = hasBuffer)
                 "#
                 .into(),

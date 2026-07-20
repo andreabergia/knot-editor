@@ -242,9 +242,10 @@ router. Fixture ES modules now load only from a runtime-local, static in-memory
 source map and are evaluated on their owning extension thread; the loader has
 no filesystem or package resolution. A private `knot:bootstrap` module is
 evaluated before extension code and captures native op bindings in module-local
-scope; only the forthcoming public facade may import it. There is still no
-public API, command registry, capability provider, or extension module facade;
-those runtime internals will remain contained in `host`.
+scope. `knot:editor` is its sole importer and exposes the fixture active-buffer
+operation; Deno's binding global is removed before any extension module runs.
+There is still no command registry or capability provider; those runtime
+internals will remain contained in `host`.
 
 An extension's host-bound identity will be its stable, case-sensitive,
 globally namespaced string ID (initially a fixture/module identity and later a

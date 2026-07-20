@@ -152,6 +152,9 @@ record that finding for the API design instead.
   - [x] Evaluate a private `knot:bootstrap` module before extension code. It
     captures its native op binding in module-local scope and rejects direct
     extension imports; the future `knot:editor` facade is its sole importer. ✅
+  - [x] Add the initial `knot:editor` facade for the fixture active-buffer
+    operation, then remove Deno's private binding global before extension code
+    runs. ✅
 - [ ] Give each extension a lifecycle token owning its commands,
   subscriptions, queued callbacks, pending promises, and cancellation state.
   Normal unload and initialization failure run the same idempotent teardown.
