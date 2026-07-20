@@ -7,12 +7,15 @@
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
+    future::Future,
     marker::PhantomData,
+    pin::Pin,
     rc::Rc,
     sync::{
         Arc,
         mpsc::{self, Receiver, Sender},
     },
+    task::{Context, Poll},
     thread::{self, JoinHandle},
 };
 
@@ -213,7 +216,7 @@ impl V8Host {
 pub struct ExtensionRuntimeHandle {
     extension: ExtensionId,
     commands: Sender<RuntimeCommand>,
-    requests: Receiver<HostRequest>,
+    requests: tokio::sync::mpsc::UnboundedReceiver<HostRequest>,
     lifecycle: Arc<ExtensionLifecycle>,
     thread: Option<JoinHandle<()>>,
 }
@@ -221,7 +224,7 @@ pub struct ExtensionRuntimeHandle {
 impl ExtensionRuntimeHandle {
     fn spawn(extension: ExtensionId, async_runtime: Arc<tokio::runtime::Runtime>) -> Self {
         let (commands, command_receiver) = mpsc::channel();
-        let (request_sender, requests) = mpsc::channel();
+        let (request_sender, requests) = tokio::sync::mpsc::unbounded_channel();
         let lifecycle = Arc::new(ExtensionLifecycle::default());
         let extension_lifecycle = Arc::clone(&lifecycle);
         let teardown_lifecycle = Arc::clone(&lifecycle);
@@ -257,49 +260,49 @@ impl ExtensionRuntimeHandle {
             .map_err(|_| ExtensionRuntimeClosed)
     }
 
-    /// Execute a fixture script inside this extension's thread-affine
-    /// runtime. This is intentionally not an extension-loading API.
+    /// Schedule a fixture script on this extension's thread-affine runtime.
+    ///
+    /// The returned completion can be awaited independently while the caller
+    /// pumps and responds to host requests. This is intentionally not an
+    /// extension-loading API.
     pub fn execute_fixture_script(
         &self,
         name: impl Into<String>,
         source: impl Into<String>,
-    ) -> Result<(), ExtensionRuntimeExecutionError> {
-        let (completion, completed) = mpsc::sync_channel(0);
-        self.commands
-            .send(RuntimeCommand::ExecuteFixtureScript {
-                name: name.into(),
-                source: source.into(),
-                completion,
-            })
-            .map_err(|_| ExtensionRuntimeExecutionError::Closed)?;
-        completed
-            .recv()
-            .unwrap_or(Err(ExtensionRuntimeExecutionError::Closed))
+    ) -> ExtensionRuntimeExecution {
+        let (completion, completed) = tokio::sync::oneshot::channel();
+        let _ = self.commands.send(RuntimeCommand::ExecuteFixtureScript {
+            name: name.into(),
+            source: source.into(),
+            completion,
+        });
+        ExtensionRuntimeExecution {
+            completion: completed,
+        }
     }
 
-    /// Load and evaluate one fixture ES module from the prototype's static
-    /// in-memory module set. `specifier` must be an absolute URL.
+    /// Schedule one fixture ES module from the prototype's static in-memory
+    /// module set. `specifier` must be an absolute URL. The returned completion
+    /// can be awaited independently while the caller handles host requests.
     pub fn execute_fixture_module(
         &self,
         specifier: impl Into<String>,
         source: impl Into<String>,
-    ) -> Result<(), ExtensionRuntimeExecutionError> {
-        let (completion, completed) = mpsc::sync_channel(0);
-        self.commands
-            .send(RuntimeCommand::ExecuteFixtureModule {
-                specifier: specifier.into(),
-                source: source.into(),
-                completion,
-            })
-            .map_err(|_| ExtensionRuntimeExecutionError::Closed)?;
-        completed
-            .recv()
-            .unwrap_or(Err(ExtensionRuntimeExecutionError::Closed))
+    ) -> ExtensionRuntimeExecution {
+        let (completion, completed) = tokio::sync::oneshot::channel();
+        let _ = self.commands.send(RuntimeCommand::ExecuteFixtureModule {
+            specifier: specifier.into(),
+            source: source.into(),
+            completion,
+        });
+        ExtensionRuntimeExecution {
+            completion: completed,
+        }
     }
 
-    /// Receive the next request emitted by the extension thread.
-    pub fn receive_request(&self) -> Option<HostRequest> {
-        self.requests.recv().ok()
+    /// Asynchronously receive the next request emitted by the extension thread.
+    pub async fn receive_request(&mut self) -> Option<HostRequest> {
+        self.requests.recv().await
     }
 
     /// Return a host response to the extension thread that issued it.
@@ -341,6 +344,22 @@ impl Drop for ExtensionRuntimeHandle {
 /// Returned when an operation targets a runtime whose extension thread ended.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ExtensionRuntimeClosed;
+
+/// Awaitable completion of fixture JavaScript scheduled on an extension thread.
+#[must_use = "fixture execution must be awaited or explicitly discarded"]
+pub struct ExtensionRuntimeExecution {
+    completion: tokio::sync::oneshot::Receiver<Result<(), ExtensionRuntimeExecutionError>>,
+}
+
+impl Future for ExtensionRuntimeExecution {
+    type Output = Result<(), ExtensionRuntimeExecutionError>;
+
+    fn poll(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
+        Pin::new(&mut self.completion)
+            .poll(context)
+            .map(|completion| completion.unwrap_or(Err(ExtensionRuntimeExecutionError::Closed)))
+    }
+}
 
 /// Host-side control for forcefully stopping one extension isolate.
 ///
@@ -388,12 +407,12 @@ enum RuntimeCommand {
     ExecuteFixtureScript {
         name: String,
         source: String,
-        completion: mpsc::SyncSender<Result<(), ExtensionRuntimeExecutionError>>,
+        completion: tokio::sync::oneshot::Sender<Result<(), ExtensionRuntimeExecutionError>>,
     },
     ExecuteFixtureModule {
         specifier: String,
         source: String,
-        completion: mpsc::SyncSender<Result<(), ExtensionRuntimeExecutionError>>,
+        completion: tokio::sync::oneshot::Sender<Result<(), ExtensionRuntimeExecutionError>>,
     },
     Shutdown,
 }
@@ -590,7 +609,7 @@ impl PendingRequests {
 struct ExtensionRequestRouter {
     extension: ExtensionId,
     next_request_id: u64,
-    request_sender: Sender<HostRequest>,
+    request_sender: tokio::sync::mpsc::UnboundedSender<HostRequest>,
     lifecycle: Arc<ExtensionLifecycle>,
 }
 
@@ -646,7 +665,7 @@ struct ExtensionRuntime {
 impl ExtensionRuntime {
     fn new(
         extension: ExtensionId,
-        request_sender: Sender<HostRequest>,
+        request_sender: tokio::sync::mpsc::UnboundedSender<HostRequest>,
         lifecycle: Arc<ExtensionLifecycle>,
         async_runtime: Arc<tokio::runtime::Runtime>,
     ) -> Self {
@@ -804,13 +823,12 @@ mod tests {
         sync::{
             Arc,
             atomic::{AtomicUsize, Ordering},
-            mpsc,
         },
     };
 
     use super::{
         ExtensionLifecycle, ExtensionRuntimeClosed, ExtensionRuntimeExecutionError,
-        ExtensionRuntimeResponseError, RuntimeCommand, V8Host,
+        ExtensionRuntimeResponseError, V8Host,
     };
     use crate::host::protocol::{
         ExtensionId, HostOperation, HostResponse, HostResponseValue, RequestId,
@@ -828,13 +846,13 @@ mod tests {
     fn extension_runtime_allocates_requests_on_its_dedicated_thread() {
         let host = V8Host::new();
         let extension = ExtensionId::new(7);
-        let runtime = host.spawn_extension(extension);
+        let mut runtime = host.spawn_extension(extension);
 
         runtime.request(HostOperation::ActiveBuffer).unwrap();
         runtime.request(HostOperation::ActiveBuffer).unwrap();
 
-        let first = runtime.receive_request().unwrap();
-        let second = runtime.receive_request().unwrap();
+        let first = pollster::block_on(runtime.receive_request()).unwrap();
+        let second = pollster::block_on(runtime.receive_request()).unwrap();
         assert_eq!(first.extension, extension);
         assert_eq!(first.id, RequestId::new(1));
         assert_eq!(second.id, RequestId::new(2));
@@ -854,22 +872,21 @@ mod tests {
         let host = V8Host::new();
         let runtime = host.spawn_extension(ExtensionId::new(7));
 
-        runtime
-            .execute_fixture_script(
-                "initialize.js",
-                "globalThis.runs = 1; Promise.resolve().then(() => globalThis.runs = 2)",
-            )
-            .unwrap();
-        runtime
-            .execute_fixture_script(
-                "verify.js",
-                "if (globalThis.runs !== 2) throw new Error('event loop was not driven')",
-            )
-            .unwrap();
+        pollster::block_on(runtime.execute_fixture_script(
+            "initialize.js",
+            "globalThis.runs = 1; Promise.resolve().then(() => globalThis.runs = 2)",
+        ))
+        .unwrap();
+        pollster::block_on(runtime.execute_fixture_script(
+            "verify.js",
+            "if (globalThis.runs !== 2) throw new Error('event loop was not driven')",
+        ))
+        .unwrap();
 
-        let error = runtime
-            .execute_fixture_script("failure.js", "throw new Error('expected')")
-            .unwrap_err();
+        let error = pollster::block_on(
+            runtime.execute_fixture_script("failure.js", "throw new Error('expected')"),
+        )
+        .unwrap_err();
         let ExtensionRuntimeExecutionError::JavaScriptException { report } = error else {
             panic!("expected JavaScript exception");
         };
@@ -883,30 +900,27 @@ mod tests {
         let host = V8Host::new();
         let runtime = host.spawn_extension(ExtensionId::new(7));
 
-        runtime
-            .execute_fixture_module(
-                "file:///fixtures/private-import.js",
-                r#"
+        pollster::block_on(runtime.execute_fixture_module(
+            "file:///fixtures/private-import.js",
+            r#"
                     import { activeBuffer } from "knot:bootstrap";
                     globalThis.fixtureModuleLoaded = 7;
                 "#,
-            )
-            .unwrap_err();
-        runtime
-            .execute_fixture_module(
-                "file:///fixtures/extension.js",
-                "globalThis.fixtureModuleLoaded = 7",
-            )
-            .unwrap();
-        runtime
-            .execute_fixture_script(
-                "verify-module.js",
-                "if (globalThis.fixtureModuleLoaded !== 7) throw new Error('module did not run')",
-            )
-            .unwrap();
+        ))
+        .unwrap_err();
+        pollster::block_on(runtime.execute_fixture_module(
+            "file:///fixtures/extension.js",
+            "globalThis.fixtureModuleLoaded = 7",
+        ))
+        .unwrap();
+        pollster::block_on(runtime.execute_fixture_script(
+            "verify-module.js",
+            "if (globalThis.fixtureModuleLoaded !== 7) throw new Error('module did not run')",
+        ))
+        .unwrap();
 
         assert_eq!(
-            runtime.execute_fixture_module("not a URL", ""),
+            pollster::block_on(runtime.execute_fixture_module("not a URL", "")),
             Err(ExtensionRuntimeExecutionError::InvalidModuleSpecifier)
         );
         runtime.shutdown();
@@ -916,14 +930,10 @@ mod tests {
     fn public_facade_resolves_a_host_request_without_exposing_deno() {
         let host = V8Host::new();
         let extension = ExtensionId::new(7);
-        let runtime = host.spawn_extension(extension);
-        let (completion, completed) = mpsc::sync_channel(0);
-
-        runtime
-            .commands
-            .send(RuntimeCommand::ExecuteFixtureModule {
-                specifier: "file:///fixtures/active-buffer.js".into(),
-                source: r#"
+        let mut runtime = host.spawn_extension(extension);
+        let execution = runtime.execute_fixture_module(
+            "file:///fixtures/active-buffer.js",
+            r#"
                     import { editor } from "knot:editor";
 
                     if (typeof Deno !== "undefined") {
@@ -931,13 +941,10 @@ mod tests {
                     }
                     editor.activeBuffer()
                         .then((hasBuffer) => globalThis.hasBuffer = hasBuffer)
-                "#
-                .into(),
-                completion,
-            })
-            .unwrap();
+                "#,
+        );
 
-        let request = runtime.receive_request().unwrap();
+        let request = pollster::block_on(runtime.receive_request()).unwrap();
         assert_eq!(request.extension, extension);
         assert_eq!(request.operation, HostOperation::ActiveBuffer);
         runtime
@@ -947,14 +954,13 @@ mod tests {
                 result: Ok(HostResponseValue::ActiveBuffer(None)),
             })
             .unwrap();
-        completed.recv().unwrap().unwrap();
+        pollster::block_on(execution).unwrap();
 
-        runtime
-            .execute_fixture_script(
-                "verify-active-buffer.js",
-                "if (globalThis.hasBuffer !== false) throw new Error('unexpected active buffer')",
-            )
-            .unwrap();
+        pollster::block_on(runtime.execute_fixture_script(
+            "verify-active-buffer.js",
+            "if (globalThis.hasBuffer !== false) throw new Error('unexpected active buffer')",
+        ))
+        .unwrap();
         runtime.shutdown();
     }
 
@@ -963,17 +969,19 @@ mod tests {
         let host = V8Host::new();
         let runtime = host.spawn_extension(ExtensionId::new(7));
 
-        let error = runtime
-            .execute_fixture_script("rejection.js", "Promise.reject(new Error('expected'))")
-            .unwrap_err();
+        let error = pollster::block_on(
+            runtime.execute_fixture_script("rejection.js", "Promise.reject(new Error('expected'))"),
+        )
+        .unwrap_err();
         let ExtensionRuntimeExecutionError::JavaScriptException { report } = error else {
             panic!("expected JavaScript rejection");
         };
         assert!(report.contains("Error: expected"));
         assert!(report.contains("rejection.js:1:16"));
-        runtime
-            .execute_fixture_script("recovery.js", "globalThis.recovered = true")
-            .unwrap();
+        pollster::block_on(
+            runtime.execute_fixture_script("recovery.js", "globalThis.recovered = true"),
+        )
+        .unwrap();
         runtime.shutdown();
     }
 
@@ -1041,9 +1049,10 @@ mod tests {
         let host = V8Host::new();
         let runtime = host.spawn_extension(ExtensionId::new(7));
 
-        runtime
-            .execute_fixture_script("watchdog-ready.js", "globalThis.watchdogReady = true")
-            .unwrap();
+        pollster::block_on(
+            runtime.execute_fixture_script("watchdog-ready.js", "globalThis.watchdogReady = true"),
+        )
+        .unwrap();
         assert!(
             runtime
                 .lifecycle
@@ -1060,23 +1069,16 @@ mod tests {
     fn watchdog_terminates_cpu_runaway_and_tears_down_the_extension() {
         let host = V8Host::new();
         let extension = ExtensionId::new(7);
-        let runtime = host.spawn_extension(extension);
+        let mut runtime = host.spawn_extension(extension);
         let watchdog = runtime.watchdog();
-        let (completion, completed) = mpsc::sync_channel(0);
-
-        runtime
-            .commands
-            .send(RuntimeCommand::ExecuteFixtureModule {
-                specifier: "file:///fixtures/runaway.js".into(),
-                source: r#"
+        let execution = runtime.execute_fixture_module(
+            "file:///fixtures/runaway.js",
+            r#"
                     import { editor } from "knot:editor";
                     editor.activeBuffer().then(() => { while (true) {} });
-                "#
-                .into(),
-                completion,
-            })
-            .unwrap();
-        let request = runtime.receive_request().unwrap();
+                "#,
+        );
+        let request = pollster::block_on(runtime.receive_request()).unwrap();
         runtime
             .respond(HostResponse {
                 extension,
@@ -1087,7 +1089,7 @@ mod tests {
 
         watchdog.terminate().unwrap();
         assert_eq!(
-            completed.recv().unwrap(),
+            pollster::block_on(execution),
             Err(ExtensionRuntimeExecutionError::Terminated)
         );
         runtime.shutdown();
@@ -1097,25 +1099,18 @@ mod tests {
     fn unload_terminates_cpu_runaway_before_joining_the_extension_thread() {
         let host = V8Host::new();
         let extension = ExtensionId::new(7);
-        let runtime = host.spawn_extension(extension);
-        let (completion, _completed) = mpsc::sync_channel(1);
-
-        runtime
-            .commands
-            .send(RuntimeCommand::ExecuteFixtureModule {
-                specifier: "file:///fixtures/runaway-during-unload.js".into(),
-                source: r#"
+        let mut runtime = host.spawn_extension(extension);
+        let _execution = runtime.execute_fixture_module(
+            "file:///fixtures/runaway-during-unload.js",
+            r#"
                     import { editor } from "knot:editor";
                     editor.activeBuffer().then(() => {
                         const end = Date.now() + 3000;
                         while (Date.now() < end) {}
                     });
-                "#
-                .into(),
-                completion,
-            })
-            .unwrap();
-        let request = runtime.receive_request().unwrap();
+                "#,
+        );
+        let request = pollster::block_on(runtime.receive_request()).unwrap();
         runtime
             .respond(HostResponse {
                 extension,

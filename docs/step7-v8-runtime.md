@@ -143,6 +143,9 @@ record that finding for the API design instead.
     shared Tokio runtime while V8 remains driven by its extension thread. ✅
   - [x] Bridge the fixture `ActiveBuffer` op through typed host messages and
     resolve its JavaScript promise from the matching typed response. ✅
+  - [x] Make fixture execution completion and host-request receipt awaitable,
+    allowing the foreground host to pump and respond to requests while module
+    evaluation is pending without exposing Tokio channel types. ✅
 - [x] Implement the static module loader, private bootstrap bindings,
   `knot:editor` facade, source-aware exception/rejection reporting, and a test
   proving extension code cannot access `Deno.core` or import private modules. ✅

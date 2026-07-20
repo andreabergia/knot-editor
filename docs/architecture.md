@@ -245,8 +245,13 @@ evaluated before extension code and captures native op bindings in module-local
 scope. `knot:editor` is its sole importer and exposes the fixture active-buffer
 operation; Deno's binding global is removed before any extension module runs.
 Fixture execution failures return source-aware JavaScript reports and do not
-poison the owning extension runtime. There is still no command registry or
-capability provider; those runtime internals will remain contained in `host`.
+poison the owning extension runtime. Fixture execution is scheduled without
+blocking the caller and returns an opaque awaitable completion. Host requests
+arrive through an asynchronous receiver, so the foreground host can pump and
+respond to requests while JavaScript evaluation remains pending. Completion
+delivery is nonblocking for the extension thread. There is still no command
+registry or capability provider; those runtime internals will remain contained
+in `host`.
 Each extension also has a lifecycle token. It currently owns pending
 JavaScript promises and cancellation state; unload clears those promises so
 late host replies are rejected. The same idempotent teardown runs after normal
