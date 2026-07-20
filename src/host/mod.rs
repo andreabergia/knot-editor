@@ -24,6 +24,16 @@ pub mod protocol;
 
 use protocol::{ExtensionId, HostOperation, HostRequest, HostResponse, RequestId};
 
+const PRIVATE_BOOTSTRAP_SPECIFIER: &str = "knot:bootstrap";
+const PUBLIC_FACADE_SPECIFIER: &str = "knot:editor";
+const PRIVATE_BOOTSTRAP_SOURCE: &str = r#"
+const nativeOps = Deno.core.ops;
+
+export function activeBuffer() {
+  return nativeOps.op_fixture_active_buffer();
+}
+"#;
+
 /// Static source storage for the prototype's fixture-only module loader.
 ///
 /// Sources enter this map only through an extension runtime command before
@@ -35,6 +45,16 @@ struct FixtureModuleLoader {
 }
 
 impl FixtureModuleLoader {
+    fn with_private_bootstrap() -> Self {
+        let loader = Self::default();
+        loader.insert(
+            ModuleSpecifier::parse(PRIVATE_BOOTSTRAP_SPECIFIER)
+                .expect("Knot private bootstrap specifier must be valid"),
+            PRIVATE_BOOTSTRAP_SOURCE.into(),
+        );
+        loader
+    }
+
     fn insert(&self, specifier: ModuleSpecifier, source: String) {
         self.sources
             .lock()
@@ -50,6 +70,14 @@ impl ModuleLoader for FixtureModuleLoader {
         referrer: &str,
         _kind: deno_core::ResolutionKind,
     ) -> ModuleResolveResponse {
+        if specifier == PRIVATE_BOOTSTRAP_SPECIFIER
+            && referrer != "."
+            && referrer != PUBLIC_FACADE_SPECIFIER
+        {
+            return Err(JsErrorBox::generic(
+                "Knot private bootstrap bindings are not importable by extensions",
+            ));
+        }
         deno_core::resolve_import(specifier, referrer).map_err(JsErrorBox::from_err)
     }
 
@@ -416,12 +444,28 @@ impl ExtensionRuntime {
         pending_requests: Arc<std::sync::Mutex<PendingRequests>>,
         async_runtime: Arc<tokio::runtime::Runtime>,
     ) -> Self {
-        let fixture_modules = FixtureModuleLoader::default();
-        let js_runtime = deno_core::JsRuntime::new(deno_core::RuntimeOptions {
+        let fixture_modules = FixtureModuleLoader::with_private_bootstrap();
+        let event_loop_runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .expect("Knot extension Tokio runtime construction failed");
+        let mut js_runtime = deno_core::JsRuntime::new(deno_core::RuntimeOptions {
             extensions: vec![knot_runtime::init()],
             module_loader: Some(Rc::new(fixture_modules.clone())),
             ..Default::default()
         });
+        let bootstrap = ModuleSpecifier::parse(PRIVATE_BOOTSTRAP_SPECIFIER)
+            .expect("Knot private bootstrap specifier must be valid");
+        let bootstrap_module = event_loop_runtime
+            .block_on(js_runtime.load_side_es_module(&bootstrap))
+            .expect("Knot private bootstrap module must load");
+        let bootstrap_evaluation = js_runtime.mod_evaluate(bootstrap_module);
+        event_loop_runtime
+            .block_on(js_runtime.run_event_loop(Default::default()))
+            .expect("Knot private bootstrap module must evaluate");
+        event_loop_runtime
+            .block_on(bootstrap_evaluation)
+            .expect("Knot private bootstrap module evaluation must succeed");
         js_runtime
             .op_state()
             .borrow_mut()
@@ -437,10 +481,7 @@ impl ExtensionRuntime {
             });
 
         Self {
-            event_loop_runtime: tokio::runtime::Builder::new_current_thread()
-                .enable_time()
-                .build()
-                .expect("Knot extension Tokio runtime construction failed"),
+            event_loop_runtime,
             js_runtime,
             fixture_modules,
             _thread_affine: PhantomData,
@@ -584,6 +625,15 @@ mod tests {
         let host = V8Host::new();
         let runtime = host.spawn_extension(ExtensionId::new(7));
 
+        runtime
+            .execute_fixture_module(
+                "file:///fixtures/private-import.js",
+                r#"
+                    import { activeBuffer } from "knot:bootstrap";
+                    globalThis.fixtureModuleLoaded = 7;
+                "#,
+            )
+            .unwrap_err();
         runtime
             .execute_fixture_module(
                 "file:///fixtures/extension.js",
