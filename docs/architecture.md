@@ -262,7 +262,12 @@ memory-limit evidence. The host can signal that private handle from another
 thread to interrupt synchronous JavaScript. An interruption is fatal to its
 extension:
 fixture execution reports `Terminated`, its command loop exits, and normal
-lifecycle teardown disposes extension-local state.
+lifecycle teardown disposes extension-local state. Unload uses the same path:
+it requests isolate termination before queuing shutdown and joining the
+extension thread, then the extension thread clears the watchdog handle during
+teardown. If unload races isolate bootstrap, termination is recorded and
+applied as soon as bootstrap finishes. This ordering prevents runaway
+JavaScript from blocking unload without interrupting Deno initialization.
 
 An extension's host-bound identity will be its stable, case-sensitive,
 globally namespaced string ID (initially a fixture/module identity and later a

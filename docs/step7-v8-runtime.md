@@ -178,6 +178,10 @@ record that finding for the API design instead.
     termination is fatal to that extension: fixture execution reports
     `Terminated`, its command loop exits, and lifecycle teardown disposes the
     isolate's pending state. ✅
+  - [x] Make unload terminate the isolate before queuing shutdown and joining
+    its thread, keeping the watchdog attached until thread-owned teardown so a
+    CPU runaway cannot block unload. Termination requested during bootstrap is
+    deferred until initialization finishes. ✅
   - [x] Configure a 32 MiB heap limit and near-limit termination callback in a
     sacrificial test process. The probe verifies the process survives and the
     isolated runtime can execute a follow-up script. A 5 MiB limit aborts V8

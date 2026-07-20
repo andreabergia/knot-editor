@@ -320,23 +320,21 @@ impl ExtensionRuntimeHandle {
 
     /// Stop the extension thread and wait for its thread-affine state to drop.
     pub fn shutdown(mut self) {
-        self.lifecycle.teardown();
+        self.stop().expect("Knot extension runtime thread panicked");
+    }
+
+    fn stop(&mut self) -> std::thread::Result<()> {
+        // Keep the isolate handle alive until the extension thread tears down.
+        // The queued command alone cannot stop JavaScript which is not yielding.
+        self.lifecycle.request_shutdown();
         let _ = self.commands.send(RuntimeCommand::Shutdown);
-        if let Some(thread) = self.thread.take() {
-            thread
-                .join()
-                .expect("Knot extension runtime thread panicked");
-        }
+        self.thread.take().map_or(Ok(()), JoinHandle::join)
     }
 }
 
 impl Drop for ExtensionRuntimeHandle {
     fn drop(&mut self) {
-        self.lifecycle.teardown();
-        let _ = self.commands.send(RuntimeCommand::Shutdown);
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
+        let _ = self.stop();
     }
 }
 
@@ -481,12 +479,40 @@ impl ExtensionLifecycle {
             .install_isolate(isolate);
     }
 
+    fn mark_isolate_ready(&self) {
+        let mut state = self
+            .state
+            .lock()
+            .expect("Knot extension lifecycle lock poisoned");
+        state.watchdog.mark_ready();
+        if state.termination_requested {
+            let _ = state.watchdog.terminate();
+        }
+    }
+
+    fn request_shutdown(&self) {
+        let mut state = self
+            .state
+            .lock()
+            .expect("Knot extension lifecycle lock poisoned");
+        if state.torn_down {
+            return;
+        }
+        state.termination_requested = true;
+        if state.watchdog.is_ready() {
+            let _ = state.watchdog.terminate();
+        }
+    }
+
     fn request_termination(&self) -> Result<(), ExtensionRuntimeClosed> {
         let mut state = self
             .state
             .lock()
             .expect("Knot extension lifecycle lock poisoned");
-        if state.torn_down || !state.watchdog.terminate() {
+        if state.torn_down || !state.watchdog.is_attached() {
+            return Err(ExtensionRuntimeClosed);
+        }
+        if state.watchdog.is_ready() && !state.watchdog.terminate() {
             return Err(ExtensionRuntimeClosed);
         }
         state.termination_requested = true;
@@ -508,6 +534,7 @@ impl ExtensionLifecycle {
 #[derive(Default)]
 struct ExtensionWatchdogState {
     isolate: Option<deno_core::v8::IsolateHandle>,
+    ready: bool,
 }
 
 impl ExtensionWatchdogState {
@@ -515,8 +542,13 @@ impl ExtensionWatchdogState {
         self.isolate = Some(isolate);
     }
 
+    fn mark_ready(&mut self) {
+        self.ready = true;
+    }
+
     fn clear_isolate(&mut self) {
         self.isolate = None;
+        self.ready = false;
     }
 
     fn terminate(&self) -> bool {
@@ -525,9 +557,12 @@ impl ExtensionWatchdogState {
             .is_some_and(deno_core::v8::IsolateHandle::terminate_execution)
     }
 
-    #[cfg(test)]
     fn is_attached(&self) -> bool {
         self.isolate.is_some()
+    }
+
+    fn is_ready(&self) -> bool {
+        self.ready
     }
 }
 
@@ -666,6 +701,7 @@ impl ExtensionRuntime {
                 request_sender,
                 lifecycle: Arc::clone(&lifecycle),
             });
+        lifecycle.mark_isolate_ready();
 
         Self {
             event_loop_runtime,
@@ -1055,6 +1091,46 @@ mod tests {
             Err(ExtensionRuntimeExecutionError::Terminated)
         );
         runtime.shutdown();
+    }
+
+    #[test]
+    fn unload_terminates_cpu_runaway_before_joining_the_extension_thread() {
+        let host = V8Host::new();
+        let extension = ExtensionId::new(7);
+        let runtime = host.spawn_extension(extension);
+        let (completion, _completed) = mpsc::sync_channel(1);
+
+        runtime
+            .commands
+            .send(RuntimeCommand::ExecuteFixtureModule {
+                specifier: "file:///fixtures/runaway-during-unload.js".into(),
+                source: r#"
+                    import { editor } from "knot:editor";
+                    editor.activeBuffer().then(() => {
+                        const end = Date.now() + 3000;
+                        while (Date.now() < end) {}
+                    });
+                "#
+                .into(),
+                completion,
+            })
+            .unwrap();
+        let request = runtime.receive_request().unwrap();
+        runtime
+            .respond(HostResponse {
+                extension,
+                id: request.id,
+                result: Ok(HostResponseValue::ActiveBuffer(None)),
+            })
+            .unwrap();
+
+        let started = std::time::Instant::now();
+        runtime.shutdown();
+
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(1),
+            "unload waited for runaway JavaScript to yield"
+        );
     }
 
     /// Heap exhaustion can trigger a V8 process abort when a near-limit
