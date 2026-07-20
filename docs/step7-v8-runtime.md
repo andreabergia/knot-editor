@@ -1,6 +1,7 @@
 # Step 7 — V8 scripting runtime
 
-Status: runtime foundation complete; editor integration and public APIs remain.
+Status: runtime foundation and editor-model refactor complete; runtime/editor
+bridge and public APIs remain.
 
 ## Goal and decisions
 
@@ -190,50 +191,49 @@ record that finding for the API design instead.
 
 ### 2. Editor model and public boundary
 
-- [ ] Replace the blank winit application with a minimal gpui application.
+- [x] Replace the blank winit application with a minimal gpui application. ✅
   A gpui entity owns the real `TextBuffer`, its public revision, and buffer
   lifecycle. The window displays buffer text, runtime status, errors, and an
   independently ticking heartbeat.
-  - [ ] Promote the useful Step 3 gpui shell and editor implementation onto
+  - [x] Promote the useful Step 3 gpui shell and editor implementation onto
     the default `knot` application path instead of replacing it with a second
     toy view. Preserve its text shaping, clipping, scrolling, cursor,
-    selection, keyboard, mouse, diagnostic-overlay, and IME code.
-  - [ ] Separate document and view ownership. Add a gpui `BufferModel` entity
+    selection, keyboard, mouse, diagnostic-overlay, and IME code. ✅
+  - [x] Separate document and view ownership. Add a gpui `BufferModel` entity
     which owns `core::TextBuffer`, a public `u64` revision starting at zero,
     and its open/closed lifecycle. `EditorView` retains only presentation
-    state and a handle to the model.
-  - [ ] Add an editor-owned buffer registry with monotonically allocated,
+    state and a handle to the model. ✅
+  - [x] Add an editor-owned buffer registry with monotonically allocated,
     never-reused `BufferHandle`s, weak references to `BufferModel` entities,
     and one optional active handle. A missing registry entry or a dead/closed
     entity means `BufferClosed`; closing the active buffer also clears the
-    active handle.
-  - [ ] Treat `TextBuffer::edit_seq()` as the private primitive-edit-log cursor
+    active handle. ✅
+  - [x] Treat `TextBuffer::edit_seq()` as the private primitive-edit-log cursor
     used by annotations. Do not expose it as the public revision. Increment
     the public revision once per non-empty editor-visible atomic commit,
-    regardless of how many primitive `TextBuffer` edits the commit produces.
-  - [ ] Make the editor's line/segment storage a derived rendering projection,
+    regardless of how many primitive `TextBuffer` edits the commit produces. ✅
+  - [x] Make the editor's line/segment storage a derived rendering projection,
     never an independently mutable document. Local edits mutate `BufferModel`,
     notify observers, and refresh the projection. Preserve fixture styling at
     load and retain the spike's current behavior of falling back to default
-    styling after edited text is rebuilt.
-  - [ ] Load `bench/fixtures/rust_sample.kfx` at startup, construct the real
+    styling after edited text is rebuilt. ✅
+  - [x] Load `bench/fixtures/rust_sample.kfx` at startup, construct the real
     `TextBuffer` from its text, and open it as the active editor buffer. Keep
     the existing Step 3 fixture-selection argument only if doing so does not
-    obscure this default proof.
-  - [ ] Count each current local replacement, including an IME preedit
+    obscure this default proof. ✅
+  - [x] Count each current local replacement, including an IME preedit
     replacement, as one prototype commit. Deferring preedit outside the
     authoritative buffer is a later editor-semantics refinement, not part of
-    the V8 boundary proof.
-  - [ ] Render the existing editor plus a compact status area containing the
+    the V8 boundary proof. ✅
+  - [x] Render the existing editor plus a compact status area containing the
     active buffer revision, runtime state, and latest runtime error. Run the
     heartbeat from a gpui foreground timer, store its counter separately from
     runtime activity, and repaint it periodically so host responsiveness is
-    directly visible.
-  - [ ] Cover only the model invariants here: handle allocation/invalidation,
+    directly visible. ✅
+  - [x] Cover only the model invariants here: handle allocation/invalidation,
     one revision increment per local commit, and projection refresh from the
     authoritative `TextBuffer`. Update `architecture.md` as this commit makes
-    gpui and `BufferModel` the real application/model ownership path. ✅ when
-    implemented.
+    gpui and `BufferModel` the real application/model ownership path. ✅
 - [ ] Route host requests onto gpui's foreground executor and return results by
   one-shot response. Never share `TextBuffer` through `Arc<Mutex<_>>` and never
   block the gpui thread waiting for JavaScript.

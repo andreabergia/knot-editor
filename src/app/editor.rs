@@ -1,4 +1,4 @@
-// Step 4 — gpui editor widget (render stage).
+// Knot's gpui editor widget, promoted from the Step 3/4 framework spike.
 //
 // A custom `Element` rendering fixture lines with multi-attribute styled
 // text via `WindowTextSystem::shape_line` + `ShapedLine::paint`, clipped by
@@ -37,6 +37,8 @@ use gpui::{prelude::*, *};
 use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation;
 
+use super::model::BufferModel;
+
 /// Owned, frame-stable copy of one styled segment of one line.
 /// Mirrors `knot::view::fixture`'s borrowed `Segment`/`SegSpec` but holds
 /// byte offsets into our owned `lines` so nothing crosses a frame boundary
@@ -69,6 +71,9 @@ const WARNING_COLOR: u32 = 0xE2C08D;
 const INFO_COLOR: u32 = 0x6CB6FF;
 
 pub struct EditorView {
+    /// Authoritative document state. Everything below is presentation state
+    /// or a derived rendering projection.
+    model: Entity<BufferModel>,
     lines: Vec<String>,
     segs: Vec<Vec<Seg>>,
     /// Diagnostic annotations (wavy underline overlay). Seeded at load time
@@ -108,11 +113,16 @@ pub struct EditorView {
     /// `unmark_text`. The element paints an underline over this span.
     marked_range_utf16: Option<Range<usize>>,
     focus: FocusHandle,
+    _model_subscription: Subscription,
 }
 
 impl EditorView {
     /// Build an editor preloaded with a fixture, as step 2's bench backends do.
-    pub fn from_fixture(fixture: &::knot::view::fixture::Fixture, cx: &mut App) -> Self {
+    pub fn from_fixture(
+        fixture: &crate::view::fixture::Fixture,
+        model: Entity<BufferModel>,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let n = fixture.line_count();
         let mut lines = Vec::with_capacity(n);
         let mut segs = Vec::with_capacity(n);
@@ -226,7 +236,14 @@ impl EditorView {
             }
         }
 
+        let model_subscription = cx.observe(&model, |this, model, cx| {
+            let text = model.read(cx).text();
+            this.rebuild_default_projection(&text);
+            cx.notify();
+        });
+
         Self {
+            model,
             lines,
             segs,
             annotations,
@@ -241,7 +258,12 @@ impl EditorView {
             has_selection: false,
             marked_range_utf16: None,
             focus: cx.focus_handle(),
+            _model_subscription: model_subscription,
         }
+    }
+
+    fn rebuild_default_projection(&mut self, text: &str) {
+        (self.lines, self.segs) = default_projection(text);
     }
 
     fn clamp_scroll(&mut self) {
@@ -726,31 +748,21 @@ impl EditorView {
         utf16_count
     }
 
-    /// Splice the flat document: replace bytes [byte_start, byte_end) with
-    /// `text`, then rebuild `lines` + `segs` from the result.
-    fn splice(&mut self, byte_start: usize, byte_end: usize, text: &str) {
-        let mut doc = self.flat_doc();
-        // Clamp to valid byte boundaries (char_indices are safe splice points).
-        let max = doc.len();
-        let start = byte_start.min(max);
-        let end = byte_end.min(max).max(start);
-        doc.replace_range(start..end, text);
-        self.lines = doc.split('\n').map(String::from).collect();
-        // Reset segs: one default-color seg per line. Fixture styling is
-        // lost on edit — acceptable for the spike (noted in commit).
-        self.segs = self
-            .lines
-            .iter()
-            .map(|l| {
-                vec![Seg {
-                    start: 0,
-                    end: l.len(),
-                    color: DEFAULT_COLOR,
-                    bold: false,
-                    italic: false,
-                }]
-            })
-            .collect();
+    /// Commit a replacement to the authoritative model, then refresh the
+    /// derived line/segment projection used by shaping and hit testing.
+    fn splice(&mut self, byte_start: usize, byte_end: usize, text: &str, cx: &mut Context<Self>) {
+        let model = self.model.clone();
+        let changed = model.update(cx, |model, cx| {
+            let changed = model.replace(byte_start..byte_end, text);
+            if changed {
+                cx.notify();
+            }
+            changed
+        });
+        if changed {
+            let text = model.read(cx).text();
+            self.rebuild_default_projection(&text);
+        }
     }
 
     /// Determine the byte range to replace given an optional UTF-16 range.
@@ -789,6 +801,23 @@ impl EditorView {
             }
         }
     }
+}
+
+fn default_projection(text: &str) -> (Vec<String>, Vec<Vec<Seg>>) {
+    let lines: Vec<String> = text.split('\n').map(String::from).collect();
+    let segs = lines
+        .iter()
+        .map(|line| {
+            vec![Seg {
+                start: 0,
+                end: line.len(),
+                color: DEFAULT_COLOR,
+                bold: false,
+                italic: false,
+            }]
+        })
+        .collect();
+    (lines, segs)
 }
 
 impl Focusable for EditorView {
@@ -887,7 +916,7 @@ impl EntityInputHandler for EditorView {
         // keyboard layouts; our line model uses \n.
         let text: String = text.replace("\r\n", "\n").replace('\r', "\n");
         let (byte_start, byte_end) = self.resolve_replacement_range(range);
-        self.splice(byte_start, byte_end, &text);
+        self.splice(byte_start, byte_end, &text, cx);
         self.marked_range_utf16 = None;
 
         // Caret → end of inserted text.
@@ -924,7 +953,7 @@ impl EntityInputHandler for EditorView {
         let doc = self.flat_doc();
         let marked_start_utf16 = self.byte_col_to_utf16(&doc, byte_start);
 
-        self.splice(byte_start, byte_end, new_text);
+        self.splice(byte_start, byte_end, new_text, cx);
 
         // Marked range = [marked_start, marked_start + utf16_len(new_text)).
         let marked_utf16_len: usize = new_text.chars().map(|c| c.len_utf16()).sum();
@@ -1579,6 +1608,22 @@ fn x_for_index_dir(s: &ShapedLine, index: usize, line_str: &str) -> Pixels {
         }
     }
     best.unwrap_or(if rtl_base { px(0.) } else { s.width })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BufferModel, default_projection};
+
+    #[test]
+    fn projection_refreshes_from_authoritative_buffer_text() {
+        let mut model = BufferModel::from_text("one\ntwo");
+        model.replace(0..3, "three");
+        let (lines, segs) = default_projection(&model.text());
+
+        assert_eq!(lines, ["three", "two"]);
+        assert_eq!(segs[0][0].end, "three".len());
+        assert_eq!(segs[1][0].end, "two".len());
+    }
 }
 
 const FONT_SIZE: f32 = 14.0;

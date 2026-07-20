@@ -1,0 +1,172 @@
+//! Foreground-owned editor document state.
+
+use std::{collections::HashMap, ops::Range};
+
+use gpui::{AppContext, Entity, WeakEntity};
+
+use crate::{core::buffer::TextBuffer, host::protocol::BufferHandle};
+
+/// The authoritative document owned by gpui's foreground thread.
+pub struct BufferModel {
+    buffer: TextBuffer,
+    revision: u64,
+    open: bool,
+}
+
+impl BufferModel {
+    pub fn from_text(text: impl Into<Box<str>>) -> Self {
+        Self {
+            buffer: TextBuffer::from_text(text),
+            revision: 0,
+            open: true,
+        }
+    }
+
+    pub fn text(&self) -> String {
+        self.buffer.read_range(0..self.buffer.len())
+    }
+
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    pub fn is_open(&self) -> bool {
+        self.open
+    }
+
+    /// Apply one editor-visible local replacement as one public commit.
+    ///
+    /// `TextBuffer::replace` may emit multiple primitive edit-log entries;
+    /// that private cursor is deliberately independent of `revision`.
+    pub fn replace(&mut self, range: Range<usize>, text: &str) -> bool {
+        assert!(self.open, "cannot edit a closed buffer");
+        if range.is_empty() && text.is_empty() {
+            return false;
+        }
+        self.buffer.replace(range, text);
+        self.revision = self
+            .revision
+            .checked_add(1)
+            .expect("public buffer revision overflowed");
+        true
+    }
+
+    fn close(&mut self) {
+        self.open = false;
+    }
+
+    #[cfg(test)]
+    fn edit_seq(&self) -> usize {
+        self.buffer.edit_seq()
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct BufferClosed;
+
+/// Maps transport-safe buffer handles to foreground-owned gpui entities.
+pub struct BufferRegistry {
+    next_handle: u64,
+    buffers: HashMap<BufferHandle, WeakEntity<BufferModel>>,
+    active: Option<BufferHandle>,
+}
+
+impl BufferRegistry {
+    pub fn new() -> Self {
+        Self {
+            next_handle: 1,
+            buffers: HashMap::new(),
+            active: None,
+        }
+    }
+
+    pub fn open(&mut self, model: &Entity<BufferModel>) -> BufferHandle {
+        self.register(model.downgrade())
+    }
+
+    fn register(&mut self, model: WeakEntity<BufferModel>) -> BufferHandle {
+        let handle = BufferHandle::new(self.next_handle);
+        self.next_handle = self
+            .next_handle
+            .checked_add(1)
+            .expect("buffer handle space exhausted");
+        self.buffers.insert(handle, model);
+        handle
+    }
+
+    pub fn set_active(&mut self, handle: Option<BufferHandle>) {
+        self.active = handle;
+    }
+
+    pub fn active_handle(&self) -> Option<BufferHandle> {
+        self.active
+    }
+
+    pub fn resolve(&self, handle: BufferHandle) -> Result<Entity<BufferModel>, BufferClosed> {
+        self.buffers
+            .get(&handle)
+            .and_then(WeakEntity::upgrade)
+            .ok_or(BufferClosed)
+    }
+
+    pub fn close<C: AppContext>(
+        &mut self,
+        handle: BufferHandle,
+        cx: &mut C,
+    ) -> Result<(), BufferClosed> {
+        let model = self.resolve(handle)?;
+        let _ = model.update(cx, |model, cx| {
+            model.close();
+            cx.notify();
+        });
+        self.invalidate(handle);
+        Ok(())
+    }
+
+    fn invalidate(&mut self, handle: BufferHandle) {
+        self.buffers.remove(&handle);
+        if self.active == Some(handle) {
+            self.active = None;
+        }
+    }
+}
+
+impl Default for BufferRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn handles_are_monotonic_and_invalidated_buffers_stay_invalid() {
+        let mut registry = BufferRegistry::new();
+        let first_handle = registry.register(WeakEntity::new_invalid());
+        let second_handle = registry.register(WeakEntity::new_invalid());
+        assert_ne!(first_handle, second_handle);
+
+        registry.set_active(Some(first_handle));
+        registry.invalidate(first_handle);
+        assert_eq!(registry.active_handle(), None);
+        assert!(registry.resolve(first_handle).is_err());
+
+        let third_handle = registry.register(WeakEntity::new_invalid());
+        assert_ne!(third_handle, first_handle);
+        assert_ne!(third_handle, second_handle);
+    }
+
+    #[test]
+    fn replacement_is_one_public_commit() {
+        let mut model = BufferModel::from_text("abc");
+        assert!(model.replace(1..2, "XYZ"));
+        assert_eq!(model.text(), "aXYZc");
+        assert_eq!(model.revision(), 1);
+        assert_eq!(model.edit_seq(), 2);
+
+        assert!(!model.replace(0..0, ""));
+        assert_eq!(model.revision(), 1);
+    }
+}

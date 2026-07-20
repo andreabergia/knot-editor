@@ -25,20 +25,19 @@ The library exports four top-level modules:
 
 - `core` owns editor data models and is independent of UI, rendering, and
   scripting.
-- `app` is the current executable shell.
+- `app` owns the gpui application shell, editor view, foreground buffer
+  models, and buffer registry.
 - `host` owns the native boundary to extension runtimes.
 - `view` is a renderer benchmark harness, not the future editor view layer.
 
 ## Current application paths
 
-The default `knot` binary calls `app::run` and opens an empty winit window. It
-does not yet integrate the editor model or scripting host.
+The default `knot` binary calls `app::run` and opens the gpui shell and editor.
+It loads `rust_sample.kfx` by default and creates the active core-backed
+`BufferModel`; it does not yet connect the scripting host.
 
-The standalone `step3-gpui` binary is the chosen-framework experiment. It
-contains an interactive editor and shell, but uses disposable, spike-local
-text and annotation state rather than `core`. The future application should
-connect gpui presentation state to the core models instead of promoting those
-local structures.
+The standalone `step3-gpui` binary is now a compatibility launcher for the
+same application path rather than a separate editor copy.
 
 The remaining binaries benchmark the renderer, text buffer, and annotation
 models. Their supporting code and fixtures are experiments, not application
@@ -75,6 +74,33 @@ annotation resolution and queries
 
 The buffer and annotation Rustdoc define stable-position behavior, endpoint
 semantics, and lifecycle details.
+
+## Application model and view
+
+gpui's foreground thread exclusively owns editor state. Each `BufferModel`
+entity owns one `core::TextBuffer`, its open/closed lifecycle, and a public
+revision that advances once per editor-visible atomic commit. The core
+buffer's `edit_seq` remains a private primitive-edit-log cursor.
+
+`BufferRegistry` gives models monotonic, never-reused transport handles and
+stores only weak entity references. It also tracks the optional active buffer.
+`EditorView` owns cursor, selection, scroll, IME, annotations, and a derived
+line/segment rendering projection; local edits commit through its model and
+model notifications refresh the projection.
+
+```text
+gpui Shell / BufferRegistry
+             |
+             v
+      BufferModel entity
+             |
+             v
+      core::TextBuffer
+             |
+       notifications
+             v
+ EditorView projection and view state
+```
 
 ## Extension host
 
@@ -124,8 +150,7 @@ Detailed runtime behavior and experiment results live in
 
 ## Major gaps
 
-- The default application has not migrated to gpui.
-- There is no core-backed editor view or integrated editor host.
+- The extension runtime is not connected to the foreground buffer registry.
 - Undo history, edit grouping, and view-state restoration are not implemented.
 - Commands, capability aggregation, filesystem providers, terminal state, and
   the public extension API remain roadmap work.
