@@ -1,4 +1,4 @@
-//! Compatibility launcher for the promoted gpui application.
+//! Alternate launcher for the Knot application.
 
 fn main() {
     knot::app::run();

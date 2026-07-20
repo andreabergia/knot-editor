@@ -1,15 +1,10 @@
-// Knot's gpui editor widget, promoted from the Step 3/4 framework spike.
+// Knot's gpui editor widget.
 //
 // A custom `Element` rendering fixture lines with multi-attribute styled
 // text via `WindowTextSystem::shape_line` + `ShapedLine::paint`, clipped by
 // a `with_content_mask` scroll viewport. Scroll-wheel mutates a pixel scroll
 // offset on the view; the element recomputes the visible line range each
 // paint from scroll + its allocated bounds.
-//
-// This stage covers roadmap item 1 (styled text) + item 2 (keyboard-driven
-// scroll + cursor movement) + item 3 (selection: mouse drag + shift-extend +
-// shift-arrow) + item 4 (IME preedit via EntityInputHandler) + item 5
-// (annotation overlay: wavy diagnostic underlines).
 //
 // Cursor model: a single caret stored as `(line, byte_col)` into the owned
 // `lines` buffer, plus a `preferred_col` used to keep a stable column when
@@ -30,8 +25,8 @@
 // paint (self-gated on focus) to register an `ElementInputHandler` wrapper.
 // `marked_range_utf16` tracks the active preedit span as flat UTF-16 offsets
 // into `lines.join("\\n")`; the element paints a thin underline over it.
-// Editing rebuilds `lines`+`segs` from the spliced flat document (fixture
-// styling is lost on edited lines — acceptable for the spike).
+// Editing rebuilds `lines`+`segs` from the authoritative buffer; edited text
+// uses default styling.
 
 use gpui::{prelude::*, *};
 use std::ops::Range;
@@ -54,9 +49,8 @@ struct Seg {
 
 /// One diagnostic annotation to render as a wavy underline overlay. `start`
 /// and `end` are byte columns within `line`; `color` is an RGB u32. This is
-/// the simplest model that exercises the paint path — a real implementation
-/// would carry a severity enum + message + source, but for the spike we only
-/// need the geometry + color.
+/// the minimal model needed by the current paint path. Provider metadata such
+/// as severity, message, and source is not represented yet.
 #[derive(Clone, Copy)]
 struct Annotation {
     line: usize,
@@ -78,8 +72,7 @@ pub struct EditorView {
     segs: Vec<Vec<Seg>>,
     /// Diagnostic annotations (wavy underline overlay). Seeded at load time
     /// by scanning for a few fixture patterns; a real implementation would
-    /// receive these from the language server layer. Not updated on edit —
-    /// the spike only needs to demonstrate the paint path.
+    /// receive these from the language server layer. Not updated on edit.
     annotations: Vec<Annotation>,
     /// Vertical scroll offset in pixels (0 = top of buffer).
     scroll: f32,
@@ -117,7 +110,7 @@ pub struct EditorView {
 }
 
 impl EditorView {
-    /// Build an editor preloaded with a fixture, as step 2's bench backends do.
+    /// Build an editor preloaded with a styled fixture.
     pub fn from_fixture(
         fixture: &crate::view::fixture::Fixture,
         model: Entity<BufferModel>,
@@ -692,8 +685,7 @@ impl EditorView {
     // (lines joined by "\n"). These helpers convert between the (line,
     // byte_col) caret space and the flat UTF-16 offset space, and perform
     // text splices that rebuild the `lines`/`segs` storage. Editing resets
-    // segs to a single default-color seg per line — fixture highlighting is
-    // lost on edited lines, acceptable for the spike.
+    // segments to a single default-color segment per line.
 
     /// Full document as a single String, lines joined by "\n".
     fn flat_doc(&self) -> String {

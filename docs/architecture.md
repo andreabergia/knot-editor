@@ -36,8 +36,8 @@ The default `knot` binary calls `app::run` and opens the gpui shell and editor.
 It loads `rust_sample.kfx` by default and creates the active core-backed
 `BufferModel`; it does not yet connect the scripting host.
 
-The standalone `step3-gpui` binary is now a compatibility launcher for the
-same application path rather than a separate editor copy.
+The standalone `step3-gpui` binary delegates to `app::run` and uses the same
+application path as the default binary.
 
 The remaining binaries benchmark the renderer, text buffer, and annotation
 models. Their supporting code and fixtures are experiments, not application

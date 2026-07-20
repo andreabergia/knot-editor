@@ -1,21 +1,7 @@
-//! Knot's gpui application shell, promoted from the Step 3 framework spike.
-//
-// Originally the layout-reach spike: a 3-pane resizable shell —
-// left panel, editor center, right panel — is buildable on gpui 0.2.2's
-// *public* layout + drag API, as an extension author would. The center now
-// hosts the promoted editor widget.
-//
-// No-internal-path scorecard (preliminary):
-//   - flex/column layout:        div().flex().flex_row()      ✓ pub (Styled)
-//   - fixed/relative sizing:     w(px(..)), flex_1()           ✓ pub (Styled)
-//   - selectable single-row list: uniform_list                 ✓ pub
-//   - row click → highlight:      div().id(..).on_click(...)   ✓ pub (StatefulInteractiveElement)
-//   - hover styling:              .hover(|s| s.bg(..))         ✓ pub (InteractiveElement)
-//   - conditional styling:       .when(cond, |d| d..)         ✓ pub (FluentBuilder, all IntoElement)
-//   - resize divider:             custom (no built-in splitter) ⚠ built from on_drag + on_drag_move + on_drop
-//
-// All public, no pub(crate)/fork/backdoor. The splitter being absent from
-// the framework is itself a (cosmetic) finding recorded in the plan.
+//! Knot's gpui application shell.
+//!
+//! The shell contains resizable explorer, editor, and outline panes plus a
+//! status area for the active buffer and extension runtime.
 
 use gpui::{prelude::FluentBuilder, *};
 use std::time::Duration;

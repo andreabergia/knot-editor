@@ -17,6 +17,9 @@ updated. Use ✅ and other emoji to mark executed steps.
 - Keep @docs/architecture.md up-to-date when a change alters architectural
   boundaries, ownership, dependency direction, or a major runtime flow. Keep
   implementation details and API contracts in the code.
+- Code comments and module documentation must describe the current design and
+  behavior only. Do not record migrations, previous locations, roadmap phases,
+  or implementation history in code; Git history is the source for that.
 - When executing multiple steps or tasks, split them into logical commits as
 you go.
 * Don't use conventional commits
