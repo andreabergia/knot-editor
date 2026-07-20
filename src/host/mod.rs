@@ -214,7 +214,7 @@ pub struct ExtensionRuntimeHandle {
     extension: ExtensionId,
     commands: Sender<RuntimeCommand>,
     requests: Receiver<HostRequest>,
-    pending_requests: Arc<std::sync::Mutex<PendingRequests>>,
+    lifecycle: Arc<ExtensionLifecycle>,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -222,18 +222,22 @@ impl ExtensionRuntimeHandle {
     fn spawn(extension: ExtensionId, async_runtime: Arc<tokio::runtime::Runtime>) -> Self {
         let (commands, command_receiver) = mpsc::channel();
         let (request_sender, requests) = mpsc::channel();
-        let pending_requests = Arc::new(std::sync::Mutex::new(PendingRequests::default()));
-        let extension_pending_requests = Arc::clone(&pending_requests);
+        let lifecycle = Arc::new(ExtensionLifecycle::default());
+        let extension_lifecycle = Arc::clone(&lifecycle);
+        let teardown_lifecycle = Arc::clone(&lifecycle);
         let thread = thread::Builder::new()
             .name(format!("knot-extension-{}", extension.value()))
             .spawn(move || {
-                ExtensionRuntime::new(
-                    extension,
-                    request_sender,
-                    extension_pending_requests,
-                    async_runtime,
-                )
-                .run(command_receiver)
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    ExtensionRuntime::new(
+                        extension,
+                        request_sender,
+                        extension_lifecycle,
+                        async_runtime,
+                    )
+                    .run(command_receiver)
+                }));
+                teardown_lifecycle.teardown();
             })
             .expect("Knot extension runtime thread construction failed");
 
@@ -241,7 +245,7 @@ impl ExtensionRuntimeHandle {
             extension,
             commands,
             requests,
-            pending_requests,
+            lifecycle,
             thread: Some(thread),
         }
     }
@@ -304,14 +308,12 @@ impl ExtensionRuntimeHandle {
             return Err(ExtensionRuntimeResponseError::WrongExtension);
         }
 
-        self.pending_requests
-            .lock()
-            .expect("Knot extension pending requests lock poisoned")
-            .respond(response)
+        self.lifecycle.respond(response)
     }
 
     /// Stop the extension thread and wait for its thread-affine state to drop.
     pub fn shutdown(mut self) {
+        self.lifecycle.teardown();
         let _ = self.commands.send(RuntimeCommand::Shutdown);
         if let Some(thread) = self.thread.take() {
             thread
@@ -323,6 +325,7 @@ impl ExtensionRuntimeHandle {
 
 impl Drop for ExtensionRuntimeHandle {
     fn drop(&mut self) {
+        self.lifecycle.teardown();
         let _ = self.commands.send(RuntimeCommand::Shutdown);
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
@@ -373,6 +376,76 @@ enum RuntimeCommand {
     Shutdown,
 }
 
+/// Extension-owned resources which must not outlive its isolate.
+///
+/// This is the common teardown point for normal unload and failed runtime
+/// initialization. Pending JavaScript promises are the only registered
+/// extension resource in this slice; command registrations, subscriptions,
+/// and queued callbacks will register here as those APIs are introduced.
+#[derive(Default)]
+struct ExtensionLifecycle {
+    state: std::sync::Mutex<ExtensionLifecycleState>,
+}
+
+#[derive(Default)]
+struct ExtensionLifecycleState {
+    torn_down: bool,
+    pending_requests: PendingRequests,
+}
+
+impl ExtensionLifecycle {
+    fn register_manual(&self, id: RequestId) -> Result<(), ExtensionRuntimeClosed> {
+        let mut state = self
+            .state
+            .lock()
+            .expect("Knot extension lifecycle lock poisoned");
+        if state.torn_down {
+            return Err(ExtensionRuntimeClosed);
+        }
+        state.pending_requests.manual.insert(id);
+        Ok(())
+    }
+
+    fn register_javascript(
+        &self,
+        id: RequestId,
+        sender: tokio::sync::oneshot::Sender<HostResponse>,
+    ) -> Result<(), ExtensionRuntimeClosed> {
+        let mut state = self
+            .state
+            .lock()
+            .expect("Knot extension lifecycle lock poisoned");
+        if state.torn_down {
+            return Err(ExtensionRuntimeClosed);
+        }
+        state.pending_requests.javascript.insert(id, sender);
+        Ok(())
+    }
+
+    fn respond(&self, response: HostResponse) -> Result<(), ExtensionRuntimeResponseError> {
+        let mut state = self
+            .state
+            .lock()
+            .expect("Knot extension lifecycle lock poisoned");
+        if state.torn_down {
+            return Err(ExtensionRuntimeResponseError::Closed);
+        }
+        state.pending_requests.respond(response)
+    }
+
+    fn teardown(&self) {
+        let mut state = self
+            .state
+            .lock()
+            .expect("Knot extension lifecycle lock poisoned");
+        if state.torn_down {
+            return;
+        }
+        state.torn_down = true;
+        state.pending_requests = PendingRequests::default();
+    }
+}
+
 #[derive(Default)]
 struct PendingRequests {
     manual: HashSet<RequestId>,
@@ -398,7 +471,7 @@ struct ExtensionRequestRouter {
     extension: ExtensionId,
     next_request_id: u64,
     request_sender: Sender<HostRequest>,
-    pending_requests: Arc<std::sync::Mutex<PendingRequests>>,
+    lifecycle: Arc<ExtensionLifecycle>,
 }
 
 impl ExtensionRequestRouter {
@@ -422,11 +495,7 @@ impl ExtensionRequestRouter {
 
     fn request_manual(&mut self, operation: HostOperation) -> Result<(), ExtensionRuntimeClosed> {
         let id = self.next_request_id();
-        self.pending_requests
-            .lock()
-            .expect("Knot extension pending requests lock poisoned")
-            .manual
-            .insert(id);
+        self.lifecycle.register_manual(id)?;
         self.send(id, operation)
     }
 
@@ -435,11 +504,7 @@ impl ExtensionRequestRouter {
     ) -> Result<tokio::sync::oneshot::Receiver<HostResponse>, ExtensionRuntimeClosed> {
         let (sender, receiver) = tokio::sync::oneshot::channel();
         let id = self.next_request_id();
-        self.pending_requests
-            .lock()
-            .expect("Knot extension pending requests lock poisoned")
-            .javascript
-            .insert(id, sender);
+        self.lifecycle.register_javascript(id, sender)?;
         self.send(id, HostOperation::ActiveBuffer)?;
         Ok(receiver)
     }
@@ -461,7 +526,7 @@ impl ExtensionRuntime {
     fn new(
         extension: ExtensionId,
         request_sender: Sender<HostRequest>,
-        pending_requests: Arc<std::sync::Mutex<PendingRequests>>,
+        lifecycle: Arc<ExtensionLifecycle>,
         async_runtime: Arc<tokio::runtime::Runtime>,
     ) -> Self {
         let fixture_modules = FixtureModuleLoader::with_private_bootstrap();
@@ -512,7 +577,7 @@ impl ExtensionRuntime {
                 extension,
                 next_request_id: 0,
                 request_sender,
-                pending_requests,
+                lifecycle,
             });
 
         Self {
@@ -583,6 +648,12 @@ impl ExtensionRuntime {
                 RuntimeCommand::Shutdown => break,
             }
         }
+        self.js_runtime
+            .op_state()
+            .borrow()
+            .borrow::<ExtensionRequestRouter>()
+            .lifecycle
+            .teardown();
     }
 }
 
@@ -591,7 +662,8 @@ mod tests {
     use std::sync::mpsc;
 
     use super::{
-        ExtensionRuntimeExecutionError, ExtensionRuntimeResponseError, RuntimeCommand, V8Host,
+        ExtensionLifecycle, ExtensionRuntimeClosed, ExtensionRuntimeExecutionError,
+        ExtensionRuntimeResponseError, RuntimeCommand, V8Host,
     };
     use crate::host::protocol::{
         ExtensionId, HostOperation, HostResponse, HostResponseValue, RequestId,
@@ -785,5 +857,35 @@ mod tests {
         });
 
         assert_eq!(result, Err(ExtensionRuntimeResponseError::UnknownRequest));
+    }
+
+    #[test]
+    fn lifecycle_teardown_cancels_pending_promises_idempotently() {
+        let lifecycle = ExtensionLifecycle::default();
+        let extension = ExtensionId::new(7);
+        let (sender, mut receiver) = tokio::sync::oneshot::channel();
+
+        lifecycle
+            .register_javascript(RequestId::new(1), sender)
+            .unwrap();
+        lifecycle.teardown();
+        lifecycle.teardown();
+
+        assert_eq!(
+            receiver.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Closed)
+        );
+        assert_eq!(
+            lifecycle.respond(HostResponse {
+                extension,
+                id: RequestId::new(1),
+                result: Ok(HostResponseValue::ActiveBuffer(None)),
+            }),
+            Err(ExtensionRuntimeResponseError::Closed)
+        );
+        assert_eq!(
+            lifecycle.register_manual(RequestId::new(2)),
+            Err(ExtensionRuntimeClosed)
+        );
     }
 }

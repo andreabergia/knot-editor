@@ -247,6 +247,11 @@ operation; Deno's binding global is removed before any extension module runs.
 Fixture execution failures return source-aware JavaScript reports and do not
 poison the owning extension runtime. There is still no command registry or
 capability provider; those runtime internals will remain contained in `host`.
+Each extension also has a lifecycle token. It currently owns pending
+JavaScript promises and cancellation state; unload clears those promises so
+late host replies are rejected. The same idempotent teardown runs after normal
+thread shutdown and failed extension-thread initialization. Future command,
+subscription, and queued-callback registries will be owned by that token.
 
 An extension's host-bound identity will be its stable, case-sensitive,
 globally namespaced string ID (initially a fixture/module identity and later a

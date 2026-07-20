@@ -157,9 +157,14 @@ record that finding for the API design instead.
     runs. ✅
   - [x] Return JavaScript exception and rejection reports with their source
     location while keeping the extension runtime usable after failure. ✅
-- [ ] Give each extension a lifecycle token owning its commands,
+- [x] Give each extension a lifecycle token owning its commands,
   subscriptions, queued callbacks, pending promises, and cancellation state.
-  Normal unload and initialization failure run the same idempotent teardown.
+  Normal unload and initialization failure run the same idempotent teardown. ✅
+  - [x] Introduce the lifecycle teardown foundation: it owns pending JavaScript
+    promises and cancellation state today, rejects late responses after unload,
+    and is idempotently invoked after normal shutdown or failed thread startup.
+    Command, subscription, and callback registries will join this token when
+    those APIs land. ✅
 - [ ] Expose V8's thread-safe isolate handle to a watchdog. A synchronous CPU
   runaway is terminated and then tears down the extension. Configure a small
   test heap limit/near-limit callback and run heap exhaustion in a sacrificial
