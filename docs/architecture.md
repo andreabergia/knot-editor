@@ -230,8 +230,9 @@ UTF-8 byte ranges; snapshots; edit batches; revisions; and stable request
 failures. It contains no V8, Deno, gpui, or `core::TextBuffer` reference.
 Each extension thread now constructs and drives its own `JsRuntime`, retaining
 isolate-local state across host fixture scripts. Each extension thread also
-owns a current-thread Tokio runtime, which drives V8 and `!Send` Deno futures
-on that same thread. `V8Host` separately retains a shared multi-thread Tokio
+owns a current-thread Tokio runtime, which is entered before `JsRuntime`
+construction and drives V8, its delayed tasks, and `!Send` Deno futures on that
+same thread. `V8Host` separately retains a shared multi-thread Tokio
 runtime for `Send` native work. An internal fixture op proves the handoff: it
 awaits work spawned on that shared runtime while the extension thread drives
 the V8 event loop. The fixture-only `ActiveBuffer` op is the first typed
@@ -257,15 +258,14 @@ JavaScript promises and cancellation state; unload clears those promises so
 late host replies are rejected. The same idempotent teardown runs after normal
 thread shutdown and failed extension-thread initialization. Future command,
 subscription, and queued-callback registries will be owned by that token.
-The lifecycle token also owns a private V8 thread-safe isolate handle for the
-future watchdog, clearing it during teardown. A test-only heap-limit probe runs
-in a sacrificial child process with a 32 MiB limit; its near-limit callback
-terminates execution and verifies the isolate can run a follow-up script. A 5
-MiB isolate aborts during `JsRuntime` initialization before the callback can
-run, so production isolates retain V8's default heap policy pending broader
-memory-limit evidence. The host can signal that private handle from another
-thread to interrupt synchronous JavaScript. An interruption is fatal to its
-extension:
+The lifecycle token also owns a private V8 thread-safe isolate handle, clearing
+it during teardown. Every extension isolate has a 32 MiB initial heap limit.
+Its near-limit callback grants V8 temporary unwind headroom, terminates
+execution, and records `MemoryLimitExceeded`; this failure is fatal to that
+extension. A sacrificial child-process test drives the real extension runtime
+to exhaustion, verifies its teardown, and confirms a neighboring isolate stays
+usable. The host can also signal the private handle from another thread to
+interrupt synchronous JavaScript. An interruption is fatal to its extension:
 fixture execution reports `Terminated`, its command loop exits, and normal
 lifecycle teardown disposes extension-local state. Unload uses the same path:
 it requests isolate termination before queuing shutdown and joining the

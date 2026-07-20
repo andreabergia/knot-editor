@@ -29,6 +29,7 @@ use protocol::{ExtensionId, HostOperation, HostRequest, HostResponse, RequestId}
 
 const PRIVATE_BOOTSTRAP_SPECIFIER: &str = "knot:bootstrap";
 const PUBLIC_FACADE_SPECIFIER: &str = "knot:editor";
+const EXTENSION_HEAP_LIMIT_BYTES: usize = 32 * 1024 * 1024;
 const PRIVATE_BOOTSTRAP_SOURCE: &str = r#"
 const nativeOps = Deno.core.ops;
 
@@ -390,6 +391,7 @@ pub enum ExtensionRuntimeResponseError {
 pub enum ExtensionRuntimeExecutionError {
     Closed,
     InvalidModuleSpecifier,
+    MemoryLimitExceeded,
     Terminated,
     JavaScriptException { report: String },
 }
@@ -431,7 +433,7 @@ struct ExtensionLifecycle {
 #[derive(Default)]
 struct ExtensionLifecycleState {
     torn_down: bool,
-    termination_requested: bool,
+    termination: Option<ExtensionTermination>,
     pending_requests: PendingRequests,
     watchdog: ExtensionWatchdogState,
 }
@@ -485,7 +487,7 @@ impl ExtensionLifecycle {
             return;
         }
         state.torn_down = true;
-        state.termination_requested = false;
+        state.termination = None;
         state.pending_requests = PendingRequests::default();
         state.watchdog.clear_isolate();
     }
@@ -504,7 +506,7 @@ impl ExtensionLifecycle {
             .lock()
             .expect("Knot extension lifecycle lock poisoned");
         state.watchdog.mark_ready();
-        if state.termination_requested {
+        if state.termination.is_some() {
             let _ = state.watchdog.terminate();
         }
     }
@@ -517,7 +519,9 @@ impl ExtensionLifecycle {
         if state.torn_down {
             return;
         }
-        state.termination_requested = true;
+        state
+            .termination
+            .get_or_insert(ExtensionTermination::Requested);
         if state.watchdog.is_ready() {
             let _ = state.watchdog.terminate();
         }
@@ -534,16 +538,36 @@ impl ExtensionLifecycle {
         if state.watchdog.is_ready() && !state.watchdog.terminate() {
             return Err(ExtensionRuntimeClosed);
         }
-        state.termination_requested = true;
+        state
+            .termination
+            .get_or_insert(ExtensionTermination::Requested);
         Ok(())
     }
 
-    fn termination_requested(&self) -> bool {
+    fn request_memory_limit_termination(&self) {
+        let mut state = self
+            .state
+            .lock()
+            .expect("Knot extension lifecycle lock poisoned");
+        if state.torn_down {
+            return;
+        }
+        state.termination = Some(ExtensionTermination::MemoryLimitExceeded);
+        let _ = state.watchdog.terminate();
+    }
+
+    fn termination(&self) -> Option<ExtensionTermination> {
         self.state
             .lock()
             .expect("Knot extension lifecycle lock poisoned")
-            .termination_requested
+            .termination
     }
+}
+
+#[derive(Clone, Copy)]
+enum ExtensionTermination {
+    Requested,
+    MemoryLimitExceeded,
 }
 
 /// Thread-safe control path from the future watchdog to its extension isolate.
@@ -674,12 +698,24 @@ impl ExtensionRuntime {
             .enable_time()
             .build()
             .expect("Knot extension Tokio runtime construction failed");
-        let mut js_runtime = deno_core::JsRuntime::new(deno_core::RuntimeOptions {
-            extensions: vec![knot_runtime::init()],
-            module_loader: Some(Rc::new(fixture_modules.clone())),
-            ..Default::default()
-        });
+        let mut js_runtime = {
+            let _runtime_guard = event_loop_runtime.enter();
+            deno_core::JsRuntime::new(deno_core::RuntimeOptions {
+                extensions: vec![knot_runtime::init()],
+                module_loader: Some(Rc::new(fixture_modules.clone())),
+                create_params: Some(
+                    deno_core::v8::Isolate::create_params()
+                        .heap_limits(0, EXTENSION_HEAP_LIMIT_BYTES),
+                ),
+                ..Default::default()
+            })
+        };
         lifecycle.install_isolate(js_runtime.v8_isolate().thread_safe_handle());
+        let heap_limit_lifecycle = Arc::clone(&lifecycle);
+        js_runtime.add_near_heap_limit_callback(move |current_limit, _initial_limit| {
+            heap_limit_lifecycle.request_memory_limit_termination();
+            current_limit.saturating_mul(2)
+        });
         let bootstrap = ModuleSpecifier::parse(PRIVATE_BOOTSTRAP_SPECIFIER)
             .expect("Knot private bootstrap specifier must be valid");
         let bootstrap_module = event_loop_runtime
@@ -761,13 +797,17 @@ impl ExtensionRuntime {
                                 .block_on(self.js_runtime.run_event_loop(Default::default()))
                                 .map_err(ExtensionRuntimeExecutionError::javascript_exception)
                         });
-                    let terminated = self.lifecycle.termination_requested();
-                    let _ = completion.send(if terminated {
-                        Err(ExtensionRuntimeExecutionError::Terminated)
-                    } else {
-                        result
+                    let termination = self.lifecycle.termination();
+                    let _ = completion.send(match termination {
+                        Some(ExtensionTermination::MemoryLimitExceeded) => {
+                            Err(ExtensionRuntimeExecutionError::MemoryLimitExceeded)
+                        }
+                        Some(ExtensionTermination::Requested) => {
+                            Err(ExtensionRuntimeExecutionError::Terminated)
+                        }
+                        None => result,
                     });
-                    if terminated {
+                    if termination.is_some() {
                         break;
                     }
                 }
@@ -794,13 +834,17 @@ impl ExtensionRuntime {
                                 .block_on(evaluation)
                                 .map_err(ExtensionRuntimeExecutionError::javascript_exception)
                         });
-                    let terminated = self.lifecycle.termination_requested();
-                    let _ = completion.send(if terminated {
-                        Err(ExtensionRuntimeExecutionError::Terminated)
-                    } else {
-                        result
+                    let termination = self.lifecycle.termination();
+                    let _ = completion.send(match termination {
+                        Some(ExtensionTermination::MemoryLimitExceeded) => {
+                            Err(ExtensionRuntimeExecutionError::MemoryLimitExceeded)
+                        }
+                        Some(ExtensionTermination::Requested) => {
+                            Err(ExtensionRuntimeExecutionError::Terminated)
+                        }
+                        None => result,
                     });
-                    if terminated {
+                    if termination.is_some() {
                         break;
                     }
                 }
@@ -818,13 +862,7 @@ impl ExtensionRuntime {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        process::Command,
-        sync::{
-            Arc,
-            atomic::{AtomicUsize, Ordering},
-        },
-    };
+    use std::process::Command;
 
     use super::{
         ExtensionLifecycle, ExtensionRuntimeClosed, ExtensionRuntimeExecutionError,
@@ -1129,8 +1167,8 @@ mod tests {
     }
 
     /// Heap exhaustion can trigger a V8 process abort when a near-limit
-    /// callback is configured incorrectly. Keep the experiment out of the
-    /// editor's test process until it has demonstrated safe recovery.
+    /// callback is configured incorrectly. Exercise the production runtime in
+    /// a child process so a regression cannot take down the test runner.
     #[test]
     fn heap_exhaustion_probe_runs_in_a_sacrificial_process() {
         let status = Command::new(std::env::current_exe().unwrap())
@@ -1143,7 +1181,7 @@ mod tests {
 
         assert!(
             status.success(),
-            "Knot heap-exhaustion probe must recover safely"
+            "Knot extension heap limit must isolate the failure"
         );
     }
 
@@ -1153,38 +1191,34 @@ mod tests {
             return;
         }
 
-        deno_core::JsRuntime::init_platform(None);
-        let tokio = tokio::runtime::Builder::new_current_thread()
-            .enable_time()
-            .build()
-            .unwrap();
-        let _guard = tokio.enter();
-        let create_params =
-            deno_core::v8::Isolate::create_params().heap_limits(0, 32 * 1024 * 1024);
-        let mut runtime = deno_core::JsRuntime::new(deno_core::RuntimeOptions {
-            create_params: Some(create_params),
-            ..Default::default()
-        });
-        let isolate = runtime.v8_isolate().thread_safe_handle();
-        let callbacks = Arc::new(AtomicUsize::new(0));
-        let callback_count = Arc::clone(&callbacks);
-        runtime.add_near_heap_limit_callback(move |current_limit, _initial_limit| {
-            callback_count.fetch_add(1, Ordering::SeqCst);
-            isolate.terminate_execution();
-            current_limit.saturating_mul(2)
-        });
+        let host = V8Host::new();
+        let exhausted = host.spawn_extension(ExtensionId::new(7));
+        pollster::block_on(exhausted.execute_fixture_script("heap-ready.js", "void 0"))
+            .expect("limited extension isolate must initialize");
+        let neighbor = host.spawn_extension(ExtensionId::new(8));
+        pollster::block_on(neighbor.execute_fixture_script("neighbor-ready.js", "void 0"))
+            .expect("neighbor extension isolate must initialize");
 
-        let error = runtime
-            .execute_script(
+        assert_eq!(
+            pollster::block_on(exhausted.execute_fixture_script(
                 "heap-exhaustion.js",
                 r#"let text = ""; while (true) { text += "Knot"; }"#,
-            )
-            .expect_err("heap exhaustion must terminate execution");
-        assert!(error.exception_message.contains("execution terminated"));
-        assert!(callbacks.load(Ordering::SeqCst) > 0);
-        assert!(runtime.v8_isolate().cancel_terminate_execution());
-        runtime
-            .execute_script("heap-recovery.js", "globalThis.recovered = true")
-            .expect("isolate must remain usable after heap-limit termination");
+            )),
+            Err(ExtensionRuntimeExecutionError::MemoryLimitExceeded)
+        );
+        assert_eq!(
+            pollster::block_on(
+                exhausted.execute_fixture_script("after-heap-exhaustion.js", "void 0")
+            ),
+            Err(ExtensionRuntimeExecutionError::Closed)
+        );
+        pollster::block_on(
+            neighbor
+                .execute_fixture_script("healthy-neighbor.js", "globalThis.stillRunning = true"),
+        )
+        .expect("another extension isolate must remain usable");
+
+        exhausted.shutdown();
+        neighbor.shutdown();
     }
 }

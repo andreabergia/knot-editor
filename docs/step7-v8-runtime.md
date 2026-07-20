@@ -168,7 +168,7 @@ record that finding for the API design instead.
     and is idempotently invoked after normal shutdown or failed thread startup.
     Command, subscription, and callback registries will join this token when
     those APIs land. ✅
-- [ ] Expose V8's thread-safe isolate handle to a watchdog. A synchronous CPU
+- [x] Expose V8's thread-safe isolate handle to a watchdog. A synchronous CPU
   runaway is terminated and then tears down the extension. Configure a small
   test heap limit/near-limit callback and run heap exhaustion in a sacrificial
   test process first; record a limitation rather than risking editor-process
@@ -185,11 +185,12 @@ record that finding for the API design instead.
     its thread, keeping the watchdog attached until thread-owned teardown so a
     CPU runaway cannot block unload. Termination requested during bootstrap is
     deferred until initialization finishes. ✅
-  - [x] Configure a 32 MiB heap limit and near-limit termination callback in a
-    sacrificial test process. The probe verifies the process survives and the
-    isolated runtime can execute a follow-up script. A 5 MiB limit aborts V8
-    during `JsRuntime` initialization before its callback can run, so production
-    isolates retain V8's default heap policy pending broader evidence. ✅
+  - [x] Apply a 32 MiB initial heap limit and near-limit termination callback to
+    every extension isolate. A sacrificial child-process test drives the real
+    extension runtime to exhaustion, verifies fatal teardown and a stable
+    `MemoryLimitExceeded` result, then proves a neighboring isolate remains
+    usable. `JsRuntime` construction enters the extension's Tokio context so
+    V8 can schedule delayed GC work without aborting the process. ✅
 
 ### 2. Editor model and public boundary
 
