@@ -14,8 +14,9 @@ from scratch after the core choices are validated.
 
 - Whenever implementing a plan or design document, always keep the plan
 updated. Use ✅ and other emoji to mark executed steps.
-- Keep @docs/architecture.md up-to-date whenever a change alters the code
-  architecture, module responsibilities, or important runtime flows.
+- Keep @docs/architecture.md up-to-date when a change alters architectural
+  boundaries, ownership, dependency direction, or a major runtime flow. Keep
+  implementation details and API contracts in the code.
 - When executing multiple steps or tasks, split them into logical commits as
 you go.
 * Don't use conventional commits
