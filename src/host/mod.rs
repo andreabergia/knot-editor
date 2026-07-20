@@ -763,7 +763,14 @@ impl ExtensionRuntime {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::mpsc;
+    use std::{
+        process::Command,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+            mpsc,
+        },
+    };
 
     use super::{
         ExtensionLifecycle, ExtensionRuntimeClosed, ExtensionRuntimeExecutionError,
@@ -1048,5 +1055,65 @@ mod tests {
             Err(ExtensionRuntimeExecutionError::Terminated)
         );
         runtime.shutdown();
+    }
+
+    /// Heap exhaustion can trigger a V8 process abort when a near-limit
+    /// callback is configured incorrectly. Keep the experiment out of the
+    /// editor's test process until it has demonstrated safe recovery.
+    #[test]
+    fn heap_exhaustion_probe_runs_in_a_sacrificial_process() {
+        let status = Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg("host::tests::heap_exhaustion_probe_child")
+            .arg("--nocapture")
+            .env("KNOT_RUN_HEAP_EXHAUSTION_PROBE", "1")
+            .status()
+            .expect("Knot heap-exhaustion probe process must start");
+
+        assert!(
+            status.success(),
+            "Knot heap-exhaustion probe must recover safely"
+        );
+    }
+
+    #[test]
+    fn heap_exhaustion_probe_child() {
+        if std::env::var_os("KNOT_RUN_HEAP_EXHAUSTION_PROBE").is_none() {
+            return;
+        }
+
+        deno_core::JsRuntime::init_platform(None);
+        let tokio = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        let _guard = tokio.enter();
+        let create_params =
+            deno_core::v8::Isolate::create_params().heap_limits(0, 32 * 1024 * 1024);
+        let mut runtime = deno_core::JsRuntime::new(deno_core::RuntimeOptions {
+            create_params: Some(create_params),
+            ..Default::default()
+        });
+        let isolate = runtime.v8_isolate().thread_safe_handle();
+        let callbacks = Arc::new(AtomicUsize::new(0));
+        let callback_count = Arc::clone(&callbacks);
+        runtime.add_near_heap_limit_callback(move |current_limit, _initial_limit| {
+            callback_count.fetch_add(1, Ordering::SeqCst);
+            isolate.terminate_execution();
+            current_limit.saturating_mul(2)
+        });
+
+        let error = runtime
+            .execute_script(
+                "heap-exhaustion.js",
+                r#"let text = ""; while (true) { text += "Knot"; }"#,
+            )
+            .expect_err("heap exhaustion must terminate execution");
+        assert!(error.exception_message.contains("execution terminated"));
+        assert!(callbacks.load(Ordering::SeqCst) > 0);
+        assert!(runtime.v8_isolate().cancel_terminate_execution());
+        runtime
+            .execute_script("heap-recovery.js", "globalThis.recovered = true")
+            .expect("isolate must remain usable after heap-limit termination");
     }
 }

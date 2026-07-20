@@ -253,11 +253,16 @@ late host replies are rejected. The same idempotent teardown runs after normal
 thread shutdown and failed extension-thread initialization. Future command,
 subscription, and queued-callback registries will be owned by that token.
 The lifecycle token also owns a private V8 thread-safe isolate handle for the
-future watchdog, clearing it during teardown. Heap-limit probing has not landed
-yet. The host can signal that private handle from another thread to interrupt
-synchronous JavaScript. An interruption is fatal to its extension: fixture
-execution reports `Terminated`, its command loop exits, and normal lifecycle
-teardown disposes extension-local state.
+future watchdog, clearing it during teardown. A test-only heap-limit probe runs
+in a sacrificial child process with a 32 MiB limit; its near-limit callback
+terminates execution and verifies the isolate can run a follow-up script. A 5
+MiB isolate aborts during `JsRuntime` initialization before the callback can
+run, so production isolates retain V8's default heap policy pending broader
+memory-limit evidence. The host can signal that private handle from another
+thread to interrupt synchronous JavaScript. An interruption is fatal to its
+extension:
+fixture execution reports `Terminated`, its command loop exits, and normal
+lifecycle teardown disposes extension-local state.
 
 An extension's host-bound identity will be its stable, case-sensitive,
 globally namespaced string ID (initially a fixture/module identity and later a

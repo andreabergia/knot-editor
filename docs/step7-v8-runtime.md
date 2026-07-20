@@ -178,6 +178,11 @@ record that finding for the API design instead.
     termination is fatal to that extension: fixture execution reports
     `Terminated`, its command loop exits, and lifecycle teardown disposes the
     isolate's pending state. ✅
+  - [x] Configure a 32 MiB heap limit and near-limit termination callback in a
+    sacrificial test process. The probe verifies the process survives and the
+    isolated runtime can execute a follow-up script. A 5 MiB limit aborts V8
+    during `JsRuntime` initialization before its callback can run, so production
+    isolates retain V8's default heap policy pending broader evidence. ✅
 
 ### 2. Editor model and public boundary
 
