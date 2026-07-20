@@ -244,8 +244,9 @@ no filesystem or package resolution. A private `knot:bootstrap` module is
 evaluated before extension code and captures native op bindings in module-local
 scope. `knot:editor` is its sole importer and exposes the fixture active-buffer
 operation; Deno's binding global is removed before any extension module runs.
-There is still no command registry or capability provider; those runtime
-internals will remain contained in `host`.
+Fixture execution failures return source-aware JavaScript reports and do not
+poison the owning extension runtime. There is still no command registry or
+capability provider; those runtime internals will remain contained in `host`.
 
 An extension's host-bound identity will be its stable, case-sensitive,
 globally namespaced string ID (initially a fixture/module identity and later a

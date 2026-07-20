@@ -343,11 +343,19 @@ pub enum ExtensionRuntimeResponseError {
 }
 
 /// Returned when a fixture script cannot run in an extension runtime.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ExtensionRuntimeExecutionError {
     Closed,
     InvalidModuleSpecifier,
-    JavaScriptException,
+    JavaScriptException { report: String },
+}
+
+impl ExtensionRuntimeExecutionError {
+    fn javascript_exception(error: impl std::fmt::Display) -> Self {
+        Self::JavaScriptException {
+            report: format!("{error:#}"),
+        }
+    }
 }
 
 enum RuntimeCommand {
@@ -539,11 +547,11 @@ impl ExtensionRuntime {
                     let result = self
                         .js_runtime
                         .execute_script(name, source)
-                        .map_err(|_| ExtensionRuntimeExecutionError::JavaScriptException)
+                        .map_err(ExtensionRuntimeExecutionError::javascript_exception)
                         .and_then(|_| {
                             self.event_loop_runtime
                                 .block_on(self.js_runtime.run_event_loop(Default::default()))
-                                .map_err(|_| ExtensionRuntimeExecutionError::JavaScriptException)
+                                .map_err(ExtensionRuntimeExecutionError::javascript_exception)
                         });
                     let _ = completion.send(result);
                 }
@@ -559,16 +567,16 @@ impl ExtensionRuntime {
                             self.fixture_modules.insert(specifier.clone(), source);
                             self.event_loop_runtime
                                 .block_on(self.js_runtime.load_main_es_module(&specifier))
-                                .map_err(|_| ExtensionRuntimeExecutionError::JavaScriptException)
+                                .map_err(ExtensionRuntimeExecutionError::javascript_exception)
                         })
                         .and_then(|module_id| {
                             let evaluation = self.js_runtime.mod_evaluate(module_id);
                             self.event_loop_runtime
                                 .block_on(self.js_runtime.run_event_loop(Default::default()))
-                                .map_err(|_| ExtensionRuntimeExecutionError::JavaScriptException)?;
+                                .map_err(ExtensionRuntimeExecutionError::javascript_exception)?;
                             self.event_loop_runtime
                                 .block_on(evaluation)
-                                .map_err(|_| ExtensionRuntimeExecutionError::JavaScriptException)
+                                .map_err(ExtensionRuntimeExecutionError::javascript_exception)
                         });
                     let _ = completion.send(result);
                 }
@@ -640,10 +648,14 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(
-            runtime.execute_fixture_script("failure.js", "throw new Error('expected')"),
-            Err(ExtensionRuntimeExecutionError::JavaScriptException)
-        );
+        let error = runtime
+            .execute_fixture_script("failure.js", "throw new Error('expected')")
+            .unwrap_err();
+        let ExtensionRuntimeExecutionError::JavaScriptException { report } = error else {
+            panic!("expected JavaScript exception");
+        };
+        assert!(report.contains("Error: expected"));
+        assert!(report.contains("failure.js:1:7"));
         runtime.shutdown();
     }
 
@@ -728,14 +740,18 @@ mod tests {
     }
 
     #[test]
-    fn javascript_exception_does_not_poison_the_extension_runtime() {
+    fn javascript_rejection_reports_its_source_without_poisoning_the_runtime() {
         let host = V8Host::new();
         let runtime = host.spawn_extension(ExtensionId::new(7));
 
-        assert_eq!(
-            runtime.execute_fixture_script("failure.js", "throw new Error('expected')"),
-            Err(ExtensionRuntimeExecutionError::JavaScriptException)
-        );
+        let error = runtime
+            .execute_fixture_script("rejection.js", "Promise.reject(new Error('expected'))")
+            .unwrap_err();
+        let ExtensionRuntimeExecutionError::JavaScriptException { report } = error else {
+            panic!("expected JavaScript rejection");
+        };
+        assert!(report.contains("Error: expected"));
+        assert!(report.contains("rejection.js:1:16"));
         runtime
             .execute_fixture_script("recovery.js", "globalThis.recovered = true")
             .unwrap();

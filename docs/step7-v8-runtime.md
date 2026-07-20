@@ -143,9 +143,9 @@ record that finding for the API design instead.
     shared Tokio runtime while V8 remains driven by its extension thread. ✅
   - [x] Bridge the fixture `ActiveBuffer` op through typed host messages and
     resolve its JavaScript promise from the matching typed response. ✅
-- [ ] Implement the static module loader, private bootstrap bindings,
+- [x] Implement the static module loader, private bootstrap bindings,
   `knot:editor` facade, source-aware exception/rejection reporting, and a test
-  proving extension code cannot access `Deno.core` or import private modules.
+  proving extension code cannot access `Deno.core` or import private modules. ✅
   - [x] Add a static in-memory loader and evaluate fixture ES modules on their
     owning extension thread. It accepts absolute URL specifiers only and has
     no filesystem or package resolution. ✅
@@ -155,6 +155,8 @@ record that finding for the API design instead.
   - [x] Add the initial `knot:editor` facade for the fixture active-buffer
     operation, then remove Deno's private binding global before extension code
     runs. ✅
+  - [x] Return JavaScript exception and rejection reports with their source
+    location while keeping the extension runtime usable after failure. ✅
 - [ ] Give each extension a lifecycle token owning its commands,
   subscriptions, queued callbacks, pending promises, and cancellation state.
   Normal unload and initialization failure run the same idempotent teardown.
