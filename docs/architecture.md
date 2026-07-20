@@ -34,7 +34,8 @@ The library exports four top-level modules:
 
 The default `knot` binary calls `app::run` and opens the gpui shell and editor.
 It loads `rust_sample.kfx` by default and creates the active core-backed
-`BufferModel`; it does not yet connect the scripting host.
+`BufferModel`. It also starts the prototype extension runtime and connects its
+typed request stream to the foreground buffer registry.
 
 The standalone `step3-gpui` binary delegates to `app::run` and uses the same
 application path as the default binary.
@@ -86,7 +87,9 @@ buffer's `edit_seq` remains a private primitive-edit-log cursor.
 stores only weak entity references. It also tracks the optional active buffer.
 `EditorView` owns cursor, selection, scroll, IME, annotations, and a derived
 line/segment rendering projection; local edits commit through its model and
-model notifications refresh the projection.
+model notifications refresh the projection. A foreground-local bridge task
+owns each extension request inbox and dispatches requests synchronously against
+the registry and its entities between awaits.
 
 ```text
 gpui Shell / BufferRegistry
@@ -111,8 +114,14 @@ and communicates with the host through typed request and response messages.
 
 `host::protocol` contains the transport-level identities, buffer data, and
 errors without depending on V8, Deno, gpui, or the concrete core buffer. This
-keeps runtime mechanics behind the host boundary and leaves editor API
-dispatch as a future layer.
+keeps runtime mechanics behind the host boundary. The application currently
+dispatches `ActiveBuffer`; snapshot and edit operations remain unimplemented.
+
+Runtime ownership separates the unique request inbox, clonable non-blocking
+control and response access, and the OS-thread join handle. V8 is initialized
+before gpui starts. Only the Knot-owned endpoints move into application state.
+On shell teardown, the foreground thread requests extension shutdown and
+background work waits for the extension thread to exit.
 
 Extension-local lifecycle state owns pending work, termination, resource
 limits, and teardown. A failed or terminated isolate does not take down other
@@ -128,7 +137,10 @@ extension runtime thread
   typed request/response
         |
         v
-editor host (future integration)
+gpui foreground bridge
+        |
+        v
+BufferRegistry / BufferModel
 ```
 
 Detailed runtime behavior and experiment results live in
@@ -150,7 +162,7 @@ Detailed runtime behavior and experiment results live in
 
 ## Major gaps
 
-- The extension runtime is not connected to the foreground buffer registry.
+- Snapshot and edit requests are not yet dispatched to `BufferModel`.
 - Undo history, edit grouping, and view-state restoration are not implemented.
 - Commands, capability aggregation, filesystem providers, terminal state, and
   the public extension API remain roadmap work.

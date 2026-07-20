@@ -255,18 +255,17 @@ record that finding for the API design instead.
     `ActiveBuffer` request from a real extension runtime, let the foreground
     executor dispatch it, and verify the opaque handle resolves to the
     displayed model. ✅
-- [ ] Make runtime teardown and bridge failure handling non-blocking and
-  visible in the gpui shell.
-  - [ ] Keep runtime shutdown and OS-thread joining off the gpui foreground
+- [x] Make runtime teardown and bridge failure handling non-blocking and
+  visible in the gpui shell. ✅
+  - [x] Keep runtime shutdown and OS-thread joining off the gpui foreground
     executor. Dropping a view or closing the window may request shutdown on
     the foreground thread, but waiting for extension teardown happens on
-    background work.
-  - [ ] Surface bridge/runtime state and failures in the status area rather
+    background work. ✅
+  - [x] Surface bridge/runtime state and failures in the status area rather
     than logging them only to stderr. A closed bridge rejects or disposes
-    pending work without freezing the application.
-  - [ ] Verify that the heartbeat progresses while the bridge is active and
+    pending work without freezing the application. ✅
+  - [x] Verify that the heartbeat progresses while the bridge is active and
     after it closes. Update `architecture.md` with the real request flow. ✅
-    when implemented.
 - [ ] Implement snapshot/range reads, UTF-8 boundary validation, atomic edit
   batches, revision conflicts, opaque-handle invalidation, and the two explicit
   UTF-16 adapter helpers. Keep byte/UTF-16 index construction lazy so ordinary

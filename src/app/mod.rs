@@ -313,6 +313,17 @@ impl Shell {
     }
 }
 
+impl Drop for Shell {
+    fn drop(&mut self) {
+        self.runtime_control.request_shutdown();
+        if let Some(thread) = self.runtime_thread.take() {
+            self.background_executor
+                .spawn(async move { thread.shutdown() })
+                .detach();
+        }
+    }
+}
+
 impl Render for Shell {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let entity = cx.entity();
@@ -525,4 +536,29 @@ mod tests {
         assert_eq!(resolved, displayed);
     }
 
+    #[gpui::test]
+    async fn heartbeat_progresses_before_and_after_the_runtime_bridge_closes(
+        cx: &mut TestAppContext,
+    ) {
+        let runtime = V8Host::new()
+            .spawn_extension(ExtensionId::new(8))
+            .into_parts();
+        let shell = cx.new(|cx| Shell::new(runtime, cx));
+
+        wait_for_runtime_state(&shell, "running", cx).await;
+        let first = cx.read(|cx| shell.read(cx).heartbeat);
+        cx.executor().advance_clock(Duration::from_millis(500));
+        cx.run_until_parked();
+        let second = cx.read(|cx| shell.read(cx).heartbeat);
+        assert!(second > first);
+
+        let control = cx.read(|cx| shell.read(cx).runtime_control.clone());
+        control.request_shutdown();
+        wait_for_runtime_state(&shell, "closed", cx).await;
+
+        cx.executor().advance_clock(Duration::from_millis(500));
+        cx.run_until_parked();
+        let third = cx.read(|cx| shell.read(cx).heartbeat);
+        assert!(third > second);
+    }
 }
