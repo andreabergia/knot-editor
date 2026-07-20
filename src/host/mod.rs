@@ -311,6 +311,13 @@ impl ExtensionRuntimeHandle {
         self.lifecycle.respond(response)
     }
 
+    /// Return the host-side watchdog for this extension's isolate.
+    pub fn watchdog(&self) -> ExtensionWatchdog {
+        ExtensionWatchdog {
+            lifecycle: Arc::clone(&self.lifecycle),
+        }
+    }
+
     /// Stop the extension thread and wait for its thread-affine state to drop.
     pub fn shutdown(mut self) {
         self.lifecycle.teardown();
@@ -337,6 +344,22 @@ impl Drop for ExtensionRuntimeHandle {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ExtensionRuntimeClosed;
 
+/// Host-side control for forcefully stopping one extension isolate.
+///
+/// This contains no V8 values. Its private lifecycle state owns V8's
+/// thread-safe handle and clears it when the extension stops.
+#[derive(Clone)]
+pub struct ExtensionWatchdog {
+    lifecycle: Arc<ExtensionLifecycle>,
+}
+
+impl ExtensionWatchdog {
+    /// Interrupt JavaScript currently running in the extension isolate.
+    pub fn terminate(&self) -> Result<(), ExtensionRuntimeClosed> {
+        self.lifecycle.request_termination()
+    }
+}
+
 /// Returned when a host reply does not belong to this runtime's pending work.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ExtensionRuntimeResponseError {
@@ -350,6 +373,7 @@ pub enum ExtensionRuntimeResponseError {
 pub enum ExtensionRuntimeExecutionError {
     Closed,
     InvalidModuleSpecifier,
+    Terminated,
     JavaScriptException { report: String },
 }
 
@@ -390,8 +414,9 @@ struct ExtensionLifecycle {
 #[derive(Default)]
 struct ExtensionLifecycleState {
     torn_down: bool,
+    termination_requested: bool,
     pending_requests: PendingRequests,
-    watchdog: ExtensionWatchdog,
+    watchdog: ExtensionWatchdogState,
 }
 
 impl ExtensionLifecycle {
@@ -443,6 +468,7 @@ impl ExtensionLifecycle {
             return;
         }
         state.torn_down = true;
+        state.termination_requested = false;
         state.pending_requests = PendingRequests::default();
         state.watchdog.clear_isolate();
     }
@@ -454,6 +480,25 @@ impl ExtensionLifecycle {
             .watchdog
             .install_isolate(isolate);
     }
+
+    fn request_termination(&self) -> Result<(), ExtensionRuntimeClosed> {
+        let mut state = self
+            .state
+            .lock()
+            .expect("Knot extension lifecycle lock poisoned");
+        if state.torn_down || !state.watchdog.terminate() {
+            return Err(ExtensionRuntimeClosed);
+        }
+        state.termination_requested = true;
+        Ok(())
+    }
+
+    fn termination_requested(&self) -> bool {
+        self.state
+            .lock()
+            .expect("Knot extension lifecycle lock poisoned")
+            .termination_requested
+    }
 }
 
 /// Thread-safe control path from the future watchdog to its extension isolate.
@@ -461,17 +506,23 @@ impl ExtensionLifecycle {
 /// The handle is kept private to `host`; callers can never obtain a V8 value
 /// through Knot's extension-facing API.
 #[derive(Default)]
-struct ExtensionWatchdog {
+struct ExtensionWatchdogState {
     isolate: Option<deno_core::v8::IsolateHandle>,
 }
 
-impl ExtensionWatchdog {
+impl ExtensionWatchdogState {
     fn install_isolate(&mut self, isolate: deno_core::v8::IsolateHandle) {
         self.isolate = Some(isolate);
     }
 
     fn clear_isolate(&mut self) {
         self.isolate = None;
+    }
+
+    fn terminate(&self) -> bool {
+        self.isolate
+            .as_ref()
+            .is_some_and(deno_core::v8::IsolateHandle::terminate_execution)
     }
 
     #[cfg(test)]
@@ -553,6 +604,7 @@ struct ExtensionRuntime {
     event_loop_runtime: tokio::runtime::Runtime,
     js_runtime: deno_core::JsRuntime,
     fixture_modules: FixtureModuleLoader,
+    lifecycle: Arc<ExtensionLifecycle>,
     _thread_affine: PhantomData<Rc<()>>,
 }
 
@@ -612,13 +664,14 @@ impl ExtensionRuntime {
                 extension,
                 next_request_id: 0,
                 request_sender,
-                lifecycle,
+                lifecycle: Arc::clone(&lifecycle),
             });
 
         Self {
             event_loop_runtime,
             js_runtime,
             fixture_modules,
+            lifecycle,
             _thread_affine: PhantomData,
         }
     }
@@ -653,7 +706,15 @@ impl ExtensionRuntime {
                                 .block_on(self.js_runtime.run_event_loop(Default::default()))
                                 .map_err(ExtensionRuntimeExecutionError::javascript_exception)
                         });
-                    let _ = completion.send(result);
+                    let terminated = self.lifecycle.termination_requested();
+                    let _ = completion.send(if terminated {
+                        Err(ExtensionRuntimeExecutionError::Terminated)
+                    } else {
+                        result
+                    });
+                    if terminated {
+                        break;
+                    }
                 }
                 RuntimeCommand::ExecuteFixtureModule {
                     specifier,
@@ -678,7 +739,15 @@ impl ExtensionRuntime {
                                 .block_on(evaluation)
                                 .map_err(ExtensionRuntimeExecutionError::javascript_exception)
                         });
-                    let _ = completion.send(result);
+                    let terminated = self.lifecycle.termination_requested();
+                    let _ = completion.send(if terminated {
+                        Err(ExtensionRuntimeExecutionError::Terminated)
+                    } else {
+                        result
+                    });
+                    if terminated {
+                        break;
+                    }
                 }
                 RuntimeCommand::Shutdown => break,
             }
@@ -940,6 +1009,43 @@ mod tests {
                 .unwrap()
                 .watchdog
                 .is_attached()
+        );
+        runtime.shutdown();
+    }
+
+    #[test]
+    fn watchdog_terminates_cpu_runaway_and_tears_down_the_extension() {
+        let host = V8Host::new();
+        let extension = ExtensionId::new(7);
+        let runtime = host.spawn_extension(extension);
+        let watchdog = runtime.watchdog();
+        let (completion, completed) = mpsc::sync_channel(0);
+
+        runtime
+            .commands
+            .send(RuntimeCommand::ExecuteFixtureModule {
+                specifier: "file:///fixtures/runaway.js".into(),
+                source: r#"
+                    import { editor } from "knot:editor";
+                    editor.activeBuffer().then(() => { while (true) {} });
+                "#
+                .into(),
+                completion,
+            })
+            .unwrap();
+        let request = runtime.receive_request().unwrap();
+        runtime
+            .respond(HostResponse {
+                extension,
+                id: request.id,
+                result: Ok(HostResponseValue::ActiveBuffer(None)),
+            })
+            .unwrap();
+
+        watchdog.terminate().unwrap();
+        assert_eq!(
+            completed.recv().unwrap(),
+            Err(ExtensionRuntimeExecutionError::Terminated)
         );
         runtime.shutdown();
     }

@@ -174,6 +174,10 @@ record that finding for the API design instead.
     lifecycle-owned watchdog. The handle remains inside `host` and is cleared
     during lifecycle teardown; termination policy and heap probing remain
     separate slices. ✅
+  - [x] Let the host watchdog terminate synchronous JavaScript execution. A
+    termination is fatal to that extension: fixture execution reports
+    `Terminated`, its command loop exits, and lifecycle teardown disposes the
+    isolate's pending state. ✅
 
 ### 2. Editor model and public boundary
 
