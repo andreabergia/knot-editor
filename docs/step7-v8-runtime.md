@@ -1,6 +1,6 @@
 # Step 7 — V8 scripting runtime
 
-Status: plan agreed; implementation not started.
+Status: runtime foundation complete; editor integration and public APIs remain.
 
 ## Goal and decisions
 
@@ -116,7 +116,7 @@ record that finding for the API design instead.
 
 ### 1. Runtime foundation
 
-- [ ] Add `deno_core` and Tokio, initialize the V8 platform on the process's
+- [x] Add `deno_core` and Tokio, initialize the V8 platform on the process's
   parent thread, and implement `host::V8Host` plus one thread-affine
   `ExtensionRuntime` per loaded extension.
   - [x] Add `deno_core` and Tokio; `host::V8Host` initializes V8 on its
@@ -128,17 +128,16 @@ record that finding for the API design instead.
     request/response protocol exists. It owns request-ID allocation and typed
     response validation on a dedicated extension OS thread. ✅
   - [x] Construct and drive one `JsRuntime` exclusively on each extension
-    thread. The fixture-script proof retains isolate state across executions;
-    async host ops and module loading remain later slices. ✅
+    thread. The fixture-script proof retains isolate state across executions. ✅
   - [x] Give each extension thread a current-thread Tokio driver for V8 and
     `!Send` Deno futures. `V8Host` retains the shared multi-thread Tokio
-    runtime for future `Send` native work. ✅
+    runtime for `Send` native work. ✅
   - [x] Cover the initial runtime shell with focused tests for V8/Tokio
     initialization, isolate persistence, JavaScript failure isolation, and
     typed request/response validation. ✅
-- [ ] Drive each `JsRuntime` from its owning thread while entering the shared
-  Tokio runtime for async ops. Use typed Knot-owned request/response messages;
-  keep all `deno_core` types inside `host`.
+- [x] Drive each `JsRuntime` from its owning thread while dispatching `Send`
+  native work onto the shared Tokio runtime. Use typed Knot-owned
+  request/response messages; keep all `deno_core` types inside `host`.
   - [x] Prove an internal async op can await `Send` native work on `V8Host`'s
     shared Tokio runtime while V8 remains driven by its extension thread. ✅
   - [x] Bridge the fixture `ActiveBuffer` op through typed host messages and
@@ -154,20 +153,17 @@ record that finding for the API design instead.
     no filesystem or package resolution. ✅
   - [x] Evaluate a private `knot:bootstrap` module before extension code. It
     captures its native op binding in module-local scope and rejects direct
-    extension imports; the future `knot:editor` facade is its sole importer. ✅
+    extension imports; the `knot:editor` facade is its sole importer. ✅
   - [x] Add the initial `knot:editor` facade for the fixture active-buffer
     operation, then remove Deno's private binding global before extension code
     runs. ✅
   - [x] Return JavaScript exception and rejection reports with their source
     location while keeping the extension runtime usable after failure. ✅
-- [x] Give each extension a lifecycle token owning its commands,
-  subscriptions, queued callbacks, pending promises, and cancellation state.
-  Normal unload and initialization failure run the same idempotent teardown. ✅
-  - [x] Introduce the lifecycle teardown foundation: it owns pending JavaScript
-    promises and cancellation state today, rejects late responses after unload,
-    and is idempotently invoked after normal shutdown or failed thread startup.
-    Command, subscription, and callback registries will join this token when
-    those APIs land. ✅
+- [x] Give each extension a lifecycle token owning pending promises,
+  termination state, resource limits, and idempotent teardown after normal
+  shutdown or failed thread startup. It rejects late responses after unload;
+  command, subscription, and callback registries will join it when those APIs
+  land. ✅
 - [x] Expose V8's thread-safe isolate handle to a watchdog. A synchronous CPU
   runaway is terminated and then tears down the extension. Configure a small
   test heap limit/near-limit callback and run heap exhaustion in a sacrificial

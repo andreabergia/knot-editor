@@ -88,7 +88,7 @@ errors without depending on V8, Deno, gpui, or the concrete core buffer. This
 keeps runtime mechanics behind the host boundary and leaves editor API
 dispatch as a future layer.
 
-Extension-local lifecycle state owns pending work, cancellation, resource
+Extension-local lifecycle state owns pending work, termination, resource
 limits, and teardown. A failed or terminated isolate does not take down other
 extensions. The current JavaScript API and module loading are fixture-level
 probes; command registration and the complete editor API do not exist yet.

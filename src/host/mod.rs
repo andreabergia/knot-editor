@@ -200,9 +200,8 @@ impl V8Host {
 
     /// Start one extension-owned runtime thread.
     ///
-    /// The thread owns its `JsRuntime` and all extension-local state. The
-    /// initial scripts are host fixtures; module loading follows in a later
-    /// Step 7 slice.
+    /// The thread owns its `JsRuntime` and all extension-local state. Script
+    /// and module execution remain fixture-level Step 7 probes.
     pub fn spawn_extension(&self, extension: ExtensionId) -> ExtensionRuntimeHandle {
         ExtensionRuntimeHandle::spawn(extension, Arc::clone(&self.async_runtime))
     }
@@ -570,7 +569,7 @@ enum ExtensionTermination {
     MemoryLimitExceeded,
 }
 
-/// Thread-safe control path from the future watchdog to its extension isolate.
+/// Thread-safe control path from the watchdog to its extension isolate.
 ///
 /// The handle is kept private to `host`; callers can never obtain a V8 value
 /// through Knot's extension-facing API.
@@ -675,9 +674,8 @@ impl ExtensionRequestRouter {
 
 /// State confined to one extension's OS thread.
 ///
-/// `Rc` makes that confinement explicit: when this grows to hold
-/// `deno_core::JsRuntime`, neither Rust's type system nor this host endpoint
-/// can accidentally move it to another thread.
+/// `Rc` makes that confinement explicit: neither Rust's type system nor the
+/// host endpoint can accidentally move the `JsRuntime` to another thread.
 struct ExtensionRuntime {
     event_loop_runtime: tokio::runtime::Runtime,
     js_runtime: deno_core::JsRuntime,
