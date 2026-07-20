@@ -28,6 +28,9 @@ objc2-quartz-core = { version = "0.3.2", default-features = false, features = ["
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["objc2-quartz-core", "NSView", "NSResponder"] }
 raw-window-handle = "0.6"
 
+[dev-dependencies]
+gpui = { version = "0.2", default-features = false, features = ["font-kit", "test-support", "windows-manifest"] }
+
 [lib]
 name = "knot"
 path = "src/lib.rs"

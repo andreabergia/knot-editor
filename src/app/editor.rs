@@ -110,6 +110,11 @@ pub struct EditorView {
 }
 
 impl EditorView {
+    #[cfg(test)]
+    pub(crate) fn model(&self) -> &Entity<BufferModel> {
+        &self.model
+    }
+
     /// Build an editor preloaded with a styled fixture.
     pub fn from_fixture(
         fixture: &crate::view::fixture::Fixture,

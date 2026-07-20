@@ -107,6 +107,7 @@ pub struct TextSnapshot {
 /// Stable failures at the host boundary.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HostRequestError {
+    UnsupportedOperation,
     BufferClosed,
     InvalidRange,
     InvalidEditBatch,

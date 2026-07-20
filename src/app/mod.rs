@@ -6,6 +6,14 @@
 use gpui::{prelude::FluentBuilder, *};
 use std::time::Duration;
 
+use crate::host::{
+    ExtensionRequestInbox, ExtensionRuntimeControl, ExtensionRuntimeParts, ExtensionRuntimeThread,
+    V8Host,
+    protocol::{
+        ExtensionId, HostOperation, HostRequest, HostRequestError, HostResponse, HostResponseValue,
+    },
+};
+
 mod editor;
 pub mod model;
 
@@ -15,6 +23,14 @@ use model::{BufferModel, BufferRegistry};
 actions!(knot, [Quit]);
 
 const MIN_PANE: f32 = 120.;
+const RUNTIME_PROBE_SOURCE: &str = r#"
+import { editor } from "knot:editor";
+
+globalThis.knotActiveBuffer = await editor.activeBuffer();
+if (!globalThis.knotActiveBuffer) {
+  throw new Error("Knot has no active editor buffer");
+}
+"#;
 
 /// Drag value carried by the active drag while a pane divider is being dragged.
 /// `which` identifies which divider (0 = left/center, 1 = center/right).
@@ -50,6 +66,11 @@ struct Shell {
     heartbeat: u64,
     runtime_state: SharedString,
     latest_runtime_error: Option<SharedString>,
+    runtime_control: ExtensionRuntimeControl,
+    runtime_thread: Option<ExtensionRuntimeThread>,
+    background_executor: BackgroundExecutor,
+    _runtime_bridge_task: Task<()>,
+    _runtime_execution_task: Task<()>,
     _model_subscription: Subscription,
     _heartbeat_task: Task<()>,
     /// Name of the fixture currently loaded (shown in a thin status header
@@ -62,7 +83,7 @@ impl Shell {
     /// from `argv[1]` (default `rust_sample`) so the editor pane has real
     /// styled text to render. Fixture resolution is relative to the crate
     /// root so the binary runs from any cwd.
-    fn new(cx: &mut Context<Self>) -> Self {
+    fn new(runtime: ExtensionRuntimeParts, cx: &mut Context<Self>) -> Self {
         let fixture_name = std::env::args()
             .nth(1)
             .unwrap_or_else(|| "rust_sample".into());
@@ -81,6 +102,32 @@ impl Shell {
         buffer_registry.set_active(Some(handle));
         let editor = cx.new(|cx| EditorView::from_fixture(&fixture, model.clone(), cx));
         let model_subscription = cx.observe(&model, |_this, _model, cx| cx.notify());
+        let ExtensionRuntimeParts {
+            control: runtime_control,
+            requests,
+            thread: runtime_thread,
+        } = runtime;
+        let runtime_bridge_task = Self::spawn_runtime_bridge(requests, runtime_control.clone(), cx);
+        let runtime_execution = runtime_control.execute_fixture_module(
+            "file:///fixtures/gpui-runtime-probe.js",
+            RUNTIME_PROBE_SOURCE,
+        );
+        let runtime_execution_task = cx.spawn(async move |this, cx| {
+            let result = runtime_execution.await;
+            let _ = this.update(cx, |this, cx| {
+                match result {
+                    Ok(()) => {
+                        this.runtime_state = "running".into();
+                        this.latest_runtime_error = None;
+                    }
+                    Err(error) => {
+                        this.runtime_state = "failed".into();
+                        this.latest_runtime_error = Some(format!("{error:?}").into());
+                    }
+                }
+                cx.notify();
+            });
+        });
         let heartbeat_task = cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor()
@@ -131,11 +178,61 @@ impl Shell {
             editor,
             buffer_registry,
             heartbeat: 0,
-            runtime_state: "not started".into(),
+            runtime_state: "starting".into(),
             latest_runtime_error: None,
+            runtime_control,
+            runtime_thread: Some(runtime_thread),
+            background_executor: cx.background_executor().clone(),
+            _runtime_bridge_task: runtime_bridge_task,
+            _runtime_execution_task: runtime_execution_task,
             _model_subscription: model_subscription,
             _heartbeat_task: heartbeat_task,
             fixture_name,
+        }
+    }
+
+    fn spawn_runtime_bridge(
+        mut requests: ExtensionRequestInbox,
+        control: ExtensionRuntimeControl,
+        cx: &mut Context<Self>,
+    ) -> Task<()> {
+        cx.spawn(async move |this, cx| {
+            let mut failure = None;
+            while let Some(request) = requests.receive().await {
+                let response =
+                    match this.update(cx, |this, _cx| this.dispatch_host_request(request)) {
+                        Ok(response) => response,
+                        Err(_) => return,
+                    };
+                if let Err(error) = control.respond(response) {
+                    failure = Some(format!("runtime response failed: {error:?}"));
+                    break;
+                }
+            }
+            let _ = this.update(cx, |this, cx| {
+                this.runtime_state = "closed".into();
+                if let Some(error) = failure {
+                    this.latest_runtime_error = Some(error.into());
+                }
+                cx.notify();
+            });
+        })
+    }
+
+    fn dispatch_host_request(&mut self, request: HostRequest) -> HostResponse {
+        let result = match request.operation {
+            HostOperation::ActiveBuffer => Ok(HostResponseValue::ActiveBuffer(
+                self.buffer_registry.active_handle(),
+            )),
+            HostOperation::Snapshot { .. } | HostOperation::ApplyEdits { .. } => {
+                Err(HostRequestError::UnsupportedOperation)
+            }
+        };
+
+        HostResponse {
+            extension: request.extension,
+            id: request.id,
+            result,
         }
     }
 
@@ -352,7 +449,11 @@ impl Render for Shell {
 }
 
 pub fn run() {
-    Application::new().run(|app: &mut App| {
+    let runtime = V8Host::new()
+        .spawn_extension(ExtensionId::new(1))
+        .into_parts();
+
+    Application::new().run(move |app: &mut App| {
         app.on_action(|_action: &Quit, app: &mut App| app.quit());
 
         app.key_bindings()
@@ -365,7 +466,7 @@ pub fn run() {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 ..Default::default()
             },
-            |_window, cx| cx.new(|cx| Shell::new(cx)),
+            |_window, cx| cx.new(|cx| Shell::new(runtime, cx)),
         )
         .unwrap();
 
@@ -374,4 +475,54 @@ pub fn run() {
             items: vec![MenuItem::action("Quit Knot", Quit)],
         }]);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use gpui::{AppContext, Entity, TestAppContext};
+
+    use super::Shell;
+    use crate::host::{V8Host, protocol::ExtensionId};
+
+    async fn wait_for_runtime_state(
+        shell: &Entity<Shell>,
+        expected: &str,
+        cx: &mut TestAppContext,
+    ) {
+        while cx.read(|cx| shell.read(cx).runtime_state != expected) {
+            shell.next_notification(Duration::ZERO, cx).await;
+        }
+    }
+
+    #[gpui::test]
+    async fn foreground_bridge_resolves_the_displayed_active_buffer(cx: &mut TestAppContext) {
+        let runtime = V8Host::new()
+            .spawn_extension(ExtensionId::new(7))
+            .into_parts();
+        let shell = cx.new(|cx| Shell::new(runtime, cx));
+        wait_for_runtime_state(&shell, "running", cx).await;
+        let control = cx.read(|cx| shell.read(cx).runtime_control.clone());
+        let execution = control.execute_fixture_script(
+            "verify-gpui-active-buffer.js",
+            r#"
+                if (!globalThis.knotActiveBuffer) {
+                    throw new Error("gpui did not return its active buffer");
+                }
+            "#,
+        );
+
+        execution.await.unwrap();
+
+        let (resolved, displayed) = cx.read(|cx| {
+            let shell = shell.read(cx);
+            let handle = shell.buffer_registry.active_handle().unwrap();
+            let resolved = shell.buffer_registry.resolve(handle).unwrap();
+            let displayed = shell.editor.read(cx).model().clone();
+            (resolved, displayed)
+        });
+        assert_eq!(resolved, displayed);
+    }
+
 }

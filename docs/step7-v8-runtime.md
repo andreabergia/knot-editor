@@ -238,23 +238,23 @@ record that finding for the API design instead.
   clonable response/control access, and thread joining can move independently.
   The gpui bridge owns the unique request inbox; it must not borrow an entity
   across an `.await`. ✅
-- [ ] Route host requests onto gpui's foreground executor and return results by
+- [x] Route host requests onto gpui's foreground executor and return results by
   one-shot response. Never share `TextBuffer` through `Arc<Mutex<_>>` and never
-  block the gpui thread waiting for JavaScript.
-  - [ ] Keep V8 initialization on the process parent thread, then transfer only
+  block the gpui thread waiting for JavaScript. ✅
+  - [x] Keep V8 initialization on the process parent thread, then transfer only
     Knot-owned runtime controls and messages into application state. No gpui
-    entity, `TextBuffer`, or V8/Deno value crosses a thread boundary.
-  - [ ] Spawn a long-lived local task on gpui's foreground executor. It awaits
+    entity, `TextBuffer`, or V8/Deno value crosses a thread boundary. ✅
+  - [x] Spawn a long-lived local task on gpui's foreground executor. It awaits
     the next typed `HostRequest`, updates the editor registry/model
     synchronously, and completes that request through its existing one-shot
-    response path before awaiting the next request.
-  - [ ] Dispatch `ActiveBuffer` first: return the active registry handle or
+    response path before awaiting the next request. ✅
+  - [x] Dispatch `ActiveBuffer` first: return the active registry handle or
     `None`, and prove that the handle resolves to the same real `BufferModel`
-    displayed by `EditorView`.
-  - [ ] Add a focused integration test using gpui's test context: issue an
+    displayed by `EditorView`. ✅
+  - [x] Add a focused integration test using gpui's test context: issue an
     `ActiveBuffer` request from a real extension runtime, let the foreground
     executor dispatch it, and verify the opaque handle resolves to the
-    displayed model.
+    displayed model. ✅
 - [ ] Make runtime teardown and bridge failure handling non-blocking and
   visible in the gpui shell.
   - [ ] Keep runtime shutdown and OS-thread joining off the gpui foreground
