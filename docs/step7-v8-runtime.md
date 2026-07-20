@@ -194,19 +194,166 @@ record that finding for the API design instead.
   A gpui entity owns the real `TextBuffer`, its public revision, and buffer
   lifecycle. The window displays buffer text, runtime status, errors, and an
   independently ticking heartbeat.
+  - [ ] Promote the useful Step 3 gpui shell and editor implementation onto
+    the default `knot` application path instead of replacing it with a second
+    toy view. Preserve its text shaping, clipping, scrolling, cursor,
+    selection, keyboard, mouse, diagnostic-overlay, and IME code.
+  - [ ] Separate document and view ownership. Add a gpui `BufferModel` entity
+    which owns `core::TextBuffer`, a public `u64` revision starting at zero,
+    and its open/closed lifecycle. `EditorView` retains only presentation
+    state and a handle to the model.
+  - [ ] Add an editor-owned buffer registry with monotonically allocated,
+    never-reused `BufferHandle`s, weak references to `BufferModel` entities,
+    and one optional active handle. A missing registry entry or a dead/closed
+    entity means `BufferClosed`; closing the active buffer also clears the
+    active handle.
+  - [ ] Treat `TextBuffer::edit_seq()` as the private primitive-edit-log cursor
+    used by annotations. Do not expose it as the public revision. Increment
+    the public revision once per non-empty editor-visible atomic commit,
+    regardless of how many primitive `TextBuffer` edits the commit produces.
+  - [ ] Make the editor's line/segment storage a derived rendering projection,
+    never an independently mutable document. Local edits mutate `BufferModel`,
+    notify observers, and refresh the projection. Preserve fixture styling at
+    load and retain the spike's current behavior of falling back to default
+    styling after edited text is rebuilt.
+  - [ ] Load `bench/fixtures/rust_sample.kfx` at startup, construct the real
+    `TextBuffer` from its text, and open it as the active editor buffer. Keep
+    the existing Step 3 fixture-selection argument only if doing so does not
+    obscure this default proof.
+  - [ ] Count each current local replacement, including an IME preedit
+    replacement, as one prototype commit. Deferring preedit outside the
+    authoritative buffer is a later editor-semantics refinement, not part of
+    the V8 boundary proof.
+  - [ ] Render the existing editor plus a compact status area containing the
+    active buffer revision, runtime state, and latest runtime error. Run the
+    heartbeat from a gpui foreground timer, store its counter separately from
+    runtime activity, and repaint it periodically so host responsiveness is
+    directly visible.
+  - [ ] Cover only the model invariants here: handle allocation/invalidation,
+    one revision increment per local commit, and projection refresh from the
+    authoritative `TextBuffer`. Update `architecture.md` as this commit makes
+    gpui and `BufferModel` the real application/model ownership path. ✅ when
+    implemented.
 - [ ] Route host requests onto gpui's foreground executor and return results by
   one-shot response. Never share `TextBuffer` through `Arc<Mutex<_>>` and never
   block the gpui thread waiting for JavaScript.
+  - [ ] Refactor `ExtensionRuntimeHandle` so request reception, clonable
+    response/control access, and thread joining have distinct ownership. The
+    gpui bridge owns the unique request inbox; it must not borrow an entity
+    across an `.await`.
+  - [ ] Keep V8 initialization on the process parent thread, then transfer only
+    Knot-owned runtime controls and messages into application state. No gpui
+    entity, `TextBuffer`, or V8/Deno value crosses a thread boundary.
+  - [ ] Spawn a long-lived local task on gpui's foreground executor. It awaits
+    the next typed `HostRequest`, updates the editor registry/model
+    synchronously, and completes that request through its existing one-shot
+    response path before awaiting the next request.
+  - [ ] Dispatch `ActiveBuffer` first: return the active registry handle or
+    `None`, and prove that the handle resolves to the same real `BufferModel`
+    displayed by `EditorView`.
+  - [ ] Keep runtime shutdown and OS-thread joining off the gpui foreground
+    executor. Dropping a view or closing the window may request shutdown on
+    the foreground thread, but waiting for extension teardown happens on
+    background work.
+  - [ ] Surface bridge/runtime state and failures in the status area rather
+    than logging them only to stderr. A closed bridge rejects or disposes
+    pending work without freezing the application.
+  - [ ] Add a focused integration test using gpui's test context: issue an
+    `ActiveBuffer` request from a real extension runtime, let the foreground
+    executor dispatch it, and verify the opaque handle and heartbeat progress.
+    Update `architecture.md` with the real request flow. ✅ when implemented.
 - [ ] Implement snapshot/range reads, UTF-8 boundary validation, atomic edit
   batches, revision conflicts, opaque-handle invalidation, and the two explicit
   UTF-16 adapter helpers. Keep byte/UTF-16 index construction lazy so ordinary
   UTF-8 operations do no re-encoding work.
+  - [ ] Put buffer semantics in `BufferModel`/editor-host code, leaving
+    `host::protocol` as transport data and V8 ops as marshalling only. Add
+    checked helpers around `TextBuffer` because its current UTF-8 preconditions
+    are assertions rather than recoverable host errors.
+  - [ ] Resolve a handle immediately before every operation. Reject missing,
+    closed, or dead entities with `BufferClosed`; never let a stale handle
+    resolve to a subsequently opened buffer.
+  - [ ] Implement `snapshot(None)` as the complete buffer and
+    `snapshot(Some(range))` as the requested half-open UTF-8 byte range.
+    Validate ordering, bounds, and both scalar boundaries before calling
+    `TextBuffer::read_range`; return the exact requested range and current
+    public revision.
+  - [ ] Validate an edit batch completely before mutation: matching revision,
+    ordered and non-overlapping pre-commit ranges, in-bounds offsets, UTF-8
+    scalar boundaries, and representable sizes. Stale revisions return
+    `RevisionConflict`; structural or boundary failures return stable request
+    errors without partial mutation.
+  - [ ] Detect a semantically empty batch before mutation, including an empty
+    list and replacements whose text already equals their range. Return the
+    current revision without touching `TextBuffer`, incrementing revision, or
+    notifying observers.
+  - [ ] Apply a valid batch in reverse range order so every range remains in
+    pre-commit coordinates. Publish it as one commit: increment revision once,
+    refresh/notify views once, and retain the original ordered edits for the
+    later change event.
+  - [ ] Extend the private bootstrap and `knot:editor` facade with cached
+    `TextBuffer` proxies keyed by opaque private handles. JavaScript receives
+    no numeric handle, Rust type, gpui entity, op name, or Deno object.
+  - [ ] Materialize `TextSnapshot` as an immutable public object. Define both
+    UTF-16 adapters relative to `snapshot.text` (byte offset zero is the start
+    of the snapshot); callers use `snapshot.range.startByteOffset` when they
+    need a buffer-absolute position.
+  - [ ] Build a snapshot's byte/UTF-16 boundary table only on its first adapter
+    call and cache it privately. Reject a split surrogate and a non-UTF-8
+    boundary; ordinary snapshot reads and edits must not construct this table.
+  - [ ] Add narrow Unicode and transaction tests covering ASCII, CJK, Arabic,
+    combining marks, emoji/ZWJ, partial snapshots, stale revisions, invalid
+    boundaries, overlap/order failures, semantic no-ops, and one-revision
+    multi-edit commits. Add a fixture module that reads and edits the active
+    Rust buffer so the window visibly proves the end-to-end path. ✅ when
+    implemented.
 - [ ] Implement extension-owned command registration and invocation. Pass an
   `AbortSignal`; cancellation rejects awaited host work and invalidates the
   invocation token so a response arriving later cannot mutate editor state.
+  - [ ] Add Knot-owned command, registration, and invocation identities to the
+    typed protocol. Keep the editor registry authoritative for command names;
+    each registration records its owning extension and lifecycle token.
+  - [ ] Add `commands.register` to the facade with an extension-local handler
+    registry and idempotent disposable. Extension unload disposes all of its
+    registrations; an explicit dispose prevents later invocation.
+  - [ ] Invoke handlers only on their owning extension thread and serialize
+    callbacks within that extension. Construct `CommandContext` with the
+    active buffer proxy and a fresh `AbortSignal`, then propagate synchronous
+    returns, promises, throws, and rejections to the host as typed outcomes.
+  - [ ] Give every invocation a cancellation token checked both before editor
+    dispatch and immediately before any mutation. Aborting rejects awaited
+    host operations and makes late native or JavaScript completions unable to
+    edit even if their underlying work finishes.
+  - [ ] Wire one visible gpui action/button to invoke the fixture command that
+    awaits, snapshots, and edits the Rust buffer. Report its running,
+    completed, cancelled, or failed state in the window. Add focused tests for
+    disposal, unload, throw/rejection, and the late-response mutation guard. ✅
+    when implemented.
 - [ ] Implement buffer-change subscriptions and disposables. Fan one committed
   change out to several extension threads while preserving per-extension
   ordering and isolating thrown/rejected subscriber failures.
+  - [ ] Add subscription identities and lifecycle-owned registries without
+    exposing transport concepts publicly. `onDidChange` returns an idempotent
+    disposable; buffer closure and extension unload remove all affected
+    subscriptions.
+  - [ ] After each non-empty commit, construct exactly one `BufferChangeEvent`
+    containing the cached buffer proxy, before/after revisions, and the
+    original ordered edits in pre-commit coordinates. Local and extension
+    commits use the same publication path.
+  - [ ] Fan the immutable Knot-owned event payload to every subscribed
+    extension. Queue callbacks on each extension's runtime command stream so
+    callbacks for one extension execute serially and in commit order while
+    different extension threads remain independent.
+  - [ ] Await each listener result before advancing that extension's callback
+    queue. Record thrown/rejected listener failures against that extension and
+    continue later callbacks and other extensions; do not fail or roll back the
+    already committed edit.
+  - [ ] Track queue depth and enqueue-to-start lag for later Phase 3 evidence,
+    but add no dropping, coalescing, producer blocking, or eviction policy.
+  - [ ] Test one event for a multi-edit commit, ordering across finite bursts,
+    several extensions receiving the same commit, disposal and closure, and a
+    failing subscriber not suppressing subsequent delivery. Update
+    `architecture.md` with the commit/event fan-out flow. ✅ when implemented.
 
 ### 3. Integrated proof and evidence
 
