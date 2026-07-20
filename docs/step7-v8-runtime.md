@@ -170,6 +170,10 @@ record that finding for the API design instead.
   test heap limit/near-limit callback and run heap exhaustion in a sacrificial
   test process first; record a limitation rather than risking editor-process
   abort if V8 cannot recover safely.
+  - [x] Attach each extension isolate's private thread-safe handle to its
+    lifecycle-owned watchdog. The handle remains inside `host` and is cleared
+    during lifecycle teardown; termination policy and heap probing remain
+    separate slices. ✅
 
 ### 2. Editor model and public boundary
 

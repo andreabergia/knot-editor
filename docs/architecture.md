@@ -252,6 +252,9 @@ JavaScript promises and cancellation state; unload clears those promises so
 late host replies are rejected. The same idempotent teardown runs after normal
 thread shutdown and failed extension-thread initialization. Future command,
 subscription, and queued-callback registries will be owned by that token.
+The lifecycle token also owns a private V8 thread-safe isolate handle for the
+future watchdog, clearing it during teardown. No watchdog termination policy
+or heap-limit probing has landed yet.
 
 An extension's host-bound identity will be its stable, case-sensitive,
 globally namespaced string ID (initially a fixture/module identity and later a

@@ -391,6 +391,7 @@ struct ExtensionLifecycle {
 struct ExtensionLifecycleState {
     torn_down: bool,
     pending_requests: PendingRequests,
+    watchdog: ExtensionWatchdog,
 }
 
 impl ExtensionLifecycle {
@@ -443,6 +444,39 @@ impl ExtensionLifecycle {
         }
         state.torn_down = true;
         state.pending_requests = PendingRequests::default();
+        state.watchdog.clear_isolate();
+    }
+
+    fn install_isolate(&self, isolate: deno_core::v8::IsolateHandle) {
+        self.state
+            .lock()
+            .expect("Knot extension lifecycle lock poisoned")
+            .watchdog
+            .install_isolate(isolate);
+    }
+}
+
+/// Thread-safe control path from the future watchdog to its extension isolate.
+///
+/// The handle is kept private to `host`; callers can never obtain a V8 value
+/// through Knot's extension-facing API.
+#[derive(Default)]
+struct ExtensionWatchdog {
+    isolate: Option<deno_core::v8::IsolateHandle>,
+}
+
+impl ExtensionWatchdog {
+    fn install_isolate(&mut self, isolate: deno_core::v8::IsolateHandle) {
+        self.isolate = Some(isolate);
+    }
+
+    fn clear_isolate(&mut self) {
+        self.isolate = None;
+    }
+
+    #[cfg(test)]
+    fn is_attached(&self) -> bool {
+        self.isolate.is_some()
     }
 }
 
@@ -539,6 +573,7 @@ impl ExtensionRuntime {
             module_loader: Some(Rc::new(fixture_modules.clone())),
             ..Default::default()
         });
+        lifecycle.install_isolate(js_runtime.v8_isolate().thread_safe_handle());
         let bootstrap = ModuleSpecifier::parse(PRIVATE_BOOTSTRAP_SPECIFIER)
             .expect("Knot private bootstrap specifier must be valid");
         let bootstrap_module = event_loop_runtime
@@ -887,5 +922,25 @@ mod tests {
             lifecycle.register_manual(RequestId::new(2)),
             Err(ExtensionRuntimeClosed)
         );
+    }
+
+    #[test]
+    fn lifecycle_attaches_the_isolate_to_its_private_watchdog() {
+        let host = V8Host::new();
+        let runtime = host.spawn_extension(ExtensionId::new(7));
+
+        runtime
+            .execute_fixture_script("watchdog-ready.js", "globalThis.watchdogReady = true")
+            .unwrap();
+        assert!(
+            runtime
+                .lifecycle
+                .state
+                .lock()
+                .unwrap()
+                .watchdog
+                .is_attached()
+        );
+        runtime.shutdown();
     }
 }
