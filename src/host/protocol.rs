@@ -29,6 +29,42 @@ impl RequestId {
     }
 }
 
+/// An identity for one loaded extension lifetime.
+///
+/// Reusing an [`ExtensionId`] for a later load does not reuse this value.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct ExtensionLifecycleId(u64);
+
+impl ExtensionLifecycleId {
+    pub(crate) const fn new(value: u64) -> Self {
+        Self(value)
+    }
+}
+
+/// An opaque identity for one extension command registration.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct CommandRegistrationId(u64);
+
+impl CommandRegistrationId {
+    pub(crate) const fn new(value: u64) -> Self {
+        Self(value)
+    }
+}
+
+/// An opaque identity for one command invocation.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct CommandInvocationId(u64);
+
+impl CommandInvocationId {
+    #[allow(
+        dead_code,
+        reason = "invocation allocation lands with command execution in the next Step 7 slice"
+    )]
+    pub(crate) const fn new(value: u64) -> Self {
+        Self(value)
+    }
+}
+
 /// An opaque reference to an editor buffer.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct BufferHandle(u64);
@@ -67,6 +103,7 @@ pub struct TextEdit {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HostRequest {
     pub extension: ExtensionId,
+    pub lifecycle: ExtensionLifecycleId,
     pub id: RequestId,
     pub operation: HostOperation,
 }
@@ -84,12 +121,19 @@ pub enum HostOperation {
         edits: Vec<TextEdit>,
         if_revision: u64,
     },
+    RegisterCommand {
+        name: String,
+    },
+    UnregisterCommand {
+        registration: CommandRegistrationId,
+    },
 }
 
 /// A reply sent back to the extension runtime for one [`HostRequest`].
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HostResponse {
     pub extension: ExtensionId,
+    pub lifecycle: ExtensionLifecycleId,
     pub id: RequestId,
     pub result: Result<HostResponseValue, HostRequestError>,
 }
@@ -100,6 +144,17 @@ pub enum HostResponseValue {
     ActiveBuffer(Option<BufferHandle>),
     Snapshot(TextSnapshot),
     AppliedEdits { revision: u64 },
+    CommandRegistered { registration: CommandRegistrationId },
+    CommandUnregistered { registration: CommandRegistrationId },
+}
+
+/// A foreground-authorized command invocation routed to its extension owner.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CommandInvocation {
+    pub id: CommandInvocationId,
+    pub registration: CommandRegistrationId,
+    pub extension: ExtensionId,
+    pub lifecycle: ExtensionLifecycleId,
 }
 
 /// A snapshot of one requested UTF-8 byte range.
@@ -120,31 +175,36 @@ pub enum HostRequestError {
     InvalidRange,
     InvalidEditBatch,
     RevisionConflict,
+    CommandNameInUse,
+    CommandNotFound,
     Cancelled,
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        BufferHandle, ExtensionId, HostOperation, HostRequest, HostResponse, HostResponseValue,
-        RequestId,
+        BufferHandle, ExtensionId, ExtensionLifecycleId, HostOperation, HostRequest, HostResponse,
+        HostResponseValue, RequestId,
     };
 
     #[test]
     fn response_keeps_the_extension_and_request_identity() {
         let request = HostRequest {
             extension: ExtensionId::new(7),
+            lifecycle: ExtensionLifecycleId::new(3),
             id: RequestId::new(11),
             operation: HostOperation::ActiveBuffer,
         };
 
         let response = HostResponse {
             extension: request.extension,
+            lifecycle: request.lifecycle,
             id: request.id,
             result: Ok(HostResponseValue::ActiveBuffer(Some(BufferHandle::new(3)))),
         };
 
         assert_eq!(response.extension, request.extension);
+        assert_eq!(response.lifecycle, request.lifecycle);
         assert_eq!(response.id, request.id);
     }
 }

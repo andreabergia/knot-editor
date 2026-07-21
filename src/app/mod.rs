@@ -18,7 +18,7 @@ mod editor;
 pub mod model;
 
 use editor::EditorView;
-use model::{BufferAccessError, BufferModel, BufferRegistry};
+use model::{BufferAccessError, BufferModel, BufferRegistry, CommandRegistry};
 
 actions!(knot, [Quit]);
 
@@ -38,6 +38,13 @@ fn map_buffer_error(error: BufferAccessError) -> HostRequestError {
         BufferAccessError::InvalidRange => HostRequestError::InvalidRange,
         BufferAccessError::InvalidEditBatch => HostRequestError::InvalidEditBatch,
         BufferAccessError::RevisionConflict => HostRequestError::RevisionConflict,
+    }
+}
+
+fn map_command_error(error: model::CommandRegistryError) -> HostRequestError {
+    match error {
+        model::CommandRegistryError::NameInUse => HostRequestError::CommandNameInUse,
+        model::CommandRegistryError::NotFound => HostRequestError::CommandNotFound,
     }
 }
 
@@ -72,6 +79,7 @@ struct Shell {
     /// during each paint.
     editor: Entity<EditorView>,
     buffer_registry: BufferRegistry,
+    command_registry: CommandRegistry,
     heartbeat: u64,
     runtime_state: SharedString,
     latest_runtime_error: Option<SharedString>,
@@ -186,6 +194,7 @@ impl Shell {
             drag_origin: None,
             editor,
             buffer_registry,
+            command_registry: CommandRegistry::new(),
             heartbeat: 0,
             runtime_state: "starting".into(),
             latest_runtime_error: None,
@@ -279,10 +288,21 @@ impl Shell {
                         .read_with(cx, |model, _| model.revision());
                     HostResponseValue::AppliedEdits { revision }
                 }),
+            HostOperation::RegisterCommand { name } => self
+                .command_registry
+                .register(name, request.extension, request.lifecycle)
+                .map(|registration| HostResponseValue::CommandRegistered { registration })
+                .map_err(map_command_error),
+            HostOperation::UnregisterCommand { registration } => self
+                .command_registry
+                .unregister(registration, request.extension, request.lifecycle)
+                .map(|()| HostResponseValue::CommandUnregistered { registration })
+                .map_err(map_command_error),
         };
 
         HostResponse {
             extension: request.extension,
+            lifecycle: request.lifecycle,
             id: request.id,
             result,
         }

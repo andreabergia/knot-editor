@@ -6,7 +6,9 @@ use gpui::{AppContext, Entity, WeakEntity};
 
 use crate::{
     core::buffer::TextBuffer,
-    host::protocol::{BufferHandle, ByteRange},
+    host::protocol::{
+        BufferHandle, ByteRange, CommandRegistrationId, ExtensionId, ExtensionLifecycleId,
+    },
 };
 
 /// The authoritative document owned by gpui's foreground thread.
@@ -242,6 +244,104 @@ impl Default for BufferRegistry {
     }
 }
 
+/// Foreground-authoritative command names and their extension ownership.
+pub struct CommandRegistry {
+    next_registration: u64,
+    by_name: HashMap<String, CommandRegistration>,
+    by_id: HashMap<CommandRegistrationId, String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct CommandRegistration {
+    id: CommandRegistrationId,
+    extension: ExtensionId,
+    lifecycle: ExtensionLifecycleId,
+}
+
+/// The extension lifetime authorized to receive a named command invocation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct CommandTarget {
+    pub registration: CommandRegistrationId,
+    pub extension: ExtensionId,
+    pub lifecycle: ExtensionLifecycleId,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CommandRegistryError {
+    NameInUse,
+    NotFound,
+}
+
+impl CommandRegistry {
+    pub fn new() -> Self {
+        Self {
+            next_registration: 1,
+            by_name: HashMap::new(),
+            by_id: HashMap::new(),
+        }
+    }
+
+    pub(crate) fn register(
+        &mut self,
+        name: String,
+        extension: ExtensionId,
+        lifecycle: ExtensionLifecycleId,
+    ) -> Result<CommandRegistrationId, CommandRegistryError> {
+        if self.by_name.contains_key(&name) {
+            return Err(CommandRegistryError::NameInUse);
+        }
+        let id = CommandRegistrationId::new(self.next_registration);
+        self.next_registration = self
+            .next_registration
+            .checked_add(1)
+            .expect("command registration space exhausted");
+        self.by_name.insert(
+            name.clone(),
+            CommandRegistration {
+                id,
+                extension,
+                lifecycle,
+            },
+        );
+        self.by_id.insert(id, name);
+        Ok(id)
+    }
+
+    pub(crate) fn resolve(&self, name: &str) -> Result<CommandTarget, CommandRegistryError> {
+        let registration = self
+            .by_name
+            .get(name)
+            .ok_or(CommandRegistryError::NotFound)?;
+        Ok(CommandTarget {
+            registration: registration.id,
+            extension: registration.extension,
+            lifecycle: registration.lifecycle,
+        })
+    }
+
+    pub(crate) fn unregister(
+        &mut self,
+        id: CommandRegistrationId,
+        extension: ExtensionId,
+        lifecycle: ExtensionLifecycleId,
+    ) -> Result<(), CommandRegistryError> {
+        let name = self.by_id.get(&id).ok_or(CommandRegistryError::NotFound)?;
+        let registration = self.by_name.get(name).expect("command indexes agree");
+        if registration.extension != extension || registration.lifecycle != lifecycle {
+            return Err(CommandRegistryError::NotFound);
+        }
+        let name = self.by_id.remove(&id).expect("command exists");
+        self.by_name.remove(&name);
+        Ok(())
+    }
+}
+
+impl Default for CommandRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::host::protocol::TextEdit;
@@ -432,6 +532,44 @@ mod tests {
                 end_byte_offset: emoji_end,
             })),
             Err(BufferAccessError::InvalidRange)
+        );
+    }
+
+    #[test]
+    fn command_names_belong_to_one_extension_lifetime() {
+        let mut registry = CommandRegistry::new();
+        let extension = ExtensionId::new(7);
+        let lifecycle = ExtensionLifecycleId::new(3);
+        let registration = registry
+            .register("knot.fixture.edit".into(), extension, lifecycle)
+            .unwrap();
+
+        assert_eq!(
+            registry.resolve("knot.fixture.edit").unwrap(),
+            CommandTarget {
+                registration,
+                extension,
+                lifecycle,
+            }
+        );
+        assert_eq!(
+            registry.register(
+                "knot.fixture.edit".into(),
+                ExtensionId::new(8),
+                ExtensionLifecycleId::new(4),
+            ),
+            Err(CommandRegistryError::NameInUse)
+        );
+        assert_eq!(
+            registry.unregister(registration, extension, ExtensionLifecycleId::new(4)),
+            Err(CommandRegistryError::NotFound)
+        );
+        registry
+            .unregister(registration, extension, lifecycle)
+            .unwrap();
+        assert_eq!(
+            registry.resolve("knot.fixture.edit"),
+            Err(CommandRegistryError::NotFound)
         );
     }
 }

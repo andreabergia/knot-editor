@@ -313,9 +313,9 @@ record that finding for the API design instead.
 - [ ] Implement extension-owned command registration and invocation. Pass an
   `AbortSignal`; cancellation rejects awaited host work and invalidates the
   invocation token so a response arriving later cannot mutate editor state.
-  - [ ] Add Knot-owned command, registration, and invocation identities to the
+  - [x] Add Knot-owned command, registration, and invocation identities to the
     typed protocol. Keep the editor registry authoritative for command names;
-    each registration records its owning extension and lifecycle token.
+    each registration records its owning extension and lifecycle token. ✅
   - [ ] Add `commands.register` to the facade with an extension-local handler
     registry and idempotent disposable. Extension unload disposes all of its
     registrations; an explicit dispose prevents later invocation.

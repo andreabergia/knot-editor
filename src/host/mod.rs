@@ -26,8 +26,8 @@ use deno_error::JsErrorBox;
 pub mod protocol;
 
 use protocol::{
-    BufferHandle, ByteRange, ExtensionId, HostOperation, HostRequest, HostResponse,
-    HostResponseValue, RequestId, TextEdit,
+    BufferHandle, ByteRange, ExtensionId, ExtensionLifecycleId, HostOperation, HostRequest,
+    HostResponse, HostResponseValue, RequestId, TextEdit,
 };
 
 const PRIVATE_BOOTSTRAP_SPECIFIER: &str = "knot:bootstrap";
@@ -341,6 +341,7 @@ async fn request_host_operation(
 /// per-extension initializer.
 pub struct V8Host {
     async_runtime: Arc<tokio::runtime::Runtime>,
+    next_lifecycle_id: std::sync::atomic::AtomicU64,
 }
 
 impl V8Host {
@@ -357,6 +358,7 @@ impl V8Host {
 
         Self {
             async_runtime: Arc::new(async_runtime),
+            next_lifecycle_id: std::sync::atomic::AtomicU64::new(1),
         }
     }
 
@@ -365,7 +367,11 @@ impl V8Host {
     /// The thread owns its `JsRuntime` and all extension-local state. Script
     /// and module execution remain fixture-level Step 7 probes.
     pub fn spawn_extension(&self, extension: ExtensionId) -> ExtensionRuntimeHandle {
-        ExtensionRuntimeHandle::spawn(extension, Arc::clone(&self.async_runtime))
+        let lifecycle = ExtensionLifecycleId::new(
+            self.next_lifecycle_id
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+        );
+        ExtensionRuntimeHandle::spawn(extension, lifecycle, Arc::clone(&self.async_runtime))
     }
 }
 
@@ -382,7 +388,11 @@ pub struct ExtensionRuntimeHandle {
 }
 
 impl ExtensionRuntimeHandle {
-    fn spawn(extension: ExtensionId, async_runtime: Arc<tokio::runtime::Runtime>) -> Self {
+    fn spawn(
+        extension: ExtensionId,
+        lifecycle_id: ExtensionLifecycleId,
+        async_runtime: Arc<tokio::runtime::Runtime>,
+    ) -> Self {
         let (commands, command_receiver) = mpsc::channel();
         let (request_sender, requests) = tokio::sync::mpsc::unbounded_channel();
         let lifecycle = Arc::new(ExtensionLifecycle::default());
@@ -394,6 +404,7 @@ impl ExtensionRuntimeHandle {
                 let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     ExtensionRuntime::new(
                         extension,
+                        lifecycle_id,
                         request_sender,
                         extension_lifecycle,
                         async_runtime,
@@ -406,6 +417,7 @@ impl ExtensionRuntimeHandle {
 
         let control = ExtensionRuntimeControl {
             extension,
+            lifecycle_id,
             commands,
             lifecycle,
         };
@@ -491,6 +503,7 @@ pub struct ExtensionRuntimeParts {
 #[derive(Clone)]
 pub struct ExtensionRuntimeControl {
     extension: ExtensionId,
+    lifecycle_id: ExtensionLifecycleId,
     commands: Sender<RuntimeCommand>,
     lifecycle: Arc<ExtensionLifecycle>,
 }
@@ -537,7 +550,7 @@ impl ExtensionRuntimeControl {
 
     /// Return a host response to this extension runtime.
     pub fn respond(&self, response: HostResponse) -> Result<(), ExtensionRuntimeResponseError> {
-        if response.extension != self.extension {
+        if response.extension != self.extension || response.lifecycle != self.lifecycle_id {
             return Err(ExtensionRuntimeResponseError::WrongExtension);
         }
 
@@ -884,6 +897,7 @@ impl PendingRequests {
 /// Extension-thread request allocator and JavaScript-promise response router.
 struct ExtensionRequestRouter {
     extension: ExtensionId,
+    lifecycle_id: ExtensionLifecycleId,
     next_request_id: u64,
     request_sender: tokio::sync::mpsc::UnboundedSender<HostRequest>,
     lifecycle: Arc<ExtensionLifecycle>,
@@ -902,6 +916,7 @@ impl ExtensionRequestRouter {
         self.request_sender
             .send(HostRequest {
                 extension: self.extension,
+                lifecycle: self.lifecycle_id,
                 id,
                 operation,
             })
@@ -941,6 +956,7 @@ struct ExtensionRuntime {
 impl ExtensionRuntime {
     fn new(
         extension: ExtensionId,
+        lifecycle_id: ExtensionLifecycleId,
         request_sender: tokio::sync::mpsc::UnboundedSender<HostRequest>,
         lifecycle: Arc<ExtensionLifecycle>,
         async_runtime: Arc<tokio::runtime::Runtime>,
@@ -1004,6 +1020,7 @@ impl ExtensionRuntime {
             .borrow_mut()
             .put(ExtensionRequestRouter {
                 extension,
+                lifecycle_id,
                 next_request_id: 0,
                 request_sender,
                 lifecycle: Arc::clone(&lifecycle),
@@ -1121,7 +1138,8 @@ mod tests {
         ExtensionRuntimeResponseError, V8Host,
     };
     use crate::host::protocol::{
-        ExtensionId, HostOperation, HostResponse, HostResponseValue, RequestId,
+        ExtensionId, ExtensionLifecycleId, HostOperation, HostResponse, HostResponseValue,
+        RequestId,
     };
 
     #[test]
@@ -1150,6 +1168,7 @@ mod tests {
         runtime
             .respond(HostResponse {
                 extension,
+                lifecycle: first.lifecycle,
                 id: first.id,
                 result: Ok(HostResponseValue::ActiveBuffer(None)),
             })
@@ -1240,6 +1259,7 @@ mod tests {
         runtime
             .respond(HostResponse {
                 extension,
+                lifecycle: request.lifecycle,
                 id: request.id,
                 result: Ok(HostResponseValue::ActiveBuffer(None)),
             })
@@ -1282,6 +1302,7 @@ mod tests {
 
         let result = runtime.respond(HostResponse {
             extension: ExtensionId::new(8),
+            lifecycle: runtime.control.lifecycle_id,
             id: RequestId::new(1),
             result: Ok(HostResponseValue::ActiveBuffer(None)),
         });
@@ -1297,6 +1318,7 @@ mod tests {
 
         let result = runtime.respond(HostResponse {
             extension,
+            lifecycle: runtime.control.lifecycle_id,
             id: RequestId::new(1),
             result: Ok(HostResponseValue::ActiveBuffer(None)),
         });
@@ -1323,6 +1345,7 @@ mod tests {
         assert_eq!(
             lifecycle.respond(HostResponse {
                 extension,
+                lifecycle: ExtensionLifecycleId::new(1),
                 id: RequestId::new(1),
                 result: Ok(HostResponseValue::ActiveBuffer(None)),
             }),
@@ -1369,6 +1392,7 @@ mod tests {
         control
             .respond(HostResponse {
                 extension,
+                lifecycle: request.lifecycle,
                 id: request.id,
                 result: Ok(HostResponseValue::ActiveBuffer(None)),
             })
@@ -1394,6 +1418,7 @@ mod tests {
         runtime
             .respond(HostResponse {
                 extension,
+                lifecycle: request.lifecycle,
                 id: request.id,
                 result: Ok(HostResponseValue::ActiveBuffer(None)),
             })
@@ -1426,6 +1451,7 @@ mod tests {
         runtime
             .respond(HostResponse {
                 extension,
+                lifecycle: request.lifecycle,
                 id: request.id,
                 result: Ok(HostResponseValue::ActiveBuffer(None)),
             })

@@ -85,6 +85,8 @@ buffer's `edit_seq` remains a private primitive-edit-log cursor.
 
 `BufferRegistry` gives models monotonic, never-reused transport handles and
 stores only weak entity references. It also tracks the optional active buffer.
+`CommandRegistry` is foreground-owned and keeps command names authoritative;
+each registration is bound to its extension and unique extension lifetime.
 `EditorView` owns cursor, selection, scroll, IME, annotations, and a derived
 line/segment rendering projection; local edits commit through its model and
 model notifications refresh the projection. A foreground-local bridge task
@@ -112,9 +114,9 @@ gpui Shell / BufferRegistry
 work. Each extension runs a persistent JavaScript runtime on its own OS thread
 and communicates with the host through typed request and response messages.
 
-`host::protocol` contains the transport-level identities, buffer data, and
-errors without depending on V8, Deno, gpui, or the concrete core buffer. This
-keeps runtime mechanics behind the host boundary. The application dispatches
+`host::protocol` contains the transport-level identities, buffer and command
+data, and errors without depending on V8, Deno, gpui, or the concrete core
+buffer. This keeps runtime mechanics behind the host boundary. The application dispatches
 active-buffer, snapshot, and batched-edit requests by resolving opaque handles
 against foreground-owned models immediately before each operation. `BufferModel`
 validates UTF-8 byte ranges and revisioned edit batches before using core's
@@ -129,7 +131,8 @@ background work waits for the extension thread to exit.
 Extension-local lifecycle state owns pending work, termination, resource
 limits, and teardown. A failed or terminated isolate does not take down other
 extensions. The current JavaScript API and module loading are fixture-level
-probes; command registration and the complete editor API do not exist yet.
+probes; command facade wiring, invocation, and the complete editor API do not
+exist yet.
 
 ```text
 extension JavaScript
@@ -143,7 +146,7 @@ extension runtime thread
 gpui foreground bridge
         |
         v
-BufferRegistry / BufferModel
+BufferRegistry / BufferModel / CommandRegistry
 ```
 
 The private bootstrap module retains native bindings and turns opaque handles
@@ -169,10 +172,9 @@ Detailed runtime behavior and experiment results live in
 
 ## Major gaps
 
-- Snapshot and edit requests are not yet dispatched to `BufferModel`.
 - Undo history, edit grouping, and view-state restoration are not implemented.
-- Commands, capability aggregation, filesystem providers, terminal state, and
-  the public extension API remain roadmap work.
+- Command facade wiring and invocation, capability aggregation, filesystem
+  providers, terminal state, and the public extension API remain roadmap work.
 
 Update this document when component boundaries, ownership, dependency
 direction, or a major runtime flow changes. Keep implementation contracts in
