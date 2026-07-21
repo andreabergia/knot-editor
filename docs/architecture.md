@@ -128,11 +128,19 @@ before gpui starts. Only the Knot-owned endpoints move into application state.
 On shell teardown, the foreground thread requests extension shutdown and
 background work waits for the extension thread to exit.
 
+Command registration crosses the same typed bridge. The foreground
+`CommandRegistry` allocates registrations and resolves a command name to its
+owning extension lifetime. Invocation is queued onto that extension's runtime
+thread with the active buffer handle; requests issued by the handler carry the
+invocation identity. The foreground cancellation set rejects its later host
+work and rechecks before applying an edit, so a late completion cannot mutate
+the document.
+
 Extension-local lifecycle state owns pending work, termination, resource
 limits, and teardown. A failed or terminated isolate does not take down other
 extensions. The current JavaScript API and module loading are fixture-level
-probes; command facade wiring, invocation, and the complete editor API do not
-exist yet.
+probes; buffer change subscriptions and the complete editor API do not exist
+yet.
 
 ```text
 extension JavaScript
@@ -173,8 +181,8 @@ Detailed runtime behavior and experiment results live in
 ## Major gaps
 
 - Undo history, edit grouping, and view-state restoration are not implemented.
-- Command facade wiring and invocation, capability aggregation, filesystem
-  providers, terminal state, and the public extension API remain roadmap work.
+- Buffer change subscriptions, capability aggregation, filesystem providers,
+  terminal state, and the public extension API remain roadmap work.
 
 Update this document when component boundaries, ownership, dependency
 direction, or a major runtime flow changes. Keep implementation contracts in

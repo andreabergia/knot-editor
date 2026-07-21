@@ -4,13 +4,14 @@
 //! status area for the active buffer and extension runtime.
 
 use gpui::{prelude::FluentBuilder, *};
-use std::time::Duration;
+use std::{collections::HashSet, time::Duration};
 
 use crate::host::{
     ExtensionRequestInbox, ExtensionRuntimeControl, ExtensionRuntimeParts, ExtensionRuntimeThread,
     V8Host,
     protocol::{
-        ExtensionId, HostOperation, HostRequest, HostRequestError, HostResponse, HostResponseValue,
+        CommandInvocation, CommandInvocationId, ExtensionId, HostOperation, HostRequest,
+        HostRequestError, HostResponse, HostResponseValue,
     },
 };
 
@@ -24,12 +25,17 @@ actions!(knot, [Quit]);
 
 const MIN_PANE: f32 = 120.;
 const RUNTIME_PROBE_SOURCE: &str = r#"
-import { editor } from "knot:editor";
+import { commands, editor } from "knot:editor";
 
 globalThis.knotActiveBuffer = await editor.activeBuffer();
-if (!globalThis.knotActiveBuffer) {
-  throw new Error("Knot has no active editor buffer");
-}
+await commands.register("knot.fixture.edit", async (context) => {
+  if (!context.buffer) throw new Error("Knot has no active editor buffer");
+  const snapshot = await context.buffer.snapshot();
+  await context.buffer.applyEdits(
+    [{ range: { startByteOffset: 0, endByteOffset: 0 }, text: "// command\n" }],
+    { ifRevision: snapshot.revision },
+  );
+});
 "#;
 
 fn map_buffer_error(error: BufferAccessError) -> HostRequestError {
@@ -80,6 +86,10 @@ struct Shell {
     editor: Entity<EditorView>,
     buffer_registry: BufferRegistry,
     command_registry: CommandRegistry,
+    next_command_invocation: u64,
+    active_command: Option<CommandInvocationId>,
+    cancelled_commands: HashSet<CommandInvocationId>,
+    command_state: SharedString,
     heartbeat: u64,
     runtime_state: SharedString,
     latest_runtime_error: Option<SharedString>,
@@ -195,6 +205,10 @@ impl Shell {
             editor,
             buffer_registry,
             command_registry: CommandRegistry::new(),
+            next_command_invocation: 1,
+            active_command: None,
+            cancelled_commands: HashSet::new(),
+            command_state: "idle".into(),
             heartbeat: 0,
             runtime_state: "starting".into(),
             latest_runtime_error: None,
@@ -227,7 +241,9 @@ impl Shell {
                     break;
                 }
             }
+            let (extension, lifecycle) = control.identity();
             let _ = this.update(cx, |this, cx| {
+                this.command_registry.remove_lifecycle(extension, lifecycle);
                 this.runtime_state = "closed".into();
                 if let Some(error) = failure {
                     this.latest_runtime_error = Some(error.into());
@@ -242,6 +258,9 @@ impl Shell {
         request: HostRequest,
         cx: &mut Context<Self>,
     ) -> HostResponse {
+        let cancelled = request
+            .invocation
+            .is_some_and(|invocation| self.cancelled_commands.contains(&invocation));
         let result = match request.operation {
             HostOperation::ActiveBuffer => Ok(HostResponseValue::ActiveBuffer(
                 self.buffer_registry.active_handle(),
@@ -256,6 +275,7 @@ impl Shell {
                         .map_err(map_buffer_error)
                 })
                 .map(HostResponseValue::Snapshot),
+            HostOperation::ApplyEdits { .. } if cancelled => Err(HostRequestError::Cancelled),
             HostOperation::ApplyEdits {
                 buffer,
                 edits,
@@ -305,6 +325,59 @@ impl Shell {
             lifecycle: request.lifecycle,
             id: request.id,
             result,
+        }
+    }
+
+    fn invoke_fixture_command(&mut self, cx: &mut Context<Self>) {
+        let target = match self.command_registry.resolve("knot.fixture.edit") {
+            Ok(target) => target,
+            Err(_) => {
+                self.command_state = "unavailable".into();
+                cx.notify();
+                return;
+            }
+        };
+        let id = CommandInvocationId::new(self.next_command_invocation);
+        self.next_command_invocation = self
+            .next_command_invocation
+            .checked_add(1)
+            .expect("command invocation space exhausted");
+        self.active_command = Some(id);
+        self.command_state = "running".into();
+        let execution = self.runtime_control.invoke_command(
+            CommandInvocation {
+                id,
+                registration: target.registration,
+                extension: target.extension,
+                lifecycle: target.lifecycle,
+            },
+            self.buffer_registry.active_handle(),
+        );
+        cx.spawn(async move |this, cx| {
+            let result = execution.await;
+            let _ = this.update(cx, |this, cx| {
+                if this.active_command == Some(id) {
+                    this.active_command = None;
+                    this.command_state = if this.cancelled_commands.remove(&id) {
+                        "cancelled".into()
+                    } else if result.is_ok() {
+                        "completed".into()
+                    } else {
+                        "failed".into()
+                    };
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn cancel_active_command(&mut self, cx: &mut Context<Self>) {
+        if let Some(invocation) = self.active_command {
+            self.cancelled_commands.insert(invocation);
+            self.command_state = "cancelling".into();
+            cx.notify();
         }
     }
 
@@ -506,6 +579,27 @@ impl Render for Shell {
                             .bg(rgb(0x252526))
                             .child(format!("revision {revision}"))
                             .child(format!("runtime {}", self.runtime_state))
+                            .child(format!("command {}", self.command_state))
+                            .child(
+                                div()
+                                    .id("run-fixture-command")
+                                    .cursor_pointer()
+                                    .text_color(rgb(0x80c0ff))
+                                    .child("run command")
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.invoke_fixture_command(cx);
+                                    })),
+                            )
+                            .child(
+                                div()
+                                    .id("cancel-fixture-command")
+                                    .cursor_pointer()
+                                    .text_color(rgb(0xffb080))
+                                    .child("cancel command")
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.cancel_active_command(cx);
+                                    })),
+                            )
                             .child(format!("error {runtime_error}"))
                             .child(format!("heartbeat {}", self.heartbeat)),
                     ),
@@ -575,6 +669,16 @@ mod tests {
         cx: &mut TestAppContext,
     ) {
         while cx.read(|cx| shell.read(cx).runtime_state != expected) {
+            shell.next_notification(Duration::ZERO, cx).await;
+        }
+    }
+
+    async fn wait_for_command_state(
+        shell: &Entity<Shell>,
+        expected: &str,
+        cx: &mut TestAppContext,
+    ) {
+        while cx.read(|cx| shell.read(cx).command_state != expected) {
             shell.next_notification(Duration::ZERO, cx).await;
         }
     }
@@ -664,6 +768,67 @@ mod tests {
         });
         assert!(text.starts_with("😀中é// extension\n"));
         assert_eq!(revision, 2);
+    }
+
+    #[gpui::test]
+    async fn fixture_command_edits_the_displayed_buffer_without_blocking_the_bridge(
+        cx: &mut TestAppContext,
+    ) {
+        let runtime = V8Host::new()
+            .spawn_extension(ExtensionId::new(10))
+            .into_parts();
+        let shell = cx.new(|cx| Shell::new(runtime, cx));
+        wait_for_runtime_state(&shell, "running", cx).await;
+        shell.update(cx, |shell, cx| shell.invoke_fixture_command(cx));
+        wait_for_command_state(&shell, "completed", cx).await;
+
+        let text = cx.read(|cx| {
+            let shell = shell.read(cx);
+            let handle = shell.buffer_registry.active_handle().unwrap();
+            shell
+                .buffer_registry
+                .resolve(handle)
+                .unwrap()
+                .read_with(cx, |model, _| model.text())
+        });
+        assert!(text.starts_with("// command\n"));
+    }
+
+    #[gpui::test]
+    async fn cancelling_before_the_awaited_command_request_prevents_its_edit(
+        cx: &mut TestAppContext,
+    ) {
+        let runtime = V8Host::new()
+            .spawn_extension(ExtensionId::new(11))
+            .into_parts();
+        let shell = cx.new(|cx| Shell::new(runtime, cx));
+        wait_for_runtime_state(&shell, "running", cx).await;
+        let initial_text = cx.read(|cx| {
+            let shell = shell.read(cx);
+            let handle = shell.buffer_registry.active_handle().unwrap();
+            shell
+                .buffer_registry
+                .resolve(handle)
+                .unwrap()
+                .read_with(cx, |model, _| model.text())
+        });
+
+        shell.update(cx, |shell, cx| {
+            shell.invoke_fixture_command(cx);
+            shell.cancel_active_command(cx);
+        });
+        wait_for_command_state(&shell, "cancelled", cx).await;
+
+        let text = cx.read(|cx| {
+            let shell = shell.read(cx);
+            let handle = shell.buffer_registry.active_handle().unwrap();
+            shell
+                .buffer_registry
+                .resolve(handle)
+                .unwrap()
+                .read_with(cx, |model, _| model.text())
+        });
+        assert_eq!(text, initial_text);
     }
 
     #[gpui::test]

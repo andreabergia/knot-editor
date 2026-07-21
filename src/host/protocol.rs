@@ -49,6 +49,10 @@ impl CommandRegistrationId {
     pub(crate) const fn new(value: u64) -> Self {
         Self(value)
     }
+
+    pub(crate) const fn value(self) -> u64 {
+        self.0
+    }
 }
 
 /// An opaque identity for one command invocation.
@@ -105,6 +109,7 @@ pub struct HostRequest {
     pub extension: ExtensionId,
     pub lifecycle: ExtensionLifecycleId,
     pub id: RequestId,
+    pub invocation: Option<CommandInvocationId>,
     pub operation: HostOperation,
 }
 
@@ -193,6 +198,7 @@ mod tests {
             extension: ExtensionId::new(7),
             lifecycle: ExtensionLifecycleId::new(3),
             id: RequestId::new(11),
+            invocation: None,
             operation: HostOperation::ActiveBuffer,
         };
 

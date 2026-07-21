@@ -334,6 +334,25 @@ impl CommandRegistry {
         self.by_name.remove(&name);
         Ok(())
     }
+
+    pub(crate) fn remove_lifecycle(
+        &mut self,
+        extension: ExtensionId,
+        lifecycle: ExtensionLifecycleId,
+    ) {
+        let registrations: Vec<_> = self
+            .by_name
+            .iter()
+            .filter_map(|(name, registration)| {
+                (registration.extension == extension && registration.lifecycle == lifecycle)
+                    .then_some((registration.id, name.clone()))
+            })
+            .collect();
+        for (id, name) in registrations {
+            self.by_id.remove(&id);
+            self.by_name.remove(&name);
+        }
+    }
 }
 
 impl Default for CommandRegistry {
@@ -569,6 +588,15 @@ mod tests {
             .unwrap();
         assert_eq!(
             registry.resolve("knot.fixture.edit"),
+            Err(CommandRegistryError::NotFound)
+        );
+
+        let replacement = registry
+            .register("knot.fixture.edit".into(), extension, lifecycle)
+            .unwrap();
+        registry.remove_lifecycle(extension, lifecycle);
+        assert_eq!(
+            registry.unregister(replacement, extension, lifecycle),
             Err(CommandRegistryError::NotFound)
         );
     }

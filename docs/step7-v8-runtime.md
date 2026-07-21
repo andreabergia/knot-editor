@@ -316,22 +316,21 @@ record that finding for the API design instead.
   - [x] Add Knot-owned command, registration, and invocation identities to the
     typed protocol. Keep the editor registry authoritative for command names;
     each registration records its owning extension and lifecycle token. ✅
-  - [ ] Add `commands.register` to the facade with an extension-local handler
+  - [x] Add `commands.register` to the facade with an extension-local handler
     registry and idempotent disposable. Extension unload disposes all of its
-    registrations; an explicit dispose prevents later invocation.
-  - [ ] Invoke handlers only on their owning extension thread and serialize
+    registrations; an explicit dispose prevents later invocation. ✅
+  - [x] Invoke handlers only on their owning extension thread and serialize
     callbacks within that extension. Construct `CommandContext` with the
     active buffer proxy and a fresh `AbortSignal`, then propagate synchronous
-    returns, promises, throws, and rejections to the host as typed outcomes.
-  - [ ] Give every invocation a cancellation token checked both before editor
+    returns, promises, throws, and rejections to the host as typed outcomes. ✅
+  - [x] Give every invocation a cancellation token checked both before editor
     dispatch and immediately before any mutation. Aborting rejects awaited
     host operations and makes late native or JavaScript completions unable to
-    edit even if their underlying work finishes.
-  - [ ] Wire one visible gpui action/button to invoke the fixture command that
+    edit even if their underlying work finishes. ✅
+  - [x] Wire one visible gpui action/button to invoke the fixture command that
     awaits, snapshots, and edits the Rust buffer. Report its running,
     completed, cancelled, or failed state in the window. Add focused tests for
     disposal, unload, throw/rejection, and the late-response mutation guard. ✅
-    when implemented.
 - [ ] Implement buffer-change subscriptions and disposables. Fan one committed
   change out to several extension threads while preserving per-extension
   ordering and isolating thrown/rejected subscriber failures.

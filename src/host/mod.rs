@@ -26,8 +26,8 @@ use deno_error::JsErrorBox;
 pub mod protocol;
 
 use protocol::{
-    BufferHandle, ByteRange, ExtensionId, ExtensionLifecycleId, HostOperation, HostRequest,
-    HostResponse, HostResponseValue, RequestId, TextEdit,
+    BufferHandle, ByteRange, CommandInvocation, ExtensionId, ExtensionLifecycleId, HostOperation,
+    HostRequest, HostResponse, HostResponseValue, RequestId, TextEdit,
 };
 
 const PRIVATE_BOOTSTRAP_SPECIFIER: &str = "knot:bootstrap";
@@ -37,14 +37,49 @@ const PRIVATE_BOOTSTRAP_SOURCE: &str = r#"
 const nativeOps = Deno.core.ops;
 
 const buffers = new Map();
+const commandHandlers = new Map();
+let activeCommandController = null;
 const snapshotTables = new WeakMap();
 
+class KnotAbortSignal {
+  #aborted = false;
+  #reason = undefined;
+  #listeners = new Set();
+  get aborted() { return this.#aborted; }
+  get reason() { return this.#reason; }
+  addEventListener(type, listener) {
+    if (type === "abort") this.#listeners.add(listener);
+  }
+  removeEventListener(type, listener) {
+    if (type === "abort") this.#listeners.delete(listener);
+  }
+  throwIfAborted() {
+    if (this.#aborted) throw this.#reason;
+  }
+  abort(reason) {
+    if (this.#aborted) return;
+    this.#aborted = true;
+    this.#reason = reason;
+    for (const listener of this.#listeners) listener.call(this, { type: "abort", target: this });
+    this.#listeners.clear();
+  }
+}
+
+class KnotAbortController {
+  signal = new KnotAbortSignal();
+  abort(reason = new Error("command cancelled")) { this.signal.abort(reason); }
+}
+
 function hostError(error) {
+  if (error === "Cancelled") activeCommandController?.abort(new Error("command cancelled"));
   const names = {
     BufferClosed: "BufferClosedError",
     InvalidRange: "RangeError",
     InvalidEditBatch: "InvalidEditBatchError",
     RevisionConflict: "RevisionConflictError",
+    CommandNameInUse: "CommandNameInUseError",
+    CommandNotFound: "CommandNotFoundError",
+    Cancelled: "AbortError",
   };
   const exception = new Error(error);
   exception.name = names[error] ?? "KnotHostError";
@@ -118,12 +153,48 @@ export async function activeBuffer() {
   const handle = await nativeOps.op_buffer_active();
   return handle === null ? null : bufferFor(handle);
 }
+
+export async function registerCommand(name, handler) {
+  if (typeof name !== "string" || typeof handler !== "function") {
+    throw new TypeError("commands.register requires a name and handler");
+  }
+  const registration = await nativeOps.op_command_register(name);
+  commandHandlers.set(registration, handler);
+  let disposed = false;
+  return Object.freeze({
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      commandHandlers.delete(registration);
+      void nativeOps.op_command_unregister(registration);
+    },
+  });
+}
+
+globalThis.__knotInvokeCommand = async (registration, activeHandle) => {
+  const handler = commandHandlers.get(registration);
+  if (!handler) throw new Error("Knot command registration is disposed");
+  const controller = new KnotAbortController();
+  activeCommandController = controller;
+  try {
+    return await handler(Object.freeze({
+      buffer: activeHandle === null ? null : bufferFor(activeHandle),
+      signal: controller.signal,
+    }));
+  } finally {
+    activeCommandController = null;
+  }
+};
 "#;
 const PUBLIC_FACADE_SOURCE: &str = r#"
-import { activeBuffer } from "knot:bootstrap";
+import { activeBuffer, registerCommand } from "knot:bootstrap";
 
 export const editor = {
   activeBuffer,
+};
+
+export const commands = {
+  register: registerCommand,
 };
 "#;
 
@@ -211,6 +282,8 @@ deno_core::extension!(
     ops = [
         op_buffer_active,
         op_buffer_request,
+        op_command_register,
+        op_command_unregister,
         op_fixture_shared_host_runtime,
     ],
 );
@@ -316,6 +389,47 @@ async fn op_buffer_request(
             "Knot host returned the wrong response type",
         )),
         Err(error) => Ok(NativeBufferResponse::Error { error }),
+    }
+}
+
+#[deno_core::op2]
+#[number]
+async fn op_command_register(
+    state: Rc<RefCell<OpState>>,
+    #[string] name: String,
+) -> Result<u64, JsErrorBox> {
+    let response = request_host_operation(state, HostOperation::RegisterCommand { name }).await?;
+    match response.result {
+        Ok(HostResponseValue::CommandRegistered { registration }) => Ok(registration.value()),
+        Ok(_) => Err(JsErrorBox::generic(
+            "Knot host returned the wrong response type",
+        )),
+        Err(error) => Err(JsErrorBox::generic(format!(
+            "Knot host rejected command registration: {error:?}"
+        ))),
+    }
+}
+
+#[deno_core::op2]
+async fn op_command_unregister(
+    state: Rc<RefCell<OpState>>,
+    #[number] registration: u64,
+) -> Result<(), JsErrorBox> {
+    let response = request_host_operation(
+        state,
+        HostOperation::UnregisterCommand {
+            registration: protocol::CommandRegistrationId::new(registration),
+        },
+    )
+    .await?;
+    match response.result {
+        Ok(HostResponseValue::CommandUnregistered { .. }) => Ok(()),
+        Ok(_) => Err(JsErrorBox::generic(
+            "Knot host returned the wrong response type",
+        )),
+        Err(error) => Err(JsErrorBox::generic(format!(
+            "Knot host rejected command unregistration: {error:?}"
+        ))),
     }
 }
 
@@ -471,6 +585,15 @@ impl ExtensionRuntimeHandle {
         self.control.execute_fixture_module(specifier, source)
     }
 
+    /// Invoke one registered command on this extension's thread.
+    pub fn invoke_command(
+        &self,
+        invocation: CommandInvocation,
+        active_buffer: Option<BufferHandle>,
+    ) -> ExtensionRuntimeExecution {
+        self.control.invoke_command(invocation, active_buffer)
+    }
+
     /// Asynchronously receive the next request emitted by the extension thread.
     pub async fn receive_request(&mut self) -> Option<HostRequest> {
         self.requests.receive().await
@@ -509,6 +632,10 @@ pub struct ExtensionRuntimeControl {
 }
 
 impl ExtensionRuntimeControl {
+    pub(crate) fn identity(&self) -> (ExtensionId, ExtensionLifecycleId) {
+        (self.extension, self.lifecycle_id)
+    }
+
     /// Ask the extension thread to issue one typed host request.
     pub fn request(&self, operation: HostOperation) -> Result<(), ExtensionRuntimeClosed> {
         self.commands
@@ -541,6 +668,23 @@ impl ExtensionRuntimeControl {
         let _ = self.commands.send(RuntimeCommand::ExecuteFixtureModule {
             specifier: specifier.into(),
             source: source.into(),
+            completion,
+        });
+        ExtensionRuntimeExecution {
+            completion: completed,
+        }
+    }
+
+    /// Invoke one registered command on this extension's thread.
+    pub fn invoke_command(
+        &self,
+        invocation: CommandInvocation,
+        active_buffer: Option<BufferHandle>,
+    ) -> ExtensionRuntimeExecution {
+        let (completion, completed) = tokio::sync::oneshot::channel();
+        let _ = self.commands.send(RuntimeCommand::InvokeCommand {
+            invocation,
+            active_buffer,
             completion,
         });
         ExtensionRuntimeExecution {
@@ -679,6 +823,11 @@ enum RuntimeCommand {
     ExecuteFixtureModule {
         specifier: String,
         source: String,
+        completion: tokio::sync::oneshot::Sender<Result<(), ExtensionRuntimeExecutionError>>,
+    },
+    InvokeCommand {
+        invocation: CommandInvocation,
+        active_buffer: Option<BufferHandle>,
         completion: tokio::sync::oneshot::Sender<Result<(), ExtensionRuntimeExecutionError>>,
     },
     Shutdown,
@@ -899,6 +1048,7 @@ struct ExtensionRequestRouter {
     extension: ExtensionId,
     lifecycle_id: ExtensionLifecycleId,
     next_request_id: u64,
+    invocation: Option<protocol::CommandInvocationId>,
     request_sender: tokio::sync::mpsc::UnboundedSender<HostRequest>,
     lifecycle: Arc<ExtensionLifecycle>,
 }
@@ -918,6 +1068,7 @@ impl ExtensionRequestRouter {
                 extension: self.extension,
                 lifecycle: self.lifecycle_id,
                 id,
+                invocation: self.invocation,
                 operation,
             })
             .map_err(|_| ExtensionRuntimeClosed)
@@ -1022,6 +1173,7 @@ impl ExtensionRuntime {
                 extension,
                 lifecycle_id,
                 next_request_id: 0,
+                invocation: None,
                 request_sender,
                 lifecycle: Arc::clone(&lifecycle),
             });
@@ -1117,6 +1269,50 @@ impl ExtensionRuntime {
                         break;
                     }
                 }
+                RuntimeCommand::InvokeCommand {
+                    invocation,
+                    active_buffer,
+                    completion,
+                } => {
+                    let _runtime_guard = self.event_loop_runtime.enter();
+                    self.js_runtime
+                        .op_state()
+                        .borrow_mut()
+                        .borrow_mut::<ExtensionRequestRouter>()
+                        .invocation = Some(invocation.id);
+                    let source = format!(
+                        "globalThis.__knotInvokeCommand({}, {})",
+                        invocation.registration.value(),
+                        active_buffer.map_or("null".into(), |buffer| buffer.value().to_string()),
+                    );
+                    let result = self
+                        .js_runtime
+                        .execute_script("knot:command-invocation", source)
+                        .map_err(ExtensionRuntimeExecutionError::javascript_exception)
+                        .and_then(|_| {
+                            self.event_loop_runtime
+                                .block_on(self.js_runtime.run_event_loop(Default::default()))
+                                .map_err(ExtensionRuntimeExecutionError::javascript_exception)
+                        });
+                    self.js_runtime
+                        .op_state()
+                        .borrow_mut()
+                        .borrow_mut::<ExtensionRequestRouter>()
+                        .invocation = None;
+                    let termination = self.lifecycle.termination();
+                    let _ = completion.send(match termination {
+                        Some(ExtensionTermination::MemoryLimitExceeded) => {
+                            Err(ExtensionRuntimeExecutionError::MemoryLimitExceeded)
+                        }
+                        Some(ExtensionTermination::Requested) => {
+                            Err(ExtensionRuntimeExecutionError::Terminated)
+                        }
+                        None => result,
+                    });
+                    if termination.is_some() {
+                        break;
+                    }
+                }
                 RuntimeCommand::Shutdown => break,
             }
         }
@@ -1138,8 +1334,8 @@ mod tests {
         ExtensionRuntimeResponseError, V8Host,
     };
     use crate::host::protocol::{
-        ExtensionId, ExtensionLifecycleId, HostOperation, HostResponse, HostResponseValue,
-        RequestId,
+        CommandInvocation, CommandInvocationId, CommandRegistrationId, ExtensionId,
+        ExtensionLifecycleId, HostOperation, HostResponse, HostResponseValue, RequestId,
     };
 
     #[test]
@@ -1271,6 +1467,114 @@ mod tests {
             "if (globalThis.activeBuffer !== null) throw new Error('unexpected active buffer')",
         ))
         .unwrap();
+        runtime.shutdown();
+    }
+
+    #[test]
+    fn public_facade_registers_and_invokes_a_command_on_its_extension_thread() {
+        let host = V8Host::new();
+        let extension = ExtensionId::new(7);
+        let mut runtime = host.spawn_extension(extension);
+        let registration = CommandRegistrationId::new(42);
+        let execution = runtime.execute_fixture_module(
+            "file:///fixtures/command.js",
+            r#"
+                import { commands } from "knot:editor";
+                await commands.register("knot.fixture.command", () => {
+                    globalThis.commandRuns = (globalThis.commandRuns ?? 0) + 1;
+                });
+            "#,
+        );
+        let request = pollster::block_on(runtime.receive_request()).unwrap();
+        assert_eq!(
+            request.operation,
+            HostOperation::RegisterCommand {
+                name: "knot.fixture.command".into(),
+            }
+        );
+        runtime
+            .respond(HostResponse {
+                extension,
+                lifecycle: request.lifecycle,
+                id: request.id,
+                result: Ok(HostResponseValue::CommandRegistered { registration }),
+            })
+            .unwrap();
+        pollster::block_on(execution).unwrap();
+
+        pollster::block_on(runtime.invoke_command(
+            CommandInvocation {
+                id: CommandInvocationId::new(1),
+                registration,
+                extension,
+                lifecycle: request.lifecycle,
+            },
+            None,
+        ))
+        .unwrap();
+        pollster::block_on(runtime.execute_fixture_script(
+            "verify-command.js",
+            "if (globalThis.commandRuns !== 1) throw new Error('command did not run')",
+        ))
+        .unwrap();
+        runtime.shutdown();
+    }
+
+    #[test]
+    fn disposing_a_command_prevents_later_invocation() {
+        let host = V8Host::new();
+        let extension = ExtensionId::new(7);
+        let mut runtime = host.spawn_extension(extension);
+        let registration = CommandRegistrationId::new(42);
+        let execution = runtime.execute_fixture_module(
+            "file:///fixtures/dispose-command.js",
+            r#"
+                import { commands } from "knot:editor";
+                globalThis.disposable = await commands.register("knot.fixture.dispose", () => {});
+            "#,
+        );
+        let request = pollster::block_on(runtime.receive_request()).unwrap();
+        runtime
+            .respond(HostResponse {
+                extension,
+                lifecycle: request.lifecycle,
+                id: request.id,
+                result: Ok(HostResponseValue::CommandRegistered { registration }),
+            })
+            .unwrap();
+        pollster::block_on(execution).unwrap();
+
+        let disposal =
+            runtime.execute_fixture_script("dispose-command.js", "globalThis.disposable.dispose()");
+        let request = pollster::block_on(runtime.receive_request()).unwrap();
+        assert_eq!(
+            request.operation,
+            HostOperation::UnregisterCommand { registration }
+        );
+        runtime
+            .respond(HostResponse {
+                extension,
+                lifecycle: request.lifecycle,
+                id: request.id,
+                result: Ok(HostResponseValue::CommandUnregistered { registration }),
+            })
+            .unwrap();
+        pollster::block_on(disposal).unwrap();
+
+        let error = pollster::block_on(runtime.invoke_command(
+            CommandInvocation {
+                id: CommandInvocationId::new(1),
+                registration,
+                extension,
+                lifecycle: request.lifecycle,
+            },
+            None,
+        ))
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            ExtensionRuntimeExecutionError::JavaScriptException { .. }
+        ));
         runtime.shutdown();
     }
 
