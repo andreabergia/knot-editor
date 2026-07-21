@@ -350,8 +350,8 @@ record that finding for the API design instead.
     queue. Record thrown/rejected listener failures against that extension and
     continue later callbacks and other extensions; do not fail or roll back the
     already committed edit.
-  - [ ] Track queue depth and enqueue-to-start lag for later Phase 3 evidence,
-    but add no dropping, coalescing, producer blocking, or eviction policy.
+  - [x] Track queue depth and enqueue-to-start lag for later Phase 3 evidence,
+    but add no dropping, coalescing, producer blocking, or eviction policy. ✅
   - [ ] Test one event for a multi-edit commit, ordering across finite bursts,
     several extensions receiving the same commit, disposal and closure, and a
     failing subscriber not suppressing subsequent delivery. Update

@@ -17,6 +17,7 @@ use std::{
     },
     task::{Context, Poll},
     thread::{self, JoinHandle},
+    time::{Duration, Instant},
 };
 
 use deno_core::{ModuleLoadOptions, ModuleLoadReferrer, ModuleLoadResponse, ModuleLoader};
@@ -784,12 +785,26 @@ impl ExtensionRuntimeControl {
         subscription: BufferSubscriptionId,
         change: BufferChange,
     ) -> Result<(), ExtensionRuntimeClosed> {
+        let enqueued_at = Instant::now();
+        self.lifecycle.buffer_change_enqueued();
         self.commands
             .send(RuntimeCommand::DispatchBufferChange {
                 subscription,
                 change,
+                enqueued_at,
             })
-            .map_err(|_| ExtensionRuntimeClosed)
+            .map_err(|_| {
+                self.lifecycle.buffer_change_discarded();
+                ExtensionRuntimeClosed
+            })
+    }
+
+    /// Return measurements for buffer-change callback delivery on this extension.
+    ///
+    /// These are evidence only: the runtime does not drop, coalesce, block, or
+    /// otherwise apply a slow-consumer policy based on them.
+    pub fn buffer_change_queue_metrics(&self) -> BufferChangeQueueMetrics {
+        self.lifecycle.buffer_change_queue_metrics()
     }
 
     /// Return a host response to this extension runtime.
@@ -933,6 +948,7 @@ enum RuntimeCommand {
     DispatchBufferChange {
         subscription: BufferSubscriptionId,
         change: BufferChange,
+        enqueued_at: Instant,
     },
     Shutdown,
 }
@@ -954,9 +970,60 @@ struct ExtensionLifecycleState {
     termination: Option<ExtensionTermination>,
     pending_requests: PendingRequests,
     watchdog: ExtensionWatchdogState,
+    buffer_change_queue: BufferChangeQueueMetrics,
+    queued_buffer_change_callbacks: usize,
+}
+
+/// Observed buffer-change callback pressure for one extension runtime.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct BufferChangeQueueMetrics {
+    /// Largest number of queued callbacks awaiting their start.
+    pub max_depth: usize,
+    /// Largest delay from enqueueing a callback until its execution starts.
+    pub max_enqueue_to_start_lag: Duration,
 }
 
 impl ExtensionLifecycle {
+    fn buffer_change_enqueued(&self) {
+        let mut state = self
+            .state
+            .lock()
+            .expect("extension lifecycle lock poisoned");
+        state.queued_buffer_change_callbacks += 1;
+        state.buffer_change_queue.max_depth = state
+            .buffer_change_queue
+            .max_depth
+            .max(state.queued_buffer_change_callbacks);
+    }
+
+    fn buffer_change_discarded(&self) {
+        let mut state = self
+            .state
+            .lock()
+            .expect("extension lifecycle lock poisoned");
+        state.queued_buffer_change_callbacks =
+            state.queued_buffer_change_callbacks.saturating_sub(1);
+    }
+
+    fn buffer_change_started(&self, enqueued_at: Instant) {
+        let mut state = self
+            .state
+            .lock()
+            .expect("extension lifecycle lock poisoned");
+        state.queued_buffer_change_callbacks =
+            state.queued_buffer_change_callbacks.saturating_sub(1);
+        state.buffer_change_queue.max_enqueue_to_start_lag = state
+            .buffer_change_queue
+            .max_enqueue_to_start_lag
+            .max(enqueued_at.elapsed());
+    }
+
+    fn buffer_change_queue_metrics(&self) -> BufferChangeQueueMetrics {
+        self.state
+            .lock()
+            .expect("extension lifecycle lock poisoned")
+            .buffer_change_queue
+    }
     fn register_manual(&self, id: RequestId) -> Result<(), ExtensionRuntimeClosed> {
         let mut state = self
             .state
@@ -1420,7 +1487,9 @@ impl ExtensionRuntime {
                 RuntimeCommand::DispatchBufferChange {
                     subscription,
                     change,
+                    enqueued_at,
                 } => {
+                    self.lifecycle.buffer_change_started(enqueued_at);
                     let _runtime_guard = self.event_loop_runtime.enter();
                     let change = serde_json::json!({
                         "beforeRevision": change.before_revision,
@@ -1665,6 +1734,9 @@ mod tests {
             "if (globalThis.events.join(',') !== '1,2') throw new Error('events were not serial')",
         ))
         .unwrap();
+        let metrics = runtime.control.buffer_change_queue_metrics();
+        assert!(metrics.max_depth >= 1);
+        assert!(metrics.max_enqueue_to_start_lag > std::time::Duration::ZERO);
         assert_eq!(runtime.control.identity().1, lifecycle);
         runtime.shutdown();
     }
