@@ -138,12 +138,14 @@ the document.
 
 Extension-local lifecycle state owns pending work, termination, resource
 limits, command registrations, buffer-change subscriptions, and teardown. A
-failed or terminated isolate does not take down other extensions. Each
-non-empty commit publishes one immutable Knot-owned change payload to matching
-subscriptions. Delivery is queued on the owning extension's command stream,
-so callbacks are serial and ordered per extension while independent extension
-threads can progress separately; a listener failure is reported but does not
-suppress later callbacks.
+failed or terminated isolate does not take down other extensions. The shell
+retains controls for every loaded extension, so each non-empty commit fans one
+immutable Knot-owned payload to every matching subscription. Delivery is
+queued on the owning extension's command stream, so callbacks are serial and
+ordered per extension while independent extension threads can progress
+separately; a listener failure is reported but does not suppress later
+callbacks. Per-extension queue depth and enqueue-to-start lag are recorded for
+the later evidence phase only; no slow-consumer policy is applied.
 
 ```text
 extension JavaScript

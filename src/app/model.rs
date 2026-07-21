@@ -1,6 +1,9 @@
 //! Foreground-owned editor document state.
 
-use std::{collections::HashMap, ops::Range};
+use std::{
+    collections::{HashMap, VecDeque},
+    ops::Range,
+};
 
 use gpui::{AppContext, Entity, WeakEntity};
 
@@ -17,7 +20,7 @@ pub struct BufferModel {
     buffer: TextBuffer,
     revision: u64,
     open: bool,
-    pending_change: Option<CommittedBufferChange>,
+    pending_changes: VecDeque<CommittedBufferChange>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -33,7 +36,7 @@ impl BufferModel {
             buffer: TextBuffer::from_text(text),
             revision: 0,
             open: true,
-            pending_change: None,
+            pending_changes: VecDeque::new(),
         }
     }
 
@@ -136,7 +139,7 @@ impl BufferModel {
         }
         let before_revision = self.revision;
         self.advance_revision();
-        self.pending_change = Some(CommittedBufferChange {
+        self.pending_changes.push_back(CommittedBufferChange {
             before_revision,
             revision: self.revision,
             edits: edits.to_vec(),
@@ -163,7 +166,7 @@ impl BufferModel {
         self.buffer.replace(range, text);
         let before_revision = self.revision;
         self.advance_revision();
-        self.pending_change = Some(CommittedBufferChange {
+        self.pending_changes.push_back(CommittedBufferChange {
             before_revision,
             revision: self.revision,
             edits: vec![edit],
@@ -172,7 +175,7 @@ impl BufferModel {
     }
 
     pub(crate) fn take_pending_change(&mut self) -> Option<CommittedBufferChange> {
-        self.pending_change.take()
+        self.pending_changes.pop_front()
     }
 
     fn advance_revision(&mut self) {
@@ -363,6 +366,15 @@ impl BufferSubscriptionRegistry {
         self.subscriptions.retain(|_, subscription| {
             subscription.extension != extension || subscription.lifecycle != lifecycle
         });
+    }
+
+    #[allow(
+        dead_code,
+        reason = "buffer closing is not exposed by the prototype shell yet"
+    )]
+    pub(crate) fn remove_buffer(&mut self, buffer: BufferHandle) {
+        self.subscriptions
+            .retain(|_, subscription| subscription.buffer != buffer);
     }
 }
 

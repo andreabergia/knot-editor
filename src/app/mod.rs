@@ -4,7 +4,10 @@
 //! status area for the active buffer and extension runtime.
 
 use gpui::{prelude::FluentBuilder, *};
-use std::{collections::HashSet, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    time::Duration,
+};
 
 use crate::host::{
     ExtensionRequestInbox, ExtensionRuntimeControl, ExtensionRuntimeParts, ExtensionRuntimeThread,
@@ -97,9 +100,13 @@ struct Shell {
     runtime_state: SharedString,
     latest_runtime_error: Option<SharedString>,
     runtime_control: ExtensionRuntimeControl,
-    runtime_thread: Option<ExtensionRuntimeThread>,
+    extension_controls: HashMap<
+        (ExtensionId, crate::host::protocol::ExtensionLifecycleId),
+        ExtensionRuntimeControl,
+    >,
+    runtime_threads: Vec<ExtensionRuntimeThread>,
     background_executor: BackgroundExecutor,
-    _runtime_bridge_task: Task<()>,
+    _runtime_bridge_tasks: Vec<Task<()>>,
     _runtime_execution_task: Task<()>,
     _model_subscription: Subscription,
     _heartbeat_task: Task<()>,
@@ -114,6 +121,10 @@ impl Shell {
     /// styled text to render. Fixture resolution is relative to the crate
     /// root so the binary runs from any cwd.
     fn new(runtime: ExtensionRuntimeParts, cx: &mut Context<Self>) -> Self {
+        Self::new_with_runtimes(vec![runtime], cx)
+    }
+
+    fn new_with_runtimes(runtimes: Vec<ExtensionRuntimeParts>, cx: &mut Context<Self>) -> Self {
         let fixture_name = std::env::args()
             .nth(1)
             .unwrap_or_else(|| "rust_sample".into());
@@ -135,12 +146,32 @@ impl Shell {
             this.publish_model_change(model, cx);
             cx.notify();
         });
+        let mut runtimes = runtimes.into_iter();
         let ExtensionRuntimeParts {
             control: runtime_control,
             requests,
             thread: runtime_thread,
-        } = runtime;
-        let runtime_bridge_task = Self::spawn_runtime_bridge(requests, runtime_control.clone(), cx);
+        } = runtimes
+            .next()
+            .expect("Knot shell requires one extension runtime");
+        let mut extension_controls = HashMap::new();
+        extension_controls.insert(runtime_control.identity(), runtime_control.clone());
+        let mut runtime_bridge_tasks = vec![Self::spawn_runtime_bridge(
+            requests,
+            runtime_control.clone(),
+            cx,
+        )];
+        let mut runtime_threads = vec![runtime_thread];
+        for ExtensionRuntimeParts {
+            control,
+            requests,
+            thread,
+        } in runtimes
+        {
+            extension_controls.insert(control.identity(), control.clone());
+            runtime_bridge_tasks.push(Self::spawn_runtime_bridge(requests, control, cx));
+            runtime_threads.push(thread);
+        }
         let runtime_execution = runtime_control.execute_fixture_module(
             "file:///fixtures/gpui-runtime-probe.js",
             RUNTIME_PROBE_SOURCE,
@@ -220,9 +251,10 @@ impl Shell {
             runtime_state: "starting".into(),
             latest_runtime_error: None,
             runtime_control,
-            runtime_thread: Some(runtime_thread),
+            extension_controls,
+            runtime_threads,
             background_executor: cx.background_executor().clone(),
-            _runtime_bridge_task: runtime_bridge_task,
+            _runtime_bridge_tasks: runtime_bridge_tasks,
             _runtime_execution_task: runtime_execution_task,
             _model_subscription: model_subscription,
             _heartbeat_task: heartbeat_task,
@@ -361,14 +393,28 @@ impl Shell {
 
     fn publish_buffer_change(&self, change: BufferChange) {
         for subscription in self.buffer_subscriptions.for_buffer(change.buffer) {
-            if subscription.extension == self.runtime_control.identity().0
-                && subscription.lifecycle == self.runtime_control.identity().1
+            if let Some(control) = self
+                .extension_controls
+                .get(&(subscription.extension, subscription.lifecycle))
             {
-                let _ = self
-                    .runtime_control
-                    .dispatch_buffer_change(subscription.id, change.clone());
+                let _ = control.dispatch_buffer_change(subscription.id, change.clone());
             }
         }
+    }
+
+    #[allow(
+        dead_code,
+        reason = "buffer closing is not exposed by the prototype shell yet"
+    )]
+    fn close_buffer(
+        &mut self,
+        buffer: crate::host::protocol::BufferHandle,
+        cx: &mut Context<Self>,
+    ) {
+        self.buffer_registry
+            .close(buffer, cx)
+            .expect("buffer is open");
+        self.buffer_subscriptions.remove_buffer(buffer);
     }
 
     fn publish_model_change(&mut self, model: Entity<BufferModel>, cx: &mut Context<Self>) {
@@ -382,8 +428,7 @@ impl Shell {
         if active != model {
             return;
         }
-        let change = model.update(cx, |model, _| model.take_pending_change());
-        if let Some(change) = change {
+        while let Some(change) = model.update(cx, |model, _| model.take_pending_change()) {
             self.publish_buffer_change(BufferChange {
                 buffer,
                 before_revision: change.before_revision,
@@ -543,8 +588,10 @@ impl Shell {
 
 impl Drop for Shell {
     fn drop(&mut self) {
-        self.runtime_control.request_shutdown();
-        if let Some(thread) = self.runtime_thread.take() {
+        for control in self.extension_controls.values() {
+            control.request_shutdown();
+        }
+        for thread in self.runtime_threads.drain(..) {
             self.background_executor
                 .spawn(async move { thread.shutdown() })
                 .detach();
@@ -744,7 +791,10 @@ mod tests {
     use gpui::{AppContext, Entity, TestAppContext};
 
     use super::Shell;
-    use crate::host::{V8Host, protocol::ExtensionId};
+    use crate::host::{
+        V8Host,
+        protocol::{ByteRange, ExtensionId, TextEdit},
+    };
 
     async fn wait_for_runtime_state(
         shell: &Entity<Shell>,
@@ -851,6 +901,130 @@ mod tests {
         });
         assert!(text.starts_with("😀中é// extension\n"));
         assert_eq!(revision, 2);
+    }
+
+    #[gpui::test]
+    async fn buffer_changes_fan_out_in_order_and_survive_listener_failures(
+        cx: &mut TestAppContext,
+    ) {
+        let host = V8Host::new();
+        let shell = cx.new(|cx| {
+            Shell::new_with_runtimes(
+                vec![
+                    host.spawn_extension(ExtensionId::new(12)).into_parts(),
+                    host.spawn_extension(ExtensionId::new(13)).into_parts(),
+                ],
+                cx,
+            )
+        });
+        wait_for_runtime_state(&shell, "running", cx).await;
+        let controls = cx.read(|cx| {
+            shell
+                .read(cx)
+                .extension_controls
+                .values()
+                .cloned()
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(controls.len(), 2);
+
+        for control in &controls {
+            control
+                .execute_fixture_module(
+                    format!("file:///fixtures/subscriber-{}.js", control.identity().0.value()),
+                    r#"
+                        import { editor } from "knot:editor";
+                        const buffer = await editor.activeBuffer();
+                        globalThis.disposable = await buffer.onDidChange((event) => {
+                          globalThis.events = [...(globalThis.events ?? []), `${event.revision}:${event.edits.length}`];
+                          if (event.revision === 1 && globalThis.failFirst) {
+                            throw new Error("expected listener failure");
+                          }
+                        });
+                    "#,
+                )
+                .await
+                .unwrap();
+        }
+        controls[1]
+            .execute_fixture_script("fail-first-listener.js", "globalThis.failFirst = true")
+            .await
+            .unwrap();
+
+        shell.update(cx, |shell, cx| {
+            let handle = shell.buffer_registry.active_handle().unwrap();
+            let model = shell.buffer_registry.resolve(handle).unwrap();
+            assert!(model.update(cx, |model, cx| {
+                let changed = model
+                    .apply_edits(
+                        &[
+                            TextEdit {
+                                range: ByteRange {
+                                    start_byte_offset: 0,
+                                    end_byte_offset: 0,
+                                },
+                                text: "A".into(),
+                            },
+                            TextEdit {
+                                range: ByteRange {
+                                    start_byte_offset: 1,
+                                    end_byte_offset: 1,
+                                },
+                                text: "B".into(),
+                            },
+                        ],
+                        model.revision(),
+                    )
+                    .unwrap();
+                cx.notify();
+                changed
+            }));
+            model.update(cx, |model, cx| {
+                assert!(model.replace(0..1, "C"));
+                cx.notify();
+            });
+        });
+        cx.run_until_parked();
+
+        for control in &controls {
+            control
+                .execute_fixture_script(
+                    "verify-buffer-change-events.js",
+                    "if (globalThis.events.join(',') !== '1:2,2:1') throw new Error(`missing or unordered buffer changes: ${globalThis.events}`)",
+                )
+                .await
+                .unwrap();
+        }
+
+        controls[0]
+            .execute_fixture_script(
+                "dispose-buffer-listener.js",
+                "globalThis.disposable.dispose()",
+            )
+            .await
+            .unwrap();
+        cx.run_until_parked();
+        assert_eq!(
+            cx.read(|cx| {
+                shell
+                    .read(cx)
+                    .buffer_subscriptions
+                    .for_buffer(shell.read(cx).buffer_registry.active_handle().unwrap())
+                    .count()
+            }),
+            1
+        );
+
+        let handle = cx.read(|cx| shell.read(cx).buffer_registry.active_handle().unwrap());
+        shell.update(cx, |shell, cx| shell.close_buffer(handle, cx));
+        assert!(cx.read(|cx| {
+            shell
+                .read(cx)
+                .buffer_subscriptions
+                .for_buffer(handle)
+                .next()
+                .is_none()
+        }));
     }
 
     #[gpui::test]

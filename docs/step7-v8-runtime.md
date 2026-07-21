@@ -352,10 +352,10 @@ record that finding for the API design instead.
     already committed edit.
   - [x] Track queue depth and enqueue-to-start lag for later Phase 3 evidence,
     but add no dropping, coalescing, producer blocking, or eviction policy. ✅
-  - [ ] Test one event for a multi-edit commit, ordering across finite bursts,
+  - [x] Test one event for a multi-edit commit, ordering across finite bursts,
     several extensions receiving the same commit, disposal and closure, and a
     failing subscriber not suppressing subsequent delivery. Update
-    `architecture.md` with the commit/event fan-out flow. ✅ when implemented.
+    `architecture.md` with the commit/event fan-out flow. ✅
 
 ### 3. Integrated proof and evidence
 
