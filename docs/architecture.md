@@ -114,8 +114,11 @@ and communicates with the host through typed request and response messages.
 
 `host::protocol` contains the transport-level identities, buffer data, and
 errors without depending on V8, Deno, gpui, or the concrete core buffer. This
-keeps runtime mechanics behind the host boundary. The application currently
-dispatches `ActiveBuffer`; snapshot and edit operations remain unimplemented.
+keeps runtime mechanics behind the host boundary. The application dispatches
+active-buffer, snapshot, and batched-edit requests by resolving opaque handles
+against foreground-owned models immediately before each operation. `BufferModel`
+validates UTF-8 byte ranges and revisioned edit batches before using core's
+assertion-based buffer API.
 
 Runtime ownership separates the unique request inbox, clonable non-blocking
 control and response access, and the OS-thread join handle. V8 is initialized
@@ -142,6 +145,10 @@ gpui foreground bridge
         v
 BufferRegistry / BufferModel
 ```
+
+The private bootstrap module retains native bindings and turns opaque handles
+into cached JavaScript `TextBuffer` proxies. Snapshots are immutable values;
+their byte/UTF-16 boundary table is built only when an adapter is called.
 
 Detailed runtime behavior and experiment results live in
 `step7-v8-runtime.md` and the host module's Rustdoc.

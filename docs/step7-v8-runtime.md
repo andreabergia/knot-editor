@@ -266,51 +266,50 @@ record that finding for the API design instead.
     pending work without freezing the application. ✅
   - [x] Verify that the heartbeat progresses while the bridge is active and
     after it closes. Update `architecture.md` with the real request flow. ✅
-- [ ] Implement snapshot/range reads, UTF-8 boundary validation, atomic edit
+- [x] Implement snapshot/range reads, UTF-8 boundary validation, atomic edit
   batches, revision conflicts, opaque-handle invalidation, and the two explicit
   UTF-16 adapter helpers. Keep byte/UTF-16 index construction lazy so ordinary
-  UTF-8 operations do no re-encoding work.
+  UTF-8 operations do no re-encoding work. ✅
   - [x] Put buffer semantics in `BufferModel`/editor-host code, leaving
     `host::protocol` as transport data and V8 ops as marshalling only. Add
     checked helpers around `TextBuffer` because its current UTF-8 preconditions
     are assertions rather than recoverable host errors. ✅
-  - [ ] Resolve a handle immediately before every operation. Reject missing,
+  - [x] Resolve a handle immediately before every operation. Reject missing,
     closed, or dead entities with `BufferClosed`; never let a stale handle
-    resolve to a subsequently opened buffer.
-  - [ ] Implement `snapshot(None)` as the complete buffer and
+    resolve to a subsequently opened buffer. ✅
+  - [x] Implement `snapshot(None)` as the complete buffer and
     `snapshot(Some(range))` as the requested half-open UTF-8 byte range.
     Validate ordering, bounds, and both scalar boundaries before calling
     `TextBuffer::read_range`; return the exact requested range and current
-    public revision.
-  - [ ] Validate an edit batch completely before mutation: matching revision,
+    public revision. ✅
+  - [x] Validate an edit batch completely before mutation: matching revision,
     ordered and non-overlapping pre-commit ranges, in-bounds offsets, UTF-8
     scalar boundaries, and representable sizes. Stale revisions return
     `RevisionConflict`; structural or boundary failures return stable request
-    errors without partial mutation.
-  - [ ] Detect a semantically empty batch before mutation, including an empty
+    errors without partial mutation. ✅
+  - [x] Detect a semantically empty batch before mutation, including an empty
     list and replacements whose text already equals their range. Return the
     current revision without touching `TextBuffer`, incrementing revision, or
-    notifying observers.
-  - [ ] Apply a valid batch in reverse range order so every range remains in
+    notifying observers. ✅
+  - [x] Apply a valid batch in reverse range order so every range remains in
     pre-commit coordinates. Publish it as one commit: increment revision once,
     refresh/notify views once, and retain the original ordered edits for the
-    later change event.
-  - [ ] Extend the private bootstrap and `knot:editor` facade with cached
+    later change event. ✅
+  - [x] Extend the private bootstrap and `knot:editor` facade with cached
     `TextBuffer` proxies keyed by opaque private handles. JavaScript receives
-    no numeric handle, Rust type, gpui entity, op name, or Deno object.
-  - [ ] Materialize `TextSnapshot` as an immutable public object. Define both
+    no numeric handle, Rust type, gpui entity, op name, or Deno object. ✅
+  - [x] Materialize `TextSnapshot` as an immutable public object. Define both
     UTF-16 adapters relative to `snapshot.text` (byte offset zero is the start
     of the snapshot); callers use `snapshot.range.startByteOffset` when they
-    need a buffer-absolute position.
-  - [ ] Build a snapshot's byte/UTF-16 boundary table only on its first adapter
+    need a buffer-absolute position. ✅
+  - [x] Build a snapshot's byte/UTF-16 boundary table only on its first adapter
     call and cache it privately. Reject a split surrogate and a non-UTF-8
-    boundary; ordinary snapshot reads and edits must not construct this table.
-  - [ ] Add narrow Unicode and transaction tests covering ASCII, CJK, Arabic,
+    boundary; ordinary snapshot reads and edits must not construct this table. ✅
+  - [x] Add narrow Unicode and transaction tests covering ASCII, CJK, Arabic,
     combining marks, emoji/ZWJ, partial snapshots, stale revisions, invalid
     boundaries, overlap/order failures, semantic no-ops, and one-revision
     multi-edit commits. Add a fixture module that reads and edits the active
-    Rust buffer so the window visibly proves the end-to-end path. ✅ when
-    implemented.
+    Rust buffer so the window visibly proves the end-to-end path. ✅
 - [ ] Implement extension-owned command registration and invocation. Pass an
   `AbortSignal`; cancellation rejects awaited host work and invalidates the
   invocation token so a response arriving later cannot mutate editor state.

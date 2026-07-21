@@ -762,6 +762,13 @@ impl EditorView {
         }
     }
 
+    /// Refresh the derived rendering projection after a foreground host commit.
+    pub(crate) fn refresh_from_model(&mut self, cx: &mut Context<Self>) {
+        let text = self.model.read(cx).text();
+        self.rebuild_default_projection(&text);
+        cx.notify();
+    }
+
     /// Determine the byte range to replace given an optional UTF-16 range.
     /// If `range` is `None`, replace the marked range if there is one,
     /// otherwise the current selection, otherwise the caret (zero-length).

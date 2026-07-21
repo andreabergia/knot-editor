@@ -41,6 +41,10 @@ impl BufferHandle {
     pub(crate) const fn new(value: u64) -> Self {
         Self(value)
     }
+
+    pub(crate) const fn value(self) -> u64 {
+        self.0
+    }
 }
 
 /// A half-open range in UTF-8 byte offsets.

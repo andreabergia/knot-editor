@@ -18,7 +18,7 @@ mod editor;
 pub mod model;
 
 use editor::EditorView;
-use model::{BufferModel, BufferRegistry};
+use model::{BufferAccessError, BufferModel, BufferRegistry};
 
 actions!(knot, [Quit]);
 
@@ -31,6 +31,15 @@ if (!globalThis.knotActiveBuffer) {
   throw new Error("Knot has no active editor buffer");
 }
 "#;
+
+fn map_buffer_error(error: BufferAccessError) -> HostRequestError {
+    match error {
+        BufferAccessError::Closed => HostRequestError::BufferClosed,
+        BufferAccessError::InvalidRange => HostRequestError::InvalidRange,
+        BufferAccessError::InvalidEditBatch => HostRequestError::InvalidEditBatch,
+        BufferAccessError::RevisionConflict => HostRequestError::RevisionConflict,
+    }
+}
 
 /// Drag value carried by the active drag while a pane divider is being dragged.
 /// `which` identifies which divider (0 = left/center, 1 = center/right).
@@ -200,7 +209,7 @@ impl Shell {
             let mut failure = None;
             while let Some(request) = requests.receive().await {
                 let response =
-                    match this.update(cx, |this, _cx| this.dispatch_host_request(request)) {
+                    match this.update(cx, |this, cx| this.dispatch_host_request(request, cx)) {
                         Ok(response) => response,
                         Err(_) => return,
                     };
@@ -219,14 +228,57 @@ impl Shell {
         })
     }
 
-    fn dispatch_host_request(&mut self, request: HostRequest) -> HostResponse {
+    fn dispatch_host_request(
+        &mut self,
+        request: HostRequest,
+        cx: &mut Context<Self>,
+    ) -> HostResponse {
         let result = match request.operation {
             HostOperation::ActiveBuffer => Ok(HostResponseValue::ActiveBuffer(
                 self.buffer_registry.active_handle(),
             )),
-            HostOperation::Snapshot { .. } | HostOperation::ApplyEdits { .. } => {
-                Err(HostRequestError::UnsupportedOperation)
-            }
+            HostOperation::Snapshot { buffer, range } => self
+                .buffer_registry
+                .resolve(buffer)
+                .map_err(|_| HostRequestError::BufferClosed)
+                .and_then(|model| {
+                    model
+                        .read_with(cx, |model, _| model.snapshot(range))
+                        .map_err(map_buffer_error)
+                })
+                .map(HostResponseValue::Snapshot),
+            HostOperation::ApplyEdits {
+                buffer,
+                edits,
+                if_revision,
+            } => self
+                .buffer_registry
+                .resolve(buffer)
+                .map_err(|_| HostRequestError::BufferClosed)
+                .and_then(|model| {
+                    let changed = model
+                        .update(cx, |model, cx| {
+                            let changed = model.apply_edits(&edits, if_revision)?;
+                            if changed {
+                                cx.notify();
+                            }
+                            Ok(changed)
+                        })
+                        .map_err(map_buffer_error)?;
+                    Ok(changed)
+                })
+                .map(|changed| {
+                    if changed {
+                        self.editor
+                            .update(cx, |editor, cx| editor.refresh_from_model(cx));
+                    }
+                    let revision = self
+                        .buffer_registry
+                        .resolve(buffer)
+                        .expect("buffer remains open after its own edit")
+                        .read_with(cx, |model, _| model.revision());
+                    HostResponseValue::AppliedEdits { revision }
+                }),
         };
 
         HostResponse {
@@ -534,6 +586,64 @@ mod tests {
             (resolved, displayed)
         });
         assert_eq!(resolved, displayed);
+    }
+
+    #[gpui::test]
+    async fn extension_buffer_proxy_reads_and_edits_the_displayed_model(cx: &mut TestAppContext) {
+        let runtime = V8Host::new()
+            .spawn_extension(ExtensionId::new(9))
+            .into_parts();
+        let shell = cx.new(|cx| Shell::new(runtime, cx));
+        wait_for_runtime_state(&shell, "running", cx).await;
+        let control = cx.read(|cx| shell.read(cx).runtime_control.clone());
+
+        control
+            .execute_fixture_module(
+                "file:///fixtures/buffer-proxy.js",
+                r#"
+                    import { editor } from "knot:editor";
+
+                    const buffer = await editor.activeBuffer();
+                    const snapshot = await buffer.snapshot();
+                    const start = snapshot.byteOffsetAtUtf16(0);
+                    await buffer.applyEdits(
+                        [{ range: { startByteOffset: start, endByteOffset: start }, text: "// extension\n" }],
+                        { ifRevision: snapshot.revision },
+                    );
+                    const afterComment = await buffer.snapshot();
+                    await buffer.applyEdits(
+                        [{ range: { startByteOffset: 0, endByteOffset: 0 }, text: "😀中e\u0301" }],
+                        { ifRevision: afterComment.revision },
+                    );
+                    const unicode = await buffer.snapshot({ startByteOffset: 0, endByteOffset: 10 });
+                    if (unicode.byteOffsetAtUtf16(2) !== 4 || unicode.byteOffsetAtUtf16(3) !== 7) {
+                        throw new Error("unexpected UTF-16 to byte conversion");
+                    }
+                    if (unicode.utf16OffsetAtByte(7) !== 3) {
+                        throw new Error("unexpected byte to UTF-16 conversion");
+                    }
+                    for (const invalid of [
+                        () => unicode.byteOffsetAtUtf16(1),
+                        () => unicode.utf16OffsetAtByte(1),
+                    ]) {
+                        try { invalid(); throw new Error("accepted split boundary"); } catch (error) {
+                            if (!(error instanceof RangeError)) throw error;
+                        }
+                    }
+                    globalThis.extensionRevision = unicode.revision;
+                "#,
+            )
+            .await
+            .unwrap();
+
+        let (text, revision) = cx.read(|cx| {
+            let shell = shell.read(cx);
+            let handle = shell.buffer_registry.active_handle().unwrap();
+            let model = shell.buffer_registry.resolve(handle).unwrap();
+            model.read_with(cx, |model, _| (model.text(), model.revision()))
+        });
+        assert!(text.starts_with("😀中é// extension\n"));
+        assert_eq!(revision, 2);
     }
 
     #[gpui::test]

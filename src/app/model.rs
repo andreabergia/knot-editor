@@ -72,6 +72,67 @@ impl BufferModel {
         Ok(self.buffer.read_range(range))
     }
 
+    pub(crate) fn snapshot(
+        &self,
+        range: Option<ByteRange>,
+    ) -> Result<crate::host::protocol::TextSnapshot, BufferAccessError> {
+        let range = range.unwrap_or(ByteRange {
+            start_byte_offset: 0,
+            end_byte_offset: self.buffer.len(),
+        });
+        Ok(crate::host::protocol::TextSnapshot {
+            text: self.read_checked(range)?,
+            range,
+            revision: self.revision,
+        })
+    }
+
+    /// Validate and atomically apply an extension edit batch.
+    ///
+    /// Ranges remain in the pre-commit coordinate space because mutations run
+    /// from the final range backwards.
+    pub(crate) fn apply_edits(
+        &mut self,
+        edits: &[crate::host::protocol::TextEdit],
+        if_revision: u64,
+    ) -> Result<bool, BufferAccessError> {
+        if !self.open {
+            return Err(BufferAccessError::Closed);
+        }
+        if if_revision != self.revision {
+            return Err(BufferAccessError::RevisionConflict);
+        }
+
+        let mut validated = Vec::with_capacity(edits.len());
+        let mut previous: Option<Range<usize>> = None;
+        let mut changed = false;
+        for edit in edits {
+            let range = self.checked_range(edit.range)?;
+            if let Some(previous) = &previous {
+                if range.start < previous.start || range.start < previous.end {
+                    return Err(BufferAccessError::InvalidEditBatch);
+                }
+            }
+            if self.buffer.read_range(range.clone()) != edit.text {
+                changed = true;
+            }
+            previous = Some(range.clone());
+            validated.push((range, edit.text.as_str()));
+        }
+
+        if !changed {
+            return Ok(false);
+        }
+        for (range, text) in validated.into_iter().rev() {
+            self.buffer.replace(range, text);
+        }
+        self.revision = self
+            .revision
+            .checked_add(1)
+            .expect("public buffer revision overflowed");
+        Ok(true)
+    }
+
     /// Apply one editor-visible local replacement as one public commit.
     ///
     /// `TextBuffer::replace` may emit multiple primitive edit-log entries;
@@ -107,6 +168,8 @@ pub struct BufferClosed;
 pub(crate) enum BufferAccessError {
     Closed,
     InvalidRange,
+    InvalidEditBatch,
+    RevisionConflict,
 }
 
 /// Maps transport-safe buffer handles to foreground-owned gpui entities.
@@ -184,6 +247,8 @@ impl Default for BufferRegistry {
 
 #[cfg(test)]
 mod tests {
+    use crate::host::protocol::TextEdit;
+
     use super::*;
 
     #[test]
@@ -255,6 +320,121 @@ mod tests {
                 end_byte_offset: 3,
             }),
             Err(BufferAccessError::Closed)
+        );
+    }
+
+    #[test]
+    fn snapshots_and_atomic_edits_use_public_revisions() {
+        let mut model = BufferModel::from_text("aé中z");
+        let snapshot = model
+            .snapshot(Some(ByteRange {
+                start_byte_offset: 1,
+                end_byte_offset: 6,
+            }))
+            .unwrap();
+        assert_eq!(snapshot.text, "é中");
+        assert_eq!(snapshot.revision, 0);
+
+        assert!(
+            model
+                .apply_edits(
+                    &[
+                        TextEdit {
+                            range: ByteRange {
+                                start_byte_offset: 0,
+                                end_byte_offset: 1,
+                            },
+                            text: "A".into(),
+                        },
+                        TextEdit {
+                            range: ByteRange {
+                                start_byte_offset: 6,
+                                end_byte_offset: 7,
+                            },
+                            text: "Z".into(),
+                        },
+                    ],
+                    0,
+                )
+                .unwrap()
+        );
+        assert_eq!(model.text(), "Aé中Z");
+        assert_eq!(model.revision(), 1);
+    }
+
+    #[test]
+    fn edits_reject_invalid_batches_without_partial_mutation() {
+        let mut model = BufferModel::from_text("abcdef");
+        let overlapping = [
+            TextEdit {
+                range: ByteRange {
+                    start_byte_offset: 1,
+                    end_byte_offset: 3,
+                },
+                text: "X".into(),
+            },
+            TextEdit {
+                range: ByteRange {
+                    start_byte_offset: 2,
+                    end_byte_offset: 4,
+                },
+                text: "Y".into(),
+            },
+        ];
+        assert_eq!(
+            model.apply_edits(&overlapping, 0),
+            Err(BufferAccessError::InvalidEditBatch)
+        );
+        assert_eq!(model.text(), "abcdef");
+        assert_eq!(model.revision(), 0);
+
+        assert_eq!(
+            model.apply_edits(&[], 1),
+            Err(BufferAccessError::RevisionConflict)
+        );
+    }
+
+    #[test]
+    fn semantically_empty_batches_do_not_commit() {
+        let mut model = BufferModel::from_text("abcdef");
+        let edits = [TextEdit {
+            range: ByteRange {
+                start_byte_offset: 1,
+                end_byte_offset: 3,
+            },
+            text: "bc".into(),
+        }];
+        assert!(!model.apply_edits(&edits, 0).unwrap());
+        assert!(!model.apply_edits(&[], 0).unwrap());
+        assert_eq!(model.text(), "abcdef");
+        assert_eq!(model.revision(), 0);
+    }
+
+    #[test]
+    fn snapshots_preserve_unicode_and_reject_split_scalar_boundaries() {
+        let text = "ASCII 中 العربية e\u{301} 👩‍💻";
+        let model = BufferModel::from_text(text);
+        let full = model.snapshot(None).unwrap();
+        assert_eq!(full.text, text);
+
+        let emoji_start = text.find('👩').unwrap();
+        let emoji_end = text.len();
+        assert_eq!(
+            model
+                .snapshot(Some(ByteRange {
+                    start_byte_offset: emoji_start,
+                    end_byte_offset: emoji_end,
+                }))
+                .unwrap()
+                .text,
+            "👩‍💻"
+        );
+        assert_eq!(
+            model.snapshot(Some(ByteRange {
+                start_byte_offset: emoji_start + 1,
+                end_byte_offset: emoji_end,
+            })),
+            Err(BufferAccessError::InvalidRange)
         );
     }
 }

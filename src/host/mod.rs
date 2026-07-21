@@ -25,7 +25,10 @@ use deno_error::JsErrorBox;
 
 pub mod protocol;
 
-use protocol::{ExtensionId, HostOperation, HostRequest, HostResponse, RequestId};
+use protocol::{
+    BufferHandle, ByteRange, ExtensionId, HostOperation, HostRequest, HostResponse,
+    HostResponseValue, RequestId, TextEdit,
+};
 
 const PRIVATE_BOOTSTRAP_SPECIFIER: &str = "knot:bootstrap";
 const PUBLIC_FACADE_SPECIFIER: &str = "knot:editor";
@@ -33,8 +36,87 @@ const EXTENSION_HEAP_LIMIT_BYTES: usize = 32 * 1024 * 1024;
 const PRIVATE_BOOTSTRAP_SOURCE: &str = r#"
 const nativeOps = Deno.core.ops;
 
-export function activeBuffer() {
-  return nativeOps.op_fixture_active_buffer();
+const buffers = new Map();
+const snapshotTables = new WeakMap();
+
+function hostError(error) {
+  const names = {
+    BufferClosed: "BufferClosedError",
+    InvalidRange: "RangeError",
+    InvalidEditBatch: "InvalidEditBatchError",
+    RevisionConflict: "RevisionConflictError",
+  };
+  const exception = new Error(error);
+  exception.name = names[error] ?? "KnotHostError";
+  throw exception;
+}
+
+function byteLengthOfCodePoint(codePoint) {
+  return codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4;
+}
+
+function snapshotTable(snapshot) {
+  let table = snapshotTables.get(snapshot);
+  if (table) return table;
+  const byteAtUtf16 = [0];
+  const utf16AtByte = new Map([[0, 0]]);
+  let byteOffset = 0;
+  let utf16Offset = 0;
+  for (const character of snapshot.text) {
+    byteOffset += byteLengthOfCodePoint(character.codePointAt(0));
+    utf16Offset += character.length;
+    byteAtUtf16[utf16Offset] = byteOffset;
+    utf16AtByte.set(byteOffset, utf16Offset);
+  }
+  table = { byteAtUtf16, utf16AtByte };
+  snapshotTables.set(snapshot, table);
+  return table;
+}
+
+function snapshotFromNative(snapshot) {
+  const value = {
+    text: snapshot.text,
+    range: Object.freeze({
+      startByteOffset: snapshot.startByteOffset,
+      endByteOffset: snapshot.endByteOffset,
+    }),
+    revision: snapshot.revision,
+    byteOffsetAtUtf16(offset) {
+      const value = snapshotTable(this).byteAtUtf16[offset];
+      if (value === undefined) throw new RangeError("UTF-16 offset splits a surrogate pair or is out of bounds");
+      return value;
+    },
+    utf16OffsetAtByte(offset) {
+      const value = snapshotTable(this).utf16AtByte.get(offset);
+      if (value === undefined) throw new RangeError("byte offset splits a UTF-8 scalar or is out of bounds");
+      return value;
+    },
+  };
+  return Object.freeze(value);
+}
+
+function bufferFor(handle) {
+  let buffer = buffers.get(handle);
+  if (buffer) return buffer;
+  buffer = Object.freeze({
+    async snapshot(range) {
+      const result = await nativeOps.op_buffer_snapshot({ handle, range });
+      if (result.error) hostError(result.error);
+      return snapshotFromNative(result.snapshot);
+    },
+    async applyEdits(edits, options) {
+      const result = await nativeOps.op_buffer_apply_edits({ handle, edits, ifRevision: options?.ifRevision });
+      if (result.error) hostError(result.error);
+      return Object.freeze({ revision: result.revision });
+    },
+  });
+  buffers.set(handle, buffer);
+  return buffer;
+}
+
+export async function activeBuffer() {
+  const handle = await nativeOps.op_buffer_active();
+  return handle === null ? null : bufferFor(handle);
 }
 "#;
 const PUBLIC_FACADE_SOURCE: &str = r#"
@@ -126,7 +208,12 @@ impl ModuleLoader for FixtureModuleLoader {
 
 deno_core::extension!(
     knot_runtime,
-    ops = [op_fixture_active_buffer, op_fixture_shared_host_runtime],
+    ops = [
+        op_buffer_active,
+        op_buffer_snapshot,
+        op_buffer_apply_edits,
+        op_fixture_shared_host_runtime,
+    ],
 );
 
 /// Shared native work available to ops without moving V8 off its extension
@@ -149,25 +236,180 @@ async fn op_fixture_shared_host_runtime(state: Rc<RefCell<OpState>>) -> String {
         .expect("Knot shared host runtime task panicked")
 }
 
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeSnapshotRequest {
+    handle: u64,
+    range: Option<NativeByteRange>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeApplyEditsRequest {
+    handle: u64,
+    edits: Vec<NativeTextEdit>,
+    if_revision: u64,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeByteRange {
+    start_byte_offset: usize,
+    end_byte_offset: usize,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeTextEdit {
+    range: NativeByteRange,
+    text: String,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeSnapshotResponse {
+    text: String,
+    start_byte_offset: usize,
+    end_byte_offset: usize,
+    revision: u64,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeBufferResponse {
+    error: Option<&'static str>,
+    snapshot: Option<NativeSnapshotResponse>,
+    revision: Option<u64>,
+}
+
 #[deno_core::op2]
-async fn op_fixture_active_buffer(state: Rc<RefCell<OpState>>) -> Result<bool, JsErrorBox> {
+#[serde]
+async fn op_buffer_active(state: Rc<RefCell<OpState>>) -> Result<Option<u64>, JsErrorBox> {
     let response = state
         .borrow_mut()
         .borrow_mut::<ExtensionRequestRouter>()
-        .request_active_buffer()
+        .request_javascript(HostOperation::ActiveBuffer)
         .map_err(|_| JsErrorBox::generic("Knot host closed the active-buffer request"))?;
     let response = response
         .await
         .map_err(|_| JsErrorBox::generic("Knot host closed the active-buffer request"))?;
 
     match response.result {
-        Ok(protocol::HostResponseValue::ActiveBuffer(buffer)) => Ok(buffer.is_some()),
+        Ok(HostResponseValue::ActiveBuffer(buffer)) => Ok(buffer.map(BufferHandle::value)),
         Ok(_) => Err(JsErrorBox::generic(
             "Knot host returned the wrong response type",
         )),
         Err(error) => Err(JsErrorBox::generic(format!(
             "Knot host rejected active-buffer request: {error:?}"
         ))),
+    }
+}
+
+#[deno_core::op2]
+#[serde]
+async fn op_buffer_snapshot(
+    state: Rc<RefCell<OpState>>,
+    #[serde] request: NativeSnapshotRequest,
+) -> Result<NativeBufferResponse, JsErrorBox> {
+    let range = request.range.map(|range| ByteRange {
+        start_byte_offset: range.start_byte_offset,
+        end_byte_offset: range.end_byte_offset,
+    });
+    let response = request_host_operation(
+        state,
+        HostOperation::Snapshot {
+            buffer: BufferHandle::new(request.handle),
+            range,
+        },
+    )
+    .await?;
+    match response.result {
+        Ok(HostResponseValue::Snapshot(snapshot)) => Ok(NativeBufferResponse {
+            error: None,
+            snapshot: Some(NativeSnapshotResponse {
+                text: snapshot.text,
+                start_byte_offset: snapshot.range.start_byte_offset,
+                end_byte_offset: snapshot.range.end_byte_offset,
+                revision: snapshot.revision,
+            }),
+            revision: None,
+        }),
+        Ok(_) => Err(JsErrorBox::generic(
+            "Knot host returned the wrong response type",
+        )),
+        Err(error) => Ok(NativeBufferResponse {
+            error: Some(host_request_error_name(error)),
+            snapshot: None,
+            revision: None,
+        }),
+    }
+}
+
+#[deno_core::op2]
+#[serde]
+async fn op_buffer_apply_edits(
+    state: Rc<RefCell<OpState>>,
+    #[serde] request: NativeApplyEditsRequest,
+) -> Result<NativeBufferResponse, JsErrorBox> {
+    let edits = request
+        .edits
+        .into_iter()
+        .map(|edit| TextEdit {
+            range: ByteRange {
+                start_byte_offset: edit.range.start_byte_offset,
+                end_byte_offset: edit.range.end_byte_offset,
+            },
+            text: edit.text,
+        })
+        .collect();
+    let response = request_host_operation(
+        state,
+        HostOperation::ApplyEdits {
+            buffer: BufferHandle::new(request.handle),
+            edits,
+            if_revision: request.if_revision,
+        },
+    )
+    .await?;
+    match response.result {
+        Ok(HostResponseValue::AppliedEdits { revision }) => Ok(NativeBufferResponse {
+            error: None,
+            snapshot: None,
+            revision: Some(revision),
+        }),
+        Ok(_) => Err(JsErrorBox::generic(
+            "Knot host returned the wrong response type",
+        )),
+        Err(error) => Ok(NativeBufferResponse {
+            error: Some(host_request_error_name(error)),
+            snapshot: None,
+            revision: None,
+        }),
+    }
+}
+
+async fn request_host_operation(
+    state: Rc<RefCell<OpState>>,
+    operation: HostOperation,
+) -> Result<HostResponse, JsErrorBox> {
+    let response = state
+        .borrow_mut()
+        .borrow_mut::<ExtensionRequestRouter>()
+        .request_javascript(operation)
+        .map_err(|_| JsErrorBox::generic("Knot host closed the buffer request"))?;
+    response
+        .await
+        .map_err(|_| JsErrorBox::generic("Knot host closed the buffer request"))
+}
+
+fn host_request_error_name(error: protocol::HostRequestError) -> &'static str {
+    match error {
+        protocol::HostRequestError::BufferClosed => "BufferClosed",
+        protocol::HostRequestError::InvalidRange => "InvalidRange",
+        protocol::HostRequestError::InvalidEditBatch => "InvalidEditBatch",
+        protocol::HostRequestError::RevisionConflict => "RevisionConflict",
+        protocol::HostRequestError::UnsupportedOperation => "UnsupportedOperation",
+        protocol::HostRequestError::Cancelled => "Cancelled",
     }
 }
 
@@ -752,13 +994,14 @@ impl ExtensionRequestRouter {
         self.send(id, operation)
     }
 
-    fn request_active_buffer(
+    fn request_javascript(
         &mut self,
+        operation: HostOperation,
     ) -> Result<tokio::sync::oneshot::Receiver<HostResponse>, ExtensionRuntimeClosed> {
         let (sender, receiver) = tokio::sync::oneshot::channel();
         let id = self.next_request_id();
         self.lifecycle.register_javascript(id, sender)?;
-        self.send(id, HostOperation::ActiveBuffer)?;
+        self.send(id, operation)?;
         Ok(receiver)
     }
 }
@@ -911,7 +1154,7 @@ impl ExtensionRuntime {
                         .and_then(|specifier| {
                             self.fixture_modules.insert(specifier.clone(), source);
                             self.event_loop_runtime
-                                .block_on(self.js_runtime.load_main_es_module(&specifier))
+                                .block_on(self.js_runtime.load_side_es_module(&specifier))
                                 .map_err(ExtensionRuntimeExecutionError::javascript_exception)
                         })
                         .and_then(|module_id| {
@@ -1067,7 +1310,7 @@ mod tests {
                         throw new Error("extension can access Deno");
                     }
                     editor.activeBuffer()
-                        .then((hasBuffer) => globalThis.hasBuffer = hasBuffer)
+                        .then((buffer) => globalThis.activeBuffer = buffer)
                 "#,
         );
 
@@ -1085,7 +1328,7 @@ mod tests {
 
         pollster::block_on(runtime.execute_fixture_script(
             "verify-active-buffer.js",
-            "if (globalThis.hasBuffer !== false) throw new Error('unexpected active buffer')",
+            "if (globalThis.activeBuffer !== null) throw new Error('unexpected active buffer')",
         ))
         .unwrap();
         runtime.shutdown();
