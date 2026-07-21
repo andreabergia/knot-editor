@@ -329,6 +329,9 @@ impl Shell {
     }
 
     fn invoke_fixture_command(&mut self, cx: &mut Context<Self>) {
+        if self.active_command.is_some() {
+            return;
+        }
         let target = match self.command_registry.resolve("knot.fixture.edit") {
             Ok(target) => target,
             Err(_) => {
@@ -337,11 +340,7 @@ impl Shell {
                 return;
             }
         };
-        let id = CommandInvocationId::new(self.next_command_invocation);
-        self.next_command_invocation = self
-            .next_command_invocation
-            .checked_add(1)
-            .expect("command invocation space exhausted");
+        let id = self.allocate_command_invocation();
         self.active_command = Some(id);
         self.command_state = "running".into();
         let execution = self.runtime_control.invoke_command(
@@ -356,20 +355,39 @@ impl Shell {
         cx.spawn(async move |this, cx| {
             let result = execution.await;
             let _ = this.update(cx, |this, cx| {
-                if this.active_command == Some(id) {
-                    this.active_command = None;
-                    this.command_state = if this.cancelled_commands.remove(&id) {
-                        "cancelled".into()
-                    } else if result.is_ok() {
-                        "completed".into()
-                    } else {
-                        "failed".into()
-                    };
-                    cx.notify();
-                }
+                this.finish_command(id, result.is_ok(), cx);
             });
         })
         .detach();
+        cx.notify();
+    }
+
+    fn allocate_command_invocation(&mut self) -> CommandInvocationId {
+        let id = CommandInvocationId::new(self.next_command_invocation);
+        self.next_command_invocation = self
+            .next_command_invocation
+            .checked_add(1)
+            .expect("command invocation space exhausted");
+        id
+    }
+
+    fn finish_command(
+        &mut self,
+        invocation: CommandInvocationId,
+        succeeded: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if self.active_command != Some(invocation) {
+            return;
+        }
+        self.active_command = None;
+        self.command_state = if self.cancelled_commands.remove(&invocation) {
+            "cancelled".into()
+        } else if succeeded {
+            "completed".into()
+        } else {
+            "failed".into()
+        };
         cx.notify();
     }
 
