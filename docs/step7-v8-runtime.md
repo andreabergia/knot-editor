@@ -1,7 +1,7 @@
 # Step 7 — V8 scripting runtime
 
-Status: runtime foundation and editor-model refactor complete; runtime/editor
-bridge and public APIs remain.
+Status: runtime foundation and editor/public boundary complete; integrated
+runtime proof and evidence remain.
 
 ## Goal and decisions
 
@@ -310,7 +310,7 @@ record that finding for the API design instead.
     boundaries, overlap/order failures, semantic no-ops, and one-revision
     multi-edit commits. Add a fixture module that reads and edits the active
     Rust buffer so the window visibly proves the end-to-end path. ✅
-- [ ] Implement extension-owned command registration and invocation. Pass an
+- [x] Implement extension-owned command registration and invocation. Pass an
   `AbortSignal`; cancellation rejects awaited host work and invalidates the
   invocation token so a response arriving later cannot mutate editor state.
   - [x] Add Knot-owned command, registration, and invocation identities to the
@@ -331,7 +331,7 @@ record that finding for the API design instead.
     awaits, snapshots, and edits the Rust buffer. Report its running,
     completed, cancelled, or failed state in the window. Add focused tests for
     disposal, unload, throw/rejection, and the late-response mutation guard. ✅
-- [ ] Implement buffer-change subscriptions and disposables. Fan one committed
+- [x] Implement buffer-change subscriptions and disposables. Fan one committed
   change out to several extension threads while preserving per-extension
   ordering and isolating thrown/rejected subscriber failures.
   - [x] Add subscription identities and lifecycle-owned registries without
