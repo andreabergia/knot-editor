@@ -77,8 +77,8 @@ function snapshotFromNative(snapshot) {
   const value = {
     text: snapshot.text,
     range: Object.freeze({
-      startByteOffset: snapshot.startByteOffset,
-      endByteOffset: snapshot.endByteOffset,
+      startByteOffset: snapshot.range.startByteOffset,
+      endByteOffset: snapshot.range.endByteOffset,
     }),
     revision: snapshot.revision,
     byteOffsetAtUtf16(offset) {
@@ -100,13 +100,13 @@ function bufferFor(handle) {
   if (buffer) return buffer;
   buffer = Object.freeze({
     async snapshot(range) {
-      const result = await nativeOps.op_buffer_snapshot({ handle, range });
-      if (result.error) hostError(result.error);
+      const result = await nativeOps.op_buffer_request({ kind: "snapshot", handle, range });
+      if (result.kind === "error") hostError(result.error);
       return snapshotFromNative(result.snapshot);
     },
     async applyEdits(edits, options) {
-      const result = await nativeOps.op_buffer_apply_edits({ handle, edits, ifRevision: options?.ifRevision });
-      if (result.error) hostError(result.error);
+      const result = await nativeOps.op_buffer_request({ kind: "applyEdits", handle, edits, ifRevision: options?.ifRevision });
+      if (result.kind === "error") hostError(result.error);
       return Object.freeze({ revision: result.revision });
     },
   });
@@ -210,8 +210,7 @@ deno_core::extension!(
     knot_runtime,
     ops = [
         op_buffer_active,
-        op_buffer_snapshot,
-        op_buffer_apply_edits,
+        op_buffer_request,
         op_fixture_shared_host_runtime,
     ],
 );
@@ -238,48 +237,31 @@ async fn op_fixture_shared_host_runtime(state: Rc<RefCell<OpState>>) -> String {
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct NativeSnapshotRequest {
+struct NativeBufferRequest {
     handle: u64,
-    range: Option<NativeByteRange>,
+    #[serde(flatten)]
+    operation: NativeBufferOperation,
 }
 
 #[derive(serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct NativeApplyEditsRequest {
-    handle: u64,
-    edits: Vec<NativeTextEdit>,
-    if_revision: u64,
-}
-
-#[derive(serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct NativeByteRange {
-    start_byte_offset: usize,
-    end_byte_offset: usize,
-}
-
-#[derive(serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct NativeTextEdit {
-    range: NativeByteRange,
-    text: String,
+#[serde(tag = "kind", rename_all = "camelCase")]
+enum NativeBufferOperation {
+    Snapshot {
+        range: Option<ByteRange>,
+    },
+    ApplyEdits {
+        edits: Vec<TextEdit>,
+        #[serde(rename = "ifRevision")]
+        if_revision: u64,
+    },
 }
 
 #[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct NativeSnapshotResponse {
-    text: String,
-    start_byte_offset: usize,
-    end_byte_offset: usize,
-    revision: u64,
-}
-
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct NativeBufferResponse {
-    error: Option<&'static str>,
-    snapshot: Option<NativeSnapshotResponse>,
-    revision: Option<u64>,
+#[serde(tag = "kind", rename_all = "camelCase")]
+enum NativeBufferResponse {
+    Snapshot { snapshot: protocol::TextSnapshot },
+    AppliedEdits { revision: u64 },
+    Error { error: protocol::HostRequestError },
 }
 
 #[deno_core::op2]
@@ -307,84 +289,33 @@ async fn op_buffer_active(state: Rc<RefCell<OpState>>) -> Result<Option<u64>, Js
 
 #[deno_core::op2]
 #[serde]
-async fn op_buffer_snapshot(
+async fn op_buffer_request(
     state: Rc<RefCell<OpState>>,
-    #[serde] request: NativeSnapshotRequest,
+    #[serde] request: NativeBufferRequest,
 ) -> Result<NativeBufferResponse, JsErrorBox> {
-    let range = request.range.map(|range| ByteRange {
-        start_byte_offset: range.start_byte_offset,
-        end_byte_offset: range.end_byte_offset,
-    });
-    let response = request_host_operation(
-        state,
-        HostOperation::Snapshot {
+    let operation = match request.operation {
+        NativeBufferOperation::Snapshot { range } => HostOperation::Snapshot {
             buffer: BufferHandle::new(request.handle),
             range,
         },
-    )
-    .await?;
-    match response.result {
-        Ok(HostResponseValue::Snapshot(snapshot)) => Ok(NativeBufferResponse {
-            error: None,
-            snapshot: Some(NativeSnapshotResponse {
-                text: snapshot.text,
-                start_byte_offset: snapshot.range.start_byte_offset,
-                end_byte_offset: snapshot.range.end_byte_offset,
-                revision: snapshot.revision,
-            }),
-            revision: None,
-        }),
-        Ok(_) => Err(JsErrorBox::generic(
-            "Knot host returned the wrong response type",
-        )),
-        Err(error) => Ok(NativeBufferResponse {
-            error: Some(host_request_error_name(error)),
-            snapshot: None,
-            revision: None,
-        }),
-    }
-}
-
-#[deno_core::op2]
-#[serde]
-async fn op_buffer_apply_edits(
-    state: Rc<RefCell<OpState>>,
-    #[serde] request: NativeApplyEditsRequest,
-) -> Result<NativeBufferResponse, JsErrorBox> {
-    let edits = request
-        .edits
-        .into_iter()
-        .map(|edit| TextEdit {
-            range: ByteRange {
-                start_byte_offset: edit.range.start_byte_offset,
-                end_byte_offset: edit.range.end_byte_offset,
-            },
-            text: edit.text,
-        })
-        .collect();
-    let response = request_host_operation(
-        state,
-        HostOperation::ApplyEdits {
+        NativeBufferOperation::ApplyEdits { edits, if_revision } => HostOperation::ApplyEdits {
             buffer: BufferHandle::new(request.handle),
             edits,
-            if_revision: request.if_revision,
+            if_revision,
         },
-    )
-    .await?;
+    };
+    let response = request_host_operation(state, operation).await?;
     match response.result {
-        Ok(HostResponseValue::AppliedEdits { revision }) => Ok(NativeBufferResponse {
-            error: None,
-            snapshot: None,
-            revision: Some(revision),
-        }),
+        Ok(HostResponseValue::Snapshot(snapshot)) => {
+            Ok(NativeBufferResponse::Snapshot { snapshot })
+        }
+        Ok(HostResponseValue::AppliedEdits { revision }) => {
+            Ok(NativeBufferResponse::AppliedEdits { revision })
+        }
         Ok(_) => Err(JsErrorBox::generic(
             "Knot host returned the wrong response type",
         )),
-        Err(error) => Ok(NativeBufferResponse {
-            error: Some(host_request_error_name(error)),
-            snapshot: None,
-            revision: None,
-        }),
+        Err(error) => Ok(NativeBufferResponse::Error { error }),
     }
 }
 
@@ -400,17 +331,6 @@ async fn request_host_operation(
     response
         .await
         .map_err(|_| JsErrorBox::generic("Knot host closed the buffer request"))
-}
-
-fn host_request_error_name(error: protocol::HostRequestError) -> &'static str {
-    match error {
-        protocol::HostRequestError::BufferClosed => "BufferClosed",
-        protocol::HostRequestError::InvalidRange => "InvalidRange",
-        protocol::HostRequestError::InvalidEditBatch => "InvalidEditBatch",
-        protocol::HostRequestError::RevisionConflict => "RevisionConflict",
-        protocol::HostRequestError::UnsupportedOperation => "UnsupportedOperation",
-        protocol::HostRequestError::Cancelled => "Cancelled",
-    }
 }
 
 /// Process-wide owner of the V8 platform and host asynchronous work.

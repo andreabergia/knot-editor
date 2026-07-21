@@ -63,10 +63,6 @@ impl BufferModel {
 
     /// Read a host-validated UTF-8 byte range without exposing core's
     /// assertion-based API to the extension boundary.
-    #[allow(
-        dead_code,
-        reason = "the next Step 7 slice dispatches snapshot requests through this helper"
-    )]
     pub(crate) fn read_checked(&self, range: ByteRange) -> Result<String, BufferAccessError> {
         let range = self.checked_range(range)?;
         Ok(self.buffer.read_range(range))
@@ -126,10 +122,7 @@ impl BufferModel {
         for (range, text) in validated.into_iter().rev() {
             self.buffer.replace(range, text);
         }
-        self.revision = self
-            .revision
-            .checked_add(1)
-            .expect("public buffer revision overflowed");
+        self.advance_revision();
         Ok(true)
     }
 
@@ -143,11 +136,15 @@ impl BufferModel {
             return false;
         }
         self.buffer.replace(range, text);
+        self.advance_revision();
+        true
+    }
+
+    fn advance_revision(&mut self) {
         self.revision = self
             .revision
             .checked_add(1)
             .expect("public buffer revision overflowed");
-        true
     }
 
     fn close(&mut self) {

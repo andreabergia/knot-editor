@@ -48,14 +48,16 @@ impl BufferHandle {
 }
 
 /// A half-open range in UTF-8 byte offsets.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ByteRange {
     pub start_byte_offset: usize,
     pub end_byte_offset: usize,
 }
 
 /// One replacement expressed in pre-commit buffer coordinates.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TextEdit {
     pub range: ByteRange,
     pub text: String,
@@ -101,7 +103,8 @@ pub enum HostResponseValue {
 }
 
 /// A snapshot of one requested UTF-8 byte range.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TextSnapshot {
     pub text: String,
     pub range: ByteRange,
@@ -109,7 +112,8 @@ pub struct TextSnapshot {
 }
 
 /// Stable failures at the host boundary.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "PascalCase")]
 pub enum HostRequestError {
     UnsupportedOperation,
     BufferClosed,
