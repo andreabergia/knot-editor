@@ -7,7 +7,8 @@ use gpui::{AppContext, Entity, WeakEntity};
 use crate::{
     core::buffer::TextBuffer,
     host::protocol::{
-        BufferHandle, ByteRange, CommandRegistrationId, ExtensionId, ExtensionLifecycleId,
+        BufferHandle, BufferSubscriptionId, ByteRange, CommandRegistrationId, ExtensionId,
+        ExtensionLifecycleId,
     },
 };
 
@@ -16,6 +17,14 @@ pub struct BufferModel {
     buffer: TextBuffer,
     revision: u64,
     open: bool,
+    pending_change: Option<CommittedBufferChange>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CommittedBufferChange {
+    pub before_revision: u64,
+    pub revision: u64,
+    pub edits: Vec<crate::host::protocol::TextEdit>,
 }
 
 impl BufferModel {
@@ -24,6 +33,7 @@ impl BufferModel {
             buffer: TextBuffer::from_text(text),
             revision: 0,
             open: true,
+            pending_change: None,
         }
     }
 
@@ -124,7 +134,13 @@ impl BufferModel {
         for (range, text) in validated.into_iter().rev() {
             self.buffer.replace(range, text);
         }
+        let before_revision = self.revision;
         self.advance_revision();
+        self.pending_change = Some(CommittedBufferChange {
+            before_revision,
+            revision: self.revision,
+            edits: edits.to_vec(),
+        });
         Ok(true)
     }
 
@@ -137,9 +153,26 @@ impl BufferModel {
         if range.is_empty() && text.is_empty() {
             return false;
         }
+        let edit = crate::host::protocol::TextEdit {
+            range: ByteRange {
+                start_byte_offset: range.start,
+                end_byte_offset: range.end,
+            },
+            text: text.into(),
+        };
         self.buffer.replace(range, text);
+        let before_revision = self.revision;
         self.advance_revision();
+        self.pending_change = Some(CommittedBufferChange {
+            before_revision,
+            revision: self.revision,
+            edits: vec![edit],
+        });
         true
+    }
+
+    pub(crate) fn take_pending_change(&mut self) -> Option<CommittedBufferChange> {
+        self.pending_change.take()
     }
 
     fn advance_revision(&mut self) {
@@ -249,6 +282,94 @@ pub struct CommandRegistry {
     next_registration: u64,
     by_name: HashMap<String, CommandRegistration>,
     by_id: HashMap<CommandRegistrationId, String>,
+}
+
+/// Foreground-authoritative buffer-change subscriptions.
+pub struct BufferSubscriptionRegistry {
+    next_subscription: u64,
+    subscriptions: HashMap<BufferSubscriptionId, BufferSubscription>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct BufferSubscription {
+    pub id: BufferSubscriptionId,
+    pub buffer: BufferHandle,
+    pub extension: ExtensionId,
+    pub lifecycle: ExtensionLifecycleId,
+}
+
+impl BufferSubscriptionRegistry {
+    pub fn new() -> Self {
+        Self {
+            next_subscription: 1,
+            subscriptions: HashMap::new(),
+        }
+    }
+
+    pub(crate) fn subscribe(
+        &mut self,
+        buffer: BufferHandle,
+        extension: ExtensionId,
+        lifecycle: ExtensionLifecycleId,
+    ) -> BufferSubscriptionId {
+        let id = BufferSubscriptionId::new(self.next_subscription);
+        self.next_subscription = self
+            .next_subscription
+            .checked_add(1)
+            .expect("subscription space exhausted");
+        self.subscriptions.insert(
+            id,
+            BufferSubscription {
+                id,
+                buffer,
+                extension,
+                lifecycle,
+            },
+        );
+        id
+    }
+
+    pub(crate) fn unsubscribe(
+        &mut self,
+        id: BufferSubscriptionId,
+        extension: ExtensionId,
+        lifecycle: ExtensionLifecycleId,
+    ) -> bool {
+        if self.subscriptions.get(&id).is_some_and(|subscription| {
+            subscription.extension == extension && subscription.lifecycle == lifecycle
+        }) {
+            self.subscriptions.remove(&id);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub(crate) fn for_buffer(
+        &self,
+        buffer: BufferHandle,
+    ) -> impl Iterator<Item = BufferSubscription> + '_ {
+        self.subscriptions
+            .values()
+            .copied()
+            .filter(move |subscription| subscription.buffer == buffer)
+    }
+
+    pub(crate) fn remove_lifecycle(
+        &mut self,
+        extension: ExtensionId,
+        lifecycle: ExtensionLifecycleId,
+    ) {
+        self.subscriptions.retain(|_, subscription| {
+            subscription.extension != extension || subscription.lifecycle != lifecycle
+        });
+    }
+}
+
+impl Default for BufferSubscriptionRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

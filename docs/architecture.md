@@ -137,10 +137,13 @@ work and rechecks before applying an edit, so a late completion cannot mutate
 the document.
 
 Extension-local lifecycle state owns pending work, termination, resource
-limits, and teardown. A failed or terminated isolate does not take down other
-extensions. The current JavaScript API and module loading are fixture-level
-probes; buffer change subscriptions and the complete editor API do not exist
-yet.
+limits, command registrations, buffer-change subscriptions, and teardown. A
+failed or terminated isolate does not take down other extensions. Each
+non-empty commit publishes one immutable Knot-owned change payload to matching
+subscriptions. Delivery is queued on the owning extension's command stream,
+so callbacks are serial and ordered per extension while independent extension
+threads can progress separately; a listener failure is reported but does not
+suppress later callbacks.
 
 ```text
 extension JavaScript
@@ -154,7 +157,7 @@ extension runtime thread
 gpui foreground bridge
         |
         v
-BufferRegistry / BufferModel / CommandRegistry
+BufferRegistry / BufferModel / CommandRegistry / BufferSubscriptionRegistry
 ```
 
 The private bootstrap module retains native bindings and turns opaque handles
@@ -181,8 +184,8 @@ Detailed runtime behavior and experiment results live in
 ## Major gaps
 
 - Undo history, edit grouping, and view-state restoration are not implemented.
-- Buffer change subscriptions, capability aggregation, filesystem providers,
-  terminal state, and the public extension API remain roadmap work.
+- Capability aggregation, filesystem providers, terminal state, and the
+  complete public extension API remain roadmap work.
 
 Update this document when component boundaries, ownership, dependency
 direction, or a major runtime flow changes. Keep implementation contracts in

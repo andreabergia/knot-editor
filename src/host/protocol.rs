@@ -69,6 +69,20 @@ impl CommandInvocationId {
     }
 }
 
+/// An opaque identity for one buffer-change subscription.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct BufferSubscriptionId(u64);
+
+impl BufferSubscriptionId {
+    pub(crate) const fn new(value: u64) -> Self {
+        Self(value)
+    }
+
+    pub(crate) const fn value(self) -> u64 {
+        self.0
+    }
+}
+
 /// An opaque reference to an editor buffer.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct BufferHandle(u64);
@@ -132,6 +146,12 @@ pub enum HostOperation {
     UnregisterCommand {
         registration: CommandRegistrationId,
     },
+    SubscribeBufferChanges {
+        buffer: BufferHandle,
+    },
+    UnsubscribeBufferChanges {
+        subscription: BufferSubscriptionId,
+    },
 }
 
 /// A reply sent back to the extension runtime for one [`HostRequest`].
@@ -151,6 +171,8 @@ pub enum HostResponseValue {
     AppliedEdits { revision: u64 },
     CommandRegistered { registration: CommandRegistrationId },
     CommandUnregistered { registration: CommandRegistrationId },
+    BufferChangesSubscribed { subscription: BufferSubscriptionId },
+    BufferChangesUnsubscribed { subscription: BufferSubscriptionId },
 }
 
 /// A foreground-authorized command invocation routed to its extension owner.
@@ -169,6 +191,15 @@ pub struct TextSnapshot {
     pub text: String,
     pub range: ByteRange,
     pub revision: u64,
+}
+
+/// One committed editor-visible buffer change in pre-commit coordinates.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BufferChange {
+    pub buffer: BufferHandle,
+    pub before_revision: u64,
+    pub revision: u64,
+    pub edits: Vec<TextEdit>,
 }
 
 /// Stable failures at the host boundary.

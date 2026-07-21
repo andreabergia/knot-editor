@@ -334,19 +334,19 @@ record that finding for the API design instead.
 - [ ] Implement buffer-change subscriptions and disposables. Fan one committed
   change out to several extension threads while preserving per-extension
   ordering and isolating thrown/rejected subscriber failures.
-  - [ ] Add subscription identities and lifecycle-owned registries without
+  - [x] Add subscription identities and lifecycle-owned registries without
     exposing transport concepts publicly. `onDidChange` returns an idempotent
     disposable; buffer closure and extension unload remove all affected
     subscriptions.
-  - [ ] After each non-empty commit, construct exactly one `BufferChangeEvent`
+  - [x] After each non-empty commit, construct exactly one `BufferChangeEvent`
     containing the cached buffer proxy, before/after revisions, and the
     original ordered edits in pre-commit coordinates. Local and extension
     commits use the same publication path.
-  - [ ] Fan the immutable Knot-owned event payload to every subscribed
+  - [x] Fan the immutable Knot-owned event payload to every subscribed
     extension. Queue callbacks on each extension's runtime command stream so
     callbacks for one extension execute serially and in commit order while
     different extension threads remain independent.
-  - [ ] Await each listener result before advancing that extension's callback
+  - [x] Await each listener result before advancing that extension's callback
     queue. Record thrown/rejected listener failures against that extension and
     continue later callbacks and other extensions; do not fail or roll back the
     already committed edit.

@@ -10,8 +10,8 @@ use crate::host::{
     ExtensionRequestInbox, ExtensionRuntimeControl, ExtensionRuntimeParts, ExtensionRuntimeThread,
     V8Host,
     protocol::{
-        CommandInvocation, CommandInvocationId, ExtensionId, HostOperation, HostRequest,
-        HostRequestError, HostResponse, HostResponseValue,
+        BufferChange, CommandInvocation, CommandInvocationId, ExtensionId, HostOperation,
+        HostRequest, HostRequestError, HostResponse, HostResponseValue,
     },
 };
 
@@ -19,7 +19,9 @@ mod editor;
 pub mod model;
 
 use editor::EditorView;
-use model::{BufferAccessError, BufferModel, BufferRegistry, CommandRegistry};
+use model::{
+    BufferAccessError, BufferModel, BufferRegistry, BufferSubscriptionRegistry, CommandRegistry,
+};
 
 actions!(knot, [Quit]);
 
@@ -85,6 +87,7 @@ struct Shell {
     /// during each paint.
     editor: Entity<EditorView>,
     buffer_registry: BufferRegistry,
+    buffer_subscriptions: BufferSubscriptionRegistry,
     command_registry: CommandRegistry,
     next_command_invocation: u64,
     active_command: Option<CommandInvocationId>,
@@ -128,7 +131,10 @@ impl Shell {
         let handle = buffer_registry.open(&model);
         buffer_registry.set_active(Some(handle));
         let editor = cx.new(|cx| EditorView::from_fixture(&fixture, model.clone(), cx));
-        let model_subscription = cx.observe(&model, |_this, _model, cx| cx.notify());
+        let model_subscription = cx.observe(&model, |this, model, cx| {
+            this.publish_model_change(model, cx);
+            cx.notify();
+        });
         let ExtensionRuntimeParts {
             control: runtime_control,
             requests,
@@ -204,6 +210,7 @@ impl Shell {
             drag_origin: None,
             editor,
             buffer_registry,
+            buffer_subscriptions: BufferSubscriptionRegistry::new(),
             command_registry: CommandRegistry::new(),
             next_command_invocation: 1,
             active_command: None,
@@ -244,6 +251,8 @@ impl Shell {
             let (extension, lifecycle) = control.identity();
             let _ = this.update(cx, |this, cx| {
                 this.command_registry.remove_lifecycle(extension, lifecycle);
+                this.buffer_subscriptions
+                    .remove_lifecycle(extension, lifecycle);
                 this.runtime_state = "closed".into();
                 if let Some(error) = failure {
                     this.latest_runtime_error = Some(error.into());
@@ -318,6 +327,28 @@ impl Shell {
                 .unregister(registration, request.extension, request.lifecycle)
                 .map(|()| HostResponseValue::CommandUnregistered { registration })
                 .map_err(map_command_error),
+            HostOperation::SubscribeBufferChanges { buffer } => self
+                .buffer_registry
+                .resolve(buffer)
+                .map_err(|_| HostRequestError::BufferClosed)
+                .map(|_| HostResponseValue::BufferChangesSubscribed {
+                    subscription: self.buffer_subscriptions.subscribe(
+                        buffer,
+                        request.extension,
+                        request.lifecycle,
+                    ),
+                }),
+            HostOperation::UnsubscribeBufferChanges { subscription } => {
+                if self.buffer_subscriptions.unsubscribe(
+                    subscription,
+                    request.extension,
+                    request.lifecycle,
+                ) {
+                    Ok(HostResponseValue::BufferChangesUnsubscribed { subscription })
+                } else {
+                    Err(HostRequestError::BufferClosed)
+                }
+            }
         };
 
         HostResponse {
@@ -325,6 +356,40 @@ impl Shell {
             lifecycle: request.lifecycle,
             id: request.id,
             result,
+        }
+    }
+
+    fn publish_buffer_change(&self, change: BufferChange) {
+        for subscription in self.buffer_subscriptions.for_buffer(change.buffer) {
+            if subscription.extension == self.runtime_control.identity().0
+                && subscription.lifecycle == self.runtime_control.identity().1
+            {
+                let _ = self
+                    .runtime_control
+                    .dispatch_buffer_change(subscription.id, change.clone());
+            }
+        }
+    }
+
+    fn publish_model_change(&mut self, model: Entity<BufferModel>, cx: &mut Context<Self>) {
+        let Some(buffer) = self.buffer_registry.active_handle() else {
+            return;
+        };
+        let active = match self.buffer_registry.resolve(buffer) {
+            Ok(active) => active,
+            Err(_) => return,
+        };
+        if active != model {
+            return;
+        }
+        let change = model.update(cx, |model, _| model.take_pending_change());
+        if let Some(change) = change {
+            self.publish_buffer_change(BufferChange {
+                buffer,
+                before_revision: change.before_revision,
+                revision: change.revision,
+                edits: change.edits,
+            });
         }
     }
 

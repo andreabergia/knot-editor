@@ -26,8 +26,9 @@ use deno_error::JsErrorBox;
 pub mod protocol;
 
 use protocol::{
-    BufferHandle, ByteRange, CommandInvocation, ExtensionId, ExtensionLifecycleId, HostOperation,
-    HostRequest, HostResponse, HostResponseValue, RequestId, TextEdit,
+    BufferChange, BufferHandle, BufferSubscriptionId, ByteRange, CommandInvocation, ExtensionId,
+    ExtensionLifecycleId, HostOperation, HostRequest, HostResponse, HostResponseValue, RequestId,
+    TextEdit,
 };
 
 const PRIVATE_BOOTSTRAP_SPECIFIER: &str = "knot:bootstrap";
@@ -38,6 +39,7 @@ const nativeOps = Deno.core.ops;
 
 const buffers = new Map();
 const commandHandlers = new Map();
+const bufferChangeListeners = new Map();
 let activeCommandController = null;
 const snapshotTables = new WeakMap();
 
@@ -144,6 +146,19 @@ function bufferFor(handle) {
       if (result.kind === "error") hostError(result.error);
       return Object.freeze({ revision: result.revision });
     },
+    onDidChange(listener) {
+      if (typeof listener !== "function") throw new TypeError("onDidChange requires a listener");
+      return nativeOps.op_buffer_subscribe(handle).then((subscription) => {
+        bufferChangeListeners.set(subscription, { handle, listener });
+        let disposed = false;
+        return Object.freeze({ dispose() {
+          if (disposed) return;
+          disposed = true;
+          bufferChangeListeners.delete(subscription);
+          void nativeOps.op_buffer_unsubscribe(subscription);
+        }});
+      });
+    },
   });
   buffers.set(handle, buffer);
   return buffer;
@@ -184,6 +199,20 @@ globalThis.__knotInvokeCommand = async (registration, activeHandle) => {
   } finally {
     activeCommandController = null;
   }
+};
+
+globalThis.__knotDispatchBufferChange = async (subscription, change) => {
+  const entry = bufferChangeListeners.get(subscription);
+  if (!entry) return;
+  await entry.listener(Object.freeze({
+    buffer: bufferFor(entry.handle),
+    beforeRevision: change.beforeRevision,
+    revision: change.revision,
+    edits: Object.freeze(change.edits.map((edit) => Object.freeze({
+      range: Object.freeze({ startByteOffset: edit.range.startByteOffset, endByteOffset: edit.range.endByteOffset }),
+      text: edit.text,
+    }))),
+  }));
 };
 "#;
 const PUBLIC_FACADE_SOURCE: &str = r#"
@@ -284,6 +313,8 @@ deno_core::extension!(
         op_buffer_request,
         op_command_register,
         op_command_unregister,
+        op_buffer_subscribe,
+        op_buffer_unsubscribe,
         op_fixture_shared_host_runtime,
     ],
 );
@@ -429,6 +460,53 @@ async fn op_command_unregister(
         )),
         Err(error) => Err(JsErrorBox::generic(format!(
             "Knot host rejected command unregistration: {error:?}"
+        ))),
+    }
+}
+
+#[deno_core::op2]
+#[number]
+async fn op_buffer_subscribe(
+    state: Rc<RefCell<OpState>>,
+    #[number] handle: u64,
+) -> Result<u64, JsErrorBox> {
+    let response = request_host_operation(
+        state,
+        HostOperation::SubscribeBufferChanges {
+            buffer: BufferHandle::new(handle),
+        },
+    )
+    .await?;
+    match response.result {
+        Ok(HostResponseValue::BufferChangesSubscribed { subscription }) => Ok(subscription.value()),
+        Ok(_) => Err(JsErrorBox::generic(
+            "Knot host returned the wrong response type",
+        )),
+        Err(error) => Err(JsErrorBox::generic(format!(
+            "Knot host rejected buffer subscription: {error:?}"
+        ))),
+    }
+}
+
+#[deno_core::op2]
+async fn op_buffer_unsubscribe(
+    state: Rc<RefCell<OpState>>,
+    #[number] subscription: u64,
+) -> Result<(), JsErrorBox> {
+    let response = request_host_operation(
+        state,
+        HostOperation::UnsubscribeBufferChanges {
+            subscription: BufferSubscriptionId::new(subscription),
+        },
+    )
+    .await?;
+    match response.result {
+        Ok(HostResponseValue::BufferChangesUnsubscribed { .. }) => Ok(()),
+        Ok(_) => Err(JsErrorBox::generic(
+            "Knot host returned the wrong response type",
+        )),
+        Err(error) => Err(JsErrorBox::generic(format!(
+            "Knot host rejected buffer unsubscription: {error:?}"
         ))),
     }
 }
@@ -594,6 +672,15 @@ impl ExtensionRuntimeHandle {
         self.control.invoke_command(invocation, active_buffer)
     }
 
+    /// Queue one committed buffer change for this extension's subscription.
+    pub fn dispatch_buffer_change(
+        &self,
+        subscription: BufferSubscriptionId,
+        change: BufferChange,
+    ) -> Result<(), ExtensionRuntimeClosed> {
+        self.control.dispatch_buffer_change(subscription, change)
+    }
+
     /// Asynchronously receive the next request emitted by the extension thread.
     pub async fn receive_request(&mut self) -> Option<HostRequest> {
         self.requests.receive().await
@@ -690,6 +777,19 @@ impl ExtensionRuntimeControl {
         ExtensionRuntimeExecution {
             completion: completed,
         }
+    }
+
+    pub fn dispatch_buffer_change(
+        &self,
+        subscription: BufferSubscriptionId,
+        change: BufferChange,
+    ) -> Result<(), ExtensionRuntimeClosed> {
+        self.commands
+            .send(RuntimeCommand::DispatchBufferChange {
+                subscription,
+                change,
+            })
+            .map_err(|_| ExtensionRuntimeClosed)
     }
 
     /// Return a host response to this extension runtime.
@@ -829,6 +929,10 @@ enum RuntimeCommand {
         invocation: CommandInvocation,
         active_buffer: Option<BufferHandle>,
         completion: tokio::sync::oneshot::Sender<Result<(), ExtensionRuntimeExecutionError>>,
+    },
+    DispatchBufferChange {
+        subscription: BufferSubscriptionId,
+        change: BufferChange,
     },
     Shutdown,
 }
@@ -1313,6 +1417,37 @@ impl ExtensionRuntime {
                         break;
                     }
                 }
+                RuntimeCommand::DispatchBufferChange {
+                    subscription,
+                    change,
+                } => {
+                    let _runtime_guard = self.event_loop_runtime.enter();
+                    let change = serde_json::json!({
+                        "beforeRevision": change.before_revision,
+                        "revision": change.revision,
+                        "edits": change.edits,
+                    });
+                    let source = format!(
+                        "globalThis.__knotDispatchBufferChange({}, {})",
+                        subscription.value(),
+                        change,
+                    );
+                    let result = self
+                        .js_runtime
+                        .execute_script("knot:buffer-change", source)
+                        .map_err(ExtensionRuntimeExecutionError::javascript_exception)
+                        .and_then(|_| {
+                            self.event_loop_runtime
+                                .block_on(self.js_runtime.run_event_loop(Default::default()))
+                                .map_err(ExtensionRuntimeExecutionError::javascript_exception)
+                        });
+                    if let Err(error) = result {
+                        eprintln!("[knot] buffer-change listener failed: {error:?}");
+                    }
+                    if self.lifecycle.termination().is_some() {
+                        break;
+                    }
+                }
                 RuntimeCommand::Shutdown => break,
             }
         }
@@ -1334,8 +1469,9 @@ mod tests {
         ExtensionRuntimeResponseError, V8Host,
     };
     use crate::host::protocol::{
-        CommandInvocation, CommandInvocationId, CommandRegistrationId, ExtensionId,
-        ExtensionLifecycleId, HostOperation, HostResponse, HostResponseValue, RequestId,
+        BufferChange, BufferHandle, BufferSubscriptionId, ByteRange, CommandInvocation,
+        CommandInvocationId, CommandRegistrationId, ExtensionId, ExtensionLifecycleId,
+        HostOperation, HostResponse, HostResponseValue, RequestId, TextEdit,
     };
 
     #[test]
@@ -1467,6 +1603,69 @@ mod tests {
             "if (globalThis.activeBuffer !== null) throw new Error('unexpected active buffer')",
         ))
         .unwrap();
+        runtime.shutdown();
+    }
+
+    #[test]
+    fn buffer_change_callbacks_are_serial_and_survive_listener_failures() {
+        let host = V8Host::new();
+        let extension = ExtensionId::new(7);
+        let mut runtime = host.spawn_extension(extension);
+        let lifecycle = runtime.control.lifecycle_id;
+        let buffer = BufferHandle::new(3);
+        let subscription = BufferSubscriptionId::new(9);
+        let execution = runtime.execute_fixture_module(
+            "file:///fixtures/subscription.js",
+            r#"
+                import { editor } from "knot:editor";
+                const buffer = await editor.activeBuffer();
+                buffer.onDidChange(async (event) => {
+                  globalThis.events = [...(globalThis.events ?? []), event.revision];
+                  if (event.revision === 1) throw new Error("expected listener failure");
+                });
+            "#,
+        );
+        for response in [
+            HostResponseValue::ActiveBuffer(Some(buffer)),
+            HostResponseValue::BufferChangesSubscribed { subscription },
+        ] {
+            let request = pollster::block_on(runtime.receive_request()).unwrap();
+            runtime
+                .respond(HostResponse {
+                    extension,
+                    lifecycle: request.lifecycle,
+                    id: request.id,
+                    result: Ok(response),
+                })
+                .unwrap();
+        }
+        pollster::block_on(execution).unwrap();
+
+        for revision in 1..=2 {
+            runtime
+                .dispatch_buffer_change(
+                    subscription,
+                    BufferChange {
+                        buffer,
+                        before_revision: revision - 1,
+                        revision,
+                        edits: vec![TextEdit {
+                            range: ByteRange {
+                                start_byte_offset: 0,
+                                end_byte_offset: 0,
+                            },
+                            text: revision.to_string(),
+                        }],
+                    },
+                )
+                .unwrap();
+        }
+        pollster::block_on(runtime.execute_fixture_script(
+            "verify-events.js",
+            "if (globalThis.events.join(',') !== '1,2') throw new Error('events were not serial')",
+        ))
+        .unwrap();
+        assert_eq!(runtime.control.identity().1, lifecycle);
         runtime.shutdown();
     }
 
