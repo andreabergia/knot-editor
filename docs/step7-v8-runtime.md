@@ -270,10 +270,10 @@ record that finding for the API design instead.
   batches, revision conflicts, opaque-handle invalidation, and the two explicit
   UTF-16 adapter helpers. Keep byte/UTF-16 index construction lazy so ordinary
   UTF-8 operations do no re-encoding work.
-  - [ ] Put buffer semantics in `BufferModel`/editor-host code, leaving
+  - [x] Put buffer semantics in `BufferModel`/editor-host code, leaving
     `host::protocol` as transport data and V8 ops as marshalling only. Add
     checked helpers around `TextBuffer` because its current UTF-8 preconditions
-    are assertions rather than recoverable host errors.
+    are assertions rather than recoverable host errors. ✅
   - [ ] Resolve a handle immediately before every operation. Reject missing,
     closed, or dead entities with `BufferClosed`; never let a stale handle
     resolve to a subsequently opened buffer.

@@ -769,8 +769,12 @@ impl TextBuffer {
         *starts = new_starts;
     }
 
-    /// True iff `offset` is a UTF-8 char boundary of the logical text.
-    fn is_char_boundary(&self, offset: usize) -> bool {
+    /// Whether `offset` is a UTF-8 scalar boundary in the logical text.
+    ///
+    /// This is crate-visible so the editor host can validate untrusted byte
+    /// ranges before calling the buffer's assertion-based mutation and read
+    /// operations.
+    pub(crate) fn is_char_boundary(&self, offset: usize) -> bool {
         // Walk the pieces and stitch a logical view; reading a full char
         // would be wasteful, so we reconstruct boundary-ness by inspecting
         // the byte at the piece boundary. Cheap path: the offset falls

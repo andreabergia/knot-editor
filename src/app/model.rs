@@ -4,7 +4,10 @@ use std::{collections::HashMap, ops::Range};
 
 use gpui::{AppContext, Entity, WeakEntity};
 
-use crate::{core::buffer::TextBuffer, host::protocol::BufferHandle};
+use crate::{
+    core::buffer::TextBuffer,
+    host::protocol::{BufferHandle, ByteRange},
+};
 
 /// The authoritative document owned by gpui's foreground thread.
 pub struct BufferModel {
@@ -32,6 +35,41 @@ impl BufferModel {
 
     pub fn is_open(&self) -> bool {
         self.open
+    }
+
+    /// Validate a public UTF-8 byte range before it reaches `TextBuffer`.
+    ///
+    /// Core buffer operations deliberately assert their preconditions. The
+    /// foreground editor host converts externally supplied offsets into this
+    /// recoverable result instead.
+    pub(crate) fn checked_range(
+        &self,
+        range: ByteRange,
+    ) -> Result<Range<usize>, BufferAccessError> {
+        if !self.open {
+            return Err(BufferAccessError::Closed);
+        }
+
+        let range = range.start_byte_offset..range.end_byte_offset;
+        if range.start > range.end
+            || range.end > self.buffer.len()
+            || !self.buffer.is_char_boundary(range.start)
+            || !self.buffer.is_char_boundary(range.end)
+        {
+            return Err(BufferAccessError::InvalidRange);
+        }
+        Ok(range)
+    }
+
+    /// Read a host-validated UTF-8 byte range without exposing core's
+    /// assertion-based API to the extension boundary.
+    #[allow(
+        dead_code,
+        reason = "the next Step 7 slice dispatches snapshot requests through this helper"
+    )]
+    pub(crate) fn read_checked(&self, range: ByteRange) -> Result<String, BufferAccessError> {
+        let range = self.checked_range(range)?;
+        Ok(self.buffer.read_range(range))
     }
 
     /// Apply one editor-visible local replacement as one public commit.
@@ -63,6 +101,13 @@ impl BufferModel {
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct BufferClosed;
+
+/// Recoverable failures while accessing a foreground-owned buffer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum BufferAccessError {
+    Closed,
+    InvalidRange,
+}
 
 /// Maps transport-safe buffer handles to foreground-owned gpui entities.
 pub struct BufferRegistry {
@@ -168,5 +213,48 @@ mod tests {
 
         assert!(!model.replace(0..0, ""));
         assert_eq!(model.revision(), 1);
+    }
+
+    #[test]
+    fn checked_reads_reject_invalid_utf8_ranges_without_touching_the_buffer() {
+        let model = BufferModel::from_text("aé中");
+
+        assert_eq!(
+            model.read_checked(ByteRange {
+                start_byte_offset: 1,
+                end_byte_offset: 3,
+            }),
+            Ok("é".into())
+        );
+        assert_eq!(
+            model.read_checked(ByteRange {
+                start_byte_offset: 2,
+                end_byte_offset: 3,
+            }),
+            Err(BufferAccessError::InvalidRange)
+        );
+        assert_eq!(
+            model.read_checked(ByteRange {
+                start_byte_offset: 4,
+                end_byte_offset: 3,
+            }),
+            Err(BufferAccessError::InvalidRange)
+        );
+        assert_eq!(model.text(), "aé中");
+        assert_eq!(model.revision(), 0);
+    }
+
+    #[test]
+    fn checked_reads_reject_closed_buffers() {
+        let mut model = BufferModel::from_text("abc");
+        model.close();
+
+        assert_eq!(
+            model.read_checked(ByteRange {
+                start_byte_offset: 0,
+                end_byte_offset: 3,
+            }),
+            Err(BufferAccessError::Closed)
+        );
     }
 }
