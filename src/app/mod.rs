@@ -35,6 +35,9 @@ import { commands, editor } from "knot:editor";
 globalThis.knotActiveBuffer = await editor.activeBuffer();
 await commands.register("knot.fixture.edit", async (context) => {
   if (!context.buffer) throw new Error("Knot has no active editor buffer");
+  context.signal.addEventListener("abort", () => {
+    globalThis.knotFixtureCommandAborted = true;
+  });
   const snapshot = await context.buffer.snapshot();
   await context.buffer.applyEdits(
     [{ range: { startByteOffset: 0, endByteOffset: 0 }, text: "// command\n" }],
@@ -99,7 +102,6 @@ struct Shell {
     heartbeat: u64,
     runtime_state: SharedString,
     latest_runtime_error: Option<SharedString>,
-    runtime_control: ExtensionRuntimeControl,
     extension_controls: HashMap<
         (ExtensionId, crate::host::protocol::ExtensionLifecycleId),
         ExtensionRuntimeControl,
@@ -250,7 +252,6 @@ impl Shell {
             heartbeat: 0,
             runtime_state: "starting".into(),
             latest_runtime_error: None,
-            runtime_control,
             extension_controls,
             runtime_threads,
             background_executor: cx.background_executor().clone(),
@@ -303,6 +304,7 @@ impl Shell {
             .invocation
             .is_some_and(|invocation| self.cancelled_commands.contains(&invocation));
         let result = match request.operation {
+            _ if cancelled => Err(HostRequestError::Cancelled),
             HostOperation::ActiveBuffer => Ok(HostResponseValue::ActiveBuffer(
                 self.buffer_registry.active_handle(),
             )),
@@ -316,7 +318,6 @@ impl Shell {
                         .map_err(map_buffer_error)
                 })
                 .map(HostResponseValue::Snapshot),
-            HostOperation::ApplyEdits { .. } if cancelled => Err(HostRequestError::Cancelled),
             HostOperation::ApplyEdits {
                 buffer,
                 edits,
@@ -450,10 +451,19 @@ impl Shell {
                 return;
             }
         };
+        let Some(control) = self
+            .extension_controls
+            .get(&(target.extension, target.lifecycle))
+            .cloned()
+        else {
+            self.command_state = "unavailable".into();
+            cx.notify();
+            return;
+        };
         let id = self.allocate_command_invocation();
         self.active_command = Some(id);
         self.command_state = "running".into();
-        let execution = self.runtime_control.invoke_command(
+        let execution = control.invoke_command(
             CommandInvocation {
                 id,
                 registration: target.registration,
@@ -792,7 +802,7 @@ mod tests {
 
     use super::Shell;
     use crate::host::{
-        V8Host,
+        ExtensionRuntimeControl, V8Host,
         protocol::{ByteRange, ExtensionId, TextEdit},
     };
 
@@ -816,6 +826,21 @@ mod tests {
         }
     }
 
+    fn only_runtime_control(
+        shell: &Entity<Shell>,
+        cx: &mut TestAppContext,
+    ) -> ExtensionRuntimeControl {
+        cx.read(|cx| {
+            shell
+                .read(cx)
+                .extension_controls
+                .values()
+                .next()
+                .cloned()
+                .expect("single-runtime shell has its control")
+        })
+    }
+
     #[gpui::test]
     async fn foreground_bridge_resolves_the_displayed_active_buffer(cx: &mut TestAppContext) {
         let runtime = V8Host::new()
@@ -823,7 +848,7 @@ mod tests {
             .into_parts();
         let shell = cx.new(|cx| Shell::new(runtime, cx));
         wait_for_runtime_state(&shell, "running", cx).await;
-        let control = cx.read(|cx| shell.read(cx).runtime_control.clone());
+        let control = only_runtime_control(&shell, cx);
         let execution = control.execute_fixture_script(
             "verify-gpui-active-buffer.js",
             r#"
@@ -852,7 +877,7 @@ mod tests {
             .into_parts();
         let shell = cx.new(|cx| Shell::new(runtime, cx));
         wait_for_runtime_state(&shell, "running", cx).await;
-        let control = cx.read(|cx| shell.read(cx).runtime_control.clone());
+        let control = only_runtime_control(&shell, cx);
 
         control
             .execute_fixture_module(
@@ -1052,6 +1077,63 @@ mod tests {
     }
 
     #[gpui::test]
+    async fn fixture_command_runs_on_its_registered_extension(cx: &mut TestAppContext) {
+        let host = V8Host::new();
+        let shell = cx.new(|cx| {
+            Shell::new_with_runtimes(
+                vec![
+                    host.spawn_extension(ExtensionId::new(14)).into_parts(),
+                    host.spawn_extension(ExtensionId::new(15)).into_parts(),
+                ],
+                cx,
+            )
+        });
+        wait_for_runtime_state(&shell, "running", cx).await;
+        let (first, second) = cx.read(|cx| {
+            let shell = shell.read(cx);
+            let mut controls = shell.extension_controls.values().cloned();
+            let first = controls
+                .find(|control| control.identity().0 == ExtensionId::new(14))
+                .unwrap();
+            let second = shell
+                .extension_controls
+                .values()
+                .find(|control| control.identity().0 == ExtensionId::new(15))
+                .cloned()
+                .unwrap();
+            (first, second)
+        });
+        let (first_extension, first_lifecycle) = first.identity();
+        shell.update(cx, |shell, _| {
+            shell
+                .command_registry
+                .remove_lifecycle(first_extension, first_lifecycle);
+        });
+        second
+            .execute_fixture_module(
+                "file:///fixtures/second-owner-command.js",
+                r#"
+                    import { commands } from "knot:editor";
+                    await commands.register("knot.fixture.edit", () => {
+                      globalThis.ranOnSecondExtension = true;
+                    });
+                "#,
+            )
+            .await
+            .unwrap();
+
+        shell.update(cx, |shell, cx| shell.invoke_fixture_command(cx));
+        wait_for_command_state(&shell, "completed", cx).await;
+        second
+            .execute_fixture_script(
+                "verify-second-owner-command.js",
+                "if (!globalThis.ranOnSecondExtension) throw new Error('command ran on the wrong extension')",
+            )
+            .await
+            .unwrap();
+    }
+
+    #[gpui::test]
     async fn cancelling_before_the_awaited_command_request_prevents_its_edit(
         cx: &mut TestAppContext,
     ) {
@@ -1075,6 +1157,14 @@ mod tests {
             shell.cancel_active_command(cx);
         });
         wait_for_command_state(&shell, "cancelled", cx).await;
+
+        only_runtime_control(&shell, cx)
+            .execute_fixture_script(
+                "verify-command-abort.js",
+                "if (!globalThis.knotFixtureCommandAborted) throw new Error('command signal was not aborted')",
+            )
+            .await
+            .unwrap();
 
         let text = cx.read(|cx| {
             let shell = shell.read(cx);
@@ -1104,7 +1194,7 @@ mod tests {
         let second = cx.read(|cx| shell.read(cx).heartbeat);
         assert!(second > first);
 
-        let control = cx.read(|cx| shell.read(cx).runtime_control.clone());
+        let control = only_runtime_control(&shell, cx);
         control.request_shutdown();
         wait_for_runtime_state(&shell, "closed", cx).await;
 

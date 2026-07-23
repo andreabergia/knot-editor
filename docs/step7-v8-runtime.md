@@ -64,7 +64,9 @@ interface TextBuffer {
     edits: readonly TextEdit[],
     options: { ifRevision: number },
   ): Promise<{ revision: number }>;
-  onDidChange(listener: (event: BufferChangeEvent) => void | Promise<void>): Disposable;
+  onDidChange(
+    listener: (event: BufferChangeEvent) => void | Promise<void>,
+  ): Promise<Disposable>;
 }
 
 interface BufferChangeEvent {
@@ -89,7 +91,7 @@ export const commands: {
   register(
     name: string,
     handler: (context: CommandContext, ...args: unknown[]) => unknown | Promise<unknown>,
-  ): Disposable;
+  ): Promise<Disposable>;
 };
 ```
 

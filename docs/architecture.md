@@ -130,11 +130,11 @@ background work waits for the extension thread to exit.
 
 Command registration crosses the same typed bridge. The foreground
 `CommandRegistry` allocates registrations and resolves a command name to its
-owning extension lifetime. Invocation is queued onto that extension's runtime
-thread with the active buffer handle; requests issued by the handler carry the
-invocation identity. The foreground cancellation set rejects its later host
-work and rechecks before applying an edit, so a late completion cannot mutate
-the document.
+owning extension lifetime. Invocation is queued onto its owning extension's
+runtime thread with the active buffer handle; requests issued by the handler
+carry the invocation identity. The foreground cancellation set rejects
+invocation-scoped host work and rechecks before applying an edit, so a late
+completion cannot mutate the document.
 
 Extension-local lifecycle state owns pending work, termination, resource
 limits, command registrations, buffer-change subscriptions, and teardown. A
