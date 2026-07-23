@@ -5,6 +5,8 @@
 //! editor to access a buffer; neither side needs to expose a V8, Deno, gpui,
 //! or Rust editor-model object to JavaScript.
 
+use std::sync::Arc;
+
 /// An extension-owned identity, opaque outside the host boundary.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct ExtensionId(u64);
@@ -184,11 +186,40 @@ pub struct CommandInvocation {
     pub lifecycle: ExtensionLifecycleId,
 }
 
+/// Immutable text storage for a snapshot crossing the runtime boundary.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SnapshotText {
+    /// The existing serde path, retained as the benchmark baseline.
+    Utf8(String),
+    /// UTF-16 storage which can be shared across isolates and externalized by V8.
+    Utf16(Arc<[u16]>),
+}
+
+impl SnapshotText {
+    pub(crate) fn from_utf8(text: &str) -> Self {
+        Self::Utf16(text.encode_utf16().collect::<Vec<_>>().into())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn to_utf8(&self) -> String {
+        match self {
+            Self::Utf8(text) => text.clone(),
+            Self::Utf16(text) => String::from_utf16(text).expect("snapshot UTF-16 is well formed"),
+        }
+    }
+
+    pub(crate) fn retained_bytes(&self) -> usize {
+        match self {
+            Self::Utf8(text) => text.len(),
+            Self::Utf16(text) => size_of_val(text.as_ref()),
+        }
+    }
+}
+
 /// A snapshot of one requested UTF-8 byte range.
-#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TextSnapshot {
-    pub text: String,
+    pub text: SnapshotText,
     pub range: ByteRange,
     pub revision: u64,
 }

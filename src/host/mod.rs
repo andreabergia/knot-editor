@@ -20,6 +20,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use deno_core::v8;
 use deno_core::{ModuleLoadOptions, ModuleLoadReferrer, ModuleLoadResponse, ModuleLoader};
 use deno_core::{ModuleResolveResponse, ModuleSource, ModuleSourceCode, ModuleSpecifier, OpState};
 use deno_error::JsErrorBox;
@@ -38,6 +39,11 @@ const PUBLIC_FACADE_SPECIFIER: &str = "knot:editor";
 const EXTENSION_HEAP_LIMIT_BYTES: usize = 32 * 1024 * 1024;
 const PRIVATE_BOOTSTRAP_SOURCE: &str = r#"
 const nativeOps = Deno.core.ops;
+
+async function bufferRequest(request) {
+  const response = await nativeOps.op_buffer_request(request);
+  return nativeOps.op_buffer_response_take(response);
+}
 
 const buffers = new Map();
 const commandHandlers = new Map();
@@ -139,12 +145,12 @@ function bufferFor(handle) {
   if (buffer) return buffer;
   buffer = Object.freeze({
     async snapshot(range) {
-      const result = await nativeOps.op_buffer_request({ kind: "snapshot", handle, range });
+      const result = await bufferRequest({ kind: "snapshot", handle, range });
       if (result.kind === "error") hostError(result.error);
       return snapshotFromNative(result.snapshot);
     },
     async applyEdits(edits, options) {
-      const result = await nativeOps.op_buffer_request({ kind: "applyEdits", handle, edits, ifRevision: options?.ifRevision });
+      const result = await bufferRequest({ kind: "applyEdits", handle, edits, ifRevision: options?.ifRevision });
       if (result.kind === "error") hostError(result.error);
       return Object.freeze({ revision: result.revision });
     },
@@ -313,6 +319,7 @@ deno_core::extension!(
     ops = [
         op_buffer_active,
         op_buffer_request,
+        op_buffer_response_take,
         op_command_register,
         op_command_unregister,
         op_buffer_subscribe,
@@ -362,12 +369,139 @@ enum NativeBufferOperation {
     },
 }
 
-#[derive(serde::Serialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
 enum NativeBufferResponse {
     Snapshot { snapshot: protocol::TextSnapshot },
     AppliedEdits { revision: u64 },
-    Error { error: protocol::HostRequestError },
+    HostError { error: protocol::HostRequestError },
+}
+
+struct NativeResponseStore {
+    next: u32,
+    responses: HashMap<u32, NativeBufferResponse>,
+}
+
+impl NativeResponseStore {
+    fn new() -> Self {
+        Self {
+            next: 1,
+            responses: HashMap::new(),
+        }
+    }
+
+    fn insert(&mut self, response: NativeBufferResponse) -> u32 {
+        let id = self.next;
+        self.next = self
+            .next
+            .checked_add(1)
+            .expect("native response ID overflowed");
+        assert!(self.responses.insert(id, response).is_none());
+        id
+    }
+}
+
+impl<'a> deno_core::ToV8<'a> for protocol::SnapshotText {
+    type Error = JsErrorBox;
+
+    fn to_v8<'i>(
+        self,
+        scope: &mut deno_core::v8::PinScope<'a, 'i>,
+    ) -> Result<deno_core::v8::Local<'a, deno_core::v8::Value>, Self::Error> {
+        let string = match self {
+            protocol::SnapshotText::Utf8(text) => deno_core::v8::String::new_from_utf8(
+                scope,
+                text.as_bytes(),
+                deno_core::v8::NewStringType::Normal,
+            ),
+            protocol::SnapshotText::Utf16(text) if text.is_empty() => {
+                return Ok(deno_core::v8::String::empty(scope).into());
+            }
+            protocol::SnapshotText::Utf16(text) => {
+                let len = text.len();
+                let raw = Arc::into_raw(text);
+                unsafe {
+                    deno_core::v8::String::new_external_twobyte_raw(
+                        scope,
+                        raw.cast::<u16>().cast_mut(),
+                        len,
+                        drop_external_utf16,
+                    )
+                }
+            }
+        }
+        .ok_or_else(|| JsErrorBox::range_error("snapshot string too long"))?;
+        Ok(string.into())
+    }
+}
+
+unsafe extern "C" fn drop_external_utf16(data: *mut u16, len: usize) {
+    let slice = std::ptr::slice_from_raw_parts(data.cast_const(), len);
+    drop(unsafe { Arc::<[u16]>::from_raw(slice) });
+}
+
+impl NativeBufferResponse {
+    fn to_v8<'a>(
+        self,
+        scope: &mut deno_core::v8::PinScope<'a, '_>,
+    ) -> Result<deno_core::v8::Local<'a, deno_core::v8::Value>, JsErrorBox> {
+        use deno_core::ToV8;
+
+        let response = deno_core::v8::Object::new(scope);
+        match self {
+            Self::Snapshot { snapshot } => {
+                let kind = v8_text(scope, "snapshot")?;
+                set_v8_property(scope, response, "kind", kind.into())?;
+                let value = deno_core::v8::Object::new(scope);
+                let text = snapshot.text.to_v8(scope)?;
+                set_v8_property(scope, value, "text", text)?;
+
+                let range = deno_core::v8::Object::new(scope);
+                let start =
+                    deno_core::v8::Number::new(scope, snapshot.range.start_byte_offset as f64);
+                set_v8_property(scope, range, "startByteOffset", start.into())?;
+                let end = deno_core::v8::Number::new(scope, snapshot.range.end_byte_offset as f64);
+                set_v8_property(scope, range, "endByteOffset", end.into())?;
+                set_v8_property(scope, value, "range", range.into())?;
+
+                let revision = deno_core::v8::Number::new(scope, snapshot.revision as f64);
+                set_v8_property(scope, value, "revision", revision.into())?;
+                set_v8_property(scope, response, "snapshot", value.into())?;
+            }
+            Self::AppliedEdits { revision } => {
+                let kind = v8_text(scope, "appliedEdits")?;
+                set_v8_property(scope, response, "kind", kind.into())?;
+                let revision = deno_core::v8::Number::new(scope, revision as f64);
+                set_v8_property(scope, response, "revision", revision.into())?;
+            }
+            Self::HostError { error } => {
+                let kind = v8_text(scope, "error")?;
+                set_v8_property(scope, response, "kind", kind.into())?;
+                let error = v8_text(scope, &format!("{error:?}"))?;
+                set_v8_property(scope, response, "error", error.into())?;
+            }
+        }
+        Ok(response.into())
+    }
+}
+
+fn v8_text<'a>(
+    scope: &mut deno_core::v8::PinScope<'a, '_>,
+    text: &str,
+) -> Result<deno_core::v8::Local<'a, deno_core::v8::String>, JsErrorBox> {
+    deno_core::v8::String::new(scope, text)
+        .ok_or_else(|| JsErrorBox::range_error("native response string too long"))
+}
+
+fn set_v8_property<'a>(
+    scope: &mut deno_core::v8::PinScope<'a, '_>,
+    object: deno_core::v8::Local<'a, deno_core::v8::Object>,
+    name: &str,
+    value: deno_core::v8::Local<'a, deno_core::v8::Value>,
+) -> Result<(), JsErrorBox> {
+    let key = v8_text(scope, name)?;
+    match object.set(scope, key.into(), value) {
+        Some(true) => Ok(()),
+        _ => Err(JsErrorBox::generic("failed to construct native response")),
+    }
 }
 
 #[deno_core::op2]
@@ -394,11 +528,11 @@ async fn op_buffer_active(state: Rc<RefCell<OpState>>) -> Result<Option<u64>, Js
 }
 
 #[deno_core::op2]
-#[serde]
+#[smi]
 async fn op_buffer_request(
     state: Rc<RefCell<OpState>>,
     #[serde] request: NativeBufferRequest,
-) -> Result<NativeBufferResponse, JsErrorBox> {
+) -> Result<u32, JsErrorBox> {
     let operation = match request.operation {
         NativeBufferOperation::Snapshot { range } => HostOperation::Snapshot {
             buffer: BufferHandle::new(request.handle),
@@ -410,19 +544,37 @@ async fn op_buffer_request(
             if_revision,
         },
     };
-    let response = request_host_operation(state, operation).await?;
-    match response.result {
-        Ok(HostResponseValue::Snapshot(snapshot)) => {
-            Ok(NativeBufferResponse::Snapshot { snapshot })
-        }
+    let response = request_host_operation(Rc::clone(&state), operation).await?;
+    let response = match response.result {
+        Ok(HostResponseValue::Snapshot(snapshot)) => NativeBufferResponse::Snapshot { snapshot },
         Ok(HostResponseValue::AppliedEdits { revision }) => {
-            Ok(NativeBufferResponse::AppliedEdits { revision })
+            NativeBufferResponse::AppliedEdits { revision }
         }
-        Ok(_) => Err(JsErrorBox::generic(
-            "Knot host returned the wrong response type",
-        )),
-        Err(error) => Ok(NativeBufferResponse::Error { error }),
-    }
+        Ok(_) => {
+            return Err(JsErrorBox::generic(
+                "Knot host returned the wrong response type",
+            ));
+        }
+        Err(error) => NativeBufferResponse::HostError { error },
+    };
+    Ok(state
+        .borrow_mut()
+        .borrow_mut::<NativeResponseStore>()
+        .insert(response))
+}
+
+#[deno_core::op2]
+fn op_buffer_response_take<'a>(
+    scope: &mut v8::PinScope<'a, '_>,
+    state: &mut OpState,
+    #[smi] response: u32,
+) -> Result<v8::Local<'a, v8::Value>, JsErrorBox> {
+    let response = state
+        .borrow_mut::<NativeResponseStore>()
+        .responses
+        .remove(&response)
+        .ok_or_else(|| JsErrorBox::generic("Knot native response is missing"))?;
+    response.to_v8(scope)
 }
 
 #[deno_core::op2]
@@ -1346,6 +1498,10 @@ impl ExtensionRuntime {
         js_runtime
             .op_state()
             .borrow_mut()
+            .put(NativeResponseStore::new());
+        js_runtime
+            .op_state()
+            .borrow_mut()
             .put(ExtensionRequestRouter {
                 extension,
                 lifecycle_id,
@@ -1539,6 +1695,7 @@ impl ExtensionRuntime {
 mod tests {
     use std::{
         process::Command,
+        sync::Arc,
         time::{Duration, Instant},
     };
 
@@ -1549,7 +1706,8 @@ mod tests {
     use crate::host::protocol::{
         BufferChange, BufferHandle, BufferSubscriptionId, ByteRange, CommandInvocation,
         CommandInvocationId, CommandRegistrationId, ExtensionId, ExtensionLifecycleId,
-        HostOperation, HostResponse, HostResponseValue, RequestId, TextEdit,
+        HostOperation, HostResponse, HostResponseValue, RequestId, SnapshotText, TextEdit,
+        TextSnapshot,
     };
 
     #[test]
@@ -1558,6 +1716,71 @@ mod tests {
         host.async_runtime.block_on(async {
             assert!(tokio::runtime::Handle::try_current().is_ok());
         });
+    }
+
+    #[test]
+    fn external_utf16_snapshot_storage_is_shared_and_released_by_isolates() {
+        let host = V8Host::new();
+        let mut first = host.spawn_extension(ExtensionId::new(70));
+        let mut second = host.spawn_extension(ExtensionId::new(71));
+        let text: Arc<[u16]> = "héllo".encode_utf16().collect::<Vec<_>>().into();
+        let weak = Arc::downgrade(&text);
+
+        for (runtime, extension, module) in [
+            (
+                &mut first,
+                ExtensionId::new(70),
+                "file:///external-first.js",
+            ),
+            (
+                &mut second,
+                ExtensionId::new(71),
+                "file:///external-second.js",
+            ),
+        ] {
+            let execution = runtime.execute_fixture_module(
+                module,
+                r#"
+                    import { editor } from "knot:editor";
+                    const buffer = await editor.activeBuffer();
+                    globalThis.heldSnapshot = await buffer.snapshot();
+                    if (globalThis.heldSnapshot.text !== "héllo") throw new Error("snapshot");
+                "#,
+            );
+            let active = pollster::block_on(runtime.receive_request()).unwrap();
+            runtime
+                .respond(HostResponse {
+                    extension,
+                    lifecycle: active.lifecycle,
+                    id: active.id,
+                    result: Ok(HostResponseValue::ActiveBuffer(Some(BufferHandle::new(1)))),
+                })
+                .unwrap();
+            let snapshot = pollster::block_on(runtime.receive_request()).unwrap();
+            runtime
+                .respond(HostResponse {
+                    extension,
+                    lifecycle: snapshot.lifecycle,
+                    id: snapshot.id,
+                    result: Ok(HostResponseValue::Snapshot(TextSnapshot {
+                        text: SnapshotText::Utf16(Arc::clone(&text)),
+                        range: ByteRange {
+                            start_byte_offset: 0,
+                            end_byte_offset: 6,
+                        },
+                        revision: 0,
+                    })),
+                })
+                .unwrap();
+            pollster::block_on(execution).unwrap();
+        }
+
+        drop(text);
+        assert_eq!(weak.strong_count(), 2);
+        first.shutdown();
+        assert_eq!(weak.strong_count(), 1);
+        second.shutdown();
+        assert_eq!(weak.strong_count(), 0);
     }
 
     #[test]

@@ -1,8 +1,10 @@
 //! Foreground-owned editor document state.
 
 use std::{
+    cell::RefCell,
     collections::{HashMap, VecDeque},
     ops::Range,
+    sync::Arc,
 };
 
 use gpui::{AppContext, Entity, WeakEntity};
@@ -11,7 +13,7 @@ use crate::{
     core::buffer::TextBuffer,
     host::protocol::{
         BufferHandle, BufferSubscriptionId, ByteRange, CommandRegistrationId, ExtensionId,
-        ExtensionLifecycleId,
+        ExtensionLifecycleId, SnapshotText,
     },
 };
 
@@ -21,6 +23,14 @@ pub struct BufferModel {
     revision: u64,
     open: bool,
     pending_changes: VecDeque<CommittedBufferChange>,
+    snapshot_cache: RefCell<Option<CachedSnapshot>>,
+}
+
+#[derive(Clone)]
+struct CachedSnapshot {
+    revision: u64,
+    range: ByteRange,
+    text: Arc<[u16]>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -37,6 +47,7 @@ impl BufferModel {
             revision: 0,
             open: true,
             pending_changes: VecDeque::new(),
+            snapshot_cache: RefCell::new(None),
         }
     }
 
@@ -91,8 +102,28 @@ impl BufferModel {
             start_byte_offset: 0,
             end_byte_offset: self.buffer.len(),
         });
+        if let Some(cached) = self.snapshot_cache.borrow().as_ref()
+            && cached.revision == self.revision
+            && cached.range == range
+        {
+            return Ok(crate::host::protocol::TextSnapshot {
+                text: SnapshotText::Utf16(Arc::clone(&cached.text)),
+                range,
+                revision: self.revision,
+            });
+        }
+
+        let text = match SnapshotText::from_utf8(&self.read_checked(range)?) {
+            SnapshotText::Utf16(text) => text,
+            SnapshotText::Utf8(_) => unreachable!("UTF-16 snapshot constructor returned UTF-8"),
+        };
+        *self.snapshot_cache.borrow_mut() = Some(CachedSnapshot {
+            revision: self.revision,
+            range,
+            text: Arc::clone(&text),
+        });
         Ok(crate::host::protocol::TextSnapshot {
-            text: self.read_checked(range)?,
+            text: SnapshotText::Utf16(text),
             range,
             revision: self.revision,
         })
@@ -179,6 +210,7 @@ impl BufferModel {
     }
 
     fn advance_revision(&mut self) {
+        self.snapshot_cache.get_mut().take();
         self.revision = self
             .revision
             .checked_add(1)
@@ -581,7 +613,7 @@ mod tests {
                 end_byte_offset: 6,
             }))
             .unwrap();
-        assert_eq!(snapshot.text, "é中");
+        assert_eq!(snapshot.text.to_utf8(), "é中");
         assert_eq!(snapshot.revision, 0);
 
         assert!(
@@ -664,7 +696,7 @@ mod tests {
         let text = "ASCII 中 العربية e\u{301} 👩‍💻";
         let model = BufferModel::from_text(text);
         let full = model.snapshot(None).unwrap();
-        assert_eq!(full.text, text);
+        assert_eq!(full.text.to_utf8(), text);
 
         let emoji_start = text.find('👩').unwrap();
         let emoji_end = text.len();
@@ -675,7 +707,8 @@ mod tests {
                     end_byte_offset: emoji_end,
                 }))
                 .unwrap()
-                .text,
+                .text
+                .to_utf8(),
             "👩‍💻"
         );
         assert_eq!(
@@ -685,6 +718,26 @@ mod tests {
             })),
             Err(BufferAccessError::InvalidRange)
         );
+    }
+
+    #[test]
+    fn snapshot_cache_reuses_storage_and_invalidates_on_edit() {
+        let mut model = BufferModel::from_text("abc");
+        let first = model.snapshot(None).unwrap();
+        let second = model.snapshot(None).unwrap();
+        let (SnapshotText::Utf16(first), SnapshotText::Utf16(second)) = (first.text, second.text)
+        else {
+            panic!("buffer snapshots must use UTF-16 cache storage");
+        };
+        assert!(Arc::ptr_eq(&first, &second));
+
+        assert!(model.replace(1..2, "B"));
+        let third = model.snapshot(None).unwrap();
+        let SnapshotText::Utf16(third) = third.text else {
+            panic!("buffer snapshots must use UTF-16 cache storage");
+        };
+        assert!(!Arc::ptr_eq(&first, &third));
+        assert_eq!(String::from_utf16(&third).unwrap(), "aBc");
     }
 
     #[test]

@@ -368,17 +368,24 @@ for this experiment are maintained in `docs/step7-v8-runtime.md`.
 Before closing the runtime decision, test whether Knot can retain its UTF-8
 editable core while avoiding repeated UTF-8 → V8-string conversion:
 
-- [ ] Add a bounded, revision-aware cache of immutable UTF-16 snapshot storage
+- [x] Add a bounded, revision-aware cache of immutable UTF-16 snapshot storage
   at the editor/runtime boundary. Invalidate it on edits and never let V8
-  borrow mutable `TextBuffer` storage.
-- [ ] Expose the cached storage to V8 as an external two-byte string whose
+  borrow mutable `TextBuffer` storage. ✅
+- [x] Expose the cached storage to V8 as an external two-byte string whose
   lifetime is independent of the foreground-owned buffer and safe across
-  extension isolates.
-- [ ] Separate and compare cold UTF-8 → UTF-16 cache construction, cache-hit
+  extension isolates. A focused test proves two isolates retain and release
+  independent references to one backing allocation. ✅
+- [x] Separate and compare cold UTF-8 → UTF-16 cache construction, cache-hit
   external-string creation, and the existing UTF-8/serde path for ASCII and
-  Unicode payloads through 10 MiB. Record retained-memory costs.
-- [ ] Decide from the measurements whether to adopt this boundary cache,
-  investigate a UTF-16 core, or retain ordinary scoped conversion.
+  Unicode payloads through 10 MiB. Record retained-memory costs. ✅
+- [x] Decide from the measurements whether to adopt this boundary cache,
+  investigate a UTF-16 core, or retain ordinary scoped conversion. ✅ Retain
+  the UTF-8 core and the bounded boundary cache; the cache-hit path reduces a
+  10 MiB snapshot to about 0.3–0.4 ms and shares one allocation across
+  isolates. Do not infer a UTF-16 core from this result: cold 10 MiB ASCII
+  conversion is about 4.2× slower and retains 20 MiB of UTF-16 beside the
+  UTF-8 core. If this path survives the prototype, add an external one-byte
+  backing for ASCII rather than forcing it through UTF-16.
 
 **Question answered:** which language and engine will Knot use? → **JavaScript
 on V8.**

@@ -120,7 +120,9 @@ buffer. This keeps runtime mechanics behind the host boundary. The application d
 active-buffer, snapshot, and batched-edit requests by resolving opaque handles
 against foreground-owned models immediately before each operation. `BufferModel`
 validates UTF-8 byte ranges and revisioned edit batches before using core's
-assertion-based buffer API.
+assertion-based buffer API. It retains at most one immutable UTF-16 snapshot,
+keyed by revision and requested byte range, and invalidates that cache on the
+next edit. The editable core remains UTF-8-native.
 
 Runtime ownership separates the unique request inbox, clonable non-blocking
 control and response access, and the OS-thread join handle. V8 is initialized
@@ -164,7 +166,12 @@ BufferRegistry / BufferModel / CommandRegistry / BufferSubscriptionRegistry
 
 The private bootstrap module retains native bindings and turns opaque handles
 into cached JavaScript `TextBuffer` proxies. Snapshots are immutable values;
-their byte/UTF-16 boundary table is built only when an adapter is called.
+their byte/UTF-16 boundary table is built only when an adapter is called. An
+asynchronous snapshot response first lands in an extension-local native
+response store. A synchronous follow-up on the isolate thread then creates a
+V8 external two-byte string over the snapshot's shared immutable allocation.
+V8 owns one reference until that string is collected or the isolate is
+disposed; it never points into mutable `TextBuffer` storage.
 
 Detailed runtime behavior and experiment results live in
 `step7-v8-runtime.md` and the host module's Rustdoc.

@@ -406,20 +406,33 @@ Measured on 2026-07-23: Apple M1 Pro, macOS 26.5.2 (arm64), Rust 1.97.1,
 
 | Workload | p50 | p95 | Notes |
 | --- | ---: | ---: | --- |
-| Process-wide V8 initialization | 8,826 | 8,826 | fresh child process, excludes process launch |
-| Incremental isolate startup | 3,836 | 4,339 | includes extension thread |
-| Built-in module initialization | 3,441 | 3,894 | `knot:editor` facade |
-| Idle RSS per isolate | 2,364 KiB | — | approximate macOS process sample |
-| Active-buffer host call | 187 | 233 | facade, channel, typed op |
-| Batched edit (10 edits) | 242 | 370 | one `applyEdits` crossing |
-| String marshal, ASCII 1 KiB | 234 | 400 | Rust UTF-8 to V8 string |
-| String marshal, Unicode 100 KiB | 691 | 738 | Rust UTF-8 to V8 string |
-| String marshal, Unicode 10 MiB | 35,168 | 35,777 | Rust UTF-8 to V8 string |
-| UTF-16 adapter, 1 KiB | 434 | 568 | includes lazy boundary table |
-| UTF-16 adapter, 100 KiB | 4,438 | 4,609 | includes lazy boundary table |
-| JIT warm-up, 32 host calls | 1,738 | 273 | first loop / second loop in one isolate |
-| Event fan-out, 2 isolates × 8 events | 170 | 266 | serial delivery within each isolate |
-| Event queue | depth 8 | lag 238 | max depth / max lag in microseconds |
+| Process-wide V8 initialization | 8,915 | 8,915 | fresh child process, excludes process launch |
+| Incremental isolate startup | 4,175 | 4,626 | includes extension thread |
+| Built-in module initialization | 4,004 | 4,268 | `knot:editor` facade |
+| Idle RSS per isolate | 2,324 KiB | — | approximate macOS process sample |
+| Active-buffer host call | 194 | 294 | facade, channel, typed op |
+| Batched edit (10 edits) | 332 | 433 | one `applyEdits` crossing |
+| String marshal, ASCII 1 KiB | 361 | 400 | Rust UTF-8 to V8 string |
+| UTF-16 cache build, ASCII 1 KiB | 1 | 2 | retains 2 KiB |
+| External UTF-16, cold ASCII 1 KiB | 294 | 384 | build plus external string |
+| External UTF-16, cached ASCII 1 KiB | 279 | 355 | shared backing |
+| String marshal, Unicode 100 KiB | 800 | 886 | Rust UTF-8 to V8 string |
+| UTF-16 cache build, Unicode 100 KiB | 70 | 88 | retains 100 KiB for `é` fixture |
+| External UTF-16, cold Unicode 100 KiB | 375 | 527 | build plus external string |
+| External UTF-16, cached Unicode 100 KiB | 296 | 344 | shared backing |
+| String marshal, ASCII 10 MiB | 2,559 | 2,955 | V8 can use one-byte storage |
+| UTF-16 cache build, ASCII 10 MiB | 9,963 | 10,389 | retains 20 MiB |
+| External UTF-16, cold ASCII 10 MiB | 10,747 | 11,339 | build plus external string |
+| External UTF-16, cached ASCII 10 MiB | 391 | 484 | shared backing |
+| String marshal, Unicode 10 MiB | 36,045 | 36,932 | Rust UTF-8 to V8 string |
+| UTF-16 cache build, Unicode 10 MiB | 10,258 | 10,860 | retains 10 MiB for emoji fixture |
+| External UTF-16, cold Unicode 10 MiB | 10,589 | 11,351 | build plus external string |
+| External UTF-16, cached Unicode 10 MiB | 321 | 384 | shared backing |
+| UTF-16 adapter, 1 KiB | 561 | 676 | includes lazy boundary table |
+| UTF-16 adapter, 100 KiB | 4,647 | 5,401 | includes lazy boundary table |
+| JIT warm-up, 32 host calls | 1,246 | 342 | first loop / second loop in one isolate |
+| Event fan-out, 2 isolates × 8 events | 229 | 289 | serial delivery within each isolate |
+| Event queue | depth 8 | lag 192 | max depth / max lag in microseconds |
 
 The 10 MiB UTF-16 adapter case intentionally is not run: building its JavaScript
 boundary table exceeds this prototype's 32 MiB per-isolate heap cap. The raw
@@ -427,13 +440,29 @@ boundary table exceeds this prototype's 32 MiB per-isolate heap cap. The raw
 to avoid triggering the adapter on whole-document transfers, not evidence for a
 byte-oriented public API yet.
 
+The boundary-cache spike keeps the core UTF-8-native. `BufferModel` retains at
+most one immutable UTF-16 allocation keyed by `(revision, range)` and invalidates
+it on edit. Extension isolates create external V8 strings over independent
+references to that shared allocation, so repeated snapshots do not transcode
+or copy the text per isolate.
+
+The cache is decisive for repeated large snapshots and for the tested Unicode
+payload even when cold. It is not evidence for an always-UTF-16 core: cold
+10 MiB ASCII is 10.7 ms rather than 2.6 ms, and its retained representation is
+twice as large. Keep the UTF-8 core and bounded boundary cache for the
+prototype. If retained beyond the prototype, use external one-byte backing for
+ASCII snapshots instead of caching them as UTF-16.
+
 ### 4. Decision checkpoint and documentation
 
 - [ ] Record measurements and answer whether thread-per-extension
   `deno_core` validates the public boundary and failure model well enough to
   proceed, including any evidence that changes the eventual `rusty_v8` pool.
-- [ ] Record whether string marshalling is acceptable, which operations require
-  batching, and whether a future byte-oriented transfer API is justified.
+- [x] Record whether string marshalling is acceptable, which operations require
+  batching, and whether a future byte-oriented transfer API is justified. ✅
+  Small scoped strings are acceptable and edits remain batched. Large repeated
+  snapshots use the bounded external-string cache; current evidence does not
+  justify a public byte-oriented API.
 - [ ] Update this checklist with ✅/⚠️ findings as work lands. Update
   `roadmap.md` with the conclusion and `architecture.md` whenever runtime,
   application ownership, or message flow changes.

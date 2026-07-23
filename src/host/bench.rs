@@ -6,6 +6,7 @@
 
 use std::{
     env,
+    hint::black_box,
     process::Command,
     time::{Duration, Instant},
 };
@@ -16,7 +17,7 @@ use super::{
     BufferChangeQueueMetrics, ExtensionRuntimeExecutionError, ExtensionRuntimeHandle, V8Host,
     protocol::{
         BufferChange, BufferHandle, BufferSubscriptionId, ByteRange, ExtensionId, HostOperation,
-        HostRequest, HostResponse, HostResponseValue, TextSnapshot,
+        HostRequest, HostResponse, HostResponseValue, SnapshotText, TextSnapshot,
     },
 };
 
@@ -67,6 +68,41 @@ pub fn run(args: impl Iterator<Item = String>) -> Result<()> {
     for (position, (label, bytes, text)) in transfer_cases().into_iter().enumerate() {
         let snapshot = sample(samples, |index| snapshot_call(&host, index, &text))?;
         print_times(label, &snapshot, bytes, "UTF-8 Rust string to V8 string");
+
+        let cache_build = sample(samples, |_| {
+            let started = Instant::now();
+            let cached = SnapshotText::from_utf8(&text);
+            black_box(cached);
+            Ok(started.elapsed())
+        })?;
+        print_times(
+            &format!("utf16-cache-build-{bytes}"),
+            &cache_build,
+            bytes,
+            "UTF-8 to immutable UTF-16",
+        );
+
+        let cached = SnapshotText::from_utf8(&text);
+        let retained = cached.retained_bytes();
+        let external_cold = sample(samples, |index| {
+            external_utf16_call(&host, index, &text, None)
+        })?;
+        print_times(
+            &format!("external-utf16-cold-{bytes}"),
+            &external_cold,
+            bytes,
+            "cache construction plus external V8 string",
+        );
+        let external_hit = sample(samples, |index| {
+            external_utf16_call(&host, index, &text, Some(&cached))
+        })?;
+        print_times(
+            &format!("external-utf16-hit-{bytes}"),
+            &external_hit,
+            bytes,
+            &format!("cached external V8 string; retained_bytes={retained}"),
+        );
+
         if position < 2 {
             let adapter = sample(samples, |index| utf16_adapter_call(&host, index, &text))?;
             print_times(
@@ -245,14 +281,51 @@ fn batched_edit_call(host: &V8Host, index: u64) -> Result<Duration> {
 }
 
 fn snapshot_call(host: &V8Host, index: u64, text: &str) -> Result<Duration> {
-    snapshot_script(host, index, text, false)
+    snapshot_script(
+        host,
+        index,
+        text,
+        || SnapshotText::Utf8(text.to_owned()),
+        false,
+    )
 }
 
 fn utf16_adapter_call(host: &V8Host, index: u64, text: &str) -> Result<Duration> {
-    snapshot_script(host, index, text, true)
+    snapshot_script(
+        host,
+        index,
+        text,
+        || SnapshotText::Utf8(text.to_owned()),
+        true,
+    )
 }
 
-fn snapshot_script(host: &V8Host, index: u64, text: &str, adapter: bool) -> Result<Duration> {
+fn external_utf16_call(
+    host: &V8Host,
+    index: u64,
+    text: &str,
+    cached: Option<&SnapshotText>,
+) -> Result<Duration> {
+    let cached = cached.cloned();
+    snapshot_script(
+        host,
+        index,
+        text,
+        || cached.unwrap_or_else(|| SnapshotText::from_utf8(text)),
+        false,
+    )
+}
+
+fn snapshot_script<F>(
+    host: &V8Host,
+    index: u64,
+    text: &str,
+    snapshot_text: F,
+    adapter: bool,
+) -> Result<Duration>
+where
+    F: FnOnce() -> SnapshotText,
+{
     let mut runtime = host.spawn_extension(ExtensionId::new(50_000 + index));
     let source = if adapter {
         "import { editor } from 'knot:editor'; globalThis.bench = async () => { const b = await editor.activeBuffer(); const s = await b.snapshot(); const byte = s.byteOffsetAtUtf16(s.text.length); if (s.utf16OffsetAtByte(byte) !== s.text.length) throw new Error('adapter'); };"
@@ -273,7 +346,7 @@ fn snapshot_script(host: &V8Host, index: u64, text: &str, adapter: bool) -> Resu
         HostResponseValue::ActiveBuffer(Some(BUFFER)),
     )?;
     let request = pollster::block_on(runtime.receive_request()).context("snapshot request")?;
-    respond(&runtime, request, snapshot(text))?;
+    respond(&runtime, request, snapshot(text.len(), snapshot_text()))?;
     completed(pollster::block_on(execution))?;
     let elapsed = started.elapsed();
     runtime.shutdown();
@@ -399,12 +472,12 @@ fn resident_memory() -> usize {
         .map_or(0, |process| process.memory() as usize / 1024)
 }
 
-fn snapshot(text: &str) -> HostResponseValue {
+fn snapshot(utf8_len: usize, text: SnapshotText) -> HostResponseValue {
     HostResponseValue::Snapshot(TextSnapshot {
-        text: text.to_owned(),
+        text,
         range: ByteRange {
             start_byte_offset: 0,
-            end_byte_offset: text.len(),
+            end_byte_offset: utf8_len,
         },
         revision: 0,
     })
@@ -437,6 +510,11 @@ fn transfer_cases() -> Vec<(&'static str, usize, String)> {
             "string-marshalling-unicode-102400",
             102_400,
             "é".repeat(51_200),
+        ),
+        (
+            "string-marshalling-ascii-10485760",
+            10_485_760,
+            "a".repeat(10_485_760),
         ),
         (
             "string-marshalling-unicode-10485760",
