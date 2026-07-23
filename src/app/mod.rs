@@ -33,6 +33,17 @@ const RUNTIME_PROBE_SOURCE: &str = r#"
 import { commands, editor } from "knot:editor";
 
 globalThis.knotActiveBuffer = await editor.activeBuffer();
+if (!globalThis.knotActiveBuffer) {
+  throw new Error("Knot has no active editor buffer");
+}
+globalThis.knotFixtureEvents = [];
+await globalThis.knotActiveBuffer.onDidChange((event) => {
+  globalThis.knotFixtureEvents.push({
+    beforeRevision: event.beforeRevision,
+    revision: event.revision,
+    edits: event.edits.length,
+  });
+});
 await commands.register("knot.fixture.edit", async (context) => {
   if (!context.buffer) throw new Error("Knot has no active editor buffer");
   context.signal.addEventListener("abort", () => {
@@ -1037,7 +1048,9 @@ mod tests {
                     .for_buffer(shell.read(cx).buffer_registry.active_handle().unwrap())
                     .count()
             }),
-            1
+            // The first extension owns the shell fixture subscription; the
+            // remaining explicit listener belongs to the second extension.
+            2
         );
 
         let handle = cx.read(|cx| shell.read(cx).buffer_registry.active_handle().unwrap());
@@ -1061,6 +1074,7 @@ mod tests {
             .into_parts();
         let shell = cx.new(|cx| Shell::new(runtime, cx));
         wait_for_runtime_state(&shell, "running", cx).await;
+        let heartbeat = cx.read(|cx| shell.read(cx).heartbeat);
         shell.update(cx, |shell, cx| shell.invoke_fixture_command(cx));
         wait_for_command_state(&shell, "completed", cx).await;
 
@@ -1074,6 +1088,17 @@ mod tests {
                 .read_with(cx, |model, _| model.text())
         });
         assert!(text.starts_with("// command\n"));
+
+        only_runtime_control(&shell, cx)
+            .execute_fixture_script(
+                "verify-fixture-command-event.js",
+                "if (globalThis.knotFixtureEvents.length !== 1 || globalThis.knotFixtureEvents[0].beforeRevision !== 0 || globalThis.knotFixtureEvents[0].revision !== 1 || globalThis.knotFixtureEvents[0].edits !== 1) throw new Error(`unexpected fixture event: ${JSON.stringify(globalThis.knotFixtureEvents)}`)",
+            )
+            .await
+            .unwrap();
+        cx.executor().advance_clock(Duration::from_millis(500));
+        cx.run_until_parked();
+        assert!(cx.read(|cx| shell.read(cx).heartbeat) > heartbeat);
     }
 
     #[gpui::test]

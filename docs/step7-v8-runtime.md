@@ -361,10 +361,10 @@ record that finding for the API design instead.
 
 ### 3. Integrated proof and evidence
 
-- [ ] Load fixture extensions that register a command, read the active buffer,
+- [x] Load fixture extensions that register a command, read the active buffer,
   edit it after an await, and observe the resulting revisioned event. Invoke
   the command from the gpui window and show the changed text without pausing
-  the heartbeat.
+  the heartbeat. ✅
 - [ ] Cancel an awaiting command and prove that its late completion cannot edit
   the buffer. Exercise thrown handlers, rejected promises, explicit disposal,
   buffer closure, extension initialization failure, and forced CPU termination;
