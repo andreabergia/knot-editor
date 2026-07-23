@@ -1531,7 +1531,10 @@ impl ExtensionRuntime {
 
 #[cfg(test)]
 mod tests {
-    use std::process::Command;
+    use std::{
+        process::Command,
+        time::{Duration, Instant},
+    };
 
     use super::{
         ExtensionLifecycle, ExtensionRuntimeClosed, ExtensionRuntimeExecutionError,
@@ -1739,6 +1742,116 @@ mod tests {
         assert!(metrics.max_enqueue_to_start_lag > std::time::Duration::ZERO);
         assert_eq!(runtime.control.identity().1, lifecycle);
         runtime.shutdown();
+    }
+
+    #[test]
+    fn cpu_bound_buffer_callbacks_run_in_parallel_across_isolates_and_serially_within_one() {
+        if std::thread::available_parallelism().is_ok_and(|parallelism| parallelism.get() < 2) {
+            return;
+        }
+
+        let host = V8Host::new();
+        let buffer = BufferHandle::new(3);
+        let mut first = host.spawn_extension(ExtensionId::new(7));
+        let mut second = host.spawn_extension(ExtensionId::new(8));
+        let first_subscription = BufferSubscriptionId::new(9);
+        let second_subscription = BufferSubscriptionId::new(10);
+        let listener_source = r#"
+            import { editor } from "knot:editor";
+            const buffer = await editor.activeBuffer();
+            globalThis.callbackRunning = 0;
+            globalThis.maxConcurrentCallbacks = 0;
+            globalThis.events = [];
+            await buffer.onDidChange((event) => {
+              globalThis.callbackRunning += 1;
+              globalThis.maxConcurrentCallbacks = Math.max(
+                globalThis.maxConcurrentCallbacks,
+                globalThis.callbackRunning,
+              );
+              const end = Date.now() + 120;
+              while (Date.now() < end) {}
+              globalThis.events.push(event.revision);
+              globalThis.callbackRunning -= 1;
+            });
+        "#;
+
+        for (runtime, extension, subscription) in [
+            (&mut first, ExtensionId::new(7), first_subscription),
+            (&mut second, ExtensionId::new(8), second_subscription),
+        ] {
+            let execution = runtime.execute_fixture_module(
+                format!("file:///fixtures/cpu-listener-{}.js", extension.value()),
+                listener_source,
+            );
+            for response in [
+                HostResponseValue::ActiveBuffer(Some(buffer)),
+                HostResponseValue::BufferChangesSubscribed { subscription },
+            ] {
+                let request = pollster::block_on(runtime.receive_request()).unwrap();
+                runtime
+                    .respond(HostResponse {
+                        extension,
+                        lifecycle: request.lifecycle,
+                        id: request.id,
+                        result: Ok(response),
+                    })
+                    .unwrap();
+            }
+            pollster::block_on(execution).unwrap();
+        }
+
+        let started = Instant::now();
+        first
+            .dispatch_buffer_change(
+                first_subscription,
+                BufferChange {
+                    buffer,
+                    before_revision: 0,
+                    revision: 1,
+                    edits: vec![],
+                },
+            )
+            .unwrap();
+        second
+            .dispatch_buffer_change(
+                second_subscription,
+                BufferChange {
+                    buffer,
+                    before_revision: 0,
+                    revision: 1,
+                    edits: vec![],
+                },
+            )
+            .unwrap();
+        first
+            .dispatch_buffer_change(
+                first_subscription,
+                BufferChange {
+                    buffer,
+                    before_revision: 1,
+                    revision: 2,
+                    edits: vec![],
+                },
+            )
+            .unwrap();
+
+        pollster::block_on(first.execute_fixture_script(
+            "verify-first-cpu-listeners.js",
+            "if (globalThis.events.join(',') !== '1,2' || globalThis.maxConcurrentCallbacks !== 1) throw new Error('first extension callbacks overlapped or reordered')",
+        ))
+        .unwrap();
+        pollster::block_on(second.execute_fixture_script(
+            "verify-second-cpu-listener.js",
+            "if (globalThis.events.join(',') !== '1' || globalThis.maxConcurrentCallbacks !== 1) throw new Error('second extension callback did not finish')",
+        ))
+        .unwrap();
+
+        assert!(
+            started.elapsed() < Duration::from_millis(320),
+            "callbacks did not overlap across extension threads"
+        );
+        first.shutdown();
+        second.shutdown();
     }
 
     #[test]

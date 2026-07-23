@@ -374,8 +374,11 @@ record that finding for the API design instead.
     displayed buffer. ✅
   - [x] Terminate one extension during synchronous CPU execution, then verify a
     neighboring extension and the gpui heartbeat remain responsive. ✅
-- [ ] Demonstrate real parallel execution with finite CPU callbacks in two
-  extension isolates. Verify callbacks within one extension never overlap.
+- [x] Demonstrate real parallel execution with finite CPU callbacks in two
+  extension isolates. Verify callbacks within one extension never overlap. ✅
+  - [x] Dispatch finite CPU-bound buffer-change callbacks to two isolates and
+    use elapsed time to prove cross-isolate overlap; a second callback in one
+    isolate proves its queue remains serial. ✅
 - [ ] Benchmark cold isolate startup, built-in module initialization, idle RSS
   per isolate, host-call latency, batched edit latency, event fan-out/lag,
   UTF-8↔V8 string marshalling, UTF-16 adapter conversion, JIT warm-up, and
