@@ -363,6 +363,23 @@ one vertical slice.
 Views are a separate exploration in the next section. Other scope boundaries
 for this experiment are maintained in `docs/step7-v8-runtime.md`.
 
+### UTF-16 boundary snapshot spike
+
+Before closing the runtime decision, test whether Knot can retain its UTF-8
+editable core while avoiding repeated UTF-8 → V8-string conversion:
+
+- [ ] Add a bounded, revision-aware cache of immutable UTF-16 snapshot storage
+  at the editor/runtime boundary. Invalidate it on edits and never let V8
+  borrow mutable `TextBuffer` storage.
+- [ ] Expose the cached storage to V8 as an external two-byte string whose
+  lifetime is independent of the foreground-owned buffer and safe across
+  extension isolates.
+- [ ] Separate and compare cold UTF-8 → UTF-16 cache construction, cache-hit
+  external-string creation, and the existing UTF-8/serde path for ASCII and
+  Unicode payloads through 10 MiB. Record retained-memory costs.
+- [ ] Decide from the measurements whether to adopt this boundary cache,
+  investigate a UTF-16 core, or retain ordinary scoped conversion.
+
 **Question answered:** which language and engine will Knot use? → **JavaScript
 on V8.**
 
