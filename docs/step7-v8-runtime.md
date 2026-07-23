@@ -1,7 +1,7 @@
 # Step 7 — V8 scripting runtime
 
-Status: runtime foundation, editor/public boundary, and benchmark evidence
-complete; the remaining integrated failure proof and decision checkpoint remain.
+Status: runtime foundation, editor/public boundary, benchmark evidence, and
+integrated failure proof complete; the decision checkpoint remains.
 
 ## Goal and decisions
 
@@ -365,18 +365,19 @@ record that finding for the API design instead.
   edit it after an await, and observe the resulting revisioned event. Invoke
   the command from the gpui window and show the changed text without pausing
   the heartbeat. ✅
-- [ ] Cancel an awaiting command and prove that its late completion cannot edit
+- [x] Cancel an awaiting command and prove that its late completion cannot edit
   the buffer. Exercise thrown handlers, rejected promises, explicit disposal,
   buffer closure, extension initialization failure, and forced CPU termination;
-  another extension and gpui must remain responsive.
+  another extension and gpui must remain responsive. ✅
   - [x] Dispatch a cancelled invocation's late edit request through the gpui
     host boundary and verify that it returns `Cancelled` without mutating the
     displayed buffer. ✅
   - [x] Terminate one extension during synchronous CPU execution, then verify a
     neighboring extension and the gpui heartbeat remain responsive. ✅
-  - [!] ⚠️ Thrown/rejected handlers, disposal, and buffer closure have focused
-    host coverage. This integrated proof remains open until startup failure can
-    be injected and all failure cases are exercised together through gpui.
+  - [x] Exercise a failing startup module, thrown and rejected handlers,
+    explicit command disposal, cancellation, buffer closure, and forced CPU
+    termination together through one gpui harness. The surviving extension and
+    foreground heartbeat continue afterward. ✅
 - [x] Demonstrate real parallel execution with finite CPU callbacks in two
   extension isolates. Verify callbacks within one extension never overlap. ✅
   - [x] Dispatch finite CPU-bound buffer-change callbacks to two isolates and

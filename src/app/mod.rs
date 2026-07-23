@@ -815,8 +815,8 @@ mod tests {
     use crate::host::{
         ExtensionRuntimeControl, ExtensionRuntimeExecutionError, V8Host,
         protocol::{
-            ByteRange, CommandInvocationId, ExtensionId, HostOperation, HostRequest,
-            HostRequestError, RequestId, TextEdit,
+            ByteRange, CommandInvocation, CommandInvocationId, ExtensionId, HostOperation,
+            HostRequest, HostRequestError, RequestId, TextEdit,
         },
     };
 
@@ -852,6 +852,22 @@ mod tests {
                 .next()
                 .cloned()
                 .expect("single-runtime shell has its control")
+        })
+    }
+
+    fn runtime_control(
+        shell: &Entity<Shell>,
+        extension: ExtensionId,
+        cx: &mut TestAppContext,
+    ) -> ExtensionRuntimeControl {
+        cx.read(|cx| {
+            shell
+                .read(cx)
+                .extension_controls
+                .values()
+                .find(|control| control.identity().0 == extension)
+                .cloned()
+                .expect("shell has the requested runtime control")
         })
     }
 
@@ -1311,6 +1327,184 @@ mod tests {
             .await
             .unwrap();
 
+        let heartbeat = cx.read(|cx| shell.read(cx).heartbeat);
+        cx.executor().advance_clock(Duration::from_millis(500));
+        cx.run_until_parked();
+        assert!(cx.read(|cx| shell.read(cx).heartbeat) > heartbeat);
+    }
+
+    #[gpui::test]
+    async fn extension_failures_are_isolated_together_through_gpui(cx: &mut TestAppContext) {
+        let host = V8Host::new();
+        let shell = cx.new(|cx| {
+            Shell::new_with_runtimes(
+                (20..24)
+                    .map(|id| host.spawn_extension(ExtensionId::new(id)).into_parts())
+                    .collect(),
+                cx,
+            )
+        });
+        wait_for_runtime_state(&shell, "running", cx).await;
+        let neighbor = runtime_control(&shell, ExtensionId::new(20), cx);
+        let command_runtime = runtime_control(&shell, ExtensionId::new(21), cx);
+        let failed_startup = runtime_control(&shell, ExtensionId::new(22), cx);
+        let runaway = runtime_control(&shell, ExtensionId::new(23), cx);
+
+        let startup_error = failed_startup
+            .execute_fixture_module(
+                "file:///fixtures/failing-startup.js",
+                r#"
+                    import { editor } from "knot:editor";
+                    await editor.activeBuffer();
+                    throw new Error("expected startup failure");
+                "#,
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            startup_error,
+            ExtensionRuntimeExecutionError::JavaScriptException { ref report }
+                if report.contains("expected startup failure")
+        ));
+        failed_startup.request_shutdown();
+
+        command_runtime
+            .execute_fixture_module(
+                "file:///fixtures/failing-commands.js",
+                r#"
+                    import { commands, editor } from "knot:editor";
+                    globalThis.closedBuffer = await editor.activeBuffer();
+                    await commands.register("knot.fixture.throw", () => {
+                      throw new Error("expected thrown handler");
+                    });
+                    await commands.register("knot.fixture.reject", async () => {
+                      await Promise.resolve();
+                      throw new Error("expected rejected handler");
+                    });
+                    globalThis.disposedCommand = await commands.register(
+                      "knot.fixture.disposed",
+                      () => {},
+                    );
+                "#,
+            )
+            .await
+            .unwrap();
+
+        for (name, expected) in [
+            ("knot.fixture.throw", "expected thrown handler"),
+            ("knot.fixture.reject", "expected rejected handler"),
+        ] {
+            let (target, active_buffer) = cx.read(|cx| {
+                let shell = shell.read(cx);
+                (
+                    shell.command_registry.resolve(name).unwrap(),
+                    shell.buffer_registry.active_handle(),
+                )
+            });
+            let error = command_runtime
+                .invoke_command(
+                    CommandInvocation {
+                        id: CommandInvocationId::new(if name.ends_with("throw") {
+                            100
+                        } else {
+                            101
+                        }),
+                        registration: target.registration,
+                        extension: target.extension,
+                        lifecycle: target.lifecycle,
+                    },
+                    active_buffer,
+                )
+                .await
+                .unwrap_err();
+            assert!(matches!(
+                error,
+                ExtensionRuntimeExecutionError::JavaScriptException { ref report }
+                    if report.contains(expected)
+            ));
+        }
+
+        command_runtime
+            .execute_fixture_script("dispose-command.js", "globalThis.disposedCommand.dispose()")
+            .await
+            .unwrap();
+        cx.run_until_parked();
+        assert!(cx.read(|cx| {
+            shell
+                .read(cx)
+                .command_registry
+                .resolve("knot.fixture.disposed")
+                .is_err()
+        }));
+
+        let initial_text = cx.read(|cx| {
+            let shell = shell.read(cx);
+            let buffer = shell.buffer_registry.active_handle().unwrap();
+            shell
+                .buffer_registry
+                .resolve(buffer)
+                .unwrap()
+                .read_with(cx, |model, _| model.text())
+        });
+        shell.update(cx, |shell, cx| {
+            shell.invoke_fixture_command(cx);
+            shell.cancel_active_command(cx);
+        });
+        wait_for_command_state(&shell, "cancelled", cx).await;
+        assert_eq!(
+            cx.read(|cx| {
+                let shell = shell.read(cx);
+                let buffer = shell.buffer_registry.active_handle().unwrap();
+                shell
+                    .buffer_registry
+                    .resolve(buffer)
+                    .unwrap()
+                    .read_with(cx, |model, _| model.text())
+            }),
+            initial_text
+        );
+
+        let buffer = cx.read(|cx| shell.read(cx).buffer_registry.active_handle().unwrap());
+        shell.update(cx, |shell, cx| shell.close_buffer(buffer, cx));
+        command_runtime
+            .execute_fixture_script(
+                "closed-buffer.js",
+                r#"
+                    (async () => {
+                      try {
+                        await globalThis.closedBuffer.snapshot();
+                        throw new Error("closed buffer operation succeeded");
+                      } catch (error) {
+                        if (error.name !== "BufferClosedError") throw error;
+                      }
+                    })()
+                "#,
+            )
+            .await
+            .unwrap();
+
+        let runaway_execution =
+            runaway.execute_fixture_script("integrated-runaway.js", "while (true) {}");
+        runaway.watchdog().terminate().unwrap();
+        assert_eq!(
+            runaway_execution.await,
+            Err(ExtensionRuntimeExecutionError::Terminated)
+        );
+
+        neighbor
+            .execute_fixture_script(
+                "integrated-neighbor.js",
+                "globalThis.integratedNeighborAlive = true",
+            )
+            .await
+            .unwrap();
+        neighbor
+            .execute_fixture_script(
+                "verify-integrated-neighbor.js",
+                "if (!globalThis.integratedNeighborAlive) throw new Error('neighbor stopped')",
+            )
+            .await
+            .unwrap();
         let heartbeat = cx.read(|cx| shell.read(cx).heartbeat);
         cx.executor().advance_clock(Duration::from_millis(500));
         cx.run_until_parked();
