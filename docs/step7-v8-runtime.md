@@ -374,6 +374,9 @@ record that finding for the API design instead.
     displayed buffer. ✅
   - [x] Terminate one extension during synchronous CPU execution, then verify a
     neighboring extension and the gpui heartbeat remain responsive. ✅
+  - [!] ⚠️ Thrown/rejected handlers, disposal, and buffer closure have focused
+    host coverage. This integrated proof remains open until startup failure can
+    be injected and all failure cases are exercised together through gpui.
 - [x] Demonstrate real parallel execution with finite CPU callbacks in two
   extension isolates. Verify callbacks within one extension never overlap. ✅
   - [x] Dispatch finite CPU-bound buffer-change callbacks to two isolates and
