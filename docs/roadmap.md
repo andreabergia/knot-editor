@@ -315,11 +315,11 @@ fresh annotation (step 7 / 10).
 
 ## 7. V8 scripting runtime and extension boundary
 
-✅ **Language and engine decided.** Knot uses JavaScript on V8 for configuration,
-built-in behavior, and extensions. The prototype starts from `deno_core`, kept
-behind a strict Knot-owned V8 wrapper; this is not a generic scripting-engine
+✅ **Complete.** Knot uses JavaScript on V8 for configuration, built-in
+behavior, and extensions. The prototype starts from `deno_core`, kept behind a
+strict Knot-owned V8 wrapper; this is not a generic scripting-engine
 abstraction and does not preserve hypothetical language or engine
-replaceability. Decisions and open implementation questions are recorded in
+replaceability. Evidence and detailed decisions are recorded in
 `docs/step7-v8-runtime.md`.
 
 Explore three concerns separately rather than treating the host boundary as
@@ -390,11 +390,21 @@ editable core while avoiding repeated UTF-8 → V8-string conversion:
 **Question answered:** which language and engine will Knot use? → **JavaScript
 on V8.**
 
-**Questions remaining:** does the thread-per-extension `deno_core` prototype
+**Question answered:** does the thread-per-extension `deno_core` prototype
 provide useful parallelism and bounded failure isolation, and do commands and
-events form a sound first public API without leaking `deno_core` details? Does
-UTF-8/V8-string marshalling require any additional batched or byte-oriented
-API?
+events form a sound first public API without leaking `deno_core` details? →
+**Yes for the prototype boundary.** Isolates execute in parallel, callbacks are
+serial within an extension, cancellation and fatal interruption contain late
+work, and the combined gpui failure proof leaves another extension and the
+foreground heartbeat responsive. Commands, revisioned batched edits, and
+ordered events are a sound first API.
+
+One OS thread per extension is not the production topology: an incremental
+isolate costs about 4.2 ms and 2.3 MiB idle RSS before its reserved thread. Keep
+the bounded movable-isolate `rusty_v8` pool as the target, preserving the
+validated Knot-owned protocol and lifecycle semantics. Current string evidence
+supports scoped strings plus batched edits and the bounded UTF-16 snapshot
+cache; it does not justify a public byte-oriented API.
 
 ---
 

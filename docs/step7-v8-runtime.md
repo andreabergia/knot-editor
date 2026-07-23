@@ -1,7 +1,7 @@
 # Step 7 — V8 scripting runtime
 
-Status: runtime foundation, editor/public boundary, benchmark evidence, and
-integrated failure proof complete; the decision checkpoint remains.
+Status: complete. The prototype validates the V8 extension boundary and
+failure model well enough to proceed to the extension view experiment.
 
 ## Goal and decisions
 
@@ -456,17 +456,31 @@ ASCII snapshots instead of caching them as UTF-16.
 
 ### 4. Decision checkpoint and documentation
 
-- [ ] Record measurements and answer whether thread-per-extension
+- [x] Record measurements and answer whether thread-per-extension
   `deno_core` validates the public boundary and failure model well enough to
-  proceed, including any evidence that changes the eventual `rusty_v8` pool.
+  proceed, including any evidence that changes the eventual `rusty_v8` pool. ✅
+  The prototype validates the boundary well enough to proceed. Typed messages,
+  foreground ownership, revisioned batched edits, cancellation, serial
+  per-extension callbacks, cross-extension parallelism, and fatal per-isolate
+  interruption compose without exposing Deno or V8 details. Keep `deno_core`
+  behind `host` while iterating on the public API.
+
+  Thread-per-extension is not the production topology. Incremental startup is
+  about 4.2 ms and an idle isolate adds about 2.3 MiB RSS before accounting for
+  one permanently reserved OS thread. This does not change the target bounded
+  movable-isolate pool on `rusty_v8`; it strengthens the reason to move before
+  loading extensions at scale. The Knot-owned protocol and lifecycle semantics
+  should survive that change. Forced interruption remains fatal to one
+  extension, with no automatic restart, and slow-consumer policy remains open.
 - [x] Record whether string marshalling is acceptable, which operations require
   batching, and whether a future byte-oriented transfer API is justified. ✅
   Small scoped strings are acceptable and edits remain batched. Large repeated
   snapshots use the bounded external-string cache; current evidence does not
   justify a public byte-oriented API.
-- [ ] Update this checklist with ✅/⚠️ findings as work lands. Update
+- [x] Update this checklist with ✅/⚠️ findings as work lands. Update
   `roadmap.md` with the conclusion and `architecture.md` whenever runtime,
-  application ownership, or message flow changes.
+  application ownership, or message flow changes. ✅ No architectural flow
+  changed in the final proof, so `architecture.md` requires no further update.
 
 ## Verification and acceptance
 
