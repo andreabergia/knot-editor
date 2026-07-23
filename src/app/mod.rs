@@ -813,7 +813,7 @@ mod tests {
 
     use super::Shell;
     use crate::host::{
-        ExtensionRuntimeControl, V8Host,
+        ExtensionRuntimeControl, ExtensionRuntimeExecutionError, V8Host,
         protocol::{
             ByteRange, CommandInvocationId, ExtensionId, HostOperation, HostRequest,
             HostRequestError, RequestId, TextEdit,
@@ -1259,6 +1259,62 @@ mod tests {
                 .read_with(cx, |model, _| model.text())
         });
         assert!(!text.starts_with("// late command\n"));
+    }
+
+    #[gpui::test]
+    async fn terminated_extension_leaves_its_neighbor_and_gpui_responsive(cx: &mut TestAppContext) {
+        let host = V8Host::new();
+        let shell = cx.new(|cx| {
+            Shell::new_with_runtimes(
+                vec![
+                    host.spawn_extension(ExtensionId::new(17)).into_parts(),
+                    host.spawn_extension(ExtensionId::new(18)).into_parts(),
+                ],
+                cx,
+            )
+        });
+        wait_for_runtime_state(&shell, "running", cx).await;
+        let (runaway, neighbor) = cx.read(|cx| {
+            let shell = shell.read(cx);
+            let controls = shell.extension_controls.values();
+            let runaway = controls
+                .clone()
+                .find(|control| control.identity().0 == ExtensionId::new(17))
+                .cloned()
+                .unwrap();
+            let neighbor = controls
+                .clone()
+                .find(|control| control.identity().0 == ExtensionId::new(18))
+                .cloned()
+                .unwrap();
+            (runaway, neighbor)
+        });
+
+        let execution = runaway.execute_fixture_script("runaway.js", "while (true) {}");
+        runaway.watchdog().terminate().unwrap();
+        assert_eq!(
+            execution.await,
+            Err(ExtensionRuntimeExecutionError::Terminated)
+        );
+        neighbor
+            .execute_fixture_script(
+                "neighbor-remains-usable.js",
+                "globalThis.neighborAlive = true",
+            )
+            .await
+            .unwrap();
+        neighbor
+            .execute_fixture_script(
+                "verify-neighbor-remains-usable.js",
+                "if (!globalThis.neighborAlive) throw new Error('neighbor did not run')",
+            )
+            .await
+            .unwrap();
+
+        let heartbeat = cx.read(|cx| shell.read(cx).heartbeat);
+        cx.executor().advance_clock(Duration::from_millis(500));
+        cx.run_until_parked();
+        assert!(cx.read(|cx| shell.read(cx).heartbeat) > heartbeat);
     }
 
     #[gpui::test]
