@@ -1855,6 +1855,70 @@ mod tests {
     }
 
     #[test]
+    fn finite_slow_subscriber_burst_records_queue_depth_and_lag() {
+        let host = V8Host::new();
+        let extension = ExtensionId::new(7);
+        let buffer = BufferHandle::new(3);
+        let subscription = BufferSubscriptionId::new(9);
+        let mut runtime = host.spawn_extension(extension);
+        let execution = runtime.execute_fixture_module(
+            "file:///fixtures/slow-subscriber.js",
+            r#"
+                import { editor } from "knot:editor";
+                const buffer = await editor.activeBuffer();
+                globalThis.events = [];
+                await buffer.onDidChange((event) => {
+                  const end = Date.now() + 40;
+                  while (Date.now() < end) {}
+                  globalThis.events.push(event.revision);
+                });
+            "#,
+        );
+        for response in [
+            HostResponseValue::ActiveBuffer(Some(buffer)),
+            HostResponseValue::BufferChangesSubscribed { subscription },
+        ] {
+            let request = pollster::block_on(runtime.receive_request()).unwrap();
+            runtime
+                .respond(HostResponse {
+                    extension,
+                    lifecycle: request.lifecycle,
+                    id: request.id,
+                    result: Ok(response),
+                })
+                .unwrap();
+        }
+        pollster::block_on(execution).unwrap();
+
+        for revision in 1..=8 {
+            runtime
+                .dispatch_buffer_change(
+                    subscription,
+                    BufferChange {
+                        buffer,
+                        before_revision: revision - 1,
+                        revision,
+                        edits: vec![],
+                    },
+                )
+                .unwrap();
+        }
+        pollster::block_on(runtime.execute_fixture_script(
+            "verify-slow-subscriber.js",
+            "if (globalThis.events.join(',') !== '1,2,3,4,5,6,7,8') throw new Error('slow subscriber lost or reordered events')",
+        ))
+        .unwrap();
+
+        let metrics = runtime.control.buffer_change_queue_metrics();
+        assert!(metrics.max_depth >= 4, "metrics: {metrics:?}");
+        assert!(
+            metrics.max_enqueue_to_start_lag >= Duration::from_millis(100),
+            "metrics: {metrics:?}"
+        );
+        runtime.shutdown();
+    }
+
+    #[test]
     fn public_facade_registers_and_invokes_a_command_on_its_extension_thread() {
         let host = V8Host::new();
         let extension = ExtensionId::new(7);

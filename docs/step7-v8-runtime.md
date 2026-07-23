@@ -383,9 +383,12 @@ record that finding for the API design instead.
   per isolate, host-call latency, batched edit latency, event fan-out/lag,
   UTF-8↔V8 string marshalling, UTF-16 adapter conversion, JIT warm-up, and
   large transfers. Separate process-wide V8 cost from incremental isolate cost.
-- [ ] Use a finite slow-subscriber burst to record maximum queue depth and lag;
+- [x] Use a finite slow-subscriber burst to record maximum queue depth and lag;
   do not implement dropping, coalescing, producer blocking, or subscriber
-  eviction in this prototype.
+  eviction in this prototype. ✅
+  - [x] An eight-event burst with 40 ms CPU-bound listeners records the
+    control's maximum depth and enqueue-to-start lag while asserting ordered,
+    lossless delivery. ✅
 
 ### 4. Decision checkpoint and documentation
 
