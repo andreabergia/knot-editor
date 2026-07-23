@@ -369,6 +369,9 @@ record that finding for the API design instead.
   the buffer. Exercise thrown handlers, rejected promises, explicit disposal,
   buffer closure, extension initialization failure, and forced CPU termination;
   another extension and gpui must remain responsive.
+  - [x] Dispatch a cancelled invocation's late edit request through the gpui
+    host boundary and verify that it returns `Cancelled` without mutating the
+    displayed buffer. ✅
 - [ ] Demonstrate real parallel execution with finite CPU callbacks in two
   extension isolates. Verify callbacks within one extension never overlap.
 - [ ] Benchmark cold isolate startup, built-in module initialization, idle RSS

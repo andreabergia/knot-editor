@@ -814,7 +814,10 @@ mod tests {
     use super::Shell;
     use crate::host::{
         ExtensionRuntimeControl, V8Host,
-        protocol::{ByteRange, ExtensionId, TextEdit},
+        protocol::{
+            ByteRange, CommandInvocationId, ExtensionId, HostOperation, HostRequest,
+            HostRequestError, RequestId, TextEdit,
+        },
     };
 
     async fn wait_for_runtime_state(
@@ -1201,6 +1204,61 @@ mod tests {
                 .read_with(cx, |model, _| model.text())
         });
         assert_eq!(text, initial_text);
+    }
+
+    #[gpui::test]
+    async fn cancelled_late_edit_request_cannot_mutate_the_displayed_buffer(
+        cx: &mut TestAppContext,
+    ) {
+        let runtime = V8Host::new()
+            .spawn_extension(ExtensionId::new(16))
+            .into_parts();
+        let shell = cx.new(|cx| Shell::new(runtime, cx));
+        wait_for_runtime_state(&shell, "running", cx).await;
+        let control = only_runtime_control(&shell, cx);
+        let (extension, lifecycle) = control.identity();
+        let invocation = CommandInvocationId::new(99);
+
+        let response = shell.update(cx, |shell, cx| {
+            let buffer = shell.buffer_registry.active_handle().unwrap();
+            let revision = shell
+                .buffer_registry
+                .resolve(buffer)
+                .unwrap()
+                .read_with(cx, |model, _| model.revision());
+            shell.cancelled_commands.insert(invocation);
+            shell.dispatch_host_request(
+                HostRequest {
+                    extension,
+                    lifecycle,
+                    id: RequestId::new(1),
+                    invocation: Some(invocation),
+                    operation: HostOperation::ApplyEdits {
+                        buffer,
+                        edits: vec![TextEdit {
+                            range: ByteRange {
+                                start_byte_offset: 0,
+                                end_byte_offset: 0,
+                            },
+                            text: "// late command\n".into(),
+                        }],
+                        if_revision: revision,
+                    },
+                },
+                cx,
+            )
+        });
+        assert_eq!(response.result, Err(HostRequestError::Cancelled));
+        let text = cx.read(|cx| {
+            let shell = shell.read(cx);
+            let buffer = shell.buffer_registry.active_handle().unwrap();
+            shell
+                .buffer_registry
+                .resolve(buffer)
+                .unwrap()
+                .read_with(cx, |model, _| model.text())
+        });
+        assert!(!text.starts_with("// late command\n"));
     }
 
     #[gpui::test]
