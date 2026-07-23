@@ -56,3 +56,7 @@ path = "src/bin/core_bench.rs"
 [[bin]]
 name = "anno-bench"
 path = "src/bin/anno_bench.rs"
+
+[[bin]]
+name = "v8-bench"
+path = "src/bin/v8_bench.rs"

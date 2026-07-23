@@ -1,7 +1,7 @@
 # Step 7 — V8 scripting runtime
 
-Status: runtime foundation and editor/public boundary complete; integrated
-runtime proof and evidence remain.
+Status: runtime foundation, editor/public boundary, and benchmark evidence
+complete; the remaining integrated failure proof and decision checkpoint remain.
 
 ## Goal and decisions
 
@@ -382,16 +382,50 @@ record that finding for the API design instead.
   - [x] Dispatch finite CPU-bound buffer-change callbacks to two isolates and
     use elapsed time to prove cross-isolate overlap; a second callback in one
     isolate proves its queue remains serial. ✅
-- [ ] Benchmark cold isolate startup, built-in module initialization, idle RSS
+- [x] Benchmark cold isolate startup, built-in module initialization, idle RSS
   per isolate, host-call latency, batched edit latency, event fan-out/lag,
   UTF-8↔V8 string marshalling, UTF-16 adapter conversion, JIT warm-up, and
   large transfers. Separate process-wide V8 cost from incremental isolate cost.
+  ✅
 - [x] Use a finite slow-subscriber burst to record maximum queue depth and lag;
   do not implement dropping, coalescing, producer blocking, or subscriber
   eviction in this prototype. ✅
   - [x] An eight-event burst with 40 ms CPU-bound listeners records the
     control's maximum depth and enqueue-to-start lag while asserting ordered,
     lossless delivery. ✅
+
+### Benchmark evidence
+
+`cargo run --release --bin v8-bench -- --samples 12` runs the real extension
+thread, public JavaScript facade, and typed request/response channel. It uses
+a fixture responder rather than constructing gpui, so the numbers exclude
+foreground model work. Values are microseconds (p50/p95) unless noted.
+
+Measured on 2026-07-23: Apple M1 Pro, macOS 26.5.2 (arm64), Rust 1.97.1,
+`deno_core` 0.408.0 / V8 crate 149.4.0.
+
+| Workload | p50 | p95 | Notes |
+| --- | ---: | ---: | --- |
+| Process-wide V8 initialization | 8,826 | 8,826 | fresh child process, excludes process launch |
+| Incremental isolate startup | 3,836 | 4,339 | includes extension thread |
+| Built-in module initialization | 3,441 | 3,894 | `knot:editor` facade |
+| Idle RSS per isolate | 2,364 KiB | — | approximate macOS process sample |
+| Active-buffer host call | 187 | 233 | facade, channel, typed op |
+| Batched edit (10 edits) | 242 | 370 | one `applyEdits` crossing |
+| String marshal, ASCII 1 KiB | 234 | 400 | Rust UTF-8 to V8 string |
+| String marshal, Unicode 100 KiB | 691 | 738 | Rust UTF-8 to V8 string |
+| String marshal, Unicode 10 MiB | 35,168 | 35,777 | Rust UTF-8 to V8 string |
+| UTF-16 adapter, 1 KiB | 434 | 568 | includes lazy boundary table |
+| UTF-16 adapter, 100 KiB | 4,438 | 4,609 | includes lazy boundary table |
+| JIT warm-up, 32 host calls | 1,738 | 273 | first loop / second loop in one isolate |
+| Event fan-out, 2 isolates × 8 events | 170 | 266 | serial delivery within each isolate |
+| Event queue | depth 8 | lag 238 | max depth / max lag in microseconds |
+
+The 10 MiB UTF-16 adapter case intentionally is not run: building its JavaScript
+boundary table exceeds this prototype's 32 MiB per-isolate heap cap. The raw
+10 MiB string transfer succeeds. This is evidence to keep snapshots scoped and
+to avoid triggering the adapter on whole-document transfers, not evidence for a
+byte-oriented public API yet.
 
 ### 4. Decision checkpoint and documentation
 

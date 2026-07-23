@@ -24,6 +24,7 @@ use deno_core::{ModuleLoadOptions, ModuleLoadReferrer, ModuleLoadResponse, Modul
 use deno_core::{ModuleResolveResponse, ModuleSource, ModuleSourceCode, ModuleSpecifier, OpState};
 use deno_error::JsErrorBox;
 
+pub mod bench;
 pub mod protocol;
 
 use protocol::{
@@ -695,6 +696,11 @@ impl ExtensionRuntimeHandle {
     /// Return the host-side watchdog for this extension's isolate.
     pub fn watchdog(&self) -> ExtensionWatchdog {
         self.control.watchdog()
+    }
+
+    /// Return recorded buffer-change delivery measurements for this runtime.
+    pub fn buffer_change_queue_metrics(&self) -> BufferChangeQueueMetrics {
+        self.control.buffer_change_queue_metrics()
     }
 
     /// Stop the extension thread and wait for its thread-affine state to drop.
