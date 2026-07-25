@@ -89,10 +89,14 @@ if (contributionStartUtf16 >= 0) {
     command: "knot.fixture.contribution",
   }], { ifRevision: contributionSnapshot.revision });
 }
-await workbench.registerTreeDataProvider("outline", {
+globalThis.knotFixtureTreeRegistration =
+  await workbench.registerTreeDataProvider("outline", {
   async getChildren(parentId) {
     if (parentId === null) {
       await globalThis.__knotFixtureDelay(150);
+    }
+    if (parentId === "failure") {
+      throw new Error("expected fixture tree failure");
     }
     if (parentId === null) return [
       { id: "shell", label: "struct Shell", icon: "symbol", collapsibleState: "expanded" },
@@ -110,7 +114,7 @@ await workbench.registerTreeDataProvider("outline", {
     ];
     return [];
   },
-});
+  });
 "#;
 
 fn map_buffer_error(error: BufferAccessError) -> HostRequestError {
@@ -1182,6 +1186,13 @@ mod tests {
         }
     }
 
+    async fn wait_for_tree_error(shell: &Entity<Shell>, cx: &mut TestAppContext) {
+        let outline = cx.read(|cx| shell.read(cx).outline.clone());
+        while cx.read(|cx| outline.read(cx).lifecycle_state().3 == 0) {
+            outline.next_notification(Duration::ZERO, cx).await;
+        }
+    }
+
     fn only_runtime_control(
         shell: &Entity<Shell>,
         cx: &mut TestAppContext,
@@ -1786,7 +1797,9 @@ mod tests {
     }
 
     #[gpui::test]
-    async fn terminated_extension_leaves_its_neighbor_and_gpui_responsive(cx: &mut TestAppContext) {
+    async fn failed_tree_owner_is_cleaned_up_without_affecting_its_neighbor(
+        cx: &mut TestAppContext,
+    ) {
         let host = V8Host::new();
         let shell = cx.new(|cx| {
             Shell::new_with_runtimes(
@@ -1798,10 +1811,10 @@ mod tests {
             )
         });
         wait_for_runtime_state(&shell, "running", cx).await;
-        let (runaway, neighbor) = cx.read(|cx| {
+        let (tree_owner, neighbor) = cx.read(|cx| {
             let shell = shell.read(cx);
             let controls = shell.extension_controls.values();
-            let runaway = controls
+            let tree_owner = controls
                 .clone()
                 .find(|control| control.identity().0 == ExtensionId::new(17))
                 .cloned()
@@ -1811,15 +1824,47 @@ mod tests {
                 .find(|control| control.identity().0 == ExtensionId::new(18))
                 .cloned()
                 .unwrap();
-            (runaway, neighbor)
+            (tree_owner, neighbor)
         });
+        let owner = tree_owner.identity();
 
-        let execution = runaway.execute_fixture_script("runaway.js", "while (true) {}");
-        runaway.watchdog().terminate().unwrap();
+        tree_owner
+            .execute_fixture_script(
+                "fail-tree-callback.js",
+                "globalThis.knotFixtureTreeRegistration.invalidate('failure')",
+            )
+            .await
+            .unwrap();
+        wait_for_tree_error(&shell, cx).await;
+        assert_eq!(
+            cx.read(|cx| shell.read(cx).outline.read(cx).lifecycle_state()),
+            (true, 3, false, 1)
+        );
+
+        let execution = tree_owner.execute_fixture_script("runaway.js", "while (true) {}");
+        tree_owner.watchdog().terminate().unwrap();
         assert_eq!(
             execution.await,
             Err(ExtensionRuntimeExecutionError::Terminated)
         );
+        wait_for_runtime_state(&shell, "closed", cx).await;
+
+        cx.read(|cx| {
+            let shell = shell.read(cx);
+            assert_eq!(
+                shell.outline.read(cx).lifecycle_state(),
+                (false, 0, false, 0)
+            );
+            let model = shell.editor.read(cx).model().read(cx);
+            assert!(model.resolved_contributions().iter().all(|contribution| {
+                contribution.source
+                    != ContributionSource::Extension {
+                        extension: owner.0,
+                        lifecycle: owner.1,
+                    }
+            }));
+        });
+
         neighbor
             .execute_fixture_script(
                 "neighbor-remains-usable.js",

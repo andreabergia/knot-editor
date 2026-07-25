@@ -163,6 +163,19 @@ impl TreeView {
         self.children.values().any(|state| state.loading)
     }
 
+    #[cfg(test)]
+    pub(crate) fn lifecycle_state(&self) -> (bool, usize, bool, usize) {
+        (
+            self.provider.is_some(),
+            self.children.len(),
+            self.is_loading(),
+            self.children
+                .values()
+                .filter(|state| state.error.is_some())
+                .count(),
+        )
+    }
+
     pub(crate) fn remove_lifecycle(
         &mut self,
         extension: ExtensionId,

@@ -307,7 +307,7 @@ land.
 1. ✅ Make the fixture tree provider deliberately await before returning
    children. During the wait, verify foreground heartbeat, editor input,
    scrolling, and painting continue.
-2. ⬜ Fail one tree callback and terminate one contributing extension. Verify
+2. ✅ Fail one tree callback and terminate one contributing extension. Verify
    native cached/loading state is cleared, its editor contributions disappear,
    and another extension remains usable.
 3. ⬜ Add focused deterministic tests for registries, revision/range
