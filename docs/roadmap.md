@@ -117,7 +117,10 @@ macOS and the RTL workaround leans on gpui/Core Text layout behavior.
 - Smoke-test IME if the local environment makes that practical.
 - Record any platform-specific shaping, fallback-font, input-method, or windowing assumptions before step 8 bakes the native view API around them.
 
-⏭️ Opportunistic / before serious step-8 work.
+⏭️ Deferred until after prototype validation and before production
+development. macOS and Windows provide the prototype's current native-boundary
+evidence; this remains a required checkpoint rather than a claim of validated
+Linux behavior.
 
 **Question answered:** does the gpui decision rely on macOS-only text or input behavior that would materially change the view abstraction?
 
@@ -158,7 +161,8 @@ fixtures.
 **Decision:** keep the gpui framework decision. The blocking Windows Unicode
 editing defects found so far were in Knot's byte/UTF-16 boundary rather than a
 gpui limitation and are corrected using public gpui APIs. The full Windows
-fixture sweep now passes. Run the Linux checkpoint before serious step-8 work.
+fixture sweep now passes. Linux validation is recorded in step 3b and deferred
+until after prototype validation, before production development begins.
 
 **Question answered:** does the macOS gpui spike transfer unchanged to
 Windows? → **No, but the identified portability defects are correctable in

@@ -117,21 +117,19 @@ gpui 0.2.2 does not expose an obvious public platform accessibility bridge.
 Step 8 will record that framework gap and preserve the required semantics; a
 production platform accessibility implementation is out of scope.
 
-### D9 — Portability is a gate on the native editor boundary
+### D9 — Linux portability validation is deferred until after the prototype
 
-The unresolved step-3 portability work must reach a conclusion before step 8
-declares the editor contribution boundary validated:
+The Windows portability checkpoint is complete. Its Unicode and startup
+failures were corrected at Knot's platform and UTF-8/UTF-16 boundaries using
+public gpui APIs; the full fixture sweep now passes on Windows as well as
+macOS.
 
-1. reproduce and correct the Windows emoji deletion failure using public gpui
-   APIs, including auditing scalar-count/UTF-16 conversions;
-2. verify Arabic visual navigation/selection behavior or document the exact
-   remaining native-view policy gap;
-3. run the Linux gpui fixture smoke test, including the RTL hit-testing
-   workaround and practical IME coverage.
-
-Tree-provider work may proceed independently, but the final step-8 decision
-checkpoint remains blocked until this gate is closed or recorded as an
-upstream limitation that changes the proposed boundary.
+Linux validation is intentionally deferred until after the prototype phase and
+before production development begins. Knot does not currently have practical
+access to a Linux desktop, while the native boundary has evidence from macOS
+and Windows and gpui/Zed have an established Linux path. This is a recorded
+risk, not a claim that Knot's Linux behavior has been validated. It does not
+block Step 8.
 
 ## Prototype public surface
 
@@ -172,9 +170,17 @@ interface EditorContributionSet extends Disposable {
 ```
 
 The registration API binds every provider and contribution set to its
-extension identity and unique lifecycle. Transport messages use Knot-owned
-opaque handles; JavaScript does not see gpui entities, Rust references, core
-annotation IDs, or runtime resource IDs.
+extension identity and unique lifecycle. The foreground registry is keyed by
+an opaque `ContributionSetId`; each entry records an owner consisting of
+`ExtensionId` plus `ExtensionLifecycleId`. The extension identity identifies
+the installed extension, while the lifecycle identifies one particular
+runtime incarnation. An extension may own multiple independently replaceable
+sets, and delayed work from an older lifecycle cannot replace or dispose sets
+owned by a restarted runtime. Built-in sources use the same registry with an
+explicit native owner variant.
+
+Transport messages use Knot-owned opaque handles; JavaScript does not see
+gpui entities, Rust references, core annotation IDs, or runtime resource IDs.
 
 `invalidate` is a notification, not a synchronous fetch. The foreground may
 coalesce repeated invalidations before requesting children.
@@ -215,16 +221,14 @@ land.
 
 ## Execution
 
-### 0. Close the portability gate
+### 0. Record the portability disposition
 
-1. ⬜ Correct and verify UTF-16/grapheme boundary handling for the Windows
+1. ✅ Correct and verify UTF-16/grapheme boundary handling for the Windows
    emoji fixture. Keep grapheme policy above `core`.
-2. ⬜ Resolve or precisely document visual left/right selection for BiDi text.
-3. ⬜ Run the Linux fixture smoke test and update roadmap steps 3b/3c with the
-   result.
-
-Commit portability corrections and their roadmap evidence separately from the
-step-8 API work.
+2. ✅ Verify visual left/right selection for BiDi text on macOS and Windows.
+3. ⏭️ Defer the Linux fixture smoke test until after prototype validation and
+   before production development. Keep roadmap step 3b as the explicit
+   checkpoint.
 
 ### 1. Introduce shared contribution ownership
 
@@ -318,8 +322,8 @@ step-8 API work.
   selection, scroll, folding, focus, and rendering state.
 - No gpui, Deno, V8, core annotation ID, or Rust object crosses the public
   JavaScript boundary.
-- The Windows and Linux portability checkpoints have conclusions consistent
-  with the native editor contribution boundary.
+- The Windows portability checkpoint is complete, and the deferred Linux
+  checkpoint remains explicitly required before production development.
 
 ## Explicitly deferred
 
@@ -338,7 +342,7 @@ step-8 API work.
 
 ## Logical commits during execution
 
-1. Portability corrections and step-3 checkpoint evidence.
+1. Portability disposition and Step 8 plan update.
 2. Shared anchored contribution ownership and built-in migration.
 3. Extension editor-contribution protocol and fixture.
 4. Asynchronous native tree provider and outline migration.
