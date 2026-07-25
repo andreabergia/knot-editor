@@ -251,9 +251,22 @@ land.
    anchored-range rule.
 6. ⬜ Strengthen `AnchoredRangeStore` validation with property/model tests.
    Cover multiple seeds, Unicode boundaries, empty-buffer transitions,
-   add/remove interleavings, all endpoint-stickiness combinations, query
-   equivalence, and internal endpoint-index consistency. Prefer a shrinking
-   property-test harness so failures produce a minimal edit sequence.
+   add/remove interleavings, the endpoint-stickiness combination exposed by
+   `AnchoredRangeStore::add`, query equivalence, and internal endpoint-index
+   consistency. Prefer a shrinking property-test harness so failures produce a
+   minimal edit sequence. Cover other stickiness combinations if a custom
+   constructor is introduced.
+
+### Review follow-up
+
+1. ✅ Reject contribution publication to an empty buffer as a recoverable
+   invalid-range error.
+2. ✅ Remove consumed anchored-range IDs from contribution ownership and
+   metadata during stabilization.
+3. ✅ Describe decoration precedence without claiming a durable exact-overlap
+   composition policy.
+4. ✅ Keep core anchored-range module documentation limited to current behavior
+   and document lazy interval-index rebuilding accurately.
 
 ### 2. Expose editor contributions to JavaScript
 
