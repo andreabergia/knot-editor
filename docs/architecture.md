@@ -79,17 +79,23 @@ semantics, and lifecycle details.
 ## Application model and view
 
 gpui's foreground thread exclusively owns editor state. Each `BufferModel`
-entity owns one `core::TextBuffer`, its open/closed lifecycle, and a public
-revision that advances once per editor-visible atomic commit. The core
-buffer's `edit_seq` remains a private primitive-edit-log cursor.
+entity owns one `core::TextBuffer`, its shared `core::AnnotationStore`, its
+source-owned editor contribution registry, its open/closed lifecycle, and a
+public revision that advances once per editor-visible atomic commit. Visual
+contribution metadata remains in `app` and refers to core annotation IDs;
+`core` does not know about decoration tokens or contribution ownership. The
+core buffer's `edit_seq` remains a private primitive-edit-log cursor.
 
 `BufferRegistry` gives models monotonic, never-reused transport handles and
 stores only weak entity references. It also tracks the optional active buffer.
 `CommandRegistry` is foreground-owned and keeps command names authoritative;
 each registration is bound to its extension and unique extension lifetime.
-`EditorView` owns cursor, selection, scroll, IME, annotations, and a derived
-line/segment rendering projection; local edits commit through its model and
-model notifications refresh the projection. A foreground-local bridge task
+Contribution sets are independently replaceable resources whose owner is
+either a built-in source or an extension identity plus its unique lifecycle.
+Lifecycle cleanup removes only sets owned by that runtime incarnation.
+`EditorView` owns cursor, selection, scroll, IME, and derived line, segment,
+and decoration rendering projections; local edits commit through its model and
+model notifications refresh those projections. A foreground-local bridge task
 owns each extension request inbox and dispatches requests synchronously against
 the registry and its entities between awaits.
 
@@ -98,11 +104,12 @@ gpui Shell / BufferRegistry
              |
              v
       BufferModel entity
-             |
-             v
-      core::TextBuffer
-             |
-       notifications
+       /       |       \
+      v        v        v
+TextBuffer  Annotation  contribution
+              Store      metadata
+       \       |       /
+        model notification
              v
  EditorView projection and view state
 ```

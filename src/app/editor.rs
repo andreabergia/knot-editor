@@ -32,7 +32,12 @@ use gpui::{prelude::*, *};
 use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation;
 
-use super::model::BufferModel;
+use crate::host::protocol::ByteRange;
+
+use super::model::{
+    BufferModel, BuiltInContributionSource, ContributionOwner, DecorationToken, EditorContribution,
+    ResolvedDecoration,
+};
 
 /// Owned, frame-stable copy of one styled segment of one line.
 /// Mirrors `knot::view::fixture`'s borrowed `Segment`/`SegSpec` but holds
@@ -70,9 +75,7 @@ pub struct EditorView {
     model: Entity<BufferModel>,
     lines: Vec<String>,
     segs: Vec<Vec<Seg>>,
-    /// Diagnostic annotations (wavy underline overlay). Seeded at load time
-    /// by scanning for a few fixture patterns; a real implementation would
-    /// receive these from the language server layer. Not updated on edit.
+    /// Renderer-local projection of shared, anchored buffer contributions.
     annotations: Vec<Annotation>,
     /// Vertical scroll offset in pixels (0 = top of buffer).
     scroll: f32,
@@ -189,54 +192,12 @@ impl EditorView {
             segs.push(row);
         }
 
-        // Seed a few annotations by scanning for patterns, so the wavy
-        // underline paint path is exercised on any fixture. `LEAF_MAX` /
-        // `INTERNAL_MIN` get a "warning" (amber) squiggle, `fn ` names get
-        // an "info" (blue) squiggle, and `unsafe` gets an "error" (red)
-        // squiggle. This mimics a language server's diagnostic overlay
-        // without wiring one up.
-        let mut annotations = Vec::new();
-        for (ix, line) in lines.iter().enumerate() {
-            for pat in [
-                ("LEAF_MAX", WARNING_COLOR),
-                ("INTERNAL_MIN", WARNING_COLOR),
-                ("unsafe", ERROR_COLOR),
-            ] {
-                let (needle, color) = pat;
-                let mut from = 0;
-                while let Some(pos) = line[from..].find(needle) {
-                    let start = from + pos;
-                    let end = start + needle.len();
-                    annotations.push(Annotation {
-                        line: ix,
-                        start,
-                        end,
-                        color,
-                    });
-                    from = end;
-                }
-            }
-            if let Some(pos) = line.find("fn ") {
-                // Annotate the function name after `fn ` as info.
-                let name_start = pos + 3;
-                let rest = &line[name_start..];
-                let name_end_in_rest = rest
-                    .find(|c: char| !c.is_alphanumeric() && c != '_')
-                    .unwrap_or(rest.len());
-                if name_end_in_rest > 0 {
-                    annotations.push(Annotation {
-                        line: ix,
-                        start: name_start,
-                        end: name_start + name_end_in_rest,
-                        color: INFO_COLOR,
-                    });
-                }
-            }
-        }
+        let annotations =
+            annotations_from_decorations(&lines, model.read(cx).resolved_decorations());
 
         let model_subscription = cx.observe(&model, |this, model, cx| {
-            let text = model.read(cx).text();
-            this.rebuild_default_projection(&text);
+            let model = model.read(cx);
+            this.rebuild_projection(&model.text(), model.resolved_decorations());
             cx.notify();
         });
 
@@ -260,8 +221,9 @@ impl EditorView {
         }
     }
 
-    fn rebuild_default_projection(&mut self, text: &str) {
+    fn rebuild_projection(&mut self, text: &str, decorations: Vec<ResolvedDecoration>) {
         (self.lines, self.segs) = default_projection(text);
+        self.annotations = annotations_from_decorations(&self.lines, decorations);
     }
 
     fn clamp_scroll(&mut self) {
@@ -758,15 +720,18 @@ impl EditorView {
             changed
         });
         if changed {
-            let text = model.read(cx).text();
-            self.rebuild_default_projection(&text);
+            let model = model.read(cx);
+            self.rebuild_projection(&model.text(), model.resolved_decorations());
         }
     }
 
     /// Refresh the derived rendering projection after a foreground host commit.
     pub(crate) fn refresh_from_model(&mut self, cx: &mut Context<Self>) {
-        let text = self.model.read(cx).text();
-        self.rebuild_default_projection(&text);
+        let (text, decorations) = {
+            let model = self.model.read(cx);
+            (model.text(), model.resolved_decorations())
+        };
+        self.rebuild_projection(&text, decorations);
         cx.notify();
     }
 
@@ -806,6 +771,112 @@ impl EditorView {
             }
         }
     }
+}
+
+pub(crate) fn seed_fixture_contributions(model: &mut BufferModel) {
+    let text = model.text();
+    let mut primary = Vec::new();
+    for (needle, decoration) in [
+        ("LEAF_MAX", DecorationToken::Warning),
+        ("INTERNAL_MIN", DecorationToken::Warning),
+        ("unsafe", DecorationToken::Error),
+    ] {
+        primary.extend(
+            text.match_indices(needle)
+                .map(|(start, matched)| EditorContribution {
+                    range: ByteRange {
+                        start_byte_offset: start,
+                        end_byte_offset: start + matched.len(),
+                    },
+                    decoration,
+                }),
+        );
+    }
+    for (start, _) in text.match_indices("fn ") {
+        let name_start = start + 3;
+        let rest = &text[name_start..];
+        let name_len = rest
+            .find(|c: char| !c.is_alphanumeric() && c != '_')
+            .unwrap_or(rest.len());
+        if name_len > 0 {
+            primary.push(EditorContribution {
+                range: ByteRange {
+                    start_byte_offset: name_start,
+                    end_byte_offset: name_start + name_len,
+                },
+                decoration: DecorationToken::Info,
+            });
+        }
+    }
+
+    let primary_owner = ContributionOwner::BuiltIn(BuiltInContributionSource::FixtureDiagnostics);
+    let primary_set = model
+        .create_contribution_set(primary_owner)
+        .expect("fixture buffer is open");
+    model
+        .replace_contributions(primary_set, primary_owner, &primary, model.revision())
+        .expect("fixture contributions have valid ranges");
+
+    // A second source deliberately overlaps LEAF_MAX. Info is painted before
+    // warning, so the primary warning deterministically wins at the overlap.
+    let overlap = text
+        .match_indices("LEAF_MAX")
+        .map(|(start, _)| {
+            let line_start = text[..start].rfind('\n').map_or(0, |newline| newline + 1);
+            let line_end = text[start..]
+                .find('\n')
+                .map_or(text.len(), |newline| start + newline);
+            EditorContribution {
+                range: ByteRange {
+                    start_byte_offset: line_start,
+                    end_byte_offset: line_end,
+                },
+                decoration: DecorationToken::Info,
+            }
+        })
+        .collect::<Vec<_>>();
+    let overlap_owner = ContributionOwner::BuiltIn(BuiltInContributionSource::FixtureOverlap);
+    let overlap_set = model
+        .create_contribution_set(overlap_owner)
+        .expect("fixture buffer is open");
+    model
+        .replace_contributions(overlap_set, overlap_owner, &overlap, model.revision())
+        .expect("fixture overlap contributions have valid ranges");
+}
+
+fn annotations_from_decorations(
+    lines: &[String],
+    decorations: Vec<ResolvedDecoration>,
+) -> Vec<Annotation> {
+    let mut annotations = Vec::new();
+    for decoration in decorations {
+        let color = match decoration.token {
+            DecorationToken::Info => INFO_COLOR,
+            DecorationToken::Warning => WARNING_COLOR,
+            DecorationToken::Error => ERROR_COLOR,
+        };
+        let start = decoration.range.start_byte_offset;
+        let end = decoration.range.end_byte_offset;
+        let mut line_start = 0;
+        for (line, text) in lines.iter().enumerate() {
+            let line_end = line_start + text.len();
+            let segment_start = start.max(line_start);
+            let segment_end = end.min(line_end);
+            if segment_start < segment_end {
+                annotations.push(Annotation {
+                    line,
+                    start: segment_start - line_start,
+                    end: segment_end - line_start,
+                    color,
+                });
+            }
+            if line_end >= end {
+                break;
+            }
+            line_start = line_end + 1;
+        }
+    }
+    annotations
 }
 
 fn default_projection(text: &str) -> (Vec<String>, Vec<Vec<Seg>>) {

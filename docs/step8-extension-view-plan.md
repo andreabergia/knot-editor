@@ -232,17 +232,17 @@ land.
 
 ### 1. Introduce shared contribution ownership
 
-1. ⬜ Move `AnnotationStore` ownership into `BufferModel` beside `TextBuffer`.
+1. ✅ Move `AnnotationStore` ownership into `BufferModel` beside `TextBuffer`.
    Stabilize it after every accepted local or extension edit, before notifying
    views.
-2. ⬜ Add an application-owned contribution registry keyed by source identity.
+2. ✅ Add an application-owned contribution registry keyed by source identity.
    Keep visual metadata outside `core` and associate it with core annotation
    IDs.
-3. ⬜ Implement atomic revision-checked replacement, explicit disposal, buffer
+3. ✅ Implement atomic revision-checked replacement, explicit disposal, buffer
    cleanup, and extension-lifecycle cleanup.
-4. ⬜ Route the existing fixture diagnostics through this registry and remove
+4. ✅ Route the existing fixture diagnostics through this registry and remove
    `EditorView`'s private fixture annotation model.
-5. ⬜ Render at least two overlapping sources with deterministic native
+5. ✅ Render at least two overlapping sources with deterministic native
    precedence. Record precedence as a local presentation policy, not a core
    annotation rule.
 

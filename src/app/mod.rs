@@ -21,7 +21,7 @@ use crate::host::{
 mod editor;
 pub mod model;
 
-use editor::EditorView;
+use editor::{EditorView, seed_fixture_contributions};
 use model::{
     BufferAccessError, BufferModel, BufferRegistry, BufferSubscriptionRegistry, CommandRegistry,
 };
@@ -156,7 +156,12 @@ impl Shell {
                 "(no fixture at {fixture_path:?}: {e})"
             )])
         });
-        let model = cx.new(|_| BufferModel::from_text(fixture.lines.join("\n")));
+        let text = fixture.lines.join("\n");
+        let model = cx.new(|_| {
+            let mut model = BufferModel::from_text(text);
+            seed_fixture_contributions(&mut model);
+            model
+        });
         let mut buffer_registry = BufferRegistry::new();
         let handle = buffer_registry.open(&model);
         buffer_registry.set_active(Some(handle));
@@ -303,6 +308,8 @@ impl Shell {
                 this.command_registry.remove_lifecycle(extension, lifecycle);
                 this.buffer_subscriptions
                     .remove_lifecycle(extension, lifecycle);
+                this.buffer_registry
+                    .remove_contribution_lifecycle(extension, lifecycle, cx);
                 this.runtime_state = "closed".into();
                 if let Some(error) = failure {
                     this.latest_runtime_error = Some(error.into());
