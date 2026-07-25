@@ -28,10 +28,15 @@ The design claims annotations compose naturally because views decide rendering. 
 
 ### Multiple views of one buffer
 
-The buffer/view split is justified by divergent presentation. Confirm the split carries its weight.
+The text-buffer/editor-view split is justified by divergent presentation.
+Confirm the split carries its weight without requiring every view to have a
+buffer.
 
-- Prototype: two views of the same buffer, one folded and one not, with independent scroll and cursor state, plus a minimap view and a "preview at different zoom" view.
-- Verify: presentation state lives entirely on the view; the buffer never needs to know about folding to serve a folded view.
+- Prototype: two editor views of the same buffer, one folded and one not, with
+  independent scroll and cursor state, plus a minimap view and a preview at a
+  different zoom.
+- Verify: presentation state lives entirely on the view; the buffer never
+  needs to know about folding to serve a folded view.
 
 ### Text as the universal surface
 
@@ -160,8 +165,16 @@ Pulled out of "Scripting" because it interacts with UI, capabilities, and LSP, a
 
 Commands are a stated pillar of the design but are not covered by any of the four areas above.
 
-- Prototype: keymap resolution with transient and active keymaps, programmable dispatch (e.g. a prefix-arg or a `M-x`-style invocation), and composition of commands.
-- Confirm: every user action is addressable as a command object, invokable programmatically with the same arguments a keypress would supply.
+- Prototype: keymap resolution with transient and active keymaps, programmable
+  dispatch (e.g. a prefix-arg or a `M-x`-style invocation), and composition of
+  commands.
+- Prototype: route a generic command through editor, terminal, and tree views,
+  then fall back through window, workspace, and global scopes.
+- Confirm: every user action is addressable as a command object, invokable
+  programmatically with the same arguments a keypress would supply.
+- Confirm: invocation captures the focused view target and optional associated
+  text buffer. An asynchronous command must not retarget itself when focus
+  changes while it awaits.
 
 ---
 

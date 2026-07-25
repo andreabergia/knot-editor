@@ -89,6 +89,10 @@ about decoration tokens or contribution ownership. The core buffer's
 
 `BufferRegistry` gives models monotonic, never-reused transport handles and
 stores only weak entity references. It also tracks the optional active buffer.
+That active-buffer state is the prototype's current extension-facing command
+context, not a requirement that every view have a buffer. Step 11 will
+generalize command invocation to capture a focused view target with an optional
+associated text buffer.
 `CommandRegistry` is foreground-owned and keeps command names authoritative;
 each registration is bound to its extension and unique extension lifetime.
 Each buffer has at most one atomic contribution set per `ContributionSource`.
@@ -169,6 +173,13 @@ runtime thread with the active buffer handle; requests issued by the handler
 carry the invocation identity. The foreground cancellation set rejects
 invocation-scoped host work and rechecks before applying an edit, so a late
 completion cannot mutate the document.
+
+This is the initial text-editor command surface. The planned command-dispatch
+boundary captures the focused view identity at invocation time and derives an
+optional text-buffer handle from it. Native commands route through the focus
+hierarchy; extension code receives semantic context rather than gpui entities
+or a requirement that non-text views fabricate buffers. Captured targets are
+revalidated after asynchronous work instead of re-resolving current focus.
 
 Extension-local lifecycle state owns pending work, termination, resource
 limits, command registrations, buffer-change subscriptions, and teardown. A
@@ -268,6 +279,10 @@ Detailed runtime behavior and experiment results live in
 - `core` must not depend on platform, rendering, or scripting details.
 - Text and edit history are buffer state. Cursor, selection, folding, scroll,
   and zoom are view state.
+- Buffers model editable or inspectable text. A view may have no associated
+  buffer and may instead own a surface-specific model; common command behavior
+  comes from focus-based routing and invocation context, not a polymorphic
+  buffer hierarchy.
 - Stable positions and buffer edit events form one contract: buffer changes
   must preserve the information anchored-range stabilization needs.
 - `AnchoredRangeStore` is the shared range-composition mechanism. Visual
@@ -280,8 +295,11 @@ Detailed runtime behavior and experiment results live in
 ## Major gaps
 
 - Undo history, edit grouping, and view-state restoration are not implemented.
-- Capability aggregation, filesystem providers, terminal state, and the
-  complete public extension API remain roadmap work.
+- Capability aggregation, filesystem providers, the native terminal view, and
+  the complete public extension API remain roadmap work.
+- Command invocation currently exposes only an optional active text buffer.
+  Focus-target capture, native focus-chain routing, and non-buffer command
+  contexts remain step-11 work.
 
 Update this document when component boundaries, ownership, dependency
 direction, or a major runtime flow changes. Keep implementation contracts in

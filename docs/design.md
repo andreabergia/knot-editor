@@ -128,11 +128,8 @@ Workspace
 
 ## Buffers
 
-Buffers represent editor state.
-
-Initially the editor supports three buffer types.
-
-### TextBuffer
+Buffers represent editable or inspectable text. The prototype has one buffer
+type: `TextBuffer`.
 
 Represents editable text.
 
@@ -145,33 +142,19 @@ Examples:
 - git status;
 - search results.
 
-### BinaryBuffer
-
-Represents arbitrary binary resources.
-
-Examples:
-
-- images;
-- PDFs;
-- binary files.
-
-### TerminalBuffer
-
-Represents a terminal session attached to a subprocess.
-
-Terminal support is a core editor capability, not an optional extension or a
-text-buffer emulation. A `TerminalBuffer` owns the pseudoterminal session and
-terminal state, while its terminal view owns presentation state such as scroll
-position. Knot should reuse a mature terminal parser/state machine rather than
-implement escape-sequence handling from scratch.
+Binary resources and terminals do not need to implement a common buffer
+abstraction merely to participate in the UI. Introduce another buffer type only
+if a future resource demonstrates useful buffer semantics.
 
 ---
 
 ## Views
 
-Views render buffers.
+Views are the primary content instances placed in windows. Some views render a
+buffer; others own a surface-specific model.
 
-A single buffer may have multiple views.
+An `EditorView` renders a `TextBuffer`. A single text buffer may have multiple
+editor views with independent presentation state.
 
 Examples:
 
@@ -180,12 +163,25 @@ Examples:
 - different zoom levels;
 - minimaps.
 
-Views contain presentation state:
+Views contain presentation and interaction state:
 
 - scroll position;
 - cursor state;
 - selections;
 - rendering options.
+
+A `TerminalView` is a native, single-view terminal surface. It owns a
+pseudoterminal session and terminal emulator state, either directly or through
+an internal `TerminalSession`, as well as its presentation and input state.
+The session/controller remains internally separate from rendering for
+testability, but is not a `Buffer`. Sharing one terminal session between
+multiple views is intentionally unsupported: a PTY has one authoritative grid
+size, and multiple independently sized or focused views would introduce
+ambiguous resize and input semantics.
+
+Terminal support remains a core editor capability, not an optional extension
+or text-buffer emulation. Knot should reuse a mature terminal parser/state
+machine rather than implement escape-sequence handling from scratch.
 
 ---
 
@@ -206,7 +202,12 @@ Windows may:
 
 ## Widgets
 
-The editor discourages specialized UI components that bypass the buffer/view model. Views remain the primary UI abstraction. However, widgets are used in some places where there is not a logical buffer to render, for example the autocompletion popup is a special widget triggered by a text view.
+The editor discourages specialized UI components that bypass its native view
+and semantic-surface APIs. Text-oriented content should normally remain
+buffer-backed. Native views may own a surface-specific model where text-buffer
+semantics do not fit, as with terminals and trees. Widgets are used where there
+is no independent content view, for example an autocompletion popup triggered
+by an editor view.
 
 ---
 
@@ -232,6 +233,19 @@ Commands may:
 - receive key bindings;
 - be invoked programmatically;
 - be composed.
+
+A command invocation captures context rather than assuming every operation
+targets a buffer. The context identifies the focused view, its optional
+associated `TextBuffer`, the containing window and workspace, and the
+invocation itself. The captured target remains stable across asynchronous
+work; implementations revalidate it before mutation rather than retargeting a
+command when focus changes.
+
+Native commands route from the focused widget through its view, window,
+workspace, and global scopes. This lets generic commands such as copy,
+select-all, and close-view acquire surface-appropriate behavior without making
+terminal, tree, and editor state implement one data model. Extension APIs
+receive semantic context and opaque handles, never native view or gpui objects.
 
 ---
 
@@ -457,7 +471,8 @@ Questions:
 
 ## Structured buffers
 
-The current design intentionally avoids introducing general structured buffers.
+The current design intentionally keeps buffers text-specific and avoids both
+general structured buffers and a common polymorphic resource model.
 
 Future experience may reveal whether additional buffer types are necessary.
 
@@ -481,7 +496,9 @@ collaborative workflows Knot intends to support.
 
 Too abstract.
 
-The editor currently prefers a small number of concrete buffer types.
+The editor prefers concrete, surface-specific models. Shared abstraction should
+come from demonstrated common semantics rather than requiring terminals,
+trees, binary resources, and editable text to look alike.
 
 ---
 

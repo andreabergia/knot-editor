@@ -95,6 +95,11 @@ export const commands: {
 };
 ```
 
+`CommandContext.buffer` is the prototype's initial text-editor surface, not a
+claim that every view has a buffer. Step 11 generalizes invocation to capture
+the focused view target and derive an optional associated `TextBuffer`; native
+view identities remain opaque to JavaScript.
+
 `TextBuffer` is a JavaScript proxy over an opaque private handle. Handle values,
 transport messages, Rust references, and locking primitives are never public.
 A closed buffer rejects future operations with a stable `BufferClosedError`.

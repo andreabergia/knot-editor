@@ -472,18 +472,28 @@ and the deferred Linux checkpoint remain outside this validation.
 
 ---
 
-## 9. Terminal buffer and view experiment
+## 9. Native terminal view experiment
 
 Terminal support is a required part of Knot. This experiment validates its
 architectural fit without building a production-complete terminal emulator.
 
+✅ **Boundary decision:** do not introduce `TerminalBuffer`. The prototype has
+one buffer type, `TextBuffer`; a terminal is a native, single-view surface.
+Keep its PTY and emulator state internally separable from rendering as a
+`TerminalSession` or equivalent, but initially let the `TerminalView` own that
+session. Extract independent session ownership only if persistence without a
+view or another concrete requirement appears.
+
 - Use a mature terminal parser/state crate; do not implement VT escape parsing
   from scratch.
-- Implement a `TerminalBuffer` that owns a local pseudoterminal subprocess and
-  terminal state, plus a native terminal view rendered through gpui.
+- Implement a native `TerminalView`, rendered through gpui, that owns one local
+  pseudoterminal subprocess and its terminal emulator state.
 - Run an interactive shell with keyboard input, asynchronous output, ANSI
   color, cursor state, and scrollback.
 - Resize the view and propagate the new terminal dimensions to the PTY.
+- Keep one authoritative view and grid per terminal session. Multiple views of
+  one session, detached/headless session lifetime, and session persistence are
+  out of scope unless the experiment produces evidence that they are needed.
 - Run one full-screen TUI using the alternate screen to expose assumptions that
   a line-oriented shell session would miss.
 - Close and restart the subprocess cleanly, and confirm terminal output cannot
@@ -491,9 +501,9 @@ architectural fit without building a production-complete terminal emulator.
 - Defer exhaustive escape-sequence compatibility, mouse reporting, hyperlinks,
   shell integration, remote PTYs, and cross-platform polish.
 
-**Question answered:** do `TerminalBuffer`, PTY lifecycle, terminal state, and a
-native terminal view fit Knot's buffer/view and async architecture well enough
-to make first-class terminal support viable?
+**Question answered:** do a view-owned PTY lifecycle, terminal emulator state,
+and native rendering fit Knot's view and async architecture without inventing
+non-text buffer semantics?
 
 ---
 
@@ -514,6 +524,20 @@ to make first-class terminal support viable?
 ## 11. Command and keymap dispatch
 
 - Command objects as first-class values: name, arguments, invokable programmatically.
+- ✅ Commands target invocation context rather than requiring every view to
+  expose a buffer. A context captures the focused view identity, its optional
+  associated `TextBuffer`, the containing window/workspace, and the invocation
+  identity.
+- Route generic commands through the focus hierarchy (focused widget, view,
+  window, workspace, global) so commands such as copy and select-all can have
+  surface-specific native handlers.
+- Capture the target at invocation time. After an asynchronous wait, revalidate
+  that captured target rather than resolving whichever view or buffer is then
+  active.
+- Keep native view identities opaque across the extension boundary. Extension
+  commands receive semantic context, initially an optional `TextBuffer`; add
+  terminal- or tree-specific public APIs only when a concrete extension use
+  case requires them.
 - Keymap resolution with transient and active keymaps.
 - Programmable dispatch: prefix-arg or `M-x`-style invocation.
 - Composition of commands.
@@ -522,7 +546,9 @@ to make first-class terminal support viable?
 - Confirm raw input protocols such as IME composition can update interaction
   state without becoming registered commands.
 
-**Question answered:** are commands a sound substrate for keybindings, programmatic invocation, and composition?
+**Question answered:** are context-targeted commands and focus-based routing a
+sound substrate for buffer, non-buffer, keybinding, programmatic, and composed
+operations?
 
 ---
 
