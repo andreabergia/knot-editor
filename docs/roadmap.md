@@ -129,7 +129,7 @@ This is the Windows counterpart to 3b. It happened before step 8 work, on a
 Windows 10 development machine, using the same step-3 editor widget and
 fixtures.
 
-⚠️ **Partial result — Windows verification is in progress.**
+✅ **Done — Windows is a clean pass.**
 
 - ✅ **Startup:** the first launch failed with
   `STATUS_ENTRYPOINT_NOT_FOUND` for `TaskDialogIndirect`. The cause was the
@@ -151,17 +151,19 @@ fixtures.
   jump was caused by `from_flat_utf16` counting Unicode scalar values instead
   of UTF-16 code units when locating a line; a focused multi-line emoji
   round-trip test now covers the conversion.
+- ✅ **Long-line and large-source behavior:** the minified JavaScript fixture
+  and ~5000-line Rust fixture render, scroll, select, and edit correctly. The
+  large Rust fixture remains visibly responsive during interactive use.
 
 **Decision:** keep the gpui framework decision. The blocking Windows Unicode
 editing defects found so far were in Knot's byte/UTF-16 boundary rather than a
-gpui limitation and are corrected using public gpui APIs. Finish the remaining
-Windows fixture checks before treating 3c as a clean pass, then run the Linux
-checkpoint before serious step-8 work.
+gpui limitation and are corrected using public gpui APIs. The full Windows
+fixture sweep now passes. Run the Linux checkpoint before serious step-8 work.
 
 **Question answered:** does the macOS gpui spike transfer unchanged to
 Windows? → **No, but the identified portability defects are correctable in
 Knot's widget.** Startup, CJK insertion, Arabic/BiDi navigation and selection,
-and emoji editing now pass; the remaining fixtures are still being verified.
+emoji editing, minified long lines, and the large Rust source fixture all pass.
 
 ---
 
