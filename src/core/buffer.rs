@@ -1,9 +1,8 @@
 //! `TextBuffer`: stable-ID piece-table backing store.
 //!
-//! Steps 4.1—4.3 of `docs/step4-buffer-plan.md`: a piece table with
-//! monotonic stable piece IDs (insert / delete / replace / read_range),
-//! a lazy incrementally-maintained line index (D4), and the
-//! `Position` / `BufferEdit` surface that step 5 will subscribe to.
+//! The buffer has monotonic stable piece IDs, insert / delete / replace /
+//! read-range operations, a lazy incrementally maintained line index, and a
+//! `Position` / `BufferEdit` surface for stable external ranges.
 //!
 //! ## Position tokens (D2 / D7)
 //!
@@ -721,8 +720,7 @@ impl TextBuffer {
     ///
     /// No-op if the line index isn't built yet (lazy: edits don't force a
     /// build). Otherwise splices the K-entry delta for the edited span and
-    /// fixes up the surviving suffix in O(n−i) — see the implementation
-    /// note in `docs/step4-buffer-plan.md`.
+    /// fixes up the surviving suffix in O(n−i).
     ///
     /// Algorithm:
     /// - `delta = new_text.len() - (range.end - range.start)` (signed).

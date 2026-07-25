@@ -20,7 +20,7 @@
 //! workload is the existing `rust_sample.kfx` path with `--tile 635`.
 //! The fixture format (`src/view/fixture.rs`) gives raw line text usable
 //! as buffer input; the segment-table portion is renderer-only and
-//! ignored here per `docs/step4-buffer-plan.md`.
+//! ignored here.
 
 use std::env;
 use std::path::PathBuf;
@@ -213,8 +213,7 @@ impl Rng {
 /// Returns `(buffer, len_bytes, input_line_count)`. Lines are joined with
 /// `'\n'` (no trailing newline added) to form a single contiguous UTF-8
 /// byte buffer; the initial piece table contains exactly one piece covering
-/// the whole span (per `docs/step4-buffer-plan.md` § "Piece-table
-/// construction from fixture"). No `'\r'` normalization is performed.
+/// the whole span. No `'\r'` normalization is performed.
 fn build_buffer(fixture: &Fixture) -> (TextBuffer, usize, usize) {
     let line_count = fixture.lines.len();
     let total_bytes: usize = fixture.lines.iter().map(|l| l.len() + 1).sum();
