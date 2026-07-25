@@ -163,6 +163,9 @@ impl BufferModel {
                     BufferAccessError::Closed => ContributionError::Closed,
                     _ => ContributionError::InvalidRange,
                 })?;
+            if self.buffer.is_empty() {
+                return Err(ContributionError::InvalidRange);
+            }
             validated.push((range, contribution.decoration));
         }
 
@@ -840,6 +843,30 @@ mod tests {
             .replace_contributions(source, &[], model.revision())
             .unwrap();
         assert!(model.resolved_decorations().is_empty());
+    }
+
+    #[test]
+    fn empty_buffer_contributions_are_rejected_recoverably() {
+        let mut model = BufferModel::from_text("");
+        let source = ContributionSource::BuiltIn;
+
+        assert_eq!(
+            model.replace_contributions(
+                source,
+                &[EditorContribution {
+                    range: ByteRange {
+                        start_byte_offset: 0,
+                        end_byte_offset: 0,
+                    },
+                    decoration: DecorationToken::Info,
+                }],
+                0,
+            ),
+            Err(ContributionError::InvalidRange)
+        );
+        assert!(model.contributions.sets.is_empty());
+        assert!(model.contributions.metadata.is_empty());
+        assert!(model.anchored_ranges.is_empty());
     }
 
     #[test]
