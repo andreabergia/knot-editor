@@ -508,45 +508,19 @@ mod tests {
 
     #[test]
     fn anchored_ranges_survive_or_get_consumed_through_forward_undo_redo() {
-        use crate::core::anchored_range::{
-            AnchoredRangeData, AnchoredRangeKind, AnchoredRangeStore,
-        };
+        use crate::core::anchored_range::AnchoredRangeStore;
 
         // "hello world": h0 e1 l2 l3 o4 SP5 w6 o7 r8 l9 d10. len 11.
         let mut b = TextBuffer::from_text("hello world");
         let mut store = AnchoredRangeStore::new();
         // Unaffected by the delete: stays put.
-        let unaffected = store.add(
-            &b,
-            0,
-            2,
-            AnchoredRangeKind::Search,
-            AnchoredRangeData::default(),
-        );
+        let unaffected = store.add(&b, 0, 2);
         // Both ends around the delete; end past `e` shifts by delete_len.
-        let bsticky = store.add(
-            &b,
-            3,
-            9,
-            AnchoredRangeKind::Diagnostic,
-            AnchoredRangeData::default(),
-        );
+        let bsticky = store.add(&b, 3, 9);
         // Spans across the delete boundary on both sides.
-        let partial = store.add(
-            &b,
-            4,
-            10,
-            AnchoredRangeKind::Git,
-            AnchoredRangeData::default(),
-        );
+        let partial = store.add(&b, 4, 10);
         // Wholly inside the delete: end + start strictly inside (s, e).
-        let victim = store.add(
-            &b,
-            6,
-            7,
-            AnchoredRangeKind::Breakpoint,
-            AnchoredRangeData::default(),
-        );
+        let victim = store.add(&b, 6, 7);
 
         // Forward: delete " wo" (bytes 5..8) -> "hellorld".
         let mut tx = EditTransaction::new();

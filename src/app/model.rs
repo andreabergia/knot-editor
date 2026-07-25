@@ -11,9 +11,7 @@ use gpui::{AppContext, Entity, WeakEntity};
 
 use crate::{
     core::{
-        anchored_range::{
-            AnchoredRangeData, AnchoredRangeId, AnchoredRangeKind, AnchoredRangeStore,
-        },
+        anchored_range::{AnchoredRangeId, AnchoredRangeStore},
         buffer::TextBuffer,
     },
     host::protocol::{
@@ -177,13 +175,9 @@ impl BufferModel {
 
         let mut anchored_range_ids = Vec::with_capacity(validated.len());
         for (range, decoration) in validated {
-            let id = self.anchored_ranges.add(
-                &self.buffer,
-                range.start,
-                range.end,
-                AnchoredRangeKind::Diagnostic,
-                AnchoredRangeData::default(),
-            );
+            let id = self
+                .anchored_ranges
+                .add(&self.buffer, range.start, range.end);
             self.contributions
                 .metadata
                 .insert(id, ContributionMetadata { decoration });

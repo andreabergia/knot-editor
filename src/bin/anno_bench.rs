@@ -38,9 +38,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 
-use knot::core::anchored_range::{
-    AnchoredRangeData, AnchoredRangeKind, AnchoredRangeStore, OffsetStore,
-};
+use knot::core::anchored_range::{AnchoredRangeStore, OffsetStore};
 use knot::core::buffer::TextBuffer;
 use knot::view::fixture::Fixture;
 
@@ -275,20 +273,12 @@ fn seed(cfg: &Cfg, buffer: &mut TextBuffer) -> (AnchoredRangeStore, OffsetStore,
     let mut rng = Rng::new(cfg.seed ^ 0x5A17);
     let total = buffer.len();
     let per_source = cfg.annotations / cfg.sources.max(1);
-    for src in 0..cfg.sources {
-        let kind = match src % 6 {
-            0 => AnchoredRangeKind::Diagnostic,
-            1 => AnchoredRangeKind::Search,
-            2 => AnchoredRangeKind::Git,
-            3 => AnchoredRangeKind::Breakpoint,
-            4 => AnchoredRangeKind::Folding,
-            _ => AnchoredRangeKind::Other(src as u8),
-        };
+    for _ in 0..cfg.sources {
         for _ in 0..per_source {
             let s = rng.below(total + 1);
             let e = rng.below(total + 1);
             let (s, e) = if s <= e { (s, e) } else { (e, s) };
-            let id = token_store.add(buffer, s, e, kind, AnchoredRangeData::default());
+            let id = token_store.add(buffer, s, e);
             offset_store.add(s, e);
             ids.push(id);
         }

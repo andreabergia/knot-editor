@@ -90,30 +90,12 @@ impl Anchor {
     }
 }
 
-/// Classification of an anchored range's source (step 6 composes by kind).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum AnchoredRangeKind {
-    Diagnostic,
-    Search,
-    Git,
-    Breakpoint,
-    Folding,
-    Other(u8),
-}
-
-/// Opaque per-source payload. Minimal owned placeholder for the prototype;
-/// step 6 supplies the real rendering data.
-#[derive(Clone, Debug, Default)]
-pub struct AnchoredRangeData(pub String);
-
-/// One anchored range: two anchored endpoints plus source metadata.
+/// One stable range with two anchored endpoints.
 #[derive(Clone, Debug)]
 pub struct AnchoredRange {
     pub id: AnchoredRangeId,
     pub start: Anchor,
     pub end: Anchor,
-    pub kind: AnchoredRangeKind,
-    pub data: AnchoredRangeData,
     /// Cached live resolved byte offsets, the authoritative transient state
     /// `stabilize` refreshes after every edit (see module docs). The
     /// `Position` tokens are re-anchored against these via `position_at`.
@@ -122,29 +104,23 @@ pub struct AnchoredRange {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-enum EndpointSide {
-    Start,
-    End,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-struct EndpointKey {
-    id: AnchoredRangeId,
-    side: EndpointSide,
+enum EndpointKey {
+    Start(AnchoredRangeId),
+    End(AnchoredRangeId),
 }
 
 impl EndpointKey {
     fn start(id: AnchoredRangeId) -> Self {
-        Self {
-            id,
-            side: EndpointSide::Start,
-        }
+        Self::Start(id)
     }
 
     fn end(id: AnchoredRangeId) -> Self {
-        Self {
-            id,
-            side: EndpointSide::End,
+        Self::End(id)
+    }
+
+    fn id(self) -> AnchoredRangeId {
+        match self {
+            Self::Start(id) | Self::End(id) => id,
         }
     }
 }
@@ -238,10 +214,10 @@ impl AnchoredRangeStore {
     }
 
     fn endpoint_pos(&self, key: EndpointKey) -> Option<Position> {
-        let ann = self.anchored_ranges.get(&key.id)?;
-        match key.side {
-            EndpointSide::Start => Some(ann.start.pos),
-            EndpointSide::End => Some(ann.end.pos),
+        let ann = self.anchored_ranges.get(&key.id())?;
+        match key {
+            EndpointKey::Start(_) => Some(ann.start.pos),
+            EndpointKey::End(_) => Some(ann.end.pos),
         }
     }
 
@@ -250,13 +226,13 @@ impl AnchoredRangeStore {
             return;
         };
         self.remove_endpoint_index(old_pos, key);
-        if let Some(ann) = self.anchored_ranges.get_mut(&key.id) {
-            match key.side {
-                EndpointSide::Start => {
+        if let Some(ann) = self.anchored_ranges.get_mut(&key.id()) {
+            match key {
+                EndpointKey::Start(_) => {
                     ann.start.pos = pos;
                     ann.idx_start = buffer.resolve(pos).unwrap_or(ann.idx_start);
                 }
-                EndpointSide::End => {
+                EndpointKey::End(_) => {
                     ann.end.pos = pos;
                     ann.idx_end = buffer.resolve(pos).unwrap_or(ann.idx_end);
                 }
@@ -270,10 +246,10 @@ impl AnchoredRangeStore {
             return;
         };
         self.remove_endpoint_index(old_pos, key);
-        if let Some(ann) = self.anchored_ranges.get_mut(&key.id) {
-            match key.side {
-                EndpointSide::Start => ann.idx_start = fallback_offset,
-                EndpointSide::End => ann.idx_end = fallback_offset,
+        if let Some(ann) = self.anchored_ranges.get_mut(&key.id()) {
+            match key {
+                EndpointKey::Start(_) => ann.idx_start = fallback_offset,
+                EndpointKey::End(_) => ann.idx_end = fallback_offset,
             }
         }
         self.unanchored_endpoints.insert(key);
@@ -324,14 +300,7 @@ impl AnchoredRangeStore {
     /// current logical text). The start endpoint defaults to `Before`
     /// (sticky-left) and the end to `After` (sticky-right) — standard
     /// selection semantics (D2).
-    pub fn add(
-        &mut self,
-        buffer: &TextBuffer,
-        start: usize,
-        end: usize,
-        kind: AnchoredRangeKind,
-        data: AnchoredRangeData,
-    ) -> AnchoredRangeId {
+    pub fn add(&mut self, buffer: &TextBuffer, start: usize, end: usize) -> AnchoredRangeId {
         let id = self.next_id;
         self.next_id += 1;
 
@@ -347,8 +316,6 @@ impl AnchoredRangeStore {
             id,
             start: start_a,
             end: end_a,
-            kind,
-            data,
             idx_start: start,
             idx_end: end,
         };
@@ -400,37 +367,6 @@ impl AnchoredRangeStore {
             .collect();
         // Already in start order from the sorted index.
         out
-    }
-
-    /// Like `query_range` but only returns anchored ranges whose `kind` is in
-    /// `kinds`. This is the composition surface for consumers that care about
-    /// only specific source types (e.g. gutter: diagnostics + breakpoints;
-    /// minimap: diagnostics + search + git).
-    pub fn query_range_for_kinds(
-        &mut self,
-        buffer: &TextBuffer,
-        a: usize,
-        b: usize,
-        kinds: &[AnchoredRangeKind],
-    ) -> Vec<AnchoredRangeId> {
-        if a >= b || kinds.is_empty() {
-            return Vec::new();
-        }
-        if self.index_dirty {
-            self.rebuild_index(buffer);
-        }
-        let kind_set: HashSet<AnchoredRangeKind> = kinds.iter().copied().collect();
-        let start_idx = self.interval_index.partition_point(|e| e.start < b);
-        self.interval_index[..start_idx]
-            .iter()
-            .filter(|e| e.end > a)
-            .filter(|e| {
-                self.anchored_ranges
-                    .get(&e.id)
-                    .map_or(false, |ann| kind_set.contains(&ann.kind))
-            })
-            .map(|e| e.id)
-            .collect()
     }
 
     /// Iterate over all live anchored ranges. Fully consumed anchored ranges are
@@ -542,7 +478,7 @@ impl AnchoredRangeStore {
                 let last_deleted = deleted_piece_lens.last().copied();
                 for piece in deleted_pieces {
                     for (offset, key) in self.endpoints_for_piece(*piece) {
-                        touched.insert(key.id);
+                        touched.insert(key.id());
                         let at_right_boundary = right_boundary_split
                             .map(|(p, off)| p == *piece && off == offset)
                             .unwrap_or(false);
@@ -556,7 +492,7 @@ impl AnchoredRangeStore {
                             && !at_elided_left_boundary
                             && !at_elided_right_boundary
                         {
-                            consumed.insert(key.id);
+                            consumed.insert(key.id());
                         }
                         if let Some(pos) = edge {
                             self.set_endpoint_pos(buffer, key, pos);
@@ -604,13 +540,13 @@ impl AnchoredRangeStore {
     fn move_unanchored_endpoints(&mut self, buffer: &TextBuffer, to: Position) {
         let keys: Vec<_> = self.unanchored_endpoints.iter().copied().collect();
         for key in keys {
-            if let Some(ann) = self.anchored_ranges.get_mut(&key.id) {
-                match key.side {
-                    EndpointSide::Start => {
+            if let Some(ann) = self.anchored_ranges.get_mut(&key.id()) {
+                match key {
+                    EndpointKey::Start(_) => {
                         ann.start.pos = to;
                         ann.idx_start = buffer.resolve(to).unwrap_or(ann.idx_start);
                     }
-                    EndpointSide::End => {
+                    EndpointKey::End(_) => {
                         ann.end.pos = to;
                         ann.idx_end = buffer.resolve(to).unwrap_or(ann.idx_end);
                     }
@@ -787,21 +723,9 @@ mod tests {
     fn add_and_resolve_round_trips() {
         let b = text();
         let mut store = AnchoredRangeStore::new();
-        let id = store.add(
-            &b,
-            0,
-            5,
-            AnchoredRangeKind::Diagnostic,
-            AnchoredRangeData::default(),
-        );
+        let id = store.add(&b, 0, 5);
         assert_eq!(store.resolve(&b, id), Some(0..5));
-        let id2 = store.add(
-            &b,
-            6,
-            11,
-            AnchoredRangeKind::Search,
-            AnchoredRangeData::default(),
-        );
+        let id2 = store.add(&b, 6, 11);
         assert_eq!(store.resolve(&b, id2), Some(6..11));
     }
 
@@ -809,13 +733,7 @@ mod tests {
     fn remove_drops_anchored_range() {
         let b = text();
         let mut store = AnchoredRangeStore::new();
-        let id = store.add(
-            &b,
-            0,
-            5,
-            AnchoredRangeKind::Diagnostic,
-            AnchoredRangeData::default(),
-        );
+        let id = store.add(&b, 0, 5);
         store.remove(id);
         assert!(store.resolve(&b, id).is_none());
         assert!(store.query_range(&b, 0, 11).is_empty());
@@ -826,13 +744,7 @@ mod tests {
         // start defaults to Before (sticky-left), end to After (sticky-right).
         let b = text();
         let mut store = AnchoredRangeStore::new();
-        let id = store.add(
-            &b,
-            0,
-            11,
-            AnchoredRangeKind::Diagnostic,
-            AnchoredRangeData::default(),
-        );
+        let id = store.add(&b, 0, 11);
         assert_eq!(
             store.anchored_ranges[&id].start.sticky(),
             Stickiness::Before
@@ -844,13 +756,7 @@ mod tests {
     fn insert_before_start_does_not_move_anchored_range() {
         let mut b = text();
         let mut store = AnchoredRangeStore::new();
-        let id = store.add(
-            &b,
-            6,
-            11,
-            AnchoredRangeKind::Search,
-            AnchoredRangeData::default(),
-        );
+        let id = store.add(&b, 6, 11);
         b.insert(0, ">>");
         store.stabilize(&b);
         // Both endpoints shifted by 2; the anchored range still covers "world".
@@ -863,13 +769,7 @@ mod tests {
         // the endpoint put (text lands before it).
         let mut b = text();
         let mut store = AnchoredRangeStore::new();
-        let id = store.add(
-            &b,
-            0,
-            5,
-            AnchoredRangeKind::Diagnostic,
-            AnchoredRangeData::default(),
-        );
+        let id = store.add(&b, 0, 5);
         b.insert(0, "X");
         store.stabilize(&b);
         // The `Before` start is sticky-left: it keeps pointing at the same
@@ -884,13 +784,7 @@ mod tests {
         // the endpoint past the inserted span.
         let mut b = text();
         let mut store = AnchoredRangeStore::new();
-        let id = store.add(
-            &b,
-            0,
-            5,
-            AnchoredRangeKind::Diagnostic,
-            AnchoredRangeData::default(),
-        );
+        let id = store.add(&b, 0, 5);
         b.insert(5, "X");
         store.stabilize(&b);
         assert_eq!(store.resolve(&b, id), Some(0..6));
@@ -900,13 +794,7 @@ mod tests {
     fn insert_at_after_end_extends() {
         let mut b = text();
         let mut store = AnchoredRangeStore::new();
-        let id = store.add(
-            &b,
-            0,
-            5,
-            AnchoredRangeKind::Diagnostic,
-            AnchoredRangeData::default(),
-        );
+        let id = store.add(&b, 0, 5);
         // "hello" then insert at offset 5 (right after "hello").
         b.insert(5, ">>>");
         store.stabilize(&b);
@@ -918,13 +806,7 @@ mod tests {
     fn delete_spanning_anchored_range_collapses_to_zero() {
         let mut b = text();
         let mut store = AnchoredRangeStore::new();
-        let id = store.add(
-            &b,
-            3,
-            8,
-            AnchoredRangeKind::Diagnostic,
-            AnchoredRangeData::default(),
-        );
+        let id = store.add(&b, 3, 8);
         // Delete [2, 9) which fully contains [3, 8).
         b.delete(2..9);
         store.stabilize(&b);
@@ -937,13 +819,7 @@ mod tests {
         let mut b = text();
         let mut store = AnchoredRangeStore::new();
         // "hello world": delete [0, 6) removes "hello " -> surviving "world".
-        let id = store.add(
-            &b,
-            2,
-            8,
-            AnchoredRangeKind::Diagnostic,
-            AnchoredRangeData::default(),
-        );
+        let id = store.add(&b, 2, 8);
         b.delete(0..6);
         store.stabilize(&b);
         // start (2) inside -> collapses to s=0; end (8) >= e=6 -> shifts to 2.
@@ -958,13 +834,7 @@ mod tests {
         let mut b = TextBuffer::from_text("abcdefghij"); // single piece, len 10
         let mut store = AnchoredRangeStore::new();
         // Anchor [2, 7): end at 7 is in the right half of the original piece.
-        let id = store.add(
-            &b,
-            2,
-            7,
-            AnchoredRangeKind::Diagnostic,
-            AnchoredRangeData::default(),
-        );
+        let id = store.add(&b, 2, 7);
         assert_eq!(store.resolve(&b, id), Some(2..7));
         // Insert at offset 4 splits the original piece; "bcdefg" (the content
         // between the endpoints) is now preceded by an extra byte.
@@ -978,20 +848,8 @@ mod tests {
     fn untouched_anchored_range_costs_nothing() {
         let mut b = text();
         let mut store = AnchoredRangeStore::new();
-        let touched = store.add(
-            &b,
-            0,
-            5,
-            AnchoredRangeKind::Diagnostic,
-            AnchoredRangeData::default(),
-        );
-        let _untouched = store.add(
-            &b,
-            6,
-            11,
-            AnchoredRangeKind::Search,
-            AnchoredRangeData::default(),
-        );
+        let touched = store.add(&b, 0, 5);
+        let _untouched = store.add(&b, 6, 11);
         // Edit at the start only affects the first anchored range.
         b.insert(0, "X");
         store.stabilize(&b);
@@ -1007,27 +865,9 @@ mod tests {
     fn query_range_returns_overlapping_excludes_nonoverlapping() {
         let b = text();
         let mut store = AnchoredRangeStore::new();
-        let a = store.add(
-            &b,
-            0,
-            5,
-            AnchoredRangeKind::Diagnostic,
-            AnchoredRangeData::default(),
-        );
-        let c = store.add(
-            &b,
-            6,
-            11,
-            AnchoredRangeKind::Search,
-            AnchoredRangeData::default(),
-        );
-        let _far = store.add(
-            &b,
-            9,
-            11,
-            AnchoredRangeKind::Git,
-            AnchoredRangeData::default(),
-        );
+        let a = store.add(&b, 0, 5);
+        let c = store.add(&b, 6, 11);
+        let _far = store.add(&b, 9, 11);
         let hits = store.query_range(&b, 4, 7);
         assert!(hits.contains(&a), "a [0,5) overlaps [4,7)");
         assert!(hits.contains(&c), "c [6,11) overlaps [4,7)");
@@ -1039,13 +879,7 @@ mod tests {
         let b = text();
         let mut store = AnchoredRangeStore::new();
         for i in 0..5 {
-            store.add(
-                &b,
-                i,
-                i + 2,
-                AnchoredRangeKind::Other(i as u8),
-                AnchoredRangeData::default(),
-            );
+            store.add(&b, i, i + 2);
         }
         // Every query must match a brute-force linear scan over resolved ranges.
         for a in 0..=11 {
@@ -1075,13 +909,7 @@ mod tests {
     fn query_range_stays_correct_after_unrelated_shift() {
         let mut b = text();
         let mut store = AnchoredRangeStore::new();
-        let id = store.add(
-            &b,
-            6,
-            11,
-            AnchoredRangeKind::Search,
-            AnchoredRangeData::default(),
-        );
+        let id = store.add(&b, 6, 11);
         b.insert(0, ">>");
         store.stabilize(&b);
         assert_eq!(store.resolve(&b, id), Some(8..13));
@@ -1094,13 +922,7 @@ mod tests {
         let b = text();
         let mut store = AnchoredRangeStore::new();
         for i in 0..5 {
-            store.add(
-                &b,
-                i,
-                i + 2,
-                AnchoredRangeKind::Other(i as u8),
-                AnchoredRangeData::default(),
-            );
+            store.add(&b, i, i + 2);
         }
         // A no-op stabilize marks the index dirty (lazy rebuild on next query).
         store.stabilize(&b);
@@ -1132,13 +954,7 @@ mod tests {
     fn zero_width_boundary_survives_empty_delete_and_reanchors_on_insert() {
         let mut b = TextBuffer::from_text("a");
         let mut store = AnchoredRangeStore::new();
-        let id = store.add(
-            &b,
-            1,
-            1,
-            AnchoredRangeKind::Search,
-            AnchoredRangeData::default(),
-        );
+        let id = store.add(&b, 1, 1);
         b.delete(0..1);
         store.stabilize(&b);
         assert_eq!(store.resolve(&b, id), Some(0..0));
@@ -1154,20 +970,8 @@ mod tests {
     fn fully_consumed_anchored_range_removed_not_tombstoned() {
         let mut b = TextBuffer::from_text("hello world");
         let mut store = AnchoredRangeStore::new();
-        let victim = store.add(
-            &b,
-            6,
-            7,
-            AnchoredRangeKind::Breakpoint,
-            AnchoredRangeData::default(),
-        );
-        let other = store.add(
-            &b,
-            0,
-            2,
-            AnchoredRangeKind::Search,
-            AnchoredRangeData::default(),
-        );
+        let victim = store.add(&b, 6, 7);
+        let other = store.add(&b, 0, 2);
 
         // Delete [5, 8) on "hello world" — fully contains [6, 7).
         b.delete(5..8);
@@ -1189,13 +993,7 @@ mod tests {
         assert_eq!(store.resolve(&b, other), Some(0..2));
 
         // A later add re-uses no id; the victim's id is gone for good.
-        let replacement = store.add(
-            &b,
-            6,
-            7,
-            AnchoredRangeKind::Breakpoint,
-            AnchoredRangeData::default(),
-        );
+        let replacement = store.add(&b, 6, 7);
         assert_ne!(replacement, victim, "monotonic ids; victim id not reused");
         assert_eq!(store.resolve(&b, replacement), Some(6..7));
     }
@@ -1206,13 +1004,7 @@ mod tests {
         // anchored range; the provider must re-publish under a fresh id.
         let mut b = TextBuffer::from_text("hello world");
         let mut store = AnchoredRangeStore::new();
-        let victim = store.add(
-            &b,
-            6,
-            7,
-            AnchoredRangeKind::Breakpoint,
-            AnchoredRangeData::default(),
-        );
+        let victim = store.add(&b, 6, 7);
 
         b.delete(5..8); // "hellorld", victim fully consumed
         store.stabilize(&b);
@@ -1305,13 +1097,7 @@ mod tests {
             let s = rng.below(b.len() + 1);
             let e = rng.below(b.len() + 1);
             let (s, e) = if s <= e { (s, e) } else { (e, s) };
-            let id = store.add(
-                &b,
-                s,
-                e,
-                AnchoredRangeKind::Other(0),
-                AnchoredRangeData::default(),
-            );
+            let id = store.add(&b, s, e);
             o_start.push(s);
             o_end.push(e);
             ids.push(id);
@@ -1412,287 +1198,5 @@ mod tests {
             // Cross-check the buffer text itself stayed faithful.
             assert_eq!(b.read_range(0..b.len()), text, "buffer text drifted");
         }
-    }
-
-    // ---- Step 6 composition stress test ---------------------------------
-
-    /// Build a multi-line buffer. Each line is `"line {:>3}"` for n lines.
-    fn multi_line(n: usize) -> TextBuffer {
-        let mut s = String::new();
-        for i in 0..n {
-            use std::fmt::Write;
-            let _ = writeln!(s, "line {:>3}", i);
-        }
-        TextBuffer::from_text(&*s)
-    }
-
-    /// Byte offset of the start of line `ln` in a buffer built by `multi_line`.
-    fn line_start(n: usize) -> usize {
-        // "line {:>3}\n" = 9 bytes per line.
-        n * 9
-    }
-
-    #[test]
-    fn composition_five_sources_three_consumers() {
-        let b = multi_line(80);
-        let mut store = AnchoredRangeStore::new();
-
-        // ---- 5 independent sources ----
-
-        // Source 1: Diagnostics — error on line 5, warning on line 20, info on line 50.
-        let diag1 = store.add(
-            &b,
-            line_start(5),
-            line_start(5) + 8,
-            AnchoredRangeKind::Diagnostic,
-            AnchoredRangeData("error: unused variable".into()),
-        );
-        let diag2 = store.add(
-            &b,
-            line_start(20),
-            line_start(20) + 8,
-            AnchoredRangeKind::Diagnostic,
-            AnchoredRangeData("warning: snake_case".into()),
-        );
-        let diag3 = store.add(
-            &b,
-            line_start(50),
-            line_start(50) + 8,
-            AnchoredRangeKind::Diagnostic,
-            AnchoredRangeData("info: dead code".into()),
-        );
-
-        // Source 2: Search — matches on lines 2, 5, 18, 20, 75.
-        let _sr1 = store.add(
-            &b,
-            line_start(2),
-            line_start(2) + 4,
-            AnchoredRangeKind::Search,
-            AnchoredRangeData("match".into()),
-        );
-        let sr2 = store.add(
-            &b,
-            line_start(5),
-            line_start(5) + 4,
-            AnchoredRangeKind::Search,
-            AnchoredRangeData("match".into()),
-        );
-        let _sr3 = store.add(
-            &b,
-            line_start(18),
-            line_start(18) + 4,
-            AnchoredRangeKind::Search,
-            AnchoredRangeData("match".into()),
-        );
-        let _sr4 = store.add(
-            &b,
-            line_start(20),
-            line_start(20) + 4,
-            AnchoredRangeKind::Search,
-            AnchoredRangeData("match".into()),
-        );
-        let _sr5 = store.add(
-            &b,
-            line_start(75),
-            line_start(75) + 4,
-            AnchoredRangeKind::Search,
-            AnchoredRangeData("match".into()),
-        );
-
-        // Source 3: Git hunks — added lines 10-15, modified lines 60-65.
-        let git1 = store.add(
-            &b,
-            line_start(10),
-            line_start(15) + 8,
-            AnchoredRangeKind::Git,
-            AnchoredRangeData("added".into()),
-        );
-        let _git2 = store.add(
-            &b,
-            line_start(60),
-            line_start(65) + 8,
-            AnchoredRangeKind::Git,
-            AnchoredRangeData("modified".into()),
-        );
-
-        // Source 4: Breakpoints — line 10 and line 40 (1-byte for range query).
-        let bp1 = store.add(
-            &b,
-            line_start(10),
-            line_start(10) + 1,
-            AnchoredRangeKind::Breakpoint,
-            AnchoredRangeData("".into()),
-        );
-        let bp2 = store.add(
-            &b,
-            line_start(40),
-            line_start(40) + 1,
-            AnchoredRangeKind::Breakpoint,
-            AnchoredRangeData("".into()),
-        );
-
-        // Source 5: Folding — region spanning lines 30-45.
-        let fold1 = store.add(
-            &b,
-            line_start(30),
-            line_start(45) + 8,
-            AnchoredRangeKind::Folding,
-            AnchoredRangeData("collapsed region".into()),
-        );
-
-        // ---- Verify total count (13 = 3+5+2+2+1) ----
-        assert_eq!(store.len(), 13, "total anchored range count");
-        let live_count = store.iter_live().count();
-        assert_eq!(live_count, 13, "all should be live");
-
-        // ---- Consumer: editor view (all kinds) ----
-        let editor_visible = store.query_range(&b, 0, b.len());
-        assert_eq!(editor_visible.len(), 13);
-
-        // ---- Consumer: gutter (diagnostics + breakpoints) ----
-        let gutter = store.query_range_for_kinds(
-            &b,
-            0,
-            b.len(),
-            &[AnchoredRangeKind::Diagnostic, AnchoredRangeKind::Breakpoint],
-        );
-        assert_eq!(gutter.len(), 5, "gutter: 3 diagnostics + 2 breakpoints");
-        assert!(gutter.contains(&diag1));
-        assert!(gutter.contains(&diag2));
-        assert!(gutter.contains(&diag3));
-        assert!(gutter.contains(&bp1));
-        assert!(gutter.contains(&bp2));
-
-        // ---- Consumer: minimap (diagnostics + search + git) ----
-        let minimap = store.query_range_for_kinds(
-            &b,
-            0,
-            b.len(),
-            &[
-                AnchoredRangeKind::Diagnostic,
-                AnchoredRangeKind::Search,
-                AnchoredRangeKind::Git,
-            ],
-        );
-        assert_eq!(minimap.len(), 10, "minimap: 3+5+2");
-        // Should NOT include breakpoints or folding.
-        assert!(!minimap.contains(&bp1));
-        assert!(!minimap.contains(&bp2));
-        assert!(!minimap.contains(&fold1));
-
-        // ---- Sub-range query: line 5 area (diagnostic + search overlap) ----
-        let line5_range = store.query_range(&b, line_start(5), line_start(6));
-        assert!(line5_range.contains(&diag1), "diagnostic on line 5");
-        assert!(line5_range.contains(&sr2), "search match on line 5");
-        assert_eq!(line5_range.len(), 2, "exactly two on line 5");
-        // Filter to only diagnostics:
-        let line5_diag = store.query_range_for_kinds(
-            &b,
-            line_start(5),
-            line_start(6),
-            &[AnchoredRangeKind::Diagnostic],
-        );
-        assert_eq!(line5_diag, vec![diag1]);
-        // Filter to only search:
-        let line5_search = store.query_range_for_kinds(
-            &b,
-            line_start(5),
-            line_start(6),
-            &[AnchoredRangeKind::Search],
-        );
-        assert_eq!(line5_search, vec![sr2]);
-
-        // ---- Sub-range query: line 10 (git + breakpoint overlap) ----
-        let line10_range = store.query_range(&b, line_start(10), line_start(11));
-        assert!(line10_range.contains(&git1));
-        assert!(line10_range.contains(&bp1));
-
-        // ---- 6th source: no store changes needed ----
-        let lint1 = store.add(
-            &b,
-            line_start(3),
-            line_start(3) + 8,
-            AnchoredRangeKind::Other(0),
-            AnchoredRangeData("lint: prefer const".into()),
-        );
-        assert_eq!(store.len(), 14, "6th source added without store changes");
-        // Lint appears in all-kinds query:
-        let all = store.query_range(&b, 0, b.len());
-        assert!(all.contains(&lint1));
-        assert_eq!(all.len(), 14);
-        // Lint is excluded from gutter:
-        let gutter2 = store.query_range_for_kinds(
-            &b,
-            0,
-            b.len(),
-            &[AnchoredRangeKind::Diagnostic, AnchoredRangeKind::Breakpoint],
-        );
-        assert!(!gutter2.contains(&lint1));
-        // Query by Other(0) only:
-        let lint_only = store.query_range_for_kinds(&b, 0, b.len(), &[AnchoredRangeKind::Other(0)]);
-        assert_eq!(lint_only, vec![lint1]);
-
-        // ---- iter_live reflects removal ----
-        store.remove(lint1);
-        assert_eq!(
-            store.iter_live().count(),
-            13,
-            "removed anchored range excluded from iter_live"
-        );
-        assert_eq!(store.len(), 13, "len reflects removal too");
-    }
-
-    #[test]
-    fn composition_survives_edits() {
-        // Multiple sources, edits shift anchored ranges independently.
-        let mut b = multi_line(20);
-        let mut store = AnchoredRangeStore::new();
-
-        let d = store.add(
-            &b,
-            line_start(3),
-            line_start(3) + 8,
-            AnchoredRangeKind::Diagnostic,
-            AnchoredRangeData::default(),
-        );
-        let s = store.add(
-            &b,
-            line_start(5),
-            line_start(5) + 4,
-            AnchoredRangeKind::Search,
-            AnchoredRangeData::default(),
-        );
-        let g = store.add(
-            &b,
-            line_start(8),
-            line_start(12) + 8,
-            AnchoredRangeKind::Git,
-            AnchoredRangeData::default(),
-        );
-
-        // Insert 2 lines at line 0: all anchored ranges shift.
-        b.insert(0, "preamble A\n");
-        b.insert(0, "preamble B\n");
-        store.stabilize(&b);
-
-        let all = store.query_range(&b, 0, b.len());
-        assert_eq!(all.len(), 3, "all three survive the edit");
-
-        // Per-kind queries still work after edit.
-        let diags = store.query_range_for_kinds(&b, 0, b.len(), &[AnchoredRangeKind::Diagnostic]);
-        assert_eq!(diags, vec![d]);
-        let search = store.query_range_for_kinds(&b, 0, b.len(), &[AnchoredRangeKind::Search]);
-        assert_eq!(search, vec![s]);
-        let git = store.query_range_for_kinds(&b, 0, b.len(), &[AnchoredRangeKind::Git]);
-        assert_eq!(git, vec![g]);
-
-        // Delete the first 4 lines (the two preamble + original lines 0-1).
-        // Each line is 9 bytes, so delete [0, 36).
-        b.delete(0..36);
-        store.stabilize(&b);
-
-        // All three should still be live (they were on lines 3,5,8-12, now
-        // shifted up by 2 lines = 20 bytes).
-        assert_eq!(store.query_range(&b, 0, b.len()).len(), 3);
     }
 }
