@@ -410,33 +410,42 @@ cache; it does not justify a public byte-oriented API.
 
 ## 8. Extension view API
 
+Plan and agreed decisions are recorded in
+`docs/step8-extension-view-plan.md`.
+
 Views are a separate exploration from commands and events. Extension code runs
 away from the UI thread and must not receive gpui or native rendering objects,
 so the important question is what public UI model crosses that boundary.
 
-Explore two related but distinct surfaces:
+Explore two related but distinct semantic surfaces:
 
-- **Custom views:** find the smallest Knot-owned UI model that lets JavaScript
-  describe a useful non-editor view, update it, and handle user interaction.
-  Prototype one nontrivial view and verify that rendering never waits on
-  synchronous JavaScript execution. Confirm failure and disposal remove the
-  view cleanly.
+- **Native tree-provider surface:** replace the outline fixture with a native
+  tree view populated asynchronously by an extension-owned data provider.
+  Native code owns layout, selection, focus, scrolling, interaction state, and
+  future accessibility mapping. Rendering must never wait on synchronous
+  JavaScript execution; failure and disposal remove provider state cleanly.
 - **Native editor contributions:** keep text shaping, selection, IME,
   accessibility, and low-level rendering native, while extensions contribute
-  decorations, gutters, and contextual behavior through public APIs. Built-in
-  high-level features should use those same contribution points.
+  anchored decorations, gutter markers, and command-backed actions through
+  public APIs. Built-in high-level features should use the same native
+  contribution registry.
 
 Use two views of one buffer to confirm that cursor, selection, folding, scroll,
 and rendering choices remain per-view state. Investigate whether the chosen
-custom-view model has a plausible accessibility path; production accessibility
-support is not part of the prototype.
+semantic tree model preserves enough information for a plausible accessibility
+path; production accessibility support is not part of the prototype.
+
+Do not build a general Knot widget tree or declarative layout language.
+Text-oriented surfaces should remain buffer-backed. Arbitrary custom UI and a
+possible WebView escape hatch are deferred.
 
 Do not mix capability-provider aggregation or replaceable capability surfaces
 into this experiment; those need their own concrete feature later.
 
-**Question answered:** what extension-facing view model is expressive and
-responsive across the isolate/UI-thread boundary, and where is the boundary
-between custom views and contributions to the native editor view?
+**Question answered:** are semantic native provider/contribution APIs
+expressive and responsive across the isolate/UI-thread boundary without Knot
+inventing a general UI framework, and where is the boundary between shared
+buffer data and per-view presentation state?
 
 ---
 
