@@ -257,17 +257,6 @@ land.
    minimal edit sequence. Cover other stickiness combinations if a custom
    constructor is introduced.
 
-### Review follow-up
-
-1. ✅ Reject contribution publication to an empty buffer as a recoverable
-   invalid-range error.
-2. ✅ Remove consumed anchored-range IDs from contribution ownership and
-   metadata during stabilization.
-3. ✅ Describe decoration precedence without claiming a durable exact-overlap
-   composition policy.
-4. ✅ Keep core anchored-range module documentation limited to current behavior
-   and document lazy interval-index rebuilding accurately.
-
 ### 2. Expose editor contributions to JavaScript
 
 1. ⬜ Add Knot-owned protocol types and recoverable errors for contribution-set
