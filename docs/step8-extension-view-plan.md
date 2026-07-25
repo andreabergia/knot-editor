@@ -304,7 +304,7 @@ land.
 
 ### 5. Responsiveness, lifecycle, and decision evidence
 
-1. ⬜ Make the fixture tree provider deliberately await before returning
+1. ✅ Make the fixture tree provider deliberately await before returning
    children. During the wait, verify foreground heartbeat, editor input,
    scrolling, and painting continue.
 2. ⬜ Fail one tree callback and terminate one contributing extension. Verify

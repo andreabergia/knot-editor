@@ -148,6 +148,8 @@ pub struct EditorView {
     /// `unmark_text`. The element paints an underline over this span.
     marked_range_utf16: Option<Range<usize>>,
     focus: FocusHandle,
+    #[cfg(test)]
+    paint_count: u64,
     _model_subscription: Subscription,
     _release_subscription: Subscription,
 }
@@ -156,6 +158,11 @@ impl EditorView {
     #[cfg(test)]
     pub(crate) fn model(&self) -> &Entity<BufferModel> {
         &self.model
+    }
+
+    #[cfg(test)]
+    pub(crate) fn responsiveness_state(&self) -> (usize, f32, u64) {
+        (self.cursor_line, self.scroll, self.paint_count)
     }
 
     /// Build an editor preloaded with a styled fixture.
@@ -284,6 +291,8 @@ impl EditorView {
             selection_reversed: false,
             marked_range_utf16: None,
             focus: cx.focus_handle(),
+            #[cfg(test)]
+            paint_count: 0,
             _model_subscription: model_subscription,
             _release_subscription: release_subscription,
         }
@@ -1499,6 +1508,10 @@ impl Element for EditorElement {
         self.entity.update(cx, |view, _cx| {
             view.viewport_h = viewport_h;
             view.bounds = bounds;
+            #[cfg(test)]
+            {
+                view.paint_count += 1;
+            }
         });
 
         // Register the IME input handler. `handle_input` self-gates on

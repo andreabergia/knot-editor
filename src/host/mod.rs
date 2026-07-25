@@ -273,6 +273,9 @@ globalThis.__knotRequestTreeChildren = async (registration, parentId, generation
   }
 };
 
+globalThis.__knotFixtureDelay = (milliseconds) =>
+  nativeOps.op_fixture_delay(milliseconds);
+
 globalThis.__knotInvokeCommand = async (registration, activeHandle) => {
   const handler = commandHandlers.get(registration);
   if (!handler) throw new Error("Knot command registration is disposed");
@@ -411,6 +414,7 @@ deno_core::extension!(
         op_tree_invalidate,
         op_tree_unregister,
         op_tree_children_complete,
+        op_fixture_delay,
         op_fixture_shared_host_runtime,
     ],
 );
@@ -418,7 +422,18 @@ deno_core::extension!(
 /// Shared native work available to ops without moving V8 off its extension
 /// thread.
 #[derive(Clone)]
-struct HostAsyncRuntime(tokio::runtime::Handle);
+struct HostAsyncRuntime(Arc<tokio::runtime::Runtime>);
+
+#[deno_core::op2]
+async fn op_fixture_delay(state: Rc<RefCell<OpState>>, #[number] milliseconds: u64) {
+    let runtime = state.borrow().borrow::<HostAsyncRuntime>().0.clone();
+    runtime
+        .spawn(async move {
+            tokio::time::sleep(Duration::from_millis(milliseconds)).await;
+        })
+        .await
+        .expect("Knot fixture delay task panicked");
+}
 
 #[deno_core::op2]
 #[string]
@@ -1764,7 +1779,7 @@ impl ExtensionRuntime {
         js_runtime
             .op_state()
             .borrow_mut()
-            .put(HostAsyncRuntime(async_runtime.handle().clone()));
+            .put(HostAsyncRuntime(async_runtime));
         js_runtime
             .op_state()
             .borrow_mut()

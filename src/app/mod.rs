@@ -91,6 +91,9 @@ if (contributionStartUtf16 >= 0) {
 }
 await workbench.registerTreeDataProvider("outline", {
   async getChildren(parentId) {
+    if (parentId === null) {
+      await globalThis.__knotFixtureDelay(150);
+    }
     if (parentId === null) return [
       { id: "shell", label: "struct Shell", icon: "symbol", collapsibleState: "expanded" },
       { id: "render", label: "impl Render", icon: "symbol", collapsibleState: "collapsed" },
@@ -1148,7 +1151,7 @@ pub fn run() {
 mod tests {
     use std::time::Duration;
 
-    use gpui::{AppContext, Entity, TestAppContext};
+    use gpui::{AppContext, Entity, Focusable, TestAppContext};
 
     use super::{ContributionSource, Shell, editor::EditorContributionAction};
     use crate::host::{
@@ -1578,6 +1581,51 @@ mod tests {
         cx.executor().advance_clock(Duration::from_millis(500));
         cx.run_until_parked();
         assert!(cx.read(|cx| shell.read(cx).heartbeat) > heartbeat);
+    }
+
+    #[gpui::test]
+    async fn slow_tree_provider_does_not_block_foreground_work(cx: &mut TestAppContext) {
+        let runtime = V8Host::new()
+            .spawn_extension(ExtensionId::new(11))
+            .into_parts();
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(runtime, cx));
+        wait_for_runtime_state(&shell, "tree-loading", cx).await;
+
+        let (heartbeat, paint_count) = cx.read(|cx| {
+            let shell = shell.read(cx);
+            (
+                shell.heartbeat,
+                shell.editor.read(cx).responsiveness_state().2,
+            )
+        });
+        cx.update(|window, cx| {
+            shell
+                .read(cx)
+                .editor
+                .read(cx)
+                .focus_handle(cx)
+                .focus(window);
+        });
+        cx.run_until_parked();
+        cx.simulate_input("x");
+        cx.simulate_keystrokes("pagedown");
+        cx.executor().advance_clock(Duration::from_millis(500));
+        cx.refresh().unwrap();
+        cx.run_until_parked();
+
+        cx.read(|cx| {
+            let shell = shell.read(cx);
+            let editor = shell.editor.read(cx);
+            let (cursor_line, scroll, paints) = editor.responsiveness_state();
+            assert!(shell.outline.read(cx).is_loading());
+            assert!(shell.heartbeat > heartbeat);
+            assert!(editor.model().read(cx).text().starts_with('x'));
+            assert!(cursor_line > 0);
+            assert!(scroll > 0.);
+            assert!(paints > paint_count);
+        });
+
+        wait_for_runtime_state(&shell, "running", cx).await;
     }
 
     #[gpui::test]
