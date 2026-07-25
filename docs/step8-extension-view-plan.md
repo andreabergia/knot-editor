@@ -291,13 +291,14 @@ land.
 
 ### 4. Prove shared-buffer/per-view ownership
 
-1. ⬜ Create two `EditorView` entities backed by one `BufferModel`.
-2. ⬜ Verify that an edit and shared contributions appear in both views.
-3. ⬜ Give the views distinct cursors, selections, scroll positions, and
+1. ✅ Create two `EditorView` entities backed by one `BufferModel`.
+2. ✅ Verify that an edit and shared contributions appear in both views.
+3. ✅ Give the views distinct cursors, selections, scroll positions, and
    rendering choices; changing one must not mutate the other.
-4. ⬜ Exercise distinct collapsed-fold state if folding is cheap to expose
-   from the existing fixture. Otherwise verify the ownership boundary with a
-   focused model test and leave actual folding UI deferred.
+4. ⏭️ *Defer:* Exercise distinct collapsed-fold state when folding is exposed.
+   The focused two-view model test verifies the ownership boundary across the
+   view-local mutable state that exists today; adding folding state without
+   folding behavior would not strengthen the prototype evidence.
 
 ### 5. Responsiveness, lifecycle, and decision evidence
 

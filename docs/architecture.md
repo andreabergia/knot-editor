@@ -95,12 +95,15 @@ Each buffer has at most one atomic contribution set per `ContributionSource`.
 A source is either built-in code or an extension identity plus its unique
 lifecycle. Lifecycle cleanup removes only the set published by that runtime
 incarnation.
-`EditorView` owns cursor, selection, scroll, IME, and derived line, segment,
-decoration, gutter-marker, and contribution-action projections. Contribution
-actions emit semantic command requests; the shell rechecks that the current
-contribution and command registration have the same live extension lifecycle
-before dispatch. Local edits commit through the model and model notifications
-refresh view projections. A foreground-local bridge task
+Each `EditorView` owns cursor, selection, scroll, focus, IME, rendering
+choices, and derived line, segment, decoration, gutter-marker, and
+contribution-action projections. Multiple editor-view entities may observe the
+same `BufferModel`; model notifications update their text and contribution
+projections independently without coupling their presentation state.
+Contribution actions emit semantic command requests; the shell rechecks that
+the current contribution and command registration have the same live extension
+lifecycle before dispatch. Local edits commit through the model and model
+notifications refresh view projections. A foreground-local bridge task
 owns each extension request inbox and dispatches requests synchronously against
 the registry and its entities between awaits.
 
@@ -124,9 +127,12 @@ gpui Shell / BufferRegistry
 TextBuffer  AnchoredRange  ContributionSource
                Store       → ContributionSet
        \       |       /
-        model notification
-             v
- EditorView projection and view state
+        model notifications
+          /           \
+         v             v
+ EditorView A       EditorView B
+ projection and     projection and
+ view state         view state
 ```
 
 ## Extension host

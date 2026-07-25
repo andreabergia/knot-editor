@@ -83,12 +83,27 @@ pub(crate) struct EditorContributionAction {
     pub source: ContributionSource,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct EditorRenderingOptions {
+    pub show_gutter_markers: bool,
+}
+
+impl Default for EditorRenderingOptions {
+    fn default() -> Self {
+        Self {
+            show_gutter_markers: true,
+        }
+    }
+}
+
 const DEFAULT_COLOR: u32 = 0xC0C0C0;
 const ERROR_COLOR: u32 = 0xF48771;
 const WARNING_COLOR: u32 = 0xE2C08D;
 const INFO_COLOR: u32 = 0x6CB6FF;
 
 pub struct EditorView {
+    element_id: usize,
+    rendering: EditorRenderingOptions,
     /// Authoritative document state. Everything below is presentation state
     /// or a derived rendering projection.
     model: Entity<BufferModel>,
@@ -143,6 +158,16 @@ impl EditorView {
     pub fn from_fixture(
         fixture: &crate::view::fixture::Fixture,
         model: Entity<BufferModel>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self::from_fixture_with_options(fixture, model, 0, EditorRenderingOptions::default(), cx)
+    }
+
+    pub(crate) fn from_fixture_with_options(
+        fixture: &crate::view::fixture::Fixture,
+        model: Entity<BufferModel>,
+        element_id: usize,
+        rendering: EditorRenderingOptions,
         cx: &mut Context<Self>,
     ) -> Self {
         let n = fixture.line_count();
@@ -223,6 +248,8 @@ impl EditorView {
         });
 
         Self {
+            element_id,
+            rendering,
             model,
             lines,
             segs,
@@ -1212,7 +1239,7 @@ impl Render for EditorView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let entity = cx.entity();
         div()
-            .id("editor")
+            .id(("editor", self.element_id))
             .size_full()
             .bg(rgb(0x1e1e1e))
             // Track focus so clicking the pane focuses this view (gpui
@@ -1368,12 +1395,15 @@ impl Element for EditorElement {
                 .filter(|a| a.line >= first && a.line < last)
                 .copied()
                 .collect();
-            let gutter_markers = view
-                .gutter_markers
-                .iter()
-                .filter(|marker| marker.line >= first && marker.line < last)
-                .copied()
-                .collect();
+            let gutter_markers = if view.rendering.show_gutter_markers {
+                view.gutter_markers
+                    .iter()
+                    .filter(|marker| marker.line >= first && marker.line < last)
+                    .copied()
+                    .collect()
+            } else {
+                Vec::new()
+            };
             (
                 view.scroll,
                 max,
@@ -1797,10 +1827,10 @@ mod tests {
     use gpui::{AppContext, TestAppContext};
 
     use super::{
-        BufferModel, ContributionSource, EditorView, ResolvedEditorContribution,
-        default_projection, project_contributions,
+        BufferModel, ContributionSource, EditorRenderingOptions, EditorView,
+        ResolvedEditorContribution, default_projection, project_contributions,
     };
-    use crate::host::protocol::{ByteRange, DecorationToken, GutterToken};
+    use crate::host::protocol::{ByteRange, DecorationToken, EditorContribution, GutterToken};
     use crate::view::fixture::Fixture;
 
     #[test]
@@ -1883,6 +1913,81 @@ mod tests {
                 let utf16 = editor.to_flat_utf16(line, byte_col);
                 assert_eq!(editor.from_flat_utf16(utf16), (line, byte_col));
             }
+        });
+    }
+
+    #[gpui::test]
+    fn views_share_model_state_and_keep_presentation_state_independent(cx: &mut TestAppContext) {
+        let fixture = Fixture::from_lines(vec!["one".into(), "two".into(), "three".into()]);
+        let model = cx.new(|_| BufferModel::from_text(fixture.lines.join("\n")));
+        let first = cx.new(|cx| EditorView::from_fixture(&fixture, model.clone(), cx));
+        let second = cx.new(|cx| {
+            EditorView::from_fixture_with_options(
+                &fixture,
+                model.clone(),
+                1,
+                EditorRenderingOptions {
+                    show_gutter_markers: false,
+                },
+                cx,
+            )
+        });
+
+        first.update(cx, |view, _| {
+            view.cursor_line = 1;
+            view.cursor_col = 2;
+            view.anchor_line = 0;
+            view.anchor_col = 1;
+            view.has_selection = true;
+            view.scroll = 20.;
+        });
+        second.update(cx, |view, _| {
+            view.cursor_line = 2;
+            view.cursor_col = 3;
+            view.scroll = 40.;
+        });
+
+        model.update(cx, |model, cx| {
+            assert!(model.replace(0..0, "shared\n"));
+            model
+                .replace_contributions(
+                    ContributionSource::BuiltIn,
+                    &[EditorContribution {
+                        range: ByteRange {
+                            start_byte_offset: 0,
+                            end_byte_offset: 6,
+                        },
+                        decoration: Some(DecorationToken::Warning),
+                        gutter: Some(GutterToken::Warning),
+                        command: None,
+                    }],
+                    model.revision(),
+                )
+                .unwrap();
+            cx.notify();
+        });
+        cx.run_until_parked();
+
+        cx.read(|cx| {
+            let first = first.read(cx);
+            let second = second.read(cx);
+
+            assert_eq!(first.model, second.model);
+            assert_eq!(first.lines, second.lines);
+            assert_eq!(first.lines[0], "shared");
+            assert_eq!(first.decorations.len(), 1);
+            assert_eq!(first.decorations.len(), second.decorations.len());
+            assert_eq!(first.gutter_markers.len(), second.gutter_markers.len());
+
+            assert_eq!((first.cursor_line, first.cursor_col), (1, 2));
+            assert_eq!((second.cursor_line, second.cursor_col), (2, 3));
+            assert!(first.has_selection);
+            assert!(!second.has_selection);
+            assert_eq!(first.scroll, 20.);
+            assert_eq!(second.scroll, 40.);
+            assert!(first.rendering.show_gutter_markers);
+            assert!(!second.rendering.show_gutter_markers);
+            assert_ne!(first.focus, second.focus);
         });
     }
 }

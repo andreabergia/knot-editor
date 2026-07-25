@@ -23,7 +23,9 @@ mod editor;
 pub mod model;
 mod tree_view;
 
-use editor::{EditorContributionAction, EditorView, seed_fixture_contributions};
+use editor::{
+    EditorContributionAction, EditorRenderingOptions, EditorView, seed_fixture_contributions,
+};
 use model::{
     BufferAccessError, BufferModel, BufferRegistry, BufferSubscriptionRegistry, CommandRegistry,
     ContributionError, ContributionSource,
@@ -167,9 +169,9 @@ struct Shell {
     /// `(which, start_x, start_width)` captured on the first drag-move event
     /// of an in-progress divider drag; cleared on drop.
     drag_origin: Option<(usize, Pixels, f32)>,
-    /// Owned as an `Entity` so the custom editor element can read its state
-    /// during each paint.
+    /// Each view is an independent presentation over the active shared model.
     editor: Entity<EditorView>,
+    secondary_editor: Entity<EditorView>,
     buffer_registry: BufferRegistry,
     buffer_subscriptions: BufferSubscriptionRegistry,
     command_registry: CommandRegistry,
@@ -190,7 +192,7 @@ struct Shell {
     _runtime_bridge_tasks: Vec<Task<()>>,
     _runtime_execution_task: Task<()>,
     _model_subscription: Subscription,
-    _editor_action_subscription: Subscription,
+    _editor_action_subscriptions: Vec<Subscription>,
     _tree_view_subscription: Subscription,
     _heartbeat_task: Task<()>,
     /// Name of the fixture currently loaded (shown in a thin status header
@@ -246,8 +248,25 @@ impl Shell {
         let handle = buffer_registry.open(&model);
         buffer_registry.set_active(Some(handle));
         let editor = cx.new(|cx| EditorView::from_fixture(&fixture, model.clone(), cx));
+        let secondary_editor = cx.new(|cx| {
+            EditorView::from_fixture_with_options(
+                &fixture,
+                model.clone(),
+                1,
+                EditorRenderingOptions {
+                    show_gutter_markers: false,
+                },
+                cx,
+            )
+        });
         let editor_action_subscription = cx.subscribe(
             &editor,
+            |this, _editor, action: &EditorContributionAction, cx| {
+                this.invoke_contribution_action(action, cx);
+            },
+        );
+        let secondary_editor_action_subscription = cx.subscribe(
+            &secondary_editor,
             |this, _editor, action: &EditorContributionAction, cx| {
                 this.invoke_contribution_action(action, cx);
             },
@@ -346,6 +365,7 @@ impl Shell {
             right_width: 220.,
             drag_origin: None,
             editor,
+            secondary_editor,
             buffer_registry,
             buffer_subscriptions: BufferSubscriptionRegistry::new(),
             command_registry: CommandRegistry::new(),
@@ -363,7 +383,10 @@ impl Shell {
             _runtime_bridge_tasks: runtime_bridge_tasks,
             _runtime_execution_task: runtime_execution_task,
             _model_subscription: model_subscription,
-            _editor_action_subscription: editor_action_subscription,
+            _editor_action_subscriptions: vec![
+                editor_action_subscription,
+                secondary_editor_action_subscription,
+            ],
             _tree_view_subscription: tree_view_subscription,
             _heartbeat_task: heartbeat_task,
             fixture_name,
@@ -990,7 +1013,45 @@ impl Render for Shell {
                             .bg(rgb(0x252526))
                             .child(self.fixture_name.clone()),
                     )
-                    .child(div().flex_1().child(self.editor.clone()))
+                    .child(
+                        div()
+                            .flex_1()
+                            .flex()
+                            .flex_row()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .h_full()
+                                    .flex()
+                                    .flex_col()
+                                    .child(
+                                        div()
+                                            .px_2()
+                                            .py_1()
+                                            .text_xs()
+                                            .text_color(rgb(0x777777))
+                                            .child("VIEW A · GUTTER ON"),
+                                    )
+                                    .child(div().flex_1().child(self.editor.clone())),
+                            )
+                            .child(div().w(px(1.)).h_full().bg(rgb(0x3a3a3a)))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .h_full()
+                                    .flex()
+                                    .flex_col()
+                                    .child(
+                                        div()
+                                            .px_2()
+                                            .py_1()
+                                            .text_xs()
+                                            .text_color(rgb(0x777777))
+                                            .child("VIEW B · GUTTER OFF"),
+                                    )
+                                    .child(div().flex_1().child(self.secondary_editor.clone())),
+                            ),
+                    )
                     .child(
                         div()
                             .flex()
