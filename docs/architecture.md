@@ -104,6 +104,16 @@ refresh view projections. A foreground-local bridge task
 owns each extension request inbox and dispatches requests synchronously against
 the registry and its entities between awaits.
 
+The native `TreeView` entity owns the outline's cached semantic items,
+expansion, selection, focus, scroll, and per-parent loading/error generations.
+It emits asynchronous child requests and command names to the shell; rendering
+and input use only cached foreground state. Responses are applied only when
+their registration, parent, and generation still match. Provider disposal or
+extension-lifecycle cleanup clears the provider and invalidates pending
+responses. Tree roles, labels, ordering, expansion, and selection remain
+renderer-independent semantics, but gpui 0.2.2 has no public platform
+accessibility bridge through which Knot can expose them.
+
 ```text
 gpui Shell / BufferRegistry
              |
@@ -188,6 +198,23 @@ response store. A synchronous follow-up on the isolate thread then creates a
 V8 external two-byte string over the snapshot's shared immutable allocation.
 V8 owns one reference until that string is collected or the isolate is
 disposed; it never points into mutable `TextBuffer` storage.
+
+The public workbench facade registers semantic tree data providers by native
+view ID. Registration, invalidation, and disposal travel through the typed host
+request stream. A foreground tree generation queues a reverse runtime command;
+the owning isolate invokes `getChildren` serially with its other callbacks and
+returns renderer-neutral items or a recoverable error. Dropping the runtime
+command queue clears pending callback completions during teardown.
+
+```text
+extension getChildren callback
+        ^             |
+ reverse runtime      | semantic items/error
+ command              v
+        native TreeView cache
+              |
+       gpui render/input
+```
 
 Detailed runtime behavior and experiment results live in
 `step7-v8-runtime.md` and the host module's Rustdoc.

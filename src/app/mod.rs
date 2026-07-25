@@ -14,25 +14,28 @@ use crate::host::{
     V8Host,
     protocol::{
         BufferChange, CommandInvocation, CommandInvocationId, ExtensionId, HostOperation,
-        HostRequest, HostRequestError, HostResponse, HostResponseValue,
+        HostRequest, HostRequestError, HostResponse, HostResponseValue, TreeChildrenResponse,
+        TreeProviderError, TreeProviderRegistrationId,
     },
 };
 
 mod editor;
 pub mod model;
+mod tree_view;
 
 use editor::{EditorContributionAction, EditorView, seed_fixture_contributions};
 use model::{
     BufferAccessError, BufferModel, BufferRegistry, BufferSubscriptionRegistry, CommandRegistry,
     ContributionError, ContributionSource,
 };
+use tree_view::{TreeProviderIdentity, TreeView, TreeViewEvent, TreeViewRegistrationError};
 
 actions!(knot, [Quit]);
 
 const MIN_PANE: f32 = 120.;
 const DEFAULT_FIXTURE_NAME: &str = "rust_sample";
 const RUNTIME_PROBE_SOURCE: &str = r#"
-import { commands, editor } from "knot:editor";
+import { commands, editor, workbench } from "knot:editor";
 
 globalThis.knotActiveBuffer = await editor.activeBuffer();
 if (!globalThis.knotActiveBuffer) {
@@ -84,6 +87,25 @@ if (contributionStartUtf16 >= 0) {
     command: "knot.fixture.contribution",
   }], { ifRevision: contributionSnapshot.revision });
 }
+await workbench.registerTreeDataProvider("outline", {
+  async getChildren(parentId) {
+    if (parentId === null) return [
+      { id: "shell", label: "struct Shell", icon: "symbol", collapsibleState: "expanded" },
+      { id: "render", label: "impl Render", icon: "symbol", collapsibleState: "collapsed" },
+      { id: "main", label: "fn main()", icon: "symbol", collapsibleState: "none",
+        command: "knot.fixture.edit" },
+    ];
+    if (parentId === "shell") return [
+      { id: "shell.editor", label: "editor", description: "EditorView", collapsibleState: "none" },
+      { id: "shell.buffers", label: "buffer_registry", description: "BufferRegistry", collapsibleState: "none" },
+      { id: "shell.extensions", label: "extension_controls", description: "runtime owners", collapsibleState: "none" },
+    ];
+    if (parentId === "render") return [
+      { id: "render.render", label: "render()", collapsibleState: "none" },
+    ];
+    return [];
+  },
+});
 "#;
 
 fn map_buffer_error(error: BufferAccessError) -> HostRequestError {
@@ -111,6 +133,14 @@ fn map_contribution_error(error: ContributionError) -> HostRequestError {
     }
 }
 
+fn map_tree_error(error: TreeViewRegistrationError) -> HostRequestError {
+    match error {
+        TreeViewRegistrationError::WrongView => HostRequestError::TreeViewNotFound,
+        TreeViewRegistrationError::ProviderInUse => HostRequestError::TreeProviderInUse,
+        TreeViewRegistrationError::ProviderNotFound => HostRequestError::TreeProviderNotFound,
+    }
+}
+
 /// Drag value carried by the active drag while a pane divider is being dragged.
 /// `which` identifies which divider (0 = left/center, 1 = center/right).
 #[derive(Clone, Copy)]
@@ -131,8 +161,7 @@ impl Render for DragGhost {
 struct Shell {
     left_files: Vec<SharedString>,
     left_selected: Option<usize>,
-    right_outline: Vec<SharedString>,
-    right_selected: Option<usize>,
+    outline: Entity<TreeView>,
     left_width: f32,
     right_width: f32,
     /// `(which, start_x, start_width)` captured on the first drag-move event
@@ -144,6 +173,7 @@ struct Shell {
     buffer_registry: BufferRegistry,
     buffer_subscriptions: BufferSubscriptionRegistry,
     command_registry: CommandRegistry,
+    next_tree_registration: u64,
     next_command_invocation: u64,
     active_command: Option<CommandInvocationId>,
     cancelled_commands: HashSet<CommandInvocationId>,
@@ -161,6 +191,7 @@ struct Shell {
     _runtime_execution_task: Task<()>,
     _model_subscription: Subscription,
     _editor_action_subscription: Subscription,
+    _tree_view_subscription: Subscription,
     _heartbeat_task: Task<()>,
     /// Name of the fixture currently loaded (shown in a thin status header
     /// above the editor so it's visible at a glance which fixture is running).
@@ -221,6 +252,11 @@ impl Shell {
                 this.invoke_contribution_action(action, cx);
             },
         );
+        let outline = cx.new(|cx| TreeView::new("outline", cx));
+        let tree_view_subscription =
+            cx.subscribe(&outline, |this, _tree, event: &TreeViewEvent, cx| {
+                this.dispatch_tree_view_event(event.clone(), cx);
+            });
         let model_subscription = cx.observe(&model, |this, model, cx| {
             this.publish_model_change(model, cx);
             cx.notify();
@@ -260,7 +296,11 @@ impl Shell {
             let _ = this.update(cx, |this, cx| {
                 match result {
                     Ok(()) => {
-                        this.runtime_state = "running".into();
+                        this.runtime_state = if this.outline.read(cx).is_loading() {
+                            "tree-loading".into()
+                        } else {
+                            "running".into()
+                        };
                         this.latest_runtime_error = None;
                     }
                     Err(error) => {
@@ -301,20 +341,7 @@ impl Shell {
                 "AGENTS.md".into(),
             ],
             left_selected: Some(2),
-            right_outline: vec![
-                "struct Shell".into(),
-                "  left_files".into(),
-                "  left_selected".into(),
-                "  right_outline".into(),
-                "  right_selected".into(),
-                "  left_width".into(),
-                "  right_width".into(),
-                "  drag_origin".into(),
-                "impl Render".into(),
-                "  render()".into(),
-                "fn main()".into(),
-            ],
-            right_selected: None,
+            outline,
             left_width: 260.,
             right_width: 220.,
             drag_origin: None,
@@ -322,6 +349,7 @@ impl Shell {
             buffer_registry,
             buffer_subscriptions: BufferSubscriptionRegistry::new(),
             command_registry: CommandRegistry::new(),
+            next_tree_registration: 1,
             next_command_invocation: 1,
             active_command: None,
             cancelled_commands: HashSet::new(),
@@ -336,6 +364,7 @@ impl Shell {
             _runtime_execution_task: runtime_execution_task,
             _model_subscription: model_subscription,
             _editor_action_subscription: editor_action_subscription,
+            _tree_view_subscription: tree_view_subscription,
             _heartbeat_task: heartbeat_task,
             fixture_name,
         }
@@ -367,6 +396,9 @@ impl Shell {
                     .remove_lifecycle(extension, lifecycle);
                 this.buffer_registry
                     .remove_contribution_lifecycle(extension, lifecycle, cx);
+                this.outline.update(cx, |tree, cx| {
+                    tree.remove_lifecycle(extension, lifecycle, cx);
+                });
                 this.runtime_state = "closed".into();
                 if let Some(error) = failure {
                     this.latest_runtime_error = Some(error.into());
@@ -507,6 +539,60 @@ impl Shell {
                         .map_err(map_contribution_error)
                 })
                 .map(|()| HostResponseValue::EditorContributionsDisposed),
+            HostOperation::RegisterTreeProvider { view_id } => {
+                let registration = TreeProviderRegistrationId::new(self.next_tree_registration);
+                let result = self.outline.update(cx, |tree, cx| {
+                    tree.register_provider(
+                        &view_id,
+                        TreeProviderIdentity {
+                            extension: request.extension,
+                            lifecycle: request.lifecycle,
+                            registration,
+                        },
+                        cx,
+                    )
+                });
+                result
+                    .map(|()| {
+                        self.next_tree_registration = self
+                            .next_tree_registration
+                            .checked_add(1)
+                            .expect("tree registration space exhausted");
+                        HostResponseValue::TreeProviderRegistered { registration }
+                    })
+                    .map_err(map_tree_error)
+            }
+            HostOperation::InvalidateTreeProvider {
+                registration,
+                parent_id,
+            } => {
+                if !self.outline.read(cx).owns_provider(
+                    registration,
+                    request.extension,
+                    request.lifecycle,
+                ) {
+                    Err(HostRequestError::TreeProviderNotFound)
+                } else {
+                    self.outline
+                        .update(cx, |tree, cx| tree.invalidate(registration, parent_id, cx))
+                        .map(|()| HostResponseValue::TreeProviderInvalidated)
+                        .map_err(map_tree_error)
+                }
+            }
+            HostOperation::UnregisterTreeProvider { registration } => {
+                if !self.outline.read(cx).owns_provider(
+                    registration,
+                    request.extension,
+                    request.lifecycle,
+                ) {
+                    Err(HostRequestError::TreeProviderNotFound)
+                } else {
+                    self.outline
+                        .update(cx, |tree, cx| tree.unregister_provider(registration, cx))
+                        .map(|()| HostResponseValue::TreeProviderUnregistered { registration })
+                        .map_err(map_tree_error)
+                }
+            }
         };
 
         HostResponse {
@@ -524,6 +610,57 @@ impl Shell {
                 .get(&(subscription.extension, subscription.lifecycle))
             {
                 let _ = control.dispatch_buffer_change(subscription.id, change.clone());
+            }
+        }
+    }
+
+    fn dispatch_tree_view_event(&mut self, event: TreeViewEvent, cx: &mut Context<Self>) {
+        match event {
+            TreeViewEvent::RequestChildren { provider, request } => {
+                let Some(control) = self
+                    .extension_controls
+                    .get(&(provider.extension, provider.lifecycle))
+                    .cloned()
+                else {
+                    return;
+                };
+                let outline = self.outline.clone();
+                let failed_request = request.clone();
+                let callback = control.request_tree_children(request);
+                cx.spawn(async move |this, cx| {
+                    let response = callback.await.unwrap_or_else(|error| TreeChildrenResponse {
+                        registration: failed_request.registration,
+                        parent_id: failed_request.parent_id,
+                        generation: failed_request.generation,
+                        result: Err(TreeProviderError {
+                            message: format!("{error:?}"),
+                        }),
+                    });
+                    let done_loading = outline
+                        .update(cx, |tree, cx| {
+                            tree.apply_response(response, cx);
+                            !tree.is_loading()
+                        })
+                        .unwrap_or(false);
+                    if done_loading {
+                        let _ = this.update(cx, |this, cx| {
+                            if this.runtime_state == "tree-loading" {
+                                this.runtime_state = "running".into();
+                                cx.notify();
+                            }
+                        });
+                    }
+                })
+                .detach();
+            }
+            TreeViewEvent::InvokeCommand { provider, command } => {
+                let Ok(target) = self.command_registry.resolve(&command) else {
+                    return;
+                };
+                if target.extension == provider.extension && target.lifecycle == provider.lifecycle
+                {
+                    self.invoke_command_target(target, cx);
+                }
             }
         }
     }
@@ -691,7 +828,6 @@ impl Shell {
         label: SharedString,
         selected: Option<usize>,
         entity: Entity<Shell>,
-        which_pane: usize,
     ) -> AnyElement {
         let is_selected = selected == Some(ix);
         div()
@@ -707,11 +843,7 @@ impl Shell {
             .hover(|s| s.bg(rgb(0x222222)))
             .on_click(move |_ev, _window, cx| {
                 entity.update(cx, |s, cx| {
-                    if which_pane == 0 {
-                        s.left_selected = Some(ix);
-                    } else {
-                        s.right_selected = Some(ix);
-                    }
+                    s.left_selected = Some(ix);
                     cx.notify();
                 });
             })
@@ -725,21 +857,11 @@ impl Shell {
         items: &[SharedString],
         selected: Option<usize>,
         entity: Entity<Shell>,
-        which_pane: usize,
     ) -> impl IntoElement {
         let items: Vec<SharedString> = items.to_vec();
         uniform_list(id_prefix, items.len(), move |range, _window, _cx| {
             range
-                .map(|ix| {
-                    Self::row(
-                        id_prefix,
-                        ix,
-                        items[ix].clone(),
-                        selected,
-                        entity.clone(),
-                        which_pane,
-                    )
-                })
+                .map(|ix| Self::row(id_prefix, ix, items[ix].clone(), selected, entity.clone()))
                 .collect()
         })
         .h_full()
@@ -777,9 +899,7 @@ impl Render for Shell {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let entity = cx.entity();
         let left_selected = self.left_selected;
-        let right_selected = self.right_selected;
         let left_files = self.left_files.clone();
-        let right_outline = self.right_outline.clone();
         let revision = self
             .buffer_registry
             .active_handle()
@@ -851,7 +971,7 @@ impl Render for Shell {
                             .text_color(rgb(0x888888))
                             .child("EXPLORER"),
                     )
-                    .child(self.pane("left", &left_files, left_selected, entity.clone(), 0)),
+                    .child(self.pane("left", &left_files, left_selected, entity.clone())),
             )
             .child(Self::divider(0))
             .child(
@@ -924,7 +1044,7 @@ impl Render for Shell {
                             .text_color(rgb(0x888888))
                             .child("OUTLINE"),
                     )
-                    .child(self.pane("right", &right_outline, right_selected, entity, 1)),
+                    .child(self.outline.clone()),
             )
     }
 }

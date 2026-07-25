@@ -31,7 +31,7 @@ pub mod protocol;
 use protocol::{
     BufferChange, BufferHandle, BufferSubscriptionId, ByteRange, CommandInvocation, ExtensionId,
     ExtensionLifecycleId, HostOperation, HostRequest, HostResponse, HostResponseValue, RequestId,
-    TextEdit,
+    TextEdit, TreeChildrenRequest, TreeChildrenResponse, TreeProviderError,
 };
 
 const PRIVATE_BOOTSTRAP_SPECIFIER: &str = "knot:bootstrap";
@@ -48,6 +48,7 @@ async function bufferRequest(request) {
 const buffers = new Map();
 const commandHandlers = new Map();
 const bufferChangeListeners = new Map();
+const treeProviders = new Map();
 let activeCommandController = null;
 const snapshotTables = new WeakMap();
 
@@ -88,6 +89,9 @@ function hostError(error) {
     InvalidEditBatch: "InvalidEditBatchError",
     RevisionConflict: "RevisionConflictError",
     ContributionSetNotFound: "ContributionSetNotFoundError",
+    TreeViewNotFound: "TreeViewNotFoundError",
+    TreeProviderInUse: "TreeProviderInUseError",
+    TreeProviderNotFound: "TreeProviderNotFoundError",
     CommandNameInUse: "CommandNameInUseError",
     CommandNotFound: "CommandNotFoundError",
     Cancelled: "AbortError",
@@ -219,6 +223,56 @@ export async function registerCommand(name, handler) {
   });
 }
 
+export async function registerTreeDataProvider(viewId, provider) {
+  if (typeof viewId !== "string" || typeof provider?.getChildren !== "function") {
+    throw new TypeError("workbench.registerTreeDataProvider requires a view ID and getChildren provider");
+  }
+  const registration = await nativeOps.op_tree_register(viewId);
+  treeProviders.set(registration, provider);
+  let disposed = false;
+  return Object.freeze({
+    invalidate(parentId) {
+      if (disposed) return;
+      void nativeOps.op_tree_invalidate(registration, parentId ?? null);
+    },
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      treeProviders.delete(registration);
+      void nativeOps.op_tree_unregister(registration);
+    },
+  });
+}
+
+globalThis.__knotRequestTreeChildren = async (registration, parentId, generation) => {
+  const provider = treeProviders.get(registration);
+  if (!provider) {
+    nativeOps.op_tree_children_complete({
+      registration,
+      parentId,
+      generation,
+      error: "tree data provider is disposed",
+    });
+    return;
+  }
+  try {
+    const items = await provider.getChildren(parentId);
+    nativeOps.op_tree_children_complete({
+      registration,
+      parentId,
+      generation,
+      items: Array.from(items),
+    });
+  } catch (error) {
+    nativeOps.op_tree_children_complete({
+      registration,
+      parentId,
+      generation,
+      error: String(error?.stack ?? error),
+    });
+  }
+};
+
 globalThis.__knotInvokeCommand = async (registration, activeHandle) => {
   const handler = commandHandlers.get(registration);
   if (!handler) throw new Error("Knot command registration is disposed");
@@ -249,7 +303,7 @@ globalThis.__knotDispatchBufferChange = async (subscription, change) => {
 };
 "#;
 const PUBLIC_FACADE_SOURCE: &str = r#"
-import { activeBuffer, registerCommand } from "knot:bootstrap";
+import { activeBuffer, registerCommand, registerTreeDataProvider } from "knot:bootstrap";
 
 export const editor = {
   activeBuffer,
@@ -257,6 +311,10 @@ export const editor = {
 
 export const commands = {
   register: registerCommand,
+};
+
+export const workbench = {
+  registerTreeDataProvider,
 };
 "#;
 
@@ -349,6 +407,10 @@ deno_core::extension!(
         op_command_unregister,
         op_buffer_subscribe,
         op_buffer_unsubscribe,
+        op_tree_register,
+        op_tree_invalidate,
+        op_tree_unregister,
+        op_tree_children_complete,
         op_fixture_shared_host_runtime,
     ],
 );
@@ -411,6 +473,21 @@ enum NativeBufferResponse {
 struct NativeResponseStore {
     next: u32,
     responses: HashMap<u32, NativeBufferResponse>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeTreeChildrenCompletion {
+    registration: u64,
+    parent_id: Option<String>,
+    generation: u64,
+    items: Option<Vec<protocol::TreeItem>>,
+    error: Option<String>,
+}
+
+#[derive(Default)]
+struct TreeCallbackStore {
+    response: Option<TreeChildrenResponse>,
 }
 
 impl NativeResponseStore {
@@ -725,6 +802,99 @@ async fn op_buffer_unsubscribe(
     }
 }
 
+#[deno_core::op2]
+#[number]
+async fn op_tree_register(
+    state: Rc<RefCell<OpState>>,
+    #[string] view_id: String,
+) -> Result<u64, JsErrorBox> {
+    let response =
+        request_host_operation(state, HostOperation::RegisterTreeProvider { view_id }).await?;
+    match response.result {
+        Ok(HostResponseValue::TreeProviderRegistered { registration }) => Ok(registration.value()),
+        Ok(_) => Err(JsErrorBox::generic(
+            "Knot host returned the wrong response type",
+        )),
+        Err(error) => Err(JsErrorBox::generic(format!(
+            "Knot host rejected tree provider registration: {error:?}"
+        ))),
+    }
+}
+
+#[deno_core::op2]
+async fn op_tree_invalidate(
+    state: Rc<RefCell<OpState>>,
+    #[number] registration: u64,
+    #[string] parent_id: Option<String>,
+) -> Result<(), JsErrorBox> {
+    let response = request_host_operation(
+        state,
+        HostOperation::InvalidateTreeProvider {
+            registration: protocol::TreeProviderRegistrationId::new(registration),
+            parent_id,
+        },
+    )
+    .await?;
+    match response.result {
+        Ok(HostResponseValue::TreeProviderInvalidated) => Ok(()),
+        Ok(_) => Err(JsErrorBox::generic(
+            "Knot host returned the wrong response type",
+        )),
+        Err(error) => Err(JsErrorBox::generic(format!(
+            "Knot host rejected tree provider invalidation: {error:?}"
+        ))),
+    }
+}
+
+#[deno_core::op2]
+async fn op_tree_unregister(
+    state: Rc<RefCell<OpState>>,
+    #[number] registration: u64,
+) -> Result<(), JsErrorBox> {
+    let registration = protocol::TreeProviderRegistrationId::new(registration);
+    let response = request_host_operation(
+        state,
+        HostOperation::UnregisterTreeProvider { registration },
+    )
+    .await?;
+    match response.result {
+        Ok(HostResponseValue::TreeProviderUnregistered { .. }) => Ok(()),
+        Ok(_) => Err(JsErrorBox::generic(
+            "Knot host returned the wrong response type",
+        )),
+        Err(error) => Err(JsErrorBox::generic(format!(
+            "Knot host rejected tree provider disposal: {error:?}"
+        ))),
+    }
+}
+
+#[deno_core::op2]
+fn op_tree_children_complete(
+    state: &mut OpState,
+    #[serde] completion: NativeTreeChildrenCompletion,
+) -> Result<(), JsErrorBox> {
+    let result = match (completion.items, completion.error) {
+        (Some(items), None) => Ok(items),
+        (_, Some(message)) => Err(TreeProviderError { message }),
+        _ => Err(TreeProviderError {
+            message: "tree provider returned no items".into(),
+        }),
+    };
+    let response = TreeChildrenResponse {
+        registration: protocol::TreeProviderRegistrationId::new(completion.registration),
+        parent_id: completion.parent_id,
+        generation: completion.generation,
+        result,
+    };
+    let store = state.borrow_mut::<TreeCallbackStore>();
+    if store.response.replace(response).is_some() {
+        return Err(JsErrorBox::generic(
+            "tree provider completed one request more than once",
+        ));
+    }
+    Ok(())
+}
+
 async fn request_host_operation(
     state: Rc<RefCell<OpState>>,
     operation: HostOperation,
@@ -895,6 +1065,11 @@ impl ExtensionRuntimeHandle {
         self.control.dispatch_buffer_change(subscription, change)
     }
 
+    /// Queue one native tree-view child request on this extension's thread.
+    pub fn request_tree_children(&self, request: TreeChildrenRequest) -> ExtensionTreeRequest {
+        self.control.request_tree_children(request)
+    }
+
     /// Asynchronously receive the next request emitted by the extension thread.
     pub async fn receive_request(&mut self) -> Option<HostRequest> {
         self.requests.receive().await
@@ -1017,6 +1192,17 @@ impl ExtensionRuntimeControl {
             })
     }
 
+    pub fn request_tree_children(&self, request: TreeChildrenRequest) -> ExtensionTreeRequest {
+        let (completion, completed) = tokio::sync::oneshot::channel();
+        let _ = self.commands.send(RuntimeCommand::RequestTreeChildren {
+            request,
+            completion,
+        });
+        ExtensionTreeRequest {
+            completion: completed,
+        }
+    }
+
     /// Return measurements for buffer-change callback delivery on this extension.
     ///
     /// These are evidence only: the runtime does not drop, coalesce, block, or
@@ -1094,6 +1280,24 @@ pub struct ExtensionRuntimeExecution {
     completion: tokio::sync::oneshot::Receiver<Result<(), ExtensionRuntimeExecutionError>>,
 }
 
+/// Awaitable response to one asynchronous tree-provider callback.
+#[must_use = "tree child requests must be awaited or explicitly discarded"]
+pub struct ExtensionTreeRequest {
+    completion: tokio::sync::oneshot::Receiver<
+        Result<TreeChildrenResponse, ExtensionRuntimeExecutionError>,
+    >,
+}
+
+impl Future for ExtensionTreeRequest {
+    type Output = Result<TreeChildrenResponse, ExtensionRuntimeExecutionError>;
+
+    fn poll(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
+        Pin::new(&mut self.completion)
+            .poll(context)
+            .map(|completion| completion.unwrap_or(Err(ExtensionRuntimeExecutionError::Closed)))
+    }
+}
+
 impl Future for ExtensionRuntimeExecution {
     type Output = Result<(), ExtensionRuntimeExecutionError>;
 
@@ -1167,6 +1371,12 @@ enum RuntimeCommand {
         subscription: BufferSubscriptionId,
         change: BufferChange,
         enqueued_at: Instant,
+    },
+    RequestTreeChildren {
+        request: TreeChildrenRequest,
+        completion: tokio::sync::oneshot::Sender<
+            Result<TreeChildrenResponse, ExtensionRuntimeExecutionError>,
+        >,
     },
     Shutdown,
 }
@@ -1562,6 +1772,10 @@ impl ExtensionRuntime {
         js_runtime
             .op_state()
             .borrow_mut()
+            .put(TreeCallbackStore::default());
+        js_runtime
+            .op_state()
+            .borrow_mut()
             .put(ExtensionRequestRouter {
                 extension,
                 lifecycle_id,
@@ -1739,6 +1953,56 @@ impl ExtensionRuntime {
                         break;
                     }
                 }
+                RuntimeCommand::RequestTreeChildren {
+                    request,
+                    completion,
+                } => {
+                    let _runtime_guard = self.event_loop_runtime.enter();
+                    self.js_runtime
+                        .op_state()
+                        .borrow_mut()
+                        .borrow_mut::<TreeCallbackStore>()
+                        .response = None;
+                    let parent_id =
+                        serde_json::to_string(&request.parent_id).expect("tree parent serializes");
+                    let source = format!(
+                        "globalThis.__knotRequestTreeChildren({}, {}, {})",
+                        request.registration.value(),
+                        parent_id,
+                        request.generation,
+                    );
+                    let result = self
+                        .js_runtime
+                        .execute_script("knot:tree-children", source)
+                        .map_err(ExtensionRuntimeExecutionError::javascript_exception)
+                        .and_then(|_| {
+                            self.event_loop_runtime
+                                .block_on(self.js_runtime.run_event_loop(Default::default()))
+                                .map_err(ExtensionRuntimeExecutionError::javascript_exception)
+                        })
+                        .and_then(|()| {
+                            self.js_runtime
+                                .op_state()
+                                .borrow_mut()
+                                .borrow_mut::<TreeCallbackStore>()
+                                .response
+                                .take()
+                                .ok_or_else(|| {
+                                    ExtensionRuntimeExecutionError::javascript_exception(
+                                        "tree provider did not complete its request",
+                                    )
+                                })
+                        });
+                    if let Ok(response) = &result
+                        && let Err(error) = &response.result
+                    {
+                        eprintln!("[knot] tree provider callback failed: {}", error.message);
+                    }
+                    let _ = completion.send(result);
+                    if self.lifecycle.termination().is_some() {
+                        break;
+                    }
+                }
                 RuntimeCommand::Shutdown => break,
             }
         }
@@ -1767,7 +2031,8 @@ mod tests {
         BufferChange, BufferHandle, BufferSubscriptionId, ByteRange, CommandInvocation,
         CommandInvocationId, CommandRegistrationId, ExtensionId, ExtensionLifecycleId,
         HostOperation, HostResponse, HostResponseValue, RequestId, SnapshotText, TextEdit,
-        TextSnapshot,
+        TextSnapshot, TreeChildrenRequest, TreeCollapsibleState, TreeIcon,
+        TreeProviderRegistrationId,
     };
 
     #[test]
@@ -1964,6 +2229,100 @@ mod tests {
             "if (globalThis.activeBuffer !== null) throw new Error('unexpected active buffer')",
         ))
         .unwrap();
+        runtime.shutdown();
+    }
+
+    #[test]
+    fn tree_provider_registration_invalidation_and_children_are_asynchronous() {
+        let host = V8Host::new();
+        let extension = ExtensionId::new(72);
+        let mut runtime = host.spawn_extension(extension);
+        let registration = TreeProviderRegistrationId::new(4);
+        let execution = runtime.execute_fixture_module(
+            "file:///fixtures/tree-provider.js",
+            r#"
+                import { workbench } from "knot:editor";
+                globalThis.treeRegistration = await workbench.registerTreeDataProvider(
+                  "outline",
+                  {
+                    async getChildren(parentId) {
+                      if (parentId === "failure") throw new Error("expected tree failure");
+                      return [{
+                        id: parentId === null ? "root" : `${parentId}.child`,
+                        label: "Tree item",
+                        description: "fixture",
+                        icon: "symbol",
+                        collapsibleState: parentId === null ? "expanded" : "none",
+                      }];
+                    },
+                  },
+                );
+            "#,
+        );
+        let register_request = pollster::block_on(runtime.receive_request()).unwrap();
+        assert_eq!(
+            register_request.operation,
+            HostOperation::RegisterTreeProvider {
+                view_id: "outline".into()
+            }
+        );
+        runtime
+            .respond(HostResponse {
+                extension,
+                lifecycle: register_request.lifecycle,
+                id: register_request.id,
+                result: Ok(HostResponseValue::TreeProviderRegistered { registration }),
+            })
+            .unwrap();
+        pollster::block_on(execution).unwrap();
+
+        let response = pollster::block_on(runtime.request_tree_children(TreeChildrenRequest {
+            registration,
+            parent_id: None,
+            generation: 8,
+        }))
+        .unwrap();
+        assert_eq!(response.generation, 8);
+        let items = response.result.unwrap();
+        assert_eq!(items[0].id, "root");
+        assert_eq!(items[0].icon, Some(TreeIcon::Symbol));
+        assert_eq!(items[0].collapsible_state, TreeCollapsibleState::Expanded);
+
+        let invalidation_execution = runtime.execute_fixture_script(
+            "invalidate-tree.js",
+            "globalThis.treeRegistration.invalidate('root')",
+        );
+        let invalidation = pollster::block_on(runtime.receive_request()).unwrap();
+        assert_eq!(
+            invalidation.operation,
+            HostOperation::InvalidateTreeProvider {
+                registration,
+                parent_id: Some("root".into()),
+            }
+        );
+        runtime
+            .respond(HostResponse {
+                extension,
+                lifecycle: invalidation.lifecycle,
+                id: invalidation.id,
+                result: Ok(HostResponseValue::TreeProviderInvalidated),
+            })
+            .unwrap();
+        pollster::block_on(invalidation_execution).unwrap();
+
+        let failure = pollster::block_on(runtime.request_tree_children(TreeChildrenRequest {
+            registration,
+            parent_id: Some("failure".into()),
+            generation: 9,
+        }))
+        .unwrap();
+        assert!(
+            failure
+                .result
+                .unwrap_err()
+                .message
+                .contains("expected tree failure")
+        );
         runtime.shutdown();
     }
 

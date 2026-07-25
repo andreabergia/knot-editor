@@ -85,6 +85,20 @@ impl BufferSubscriptionId {
     }
 }
 
+/// An opaque identity for one tree data-provider registration.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct TreeProviderRegistrationId(u64);
+
+impl TreeProviderRegistrationId {
+    pub(crate) const fn new(value: u64) -> Self {
+        Self(value)
+    }
+
+    pub(crate) const fn value(self) -> u64 {
+        self.0
+    }
+}
+
 /// An opaque reference to an editor buffer.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct BufferHandle(u64);
@@ -147,6 +161,59 @@ pub struct EditorContribution {
     pub command: Option<String>,
 }
 
+/// Theme-aware icon tokens supported by native tree views.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TreeIcon {
+    File,
+    Folder,
+    Symbol,
+}
+
+/// Whether a tree item can be expanded.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TreeCollapsibleState {
+    None,
+    Collapsed,
+    Expanded,
+}
+
+/// Renderer-neutral semantics for one extension-provided tree item.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TreeItem {
+    pub id: String,
+    pub label: String,
+    pub description: Option<String>,
+    pub icon: Option<TreeIcon>,
+    pub collapsible_state: TreeCollapsibleState,
+    pub command: Option<String>,
+}
+
+/// One asynchronous child request issued by a native tree view.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TreeChildrenRequest {
+    pub registration: TreeProviderRegistrationId,
+    pub parent_id: Option<String>,
+    pub generation: u64,
+}
+
+/// A recoverable tree-provider callback failure.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TreeProviderError {
+    pub message: String,
+}
+
+/// One extension callback result returned to a native tree view.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TreeChildrenResponse {
+    pub registration: TreeProviderRegistrationId,
+    pub parent_id: Option<String>,
+    pub generation: u64,
+    pub result: Result<Vec<TreeItem>, TreeProviderError>,
+}
+
 /// A request sent by one extension runtime to the editor foreground owner.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HostRequest {
@@ -190,6 +257,16 @@ pub enum HostOperation {
     DisposeEditorContributions {
         buffer: BufferHandle,
     },
+    RegisterTreeProvider {
+        view_id: String,
+    },
+    InvalidateTreeProvider {
+        registration: TreeProviderRegistrationId,
+        parent_id: Option<String>,
+    },
+    UnregisterTreeProvider {
+        registration: TreeProviderRegistrationId,
+    },
 }
 
 /// A reply sent back to the extension runtime for one [`HostRequest`].
@@ -206,13 +283,30 @@ pub struct HostResponse {
 pub enum HostResponseValue {
     ActiveBuffer(Option<BufferHandle>),
     Snapshot(TextSnapshot),
-    AppliedEdits { revision: u64 },
-    CommandRegistered { registration: CommandRegistrationId },
-    CommandUnregistered { registration: CommandRegistrationId },
-    BufferChangesSubscribed { subscription: BufferSubscriptionId },
-    BufferChangesUnsubscribed { subscription: BufferSubscriptionId },
+    AppliedEdits {
+        revision: u64,
+    },
+    CommandRegistered {
+        registration: CommandRegistrationId,
+    },
+    CommandUnregistered {
+        registration: CommandRegistrationId,
+    },
+    BufferChangesSubscribed {
+        subscription: BufferSubscriptionId,
+    },
+    BufferChangesUnsubscribed {
+        subscription: BufferSubscriptionId,
+    },
     EditorContributionsReplaced,
     EditorContributionsDisposed,
+    TreeProviderRegistered {
+        registration: TreeProviderRegistrationId,
+    },
+    TreeProviderInvalidated,
+    TreeProviderUnregistered {
+        registration: TreeProviderRegistrationId,
+    },
 }
 
 /// A foreground-authorized command invocation routed to its extension owner.
@@ -281,6 +375,9 @@ pub enum HostRequestError {
     InvalidEditBatch,
     RevisionConflict,
     ContributionSetNotFound,
+    TreeViewNotFound,
+    TreeProviderInUse,
+    TreeProviderNotFound,
     CommandNameInUse,
     CommandNotFound,
     Cancelled,

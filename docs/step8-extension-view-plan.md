@@ -275,18 +275,18 @@ land.
 
 ### 3. Add the asynchronous native tree-provider surface
 
-1. ⬜ Define tree provider/registration identities and renderer-neutral item
+1. ✅ Define tree provider/registration identities and renderer-neutral item
    types in `host::protocol`.
-2. ⬜ Add extension-local registration, invalidation, child-request dispatch,
+2. ✅ Add extension-local registration, invalidation, child-request dispatch,
    pending-request cleanup, and callback error reporting.
-3. ⬜ Add a foreground `TreeView` entity that owns cached items, expansion,
+3. ✅ Add a foreground `TreeView` entity that owns cached items, expansion,
    selection, focus, scroll, loading/error state, and provider generations.
-4. ⬜ Replace the hard-coded outline pane with the native tree view populated
+4. ✅ Replace the hard-coded outline pane with the native tree view populated
    by a fixture extension.
-5. ⬜ Ignore stale responses after reinvalidation, disposal, or extension
+5. ✅ Ignore stale responses after reinvalidation, disposal, or extension
    termination. Remove the view's provider state cleanly without affecting
    the shell or other extensions.
-6. ⬜ Preserve tree semantics independently of gpui and record the missing
+6. ✅ Preserve tree semantics independently of gpui and record the missing
    platform accessibility bridge.
 
 ### 4. Prove shared-buffer/per-view ownership
