@@ -40,24 +40,13 @@ impl DecorationToken {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct ResolvedDecoration {
-    pub range: ByteRange,
-    pub token: DecorationToken,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct ResolvedGutterMarker {
-    pub range: ByteRange,
-    pub token: GutterToken,
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ResolvedContributionAction {
+pub(crate) struct ResolvedEditorContribution {
     pub range: ByteRange,
-    pub command: String,
     pub source: ContributionSource,
-    pub gutter: bool,
+    pub decoration: Option<DecorationToken>,
+    pub gutter: Option<GutterToken>,
+    pub command: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -273,7 +262,7 @@ impl BufferModel {
         }
     }
 
-    pub(crate) fn resolved_decorations(&self) -> Vec<ResolvedDecoration> {
+    pub(crate) fn resolved_contributions(&self) -> Vec<ResolvedEditorContribution> {
         let mut resolved = self
             .contributions
             .metadata
@@ -295,73 +284,33 @@ impl BufferModel {
         });
         resolved
             .into_iter()
-            .filter_map(|(metadata, _, range)| {
-                metadata.decoration.map(|token| ResolvedDecoration {
-                    range: ByteRange {
-                        start_byte_offset: range.start,
-                        end_byte_offset: range.end,
-                    },
-                    token,
-                })
+            .map(|(metadata, _, range)| ResolvedEditorContribution {
+                range: ByteRange {
+                    start_byte_offset: range.start,
+                    end_byte_offset: range.end,
+                },
+                source: metadata.source,
+                decoration: metadata.decoration,
+                gutter: metadata.gutter,
+                command: metadata.command.clone(),
             })
             .collect()
     }
 
-    pub(crate) fn resolved_gutter_markers(&self) -> Vec<ResolvedGutterMarker> {
-        let mut resolved = self
-            .contributions
-            .metadata
-            .iter()
-            .filter_map(|(&id, metadata)| {
-                let token = metadata.gutter?;
-                let range = self.anchored_ranges.resolve(&self.buffer, id)?;
-                Some(ResolvedGutterMarker {
-                    range: ByteRange {
-                        start_byte_offset: range.start,
-                        end_byte_offset: range.end,
-                    },
-                    token,
-                })
+    pub(crate) fn has_contribution_action(
+        &self,
+        source: ContributionSource,
+        command: &str,
+    ) -> bool {
+        self.contributions.sets.get(&source).is_some_and(|set| {
+            set.anchored_ranges.iter().any(|id| {
+                self.contributions
+                    .metadata
+                    .get(id)
+                    .and_then(|metadata| metadata.command.as_deref())
+                    == Some(command)
             })
-            .collect::<Vec<_>>();
-        resolved.sort_unstable_by_key(|marker| {
-            (marker.range.start_byte_offset, marker.range.end_byte_offset)
-        });
-        resolved
-    }
-
-    pub(crate) fn resolved_contribution_actions(&self) -> Vec<ResolvedContributionAction> {
-        let mut resolved = self
-            .contributions
-            .metadata
-            .iter()
-            .filter_map(|(&id, metadata)| {
-                let command = metadata.command.clone()?;
-                let range = self.anchored_ranges.resolve(&self.buffer, id)?;
-                Some(ResolvedContributionAction {
-                    range: ByteRange {
-                        start_byte_offset: range.start,
-                        end_byte_offset: range.end,
-                    },
-                    command,
-                    source: metadata.source,
-                    gutter: metadata.gutter.is_some(),
-                })
-            })
-            .collect::<Vec<_>>();
-        resolved.sort_unstable_by(|left, right| {
-            (
-                left.range.start_byte_offset,
-                left.range.end_byte_offset,
-                &left.command,
-            )
-                .cmp(&(
-                    right.range.start_byte_offset,
-                    right.range.end_byte_offset,
-                    &right.command,
-                ))
-        });
-        resolved
+        })
     }
 
     /// Validate a public UTF-8 byte range before it reaches `TextBuffer`.
@@ -906,13 +855,16 @@ mod tests {
 
         assert!(model.replace(0..0, "++"));
         assert_eq!(
-            model.resolved_decorations(),
-            [ResolvedDecoration {
+            model.resolved_contributions(),
+            [ResolvedEditorContribution {
                 range: ByteRange {
                     start_byte_offset: 6,
                     end_byte_offset: 9,
                 },
-                token: DecorationToken::Warning,
+                source,
+                decoration: Some(DecorationToken::Warning),
+                gutter: None,
+                command: None,
             }]
         );
 
@@ -920,7 +872,7 @@ mod tests {
             model.replace_contributions(source, &[], 0),
             Err(ContributionError::RevisionConflict)
         );
-        assert_eq!(model.resolved_decorations().len(), 1);
+        assert_eq!(model.resolved_contributions().len(), 1);
         assert_eq!(
             model.replace_contributions(
                 source,
@@ -937,12 +889,12 @@ mod tests {
             ),
             Err(ContributionError::InvalidRange)
         );
-        assert_eq!(model.resolved_decorations().len(), 1);
+        assert_eq!(model.resolved_contributions().len(), 1);
 
         model
             .replace_contributions(source, &[], model.revision())
             .unwrap();
-        assert!(model.resolved_decorations().is_empty());
+        assert!(model.resolved_contributions().is_empty());
     }
 
     #[test]
@@ -1003,10 +955,10 @@ mod tests {
             model.dispose_contributions(stale_source),
             Err(ContributionError::NotFound)
         );
-        assert_eq!(model.resolved_decorations().len(), 1);
+        assert_eq!(model.resolved_contributions().len(), 1);
         assert!(!model.remove_contribution_lifecycle(extension, ExtensionLifecycleId::new(2)));
         assert!(model.remove_contribution_lifecycle(extension, ExtensionLifecycleId::new(3)));
-        assert!(model.resolved_decorations().is_empty());
+        assert!(model.resolved_contributions().is_empty());
     }
 
     #[test]
@@ -1031,7 +983,7 @@ mod tests {
 
         assert!(model.replace(4..7, ""));
 
-        assert!(model.resolved_decorations().is_empty());
+        assert!(model.resolved_contributions().is_empty());
         assert!(model.contributions.metadata.is_empty());
         assert!(model.contributions.sets[&source].anchored_ranges.is_empty());
         assert!(model.anchored_ranges.is_empty());
@@ -1069,9 +1021,9 @@ mod tests {
 
         assert_eq!(
             model
-                .resolved_decorations()
+                .resolved_contributions()
                 .into_iter()
-                .map(|decoration| decoration.token)
+                .filter_map(|contribution| contribution.decoration)
                 .collect::<Vec<_>>(),
             [DecorationToken::Info, DecorationToken::Warning]
         );

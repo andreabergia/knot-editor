@@ -411,22 +411,16 @@ impl Shell {
                 .resolve(buffer)
                 .map_err(|_| HostRequestError::BufferClosed)
                 .and_then(|model| {
-                    let changed = model
+                    model
                         .update(cx, |model, cx| {
-                            let changed = model.apply_edits(&edits, if_revision)?;
-                            if changed {
+                            if model.apply_edits(&edits, if_revision)? {
                                 cx.notify();
                             }
-                            Ok(changed)
+                            Ok(())
                         })
-                        .map_err(map_buffer_error)?;
-                    Ok(changed)
+                        .map_err(map_buffer_error)
                 })
-                .map(|changed| {
-                    if changed {
-                        self.editor
-                            .update(cx, |editor, cx| editor.refresh_from_model(cx));
-                    }
+                .map(|()| {
                     let revision = self
                         .buffer_registry
                         .resolve(buffer)
@@ -490,11 +484,7 @@ impl Shell {
                         })
                         .map_err(map_contribution_error)
                 })
-                .map(|()| {
-                    self.editor
-                        .update(cx, |editor, cx| editor.refresh_from_model(cx));
-                    HostResponseValue::EditorContributionsReplaced
-                }),
+                .map(|()| HostResponseValue::EditorContributionsReplaced),
             HostOperation::DisposeEditorContributions { buffer } => self
                 .buffer_registry
                 .resolve(buffer)
@@ -507,21 +497,16 @@ impl Shell {
                                     extension: request.extension,
                                     lifecycle: request.lifecycle,
                                 });
-                            if let Err(error) = result
-                                && error != ContributionError::NotFound
-                            {
-                                return Err(error);
+                            match result {
+                                Ok(()) => cx.notify(),
+                                Err(ContributionError::NotFound) => {}
+                                Err(error) => return Err(error),
                             }
-                            cx.notify();
                             Ok(())
                         })
                         .map_err(map_contribution_error)
                 })
-                .map(|()| {
-                    self.editor
-                        .update(cx, |editor, cx| editor.refresh_from_model(cx));
-                    HostResponseValue::EditorContributionsDisposed
-                }),
+                .map(|()| HostResponseValue::EditorContributionsDisposed),
         };
 
         HostResponse {
@@ -613,10 +598,7 @@ impl Shell {
             return;
         };
         if !model.read_with(cx, |model, _| {
-            model
-                .resolved_contribution_actions()
-                .iter()
-                .any(|current| current.command == action.command && current.source == action.source)
+            model.has_contribution_action(action.source, &action.command)
         }) {
             return;
         }
@@ -1189,17 +1171,20 @@ mod tests {
         cx.read(|cx| {
             let shell = shell.read(cx);
             let model = shell.editor.read(cx).model().read(cx);
+            let contributions = model.resolved_contributions();
             assert!(
-                model
-                    .resolved_decorations()
+                contributions
                     .iter()
-                    .any(|decoration| decoration.token == DecorationToken::Error)
+                    .any(|contribution| contribution.decoration == Some(DecorationToken::Error))
             );
-            assert_eq!(model.resolved_gutter_markers()[0].token, GutterToken::Error);
-            assert_eq!(
-                model.resolved_contribution_actions()[0].command,
-                "knot.fixture.test-contribution"
+            assert!(
+                contributions
+                    .iter()
+                    .any(|contribution| contribution.gutter == Some(GutterToken::Error))
             );
+            assert!(contributions.iter().any(|contribution| {
+                contribution.command.as_deref() == Some("knot.fixture.test-contribution")
+            }));
         });
 
         shell.update(cx, |shell, cx| {
@@ -1219,8 +1204,17 @@ mod tests {
         cx.read(|cx| {
             let shell = shell.read(cx);
             let model = shell.editor.read(cx).model().read(cx);
-            assert!(model.resolved_gutter_markers().is_empty());
-            assert!(model.resolved_contribution_actions().is_empty());
+            let contributions = model.resolved_contributions();
+            assert!(
+                contributions
+                    .iter()
+                    .all(|contribution| contribution.gutter.is_none())
+            );
+            assert!(
+                contributions
+                    .iter()
+                    .all(|contribution| contribution.command.is_none())
+            );
         });
         shell.update(cx, |shell, cx| {
             shell.invoke_contribution_action(

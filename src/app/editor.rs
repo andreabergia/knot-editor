@@ -34,10 +34,7 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use crate::host::protocol::{ByteRange, DecorationToken, EditorContribution, GutterToken};
 
-use super::model::{
-    BufferModel, ContributionSource, ResolvedContributionAction, ResolvedDecoration,
-    ResolvedGutterMarker,
-};
+use super::model::{BufferModel, ContributionSource, ResolvedEditorContribution};
 
 /// Owned, frame-stable copy of one styled segment of one line.
 /// Mirrors `knot::view::fixture`'s borrowed `Segment`/`SegSpec` but holds
@@ -216,23 +213,12 @@ impl EditorView {
             segs.push(row);
         }
 
-        let (decorations, gutter_markers, contribution_actions) = {
-            let model = model.read(cx);
-            (
-                project_decorations(&lines, model.resolved_decorations()),
-                project_gutter_markers(&lines, model.resolved_gutter_markers()),
-                project_contribution_actions(&lines, model.resolved_contribution_actions()),
-            )
-        };
+        let (decorations, gutter_markers, contribution_actions) =
+            project_contributions(&lines, model.read(cx).resolved_contributions());
 
         let model_subscription = cx.observe(&model, |this, model, cx| {
             let model = model.read(cx);
-            this.rebuild_projection(
-                &model.text(),
-                model.resolved_decorations(),
-                model.resolved_gutter_markers(),
-                model.resolved_contribution_actions(),
-            );
+            this.rebuild_projection(&model.text(), model.resolved_contributions());
             cx.notify();
         });
 
@@ -258,17 +244,13 @@ impl EditorView {
         }
     }
 
-    fn rebuild_projection(
-        &mut self,
-        text: &str,
-        decorations: Vec<ResolvedDecoration>,
-        gutter_markers: Vec<ResolvedGutterMarker>,
-        contribution_actions: Vec<ResolvedContributionAction>,
-    ) {
+    fn rebuild_projection(&mut self, text: &str, contributions: Vec<ResolvedEditorContribution>) {
         (self.lines, self.segs) = default_projection(text);
-        self.decorations = project_decorations(&self.lines, decorations);
-        self.gutter_markers = project_gutter_markers(&self.lines, gutter_markers);
-        self.contribution_actions = project_contribution_actions(&self.lines, contribution_actions);
+        (
+            self.decorations,
+            self.gutter_markers,
+            self.contribution_actions,
+        ) = project_contributions(&self.lines, contributions);
     }
 
     fn clamp_scroll(&mut self) {
@@ -579,7 +561,7 @@ impl EditorView {
     fn on_mouse_down(&mut self, ev: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let (line, col) = self.hit_test(ev.position, window);
         let gutter = ev.position.x <= self.bounds.origin.x + px(14.);
-        if let Some(action) = self.contribution_actions.iter().find(|action| {
+        if let Some(action) = self.contribution_actions.iter().rev().find(|action| {
             action.line == line
                 && if gutter {
                     action.gutter
@@ -770,41 +752,15 @@ impl EditorView {
         utf16_count
     }
 
-    /// Commit a replacement to the authoritative model, then refresh the
-    /// derived line/segment projection used by shaping and hit testing.
+    /// Commit a replacement to the authoritative model. Its notification
+    /// refreshes the derived line/segment projection.
     fn splice(&mut self, byte_start: usize, byte_end: usize, text: &str, cx: &mut Context<Self>) {
         let model = self.model.clone();
-        let changed = model.update(cx, |model, cx| {
-            let changed = model.replace(byte_start..byte_end, text);
-            if changed {
+        model.update(cx, |model, cx| {
+            if model.replace(byte_start..byte_end, text) {
                 cx.notify();
             }
-            changed
         });
-        if changed {
-            let model = model.read(cx);
-            self.rebuild_projection(
-                &model.text(),
-                model.resolved_decorations(),
-                model.resolved_gutter_markers(),
-                model.resolved_contribution_actions(),
-            );
-        }
-    }
-
-    /// Refresh the derived rendering projection after a foreground host commit.
-    pub(crate) fn refresh_from_model(&mut self, cx: &mut Context<Self>) {
-        let (text, decorations, gutter_markers, contribution_actions) = {
-            let model = self.model.read(cx);
-            (
-                model.text(),
-                model.resolved_decorations(),
-                model.resolved_gutter_markers(),
-                model.resolved_contribution_actions(),
-            )
-        };
-        self.rebuild_projection(&text, decorations, gutter_markers, contribution_actions);
-        cx.notify();
     }
 
     /// Determine the byte range to replace given an optional UTF-16 range.
@@ -917,103 +873,98 @@ pub(crate) fn seed_fixture_contributions(
         .expect("fixture overlap contributions have valid ranges");
 }
 
-fn project_decorations(
+fn project_contributions(
     lines: &[String],
-    decorations: Vec<ResolvedDecoration>,
-) -> Vec<RenderedDecoration> {
-    let mut projected = Vec::new();
-    for decoration in decorations {
-        let color = match decoration.token {
-            DecorationToken::Info => INFO_COLOR,
-            DecorationToken::Warning => WARNING_COLOR,
-            DecorationToken::Error => ERROR_COLOR,
-        };
-        let start = decoration.range.start_byte_offset;
-        let end = decoration.range.end_byte_offset;
-        let mut line_start = 0;
-        for (line, text) in lines.iter().enumerate() {
-            let line_end = line_start + text.len();
+    contributions: Vec<ResolvedEditorContribution>,
+) -> (
+    Vec<RenderedDecoration>,
+    Vec<RenderedGutterMarker>,
+    Vec<RenderedContributionAction>,
+) {
+    let mut line_starts = Vec::with_capacity(lines.len());
+    let mut next_start = 0;
+    for line in lines {
+        line_starts.push(next_start);
+        next_start += line.len() + 1;
+    }
+
+    let line_at = |offset| {
+        line_starts
+            .partition_point(|&start| start <= offset)
+            .saturating_sub(1)
+            .min(lines.len().saturating_sub(1))
+    };
+
+    let mut decorations = Vec::new();
+    let mut gutter_markers = Vec::new();
+    let mut actions = Vec::new();
+    for contribution in contributions {
+        let start = contribution.range.start_byte_offset;
+        let end = contribution.range.end_byte_offset;
+        let first_line = line_at(start);
+        let last_line = line_at(end);
+
+        if let Some(token) = contribution.gutter {
+            gutter_markers.push(RenderedGutterMarker {
+                line: first_line,
+                color: gutter_color(token),
+            });
+        }
+
+        if contribution.decoration.is_none() && contribution.command.is_none() {
+            continue;
+        }
+
+        for line in first_line..=last_line {
+            let line_start = line_starts[line];
+            let line_end = line_start + lines[line].len();
             let segment_start = start.max(line_start);
             let segment_end = end.min(line_end);
-            if segment_start < segment_end {
-                projected.push(RenderedDecoration {
+
+            if let Some(token) = contribution.decoration
+                && segment_start < segment_end
+            {
+                decorations.push(RenderedDecoration {
                     line,
                     start: segment_start - line_start,
                     end: segment_end - line_start,
-                    color,
+                    color: decoration_color(token),
                 });
             }
-            if line_end >= end {
-                break;
-            }
-            line_start = line_end + 1;
-        }
-    }
-    projected
-}
 
-fn line_and_column_at(lines: &[String], byte_offset: usize) -> (usize, usize) {
-    let mut line_start = 0;
-    for (line, text) in lines.iter().enumerate() {
-        let line_end = line_start + text.len();
-        if byte_offset <= line_end {
-            return (line, byte_offset - line_start);
-        }
-        line_start = line_end + 1;
-    }
-    let line = lines.len().saturating_sub(1);
-    (line, lines.get(line).map_or(0, String::len))
-}
-
-fn project_gutter_markers(
-    lines: &[String],
-    markers: Vec<ResolvedGutterMarker>,
-) -> Vec<RenderedGutterMarker> {
-    markers
-        .into_iter()
-        .map(|marker| {
-            let (line, _) = line_and_column_at(lines, marker.range.start_byte_offset);
-            let color = match marker.token {
-                GutterToken::Info => INFO_COLOR,
-                GutterToken::Warning => WARNING_COLOR,
-                GutterToken::Error => ERROR_COLOR,
-            };
-            RenderedGutterMarker { line, color }
-        })
-        .collect()
-}
-
-fn project_contribution_actions(
-    lines: &[String],
-    actions: Vec<ResolvedContributionAction>,
-) -> Vec<RenderedContributionAction> {
-    let mut projected = Vec::new();
-    for action in actions {
-        let start = action.range.start_byte_offset;
-        let end = action.range.end_byte_offset;
-        let gutter_line = line_and_column_at(lines, start).0;
-        let mut line_start = 0;
-        for (line, text) in lines.iter().enumerate() {
-            let line_end = line_start + text.len();
-            let segment_start = start.max(line_start);
-            let segment_end = end.min(line_end);
-            if segment_start <= segment_end && start <= line_end && end >= line_start {
-                projected.push(RenderedContributionAction {
+            if let Some(command) = &contribution.command
+                && segment_start <= segment_end
+                && start <= line_end
+                && end >= line_start
+            {
+                actions.push(RenderedContributionAction {
                     line,
                     start: segment_start - line_start,
                     end: segment_end - line_start,
-                    command: action.command.clone(),
-                    source: action.source,
-                    gutter: action.gutter && line == gutter_line,
+                    command: command.clone(),
+                    source: contribution.source,
+                    gutter: contribution.gutter.is_some() && line == first_line,
                 });
             }
-            if line_end >= end {
-                break;
-            }
-            line_start = line_end + 1;
         }
     }
-    projected
+    (decorations, gutter_markers, actions)
+}
+
+fn decoration_color(token: DecorationToken) -> u32 {
+    match token {
+        DecorationToken::Info => INFO_COLOR,
+        DecorationToken::Warning => WARNING_COLOR,
+        DecorationToken::Error => ERROR_COLOR,
+    }
+}
+
+fn gutter_color(token: GutterToken) -> u32 {
+    match token {
+        GutterToken::Info => INFO_COLOR,
+        GutterToken::Warning => WARNING_COLOR,
+        GutterToken::Error => ERROR_COLOR,
+    }
 }
 
 fn default_projection(text: &str) -> (Vec<String>, Vec<Vec<Seg>>) {
@@ -1845,7 +1796,11 @@ fn x_for_index_dir(s: &ShapedLine, index: usize, line_str: &str) -> Pixels {
 mod tests {
     use gpui::{AppContext, TestAppContext};
 
-    use super::{BufferModel, EditorView, default_projection};
+    use super::{
+        BufferModel, ContributionSource, EditorView, ResolvedEditorContribution,
+        default_projection, project_contributions,
+    };
+    use crate::host::protocol::{ByteRange, DecorationToken, GutterToken};
     use crate::view::fixture::Fixture;
 
     #[test]
@@ -1857,6 +1812,41 @@ mod tests {
         assert_eq!(lines, ["three", "two"]);
         assert_eq!(segs[0][0].end, "three".len());
         assert_eq!(segs[1][0].end, "two".len());
+    }
+
+    #[test]
+    fn contribution_projection_indexes_multiline_ranges() {
+        let lines = vec!["aa".into(), "bbbb".into(), "cc".into()];
+        let (decorations, gutters, actions) = project_contributions(
+            &lines,
+            vec![ResolvedEditorContribution {
+                range: ByteRange {
+                    start_byte_offset: 1,
+                    end_byte_offset: 9,
+                },
+                source: ContributionSource::BuiltIn,
+                decoration: Some(DecorationToken::Warning),
+                gutter: Some(GutterToken::Warning),
+                command: Some("fixture.action".into()),
+            }],
+        );
+
+        assert_eq!(
+            decorations
+                .iter()
+                .map(|decoration| (decoration.line, decoration.start, decoration.end))
+                .collect::<Vec<_>>(),
+            [(0, 1, 2), (1, 0, 4), (2, 0, 1)]
+        );
+        assert_eq!(gutters.len(), 1);
+        assert_eq!(gutters[0].line, 0);
+        assert_eq!(
+            actions
+                .iter()
+                .map(|action| (action.line, action.start, action.end, action.gutter))
+                .collect::<Vec<_>>(),
+            [(0, 1, 2, true), (1, 0, 4, false), (2, 0, 1, false)]
+        );
     }
 
     #[gpui::test]

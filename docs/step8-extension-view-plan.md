@@ -269,6 +269,9 @@ land.
    terminated owner cannot receive a late action.
 5. ✅ Add a fixture extension that publishes diagnostics and gutter markers,
    updates them once, receives one action, and disposes them.
+6. ✅ Resolve contribution metadata once per model notification and project
+   byte ranges through one indexed line table. Avoid per-contribution scans
+   from the start of the document and duplicate view refreshes.
 
 ### 3. Add the asynchronous native tree-provider surface
 
