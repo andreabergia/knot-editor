@@ -32,6 +32,7 @@ use gpui::{prelude::*, *};
 use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation;
 
+use crate::core::anchored_range::AnchoredRangeId;
 use crate::host::protocol::{ByteRange, DecorationToken, EditorContribution, GutterToken};
 
 use super::model::{BufferModel, ContributionSource, ResolvedEditorContribution};
@@ -139,6 +140,8 @@ pub struct EditorView {
     anchor_line: usize,
     anchor_col: usize,
     has_selection: bool,
+    position_range: Option<AnchoredRangeId>,
+    selection_reversed: bool,
     /// IME preedit (marked) range as flat UTF-16 offsets into the
     /// `lines.join("\\n")` document. `None` = no active composition. Set by
     /// `replace_and_mark_text_in_range`, cleared by `replace_text_in_range` /
@@ -146,6 +149,7 @@ pub struct EditorView {
     marked_range_utf16: Option<Range<usize>>,
     focus: FocusHandle,
     _model_subscription: Subscription,
+    _release_subscription: Subscription,
 }
 
 impl EditorView {
@@ -241,10 +245,21 @@ impl EditorView {
         let (decorations, gutter_markers, contribution_actions) =
             project_contributions(&lines, model.read(cx).resolved_contributions());
 
+        let position_range = model.update(cx, |model, _| model.add_view_position(0..0));
         let model_subscription = cx.observe(&model, |this, model, cx| {
             let model = model.read(cx);
-            this.rebuild_projection(&model.text(), model.resolved_contributions());
+            this.rebuild_projection(
+                &model.text(),
+                model.resolved_contributions(),
+                model.resolve_view_position(this.position_range),
+            );
+            this.sync_view_position(cx);
             cx.notify();
+        });
+        let release_subscription = cx.on_release(|this, cx| {
+            this.model.update(cx, |model, _| {
+                model.remove_view_position(this.position_range);
+            });
         });
 
         Self {
@@ -265,19 +280,90 @@ impl EditorView {
             anchor_line: 0,
             anchor_col: 0,
             has_selection: false,
+            position_range,
+            selection_reversed: false,
             marked_range_utf16: None,
             focus: cx.focus_handle(),
             _model_subscription: model_subscription,
+            _release_subscription: release_subscription,
         }
     }
 
-    fn rebuild_projection(&mut self, text: &str, contributions: Vec<ResolvedEditorContribution>) {
+    fn rebuild_projection(
+        &mut self,
+        text: &str,
+        contributions: Vec<ResolvedEditorContribution>,
+        position: Option<Range<usize>>,
+    ) {
         (self.lines, self.segs) = default_projection(text);
         (
             self.decorations,
             self.gutter_markers,
             self.contribution_actions,
         ) = project_contributions(&self.lines, contributions);
+        if let Some(position) = position {
+            self.restore_view_position(position);
+        }
+    }
+
+    fn to_flat_byte(&self, line: usize, byte_col: usize) -> usize {
+        self.lines
+            .iter()
+            .take(line)
+            .map(|line| line.len() + 1)
+            .sum::<usize>()
+            + byte_col
+    }
+
+    fn from_flat_byte(&self, mut offset: usize) -> (usize, usize) {
+        for (line, text) in self.lines.iter().enumerate() {
+            if offset <= text.len() {
+                return (line, offset);
+            }
+            offset = offset.saturating_sub(text.len() + 1);
+        }
+        let line = self.lines.len().saturating_sub(1);
+        (line, self.line_end(line))
+    }
+
+    fn sync_view_position(&mut self, cx: &mut Context<Self>) {
+        let caret = self.to_flat_byte(self.cursor_line, self.cursor_col);
+        let anchor = if self.has_selection {
+            self.to_flat_byte(self.anchor_line, self.anchor_col)
+        } else {
+            caret
+        };
+        self.selection_reversed = self.has_selection && caret < anchor;
+        let range = anchor.min(caret)..anchor.max(caret);
+        self.position_range = self.model.update(cx, |model, _| {
+            model.replace_view_position(self.position_range, range)
+        });
+    }
+
+    fn finish_position_change(&mut self, cx: &mut Context<Self>) {
+        self.ensure_cursor_visible(self.viewport_h);
+        self.clamp_scroll();
+        self.sync_view_position(cx);
+        cx.notify();
+    }
+
+    fn restore_view_position(&mut self, range: Range<usize>) {
+        let start = self.from_flat_byte(range.start);
+        let end = self.from_flat_byte(range.end);
+        if self.has_selection && !range.is_empty() {
+            if self.selection_reversed {
+                (self.cursor_line, self.cursor_col) = start;
+                (self.anchor_line, self.anchor_col) = end;
+            } else {
+                (self.anchor_line, self.anchor_col) = start;
+                (self.cursor_line, self.cursor_col) = end;
+            }
+        } else {
+            (self.cursor_line, self.cursor_col) = end;
+            self.has_selection = false;
+        }
+        self.preferred_col = self.cursor_col;
+        self.clamp_scroll();
     }
 
     fn clamp_scroll(&mut self) {
@@ -551,10 +637,8 @@ impl EditorView {
             self.scroll = (self.scroll + scroll_delta).max(0.);
         }
 
-        self.ensure_cursor_visible(self.viewport_h);
-        self.clamp_scroll();
         cx.stop_propagation();
-        cx.notify();
+        self.finish_position_change(cx);
     }
 
     /// Convert `preferred_col` to a valid byte column on `line`, never
@@ -620,9 +704,7 @@ impl EditorView {
             self.preferred_col = col;
             self.has_selection = false;
         }
-        self.ensure_cursor_visible(self.viewport_h);
-        self.clamp_scroll();
-        cx.notify();
+        self.finish_position_change(cx);
     }
 
     /// Mouse-move while the left button is held extends the selection from
@@ -647,9 +729,7 @@ impl EditorView {
         self.preferred_col = col;
         self.has_selection =
             self.cursor_line != self.anchor_line || self.cursor_col != self.anchor_col;
-        self.ensure_cursor_visible(self.viewport_h);
-        self.clamp_scroll();
-        cx.notify();
+        self.finish_position_change(cx);
     }
 
     /// Per-line horizontal offset for RTL lines: right-align the line within
@@ -1087,9 +1167,7 @@ impl EntityInputHandler for EditorView {
             self.cursor_col = col;
             self.preferred_col = col;
             self.has_selection = false;
-            self.ensure_cursor_visible(self.viewport_h);
-            self.clamp_scroll();
-            cx.notify();
+            self.finish_position_change(cx);
         }
     }
 
@@ -1121,9 +1199,7 @@ impl EntityInputHandler for EditorView {
         self.cursor_col = col;
         self.preferred_col = col;
         self.has_selection = false;
-        self.ensure_cursor_visible(self.viewport_h);
-        self.clamp_scroll();
-        cx.notify();
+        self.finish_position_change(cx);
     }
 
     /// Replace text at the given range (or current selection / marked range
@@ -1168,9 +1244,7 @@ impl EntityInputHandler for EditorView {
         self.preferred_col = cc;
         self.has_selection = anchor_utf16 != caret_utf16;
 
-        self.ensure_cursor_visible(self.viewport_h);
-        self.clamp_scroll();
-        cx.notify();
+        self.finish_position_change(cx);
     }
 
     /// Return the bounds (in window-local px) of the given UTF-16 range, used
@@ -1933,18 +2007,20 @@ mod tests {
             )
         });
 
-        first.update(cx, |view, _| {
+        first.update(cx, |view, cx| {
             view.cursor_line = 1;
             view.cursor_col = 2;
             view.anchor_line = 0;
             view.anchor_col = 1;
             view.has_selection = true;
             view.scroll = 20.;
+            view.sync_view_position(cx);
         });
-        second.update(cx, |view, _| {
+        second.update(cx, |view, cx| {
             view.cursor_line = 2;
             view.cursor_col = 3;
             view.scroll = 40.;
+            view.sync_view_position(cx);
         });
 
         model.update(cx, |model, cx| {
@@ -1979,8 +2055,8 @@ mod tests {
             assert_eq!(first.decorations.len(), second.decorations.len());
             assert_eq!(first.gutter_markers.len(), second.gutter_markers.len());
 
-            assert_eq!((first.cursor_line, first.cursor_col), (1, 2));
-            assert_eq!((second.cursor_line, second.cursor_col), (2, 3));
+            assert_eq!((first.cursor_line, first.cursor_col), (2, 2));
+            assert_eq!((second.cursor_line, second.cursor_col), (3, 3));
             assert!(first.has_selection);
             assert!(!second.has_selection);
             assert_eq!(first.scroll, 20.);
@@ -1988,6 +2064,36 @@ mod tests {
             assert!(first.rendering.show_gutter_markers);
             assert!(!second.rendering.show_gutter_markers);
             assert_ne!(first.focus, second.focus);
+        });
+    }
+
+    #[gpui::test]
+    fn selection_tracks_a_deletion_from_another_view(cx: &mut TestAppContext) {
+        let fixture = Fixture::from_lines(vec!["0123456789".into()]);
+        let model = cx.new(|_| BufferModel::from_text("0123456789"));
+        let first = cx.new(|cx| EditorView::from_fixture(&fixture, model.clone(), cx));
+        let second = cx.new(|cx| EditorView::from_fixture(&fixture, model.clone(), cx));
+
+        second.update(cx, |view, cx| {
+            view.anchor_col = 4;
+            view.cursor_col = 7;
+            view.has_selection = true;
+            view.sync_view_position(cx);
+        });
+        model.update(cx, |model, cx| {
+            assert!(model.replace(1..2, ""));
+            cx.notify();
+        });
+        cx.run_until_parked();
+
+        cx.read(|cx| {
+            let first = first.read(cx);
+            let second = second.read(cx);
+            assert_eq!(first.lines[0], "023456789");
+            assert_eq!(second.lines, first.lines);
+            assert_eq!((second.anchor_line, second.anchor_col), (0, 3));
+            assert_eq!((second.cursor_line, second.cursor_col), (0, 6));
+            assert!(second.has_selection);
         });
     }
 }

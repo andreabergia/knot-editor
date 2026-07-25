@@ -99,7 +99,10 @@ Each `EditorView` owns cursor, selection, scroll, focus, IME, rendering
 choices, and derived line, segment, decoration, gutter-marker, and
 contribution-action projections. Multiple editor-view entities may observe the
 same `BufferModel`; model notifications update their text and contribution
-projections independently without coupling their presentation state.
+projections independently without coupling their presentation state. Each view
+also owns the identity and direction of a persistent range in the model's
+shared anchored-range store, so its cursor and selection follow buffer edits
+while remaining view-local state.
 Contribution actions emit semantic command requests; the shell rechecks that
 the current contribution and command registration have the same live extension
 lifecycle before dispatch. Local edits commit through the model and model

@@ -297,6 +297,43 @@ impl BufferModel {
             .collect()
     }
 
+    pub(crate) fn add_view_position(&mut self, range: Range<usize>) -> Option<AnchoredRangeId> {
+        if self.buffer.is_empty() {
+            return None;
+        }
+        Some(
+            self.anchored_ranges
+                .add_persistent(&self.buffer, range.start, range.end),
+        )
+    }
+
+    pub(crate) fn replace_view_position(
+        &mut self,
+        id: Option<AnchoredRangeId>,
+        range: Range<usize>,
+    ) -> Option<AnchoredRangeId> {
+        if self.buffer.is_empty() {
+            return id;
+        }
+        if let Some(id) = id {
+            self.anchored_ranges.remove(id);
+        }
+        self.add_view_position(range)
+    }
+
+    pub(crate) fn resolve_view_position(
+        &self,
+        id: Option<AnchoredRangeId>,
+    ) -> Option<Range<usize>> {
+        self.anchored_ranges.resolve(&self.buffer, id?)
+    }
+
+    pub(crate) fn remove_view_position(&mut self, id: Option<AnchoredRangeId>) {
+        if let Some(id) = id {
+            self.anchored_ranges.remove(id);
+        }
+    }
+
     pub(crate) fn has_contribution_action(
         &self,
         source: ContributionSource,

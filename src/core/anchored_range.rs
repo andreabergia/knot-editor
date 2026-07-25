@@ -9,9 +9,9 @@
 //! Range queries use a derived interval index. Mutations mark the index dirty,
 //! and [`AnchoredRangeStore::query_range`] rebuilds it lazily before querying.
 //!
-//! A deletion that fully consumes a range removes the range and its endpoint
-//! index entries. Removed IDs no longer resolve or appear in live iteration or
-//! range queries.
+//! A deletion that fully consumes a normal range removes it and its endpoint
+//! index entries. Persistent ranges instead collapse at the surviving edit
+//! boundary for cursor and selection geometry.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::ops::Range;
@@ -71,6 +71,7 @@ pub struct AnchoredRange {
     pub id: AnchoredRangeId,
     pub start: Anchor,
     pub end: Anchor,
+    retain_when_empty: bool,
     /// Cached live resolved byte offsets, the authoritative transient state
     /// `stabilize` refreshes after every edit (see module docs). The
     /// `Position` tokens are re-anchored against these via `position_at`.
@@ -143,8 +144,7 @@ impl AnchoredRangeStore {
         }
     }
 
-    /// Number of anchored ranges currently held (all live; fully consumed
-    /// anchored ranges are removed, not tombstoned).
+    /// Number of anchored ranges currently held.
     pub fn len(&self) -> usize {
         self.anchored_ranges.len()
     }
@@ -276,6 +276,28 @@ impl AnchoredRangeStore {
     /// (sticky-left) and the end to `After` (sticky-right) — standard
     /// selection semantics (D2).
     pub fn add(&mut self, buffer: &TextBuffer, start: usize, end: usize) -> AnchoredRangeId {
+        self.add_inner(buffer, start, end, false)
+    }
+
+    /// Add a range whose endpoints survive deletion even when its extent
+    /// collapses to zero. Cursor and selection geometry uses this behavior to
+    /// snap to the surviving edit boundary rather than disappear.
+    pub fn add_persistent(
+        &mut self,
+        buffer: &TextBuffer,
+        start: usize,
+        end: usize,
+    ) -> AnchoredRangeId {
+        self.add_inner(buffer, start, end, true)
+    }
+
+    fn add_inner(
+        &mut self,
+        buffer: &TextBuffer,
+        start: usize,
+        end: usize,
+        retain_when_empty: bool,
+    ) -> AnchoredRangeId {
         let id = self.next_id;
         self.next_id += 1;
 
@@ -291,6 +313,7 @@ impl AnchoredRangeStore {
             id,
             start: start_a,
             end: end_a,
+            retain_when_empty,
             idx_start: start,
             idx_end: end,
         };
@@ -344,9 +367,7 @@ impl AnchoredRangeStore {
         out
     }
 
-    /// Iterate over all live anchored ranges. Fully consumed anchored ranges are
-    /// removed rather than retained as tombstones, so every entry in the
-    /// map is live.
+    /// Iterate over all live anchored ranges.
     pub fn iter_live(&self) -> impl Iterator<Item = (&AnchoredRangeId, &AnchoredRange)> {
         self.anchored_ranges.iter()
     }
@@ -491,6 +512,7 @@ impl AnchoredRangeStore {
                 for id in touched {
                     self.refresh_cached_offsets(buffer, id);
                     if consumption_candidates.contains(&id)
+                        && !self.anchored_ranges[&id].retain_when_empty
                         && self.resolved_extent_empty(buffer, id)
                         && self.consume(id)
                     {
@@ -804,6 +826,18 @@ mod tests {
         store.stabilize(&b);
         // Fully deleted -> consumed, no extent; anchored range is removed entirely.
         assert_eq!(store.resolve(&b, id), None);
+    }
+
+    #[test]
+    fn persistent_range_collapses_at_a_full_deletion() {
+        let mut b = text();
+        let mut store = AnchoredRangeStore::new();
+        let id = store.add_persistent(&b, 3, 8);
+
+        b.delete(2..9);
+        store.stabilize(&b);
+
+        assert_eq!(store.resolve(&b, id), Some(2..2));
     }
 
     #[test]
