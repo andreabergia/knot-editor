@@ -27,8 +27,10 @@ ContributionSource → ContributionSet
 
 Each built-in or extension source publishes one complete contribution set per
 buffer. Multiple sources may create distinct anchored ranges with identical
-resolved byte ranges. The application retains every contribution and applies
-surface-specific composition policies for decorations, gutters, and actions.
+resolved byte ranges. The application retains every contribution and owns
+surface-specific composition policy. The current decoration path orders tokens
+by precedence; durable exact-overlap policies for each presentation channel
+remain open.
 
 This supersedes the prototype's earlier `AnchoredRangeKind`,
 `AnchoredRangeData`, and `query_range_for_kinds` design. Those types mixed
