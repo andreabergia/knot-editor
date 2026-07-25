@@ -249,7 +249,7 @@ land.
 5. ✅ Render at least two overlapping sources with deterministic native
    precedence. Record precedence as a local presentation policy, not a core
    anchored-range rule.
-6. ⬜ Strengthen `AnchoredRangeStore` validation with property/model tests.
+6. ⏭️ *Defer:* Strengthen `AnchoredRangeStore` validation with property/model tests.
    Cover multiple seeds, Unicode boundaries, empty-buffer transitions,
    add/remove interleavings, the endpoint-stickiness combination exposed by
    `AnchoredRangeStore::add`, query equivalence, and internal endpoint-index
