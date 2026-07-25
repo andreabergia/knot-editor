@@ -1,47 +1,17 @@
-//! `AnchoredRangeStore`: stable ranges over `TextBuffer`.
+//! Stable byte ranges over [`TextBuffer`].
 //!
-//! Each anchored range anchors its endpoints as stable `Position` tokens issued
-//! by `TextBuffer::position_at` (D1), not raw byte offsets. Endpoint
-//! stickiness (`Before`/`After`, D2) makes anchored ranges survive edits
-//! correctly. A derived interval index (D3) answers "anchored ranges overlapping
-//! `[a, b)`".
+//! Each endpoint uses a stable [`Position`] token plus endpoint stickiness.
+//! Cached byte offsets preserve resolution while the buffer is empty.
+//! [`AnchoredRangeStore::stabilize`] follows the buffer edit log and repairs
+//! only endpoints whose pieces were affected; untouched endpoints continue to
+//! resolve through their existing tokens.
 //!
-//! ## Representation and stabilization
+//! Range queries use a derived interval index. Mutations mark the index dirty,
+//! and [`AnchoredRangeStore::query_range`] rebuilds it lazily before querying.
 //!
-//! Endpoints carry a `Position` token plus a cached live byte offset
-//! (`idx_start` / `idx_end`) used only as a fallback when an empty buffer
-//! cannot issue a fresh token. `stabilize` advances a cursor over the edit
-//! log and repairs only endpoints whose token piece is affected by the edit:
-//! interior split right halves, insert-boundary endpoints, and endpoints
-//! whose piece is deleted. Untouched anchored ranges are left alone and resolve
-//! through their stable `Position` tokens.
-//!
-//! Querying is buffer-aware: `query_range` uses a sorted interval index
-//! rebuilt during `stabilize` for O(log n + k) binary-search lookup (D3).
-//! The `Position` tokens remain the source of truth — the index is a derived
-//! cache, so it can never drift in correctness.
-//!
-//! ## API shape note
-//!
-//! The plan's type sketch stored `buffer: &'buf TextBuffer` inside the store.
-//! That makes the store unusable while the buffer is being edited (you cannot
-//! hold `&buffer` and call `buffer.insert` through `&mut`). Instead the store
-//! is buffer-agnostic and receives `&TextBuffer` at the call sites that need
-//! it (`add`, `resolve`, `stabilize`). An editor owns the `TextBuffer` and the
-//! `AnchoredRangeStore` as sibling fields and passes the buffer in — which is
-//! exactly the shape a real host needs.
-//!
-//! ## `resolve` contract (decided)
-//!
-//! `resolve` returns `Some(start..end)` with `start <= end` for every live
-//! anchored range. When an anchored range's extent is fully consumed by a delete
-//! (both endpoints land strictly inside a deleted span and collapse onto the
-//! same point), it has no surviving extent: `AnchoredRangeStore` **removes** the
-//! anchored range entirely — its id, both endpoint-index entries, and any cached
-//! offsets. `resolve` returns `None` for that id thereafter, and `query_range`
-//! / `iter_live` cannot return it. The id is not reserved; a provider may add
-//! a fresh anchored range later that receives a new id (undo does not revive a
-//! consumed anchored range — see step 6b).
+//! A deletion that fully consumes a range removes the range and its endpoint
+//! index entries. Removed IDs no longer resolve or appear in live iteration or
+//! range queries.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::ops::Range;
