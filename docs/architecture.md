@@ -208,6 +208,26 @@ V8 external two-byte string over the snapshot's shared immutable allocation.
 V8 owns one reference until that string is collected or the isolate is
 disposed; it never points into mutable `TextBuffer` storage.
 
+Editor contribution publication follows one foreground-owned mutation path:
+
+```text
+extension replace(set, revision)
+              |
+       typed host request
+              |
+ revision/lifecycle/range validation
+              |
+ BufferModel atomic source replacement
+              |
+ shared anchors + model notification
+              |
+     each EditorView reprojects
+```
+
+The source identity comes from the request envelope rather than extension
+payload. Disposal and extension teardown enter the same model path and notify
+every observing view after removing that source's complete set.
+
 The public workbench facade registers semantic tree data providers by native
 view ID. Registration, invalidation, and disposal travel through the typed host
 request stream. A foreground tree generation queues a reverse runtime command;
@@ -216,14 +236,29 @@ returns renderer-neutral items or a recoverable error. Dropping the runtime
 command queue clears pending callback completions during teardown.
 
 ```text
-extension getChildren callback
-        ^             |
- reverse runtime      | semantic items/error
- command              v
-        native TreeView cache
-              |
-       gpui render/input
+extension invalidate/register/dispose
+                |
+        typed host request
+                v
+       native TreeView generation
+                |
+        reverse runtime command
+                v
+   extension getChildren callback
+                |
+       semantic items/error
+                v
+ generation/lifecycle validation
+                |
+       native TreeView cache
+                |
+        gpui render/input
 ```
+
+Invalidation advances only the affected parent generation and may be coalesced.
+Rendering and input consult the foreground cache only. A response updates that
+cache only when its registration, parent, generation, and extension lifecycle
+still match; otherwise it is discarded without mutating view state.
 
 Detailed runtime behavior and experiment results live in
 `step7-v8-runtime.md` and the host module's Rustdoc.

@@ -315,7 +315,7 @@ land.
    Avoid broad UI snapshot or end-to-end suites.
 4. ✅ Record findings and the final boundary decision in this document and
    `docs/roadmap.md`.
-5. ⬜ Update `docs/architecture.md` with the resulting ownership and request
+5. ✅ Update `docs/architecture.md` with the resulting ownership and request
    flows.
 6. ⬜ Run `cargo fmt` once at the end of Rust work, then run the focused tests
    and any existing suite affected by the changes.
