@@ -21,10 +21,10 @@ use crate::host::{
 mod editor;
 pub mod model;
 
-use editor::{EditorView, seed_fixture_contributions};
+use editor::{EditorContributionAction, EditorView, seed_fixture_contributions};
 use model::{
     BufferAccessError, BufferModel, BufferRegistry, BufferSubscriptionRegistry, CommandRegistry,
-    ContributionSource,
+    ContributionError, ContributionSource,
 };
 
 actions!(knot, [Quit]);
@@ -57,6 +57,33 @@ await commands.register("knot.fixture.edit", async (context) => {
     { ifRevision: snapshot.revision },
   );
 });
+await commands.register("knot.fixture.contribution", async () => {
+  globalThis.knotFixtureContributionActions =
+    (globalThis.knotFixtureContributionActions ?? 0) + 1;
+  await globalThis.knotActiveBuffer.contributions.dispose();
+});
+const contributionSnapshot = await globalThis.knotActiveBuffer.snapshot();
+const contributionStartUtf16 = contributionSnapshot.text.indexOf("LEAF_MAX");
+if (contributionStartUtf16 >= 0) {
+  const contributionRange = {
+    startByteOffset: contributionSnapshot.byteOffsetAtUtf16(contributionStartUtf16),
+    endByteOffset: contributionSnapshot.byteOffsetAtUtf16(
+      contributionStartUtf16 + "LEAF_MAX".length,
+    ),
+  };
+  await globalThis.knotActiveBuffer.contributions.replace([{
+    range: contributionRange,
+    decoration: "warning",
+    gutter: "warning",
+    command: "knot.fixture.contribution",
+  }], { ifRevision: contributionSnapshot.revision });
+  await globalThis.knotActiveBuffer.contributions.replace([{
+    range: contributionRange,
+    decoration: "error",
+    gutter: "error",
+    command: "knot.fixture.contribution",
+  }], { ifRevision: contributionSnapshot.revision });
+}
 "#;
 
 fn map_buffer_error(error: BufferAccessError) -> HostRequestError {
@@ -72,6 +99,15 @@ fn map_command_error(error: model::CommandRegistryError) -> HostRequestError {
     match error {
         model::CommandRegistryError::NameInUse => HostRequestError::CommandNameInUse,
         model::CommandRegistryError::NotFound => HostRequestError::CommandNotFound,
+    }
+}
+
+fn map_contribution_error(error: ContributionError) -> HostRequestError {
+    match error {
+        ContributionError::Closed => HostRequestError::BufferClosed,
+        ContributionError::InvalidRange => HostRequestError::InvalidRange,
+        ContributionError::RevisionConflict => HostRequestError::RevisionConflict,
+        ContributionError::NotFound => HostRequestError::ContributionSetNotFound,
     }
 }
 
@@ -124,6 +160,7 @@ struct Shell {
     _runtime_bridge_tasks: Vec<Task<()>>,
     _runtime_execution_task: Task<()>,
     _model_subscription: Subscription,
+    _editor_action_subscription: Subscription,
     _heartbeat_task: Task<()>,
     /// Name of the fixture currently loaded (shown in a thin status header
     /// above the editor so it's visible at a glance which fixture is running).
@@ -178,6 +215,12 @@ impl Shell {
         let handle = buffer_registry.open(&model);
         buffer_registry.set_active(Some(handle));
         let editor = cx.new(|cx| EditorView::from_fixture(&fixture, model.clone(), cx));
+        let editor_action_subscription = cx.subscribe(
+            &editor,
+            |this, _editor, action: &EditorContributionAction, cx| {
+                this.invoke_contribution_action(action, cx);
+            },
+        );
         let model_subscription = cx.observe(&model, |this, model, cx| {
             this.publish_model_change(model, cx);
             cx.notify();
@@ -292,6 +335,7 @@ impl Shell {
             _runtime_bridge_tasks: runtime_bridge_tasks,
             _runtime_execution_task: runtime_execution_task,
             _model_subscription: model_subscription,
+            _editor_action_subscription: editor_action_subscription,
             _heartbeat_task: heartbeat_task,
             fixture_name,
         }
@@ -317,6 +361,7 @@ impl Shell {
             }
             let (extension, lifecycle) = control.identity();
             let _ = this.update(cx, |this, cx| {
+                this.extension_controls.remove(&(extension, lifecycle));
                 this.command_registry.remove_lifecycle(extension, lifecycle);
                 this.buffer_subscriptions
                     .remove_lifecycle(extension, lifecycle);
@@ -339,8 +384,11 @@ impl Shell {
         let cancelled = request
             .invocation
             .is_some_and(|invocation| self.cancelled_commands.contains(&invocation));
+        let lifecycle_live = self
+            .extension_controls
+            .contains_key(&(request.extension, request.lifecycle));
         let result = match request.operation {
-            _ if cancelled => Err(HostRequestError::Cancelled),
+            _ if cancelled || !lifecycle_live => Err(HostRequestError::Cancelled),
             HostOperation::ActiveBuffer => Ok(HostResponseValue::ActiveBuffer(
                 self.buffer_registry.active_handle(),
             )),
@@ -418,6 +466,62 @@ impl Shell {
                     Err(HostRequestError::BufferClosed)
                 }
             }
+            HostOperation::ReplaceEditorContributions {
+                buffer,
+                contributions,
+                if_revision,
+            } => self
+                .buffer_registry
+                .resolve(buffer)
+                .map_err(|_| HostRequestError::BufferClosed)
+                .and_then(|model| {
+                    model
+                        .update(cx, |model, cx| {
+                            model.replace_contributions(
+                                ContributionSource::Extension {
+                                    extension: request.extension,
+                                    lifecycle: request.lifecycle,
+                                },
+                                &contributions,
+                                if_revision,
+                            )?;
+                            cx.notify();
+                            Ok(())
+                        })
+                        .map_err(map_contribution_error)
+                })
+                .map(|()| {
+                    self.editor
+                        .update(cx, |editor, cx| editor.refresh_from_model(cx));
+                    HostResponseValue::EditorContributionsReplaced
+                }),
+            HostOperation::DisposeEditorContributions { buffer } => self
+                .buffer_registry
+                .resolve(buffer)
+                .map_err(|_| HostRequestError::BufferClosed)
+                .and_then(|model| {
+                    model
+                        .update(cx, |model, cx| {
+                            let result =
+                                model.dispose_contributions(ContributionSource::Extension {
+                                    extension: request.extension,
+                                    lifecycle: request.lifecycle,
+                                });
+                            if let Err(error) = result
+                                && error != ContributionError::NotFound
+                            {
+                                return Err(error);
+                            }
+                            cx.notify();
+                            Ok(())
+                        })
+                        .map_err(map_contribution_error)
+                })
+                .map(|()| {
+                    self.editor
+                        .update(cx, |editor, cx| editor.refresh_from_model(cx));
+                    HostResponseValue::EditorContributionsDisposed
+                }),
         };
 
         HostResponse {
@@ -487,6 +591,48 @@ impl Shell {
                 return;
             }
         };
+        self.invoke_command_target(target, cx);
+    }
+
+    fn invoke_contribution_action(
+        &mut self,
+        action: &EditorContributionAction,
+        cx: &mut Context<Self>,
+    ) {
+        let ContributionSource::Extension {
+            extension,
+            lifecycle,
+        } = action.source
+        else {
+            return;
+        };
+        let Some(buffer) = self.buffer_registry.active_handle() else {
+            return;
+        };
+        let Ok(model) = self.buffer_registry.resolve(buffer) else {
+            return;
+        };
+        if !model.read_with(cx, |model, _| {
+            model
+                .resolved_contribution_actions()
+                .iter()
+                .any(|current| current.command == action.command && current.source == action.source)
+        }) {
+            return;
+        }
+        let Ok(target) = self.command_registry.resolve(&action.command) else {
+            return;
+        };
+        if target.extension != extension || target.lifecycle != lifecycle {
+            return;
+        }
+        self.invoke_command_target(target, cx);
+    }
+
+    fn invoke_command_target(&mut self, target: model::CommandTarget, cx: &mut Context<Self>) {
+        if self.active_command.is_some() {
+            return;
+        }
         let Some(control) = self
             .extension_controls
             .get(&(target.extension, target.lifecycle))
@@ -841,12 +987,12 @@ mod tests {
 
     use gpui::{AppContext, Entity, TestAppContext};
 
-    use super::Shell;
+    use super::{ContributionSource, Shell, editor::EditorContributionAction};
     use crate::host::{
         ExtensionRuntimeControl, ExtensionRuntimeExecutionError, V8Host,
         protocol::{
-            ByteRange, CommandInvocation, CommandInvocationId, ExtensionId, HostOperation,
-            HostRequest, HostRequestError, RequestId, TextEdit,
+            ByteRange, CommandInvocation, CommandInvocationId, DecorationToken, ExtensionId,
+            GutterToken, HostOperation, HostRequest, HostRequestError, RequestId, TextEdit,
         },
     };
 
@@ -986,6 +1132,115 @@ mod tests {
         });
         assert!(text.starts_with("😀中é// extension\n"));
         assert_eq!(revision, 2);
+    }
+
+    #[gpui::test]
+    async fn extension_contributions_replace_invoke_and_dispose(cx: &mut TestAppContext) {
+        let runtime = V8Host::new()
+            .spawn_extension(ExtensionId::new(10))
+            .into_parts();
+        let identity = runtime.control.identity();
+        let shell = cx.new(|cx| Shell::new(runtime, cx));
+        wait_for_runtime_state(&shell, "running", cx).await;
+        let control = only_runtime_control(&shell, cx);
+
+        control
+            .execute_fixture_module(
+                "file:///fixtures/editor-contributions.js",
+                r#"
+                    import { commands, editor } from "knot:editor";
+
+                    const buffer = await editor.activeBuffer();
+                    const snapshot = await buffer.snapshot();
+                    await commands.register("knot.fixture.test-contribution", async () => {
+                      globalThis.contributionActions = (globalThis.contributionActions ?? 0) + 1;
+                      await buffer.contributions.dispose();
+                    });
+                    await buffer.contributions.replace([{
+                      range: { startByteOffset: 0, endByteOffset: 2 },
+                      decoration: "warning",
+                      gutter: "warning",
+                      command: "knot.fixture.test-contribution",
+                    }], { ifRevision: snapshot.revision });
+                    await buffer.contributions.replace([{
+                      range: { startByteOffset: 0, endByteOffset: 2 },
+                      decoration: "error",
+                      gutter: "error",
+                      command: "knot.fixture.test-contribution",
+                    }], { ifRevision: snapshot.revision });
+                    for (const [replacement, revision, expected] of [
+                      [{ range: { startByteOffset: 0, endByteOffset: 2 }, decoration: "info" },
+                       snapshot.revision + 1, "RevisionConflictError"],
+                      [{ range: { startByteOffset: 0, endByteOffset: 999999 }, decoration: "info" },
+                       snapshot.revision, "RangeError"],
+                    ]) {
+                      try {
+                        await buffer.contributions.replace([replacement], { ifRevision: revision });
+                        throw new Error(`accepted invalid replacement for ${expected}`);
+                      } catch (error) {
+                        if (error.name !== expected) throw error;
+                      }
+                    }
+                "#,
+            )
+            .await
+            .unwrap();
+
+        cx.read(|cx| {
+            let shell = shell.read(cx);
+            let model = shell.editor.read(cx).model().read(cx);
+            assert!(
+                model
+                    .resolved_decorations()
+                    .iter()
+                    .any(|decoration| decoration.token == DecorationToken::Error)
+            );
+            assert_eq!(model.resolved_gutter_markers()[0].token, GutterToken::Error);
+            assert_eq!(
+                model.resolved_contribution_actions()[0].command,
+                "knot.fixture.test-contribution"
+            );
+        });
+
+        shell.update(cx, |shell, cx| {
+            shell.invoke_contribution_action(
+                &EditorContributionAction {
+                    command: "knot.fixture.test-contribution".into(),
+                    source: ContributionSource::Extension {
+                        extension: identity.0,
+                        lifecycle: identity.1,
+                    },
+                },
+                cx,
+            );
+        });
+        wait_for_command_state(&shell, "completed", cx).await;
+
+        cx.read(|cx| {
+            let shell = shell.read(cx);
+            let model = shell.editor.read(cx).model().read(cx);
+            assert!(model.resolved_gutter_markers().is_empty());
+            assert!(model.resolved_contribution_actions().is_empty());
+        });
+        shell.update(cx, |shell, cx| {
+            shell.invoke_contribution_action(
+                &EditorContributionAction {
+                    command: "knot.fixture.test-contribution".into(),
+                    source: ContributionSource::Extension {
+                        extension: identity.0,
+                        lifecycle: identity.1,
+                    },
+                },
+                cx,
+            );
+        });
+        control
+            .execute_fixture_script(
+                "verify-contribution-action.js",
+                "if (globalThis.contributionActions !== 1) throw new Error('action not received')",
+            )
+            .await
+            .unwrap();
     }
 
     #[gpui::test]

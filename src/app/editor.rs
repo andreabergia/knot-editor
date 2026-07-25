@@ -32,10 +32,11 @@ use gpui::{prelude::*, *};
 use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation;
 
-use crate::host::protocol::ByteRange;
+use crate::host::protocol::{ByteRange, DecorationToken, EditorContribution, GutterToken};
 
 use super::model::{
-    BufferModel, ContributionSource, DecorationToken, EditorContribution, ResolvedDecoration,
+    BufferModel, ContributionSource, ResolvedContributionAction, ResolvedDecoration,
+    ResolvedGutterMarker,
 };
 
 /// Owned, frame-stable copy of one styled segment of one line.
@@ -63,6 +64,28 @@ struct RenderedDecoration {
     color: u32,
 }
 
+#[derive(Clone, Copy)]
+struct RenderedGutterMarker {
+    line: usize,
+    color: u32,
+}
+
+#[derive(Clone)]
+struct RenderedContributionAction {
+    line: usize,
+    start: usize,
+    end: usize,
+    command: String,
+    source: ContributionSource,
+    gutter: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct EditorContributionAction {
+    pub command: String,
+    pub source: ContributionSource,
+}
+
 const DEFAULT_COLOR: u32 = 0xC0C0C0;
 const ERROR_COLOR: u32 = 0xF48771;
 const WARNING_COLOR: u32 = 0xE2C08D;
@@ -76,6 +99,8 @@ pub struct EditorView {
     segs: Vec<Vec<Seg>>,
     /// Renderer-local projection of shared, anchored buffer contributions.
     decorations: Vec<RenderedDecoration>,
+    gutter_markers: Vec<RenderedGutterMarker>,
+    contribution_actions: Vec<RenderedContributionAction>,
     /// Vertical scroll offset in pixels (0 = top of buffer).
     scroll: f32,
     /// Caret position: (line index, byte offset within that line).
@@ -191,11 +216,23 @@ impl EditorView {
             segs.push(row);
         }
 
-        let decorations = project_decorations(&lines, model.read(cx).resolved_decorations());
+        let (decorations, gutter_markers, contribution_actions) = {
+            let model = model.read(cx);
+            (
+                project_decorations(&lines, model.resolved_decorations()),
+                project_gutter_markers(&lines, model.resolved_gutter_markers()),
+                project_contribution_actions(&lines, model.resolved_contribution_actions()),
+            )
+        };
 
         let model_subscription = cx.observe(&model, |this, model, cx| {
             let model = model.read(cx);
-            this.rebuild_projection(&model.text(), model.resolved_decorations());
+            this.rebuild_projection(
+                &model.text(),
+                model.resolved_decorations(),
+                model.resolved_gutter_markers(),
+                model.resolved_contribution_actions(),
+            );
             cx.notify();
         });
 
@@ -204,6 +241,8 @@ impl EditorView {
             lines,
             segs,
             decorations,
+            gutter_markers,
+            contribution_actions,
             scroll: 0.,
             cursor_line: 0,
             cursor_col: 0,
@@ -219,9 +258,17 @@ impl EditorView {
         }
     }
 
-    fn rebuild_projection(&mut self, text: &str, decorations: Vec<ResolvedDecoration>) {
+    fn rebuild_projection(
+        &mut self,
+        text: &str,
+        decorations: Vec<ResolvedDecoration>,
+        gutter_markers: Vec<ResolvedGutterMarker>,
+        contribution_actions: Vec<ResolvedContributionAction>,
+    ) {
         (self.lines, self.segs) = default_projection(text);
         self.decorations = project_decorations(&self.lines, decorations);
+        self.gutter_markers = project_gutter_markers(&self.lines, gutter_markers);
+        self.contribution_actions = project_contribution_actions(&self.lines, contribution_actions);
     }
 
     fn clamp_scroll(&mut self) {
@@ -531,6 +578,23 @@ impl EditorView {
     /// cleared and the caret jumps to the click.
     fn on_mouse_down(&mut self, ev: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let (line, col) = self.hit_test(ev.position, window);
+        let gutter = ev.position.x <= self.bounds.origin.x + px(14.);
+        if let Some(action) = self.contribution_actions.iter().find(|action| {
+            action.line == line
+                && if gutter {
+                    action.gutter
+                } else {
+                    (action.start == action.end && col == action.start)
+                        || (col >= action.start && col < action.end)
+                }
+        }) {
+            cx.emit(EditorContributionAction {
+                command: action.command.clone(),
+                source: action.source,
+            });
+            cx.stop_propagation();
+            return;
+        }
         if ev.modifiers.shift {
             if !self.has_selection {
                 self.anchor_line = self.cursor_line;
@@ -719,17 +783,27 @@ impl EditorView {
         });
         if changed {
             let model = model.read(cx);
-            self.rebuild_projection(&model.text(), model.resolved_decorations());
+            self.rebuild_projection(
+                &model.text(),
+                model.resolved_decorations(),
+                model.resolved_gutter_markers(),
+                model.resolved_contribution_actions(),
+            );
         }
     }
 
     /// Refresh the derived rendering projection after a foreground host commit.
     pub(crate) fn refresh_from_model(&mut self, cx: &mut Context<Self>) {
-        let (text, decorations) = {
+        let (text, decorations, gutter_markers, contribution_actions) = {
             let model = self.model.read(cx);
-            (model.text(), model.resolved_decorations())
+            (
+                model.text(),
+                model.resolved_decorations(),
+                model.resolved_gutter_markers(),
+                model.resolved_contribution_actions(),
+            )
         };
-        self.rebuild_projection(&text, decorations);
+        self.rebuild_projection(&text, decorations, gutter_markers, contribution_actions);
         cx.notify();
     }
 
@@ -789,7 +863,9 @@ pub(crate) fn seed_fixture_contributions(
                         start_byte_offset: start,
                         end_byte_offset: start + matched.len(),
                     },
-                    decoration,
+                    decoration: Some(decoration),
+                    gutter: None,
+                    command: None,
                 }),
         );
     }
@@ -805,7 +881,9 @@ pub(crate) fn seed_fixture_contributions(
                     start_byte_offset: name_start,
                     end_byte_offset: name_start + name_len,
                 },
-                decoration: DecorationToken::Info,
+                decoration: Some(DecorationToken::Info),
+                gutter: None,
+                command: None,
             });
         }
     }
@@ -828,7 +906,9 @@ pub(crate) fn seed_fixture_contributions(
                     start_byte_offset: line_start,
                     end_byte_offset: line_end,
                 },
-                decoration: DecorationToken::Info,
+                decoration: Some(DecorationToken::Info),
+                gutter: None,
+                command: None,
             }
         })
         .collect::<Vec<_>>();
@@ -872,6 +952,70 @@ fn project_decorations(
     projected
 }
 
+fn line_and_column_at(lines: &[String], byte_offset: usize) -> (usize, usize) {
+    let mut line_start = 0;
+    for (line, text) in lines.iter().enumerate() {
+        let line_end = line_start + text.len();
+        if byte_offset <= line_end {
+            return (line, byte_offset - line_start);
+        }
+        line_start = line_end + 1;
+    }
+    let line = lines.len().saturating_sub(1);
+    (line, lines.get(line).map_or(0, String::len))
+}
+
+fn project_gutter_markers(
+    lines: &[String],
+    markers: Vec<ResolvedGutterMarker>,
+) -> Vec<RenderedGutterMarker> {
+    markers
+        .into_iter()
+        .map(|marker| {
+            let (line, _) = line_and_column_at(lines, marker.range.start_byte_offset);
+            let color = match marker.token {
+                GutterToken::Info => INFO_COLOR,
+                GutterToken::Warning => WARNING_COLOR,
+                GutterToken::Error => ERROR_COLOR,
+            };
+            RenderedGutterMarker { line, color }
+        })
+        .collect()
+}
+
+fn project_contribution_actions(
+    lines: &[String],
+    actions: Vec<ResolvedContributionAction>,
+) -> Vec<RenderedContributionAction> {
+    let mut projected = Vec::new();
+    for action in actions {
+        let start = action.range.start_byte_offset;
+        let end = action.range.end_byte_offset;
+        let gutter_line = line_and_column_at(lines, start).0;
+        let mut line_start = 0;
+        for (line, text) in lines.iter().enumerate() {
+            let line_end = line_start + text.len();
+            let segment_start = start.max(line_start);
+            let segment_end = end.min(line_end);
+            if segment_start <= segment_end && start <= line_end && end >= line_start {
+                projected.push(RenderedContributionAction {
+                    line,
+                    start: segment_start - line_start,
+                    end: segment_end - line_start,
+                    command: action.command.clone(),
+                    source: action.source,
+                    gutter: action.gutter && line == gutter_line,
+                });
+            }
+            if line_end >= end {
+                break;
+            }
+            line_start = line_end + 1;
+        }
+    }
+    projected
+}
+
 fn default_projection(text: &str) -> (Vec<String>, Vec<Vec<Seg>>) {
     let lines: Vec<String> = text.split('\n').map(String::from).collect();
     let segs = lines
@@ -894,6 +1038,8 @@ impl Focusable for EditorView {
         self.focus.clone()
     }
 }
+
+impl EventEmitter<EditorContributionAction> for EditorView {}
 
 impl EntityInputHandler for EditorView {
     /// Return the substring of the flat document at the given UTF-16 range.
@@ -1226,6 +1372,7 @@ impl Element for EditorElement {
             selection,
             marked,
             decorations,
+            gutter_markers,
             focus_handle,
             entity,
         ): (
@@ -1236,6 +1383,7 @@ impl Element for EditorElement {
             Option<((usize, usize), (usize, usize))>,
             Option<((usize, usize), (usize, usize))>,
             Vec<RenderedDecoration>,
+            Vec<RenderedGutterMarker>,
             FocusHandle,
             Entity<EditorView>,
         ) = {
@@ -1245,9 +1393,7 @@ impl Element for EditorElement {
             let visible_rows = (f32::from(bounds.size.height) / LINE_HEIGHT).ceil() as usize + 1;
             let last = (first + visible_rows).min(view.lines.len());
             let vis = (first..last)
-                .map(|ix| {
-                    (ix, view.lines[ix].clone(), view.segs[ix].clone())
-                })
+                .map(|ix| (ix, view.lines[ix].clone(), view.segs[ix].clone()))
                 .collect();
             // Only paint the caret when it's on a visible line; otherwise it
             // is clipped anyway, so skip the shaping cost.
@@ -1271,6 +1417,12 @@ impl Element for EditorElement {
                 .filter(|a| a.line >= first && a.line < last)
                 .copied()
                 .collect();
+            let gutter_markers = view
+                .gutter_markers
+                .iter()
+                .filter(|marker| marker.line >= first && marker.line < last)
+                .copied()
+                .collect();
             (
                 view.scroll,
                 max,
@@ -1279,6 +1431,7 @@ impl Element for EditorElement {
                 view.selection_range(),
                 marked,
                 decorations,
+                gutter_markers,
                 view.focus.clone(),
                 self.entity.clone(),
             )
@@ -1522,6 +1675,15 @@ impl Element for EditorElement {
                         },
                     );
                 }
+            }
+
+            for marker in &gutter_markers {
+                let top = bounds.origin.y + px(marker.line as f32 * LINE_HEIGHT) - px(scroll);
+                let marker_bounds = Bounds {
+                    origin: point(bounds.origin.x + px(3.), top + px(6.)),
+                    size: size(px(7.), px(7.)),
+                };
+                let _ = window.paint_quad(fill(marker_bounds, rgb(marker.color)));
             }
         });
 

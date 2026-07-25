@@ -96,8 +96,11 @@ A source is either built-in code or an extension identity plus its unique
 lifecycle. Lifecycle cleanup removes only the set published by that runtime
 incarnation.
 `EditorView` owns cursor, selection, scroll, IME, and derived line, segment,
-and decoration rendering projections; local edits commit through its model and
-model notifications refresh those projections. A foreground-local bridge task
+decoration, gutter-marker, and contribution-action projections. Contribution
+actions emit semantic command requests; the shell rechecks that the current
+contribution and command registration have the same live extension lifecycle
+before dispatch. Local edits commit through the model and model notifications
+refresh view projections. A foreground-local bridge task
 owns each extension request inbox and dispatches requests synchronously against
 the registry and its entities between awaits.
 
@@ -123,13 +126,14 @@ TextBuffer  AnchoredRange  ContributionSource
 work. Each extension runs a persistent JavaScript runtime on its own OS thread
 and communicates with the host through typed request and response messages.
 
-`host::protocol` contains the transport-level identities, buffer and command
-data, and errors without depending on V8, Deno, gpui, or the concrete core
-buffer. This keeps runtime mechanics behind the host boundary. The application dispatches
-active-buffer, snapshot, and batched-edit requests by resolving opaque handles
-against foreground-owned models immediately before each operation. `BufferModel`
-validates UTF-8 byte ranges and revisioned edit batches before using core's
-assertion-based buffer API. It retains at most one immutable UTF-16 snapshot,
+`host::protocol` contains the transport-level identities, buffer, command, and
+semantic editor-contribution data and errors without depending on V8, Deno,
+gpui, or the concrete core buffer. This keeps runtime mechanics behind the host
+boundary. The application dispatches active-buffer, snapshot, batched-edit,
+and contribution-set requests by resolving opaque handles against
+foreground-owned models immediately before each operation. `BufferModel`
+validates UTF-8 byte ranges and revisions before using core's assertion-based
+buffer and anchored-range APIs. It retains at most one immutable UTF-16 snapshot,
 keyed by revision and requested byte range, and invalidates that cache on the
 next edit. The editable core remains UTF-8-native.
 
@@ -174,7 +178,10 @@ BufferRegistry / BufferModel / CommandRegistry / BufferSubscriptionRegistry
 ```
 
 The private bootstrap module retains native bindings and turns opaque handles
-into cached JavaScript `TextBuffer` proxies. Snapshots are immutable values;
+into cached JavaScript `TextBuffer` proxies. Each proxy owns one cached,
+idempotently disposable editor-contribution-set facade; native set identity is
+derived from the request's buffer handle and extension lifecycle rather than
+exposed to JavaScript. Snapshots are immutable values;
 their byte/UTF-16 boundary table is built only when an adapter is called. An
 asynchronous snapshot response first lands in an extension-local native
 response store. A synchronous follow-up on the isolate thread then creates a

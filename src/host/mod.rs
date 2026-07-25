@@ -87,6 +87,7 @@ function hostError(error) {
     InvalidRange: "RangeError",
     InvalidEditBatch: "InvalidEditBatchError",
     RevisionConflict: "RevisionConflictError",
+    ContributionSetNotFound: "ContributionSetNotFoundError",
     CommandNameInUse: "CommandNameInUseError",
     CommandNotFound: "CommandNotFoundError",
     Cancelled: "AbortError",
@@ -143,6 +144,29 @@ function snapshotFromNative(snapshot) {
 function bufferFor(handle) {
   let buffer = buffers.get(handle);
   if (buffer) return buffer;
+  let contributionsDisposed = false;
+  const contributions = Object.freeze({
+    async replace(items, options) {
+      if (contributionsDisposed) {
+        const error = new Error("editor contribution set is disposed");
+        error.name = "ContributionSetDisposedError";
+        throw error;
+      }
+      const result = await bufferRequest({
+        kind: "replaceEditorContributions",
+        handle,
+        contributions: items,
+        ifRevision: options?.ifRevision,
+      });
+      if (result.kind === "error") hostError(result.error);
+    },
+    async dispose() {
+      if (contributionsDisposed) return;
+      contributionsDisposed = true;
+      const result = await bufferRequest({ kind: "disposeEditorContributions", handle });
+      if (result.kind === "error") hostError(result.error);
+    },
+  });
   buffer = Object.freeze({
     async snapshot(range) {
       const result = await bufferRequest({ kind: "snapshot", handle, range });
@@ -167,6 +191,7 @@ function bufferFor(handle) {
         }});
       });
     },
+    contributions,
   });
   buffers.set(handle, buffer);
   return buffer;
@@ -367,11 +392,19 @@ enum NativeBufferOperation {
         #[serde(rename = "ifRevision")]
         if_revision: u64,
     },
+    ReplaceEditorContributions {
+        contributions: Vec<protocol::EditorContribution>,
+        #[serde(rename = "ifRevision")]
+        if_revision: u64,
+    },
+    DisposeEditorContributions,
 }
 
 enum NativeBufferResponse {
     Snapshot { snapshot: protocol::TextSnapshot },
     AppliedEdits { revision: u64 },
+    EditorContributionsReplaced,
+    EditorContributionsDisposed,
     HostError { error: protocol::HostRequestError },
 }
 
@@ -472,6 +505,14 @@ impl NativeBufferResponse {
                 let revision = deno_core::v8::Number::new(scope, revision as f64);
                 set_v8_property(scope, response, "revision", revision.into())?;
             }
+            Self::EditorContributionsReplaced => {
+                let kind = v8_text(scope, "editorContributionsReplaced")?;
+                set_v8_property(scope, response, "kind", kind.into())?;
+            }
+            Self::EditorContributionsDisposed => {
+                let kind = v8_text(scope, "editorContributionsDisposed")?;
+                set_v8_property(scope, response, "kind", kind.into())?;
+            }
             Self::HostError { error } => {
                 let kind = v8_text(scope, "error")?;
                 set_v8_property(scope, response, "kind", kind.into())?;
@@ -543,12 +584,31 @@ async fn op_buffer_request(
             edits,
             if_revision,
         },
+        NativeBufferOperation::ReplaceEditorContributions {
+            contributions,
+            if_revision,
+        } => HostOperation::ReplaceEditorContributions {
+            buffer: BufferHandle::new(request.handle),
+            contributions,
+            if_revision,
+        },
+        NativeBufferOperation::DisposeEditorContributions => {
+            HostOperation::DisposeEditorContributions {
+                buffer: BufferHandle::new(request.handle),
+            }
+        }
     };
     let response = request_host_operation(Rc::clone(&state), operation).await?;
     let response = match response.result {
         Ok(HostResponseValue::Snapshot(snapshot)) => NativeBufferResponse::Snapshot { snapshot },
         Ok(HostResponseValue::AppliedEdits { revision }) => {
             NativeBufferResponse::AppliedEdits { revision }
+        }
+        Ok(HostResponseValue::EditorContributionsReplaced) => {
+            NativeBufferResponse::EditorContributionsReplaced
+        }
+        Ok(HostResponseValue::EditorContributionsDisposed) => {
+            NativeBufferResponse::EditorContributionsDisposed
         }
         Ok(_) => {
             return Err(JsErrorBox::generic(

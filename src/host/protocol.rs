@@ -119,6 +119,34 @@ pub struct TextEdit {
     pub text: String,
 }
 
+/// Theme-aware range decoration tokens supported by native editor views.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DecorationToken {
+    Info,
+    Warning,
+    Error,
+}
+
+/// Theme-aware gutter marker tokens supported by native editor views.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum GutterToken {
+    Info,
+    Warning,
+    Error,
+}
+
+/// One semantic editor contribution supplied by an extension.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EditorContribution {
+    pub range: ByteRange,
+    pub decoration: Option<DecorationToken>,
+    pub gutter: Option<GutterToken>,
+    pub command: Option<String>,
+}
+
 /// A request sent by one extension runtime to the editor foreground owner.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HostRequest {
@@ -154,6 +182,14 @@ pub enum HostOperation {
     UnsubscribeBufferChanges {
         subscription: BufferSubscriptionId,
     },
+    ReplaceEditorContributions {
+        buffer: BufferHandle,
+        contributions: Vec<EditorContribution>,
+        if_revision: u64,
+    },
+    DisposeEditorContributions {
+        buffer: BufferHandle,
+    },
 }
 
 /// A reply sent back to the extension runtime for one [`HostRequest`].
@@ -175,6 +211,8 @@ pub enum HostResponseValue {
     CommandUnregistered { registration: CommandRegistrationId },
     BufferChangesSubscribed { subscription: BufferSubscriptionId },
     BufferChangesUnsubscribed { subscription: BufferSubscriptionId },
+    EditorContributionsReplaced,
+    EditorContributionsDisposed,
 }
 
 /// A foreground-authorized command invocation routed to its extension owner.
@@ -242,6 +280,7 @@ pub enum HostRequestError {
     InvalidRange,
     InvalidEditBatch,
     RevisionConflict,
+    ContributionSetNotFound,
     CommandNameInUse,
     CommandNotFound,
     Cancelled,

@@ -15,8 +15,8 @@ use crate::{
         buffer::TextBuffer,
     },
     host::protocol::{
-        BufferHandle, BufferSubscriptionId, ByteRange, CommandRegistrationId, ExtensionId,
-        ExtensionLifecycleId, SnapshotText,
+        BufferHandle, BufferSubscriptionId, ByteRange, CommandRegistrationId, DecorationToken,
+        EditorContribution, ExtensionId, ExtensionLifecycleId, GutterToken, SnapshotText,
     },
 };
 
@@ -30,14 +30,6 @@ pub(crate) enum ContributionSource {
     },
 }
 
-/// Theme-aware editor decoration vocabulary owned by the application layer.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(crate) enum DecorationToken {
-    Info,
-    Warning,
-    Error,
-}
-
 impl DecorationToken {
     fn precedence(self) -> u8 {
         match self {
@@ -49,15 +41,23 @@ impl DecorationToken {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct EditorContribution {
-    pub range: ByteRange,
-    pub decoration: DecorationToken,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ResolvedDecoration {
     pub range: ByteRange,
     pub token: DecorationToken,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ResolvedGutterMarker {
+    pub range: ByteRange,
+    pub token: GutterToken,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ResolvedContributionAction {
+    pub range: ByteRange,
+    pub command: String,
+    pub source: ContributionSource,
+    pub gutter: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -72,9 +72,12 @@ struct ContributionSet {
     anchored_ranges: Vec<AnchoredRangeId>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct ContributionMetadata {
-    decoration: DecorationToken,
+    source: ContributionSource,
+    decoration: Option<DecorationToken>,
+    gutter: Option<GutterToken>,
+    command: Option<String>,
 }
 
 struct ContributionRegistry {
@@ -166,7 +169,12 @@ impl BufferModel {
             if self.buffer.is_empty() {
                 return Err(ContributionError::InvalidRange);
             }
-            validated.push((range, contribution.decoration));
+            validated.push((
+                range,
+                contribution.decoration,
+                contribution.gutter,
+                contribution.command.clone(),
+            ));
         }
 
         if let Some(previous) = self.contributions.sets.remove(&source) {
@@ -177,13 +185,19 @@ impl BufferModel {
         }
 
         let mut anchored_range_ids = Vec::with_capacity(validated.len());
-        for (range, decoration) in validated {
+        for (range, decoration, gutter, command) in validated {
             let id = self
                 .anchored_ranges
                 .add(&self.buffer, range.start, range.end);
-            self.contributions
-                .metadata
-                .insert(id, ContributionMetadata { decoration });
+            self.contributions.metadata.insert(
+                id,
+                ContributionMetadata {
+                    source,
+                    decoration,
+                    gutter,
+                    command,
+                },
+            );
             anchored_range_ids.push(id);
         }
         self.contributions.sets.insert(
@@ -270,17 +284,84 @@ impl BufferModel {
                     .map(|range| (metadata, id, range))
             })
             .collect::<Vec<_>>();
-        resolved.sort_unstable_by_key(|(metadata, id, _)| (metadata.decoration.precedence(), *id));
+        resolved.sort_unstable_by_key(|(metadata, id, _)| {
+            (
+                metadata
+                    .decoration
+                    .map(DecorationToken::precedence)
+                    .unwrap_or(0),
+                *id,
+            )
+        });
         resolved
             .into_iter()
-            .map(|(metadata, _, range)| ResolvedDecoration {
-                range: ByteRange {
-                    start_byte_offset: range.start,
-                    end_byte_offset: range.end,
-                },
-                token: metadata.decoration,
+            .filter_map(|(metadata, _, range)| {
+                metadata.decoration.map(|token| ResolvedDecoration {
+                    range: ByteRange {
+                        start_byte_offset: range.start,
+                        end_byte_offset: range.end,
+                    },
+                    token,
+                })
             })
             .collect()
+    }
+
+    pub(crate) fn resolved_gutter_markers(&self) -> Vec<ResolvedGutterMarker> {
+        let mut resolved = self
+            .contributions
+            .metadata
+            .iter()
+            .filter_map(|(&id, metadata)| {
+                let token = metadata.gutter?;
+                let range = self.anchored_ranges.resolve(&self.buffer, id)?;
+                Some(ResolvedGutterMarker {
+                    range: ByteRange {
+                        start_byte_offset: range.start,
+                        end_byte_offset: range.end,
+                    },
+                    token,
+                })
+            })
+            .collect::<Vec<_>>();
+        resolved.sort_unstable_by_key(|marker| {
+            (marker.range.start_byte_offset, marker.range.end_byte_offset)
+        });
+        resolved
+    }
+
+    pub(crate) fn resolved_contribution_actions(&self) -> Vec<ResolvedContributionAction> {
+        let mut resolved = self
+            .contributions
+            .metadata
+            .iter()
+            .filter_map(|(&id, metadata)| {
+                let command = metadata.command.clone()?;
+                let range = self.anchored_ranges.resolve(&self.buffer, id)?;
+                Some(ResolvedContributionAction {
+                    range: ByteRange {
+                        start_byte_offset: range.start,
+                        end_byte_offset: range.end,
+                    },
+                    command,
+                    source: metadata.source,
+                    gutter: metadata.gutter.is_some(),
+                })
+            })
+            .collect::<Vec<_>>();
+        resolved.sort_unstable_by(|left, right| {
+            (
+                left.range.start_byte_offset,
+                left.range.end_byte_offset,
+                &left.command,
+            )
+                .cmp(&(
+                    right.range.start_byte_offset,
+                    right.range.end_byte_offset,
+                    &right.command,
+                ))
+        });
+        resolved
     }
 
     /// Validate a public UTF-8 byte range before it reaches `TextBuffer`.
@@ -815,7 +896,9 @@ mod tests {
                         start_byte_offset: 4,
                         end_byte_offset: 7,
                     },
-                    decoration: DecorationToken::Warning,
+                    decoration: Some(DecorationToken::Warning),
+                    gutter: None,
+                    command: None,
                 }],
                 0,
             )
@@ -846,7 +929,9 @@ mod tests {
                         start_byte_offset: 7,
                         end_byte_offset: 99,
                     },
-                    decoration: DecorationToken::Error,
+                    decoration: Some(DecorationToken::Error),
+                    gutter: None,
+                    command: None,
                 }],
                 model.revision(),
             ),
@@ -873,7 +958,9 @@ mod tests {
                         start_byte_offset: 0,
                         end_byte_offset: 0,
                     },
-                    decoration: DecorationToken::Info,
+                    decoration: Some(DecorationToken::Info),
+                    gutter: None,
+                    command: None,
                 }],
                 0,
             ),
@@ -904,7 +991,9 @@ mod tests {
                         start_byte_offset: 0,
                         end_byte_offset: 3,
                     },
-                    decoration: DecorationToken::Error,
+                    decoration: Some(DecorationToken::Error),
+                    gutter: None,
+                    command: None,
                 }],
                 0,
             )
@@ -932,7 +1021,9 @@ mod tests {
                         start_byte_offset: 5,
                         end_byte_offset: 6,
                     },
-                    decoration: DecorationToken::Warning,
+                    decoration: Some(DecorationToken::Warning),
+                    gutter: None,
+                    command: None,
                 }],
                 0,
             )
@@ -967,7 +1058,9 @@ mod tests {
                             start_byte_offset: 0,
                             end_byte_offset: 3,
                         },
-                        decoration,
+                        decoration: Some(decoration),
+                        gutter: None,
+                        command: None,
                     }],
                     0,
                 )

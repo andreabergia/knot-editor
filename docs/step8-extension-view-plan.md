@@ -1,6 +1,6 @@
 # Step 8 — Extension View API Plan
 
-Status: 📝 planned.
+Status: 🚧 implementation in progress.
 
 ## Question
 
@@ -259,15 +259,15 @@ land.
 
 ### 2. Expose editor contributions to JavaScript
 
-1. ⬜ Add Knot-owned protocol types and recoverable errors for contribution-set
+1. ✅ Add Knot-owned protocol types and recoverable errors for contribution-set
    replacement and disposal.
-2. ⬜ Add the private bootstrap bindings and the small public
+2. ✅ Add the private bootstrap bindings and the small public
    `knot:editor` facade.
-3. ⬜ Recheck extension identity, lifecycle, buffer liveness, revision, ranges,
+3. ✅ Recheck extension identity, lifecycle, buffer liveness, revision, ranges,
    and cancellation immediately before foreground mutation.
-4. ⬜ Route contribution actions through registered commands. A disposed or
+4. ✅ Route contribution actions through registered commands. A disposed or
    terminated owner cannot receive a late action.
-5. ⬜ Add a fixture extension that publishes diagnostics and gutter markers,
+5. ✅ Add a fixture extension that publishes diagnostics and gutter markers,
    updates them once, receives one action, and disposes them.
 
 ### 3. Add the asynchronous native tree-provider surface
