@@ -50,8 +50,8 @@ architecture.
 
 - `buffer::TextBuffer` owns text, stable positions, line lookup, and the edit
   log. It is currently implemented as a stable-ID piece table.
-- `anchored_range::AnchoredRangeStore` owns anchored ranges from sources such as
-  diagnostics, search, git, and folding.
+- `anchored_range::AnchoredRangeStore` owns stable range geometry without
+  source, feature, or presentation metadata.
 - `transaction::EditTransaction` records one reversible group of primitive
   buffer edits. It is not an undo history manager.
 

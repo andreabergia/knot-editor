@@ -71,7 +71,7 @@ impl EditTransaction {
 2. ✅ Change annotation consumption semantics: remove fully consumed
    annotations and their endpoint-index entries instead of retaining a
    `collapsed` tombstone. `resolve` returns `None` for a removed ID, and
-   `query_range` / `query_range_for_kinds` / `iter_live` cannot return it
+   `query_range` / `iter_live` cannot return it
    (it is no longer in `self.annotations`, and the interval index is rebuilt
    lazily from that map). The `collapsed` field is gone; the internal
    `collapse` helper is replaced by `consume`, which removes the annotation

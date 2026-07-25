@@ -89,8 +89,8 @@ entirely. Late updates from an obsolete extension lifecycle are rejected.
 - the shared `AnchoredRangeStore`;
 - source/lifecycle ownership and renderer-neutral contribution metadata.
 
-Presentation payloads stay in `app`; `core::AnchoredRangeData` will not acquire
-gpui or extension-host types.
+Presentation payloads stay in `app`; core anchored ranges contain only stable
+geometry and acquire no feature, provider, renderer, or extension metadata.
 
 Each `EditorView` continues to own its cursor, selection, scroll position,
 collapsed-fold set, focus, and rendering choices. Provider-supplied folding
@@ -248,7 +248,12 @@ land.
    `EditorView`'s private fixture-decoration model.
 5. ✅ Render at least two overlapping sources with deterministic native
    precedence. Record precedence as a local presentation policy, not a core
-   annotation rule.
+   anchored-range rule.
+6. ⬜ Strengthen `AnchoredRangeStore` validation with property/model tests.
+   Cover multiple seeds, Unicode boundaries, empty-buffer transitions,
+   add/remove interleavings, all endpoint-stickiness combinations, query
+   equivalence, and internal endpoint-index consistency. Prefer a shrinking
+   property-test harness so failures produce a minimal edit sequence.
 
 ### 2. Expose editor contributions to JavaScript
 

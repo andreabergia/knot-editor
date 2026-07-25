@@ -159,8 +159,6 @@ pub struct AnchoredRange {
     pub id: AnchoredRangeId,
     pub start: Anchor,
     pub end: Anchor,
-    pub kind: AnchoredRangeKind,   // diagnostics | search | git | breakpoint | fold ...
-    pub data: AnchoredRangeData,   // opaque payload owned by the source
 }
 
 pub struct AnchoredRangeStore {
@@ -175,8 +173,8 @@ impl AnchoredRangeStore {
 
     /// Issue two `Position` tokens via `position_at`; start defaults to
     /// `Before`, end to `After` (standard selection semantics).
-    pub fn add(&mut self, buffer: &TextBuffer, start: usize, end: usize,
-               kind: AnchoredRangeKind, data: AnchoredRangeData) -> AnchoredRangeId;
+    pub fn add(&mut self, buffer: &TextBuffer, start: usize,
+               end: usize) -> AnchoredRangeId;
 
     /// Advance `cursor` over `buffer.edits_since(cursor)`, repairing only
     /// anchors whose pieces split, receive an insert-boundary relocation,
@@ -220,8 +218,8 @@ impl AnchoredRangeStore {
 ## Sequenced work
 
 1. [✅] `core/anchored_range.rs`: `Stickiness`, `Anchor`, `AnchoredRange`,
-   `AnchoredRangeKind`/`AnchoredRangeData`, `AnchoredRangeStore::new` / `add` /
-   `remove`. `add` issues `Position` tokens via `position_at`. Unit
+   `AnchoredRangeStore::new` / `add` / `remove`. `add` issues `Position`
+   tokens via `position_at`. Unit
    tests: add/remove, `position_at` boundary anchoring, token stability
    across unrelated edits (reuse step-4 `Position` tests as a harness),
    `resolve` round-trips.

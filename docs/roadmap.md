@@ -248,20 +248,20 @@ p50 15.5–15.6 µs.
 ✅ **Done.** Plan and findings recorded in `docs/step6-annotation-composition.md`.
 
 **Changes made:**
-- `AnchoredRangeKind` extended with `Folding` variant and `Hash` derive.
-- `AnchoredRangeStore::query_range_for_kinds(&mut self, buffer, a, b, kinds: &[AnchoredRangeKind])` — per-kind query filtering for consumers (gutter, minimap).
-- `AnchoredRangeStore::iter_live(&self)` — iterate all live annotations.
-- Composition stress test: 5 sources overlapping on an 80-line buffer, queried by 3 consumer perspectives (editor: all, gutter: diag+bp, minimap: diag+search+git). A 6th source (`Other(0)`) added with zero store changes.
-- Per-source `AnchoredRangeData(String)` remains opaque; rich payloads deferred to view layer.
-- No privileged coordination required: sources never intersect, consumers filter by kind at query time.
+- `AnchoredRangeStore` retains only IDs, endpoints, and its derived query
+  index. It accepts identical and overlapping ranges without source-specific
+  coordination.
+- `BufferModel` owns `ContributionSource → ContributionSet` and presentation
+  metadata associated with anchored-range IDs.
+- The earlier `AnchoredRangeKind`, `AnchoredRangeData`, and
+  `query_range_for_kinds` experiment was removed in Step 8 because it mixed
+  editor semantics into the core geometry mechanism.
 
 **Question answered:** do independent annotation sources compose at the static
 data/query level, without forcing special coordination into the core? → **Yes.**
-Sources are independent callers of `add()`. Consumers compose per-kind with
-`query_range_for_kinds`. `AnchoredRangeKind` describes category, not provider
-ownership; add an opaque source identity when a real provider lifecycle needs
-teardown rather than treating that routine modeling detail as a separate
-experiment.
+Sources publish contributions through the application-owned registry. Core
+tracks their stable ranges without knowing which feature or provider produced
+them; presentation consumers compose contribution metadata outside core.
 
 ---
 
@@ -293,7 +293,7 @@ experiment.
 - Anchored-range consumption semantics: a fully consumed range is now
   **removed** (annotation id, both endpoint-index entries, cached offsets)
   instead of being retained as a `collapsed` tombstone. `resolve` returns
-  `None` for that id, `query_range` / `query_range_for_kinds` / `iter_live`
+  `None` for that id, `query_range` / `iter_live`
   cannot return it, and the id is never reused (monotonic counter). Undoing
   the consuming text edit does not revive the annotation — a provider may
   re-publish under a fresh id later (step 10's lifecycle owner).
