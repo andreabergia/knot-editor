@@ -462,11 +462,53 @@ impl Render for TreeView {
 mod tests {
     use gpui::{AppContext, TestAppContext};
 
-    use super::{TreeProviderIdentity, TreeView};
+    use super::{TreeProviderIdentity, TreeView, TreeViewRegistrationError};
     use crate::host::protocol::{
         ExtensionId, ExtensionLifecycleId, TreeChildrenResponse, TreeCollapsibleState, TreeItem,
         TreeProviderRegistrationId,
     };
+
+    #[gpui::test]
+    fn provider_registration_enforces_view_and_ownership(cx: &mut TestAppContext) {
+        let registration = TreeProviderRegistrationId::new(3);
+        let owner = TreeProviderIdentity {
+            extension: ExtensionId::new(7),
+            lifecycle: ExtensionLifecycleId::new(2),
+            registration,
+        };
+        let tree = cx.new(|cx| TreeView::new("outline", cx));
+
+        tree.update(cx, |tree, cx| {
+            assert_eq!(
+                tree.register_provider("wrong-view", owner, cx),
+                Err(TreeViewRegistrationError::WrongView)
+            );
+            tree.register_provider("outline", owner, cx).unwrap();
+            assert!(tree.owns_provider(registration, owner.extension, owner.lifecycle));
+            assert!(!tree.owns_provider(
+                registration,
+                owner.extension,
+                ExtensionLifecycleId::new(1)
+            ));
+            assert_eq!(
+                tree.register_provider(
+                    "outline",
+                    TreeProviderIdentity {
+                        extension: ExtensionId::new(8),
+                        lifecycle: ExtensionLifecycleId::new(1),
+                        registration: TreeProviderRegistrationId::new(4),
+                    },
+                    cx,
+                ),
+                Err(TreeViewRegistrationError::ProviderInUse)
+            );
+            assert_eq!(
+                tree.unregister_provider(TreeProviderRegistrationId::new(4), cx),
+                Err(TreeViewRegistrationError::ProviderNotFound)
+            );
+            assert!(tree.owns_provider(registration, owner.extension, owner.lifecycle));
+        });
+    }
 
     #[gpui::test]
     fn stale_and_disposed_tree_responses_are_ignored(cx: &mut TestAppContext) {

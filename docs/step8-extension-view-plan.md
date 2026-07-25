@@ -310,7 +310,7 @@ land.
 2. ✅ Fail one tree callback and terminate one contributing extension. Verify
    native cached/loading state is cleared, its editor contributions disappear,
    and another extension remains usable.
-3. ⬜ Add focused deterministic tests for registries, revision/range
+3. ✅ Add focused deterministic tests for registries, revision/range
    validation, stale generations, source replacement, and lifecycle cleanup.
    Avoid broad UI snapshot or end-to-end suites.
 4. ⬜ Record findings and the final boundary decision in this document and

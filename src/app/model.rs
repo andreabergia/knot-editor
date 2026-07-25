@@ -935,6 +935,80 @@ mod tests {
     }
 
     #[test]
+    fn replacing_one_contribution_source_preserves_other_sources() {
+        let mut model = BufferModel::from_text("abcdef");
+        let extension_source = ContributionSource::Extension {
+            extension: ExtensionId::new(7),
+            lifecycle: ExtensionLifecycleId::new(3),
+        };
+        for (source, range, decoration) in [
+            (ContributionSource::BuiltIn, 0..2, DecorationToken::Info),
+            (extension_source, 2..4, DecorationToken::Warning),
+        ] {
+            model
+                .replace_contributions(
+                    source,
+                    &[EditorContribution {
+                        range: ByteRange {
+                            start_byte_offset: range.start,
+                            end_byte_offset: range.end,
+                        },
+                        decoration: Some(decoration),
+                        gutter: None,
+                        command: None,
+                    }],
+                    model.revision(),
+                )
+                .unwrap();
+        }
+
+        model
+            .replace_contributions(
+                extension_source,
+                &[EditorContribution {
+                    range: ByteRange {
+                        start_byte_offset: 4,
+                        end_byte_offset: 6,
+                    },
+                    decoration: Some(DecorationToken::Error),
+                    gutter: None,
+                    command: None,
+                }],
+                model.revision(),
+            )
+            .unwrap();
+
+        assert_eq!(model.contributions.sets.len(), 2);
+        assert_eq!(model.contributions.metadata.len(), 2);
+        assert_eq!(model.anchored_ranges.len(), 2);
+        assert_eq!(
+            model.resolved_contributions(),
+            [
+                ResolvedEditorContribution {
+                    range: ByteRange {
+                        start_byte_offset: 0,
+                        end_byte_offset: 2,
+                    },
+                    source: ContributionSource::BuiltIn,
+                    decoration: Some(DecorationToken::Info),
+                    gutter: None,
+                    command: None,
+                },
+                ResolvedEditorContribution {
+                    range: ByteRange {
+                        start_byte_offset: 4,
+                        end_byte_offset: 6,
+                    },
+                    source: extension_source,
+                    decoration: Some(DecorationToken::Error),
+                    gutter: None,
+                    command: None,
+                },
+            ]
+        );
+    }
+
+    #[test]
     fn empty_buffer_contributions_are_rejected_recoverably() {
         let mut model = BufferModel::from_text("");
         let source = ContributionSource::BuiltIn;
@@ -1290,5 +1364,36 @@ mod tests {
             registry.unregister(replacement, extension, lifecycle),
             Err(CommandRegistryError::NotFound)
         );
+    }
+
+    #[test]
+    fn buffer_subscriptions_are_scoped_by_buffer_and_lifecycle() {
+        let mut registry = BufferSubscriptionRegistry::new();
+        let first_buffer = BufferHandle::new(1);
+        let second_buffer = BufferHandle::new(2);
+        let extension = ExtensionId::new(7);
+        let first_lifecycle = ExtensionLifecycleId::new(3);
+        let second_lifecycle = ExtensionLifecycleId::new(4);
+        let first = registry.subscribe(first_buffer, extension, first_lifecycle);
+        let second = registry.subscribe(first_buffer, extension, second_lifecycle);
+        registry.subscribe(second_buffer, ExtensionId::new(8), first_lifecycle);
+
+        assert!(!registry.unsubscribe(first, extension, second_lifecycle));
+        assert_eq!(registry.for_buffer(first_buffer).count(), 2);
+
+        registry.remove_lifecycle(extension, first_lifecycle);
+        assert_eq!(
+            registry.for_buffer(first_buffer).collect::<Vec<_>>(),
+            [BufferSubscription {
+                id: second,
+                buffer: first_buffer,
+                extension,
+                lifecycle: second_lifecycle,
+            }]
+        );
+        assert_eq!(registry.for_buffer(second_buffer).count(), 1);
+
+        registry.remove_buffer(second_buffer);
+        assert_eq!(registry.for_buffer(second_buffer).count(), 0);
     }
 }
