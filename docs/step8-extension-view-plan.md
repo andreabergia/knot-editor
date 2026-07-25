@@ -1,6 +1,6 @@
 # Step 8 — Extension View API Plan
 
-Status: 🚧 implementation in progress.
+Status: ✅ complete.
 
 ## Question
 
@@ -317,7 +317,7 @@ land.
    `docs/roadmap.md`.
 5. ✅ Update `docs/architecture.md` with the resulting ownership and request
    flows.
-6. ⬜ Run `cargo fmt` once at the end of Rust work, then run the focused tests
+6. ✅ Run `cargo fmt` once at the end of Rust work, then run the focused tests
    and any existing suite affected by the changes.
 
 ## Findings and final boundary decision
