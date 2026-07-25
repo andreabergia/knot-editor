@@ -313,12 +313,48 @@ land.
 3. ✅ Add focused deterministic tests for registries, revision/range
    validation, stale generations, source replacement, and lifecycle cleanup.
    Avoid broad UI snapshot or end-to-end suites.
-4. ⬜ Record findings and the final boundary decision in this document and
+4. ✅ Record findings and the final boundary decision in this document and
    `docs/roadmap.md`.
 5. ⬜ Update `docs/architecture.md` with the resulting ownership and request
    flows.
 6. ⬜ Run `cargo fmt` once at the end of Rust work, then run the focused tests
    and any existing suite affected by the changes.
+
+## Findings and final boundary decision
+
+The prototype validates semantic native provider and contribution APIs as the
+extension-facing UI boundary:
+
+- The asynchronous tree provider produces a useful interactive outline while
+  native code retains cached state, layout, input, selection, expansion,
+  scrolling, loading, and error presentation.
+- A deliberately slow provider leaves the foreground heartbeat, editor input,
+  scrolling, and painting responsive because rendering and input never call
+  JavaScript synchronously.
+- Generation and lifecycle checks prevent late responses from restoring
+  invalidated, disposed, or terminated provider state. Terminating the tree
+  owner also removes its contributions while another extension and the
+  foreground remain usable.
+- Revision-checked replacement sets let built-in and extension sources compose
+  anchored decorations, gutter markers, and command actions without adding
+  feature or presentation metadata to `core`.
+- Two editor views observe the same text and contributions while retaining
+  independent cursor, selection, scroll, focus, and rendering state. Folding
+  remains untested because the prototype does not yet expose folding behavior.
+
+**Decision:** keep renderer-native, surface-specific semantic APIs as Knot's
+extension UI boundary. Text-oriented surfaces remain buffer-backed; editor
+customization crosses the boundary as revisioned semantic contributions; and
+workbench surfaces use asynchronous providers whose results are cached and
+presented natively. Do not generalize the tree protocol into a widget tree or
+expose gpui, drawing, layout, or synchronous callbacks. Reconsider a WebView
+only for genuinely arbitrary UI.
+
+This decision validates the prototype boundary, not its production
+completeness. The tree model preserves semantics needed for future
+accessibility mapping, but gpui still lacks the required public bridge.
+Virtualization, paging, backpressure, manifests, and the deferred Linux
+portability checkpoint remain follow-up work.
 
 ## Acceptance criteria
 

@@ -451,7 +451,24 @@ into this experiment; those need their own concrete feature later.
 **Question answered:** are semantic native provider/contribution APIs
 expressive and responsive across the isolate/UI-thread boundary without Knot
 inventing a general UI framework, and where is the boundary between shared
-buffer data and per-view presentation state?
+buffer data and per-view presentation state? → **Yes for the prototype
+boundary.** A deliberately delayed tree provider leaves foreground input,
+scrolling, painting, and the heartbeat responsive; stale generations,
+disposal, and extension termination cannot restore provider state; and failure
+of one provider owner leaves another extension usable. Revisioned contribution
+sets compose built-in and extension decorations, gutter markers, and command
+actions through shared anchored geometry. Two views share buffer text and
+contributions while retaining their existing cursor, selection, scroll, focus,
+and rendering state independently.
+
+**Decision:** keep extension UI surface-specific and semantic. Workbench
+providers are asynchronous and cached for native presentation; editor
+customization is published as revisioned semantic contributions; text-oriented
+surfaces remain buffer-backed. Native code owns rendering and interaction, and
+neither gpui objects nor a general widget/layout protocol crosses the extension
+boundary. A WebView remains a possible later escape hatch for arbitrary UI.
+Production accessibility integration, tree scaling policies, folding evidence,
+and the deferred Linux checkpoint remain outside this validation.
 
 ---
 
