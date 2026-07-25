@@ -50,7 +50,7 @@ architecture.
 
 - `buffer::TextBuffer` owns text, stable positions, line lookup, and the edit
   log. It is currently implemented as a stable-ID piece table.
-- `annotation::AnnotationStore` owns anchored ranges from sources such as
+- `anchored_range::AnchoredRangeStore` owns anchored ranges from sources such as
   diagnostics, search, git, and folding.
 - `transaction::EditTransaction` records one reversible group of primitive
   buffer edits. It is not an undo history manager.
@@ -58,7 +58,7 @@ architecture.
 Buffer offsets and ranges are UTF-8 byte offsets. Grapheme-aware movement and
 other presentation concerns belong above `core`.
 
-Annotations follow the buffer's edit stream:
+Anchored ranges follow the buffer's edit stream:
 
 ```text
 TextBuffer mutation
@@ -67,32 +67,34 @@ TextBuffer mutation
 BufferEdit log
         |
         v
-AnnotationStore::stabilize
+AnchoredRangeStore::stabilize
         |
         v
-annotation resolution and queries
+anchored-range resolution and queries
 ```
 
-The buffer and annotation Rustdoc define stable-position behavior, endpoint
+The buffer and anchored-range Rustdoc define stable-position behavior, endpoint
 semantics, and lifecycle details.
 
 ## Application model and view
 
 gpui's foreground thread exclusively owns editor state. Each `BufferModel`
-entity owns one `core::TextBuffer`, its shared `core::AnnotationStore`, its
-source-owned editor contribution registry, its open/closed lifecycle, and a
-public revision that advances once per editor-visible atomic commit. Visual
-contribution metadata remains in `app` and refers to core annotation IDs;
-`core` does not know about decoration tokens or contribution ownership. The
-core buffer's `edit_seq` remains a private primitive-edit-log cursor.
+entity owns one `core::TextBuffer`, its shared
+`core::anchored_range::AnchoredRangeStore`, its source-owned editor
+contribution registry, its open/closed lifecycle, and a public revision that
+advances once per editor-visible atomic commit. Visual contribution metadata
+remains in `app` and refers to core anchored-range IDs; `core` does not know
+about decoration tokens or contribution ownership. The core buffer's
+`edit_seq` remains a private primitive-edit-log cursor.
 
 `BufferRegistry` gives models monotonic, never-reused transport handles and
 stores only weak entity references. It also tracks the optional active buffer.
 `CommandRegistry` is foreground-owned and keeps command names authoritative;
 each registration is bound to its extension and unique extension lifetime.
-Contribution sets are independently replaceable resources whose owner is
-either a built-in source or an extension identity plus its unique lifecycle.
-Lifecycle cleanup removes only sets owned by that runtime incarnation.
+Each buffer has at most one atomic contribution set per `ContributionSource`.
+A source is either built-in code or an extension identity plus its unique
+lifecycle. Lifecycle cleanup removes only the set published by that runtime
+incarnation.
 `EditorView` owns cursor, selection, scroll, IME, and derived line, segment,
 and decoration rendering projections; local edits commit through its model and
 model notifications refresh those projections. A foreground-local bridge task
@@ -106,8 +108,8 @@ gpui Shell / BufferRegistry
       BufferModel entity
        /       |       \
       v        v        v
-TextBuffer  Annotation  contribution
-              Store      metadata
+TextBuffer  AnchoredRange  ContributionSource
+               Store       → ContributionSet
        \       |       /
         model notification
              v
@@ -189,8 +191,8 @@ Detailed runtime behavior and experiment results live in
 - Text and edit history are buffer state. Cursor, selection, folding, scroll,
   and zoom are view state.
 - Stable positions and buffer edit events form one contract: buffer changes
-  must preserve the information annotation stabilization needs.
-- `AnnotationStore` is the shared range-composition mechanism. Visual
+  must preserve the information anchored-range stabilization needs.
+- `AnchoredRangeStore` is the shared range-composition mechanism. Visual
   precedence, hit testing, and presentation belong to the future view layer.
 - Performance-sensitive editor services stay native. Built-ins and extensions
   should use the same public editor APIs wherever practical.

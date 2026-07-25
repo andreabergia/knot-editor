@@ -38,7 +38,9 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 
-use knot::core::annotation::{AnnotationData, AnnotationKind, AnnotationStore, OffsetStore};
+use knot::core::anchored_range::{
+    AnchoredRangeData, AnchoredRangeKind, AnchoredRangeStore, OffsetStore,
+};
 use knot::core::buffer::TextBuffer;
 use knot::view::fixture::Fixture;
 
@@ -265,8 +267,8 @@ fn do_edit(buffer: &mut TextBuffer, rng: &mut Rng, source: usize) {
 /// Seed `annotations` total across `sources` independent sources at random
 /// byte ranges, mirroring them into the D5 offset baseline. Returns the token
 /// store, the offset baseline, the buffer, and the seeded ids.
-fn seed(cfg: &Cfg, buffer: &mut TextBuffer) -> (AnnotationStore, OffsetStore, Vec<u64>) {
-    let mut token_store = AnnotationStore::new();
+fn seed(cfg: &Cfg, buffer: &mut TextBuffer) -> (AnchoredRangeStore, OffsetStore, Vec<u64>) {
+    let mut token_store = AnchoredRangeStore::new();
     let mut offset_store = OffsetStore::new();
     let mut ids = Vec::with_capacity(cfg.annotations);
 
@@ -275,18 +277,18 @@ fn seed(cfg: &Cfg, buffer: &mut TextBuffer) -> (AnnotationStore, OffsetStore, Ve
     let per_source = cfg.annotations / cfg.sources.max(1);
     for src in 0..cfg.sources {
         let kind = match src % 6 {
-            0 => AnnotationKind::Diagnostic,
-            1 => AnnotationKind::Search,
-            2 => AnnotationKind::Git,
-            3 => AnnotationKind::Breakpoint,
-            4 => AnnotationKind::Folding,
-            _ => AnnotationKind::Other(src as u8),
+            0 => AnchoredRangeKind::Diagnostic,
+            1 => AnchoredRangeKind::Search,
+            2 => AnchoredRangeKind::Git,
+            3 => AnchoredRangeKind::Breakpoint,
+            4 => AnchoredRangeKind::Folding,
+            _ => AnchoredRangeKind::Other(src as u8),
         };
         for _ in 0..per_source {
             let s = rng.below(total + 1);
             let e = rng.below(total + 1);
             let (s, e) = if s <= e { (s, e) } else { (e, s) };
-            let id = token_store.add(buffer, s, e, kind, AnnotationData::default());
+            let id = token_store.add(buffer, s, e, kind, AnchoredRangeData::default());
             offset_store.add(s, e);
             ids.push(id);
         }

@@ -24,6 +24,7 @@ pub mod model;
 use editor::{EditorView, seed_fixture_contributions};
 use model::{
     BufferAccessError, BufferModel, BufferRegistry, BufferSubscriptionRegistry, CommandRegistry,
+    ContributionSource,
 };
 
 actions!(knot, [Quit]);
@@ -157,9 +158,20 @@ impl Shell {
             )])
         });
         let text = fixture.lines.join("\n");
+        let (extension, lifecycle) = runtimes
+            .first()
+            .expect("Knot shell requires one extension runtime")
+            .control
+            .identity();
         let model = cx.new(|_| {
             let mut model = BufferModel::from_text(text);
-            seed_fixture_contributions(&mut model);
+            seed_fixture_contributions(
+                &mut model,
+                ContributionSource::Extension {
+                    extension,
+                    lifecycle,
+                },
+            );
             model
         });
         let mut buffer_registry = BufferRegistry::new();

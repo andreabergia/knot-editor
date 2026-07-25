@@ -1,6 +1,6 @@
 # Step 5 — Annotation Benchmark Findings
 
-Full stress-test of the `AnnotationStore` token-anchor model against a naive
+Full stress-test of the `AnchoredRangeStore` token-anchor model against a naive
 offset-remap baseline (D5). Load: 1M-line buffer (`rust_sample.kfx --tile 635`),
 10k annotations, randomized interleaved edits from 3 and 6 independent sources
 (5 seconds per workload, `--release`).

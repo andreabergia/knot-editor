@@ -200,7 +200,7 @@ The prototype and its APIs should not reserve complexity for them.
 
 ---
 
-## 5. Annotation offset stabilization
+## 5. Anchored-range offset stabilization
 
 - An annotation model attached to the buffer that tracks positions across edits.
 - Implementation candidates: interval tree, stable-ID piece table, offset remap log.
@@ -237,7 +237,7 @@ p50 15.5–15.6 µs.
 
 ---
 
-## 6. Annotation composition
+## 6. Anchored-range composition
 
 - Multiple annotation sources (diagnostics, search matches, git hunks, folding, breakpoints) active on a single buffer simultaneously.
 - Confirm that adding a sixth source does not require re-plumbing the annotation store, buffer model, or capability model.
@@ -248,17 +248,17 @@ p50 15.5–15.6 µs.
 ✅ **Done.** Plan and findings recorded in `docs/step6-annotation-composition.md`.
 
 **Changes made:**
-- `AnnotationKind` extended with `Folding` variant and `Hash` derive.
-- `AnnotationStore::query_range_for_kinds(&mut self, buffer, a, b, kinds: &[AnnotationKind])` — per-kind query filtering for consumers (gutter, minimap).
-- `AnnotationStore::iter_live(&self)` — iterate all live annotations.
+- `AnchoredRangeKind` extended with `Folding` variant and `Hash` derive.
+- `AnchoredRangeStore::query_range_for_kinds(&mut self, buffer, a, b, kinds: &[AnchoredRangeKind])` — per-kind query filtering for consumers (gutter, minimap).
+- `AnchoredRangeStore::iter_live(&self)` — iterate all live annotations.
 - Composition stress test: 5 sources overlapping on an 80-line buffer, queried by 3 consumer perspectives (editor: all, gutter: diag+bp, minimap: diag+search+git). A 6th source (`Other(0)`) added with zero store changes.
-- Per-source `AnnotationData(String)` remains opaque; rich payloads deferred to view layer.
+- Per-source `AnchoredRangeData(String)` remains opaque; rich payloads deferred to view layer.
 - No privileged coordination required: sources never intersect, consumers filter by kind at query time.
 
 **Question answered:** do independent annotation sources compose at the static
 data/query level, without forcing special coordination into the core? → **Yes.**
 Sources are independent callers of `add()`. Consumers compose per-kind with
-`query_range_for_kinds`. `AnnotationKind` describes category, not provider
+`query_range_for_kinds`. `AnchoredRangeKind` describes category, not provider
 ownership; add an opaque source identity when a real provider lifecycle needs
 teardown rather than treating that routine modeling detail as a separate
 experiment.
@@ -290,7 +290,7 @@ experiment.
   before `undo` / `redo`, panicking on an out-of-band edit or buffer swap
   rather than applying stale raw offsets. Invalid orderings panic (double-`undo`, `redo` without
   `undo`, mutate-after-`undo`), matching `TextBuffer`'s precondition style.
-- Annotation consumption semantics: a fully consumed annotation is now
+- Anchored-range consumption semantics: a fully consumed range is now
   **removed** (annotation id, both endpoint-index entries, cached offsets)
   instead of being retained as a `collapsed` tombstone. `resolve` returns
   `None` for that id, `query_range` / `query_range_for_kinds` / `iter_live`
@@ -310,8 +310,8 @@ experiment.
 reversible transactional edits without violating their core invariants? →
 **Yes.** `EditTransaction` routes everything through the existing `TextBuffer`
 mutation surface, so piece IDs, the append-only `Add` store, the unbounded edit
-log, line-index maintenance, and annotation stabilization all retain their
-invariants across forward, undo, and redo. Annotation removal-on-consumption
+log, line-index maintenance, and anchored-range stabilization all retain their
+invariants across forward, undo, and redo. Anchored-range removal-on-consumption
 keeps the store free of invisible collapsed tombstones; undo does not need to
 revive annotations because annotations are provider-derived state, not
 transaction state — a provider observing a new buffer revision publishes a

@@ -5,23 +5,23 @@
 
 ## Answer
 
-**Yes.** Five independent sources coexist in a single `AnnotationStore` with
+**Yes.** Five independent sources coexist in a single `AnchoredRangeStore` with
 no coordination between them. Consumers query by kind; sources never need to
 know about each other. Adding a sixth source requires zero changes to the
 store, buffer, or capability model — just `store.add(&buf, start, end, kind, data)`.
 
 ## Design
 
-### Source identity: `AnnotationKind`
+### Source identity: `AnchoredRangeKind`
 
-Each source is identified by its `AnnotationKind`. The store is source-agnostic:
+Each source is identified by its `AnchoredRangeKind`. The store is source-agnostic:
 `add()` accepts any `kind` and stores it as metadata on the annotation. Sources
 are just callers of `add()` with different kinds and data payloads.
 
-The `AnnotationKind` enum now has six variants:
+The `AnchoredRangeKind` enum now has six variants:
 
 ```rust
-pub enum AnnotationKind {
+pub enum AnchoredRangeKind {
     Diagnostic,    // compiler/linter diagnostics
     Search,        // text search matches
     Git,           // version-control diff hunks
@@ -37,22 +37,22 @@ zero enum changes.
 
 ### Per-kind query surface
 
-Two new methods on `AnnotationStore` enable consumers to pick which source
+Two new methods on `AnchoredRangeStore` enable consumers to pick which source
 types they care about:
 
 | Method | Signature | Purpose |
 |--------|-----------|---------|
-| `query_range_for_kinds` | `(&mut self, &TextBuffer, a: usize, b: usize, kinds: &[AnnotationKind]) -> Vec<AnnotationId>` | Like `query_range` but filtered to the given kind set. |
-| `iter_live` | `(&self) -> impl Iterator<Item = (&AnnotationId, &Annotation)>` | Iterate all live annotations — fully consumed annotations are removed (not tombstoned) in step 6b, so every map entry is live. Full-scan consumer (e.g. minimap heatmap). |
+| `query_range_for_kinds` | `(&mut self, &TextBuffer, a: usize, b: usize, kinds: &[AnchoredRangeKind]) -> Vec<AnchoredRangeId>` | Like `query_range` but filtered to the given kind set. |
+| `iter_live` | `(&self) -> impl Iterator<Item = (&AnchoredRangeId, &AnchoredRange)>` | Iterate all live anchored ranges — fully consumed ranges are removed (not tombstoned) in step 6b, so every map entry is live. Full-scan consumer (e.g. minimap heatmap). |
 
 `query_range_for_kinds` extends the existing interval-index fast path: it
-builds a `HashSet<AnnotationKind>` from the caller's slice and filters the
+builds a `HashSet<AnchoredRangeKind>` from the caller's slice and filters the
 index results in one pass. No per-kind pre-index needed for prototype-scale
 annotation counts.
 
-### AnnotationData
+### AnchoredRangeData
 
-`AnnotationData(pub String)` remains an opaque owned payload. Different sources
+`AnchoredRangeData(pub String)` remains an opaque owned payload. Different sources
 stuff different things into it (diagnostic message, search match text, git hunk
 label, fold region name) — the store never inspects it. Rich per-kind payload
 types (e.g. diagnostic severity, git line origin) are deferred until the view
@@ -60,7 +60,7 @@ layer needs them.
 
 ## Composition stress test
 
-The test in `src/core/annotation.rs` exercises the full composition surface:
+The test in `src/core/anchored_range.rs` exercises the full composition surface:
 
 1. **5 sources** (diagnostics, search, git, breakpoints, folding) populate
    overlapping byte ranges on an 80-line buffer.
@@ -76,7 +76,7 @@ The test in `src/core/annotation.rs` exercises the full composition surface:
    - Line 10: a git hunk and a breakpoint overlap; full query returns
      both.
 
-4. **6th-source proof**: a lint annotation (`AnnotationKind::Other(0)`) is
+4. **6th-source proof**: a lint annotation (`AnchoredRangeKind::Other(0)`) is
    added after the initial 5 sources with zero store changes. It appears in
    all-kinds queries and is excluded from gutter queries (which only ask for
    `[Diagnostic, Breakpoint]`).

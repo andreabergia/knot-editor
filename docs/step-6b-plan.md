@@ -13,7 +13,7 @@ they do not restore piece IDs, truncate the append-only backing store, or
 mutate annotations directly.
 
 Annotations are provider-derived state, not transaction state. If a deletion
-fully consumes an annotation, `AnnotationStore` removes it rather than keeping
+fully consumes an annotation, `AnchoredRangeStore` removes it rather than keeping
 an invisible collapsed tombstone. Undoing the text edit does not revive that
 annotation. A provider observing the new buffer revision may publish a fresh
 annotation later; provider invocation and revision-aware async results remain
@@ -52,7 +52,7 @@ impl EditTransaction {
   undone state. Invalid ordering panics, matching `TextBuffer`'s existing
   precondition style. A new edit after `undo` is out of scope; callers create
   a new transaction rather than branching history.
-- `AnnotationStore` remains buffer-agnostic. Its owner calls
+- `AnchoredRangeStore` remains buffer-agnostic. Its owner calls
   `stabilize(&buffer)` after the forward transaction, undo, and redo just as
   it does after every other buffer edit; no transaction-specific annotation
   API is introduced.
@@ -76,7 +76,7 @@ impl EditTransaction {
    lazily from that map). The `collapsed` field is gone; the internal
    `collapse` helper is replaced by `consume`, which removes the annotation
    and its endpoint-index entries. Module and `resolve`-contract docs
-   describe removal rather than invisibility (`src/core/annotation.rs`).
+   describe removal rather than invisibility (`src/core/anchored_range.rs`).
 3. ✅ Add focused transaction tests in the transaction module and annotation
    tests for removal, plus the combined forward/undo/redo + annotation
    acceptance test. All `cargo test core` (103 tests) green.

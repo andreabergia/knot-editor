@@ -11,7 +11,9 @@ use gpui::{AppContext, Entity, WeakEntity};
 
 use crate::{
     core::{
-        annotation::{AnnotationData, AnnotationId, AnnotationKind, AnnotationStore},
+        anchored_range::{
+            AnchoredRangeData, AnchoredRangeId, AnchoredRangeKind, AnchoredRangeStore,
+        },
         buffer::TextBuffer,
     },
     host::protocol::{
@@ -20,21 +22,10 @@ use crate::{
     },
 };
 
-/// Opaque handle for one independently replaceable contribution set.
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub(crate) struct ContributionSetId(u64);
-
-/// Native sources use the same contribution path as extensions.
+/// The producer whose complete contribution set is stored in this buffer.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(crate) enum BuiltInContributionSource {
-    FixtureDiagnostics,
-    FixtureOverlap,
-}
-
-/// The runtime incarnation authorized to mutate a contribution set.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(crate) enum ContributionOwner {
-    BuiltIn(BuiltInContributionSource),
+pub(crate) enum ContributionSource {
+    BuiltIn,
     Extension {
         extension: ExtensionId,
         lifecycle: ExtensionLifecycleId,
@@ -80,56 +71,32 @@ pub(crate) enum ContributionError {
 }
 
 struct ContributionSet {
-    owner: ContributionOwner,
-    annotations: Vec<AnnotationId>,
+    anchored_ranges: Vec<AnchoredRangeId>,
 }
 
 #[derive(Clone, Copy)]
 struct ContributionMetadata {
-    set: ContributionSetId,
     decoration: DecorationToken,
 }
 
 struct ContributionRegistry {
-    next_set: u64,
-    sets: HashMap<ContributionSetId, ContributionSet>,
-    metadata: HashMap<AnnotationId, ContributionMetadata>,
+    sets: HashMap<ContributionSource, ContributionSet>,
+    metadata: HashMap<AnchoredRangeId, ContributionMetadata>,
 }
 
 impl ContributionRegistry {
     fn new() -> Self {
         Self {
-            next_set: 1,
             sets: HashMap::new(),
             metadata: HashMap::new(),
         }
-    }
-
-    fn create_set(&mut self, owner: ContributionOwner) -> ContributionSetId {
-        let id = ContributionSetId(self.next_set);
-        self.next_set = self
-            .next_set
-            .checked_add(1)
-            .expect("contribution set handle space exhausted");
-        self.sets.insert(
-            id,
-            ContributionSet {
-                owner,
-                annotations: Vec::new(),
-            },
-        );
-        id
-    }
-
-    fn owns(&self, id: ContributionSetId, owner: ContributionOwner) -> bool {
-        self.sets.get(&id).is_some_and(|set| set.owner == owner)
     }
 }
 
 /// The authoritative document owned by gpui's foreground thread.
 pub struct BufferModel {
     buffer: TextBuffer,
-    annotations: AnnotationStore,
+    anchored_ranges: AnchoredRangeStore,
     contributions: ContributionRegistry,
     revision: u64,
     open: bool,
@@ -155,7 +122,7 @@ impl BufferModel {
     pub fn from_text(text: impl Into<Box<str>>) -> Self {
         Self {
             buffer: TextBuffer::from_text(text),
-            annotations: AnnotationStore::new(),
+            anchored_ranges: AnchoredRangeStore::new(),
             contributions: ContributionRegistry::new(),
             revision: 0,
             open: true,
@@ -176,21 +143,10 @@ impl BufferModel {
         self.open
     }
 
-    pub(crate) fn create_contribution_set(
-        &mut self,
-        owner: ContributionOwner,
-    ) -> Result<ContributionSetId, ContributionError> {
-        if !self.open {
-            return Err(ContributionError::Closed);
-        }
-        Ok(self.contributions.create_set(owner))
-    }
-
     /// Atomically replace one source-owned set against the current revision.
     pub(crate) fn replace_contributions(
         &mut self,
-        set: ContributionSetId,
-        owner: ContributionOwner,
+        source: ContributionSource,
         contributions: &[EditorContribution],
         if_revision: u64,
     ) -> Result<(), ContributionError> {
@@ -199,9 +155,6 @@ impl BufferModel {
         }
         if if_revision != self.revision {
             return Err(ContributionError::RevisionConflict);
-        }
-        if !self.contributions.owns(set, owner) {
-            return Err(ContributionError::NotFound);
         }
 
         let mut validated = Vec::with_capacity(contributions.len());
@@ -215,53 +168,47 @@ impl BufferModel {
             validated.push((range, contribution.decoration));
         }
 
-        let previous = std::mem::take(
-            &mut self
-                .contributions
-                .sets
-                .get_mut(&set)
-                .expect("ownership check resolved the set")
-                .annotations,
-        );
-        for id in previous {
-            self.annotations.remove(id);
-            self.contributions.metadata.remove(&id);
+        if let Some(previous) = self.contributions.sets.remove(&source) {
+            for id in previous.anchored_ranges {
+                self.anchored_ranges.remove(id);
+                self.contributions.metadata.remove(&id);
+            }
         }
 
-        let mut annotation_ids = Vec::with_capacity(validated.len());
+        let mut anchored_range_ids = Vec::with_capacity(validated.len());
         for (range, decoration) in validated {
-            let id = self.annotations.add(
+            let id = self.anchored_ranges.add(
                 &self.buffer,
                 range.start,
                 range.end,
-                AnnotationKind::Diagnostic,
-                AnnotationData::default(),
+                AnchoredRangeKind::Diagnostic,
+                AnchoredRangeData::default(),
             );
             self.contributions
                 .metadata
-                .insert(id, ContributionMetadata { set, decoration });
-            annotation_ids.push(id);
+                .insert(id, ContributionMetadata { decoration });
+            anchored_range_ids.push(id);
         }
-        self.contributions
-            .sets
-            .get_mut(&set)
-            .expect("set remains registered")
-            .annotations = annotation_ids;
+        self.contributions.sets.insert(
+            source,
+            ContributionSet {
+                anchored_ranges: anchored_range_ids,
+            },
+        );
         Ok(())
     }
 
-    pub(crate) fn dispose_contribution_set(
+    pub(crate) fn dispose_contributions(
         &mut self,
-        set: ContributionSetId,
-        owner: ContributionOwner,
+        source: ContributionSource,
     ) -> Result<(), ContributionError> {
         if !self.open {
             return Err(ContributionError::Closed);
         }
-        if !self.contributions.owns(set, owner) {
+        if !self.contributions.sets.contains_key(&source) {
             return Err(ContributionError::NotFound);
         }
-        self.remove_contribution_set(set);
+        self.remove_contribution_set(source);
         Ok(())
     }
 
@@ -270,32 +217,32 @@ impl BufferModel {
         extension: ExtensionId,
         lifecycle: ExtensionLifecycleId,
     ) -> bool {
-        let sets: Vec<_> = self
+        let sources: Vec<_> = self
             .contributions
             .sets
-            .iter()
-            .filter_map(|(&id, set)| {
-                (set.owner
-                    == ContributionOwner::Extension {
+            .keys()
+            .copied()
+            .filter(|source| {
+                *source
+                    == ContributionSource::Extension {
                         extension,
                         lifecycle,
-                    })
-                .then_some(id)
+                    }
             })
             .collect();
-        let changed = !sets.is_empty();
-        for set in sets {
-            self.remove_contribution_set(set);
+        let changed = !sources.is_empty();
+        for source in sources {
+            self.remove_contribution_set(source);
         }
         changed
     }
 
-    fn remove_contribution_set(&mut self, set: ContributionSetId) {
-        let Some(set) = self.contributions.sets.remove(&set) else {
+    fn remove_contribution_set(&mut self, source: ContributionSource) {
+        let Some(set) = self.contributions.sets.remove(&source) else {
             return;
         };
-        for id in set.annotations {
-            self.annotations.remove(id);
+        for id in set.anchored_ranges {
+            self.anchored_ranges.remove(id);
             self.contributions.metadata.remove(&id);
         }
     }
@@ -306,14 +253,12 @@ impl BufferModel {
             .metadata
             .iter()
             .filter_map(|(&id, metadata)| {
-                self.annotations
+                self.anchored_ranges
                     .resolve(&self.buffer, id)
                     .map(|range| (metadata, id, range))
             })
             .collect::<Vec<_>>();
-        resolved.sort_unstable_by_key(|(metadata, id, _)| {
-            (metadata.decoration.precedence(), metadata.set, *id)
-        });
+        resolved.sort_unstable_by_key(|(metadata, id, _)| (metadata.decoration.precedence(), *id));
         resolved
             .into_iter()
             .map(|(metadata, _, range)| ResolvedDecoration {
@@ -431,7 +376,7 @@ impl BufferModel {
         for (range, text) in validated.into_iter().rev() {
             self.buffer.replace(range, text);
         }
-        self.annotations.stabilize(&self.buffer);
+        self.anchored_ranges.stabilize(&self.buffer);
         let before_revision = self.revision;
         self.advance_revision();
         self.pending_changes.push_back(CommittedBufferChange {
@@ -459,7 +404,7 @@ impl BufferModel {
             text: text.into(),
         };
         self.buffer.replace(range, text);
-        self.annotations.stabilize(&self.buffer);
+        self.anchored_ranges.stabilize(&self.buffer);
         let before_revision = self.revision;
         self.advance_revision();
         self.pending_changes.push_back(CommittedBufferChange {
@@ -483,7 +428,7 @@ impl BufferModel {
     }
 
     fn close(&mut self) {
-        self.annotations = AnnotationStore::new();
+        self.anchored_ranges = AnchoredRangeStore::new();
         self.contributions = ContributionRegistry::new();
         self.open = false;
     }
@@ -846,15 +791,13 @@ mod tests {
     #[test]
     fn contribution_sets_stabilize_and_replace_atomically() {
         let mut model = BufferModel::from_text("abc def");
-        let owner = ContributionOwner::Extension {
+        let source = ContributionSource::Extension {
             extension: ExtensionId::new(7),
             lifecycle: ExtensionLifecycleId::new(3),
         };
-        let set = model.create_contribution_set(owner).unwrap();
         model
             .replace_contributions(
-                set,
-                owner,
+                source,
                 &[EditorContribution {
                     range: ByteRange {
                         start_byte_offset: 4,
@@ -879,14 +822,13 @@ mod tests {
         );
 
         assert_eq!(
-            model.replace_contributions(set, owner, &[], 0),
+            model.replace_contributions(source, &[], 0),
             Err(ContributionError::RevisionConflict)
         );
         assert_eq!(model.resolved_decorations().len(), 1);
         assert_eq!(
             model.replace_contributions(
-                set,
-                owner,
+                source,
                 &[EditorContribution {
                     range: ByteRange {
                         start_byte_offset: 7,
@@ -901,7 +843,7 @@ mod tests {
         assert_eq!(model.resolved_decorations().len(), 1);
 
         model
-            .replace_contributions(set, owner, &[], model.revision())
+            .replace_contributions(source, &[], model.revision())
             .unwrap();
         assert!(model.resolved_decorations().is_empty());
     }
@@ -910,19 +852,17 @@ mod tests {
     fn contribution_ownership_rejects_stale_lifecycles_and_cleans_up() {
         let mut model = BufferModel::from_text("abc");
         let extension = ExtensionId::new(7);
-        let owner = ContributionOwner::Extension {
+        let source = ContributionSource::Extension {
             extension,
             lifecycle: ExtensionLifecycleId::new(3),
         };
-        let stale_owner = ContributionOwner::Extension {
+        let stale_source = ContributionSource::Extension {
             extension,
             lifecycle: ExtensionLifecycleId::new(2),
         };
-        let set = model.create_contribution_set(owner).unwrap();
         model
             .replace_contributions(
-                set,
-                owner,
+                source,
                 &[EditorContribution {
                     range: ByteRange {
                         start_byte_offset: 0,
@@ -935,7 +875,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            model.dispose_contribution_set(set, stale_owner),
+            model.dispose_contributions(stale_source),
             Err(ContributionError::NotFound)
         );
         assert_eq!(model.resolved_decorations().len(), 1);
@@ -948,21 +888,18 @@ mod tests {
     fn decoration_precedence_is_application_owned_and_deterministic() {
         let mut model = BufferModel::from_text("abc");
         for (source, decoration) in [
+            (ContributionSource::BuiltIn, DecorationToken::Warning),
             (
-                BuiltInContributionSource::FixtureDiagnostics,
-                DecorationToken::Warning,
-            ),
-            (
-                BuiltInContributionSource::FixtureOverlap,
+                ContributionSource::Extension {
+                    extension: ExtensionId::new(7),
+                    lifecycle: ExtensionLifecycleId::new(3),
+                },
                 DecorationToken::Info,
             ),
         ] {
-            let owner = ContributionOwner::BuiltIn(source);
-            let set = model.create_contribution_set(owner).unwrap();
             model
                 .replace_contributions(
-                    set,
-                    owner,
+                    source,
                     &[EditorContribution {
                         range: ByteRange {
                             start_byte_offset: 0,

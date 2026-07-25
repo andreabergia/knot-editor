@@ -19,15 +19,15 @@
 //! - Undo and redo route exclusively through `TextBuffer::{insert, delete,
 //!   replace}`, so each direction emits the normal `BufferEdit` log entries
 //!   and preserves line-index maintenance. No piece IDs are restored, the
-//!   append-only `Add` backing store is never truncated, and annotations are
+//!   append-only `Add` backing store is never truncated, and anchored ranges are
 //!   not mutated by the transaction. (Because both directions emit new
 //!   `BufferEdit`s, the buffer's `edit_seq` advances through undo and redo;
 //!   the checkpoint is re-stamped after each pass so the next pass is still
 //!   validated.)
-//! - `AnnotationStore` remains buffer-agnostic. Its owner calls
+//! - `AnchoredRangeStore` remains buffer-agnostic. Its owner calls
 //!   `stabilize(&buffer)` after forward, undo, and redo passes just as it does
-//!   after every other buffer edit; no transaction-specific annotation API is
-//!   introduced. A fully consumed annotation is removed (not tombstoned) by the
+//!   after every other buffer edit; no transaction-specific anchored-range API is
+//!   introduced. A fully consumed anchored range is removed (not tombstoned) by the
 //!   store; undoing the text edit does not revive it — a provider must
 //!   re-publish under a fresh id.
 
@@ -504,34 +504,48 @@ mod tests {
         assert_eq!(other.read_range(0..other.len()), "xyz");
     }
 
-    // ---- Step 6b acceptance: transaction flow with annotations ---------
+    // ---- Step 6b acceptance: transaction flow with anchored ranges ---------
 
     #[test]
-    fn annotations_survive_or_get_consumed_through_forward_undo_redo() {
-        use crate::core::annotation::{AnnotationData, AnnotationKind, AnnotationStore};
+    fn anchored_ranges_survive_or_get_consumed_through_forward_undo_redo() {
+        use crate::core::anchored_range::{
+            AnchoredRangeData, AnchoredRangeKind, AnchoredRangeStore,
+        };
 
         // "hello world": h0 e1 l2 l3 o4 SP5 w6 o7 r8 l9 d10. len 11.
         let mut b = TextBuffer::from_text("hello world");
-        let mut store = AnnotationStore::new();
+        let mut store = AnchoredRangeStore::new();
         // Unaffected by the delete: stays put.
-        let unaffected = store.add(&b, 0, 2, AnnotationKind::Search, AnnotationData::default());
+        let unaffected = store.add(
+            &b,
+            0,
+            2,
+            AnchoredRangeKind::Search,
+            AnchoredRangeData::default(),
+        );
         // Both ends around the delete; end past `e` shifts by delete_len.
         let bsticky = store.add(
             &b,
             3,
             9,
-            AnnotationKind::Diagnostic,
-            AnnotationData::default(),
+            AnchoredRangeKind::Diagnostic,
+            AnchoredRangeData::default(),
         );
         // Spans across the delete boundary on both sides.
-        let partial = store.add(&b, 4, 10, AnnotationKind::Git, AnnotationData::default());
+        let partial = store.add(
+            &b,
+            4,
+            10,
+            AnchoredRangeKind::Git,
+            AnchoredRangeData::default(),
+        );
         // Wholly inside the delete: end + start strictly inside (s, e).
         let victim = store.add(
             &b,
             6,
             7,
-            AnnotationKind::Breakpoint,
-            AnnotationData::default(),
+            AnchoredRangeKind::Breakpoint,
+            AnchoredRangeData::default(),
         );
 
         // Forward: delete " wo" (bytes 5..8) -> "hellorld".
@@ -546,9 +560,9 @@ mod tests {
             !store.query_range(&b, 0, b.len()).contains(&victim),
             "victim absent from query_range"
         );
-        assert_eq!(store.len(), 3, "only three live annotations remain");
+        assert_eq!(store.len(), 3, "only three live anchored ranges remain");
 
-        // Live annotations follow the established insert/delete semantics:
+        // Live anchored ranges follow the established insert/delete semantics:
         // - unaffected: offsets <= s keep their bytes.
         // - bsticky [3, 9): start 3 <= s stays at 3; end 9 >= e shifts by
         //   delete_len 3 -> 6; final [3, 6).
@@ -558,7 +572,7 @@ mod tests {
         assert_eq!(store.resolve(&b, bsticky), Some(3..6));
         assert_eq!(store.resolve(&b, partial), Some(4..7));
 
-        // All three live annotations remain queryable.
+        // All three live anchored ranges remain queryable.
         let visible = store.query_range(&b, 0, b.len());
         assert_eq!(visible.len(), 3);
         assert!(visible.contains(&unaffected));
@@ -566,7 +580,7 @@ mod tests {
         assert!(visible.contains(&partial));
 
         // Undo restores the deleted text. Victim stays removed — undo does
-        // not revive a consumed annotation.
+        // not revive a consumed anchored range.
         tx.undo(&mut b);
         store.stabilize(&b);
         assert_eq!(s(&b), "hello world");
@@ -581,7 +595,7 @@ mod tests {
         assert!(after_undo.contains(&partial));
         assert!(!after_undo.contains(&victim));
 
-        // Redo re-applies the delete. Live annotations follow the same
+        // Redo re-applies the delete. Live anchored ranges follow the same
         // forward semantics; the victim is still gone.
         tx.redo(&mut b);
         store.stabilize(&b);

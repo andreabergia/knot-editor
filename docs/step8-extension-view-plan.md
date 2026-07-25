@@ -74,7 +74,7 @@ against a specific buffer revision. The foreground validates every UTF-8 byte
 range and rejects stale revisions before changing visible state.
 
 Accepted ranges are converted to the core's stable anchors. Later text edits
-stabilize them through the existing `AnnotationStore`; extensions do not need
+stabilize them through the existing `AnchoredRangeStore`; extensions do not need
 to republish merely because unrelated offsets moved.
 
 Replacing a set removes its previous contributions atomically. Disposing the
@@ -86,10 +86,10 @@ entirely. Late updates from an obsolete extension lifecycle are rejected.
 `BufferModel` will own:
 
 - the authoritative `TextBuffer`;
-- the shared `AnnotationStore`;
+- the shared `AnchoredRangeStore`;
 - source/lifecycle ownership and renderer-neutral contribution metadata.
 
-Presentation payloads stay in `app`; `core::AnnotationData` will not acquire
+Presentation payloads stay in `app`; `core::AnchoredRangeData` will not acquire
 gpui or extension-host types.
 
 Each `EditorView` continues to own its cursor, selection, scroll position,
@@ -169,18 +169,22 @@ interface EditorContributionSet extends Disposable {
 }
 ```
 
-The registration API binds every provider and contribution set to its
-extension identity and unique lifecycle. The foreground registry is keyed by
-an opaque `ContributionSetId`; each entry records an owner consisting of
-`ExtensionId` plus `ExtensionLifecycleId`. The extension identity identifies
-the installed extension, while the lifecycle identifies one particular
-runtime incarnation. An extension may own multiple independently replaceable
-sets, and delayed work from an older lifecycle cannot replace or dispose sets
-owned by a restarted runtime. Built-in sources use the same registry with an
-explicit native owner variant.
+Each buffer's foreground registry is keyed directly by
+`ContributionSource`: either built-in code or `ExtensionId` plus
+`ExtensionLifecycleId`. The extension identity identifies the installed
+extension, while the lifecycle identifies one particular runtime incarnation.
+Each source has one complete, atomically replaceable contribution set per
+buffer. Delayed work from an older lifecycle therefore targets a different
+source and cannot replace or dispose the restarted runtime's set.
+The JavaScript facade may represent that set as an `EditorContributionSet`
+object, but repeated access for the same extension lifecycle and buffer refers
+to the same logical set.
 
 Transport messages use Knot-owned opaque handles; JavaScript does not see
-gpui entities, Rust references, core annotation IDs, or runtime resource IDs.
+gpui entities, Rust references, core anchored-range IDs, or runtime resource
+IDs. Contribution-set operations need no separate native handle: the buffer
+handle comes from the JavaScript buffer proxy, and the host derives the
+extension source from the request envelope.
 
 `invalidate` is a notification, not a synchronous fetch. The foreground may
 coalesce repeated invalidations before requesting children.
@@ -202,7 +206,7 @@ extension TreeDataProvider / contribution set
               /           \
      native TreeView    BufferModel
                            |
-                 AnnotationStore + metadata
+                 AnchoredRangeStore + metadata
                            |
                      EditorView(s)
 ```
@@ -232,16 +236,16 @@ land.
 
 ### 1. Introduce shared contribution ownership
 
-1. ✅ Move `AnnotationStore` ownership into `BufferModel` beside `TextBuffer`.
+1. ✅ Move `AnchoredRangeStore` ownership into `BufferModel` beside `TextBuffer`.
    Stabilize it after every accepted local or extension edit, before notifying
    views.
 2. ✅ Add an application-owned contribution registry keyed by source identity.
-   Keep visual metadata outside `core` and associate it with core annotation
+   Keep visual metadata outside `core` and associate it with core anchored-range
    IDs.
 3. ✅ Implement atomic revision-checked replacement, explicit disposal, buffer
    cleanup, and extension-lifecycle cleanup.
 4. ✅ Route the existing fixture diagnostics through this registry and remove
-   `EditorView`'s private fixture annotation model.
+   `EditorView`'s private fixture-decoration model.
 5. ✅ Render at least two overlapping sources with deterministic native
    precedence. Record precedence as a local presentation policy, not a core
    annotation rule.
@@ -249,7 +253,7 @@ land.
 ### 2. Expose editor contributions to JavaScript
 
 1. ⬜ Add Knot-owned protocol types and recoverable errors for contribution-set
-   creation, replacement, and disposal.
+   replacement and disposal.
 2. ⬜ Add the private bootstrap bindings and the small public
    `knot:editor` facade.
 3. ⬜ Recheck extension identity, lifecycle, buffer liveness, revision, ranges,
@@ -320,7 +324,7 @@ land.
   extensions.
 - Two views share buffer text and contributions but retain independent cursor,
   selection, scroll, folding, focus, and rendering state.
-- No gpui, Deno, V8, core annotation ID, or Rust object crosses the public
+- No gpui, Deno, V8, core anchored-range ID, or Rust object crosses the public
   JavaScript boundary.
 - The Windows portability checkpoint is complete, and the deferred Linux
   checkpoint remains explicitly required before production development.

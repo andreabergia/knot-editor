@@ -1,7 +1,7 @@
-//! Buffer model: TextBuffer, annotations, capabilities.
+//! Buffer model: TextBuffer, anchored ranges, capabilities.
 //!
 //! Roadmap step 4 onward. Skeleton lives in `buffer`.
 
-pub mod annotation;
+pub mod anchored_range;
 pub mod buffer;
 pub mod transaction;

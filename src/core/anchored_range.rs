@@ -1,9 +1,9 @@
-//! `AnnotationStore`: the annotation layer over `TextBuffer` (step 5, D1–D4).
+//! `AnchoredRangeStore`: stable ranges over `TextBuffer`.
 //!
-//! Each annotation anchors its endpoints as stable `Position` tokens issued
+//! Each anchored range anchors its endpoints as stable `Position` tokens issued
 //! by `TextBuffer::position_at` (D1), not raw byte offsets. Endpoint
-//! stickiness (`Before`/`After`, D2) makes annotations survive edits
-//! correctly. A derived interval index (D3) answers "annotations overlapping
+//! stickiness (`Before`/`After`, D2) makes anchored ranges survive edits
+//! correctly. A derived interval index (D3) answers "anchored ranges overlapping
 //! `[a, b)`".
 //!
 //! ## Representation and stabilization
@@ -13,7 +13,7 @@
 //! cannot issue a fresh token. `stabilize` advances a cursor over the edit
 //! log and repairs only endpoints whose token piece is affected by the edit:
 //! interior split right halves, insert-boundary endpoints, and endpoints
-//! whose piece is deleted. Untouched annotations are left alone and resolve
+//! whose piece is deleted. Untouched anchored ranges are left alone and resolve
 //! through their stable `Position` tokens.
 //!
 //! Querying is buffer-aware: `query_range` uses a sorted interval index
@@ -28,28 +28,28 @@
 //! hold `&buffer` and call `buffer.insert` through `&mut`). Instead the store
 //! is buffer-agnostic and receives `&TextBuffer` at the call sites that need
 //! it (`add`, `resolve`, `stabilize`). An editor owns the `TextBuffer` and the
-//! `AnnotationStore` as sibling fields and passes the buffer in — which is
+//! `AnchoredRangeStore` as sibling fields and passes the buffer in — which is
 //! exactly the shape a real host needs.
 //!
 //! ## `resolve` contract (decided)
 //!
 //! `resolve` returns `Some(start..end)` with `start <= end` for every live
-//! annotation. When an annotation's extent is fully consumed by a delete
+//! anchored range. When an anchored range's extent is fully consumed by a delete
 //! (both endpoints land strictly inside a deleted span and collapse onto the
-//! same point), it has no surviving extent: `AnnotationStore` **removes** the
-//! annotation entirely — its id, both endpoint-index entries, and any cached
+//! same point), it has no surviving extent: `AnchoredRangeStore` **removes** the
+//! anchored range entirely — its id, both endpoint-index entries, and any cached
 //! offsets. `resolve` returns `None` for that id thereafter, and `query_range`
 //! / `iter_live` cannot return it. The id is not reserved; a provider may add
-//! a fresh annotation later that receives a new id (undo does not revive a
-//! consumed annotation — see step 6b).
+//! a fresh anchored range later that receives a new id (undo does not revive a
+//! consumed anchored range — see step 6b).
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::ops::Range;
 
 use super::buffer::{BufferEdit, PieceId, Position, TextBuffer};
 
-/// Stable identifier for an annotation, issued by the store.
-pub type AnnotationId = u64;
+/// Stable identifier for an anchored range, issued by the store.
+pub type AnchoredRangeId = u64;
 
 /// Which side of an inserted span an endpoint sticks to (D2).
 ///
@@ -90,9 +90,9 @@ impl Anchor {
     }
 }
 
-/// Classification of an annotation's source (step 6 composes by kind).
+/// Classification of an anchored range's source (step 6 composes by kind).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum AnnotationKind {
+pub enum AnchoredRangeKind {
     Diagnostic,
     Search,
     Git,
@@ -104,16 +104,16 @@ pub enum AnnotationKind {
 /// Opaque per-source payload. Minimal owned placeholder for the prototype;
 /// step 6 supplies the real rendering data.
 #[derive(Clone, Debug, Default)]
-pub struct AnnotationData(pub String);
+pub struct AnchoredRangeData(pub String);
 
-/// One annotation: two anchored endpoints plus source metadata.
+/// One anchored range: two anchored endpoints plus source metadata.
 #[derive(Clone, Debug)]
-pub struct Annotation {
-    pub id: AnnotationId,
+pub struct AnchoredRange {
+    pub id: AnchoredRangeId,
     pub start: Anchor,
     pub end: Anchor,
-    pub kind: AnnotationKind,
-    pub data: AnnotationData,
+    pub kind: AnchoredRangeKind,
+    pub data: AnchoredRangeData,
     /// Cached live resolved byte offsets, the authoritative transient state
     /// `stabilize` refreshes after every edit (see module docs). The
     /// `Position` tokens are re-anchored against these via `position_at`.
@@ -129,19 +129,19 @@ enum EndpointSide {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct EndpointKey {
-    id: AnnotationId,
+    id: AnchoredRangeId,
     side: EndpointSide,
 }
 
 impl EndpointKey {
-    fn start(id: AnnotationId) -> Self {
+    fn start(id: AnchoredRangeId) -> Self {
         Self {
             id,
             side: EndpointSide::Start,
         }
     }
 
-    fn end(id: AnnotationId) -> Self {
+    fn end(id: AnchoredRangeId) -> Self {
         Self {
             id,
             side: EndpointSide::End,
@@ -149,7 +149,7 @@ impl EndpointKey {
     }
 }
 
-/// Authoritative annotation store over a `TextBuffer` (D1, D4).
+/// Authoritative anchored range store over a `TextBuffer` (D1, D4).
 ///
 /// Buffer-agnostic by design (see module docs): pass `&TextBuffer` to the
 /// methods that need it.
@@ -157,17 +157,17 @@ impl EndpointKey {
 struct IntervalEntry {
     start: usize,
     end: usize,
-    id: AnnotationId,
+    id: AnchoredRangeId,
 }
 
-pub struct AnnotationStore {
-    annotations: HashMap<AnnotationId, Annotation>,
+pub struct AnchoredRangeStore {
+    anchored_ranges: HashMap<AnchoredRangeId, AnchoredRange>,
     /// Endpoint index keyed by stable piece id, then endpoint offset within
     /// the piece. This lets `stabilize` touch only anchors whose piece split,
     /// received a boundary insert, or was deleted.
     endpoints_by_piece: BTreeMap<PieceId, BTreeSet<(u32, EndpointKey)>>,
     /// Endpoints that currently have no surviving piece to anchor to (only
-    /// possible when the buffer is empty and a zero-width annotation survives
+    /// possible when the buffer is empty and a zero-width anchored range survives
     /// at offset 0).
     unanchored_endpoints: BTreeSet<EndpointKey>,
     /// Derived interval index for `query_range` (D3): sorted by `start`,
@@ -176,13 +176,13 @@ pub struct AnnotationStore {
     index_dirty: bool,
     /// High-water mark into `buffer`'s edit log (D4).
     cursor: usize,
-    next_id: AnnotationId,
+    next_id: AnchoredRangeId,
 }
 
-impl AnnotationStore {
+impl AnchoredRangeStore {
     pub fn new() -> Self {
         Self {
-            annotations: HashMap::new(),
+            anchored_ranges: HashMap::new(),
             endpoints_by_piece: BTreeMap::new(),
             unanchored_endpoints: BTreeSet::new(),
             interval_index: Vec::new(),
@@ -192,14 +192,14 @@ impl AnnotationStore {
         }
     }
 
-    /// Number of annotations currently held (all live; fully consumed
-    /// annotations are removed, not tombstoned).
+    /// Number of anchored ranges currently held (all live; fully consumed
+    /// anchored ranges are removed, not tombstoned).
     pub fn len(&self) -> usize {
-        self.annotations.len()
+        self.anchored_ranges.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.annotations.is_empty()
+        self.anchored_ranges.is_empty()
     }
 
     fn mark_index_dirty(&mut self) {
@@ -208,7 +208,7 @@ impl AnnotationStore {
 
     fn rebuild_index(&mut self, buffer: &TextBuffer) {
         self.interval_index.clear();
-        for (&id, ann) in &self.annotations {
+        for (&id, ann) in &self.anchored_ranges {
             let s = ann.start.resolve(buffer).unwrap_or(ann.idx_start);
             let e = ann.end.resolve(buffer).unwrap_or(ann.idx_end);
             let (start, end) = if s <= e { (s, e) } else { (e, s) };
@@ -238,7 +238,7 @@ impl AnnotationStore {
     }
 
     fn endpoint_pos(&self, key: EndpointKey) -> Option<Position> {
-        let ann = self.annotations.get(&key.id)?;
+        let ann = self.anchored_ranges.get(&key.id)?;
         match key.side {
             EndpointSide::Start => Some(ann.start.pos),
             EndpointSide::End => Some(ann.end.pos),
@@ -250,7 +250,7 @@ impl AnnotationStore {
             return;
         };
         self.remove_endpoint_index(old_pos, key);
-        if let Some(ann) = self.annotations.get_mut(&key.id) {
+        if let Some(ann) = self.anchored_ranges.get_mut(&key.id) {
             match key.side {
                 EndpointSide::Start => {
                     ann.start.pos = pos;
@@ -270,7 +270,7 @@ impl AnnotationStore {
             return;
         };
         self.remove_endpoint_index(old_pos, key);
-        if let Some(ann) = self.annotations.get_mut(&key.id) {
+        if let Some(ann) = self.anchored_ranges.get_mut(&key.id) {
             match key.side {
                 EndpointSide::Start => ann.idx_start = fallback_offset,
                 EndpointSide::End => ann.idx_end = fallback_offset,
@@ -312,7 +312,7 @@ impl AnnotationStore {
             .unwrap_or_default()
     }
 
-    fn remove_annotation_endpoints(&mut self, ann: &Annotation) {
+    fn remove_anchored_range_endpoints(&mut self, ann: &AnchoredRange) {
         self.remove_endpoint_index(ann.start.pos, EndpointKey::start(ann.id));
         self.remove_endpoint_index(ann.end.pos, EndpointKey::end(ann.id));
         self.unanchored_endpoints
@@ -320,7 +320,7 @@ impl AnnotationStore {
         self.unanchored_endpoints.remove(&EndpointKey::end(ann.id));
     }
 
-    /// Add an annotation spanning `[start, end)` (byte offsets into the
+    /// Add an anchored range spanning `[start, end)` (byte offsets into the
     /// current logical text). The start endpoint defaults to `Before`
     /// (sticky-left) and the end to `After` (sticky-right) — standard
     /// selection semantics (D2).
@@ -329,9 +329,9 @@ impl AnnotationStore {
         buffer: &TextBuffer,
         start: usize,
         end: usize,
-        kind: AnnotationKind,
-        data: AnnotationData,
-    ) -> AnnotationId {
+        kind: AnchoredRangeKind,
+        data: AnchoredRangeData,
+    ) -> AnchoredRangeId {
         let id = self.next_id;
         self.next_id += 1;
 
@@ -343,7 +343,7 @@ impl AnnotationStore {
         let start_a = Anchor::new(s_pos, Stickiness::Before);
         let end_a = Anchor::new(e_pos, Stickiness::After);
 
-        let ann = Annotation {
+        let ann = AnchoredRange {
             id,
             start: start_a,
             end: end_a,
@@ -352,7 +352,7 @@ impl AnnotationStore {
             idx_start: start,
             idx_end: end,
         };
-        self.annotations.insert(id, ann);
+        self.anchored_ranges.insert(id, ann);
         self.insert_endpoint_index(s_pos, EndpointKey::start(id));
         self.insert_endpoint_index(e_pos, EndpointKey::end(id));
         self.mark_index_dirty();
@@ -360,32 +360,32 @@ impl AnnotationStore {
         id
     }
 
-    /// Remove an annotation entirely.
-    pub fn remove(&mut self, id: AnnotationId) {
-        if let Some(ann) = self.annotations.remove(&id) {
-            self.remove_annotation_endpoints(&ann);
+    /// Remove an anchored range entirely.
+    pub fn remove(&mut self, id: AnchoredRangeId) {
+        if let Some(ann) = self.anchored_ranges.remove(&id) {
+            self.remove_anchored_range_endpoints(&ann);
             self.mark_index_dirty();
         }
     }
 
-    /// Resolve an annotation to its current byte range.
+    /// Resolve an anchored range to its current byte range.
     ///
-    /// Returns `None` iff the annotation has been removed (e.g. it was
+    /// Returns `None` iff the anchored range has been removed (e.g. it was
     /// fully consumed by a delete) — see module docs for the contract.
     ///
     /// The caller must `stabilize` before `resolve` to reflect edits.
-    pub fn resolve(&self, buffer: &TextBuffer, id: AnnotationId) -> Option<Range<usize>> {
-        let ann = self.annotations.get(&id)?;
+    pub fn resolve(&self, buffer: &TextBuffer, id: AnchoredRangeId) -> Option<Range<usize>> {
+        let ann = self.anchored_ranges.get(&id)?;
         let s = ann.start.resolve(buffer).unwrap_or(ann.idx_start);
         let e = ann.end.resolve(buffer).unwrap_or(ann.idx_end);
         if s <= e { Some(s..e) } else { Some(e..s) }
     }
 
-    /// All annotation ids overlapping `[a, b)` (D3, for step 6). Uses a
+    /// All anchored range ids overlapping `[a, b)` (D3, for step 6). Uses a
     /// lazily-rebuilt interval index sorted by start byte for O(log n + k)
     /// binary-search lookup; the index is rebuilt once on the first query
     /// after edits.
-    pub fn query_range(&mut self, buffer: &TextBuffer, a: usize, b: usize) -> Vec<AnnotationId> {
+    pub fn query_range(&mut self, buffer: &TextBuffer, a: usize, b: usize) -> Vec<AnchoredRangeId> {
         if a >= b {
             return Vec::new();
         }
@@ -393,7 +393,7 @@ impl AnnotationStore {
             self.rebuild_index(buffer);
         }
         let start_idx = self.interval_index.partition_point(|e| e.start < b);
-        let out: Vec<AnnotationId> = self.interval_index[..start_idx]
+        let out: Vec<AnchoredRangeId> = self.interval_index[..start_idx]
             .iter()
             .filter(|e| e.end > a)
             .map(|e| e.id)
@@ -402,7 +402,7 @@ impl AnnotationStore {
         out
     }
 
-    /// Like `query_range` but only returns annotations whose `kind` is in
+    /// Like `query_range` but only returns anchored ranges whose `kind` is in
     /// `kinds`. This is the composition surface for consumers that care about
     /// only specific source types (e.g. gutter: diagnostics + breakpoints;
     /// minimap: diagnostics + search + git).
@@ -411,21 +411,21 @@ impl AnnotationStore {
         buffer: &TextBuffer,
         a: usize,
         b: usize,
-        kinds: &[AnnotationKind],
-    ) -> Vec<AnnotationId> {
+        kinds: &[AnchoredRangeKind],
+    ) -> Vec<AnchoredRangeId> {
         if a >= b || kinds.is_empty() {
             return Vec::new();
         }
         if self.index_dirty {
             self.rebuild_index(buffer);
         }
-        let kind_set: HashSet<AnnotationKind> = kinds.iter().copied().collect();
+        let kind_set: HashSet<AnchoredRangeKind> = kinds.iter().copied().collect();
         let start_idx = self.interval_index.partition_point(|e| e.start < b);
         self.interval_index[..start_idx]
             .iter()
             .filter(|e| e.end > a)
             .filter(|e| {
-                self.annotations
+                self.anchored_ranges
                     .get(&e.id)
                     .map_or(false, |ann| kind_set.contains(&ann.kind))
             })
@@ -433,17 +433,17 @@ impl AnnotationStore {
             .collect()
     }
 
-    /// Iterate over all live annotations. Fully consumed annotations are
+    /// Iterate over all live anchored ranges. Fully consumed anchored ranges are
     /// removed rather than retained as tombstones, so every entry in the
     /// map is live.
-    pub fn iter_live(&self) -> impl Iterator<Item = (&AnnotationId, &Annotation)> {
-        self.annotations.iter()
+    pub fn iter_live(&self) -> impl Iterator<Item = (&AnchoredRangeId, &AnchoredRange)> {
+        self.anchored_ranges.iter()
     }
 
     /// Advance over every edit since the last `stabilize`, repairing only
     /// endpoints whose token pieces are touched by those edits.
     ///
-    /// Untouched annotations are not scanned: their `Position` tokens stay
+    /// Untouched anchored ranges are not scanned: their `Position` tokens stay
     /// valid and resolve through the buffer's piece table.
     pub fn stabilize(&mut self, buffer: &TextBuffer) {
         let edits = buffer.edits_since(self.cursor);
@@ -604,7 +604,7 @@ impl AnnotationStore {
     fn move_unanchored_endpoints(&mut self, buffer: &TextBuffer, to: Position) {
         let keys: Vec<_> = self.unanchored_endpoints.iter().copied().collect();
         for key in keys {
-            if let Some(ann) = self.annotations.get_mut(&key.id) {
+            if let Some(ann) = self.anchored_ranges.get_mut(&key.id) {
                 match key.side {
                     EndpointSide::Start => {
                         ann.start.pos = to;
@@ -620,8 +620,8 @@ impl AnnotationStore {
         }
     }
 
-    fn refresh_cached_offsets(&mut self, buffer: &TextBuffer, id: AnnotationId) {
-        if let Some(ann) = self.annotations.get_mut(&id) {
+    fn refresh_cached_offsets(&mut self, buffer: &TextBuffer, id: AnchoredRangeId) {
+        if let Some(ann) = self.anchored_ranges.get_mut(&id) {
             if let Some(s) = ann.start.resolve(buffer) {
                 ann.idx_start = s;
             }
@@ -631,8 +631,8 @@ impl AnnotationStore {
         }
     }
 
-    fn resolved_extent_empty(&self, buffer: &TextBuffer, id: AnnotationId) -> bool {
-        let Some(ann) = self.annotations.get(&id) else {
+    fn resolved_extent_empty(&self, buffer: &TextBuffer, id: AnchoredRangeId) -> bool {
+        let Some(ann) = self.anchored_ranges.get(&id) else {
             return false;
         };
         let s = ann.start.resolve(buffer).unwrap_or(ann.idx_start);
@@ -640,20 +640,20 @@ impl AnnotationStore {
         s >= e
     }
 
-    /// Fully consume an annotation whose extent has collapsed to zero (both
+    /// Fully consume an anchored range whose extent has collapsed to zero (both
     /// endpoints snapped onto the same surviving edge of a delete). Removes
-    /// the annotation, its endpoint-index entries, and any cached offsets.
+    /// the anchored range, its endpoint-index entries, and any cached offsets.
     /// `resolve` will return `None` for `id` thereafter; there is no
-    /// tombstone. Undoing the text edit does not revive the annotation —
+    /// tombstone. Undoing the text edit does not revive the anchored range —
     /// a provider must re-publish it under a fresh id (step 6b).
-    fn consume(&mut self, id: AnnotationId) {
-        if let Some(ann) = self.annotations.remove(&id) {
-            self.remove_annotation_endpoints(&ann);
+    fn consume(&mut self, id: AnchoredRangeId) {
+        if let Some(ann) = self.anchored_ranges.remove(&id) {
+            self.remove_anchored_range_endpoints(&ann);
         }
     }
 }
 
-impl Default for AnnotationStore {
+impl Default for AnchoredRangeStore {
     fn default() -> Self {
         Self::new()
     }
@@ -661,15 +661,15 @@ impl Default for AnnotationStore {
 
 /// Naive offset-remap store (D5): the measurement baseline.
 ///
-/// Annotations keep raw byte ranges and, on every edit, *every* annotation's
+/// Anchored ranges keep raw byte ranges and, on every edit, *every* anchored range's
 /// offsets are re-transformed by the same insert/delete rules the token store
-/// applies via `Position` stability. This is O(all annotations) per edit by
+/// applies via `Position` stability. This is O(all anchored ranges) per edit by
 /// construction — the comparator that answers "which representation" in step
 /// 5's benchmark. It shares `transform_offset` with the correctness oracle.
 pub struct OffsetStore {
-    anns: HashMap<AnnotationId, (usize, usize, Stickiness, Stickiness, bool)>,
+    anns: HashMap<AnchoredRangeId, (usize, usize, Stickiness, Stickiness, bool)>,
     cursor: usize,
-    next_id: AnnotationId,
+    next_id: AnchoredRangeId,
 }
 
 impl OffsetStore {
@@ -681,7 +681,7 @@ impl OffsetStore {
         }
     }
 
-    pub fn add(&mut self, start: usize, end: usize) -> AnnotationId {
+    pub fn add(&mut self, start: usize, end: usize) -> AnchoredRangeId {
         let id = self.next_id;
         self.next_id += 1;
         self.anns.insert(
@@ -691,7 +691,7 @@ impl OffsetStore {
         id
     }
 
-    /// O(all) per edit: walk every annotation applying the edit transform.
+    /// O(all) per edit: walk every anchored range applying the edit transform.
     pub fn stabilize(&mut self, buffer: &TextBuffer) {
         let edits = buffer.edits_since(self.cursor);
         assert!(
@@ -714,7 +714,7 @@ impl OffsetStore {
         self.cursor += edits.len();
     }
 
-    pub fn resolve(&self, id: AnnotationId) -> Option<Range<usize>> {
+    pub fn resolve(&self, id: AnchoredRangeId) -> Option<Range<usize>> {
         let (s, e, _, _, collapsed) = self.anns.get(&id)?;
         if *collapsed {
             return None;
@@ -786,29 +786,35 @@ mod tests {
     #[test]
     fn add_and_resolve_round_trips() {
         let b = text();
-        let mut store = AnnotationStore::new();
+        let mut store = AnchoredRangeStore::new();
         let id = store.add(
             &b,
             0,
             5,
-            AnnotationKind::Diagnostic,
-            AnnotationData::default(),
+            AnchoredRangeKind::Diagnostic,
+            AnchoredRangeData::default(),
         );
         assert_eq!(store.resolve(&b, id), Some(0..5));
-        let id2 = store.add(&b, 6, 11, AnnotationKind::Search, AnnotationData::default());
+        let id2 = store.add(
+            &b,
+            6,
+            11,
+            AnchoredRangeKind::Search,
+            AnchoredRangeData::default(),
+        );
         assert_eq!(store.resolve(&b, id2), Some(6..11));
     }
 
     #[test]
-    fn remove_drops_annotation() {
+    fn remove_drops_anchored_range() {
         let b = text();
-        let mut store = AnnotationStore::new();
+        let mut store = AnchoredRangeStore::new();
         let id = store.add(
             &b,
             0,
             5,
-            AnnotationKind::Diagnostic,
-            AnnotationData::default(),
+            AnchoredRangeKind::Diagnostic,
+            AnchoredRangeData::default(),
         );
         store.remove(id);
         assert!(store.resolve(&b, id).is_none());
@@ -819,26 +825,35 @@ mod tests {
     fn position_at_boundary_anchoring_default_stickiness() {
         // start defaults to Before (sticky-left), end to After (sticky-right).
         let b = text();
-        let mut store = AnnotationStore::new();
+        let mut store = AnchoredRangeStore::new();
         let id = store.add(
             &b,
             0,
             11,
-            AnnotationKind::Diagnostic,
-            AnnotationData::default(),
+            AnchoredRangeKind::Diagnostic,
+            AnchoredRangeData::default(),
         );
-        assert_eq!(store.annotations[&id].start.sticky(), Stickiness::Before);
-        assert_eq!(store.annotations[&id].end.sticky(), Stickiness::After);
+        assert_eq!(
+            store.anchored_ranges[&id].start.sticky(),
+            Stickiness::Before
+        );
+        assert_eq!(store.anchored_ranges[&id].end.sticky(), Stickiness::After);
     }
 
     #[test]
-    fn insert_before_start_does_not_move_annotation() {
+    fn insert_before_start_does_not_move_anchored_range() {
         let mut b = text();
-        let mut store = AnnotationStore::new();
-        let id = store.add(&b, 6, 11, AnnotationKind::Search, AnnotationData::default());
+        let mut store = AnchoredRangeStore::new();
+        let id = store.add(
+            &b,
+            6,
+            11,
+            AnchoredRangeKind::Search,
+            AnchoredRangeData::default(),
+        );
         b.insert(0, ">>");
         store.stabilize(&b);
-        // Both endpoints shifted by 2; the annotation still covers "world".
+        // Both endpoints shifted by 2; the anchored range still covers "world".
         assert_eq!(store.resolve(&b, id), Some(8..13));
     }
 
@@ -847,34 +862,34 @@ mod tests {
         // start is `Before` (sticky-left): insert at the start offset keeps
         // the endpoint put (text lands before it).
         let mut b = text();
-        let mut store = AnnotationStore::new();
+        let mut store = AnchoredRangeStore::new();
         let id = store.add(
             &b,
             0,
             5,
-            AnnotationKind::Diagnostic,
-            AnnotationData::default(),
+            AnchoredRangeKind::Diagnostic,
+            AnchoredRangeData::default(),
         );
         b.insert(0, "X");
         store.stabilize(&b);
         // The `Before` start is sticky-left: it keeps pointing at the same
-        // content ("h"), which the insert pushed to byte 1. The annotation
+        // content ("h"), which the insert pushed to byte 1. The anchored range
         // still covers "hello", now at bytes 1..6 (it does NOT swallow "X").
         assert_eq!(store.resolve(&b, id), Some(1..6));
     }
 
     #[test]
-    fn insert_at_after_end_grows_annotation() {
+    fn insert_at_after_end_grows_anchored_range() {
         // end is `After` (sticky-right): insert at the end offset relocates
         // the endpoint past the inserted span.
         let mut b = text();
-        let mut store = AnnotationStore::new();
+        let mut store = AnchoredRangeStore::new();
         let id = store.add(
             &b,
             0,
             5,
-            AnnotationKind::Diagnostic,
-            AnnotationData::default(),
+            AnchoredRangeKind::Diagnostic,
+            AnchoredRangeData::default(),
         );
         b.insert(5, "X");
         store.stabilize(&b);
@@ -884,13 +899,13 @@ mod tests {
     #[test]
     fn insert_at_after_end_extends() {
         let mut b = text();
-        let mut store = AnnotationStore::new();
+        let mut store = AnchoredRangeStore::new();
         let id = store.add(
             &b,
             0,
             5,
-            AnnotationKind::Diagnostic,
-            AnnotationData::default(),
+            AnchoredRangeKind::Diagnostic,
+            AnchoredRangeData::default(),
         );
         // "hello" then insert at offset 5 (right after "hello").
         b.insert(5, ">>>");
@@ -900,34 +915,34 @@ mod tests {
     }
 
     #[test]
-    fn delete_spanning_annotation_collapses_to_zero() {
+    fn delete_spanning_anchored_range_collapses_to_zero() {
         let mut b = text();
-        let mut store = AnnotationStore::new();
+        let mut store = AnchoredRangeStore::new();
         let id = store.add(
             &b,
             3,
             8,
-            AnnotationKind::Diagnostic,
-            AnnotationData::default(),
+            AnchoredRangeKind::Diagnostic,
+            AnchoredRangeData::default(),
         );
         // Delete [2, 9) which fully contains [3, 8).
         b.delete(2..9);
         store.stabilize(&b);
-        // Fully deleted -> consumed, no extent; annotation is removed entirely.
+        // Fully deleted -> consumed, no extent; anchored range is removed entirely.
         assert_eq!(store.resolve(&b, id), None);
     }
 
     #[test]
     fn delete_partial_left_collapses_start_to_surviving_edge() {
         let mut b = text();
-        let mut store = AnnotationStore::new();
+        let mut store = AnchoredRangeStore::new();
         // "hello world": delete [0, 6) removes "hello " -> surviving "world".
         let id = store.add(
             &b,
             2,
             8,
-            AnnotationKind::Diagnostic,
-            AnnotationData::default(),
+            AnchoredRangeKind::Diagnostic,
+            AnchoredRangeData::default(),
         );
         b.delete(0..6);
         store.stabilize(&b);
@@ -937,18 +952,18 @@ mod tests {
 
     #[test]
     fn interior_split_stale_right_half_repaired() {
-        // Build a buffer where an annotation's end sits in the right half of
+        // Build a buffer where an anchored range's end sits in the right half of
         // a piece, then split that piece with an insert and confirm the token
         // is repaired (content preserved), not invalidated.
         let mut b = TextBuffer::from_text("abcdefghij"); // single piece, len 10
-        let mut store = AnnotationStore::new();
+        let mut store = AnchoredRangeStore::new();
         // Anchor [2, 7): end at 7 is in the right half of the original piece.
         let id = store.add(
             &b,
             2,
             7,
-            AnnotationKind::Diagnostic,
-            AnnotationData::default(),
+            AnchoredRangeKind::Diagnostic,
+            AnchoredRangeData::default(),
         );
         assert_eq!(store.resolve(&b, id), Some(2..7));
         // Insert at offset 4 splits the original piece; "bcdefg" (the content
@@ -960,24 +975,30 @@ mod tests {
     }
 
     #[test]
-    fn untouched_annotation_costs_nothing() {
+    fn untouched_anchored_range_costs_nothing() {
         let mut b = text();
-        let mut store = AnnotationStore::new();
+        let mut store = AnchoredRangeStore::new();
         let touched = store.add(
             &b,
             0,
             5,
-            AnnotationKind::Diagnostic,
-            AnnotationData::default(),
+            AnchoredRangeKind::Diagnostic,
+            AnchoredRangeData::default(),
         );
-        let _untouched = store.add(&b, 6, 11, AnnotationKind::Search, AnnotationData::default());
-        // Edit at the start only affects the first annotation.
+        let _untouched = store.add(
+            &b,
+            6,
+            11,
+            AnchoredRangeKind::Search,
+            AnchoredRangeData::default(),
+        );
+        // Edit at the start only affects the first anchored range.
         b.insert(0, "X");
         store.stabilize(&b);
         // `touched` start is `Before` (sticky-left): the "X" lands before it,
         // so "hello" shifts to 1..6.
         assert_eq!(store.resolve(&b, touched), Some(1..6));
-        // The second annotation shifted by the insert but was not specially
+        // The second anchored range shifted by the insert but was not specially
         // processed; its token stayed valid (stability, not O(all) work).
         assert_eq!(store.resolve(&b, _untouched), Some(7..12));
     }
@@ -985,16 +1006,28 @@ mod tests {
     #[test]
     fn query_range_returns_overlapping_excludes_nonoverlapping() {
         let b = text();
-        let mut store = AnnotationStore::new();
+        let mut store = AnchoredRangeStore::new();
         let a = store.add(
             &b,
             0,
             5,
-            AnnotationKind::Diagnostic,
-            AnnotationData::default(),
+            AnchoredRangeKind::Diagnostic,
+            AnchoredRangeData::default(),
         );
-        let c = store.add(&b, 6, 11, AnnotationKind::Search, AnnotationData::default());
-        let _far = store.add(&b, 9, 11, AnnotationKind::Git, AnnotationData::default());
+        let c = store.add(
+            &b,
+            6,
+            11,
+            AnchoredRangeKind::Search,
+            AnchoredRangeData::default(),
+        );
+        let _far = store.add(
+            &b,
+            9,
+            11,
+            AnchoredRangeKind::Git,
+            AnchoredRangeData::default(),
+        );
         let hits = store.query_range(&b, 4, 7);
         assert!(hits.contains(&a), "a [0,5) overlaps [4,7)");
         assert!(hits.contains(&c), "c [6,11) overlaps [4,7)");
@@ -1004,14 +1037,14 @@ mod tests {
     #[test]
     fn query_range_consistent_with_linear_scan() {
         let b = text();
-        let mut store = AnnotationStore::new();
+        let mut store = AnchoredRangeStore::new();
         for i in 0..5 {
             store.add(
                 &b,
                 i,
                 i + 2,
-                AnnotationKind::Other(i as u8),
-                AnnotationData::default(),
+                AnchoredRangeKind::Other(i as u8),
+                AnchoredRangeData::default(),
             );
         }
         // Every query must match a brute-force linear scan over resolved ranges.
@@ -1023,7 +1056,7 @@ mod tests {
             for bnd in (a + 1)..=11 {
                 let q = store.query_range(&b, a, bnd);
                 let mut expected = Vec::new();
-                for id in store.annotations.keys().copied() {
+                for id in store.anchored_ranges.keys().copied() {
                     if let Some(r) = store.resolve(&b, id) {
                         if r.start < bnd && r.end > a {
                             expected.push(id);
@@ -1041,8 +1074,14 @@ mod tests {
     #[test]
     fn query_range_stays_correct_after_unrelated_shift() {
         let mut b = text();
-        let mut store = AnnotationStore::new();
-        let id = store.add(&b, 6, 11, AnnotationKind::Search, AnnotationData::default());
+        let mut store = AnchoredRangeStore::new();
+        let id = store.add(
+            &b,
+            6,
+            11,
+            AnchoredRangeKind::Search,
+            AnchoredRangeData::default(),
+        );
         b.insert(0, ">>");
         store.stabilize(&b);
         assert_eq!(store.resolve(&b, id), Some(8..13));
@@ -1053,14 +1092,14 @@ mod tests {
     #[test]
     fn query_range_with_index_fast_path_matches_linear_scan() {
         let b = text();
-        let mut store = AnnotationStore::new();
+        let mut store = AnchoredRangeStore::new();
         for i in 0..5 {
             store.add(
                 &b,
                 i,
                 i + 2,
-                AnnotationKind::Other(i as u8),
-                AnnotationData::default(),
+                AnchoredRangeKind::Other(i as u8),
+                AnchoredRangeData::default(),
             );
         }
         // A no-op stabilize marks the index dirty (lazy rebuild on next query).
@@ -1074,7 +1113,7 @@ mod tests {
             for bnd in (a + 1)..=11 {
                 let q = store.query_range(&b, a, bnd);
                 let mut expected = Vec::new();
-                for id in store.annotations.keys().copied() {
+                for id in store.anchored_ranges.keys().copied() {
                     if let Some(r) = store.resolve(&b, id) {
                         if r.start < bnd && r.end > a {
                             expected.push(id);
@@ -1092,8 +1131,14 @@ mod tests {
     #[test]
     fn zero_width_boundary_survives_empty_delete_and_reanchors_on_insert() {
         let mut b = TextBuffer::from_text("a");
-        let mut store = AnnotationStore::new();
-        let id = store.add(&b, 1, 1, AnnotationKind::Search, AnnotationData::default());
+        let mut store = AnchoredRangeStore::new();
+        let id = store.add(
+            &b,
+            1,
+            1,
+            AnchoredRangeKind::Search,
+            AnchoredRangeData::default(),
+        );
         b.delete(0..1);
         store.stabilize(&b);
         assert_eq!(store.resolve(&b, id), Some(0..0));
@@ -1106,17 +1151,23 @@ mod tests {
     // ---- Step 6b: removal-on-consumption semantics ---------------------
 
     #[test]
-    fn fully_consumed_annotation_removed_not_tombstoned() {
+    fn fully_consumed_anchored_range_removed_not_tombstoned() {
         let mut b = TextBuffer::from_text("hello world");
-        let mut store = AnnotationStore::new();
+        let mut store = AnchoredRangeStore::new();
         let victim = store.add(
             &b,
             6,
             7,
-            AnnotationKind::Breakpoint,
-            AnnotationData::default(),
+            AnchoredRangeKind::Breakpoint,
+            AnchoredRangeData::default(),
         );
-        let other = store.add(&b, 0, 2, AnnotationKind::Search, AnnotationData::default());
+        let other = store.add(
+            &b,
+            0,
+            2,
+            AnchoredRangeKind::Search,
+            AnchoredRangeData::default(),
+        );
 
         // Delete [5, 8) on "hello world" — fully contains [6, 7).
         b.delete(5..8);
@@ -1134,7 +1185,7 @@ mod tests {
             !store.iter_live().any(|(id, _)| *id == victim),
             "victim must not appear in iter_live"
         );
-        assert_eq!(store.len(), 1, "only the unaffected annotation remains");
+        assert_eq!(store.len(), 1, "only the unaffected anchored range remains");
         assert_eq!(store.resolve(&b, other), Some(0..2));
 
         // A later add re-uses no id; the victim's id is gone for good.
@@ -1142,25 +1193,25 @@ mod tests {
             &b,
             6,
             7,
-            AnnotationKind::Breakpoint,
-            AnnotationData::default(),
+            AnchoredRangeKind::Breakpoint,
+            AnchoredRangeData::default(),
         );
         assert_ne!(replacement, victim, "monotonic ids; victim id not reused");
         assert_eq!(store.resolve(&b, replacement), Some(6..7));
     }
 
     #[test]
-    fn consumed_annotation_stays_removed_through_undo_redo() {
+    fn consumed_anchored_range_stays_removed_through_undo_redo() {
         // The text-edit inverse (re-insert) does not revive a consumed
-        // annotation; the provider must re-publish under a fresh id.
+        // anchored range; the provider must re-publish under a fresh id.
         let mut b = TextBuffer::from_text("hello world");
-        let mut store = AnnotationStore::new();
+        let mut store = AnchoredRangeStore::new();
         let victim = store.add(
             &b,
             6,
             7,
-            AnnotationKind::Breakpoint,
-            AnnotationData::default(),
+            AnchoredRangeKind::Breakpoint,
+            AnchoredRangeData::default(),
         );
 
         b.delete(5..8); // "hellorld", victim fully consumed
@@ -1241,10 +1292,10 @@ mod tests {
         // random edits are valid.
         let src = "the quick brown fox jumps over the lazy dog and then some more text here";
         let mut b = TextBuffer::from_text(src);
-        let mut store = AnnotationStore::new();
+        let mut store = AnchoredRangeStore::new();
         let mut rng = Rng::new(0x1234_ABCD);
 
-        // Seed annotations at random byte ranges.
+        // Seed anchored ranges at random byte ranges.
         const N: usize = 200;
         let mut o_start = Vec::with_capacity(N);
         let mut o_end = Vec::with_capacity(N);
@@ -1258,8 +1309,8 @@ mod tests {
                 &b,
                 s,
                 e,
-                AnnotationKind::Other(0),
-                AnnotationData::default(),
+                AnchoredRangeKind::Other(0),
+                AnchoredRangeData::default(),
             );
             o_start.push(s);
             o_end.push(e);
@@ -1302,7 +1353,7 @@ mod tests {
                             continue;
                         }
                         // Only collapse if the delete actually consumed an
-                        // endpoint (a zero-length annotation untouched by the
+                        // endpoint (a zero-length anchored range untouched by the
                         // delete stays valid at its point).
                         let s_in = o_start[i] > at && o_start[i] < end;
                         let e_in = o_end[i] > at && o_end[i] < end;
@@ -1342,7 +1393,7 @@ mod tests {
 
             store.stabilize(&b);
 
-            // Assert every annotation against the oracle.
+            // Assert every anchored range against the oracle.
             for i in 0..N {
                 let expected = if o_collapsed[i] {
                     None
@@ -1384,7 +1435,7 @@ mod tests {
     #[test]
     fn composition_five_sources_three_consumers() {
         let b = multi_line(80);
-        let mut store = AnnotationStore::new();
+        let mut store = AnchoredRangeStore::new();
 
         // ---- 5 independent sources ----
 
@@ -1393,22 +1444,22 @@ mod tests {
             &b,
             line_start(5),
             line_start(5) + 8,
-            AnnotationKind::Diagnostic,
-            AnnotationData("error: unused variable".into()),
+            AnchoredRangeKind::Diagnostic,
+            AnchoredRangeData("error: unused variable".into()),
         );
         let diag2 = store.add(
             &b,
             line_start(20),
             line_start(20) + 8,
-            AnnotationKind::Diagnostic,
-            AnnotationData("warning: snake_case".into()),
+            AnchoredRangeKind::Diagnostic,
+            AnchoredRangeData("warning: snake_case".into()),
         );
         let diag3 = store.add(
             &b,
             line_start(50),
             line_start(50) + 8,
-            AnnotationKind::Diagnostic,
-            AnnotationData("info: dead code".into()),
+            AnchoredRangeKind::Diagnostic,
+            AnchoredRangeData("info: dead code".into()),
         );
 
         // Source 2: Search — matches on lines 2, 5, 18, 20, 75.
@@ -1416,36 +1467,36 @@ mod tests {
             &b,
             line_start(2),
             line_start(2) + 4,
-            AnnotationKind::Search,
-            AnnotationData("match".into()),
+            AnchoredRangeKind::Search,
+            AnchoredRangeData("match".into()),
         );
         let sr2 = store.add(
             &b,
             line_start(5),
             line_start(5) + 4,
-            AnnotationKind::Search,
-            AnnotationData("match".into()),
+            AnchoredRangeKind::Search,
+            AnchoredRangeData("match".into()),
         );
         let _sr3 = store.add(
             &b,
             line_start(18),
             line_start(18) + 4,
-            AnnotationKind::Search,
-            AnnotationData("match".into()),
+            AnchoredRangeKind::Search,
+            AnchoredRangeData("match".into()),
         );
         let _sr4 = store.add(
             &b,
             line_start(20),
             line_start(20) + 4,
-            AnnotationKind::Search,
-            AnnotationData("match".into()),
+            AnchoredRangeKind::Search,
+            AnchoredRangeData("match".into()),
         );
         let _sr5 = store.add(
             &b,
             line_start(75),
             line_start(75) + 4,
-            AnnotationKind::Search,
-            AnnotationData("match".into()),
+            AnchoredRangeKind::Search,
+            AnchoredRangeData("match".into()),
         );
 
         // Source 3: Git hunks — added lines 10-15, modified lines 60-65.
@@ -1453,15 +1504,15 @@ mod tests {
             &b,
             line_start(10),
             line_start(15) + 8,
-            AnnotationKind::Git,
-            AnnotationData("added".into()),
+            AnchoredRangeKind::Git,
+            AnchoredRangeData("added".into()),
         );
         let _git2 = store.add(
             &b,
             line_start(60),
             line_start(65) + 8,
-            AnnotationKind::Git,
-            AnnotationData("modified".into()),
+            AnchoredRangeKind::Git,
+            AnchoredRangeData("modified".into()),
         );
 
         // Source 4: Breakpoints — line 10 and line 40 (1-byte for range query).
@@ -1469,15 +1520,15 @@ mod tests {
             &b,
             line_start(10),
             line_start(10) + 1,
-            AnnotationKind::Breakpoint,
-            AnnotationData("".into()),
+            AnchoredRangeKind::Breakpoint,
+            AnchoredRangeData("".into()),
         );
         let bp2 = store.add(
             &b,
             line_start(40),
             line_start(40) + 1,
-            AnnotationKind::Breakpoint,
-            AnnotationData("".into()),
+            AnchoredRangeKind::Breakpoint,
+            AnchoredRangeData("".into()),
         );
 
         // Source 5: Folding — region spanning lines 30-45.
@@ -1485,12 +1536,12 @@ mod tests {
             &b,
             line_start(30),
             line_start(45) + 8,
-            AnnotationKind::Folding,
-            AnnotationData("collapsed region".into()),
+            AnchoredRangeKind::Folding,
+            AnchoredRangeData("collapsed region".into()),
         );
 
         // ---- Verify total count (13 = 3+5+2+2+1) ----
-        assert_eq!(store.len(), 13, "total annotation count");
+        assert_eq!(store.len(), 13, "total anchored range count");
         let live_count = store.iter_live().count();
         assert_eq!(live_count, 13, "all should be live");
 
@@ -1503,7 +1554,7 @@ mod tests {
             &b,
             0,
             b.len(),
-            &[AnnotationKind::Diagnostic, AnnotationKind::Breakpoint],
+            &[AnchoredRangeKind::Diagnostic, AnchoredRangeKind::Breakpoint],
         );
         assert_eq!(gutter.len(), 5, "gutter: 3 diagnostics + 2 breakpoints");
         assert!(gutter.contains(&diag1));
@@ -1518,9 +1569,9 @@ mod tests {
             0,
             b.len(),
             &[
-                AnnotationKind::Diagnostic,
-                AnnotationKind::Search,
-                AnnotationKind::Git,
+                AnchoredRangeKind::Diagnostic,
+                AnchoredRangeKind::Search,
+                AnchoredRangeKind::Git,
             ],
         );
         assert_eq!(minimap.len(), 10, "minimap: 3+5+2");
@@ -1539,7 +1590,7 @@ mod tests {
             &b,
             line_start(5),
             line_start(6),
-            &[AnnotationKind::Diagnostic],
+            &[AnchoredRangeKind::Diagnostic],
         );
         assert_eq!(line5_diag, vec![diag1]);
         // Filter to only search:
@@ -1547,7 +1598,7 @@ mod tests {
             &b,
             line_start(5),
             line_start(6),
-            &[AnnotationKind::Search],
+            &[AnchoredRangeKind::Search],
         );
         assert_eq!(line5_search, vec![sr2]);
 
@@ -1561,8 +1612,8 @@ mod tests {
             &b,
             line_start(3),
             line_start(3) + 8,
-            AnnotationKind::Other(0),
-            AnnotationData("lint: prefer const".into()),
+            AnchoredRangeKind::Other(0),
+            AnchoredRangeData("lint: prefer const".into()),
         );
         assert_eq!(store.len(), 14, "6th source added without store changes");
         // Lint appears in all-kinds query:
@@ -1574,11 +1625,11 @@ mod tests {
             &b,
             0,
             b.len(),
-            &[AnnotationKind::Diagnostic, AnnotationKind::Breakpoint],
+            &[AnchoredRangeKind::Diagnostic, AnchoredRangeKind::Breakpoint],
         );
         assert!(!gutter2.contains(&lint1));
         // Query by Other(0) only:
-        let lint_only = store.query_range_for_kinds(&b, 0, b.len(), &[AnnotationKind::Other(0)]);
+        let lint_only = store.query_range_for_kinds(&b, 0, b.len(), &[AnchoredRangeKind::Other(0)]);
         assert_eq!(lint_only, vec![lint1]);
 
         // ---- iter_live reflects removal ----
@@ -1586,40 +1637,40 @@ mod tests {
         assert_eq!(
             store.iter_live().count(),
             13,
-            "removed annotation excluded from iter_live"
+            "removed anchored range excluded from iter_live"
         );
         assert_eq!(store.len(), 13, "len reflects removal too");
     }
 
     #[test]
     fn composition_survives_edits() {
-        // Multiple sources, edits shift annotations independently.
+        // Multiple sources, edits shift anchored ranges independently.
         let mut b = multi_line(20);
-        let mut store = AnnotationStore::new();
+        let mut store = AnchoredRangeStore::new();
 
         let d = store.add(
             &b,
             line_start(3),
             line_start(3) + 8,
-            AnnotationKind::Diagnostic,
-            AnnotationData::default(),
+            AnchoredRangeKind::Diagnostic,
+            AnchoredRangeData::default(),
         );
         let s = store.add(
             &b,
             line_start(5),
             line_start(5) + 4,
-            AnnotationKind::Search,
-            AnnotationData::default(),
+            AnchoredRangeKind::Search,
+            AnchoredRangeData::default(),
         );
         let g = store.add(
             &b,
             line_start(8),
             line_start(12) + 8,
-            AnnotationKind::Git,
-            AnnotationData::default(),
+            AnchoredRangeKind::Git,
+            AnchoredRangeData::default(),
         );
 
-        // Insert 2 lines at line 0: all annotations shift.
+        // Insert 2 lines at line 0: all anchored ranges shift.
         b.insert(0, "preamble A\n");
         b.insert(0, "preamble B\n");
         store.stabilize(&b);
@@ -1628,11 +1679,11 @@ mod tests {
         assert_eq!(all.len(), 3, "all three survive the edit");
 
         // Per-kind queries still work after edit.
-        let diags = store.query_range_for_kinds(&b, 0, b.len(), &[AnnotationKind::Diagnostic]);
+        let diags = store.query_range_for_kinds(&b, 0, b.len(), &[AnchoredRangeKind::Diagnostic]);
         assert_eq!(diags, vec![d]);
-        let search = store.query_range_for_kinds(&b, 0, b.len(), &[AnnotationKind::Search]);
+        let search = store.query_range_for_kinds(&b, 0, b.len(), &[AnchoredRangeKind::Search]);
         assert_eq!(search, vec![s]);
-        let git = store.query_range_for_kinds(&b, 0, b.len(), &[AnnotationKind::Git]);
+        let git = store.query_range_for_kinds(&b, 0, b.len(), &[AnchoredRangeKind::Git]);
         assert_eq!(git, vec![g]);
 
         // Delete the first 4 lines (the two preamble + original lines 0-1).

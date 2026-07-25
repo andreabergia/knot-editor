@@ -113,7 +113,7 @@ impl Position {
     }
 
     /// Construct a token from raw `(piece, offset)` fields. Exposed so
-    /// callers (step 5's annotation layer, the benchmark's remap
+    /// callers (step 5's anchored-range layer, the benchmark's remap
     /// simulation) can build the *remapped* token produced by applying
     /// the D7 rule to a `Split` record — `(Split::new_piece,
     /// old_offset - Split::split_offset)`. Step 4 itself never uses
@@ -150,9 +150,9 @@ pub struct Split {
 /// spanning two interiors may carry up to 2.
 ///
 /// In addition to the splits, each variant carries enough
-/// affected-piece metadata for step 5's annotation store to repair
+/// affected-piece metadata for step 5's anchored-range store to repair
 /// stale tokens in `O(affected)` time per edit (D7),
-/// without walking the whole piece chain: the annotation store keys
+/// without walking the whole piece chain: the anchored-range store keys
 /// anchors by `piece_id`, looks up only the pieces this edit touches,
 /// and re-binds them via these fields.
 #[derive(Clone, Debug)]

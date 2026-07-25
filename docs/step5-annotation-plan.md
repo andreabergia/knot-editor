@@ -120,7 +120,7 @@ offset approach is O(all annotations) per edit.
 
 **In scope for step 5:**
 
-- `AnnotationStore` over `Position`-token anchors (D1).
+- `AnchoredRangeStore` over `Position`-token anchors (D1).
 - `Anchor` with `Stickiness` (D2), including stale-token repair via the
   edit log.
 - Interval query index (D3).
@@ -150,50 +150,50 @@ offset approach is O(all annotations) per edit.
 ## Type sketch (target API)
 
 ```rust
-pub type AnnotationId = u64;
+pub type AnchoredRangeId = u64;
 
 pub enum Stickiness { Before, After }       // D2
 pub struct Anchor { pos: Position, sticky: Stickiness }
 
-pub struct Annotation {
-    pub id: AnnotationId,
+pub struct AnchoredRange {
+    pub id: AnchoredRangeId,
     pub start: Anchor,
     pub end: Anchor,
-    pub kind: AnnotationKind,   // diagnostics | search | git | breakpoint | fold ...
-    pub data: AnnotationData,   // opaque payload owned by the source
+    pub kind: AnchoredRangeKind,   // diagnostics | search | git | breakpoint | fold ...
+    pub data: AnchoredRangeData,   // opaque payload owned by the source
 }
 
-pub struct AnnotationStore {
-    annotations: HashMap<AnnotationId, Annotation>,
+pub struct AnchoredRangeStore {
+    anchored_ranges: HashMap<AnchoredRangeId, AnchoredRange>,
     endpoints_by_piece: BTreeMap<PieceId, BTreeSet<EndpointKey>>,
     cursor: usize,              // edit_seq() high-water mark (D4)
-    next_id: AnnotationId,
+    next_id: AnchoredRangeId,
 }
 
-impl AnnotationStore {
+impl AnchoredRangeStore {
     pub fn new() -> Self;
 
     /// Issue two `Position` tokens via `position_at`; start defaults to
     /// `Before`, end to `After` (standard selection semantics).
     pub fn add(&mut self, buffer: &TextBuffer, start: usize, end: usize,
-               kind: AnnotationKind, data: AnnotationData) -> AnnotationId;
+               kind: AnchoredRangeKind, data: AnchoredRangeData) -> AnchoredRangeId;
 
     /// Advance `cursor` over `buffer.edits_since(cursor)`, repairing only
     /// anchors whose pieces split, receive an insert-boundary relocation,
     /// are deleted, or become temporarily unanchored in an empty buffer.
     pub fn stabilize(&mut self, buffer: &TextBuffer);
 
-    /// Resolve an annotation to its current byte range; `None` iff a
+    /// Resolve an anchored range to its current byte range; `None` iff a
     /// token's piece was deleted *and* no surviving endpoint could be
-    /// recovered (annotation fully inside a deleted span → zero range).
-    pub fn resolve(&self, buffer: &TextBuffer, id: AnnotationId) -> Option<Range<usize>>;
+    /// recovered (range fully inside a deleted span → zero range).
+    pub fn resolve(&self, buffer: &TextBuffer, id: AnchoredRangeId) -> Option<Range<usize>>;
 
-    /// All annotation ids overlapping `[a, b)` (D3, for step 6). Current
+    /// All anchored-range ids overlapping `[a, b)` (D3, for step 6). Current
     /// prototype implementation resolves live token ranges linearly; a
     /// byte-offset interval cache is deferred until query latency dominates.
-    pub fn query_range(&self, buffer: &TextBuffer, a: usize, b: usize) -> Vec<AnnotationId>;
+    pub fn query_range(&self, buffer: &TextBuffer, a: usize, b: usize) -> Vec<AnchoredRangeId>;
 
-    pub fn remove(&mut self, id: AnnotationId);
+    pub fn remove(&mut self, id: AnchoredRangeId);
 }
 ```
 
@@ -219,8 +219,8 @@ impl AnnotationStore {
 
 ## Sequenced work
 
-1. [✅] `core/annotation.rs`: `Stickiness`, `Anchor`, `Annotation`,
-   `AnnotationKind`/`AnnotationData`, `AnnotationStore::new` / `add` /
+1. [✅] `core/anchored_range.rs`: `Stickiness`, `Anchor`, `AnchoredRange`,
+   `AnchoredRangeKind`/`AnchoredRangeData`, `AnchoredRangeStore::new` / `add` /
    `remove`. `add` issues `Position` tokens via `position_at`. Unit
    tests: add/remove, `position_at` boundary anchoring, token stability
    across unrelated edits (reuse step-4 `Position` tests as a harness),

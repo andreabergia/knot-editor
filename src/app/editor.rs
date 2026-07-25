@@ -35,8 +35,7 @@ use unicode_segmentation::UnicodeSegmentation;
 use crate::host::protocol::ByteRange;
 
 use super::model::{
-    BufferModel, BuiltInContributionSource, ContributionOwner, DecorationToken, EditorContribution,
-    ResolvedDecoration,
+    BufferModel, ContributionSource, DecorationToken, EditorContribution, ResolvedDecoration,
 };
 
 /// Owned, frame-stable copy of one styled segment of one line.
@@ -52,12 +51,12 @@ struct Seg {
     italic: bool,
 }
 
-/// One diagnostic annotation to render as a wavy underline overlay. `start`
+/// One diagnostic decoration to render as a wavy underline overlay. `start`
 /// and `end` are byte columns within `line`; `color` is an RGB u32. This is
 /// the minimal model needed by the current paint path. Provider metadata such
 /// as severity, message, and source is not represented yet.
 #[derive(Clone, Copy)]
-struct Annotation {
+struct RenderedDecoration {
     line: usize,
     start: usize,
     end: usize,
@@ -76,7 +75,7 @@ pub struct EditorView {
     lines: Vec<String>,
     segs: Vec<Vec<Seg>>,
     /// Renderer-local projection of shared, anchored buffer contributions.
-    annotations: Vec<Annotation>,
+    decorations: Vec<RenderedDecoration>,
     /// Vertical scroll offset in pixels (0 = top of buffer).
     scroll: f32,
     /// Caret position: (line index, byte offset within that line).
@@ -192,8 +191,7 @@ impl EditorView {
             segs.push(row);
         }
 
-        let annotations =
-            annotations_from_decorations(&lines, model.read(cx).resolved_decorations());
+        let decorations = project_decorations(&lines, model.read(cx).resolved_decorations());
 
         let model_subscription = cx.observe(&model, |this, model, cx| {
             let model = model.read(cx);
@@ -205,7 +203,7 @@ impl EditorView {
             model,
             lines,
             segs,
-            annotations,
+            decorations,
             scroll: 0.,
             cursor_line: 0,
             cursor_col: 0,
@@ -223,7 +221,7 @@ impl EditorView {
 
     fn rebuild_projection(&mut self, text: &str, decorations: Vec<ResolvedDecoration>) {
         (self.lines, self.segs) = default_projection(text);
-        self.annotations = annotations_from_decorations(&self.lines, decorations);
+        self.decorations = project_decorations(&self.lines, decorations);
     }
 
     fn clamp_scroll(&mut self) {
@@ -584,7 +582,7 @@ impl EditorView {
     /// Per-line horizontal offset for RTL lines: right-align the line within
     /// the pane so a pure-Arabic line starts at the right edge instead of the
     /// left. Returns 0 for LTR lines, `(pane_w - shaped_w).max(0)` for RTL.
-    /// The caret, selection, IME preedit, annotation, and hit-test all add
+    /// The caret, selection, IME preedit, decoration, and hit-test all add
     /// this offset to their x computations so they stay consistent with the
     /// right-aligned text.
     fn line_x_offset(&self, line: usize, shaped_w: Pixels, pane_w: Pixels) -> Pixels {
@@ -773,7 +771,10 @@ impl EditorView {
     }
 }
 
-pub(crate) fn seed_fixture_contributions(model: &mut BufferModel) {
+pub(crate) fn seed_fixture_contributions(
+    model: &mut BufferModel,
+    overlap_source: ContributionSource,
+) {
     let text = model.text();
     let mut primary = Vec::new();
     for (needle, decoration) in [
@@ -809,12 +810,8 @@ pub(crate) fn seed_fixture_contributions(model: &mut BufferModel) {
         }
     }
 
-    let primary_owner = ContributionOwner::BuiltIn(BuiltInContributionSource::FixtureDiagnostics);
-    let primary_set = model
-        .create_contribution_set(primary_owner)
-        .expect("fixture buffer is open");
     model
-        .replace_contributions(primary_set, primary_owner, &primary, model.revision())
+        .replace_contributions(ContributionSource::BuiltIn, &primary, model.revision())
         .expect("fixture contributions have valid ranges");
 
     // A second source deliberately overlaps LEAF_MAX. Info is painted before
@@ -835,20 +832,16 @@ pub(crate) fn seed_fixture_contributions(model: &mut BufferModel) {
             }
         })
         .collect::<Vec<_>>();
-    let overlap_owner = ContributionOwner::BuiltIn(BuiltInContributionSource::FixtureOverlap);
-    let overlap_set = model
-        .create_contribution_set(overlap_owner)
-        .expect("fixture buffer is open");
     model
-        .replace_contributions(overlap_set, overlap_owner, &overlap, model.revision())
+        .replace_contributions(overlap_source, &overlap, model.revision())
         .expect("fixture overlap contributions have valid ranges");
 }
 
-fn annotations_from_decorations(
+fn project_decorations(
     lines: &[String],
     decorations: Vec<ResolvedDecoration>,
-) -> Vec<Annotation> {
-    let mut annotations = Vec::new();
+) -> Vec<RenderedDecoration> {
+    let mut projected = Vec::new();
     for decoration in decorations {
         let color = match decoration.token {
             DecorationToken::Info => INFO_COLOR,
@@ -863,7 +856,7 @@ fn annotations_from_decorations(
             let segment_start = start.max(line_start);
             let segment_end = end.min(line_end);
             if segment_start < segment_end {
-                annotations.push(Annotation {
+                projected.push(RenderedDecoration {
                     line,
                     start: segment_start - line_start,
                     end: segment_end - line_start,
@@ -876,7 +869,7 @@ fn annotations_from_decorations(
             line_start = line_end + 1;
         }
     }
-    annotations
+    projected
 }
 
 fn default_projection(text: &str) -> (Vec<String>, Vec<Vec<Seg>>) {
@@ -1232,7 +1225,7 @@ impl Element for EditorElement {
             caret,
             selection,
             marked,
-            annotations,
+            decorations,
             focus_handle,
             entity,
         ): (
@@ -1242,7 +1235,7 @@ impl Element for EditorElement {
             Option<(usize, usize)>,
             Option<((usize, usize), (usize, usize))>,
             Option<((usize, usize), (usize, usize))>,
-            Vec<Annotation>,
+            Vec<RenderedDecoration>,
             FocusHandle,
             Entity<EditorView>,
         ) = {
@@ -1271,9 +1264,9 @@ impl Element for EditorElement {
                 let e = view.from_flat_utf16(mr.end);
                 (s, e)
             });
-            // Only copy annotations that fall on visible lines.
-            let annotations = view
-                .annotations
+            // Only copy decorations that fall on visible lines.
+            let decorations = view
+                .decorations
                 .iter()
                 .filter(|a| a.line >= first && a.line < last)
                 .copied()
@@ -1285,7 +1278,7 @@ impl Element for EditorElement {
                 caret,
                 view.selection_range(),
                 marked,
-                annotations,
+                decorations,
                 view.focus.clone(),
                 self.entity.clone(),
             )
@@ -1483,19 +1476,19 @@ impl Element for EditorElement {
                 }
             }
 
-            // Annotation overlay: wavy underlines beneath annotated byte
+            // Decoration overlay: wavy underlines beneath contributed byte
             // spans, painted AFTER text + caret so they sit on top. Each
-            // annotation is a (line, start_byte_col, end_byte_col, color)
+            // decoration is a (line, start_byte_col, end_byte_col, color)
             // tuple; we reuse the already-shaped lines to get the x
             // coordinates via `x_for_index`, then call `paint_underline`
             // with `wavy: true`. The underline y follows the same formula
             // the line painter uses internally:
             //   padding_top + ascent + descent * 0.618
             // below the line's top edge, so the squiggle sits just below the
-            // text baseline. Annotations on empty lines (no shaped line) are
+            // text baseline. Decorations on empty lines (no shaped line) are
             // skipped — a zero-width wavy line would be invisible anyway.
-            if !annotations.is_empty() {
-                for ann in &annotations {
+            if !decorations.is_empty() {
+                for ann in &decorations {
                     let (shaped_line, x_off, line_str) =
                         match shaped.iter().find(|(ix, _, _, _)| *ix == ann.line) {
                             Some((_, s, x_off, line_str)) => (s, *x_off, *line_str),

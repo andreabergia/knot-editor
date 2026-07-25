@@ -11,7 +11,7 @@ The areas are not independent. Two concerns cut across all of them and should be
 
 ## Buffer/view/annotation model
 
-### Annotation offset stabilization
+### Anchored-range offset stabilization
 
 Annotations must track their positions across edits to the underlying text. This is the classic hard problem (Emacs overlays, VS Code decorations all struggle with it).
 
@@ -19,7 +19,7 @@ Annotations must track their positions across edits to the underlying text. This
 - Measure: stabilization cost, correctness under concurrent edits, behavior at edit boundaries (sticky-before vs sticky-after).
 - Decide: representation (interval tree? piece table with stable IDs? offset remap log?), and the semantics exposed to extensions.
 
-### Annotation composition across features
+### Anchored-range composition across features
 
 The design claims annotations compose naturally because views decide rendering. Confirm this holds beyond toy cases.
 
