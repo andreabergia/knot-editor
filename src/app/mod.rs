@@ -29,6 +29,7 @@ use model::{
 actions!(knot, [Quit]);
 
 const MIN_PANE: f32 = 120.;
+const DEFAULT_FIXTURE_NAME: &str = "rust_sample";
 const RUNTIME_PROBE_SOURCE: &str = r#"
 import { commands, editor } from "knot:editor";
 
@@ -129,18 +130,23 @@ struct Shell {
 }
 
 impl Shell {
-    /// Construct the shell, preloading the editor with a fixture chosen
-    /// from `argv[1]` (default `rust_sample`) so the editor pane has real
-    /// styled text to render. Fixture resolution is relative to the crate
-    /// root so the binary runs from any cwd.
+    /// Construct the shell with the default fixture.
     fn new(runtime: ExtensionRuntimeParts, cx: &mut Context<Self>) -> Self {
         Self::new_with_runtimes(vec![runtime], cx)
     }
 
     fn new_with_runtimes(runtimes: Vec<ExtensionRuntimeParts>, cx: &mut Context<Self>) -> Self {
-        let fixture_name = std::env::args()
-            .nth(1)
-            .unwrap_or_else(|| "rust_sample".into());
+        Self::new_with_runtimes_and_fixture(runtimes, DEFAULT_FIXTURE_NAME.into(), cx)
+    }
+
+    /// Construct the shell with an explicitly selected fixture. Fixture
+    /// resolution is relative to the crate root so the binary runs from any
+    /// current working directory.
+    fn new_with_runtimes_and_fixture(
+        runtimes: Vec<ExtensionRuntimeParts>,
+        fixture_name: String,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let fixture_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("bench/fixtures")
             .join(format!("{fixture_name}.kfx"));
@@ -777,6 +783,9 @@ impl Render for Shell {
 }
 
 pub fn run() {
+    let fixture_name = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| DEFAULT_FIXTURE_NAME.into());
     let runtime = V8Host::new()
         .spawn_extension(ExtensionId::new(1))
         .into_parts();
@@ -794,7 +803,9 @@ pub fn run() {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 ..Default::default()
             },
-            |_window, cx| cx.new(|cx| Shell::new(runtime, cx)),
+            |_window, cx| {
+                cx.new(|cx| Shell::new_with_runtimes_and_fixture(vec![runtime], fixture_name, cx))
+            },
         )
         .unwrap();
 
@@ -1483,6 +1494,12 @@ mod tests {
             .await
             .unwrap();
 
+        // A queued script does not establish that the runtime thread has
+        // attached its isolate, which the watchdog requires.
+        runaway
+            .execute_fixture_script("integrated-runaway-ready.js", "void 0")
+            .await
+            .unwrap();
         let runaway_execution =
             runaway.execute_fixture_script("integrated-runaway.js", "while (true) {}");
         runaway.watchdog().terminate().unwrap();
