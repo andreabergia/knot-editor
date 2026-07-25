@@ -712,13 +712,14 @@ impl EditorView {
     /// Convert a flat UTF-16 offset to a (line, byte_col) position.
     fn from_flat_utf16(&self, mut off: usize) -> (usize, usize) {
         for (i, l) in self.lines.iter().enumerate() {
-            let line_utf16_len = l.chars().count();
+            let line_utf16_len = l.chars().map(char::len_utf16).sum::<usize>();
             if off <= line_utf16_len {
                 return (i, self.utf16_to_byte_col(l, off));
             }
             off -= line_utf16_len + 1;
         }
-        (self.lines.len().saturating_sub(1), 0)
+        let last_line = self.lines.len().saturating_sub(1);
+        (last_line, self.line_end(last_line))
     }
 
     /// Convert a UTF-16 offset within `s` to a UTF-8 byte offset.
@@ -1616,7 +1617,10 @@ fn x_for_index_dir(s: &ShapedLine, index: usize, line_str: &str) -> Pixels {
 
 #[cfg(test)]
 mod tests {
-    use super::{BufferModel, default_projection};
+    use gpui::{AppContext, TestAppContext};
+
+    use super::{BufferModel, EditorView, default_projection};
+    use crate::view::fixture::Fixture;
 
     #[test]
     fn projection_refreshes_from_authoritative_buffer_text() {
@@ -1627,6 +1631,43 @@ mod tests {
         assert_eq!(lines, ["three", "two"]);
         assert_eq!(segs[0][0].end, "three".len());
         assert_eq!(segs[1][0].end, "two".len());
+    }
+
+    #[gpui::test]
+    async fn flat_utf16_offsets_round_trip_across_emoji_lines(cx: &mut TestAppContext) {
+        let family = "👨‍👩‍👧‍👦";
+        let first_line = "a😀b";
+        let second_line = format!("{family}z");
+        let fixture = Fixture::from_lines(vec![first_line.into(), second_line.clone()]);
+        let model = cx.new(|_| BufferModel::from_text(fixture.lines.join("\n")));
+        let editor = cx.new(|cx| EditorView::from_fixture(&fixture, model, cx));
+
+        cx.read(|cx| {
+            let editor = editor.read(cx);
+            let second_line_start = 5;
+            let family_utf16_len = family.chars().map(char::len_utf16).sum::<usize>();
+
+            assert_eq!(editor.from_flat_utf16(1), (0, 1));
+            assert_eq!(editor.from_flat_utf16(3), (0, "a😀".len()));
+            assert_eq!(editor.from_flat_utf16(second_line_start), (1, 0));
+            assert_eq!(
+                editor.from_flat_utf16(second_line_start + family_utf16_len),
+                (1, family.len())
+            );
+
+            for (line, byte_col) in [
+                (0, 0),
+                (0, 1),
+                (0, "a😀".len()),
+                (0, first_line.len()),
+                (1, 0),
+                (1, family.len()),
+                (1, second_line.len()),
+            ] {
+                let utf16 = editor.to_flat_utf16(line, byte_col);
+                assert_eq!(editor.from_flat_utf16(utf16), (line, byte_col));
+            }
+        });
     }
 }
 

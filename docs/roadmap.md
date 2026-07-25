@@ -129,7 +129,7 @@ This is the Windows counterpart to 3b. It happened before step 8 work, on a
 Windows 10 development machine, using the same step-3 editor widget and
 fixtures.
 
-⚠️ **Partial result — Windows is not yet a clean pass.**
+⚠️ **Partial result — Windows verification is in progress.**
 
 - ✅ **Startup:** the first launch failed with
   `STATUS_ENTRYPOINT_NOT_FOUND` for `TaskDialogIndirect`. The cause was the
@@ -142,26 +142,26 @@ fixtures.
   gpui shaping) with UTF-16 offsets (used by the input API). Converting byte
   columns to UTF-16 at the input boundary fixed the observed CJK insertion
   case.
-- ⚠️ **Arabic/BiDi selection:** horizontal selection remains logical-order
-  based: `Shift+Right` in a pure RTL line expands visually left. The intended
-  editor behavior is visual left/right navigation and selection, so this is
-  an unresolved widget-policy/API problem.
-- ❌ **Emoji editing:** the emoji fixture still has incorrect Backspace/Delete
-  behavior around emoji, including ZWJ and modifier sequences, after making
-  cursor motion and hit testing grapheme-aware. This is a blocking correctness
-  failure for the current widget; do not treat the macOS text/IME result as
-  portable to Windows.
+- ✅ **Arabic/BiDi navigation and selection:** Left/Right and
+  Shift+Left/Shift+Right move visually in the requested direction on pure RTL
+  lines.
+- ✅ **Emoji editing:** cursor motion and hit testing stay on grapheme
+  boundaries, and insertion, Backspace, and Delete preserve the caret around
+  emoji, including ZWJ and modifier sequences. The remaining post-edit caret
+  jump was caused by `from_flat_utf16` counting Unicode scalar values instead
+  of UTF-16 code units when locating a line; a focused multi-line emoji
+  round-trip test now covers the conversion.
 
-**Decision:** keep the gpui framework decision, but do not bake its current
-editor-widget input behavior into the step-8 native `View` abstraction. Before
-serious step-8 work, reproduce the Windows emoji deletion failure in a
-minimal case and either correct it using public gpui APIs or record an
-upstream/framework limitation. Run the Linux checkpoint only after that
-Windows blocker has a conclusion.
+**Decision:** keep the gpui framework decision. The blocking Windows Unicode
+editing defects found so far were in Knot's byte/UTF-16 boundary rather than a
+gpui limitation and are corrected using public gpui APIs. Finish the remaining
+Windows fixture checks before treating 3c as a clean pass, then run the Linux
+checkpoint before serious step-8 work.
 
 **Question answered:** does the macOS gpui spike transfer unchanged to
-Windows? → **No.** Window startup and CJK insertion are viable, but the
-current widget fails the Windows Unicode-editing bar.
+Windows? → **No, but the identified portability defects are correctable in
+Knot's widget.** Startup, CJK insertion, Arabic/BiDi navigation and selection,
+and emoji editing now pass; the remaining fixtures are still being verified.
 
 ---
 
