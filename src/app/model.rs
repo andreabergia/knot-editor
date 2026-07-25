@@ -2,7 +2,7 @@
 
 use std::{
     cell::RefCell,
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     ops::Range,
     sync::Arc,
 };
@@ -244,6 +244,21 @@ impl BufferModel {
         }
     }
 
+    fn stabilize_anchored_ranges(&mut self) {
+        let consumed = self.anchored_ranges.stabilize(&self.buffer).consumed;
+        if consumed.is_empty() {
+            return;
+        }
+
+        let consumed = consumed.into_iter().collect::<HashSet<_>>();
+        self.contributions
+            .metadata
+            .retain(|id, _| !consumed.contains(id));
+        for set in self.contributions.sets.values_mut() {
+            set.anchored_ranges.retain(|id| !consumed.contains(id));
+        }
+    }
+
     pub(crate) fn resolved_decorations(&self) -> Vec<ResolvedDecoration> {
         let mut resolved = self
             .contributions
@@ -373,7 +388,7 @@ impl BufferModel {
         for (range, text) in validated.into_iter().rev() {
             self.buffer.replace(range, text);
         }
-        self.anchored_ranges.stabilize(&self.buffer);
+        self.stabilize_anchored_ranges();
         let before_revision = self.revision;
         self.advance_revision();
         self.pending_changes.push_back(CommittedBufferChange {
@@ -401,7 +416,7 @@ impl BufferModel {
             text: text.into(),
         };
         self.buffer.replace(range, text);
-        self.anchored_ranges.stabilize(&self.buffer);
+        self.stabilize_anchored_ranges();
         let before_revision = self.revision;
         self.advance_revision();
         self.pending_changes.push_back(CommittedBufferChange {
@@ -903,6 +918,32 @@ mod tests {
         assert!(!model.remove_contribution_lifecycle(extension, ExtensionLifecycleId::new(2)));
         assert!(model.remove_contribution_lifecycle(extension, ExtensionLifecycleId::new(3)));
         assert!(model.resolved_decorations().is_empty());
+    }
+
+    #[test]
+    fn stabilization_prunes_consumed_contribution_metadata() {
+        let mut model = BufferModel::from_text("abc def");
+        let source = ContributionSource::BuiltIn;
+        model
+            .replace_contributions(
+                source,
+                &[EditorContribution {
+                    range: ByteRange {
+                        start_byte_offset: 5,
+                        end_byte_offset: 6,
+                    },
+                    decoration: DecorationToken::Warning,
+                }],
+                0,
+            )
+            .unwrap();
+
+        assert!(model.replace(4..7, ""));
+
+        assert!(model.resolved_decorations().is_empty());
+        assert!(model.contributions.metadata.is_empty());
+        assert!(model.contributions.sets[&source].anchored_ranges.is_empty());
+        assert!(model.anchored_ranges.is_empty());
     }
 
     #[test]

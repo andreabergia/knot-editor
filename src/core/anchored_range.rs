@@ -51,6 +51,11 @@ use super::buffer::{BufferEdit, PieceId, Position, TextBuffer};
 /// Stable identifier for an anchored range, issued by the store.
 pub type AnchoredRangeId = u64;
 
+/// Anchored ranges removed while processing buffer edits.
+pub struct StabilizationResult {
+    pub consumed: Vec<AnchoredRangeId>,
+}
+
 /// Which side of an inserted span an endpoint sticks to (D2).
 ///
 /// - `Before` (sticky-left, default for a selection *start*): text inserted
@@ -381,7 +386,7 @@ impl AnchoredRangeStore {
     ///
     /// Untouched anchored ranges are not scanned: their `Position` tokens stay
     /// valid and resolve through the buffer's piece table.
-    pub fn stabilize(&mut self, buffer: &TextBuffer) {
+    pub fn stabilize(&mut self, buffer: &TextBuffer) -> StabilizationResult {
         let edits = buffer.edits_since(self.cursor);
         // D4 invariant: the log must never have been shortened underneath us.
         assert!(
@@ -392,19 +397,30 @@ impl AnchoredRangeStore {
         );
 
         if edits.is_empty() {
-            return;
+            return StabilizationResult {
+                consumed: Vec::new(),
+            };
         }
 
+        let mut consumed_ids = Vec::new();
         for edit in edits {
-            self.apply_edit_incremental(buffer, edit);
+            self.apply_edit_incremental(buffer, edit, &mut consumed_ids);
         }
         self.cursor += edits.len();
         self.mark_index_dirty();
+        StabilizationResult {
+            consumed: consumed_ids,
+        }
     }
 
     // ---- stabilization internals -----------------------------------------
 
-    fn apply_edit_incremental(&mut self, buffer: &TextBuffer, edit: &BufferEdit) {
+    fn apply_edit_incremental(
+        &mut self,
+        buffer: &TextBuffer,
+        edit: &BufferEdit,
+        consumed_ids: &mut Vec<AnchoredRangeId>,
+    ) {
         match edit {
             BufferEdit::Insert {
                 inserted_len,
@@ -473,7 +489,7 @@ impl AnchoredRangeStore {
                     .or_else(|| right_survivor.map(|piece| Position::new(piece, 0)));
 
                 let mut touched = HashSet::new();
-                let mut consumed = HashSet::new();
+                let mut consumption_candidates = HashSet::new();
                 let first_deleted = deleted_piece_lens.first().copied();
                 let last_deleted = deleted_piece_lens.last().copied();
                 for piece in deleted_pieces {
@@ -492,7 +508,7 @@ impl AnchoredRangeStore {
                             && !at_elided_left_boundary
                             && !at_elided_right_boundary
                         {
-                            consumed.insert(key.id());
+                            consumption_candidates.insert(key.id());
                         }
                         if let Some(pos) = edge {
                             self.set_endpoint_pos(buffer, key, pos);
@@ -504,8 +520,11 @@ impl AnchoredRangeStore {
 
                 for id in touched {
                     self.refresh_cached_offsets(buffer, id);
-                    if consumed.contains(&id) && self.resolved_extent_empty(buffer, id) {
-                        self.consume(id);
+                    if consumption_candidates.contains(&id)
+                        && self.resolved_extent_empty(buffer, id)
+                        && self.consume(id)
+                    {
+                        consumed_ids.push(id);
                     }
                 }
             }
@@ -582,9 +601,12 @@ impl AnchoredRangeStore {
     /// `resolve` will return `None` for `id` thereafter; there is no
     /// tombstone. Undoing the text edit does not revive the anchored range —
     /// a provider must re-publish it under a fresh id (step 6b).
-    fn consume(&mut self, id: AnchoredRangeId) {
+    fn consume(&mut self, id: AnchoredRangeId) -> bool {
         if let Some(ann) = self.anchored_ranges.remove(&id) {
             self.remove_anchored_range_endpoints(&ann);
+            true
+        } else {
+            false
         }
     }
 }
