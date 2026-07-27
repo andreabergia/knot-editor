@@ -21,6 +21,7 @@ use crate::host::{
 
 mod editor;
 pub mod model;
+mod terminal_view;
 mod tree_view;
 
 use editor::{
@@ -30,6 +31,7 @@ use model::{
     BufferAccessError, BufferModel, BufferRegistry, BufferSubscriptionRegistry, CommandRegistry,
     ContributionError, ContributionSource,
 };
+use terminal_view::TerminalView;
 use tree_view::{TreeProviderIdentity, TreeView, TreeViewEvent, TreeViewRegistrationError};
 
 actions!(knot, [Quit]);
@@ -179,6 +181,7 @@ struct Shell {
     /// Each view is an independent presentation over the active shared model.
     editor: Entity<EditorView>,
     secondary_editor: Entity<EditorView>,
+    terminal: Entity<TerminalView>,
     buffer_registry: BufferRegistry,
     buffer_subscriptions: BufferSubscriptionRegistry,
     command_registry: CommandRegistry,
@@ -266,6 +269,7 @@ impl Shell {
                 cx,
             )
         });
+        let terminal = cx.new(TerminalView::new);
         let editor_action_subscription = cx.subscribe(
             &editor,
             |this, _editor, action: &EditorContributionAction, cx| {
@@ -373,6 +377,7 @@ impl Shell {
             drag_origin: None,
             editor,
             secondary_editor,
+            terminal,
             buffer_registry,
             buffer_subscriptions: BufferSubscriptionRegistry::new(),
             command_registry: CommandRegistry::new(),
@@ -1059,6 +1064,8 @@ impl Render for Shell {
                                     .child(div().flex_1().child(self.secondary_editor.clone())),
                             ),
                     )
+                    .child(div().h(px(1.)).w_full().bg(rgb(0x3a3a3a)))
+                    .child(div().h(px(180.)).child(self.terminal.clone()))
                     .child(
                         div()
                             .flex()

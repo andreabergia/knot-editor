@@ -61,7 +61,7 @@ output cannot starve UI input or painting.
 
 ### 1. Alacritty baseline
 
-- ⬜ Add a `TerminalView` using `alacritty_terminal`.
+- ✅ Add a `TerminalView` using `alacritty_terminal`.
 - ⬜ Start one local interactive shell and route keyboard input to its PTY.
 - ⬜ Render ANSI colors, styled cells, cursor state, and scrollback through
   gpui.

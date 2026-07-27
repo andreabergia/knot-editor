@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+alacritty_terminal = { version = "0.26", default-features = false }
 anyhow = "1"
 bytemuck = { version = "1", features = ["derive"] }
 cosmic-text = "0.19"

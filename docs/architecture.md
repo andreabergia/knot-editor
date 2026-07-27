@@ -78,6 +78,10 @@ retaining independent presentation state.
 per-parent loading/error generations. It renders and handles input from cached
 foreground state only.
 
+`TerminalView` is a native gpui surface that owns one authoritative
+`alacritty_terminal` emulator grid and its focus state. It does not use or
+expose an editor model.
+
 ```text
 gpui Shell / registries
            |
