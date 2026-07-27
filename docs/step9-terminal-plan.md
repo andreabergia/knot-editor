@@ -103,6 +103,10 @@ output cannot starve UI input or painting.
 ### 5. Decision and cleanup
 
 - ⬜ Select Alacritty, Ghostty VT, or full Ghostty using the evidence above.
+- ⬜ If Alacritty is selected, extract a mode-aware input encoder using Zed's
+  GPL-compatible
+  [terminal key mappings](https://github.com/zed-industries/zed/blob/3b79b56201f35dc87788e6a8ed9d432575484769/crates/terminal/src/mappings/keys.rs)
+  as attributed reference rather than growing `TerminalView::on_key_down`.
 - ⬜ Remove the rejected candidate code rather than retain a permanent
   multi-backend abstraction.
 - ⬜ Record the validated choice and rationale in `decisions.md`.
