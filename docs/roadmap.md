@@ -32,6 +32,8 @@ Evidence:
 
 Status: next.
 
+Execution plan: [step9-terminal-plan.md](step9-terminal-plan.md).
+
 Validate terminal support without inventing non-text buffer semantics.
 
 - Use a mature parser/state crate.
