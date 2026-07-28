@@ -8,7 +8,8 @@ Knot should build on.
 
 - ✅ A terminal is an opaque native surface, not a `TextBuffer` or another
   editor model.
-- ✅ One `TerminalView` owns one authoritative PTY session and grid.
+- ✅ During candidate validation, one `TerminalView` owns one authoritative PTY
+  session and grid.
 - ✅ Terminal internals are not exposed through the extension host protocol.
   Extensions cannot enumerate terminal sessions, read their contents, send
   input, or inspect their processes or environments.
@@ -57,6 +58,26 @@ actions. Blocking PTY reads and writes stay off gpui's foreground thread.
 Updates reaching the foreground are bounded or coalesced so sustained terminal
 output cannot starve UI input or painting.
 
+This view-owned session is prototype scaffolding, not the production ownership
+model. After selecting the backend, rebuild the terminal around Zed's model:
+
+```text
+stable TerminalSession entity
+  - PTY, emulator, and process lifecycle
+  - protocol input and event ingestion
+  - immutable render snapshot
+              |
+    disposable TerminalView
+  - focus and presentation settings
+  - pixel layout and interaction
+  - gpui rendering
+```
+
+The production session is the authoritative terminal identity and may outlive
+view reconstruction. The view presents one session without owning its process
+or emulator. Preserve one presentation per session initially; independent
+multi-view presentation remains out of scope.
+
 ## Execution
 
 ### 1. Alacritty baseline
@@ -103,10 +124,15 @@ output cannot starve UI input or painting.
 ### 5. Decision and cleanup
 
 - ⬜ Select Alacritty, Ghostty VT, or full Ghostty using the evidence above.
-- ⬜ If Alacritty is selected, extract a mode-aware input encoder using Zed's
-  GPL-compatible
-  [terminal key mappings](https://github.com/zed-industries/zed/blob/3b79b56201f35dc87788e6a8ed9d432575484769/crates/terminal/src/mappings/keys.rs)
-  as attributed reference rather than growing `TerminalView::on_key_down`.
+- ✅ Treat the compact terminal frontend as disposable prototype code; its
+  current scope and organization are sufficient for candidate validation.
+- ⬜ For the production implementation, use Zed's GPL-compatible terminal code
+  as an attributed source for the Alacritty adapter, terminal model, mode-aware
+  [key mappings](https://github.com/zed-industries/zed/tree/main/crates/terminal/src/mappings),
+  gpui renderer, resize flow, and event handling rather than independently
+  rebuilding those mature paths. Replace the prototype boundary with the stable
+  session/disposable view ownership model above rather than incrementally
+  growing `TerminalView`.
 - ⬜ Remove the rejected candidate code rather than retain a permanent
   multi-backend abstraction.
 - ⬜ Record the validated choice and rationale in `decisions.md`.
