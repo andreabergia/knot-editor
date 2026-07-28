@@ -82,7 +82,9 @@ foreground state only.
 session, `alacritty_terminal` emulator grid, and its focus state. The
 Alacritty event loop performs PTY reads, writes, and parsing on a dedicated
 thread; keyboard input crosses to it through a channel. The view does not use
-or expose an editor model.
+or expose an editor model. Layout bounds determine the grid dimensions; a
+change resizes the foreground-owned emulator grid and queues the corresponding
+PTY resize to the event-loop thread.
 
 ```text
 gpui Shell / registries

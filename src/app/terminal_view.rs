@@ -5,7 +5,9 @@ use alacritty_terminal::{
     event_loop::{EventLoop, EventLoopSender, Msg, State},
     grid::{Dimensions, Scroll},
     sync::FairMutex,
-    term::{Config, Term, cell::Flags, color::Colors, point_to_viewport},
+    term::{
+        Config, MIN_COLUMNS, MIN_SCREEN_LINES, Term, cell::Flags, color::Colors, point_to_viewport,
+    },
     tty::{self, Options},
     vte::ansi::{Color, CursorShape, NamedColor, Rgb},
 };
@@ -13,8 +15,6 @@ use gpui::*;
 
 const INITIAL_COLUMNS: usize = 80;
 const INITIAL_LINES: usize = 11;
-const INITIAL_CELL_WIDTH: u16 = 8;
-const INITIAL_CELL_HEIGHT: u16 = 16;
 const CELL_WIDTH: f32 = 8.;
 const CELL_HEIGHT: f32 = 16.;
 const FONT_SIZE: f32 = 13.;
@@ -22,12 +22,49 @@ const SCROLL_PIXELS_PER_LINE: f32 = 4.;
 const BACKGROUND: u32 = 0x181818;
 const FOREGROUND: u32 = 0xd4d4d4;
 
-struct TerminalDimensions {
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct TerminalSize {
     columns: usize,
     lines: usize,
+    cell_width: u16,
+    cell_height: u16,
 }
 
-impl Dimensions for TerminalDimensions {
+impl TerminalSize {
+    fn initial() -> Self {
+        Self {
+            columns: INITIAL_COLUMNS,
+            lines: INITIAL_LINES,
+            cell_width: CELL_WIDTH as u16,
+            cell_height: CELL_HEIGHT as u16,
+        }
+    }
+
+    fn from_viewport(viewport: Size<Pixels>, scale_factor: f32) -> Self {
+        let columns = (viewport.width / px(CELL_WIDTH)).floor() as usize;
+        let lines = (viewport.height / px(CELL_HEIGHT)).floor() as usize;
+        let scaled_cell_width = (CELL_WIDTH * scale_factor).round();
+        let scaled_cell_height = (CELL_HEIGHT * scale_factor).round();
+
+        Self {
+            columns: columns.clamp(MIN_COLUMNS, u16::MAX as usize),
+            lines: lines.clamp(MIN_SCREEN_LINES, u16::MAX as usize),
+            cell_width: scaled_cell_width.clamp(1., u16::MAX as f32) as u16,
+            cell_height: scaled_cell_height.clamp(1., u16::MAX as f32) as u16,
+        }
+    }
+
+    fn window_size(self) -> WindowSize {
+        WindowSize {
+            num_lines: self.lines as u16,
+            num_cols: self.columns as u16,
+            cell_width: self.cell_width,
+            cell_height: self.cell_height,
+        }
+    }
+}
+
+impl Dimensions for TerminalSize {
     fn total_lines(&self) -> usize {
         self.lines
     }
@@ -67,20 +104,10 @@ struct TerminalSession {
 }
 
 impl TerminalSession {
-    fn start(listener: TerminalEventListener) -> std::io::Result<Self> {
-        let dimensions = TerminalDimensions {
-            columns: INITIAL_COLUMNS,
-            lines: INITIAL_LINES,
-        };
-        let window_size = WindowSize {
-            num_lines: INITIAL_LINES as u16,
-            num_cols: INITIAL_COLUMNS as u16,
-            cell_width: INITIAL_CELL_WIDTH,
-            cell_height: INITIAL_CELL_HEIGHT,
-        };
+    fn start(listener: TerminalEventListener, size: TerminalSize) -> std::io::Result<Self> {
         let terminal = Arc::new(FairMutex::new(Term::new(
             Config::default(),
-            &dimensions,
+            &size,
             listener.clone(),
         )));
         let options = Options {
@@ -93,7 +120,7 @@ impl TerminalSession {
             .into(),
             ..Options::default()
         };
-        let pty = tty::new(&options, window_size, 0)?;
+        let pty = tty::new(&options, size.window_size(), 0)?;
         let event_loop = EventLoop::new(
             terminal.clone(),
             listener,
@@ -116,6 +143,11 @@ impl TerminalSession {
             let _ = self.sender.send(Msg::Input(Cow::Owned(bytes)));
         }
     }
+
+    fn resize(&self, size: TerminalSize) {
+        self.terminal.lock().resize(size);
+        let _ = self.sender.send(Msg::Resize(size.window_size()));
+    }
 }
 
 impl Drop for TerminalSession {
@@ -132,13 +164,15 @@ pub(crate) struct TerminalView {
     session: Result<TerminalSession, String>,
     focus: FocusHandle,
     scroll_delta_y: f32,
+    size: TerminalSize,
     _repaint_task: Task<()>,
 }
 
 impl TerminalView {
     pub(crate) fn new(cx: &mut Context<Self>) -> Self {
         let (wakeup_tx, mut wakeup_rx) = tokio::sync::mpsc::channel(1);
-        let session = TerminalSession::start(TerminalEventListener { wakeups: wakeup_tx })
+        let size = TerminalSize::initial();
+        let session = TerminalSession::start(TerminalEventListener { wakeups: wakeup_tx }, size)
             .map_err(|error| error.to_string());
         let repaint_task = cx.spawn(async move |this, cx| {
             while wakeup_rx.recv().await.is_some() {
@@ -152,7 +186,18 @@ impl TerminalView {
             session,
             focus: cx.focus_handle(),
             scroll_delta_y: 0.,
+            size,
             _repaint_task: repaint_task,
+        }
+    }
+
+    fn resize(&mut self, size: TerminalSize) {
+        if self.size == size {
+            return;
+        }
+        self.size = size;
+        if let Ok(session) = &self.session {
+            session.resize(size);
         }
     }
 
@@ -352,8 +397,10 @@ impl Element for TerminalElement {
         bounds: Bounds<Pixels>,
         _: &mut Self::RequestLayoutState,
         window: &mut Window,
-        _: &mut App,
+        cx: &mut App,
     ) -> Self::PrepaintState {
+        let size = TerminalSize::from_viewport(bounds.size, window.scale_factor());
+        let _ = self.entity.update(cx, |terminal, _| terminal.resize(size));
         window.insert_hitbox(bounds, HitboxBehavior::Normal)
     }
 
