@@ -12,12 +12,13 @@ use alacritty_terminal::{
 use gpui::*;
 
 const INITIAL_COLUMNS: usize = 80;
-const INITIAL_LINES: usize = 24;
+const INITIAL_LINES: usize = 11;
 const INITIAL_CELL_WIDTH: u16 = 8;
 const INITIAL_CELL_HEIGHT: u16 = 16;
 const CELL_WIDTH: f32 = 8.;
 const CELL_HEIGHT: f32 = 16.;
 const FONT_SIZE: f32 = 13.;
+const SCROLL_PIXELS_PER_LINE: f32 = 4.;
 const BACKGROUND: u32 = 0x181818;
 const FOREGROUND: u32 = 0xd4d4d4;
 
@@ -130,6 +131,7 @@ impl Drop for TerminalSession {
 pub(crate) struct TerminalView {
     session: Result<TerminalSession, String>,
     focus: FocusHandle,
+    scroll_delta_y: f32,
     _repaint_task: Task<()>,
 }
 
@@ -149,6 +151,7 @@ impl TerminalView {
         Self {
             session,
             focus: cx.focus_handle(),
+            scroll_delta_y: 0.,
             _repaint_task: repaint_task,
         }
     }
@@ -191,23 +194,21 @@ impl TerminalView {
         }
         if !bytes.is_empty() {
             session.terminal.lock().scroll_display(Scroll::Bottom);
+            self.scroll_delta_y = 0.;
             session.send(bytes);
             cx.stop_propagation();
         }
     }
 
-    fn on_scroll_wheel(
-        &mut self,
-        event: &ScrollWheelEvent,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn scroll(&mut self, delta: ScrollDelta, cx: &mut Context<Self>) {
         let Ok(session) = &self.session else {
             return;
         };
-        let delta = event.delta.pixel_delta(px(CELL_HEIGHT));
-        let rows = (f32::from(delta.y) / CELL_HEIGHT).round() as i32;
+        let delta = delta.pixel_delta(px(CELL_HEIGHT));
+        self.scroll_delta_y += f32::from(delta.y);
+        let rows = (self.scroll_delta_y / SCROLL_PIXELS_PER_LINE).trunc() as i32;
         if rows != 0 {
+            self.scroll_delta_y -= rows as f32 * SCROLL_PIXELS_PER_LINE;
             session.terminal.lock().scroll_display(Scroll::Delta(rows));
             cx.notify();
         }
@@ -236,9 +237,9 @@ impl Render for TerminalView {
         div()
             .size_full()
             .bg(rgb(BACKGROUND))
+            .occlude()
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::on_key_down))
-            .on_scroll_wheel(cx.listener(Self::on_scroll_wheel))
             .child(TerminalElement { entity })
     }
 }
@@ -321,7 +322,7 @@ impl TerminalSnapshot {
 
 impl Element for TerminalElement {
     type RequestLayoutState = ();
-    type PrepaintState = ();
+    type PrepaintState = Hitbox;
 
     fn id(&self) -> Option<ElementId> {
         None
@@ -348,11 +349,12 @@ impl Element for TerminalElement {
         &mut self,
         _: Option<&GlobalElementId>,
         _: Option<&InspectorElementId>,
-        _: Bounds<Pixels>,
+        bounds: Bounds<Pixels>,
         _: &mut Self::RequestLayoutState,
-        _: &mut Window,
+        window: &mut Window,
         _: &mut App,
     ) -> Self::PrepaintState {
+        window.insert_hitbox(bounds, HitboxBehavior::Normal)
     }
 
     fn paint(
@@ -361,10 +363,21 @@ impl Element for TerminalElement {
         _: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
         _: &mut Self::RequestLayoutState,
-        _: &mut Self::PrepaintState,
+        hitbox: &mut Self::PrepaintState,
         window: &mut Window,
         cx: &mut App,
     ) {
+        let hitbox = hitbox.clone();
+        let entity = self.entity.clone();
+        window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
+            if phase == DispatchPhase::Bubble && hitbox.should_handle_scroll(window) {
+                let _ = entity.update(cx, |terminal, cx| {
+                    terminal.scroll(event.delta, cx);
+                });
+                cx.stop_propagation();
+            }
+        });
+
         let snapshot = TerminalSnapshot::capture(self.entity.read(cx));
         let cell_width = px(CELL_WIDTH);
         let cell_height = px(CELL_HEIGHT);

@@ -1028,6 +1028,7 @@ impl Render for Shell {
                     .child(
                         div()
                             .flex_1()
+                            .min_h_0()
                             .flex()
                             .flex_row()
                             .child(
@@ -1044,7 +1045,13 @@ impl Render for Shell {
                                             .text_color(rgb(0x777777))
                                             .child("VIEW A · GUTTER ON"),
                                     )
-                                    .child(div().flex_1().child(self.editor.clone())),
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_h_0()
+                                            .overflow_hidden()
+                                            .child(self.editor.clone()),
+                                    ),
                             )
                             .child(div().w(px(1.)).h_full().bg(rgb(0x3a3a3a)))
                             .child(
@@ -1061,11 +1068,17 @@ impl Render for Shell {
                                             .text_color(rgb(0x777777))
                                             .child("VIEW B · GUTTER OFF"),
                                     )
-                                    .child(div().flex_1().child(self.secondary_editor.clone())),
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_h_0()
+                                            .overflow_hidden()
+                                            .child(self.secondary_editor.clone()),
+                                    ),
                             ),
                     )
                     .child(div().h(px(1.)).w_full().bg(rgb(0x3a3a3a)))
-                    .child(div().h(px(180.)).child(self.terminal.clone()))
+                    .child(div().h(px(180.)).flex_none().child(self.terminal.clone()))
                     .child(
                         div()
                             .flex()
