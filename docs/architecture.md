@@ -84,7 +84,9 @@ Alacritty event loop performs PTY reads, writes, and parsing on a dedicated
 thread; keyboard input crosses to it through a channel. The view does not use
 or expose an editor model. Layout bounds determine the grid dimensions; a
 change resizes the foreground-owned emulator grid and queues the corresponding
-PTY resize to the event-loop thread.
+PTY resize to the event-loop thread. Child exit is reported back to the view;
+closing or replacing a session shuts down its event loop and reaps the child
+off the foreground thread.
 
 ```text
 gpui Shell / registries

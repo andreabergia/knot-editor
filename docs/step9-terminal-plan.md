@@ -87,7 +87,7 @@ multi-view presentation remains out of scope.
 - ✅ Render ANSI colors, styled cells, cursor state, and scrollback through
   gpui.
 - ✅ Propagate grid resize to the emulator and PTY.
-- ⬜ Close, reap, and restart the subprocess cleanly.
+- ✅ Close, reap, and restart the subprocess cleanly.
 - ⬜ Run one alternate-screen full-screen TUI.
 - ⬜ Flood the PTY with output while verifying that the UI remains responsive.
 

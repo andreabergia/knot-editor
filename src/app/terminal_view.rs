@@ -1,4 +1,8 @@
-use std::{borrow::Cow, sync::Arc, thread::JoinHandle};
+use std::{
+    borrow::Cow,
+    sync::{Arc, Mutex},
+    thread::JoinHandle,
+};
 
 use alacritty_terminal::{
     event::{Event, EventListener, WindowSize},
@@ -81,10 +85,17 @@ impl Dimensions for TerminalSize {
 #[derive(Clone)]
 struct TerminalEventListener {
     wakeups: tokio::sync::mpsc::Sender<()>,
+    child_exit: Arc<Mutex<Option<String>>>,
 }
 
 impl EventListener for TerminalEventListener {
     fn send_event(&self, event: Event) {
+        if let Event::ChildExit(status) = &event {
+            *self
+                .child_exit
+                .lock()
+                .expect("terminal exit state poisoned") = Some(status.to_string());
+        }
         if matches!(
             event,
             Event::Wakeup | Event::CursorBlinkingChange | Event::Exit | Event::ChildExit(_)
@@ -148,6 +159,15 @@ impl TerminalSession {
         self.terminal.lock().resize(size);
         let _ = self.sender.send(Msg::Resize(size.window_size()));
     }
+
+    fn shutdown(mut self) {
+        let _ = self.sender.send(Msg::Shutdown);
+        if let Some(thread) = self.thread.take() {
+            std::thread::spawn(move || {
+                let _ = thread.join();
+            });
+        }
+    }
 }
 
 impl Drop for TerminalSession {
@@ -159,9 +179,36 @@ impl Drop for TerminalSession {
     }
 }
 
+enum TerminalState {
+    Running(TerminalSession),
+    Stopped {
+        terminal: Arc<FairMutex<Term<TerminalEventListener>>>,
+        status: String,
+    },
+    Failed(String),
+}
+
+impl TerminalState {
+    fn terminal(&self) -> Option<&Arc<FairMutex<Term<TerminalEventListener>>>> {
+        match self {
+            Self::Running(session) => Some(&session.terminal),
+            Self::Stopped { terminal, .. } => Some(terminal),
+            Self::Failed(_) => None,
+        }
+    }
+
+    fn label(&self) -> String {
+        match self {
+            Self::Running(_) => "running".to_owned(),
+            Self::Stopped { status, .. } => status.clone(),
+            Self::Failed(error) => format!("failed: {error}"),
+        }
+    }
+}
+
 /// Native terminal surface owning one authoritative PTY session and emulator grid.
 pub(crate) struct TerminalView {
-    session: Result<TerminalSession, String>,
+    state: TerminalState,
     focus: FocusHandle,
     scroll_delta_y: f32,
     size: TerminalSize,
@@ -170,20 +217,11 @@ pub(crate) struct TerminalView {
 
 impl TerminalView {
     pub(crate) fn new(cx: &mut Context<Self>) -> Self {
-        let (wakeup_tx, mut wakeup_rx) = tokio::sync::mpsc::channel(1);
         let size = TerminalSize::initial();
-        let session = TerminalSession::start(TerminalEventListener { wakeups: wakeup_tx }, size)
-            .map_err(|error| error.to_string());
-        let repaint_task = cx.spawn(async move |this, cx| {
-            while wakeup_rx.recv().await.is_some() {
-                if this.update(cx, |_, cx| cx.notify()).is_err() {
-                    break;
-                }
-            }
-        });
+        let (state, repaint_task) = Self::start(size, cx);
 
         Self {
-            session,
+            state,
             focus: cx.focus_handle(),
             scroll_delta_y: 0.,
             size,
@@ -191,18 +229,81 @@ impl TerminalView {
         }
     }
 
+    fn start(size: TerminalSize, cx: &mut Context<Self>) -> (TerminalState, Task<()>) {
+        let (wakeup_tx, mut wakeup_rx) = tokio::sync::mpsc::channel(1);
+        let child_exit = Arc::new(Mutex::new(None));
+        let listener = TerminalEventListener {
+            wakeups: wakeup_tx,
+            child_exit: child_exit.clone(),
+        };
+        let state = match TerminalSession::start(listener, size) {
+            Ok(session) => TerminalState::Running(session),
+            Err(error) => TerminalState::Failed(error.to_string()),
+        };
+        let repaint_task = cx.spawn(async move |this, cx| {
+            while wakeup_rx.recv().await.is_some() {
+                let status = child_exit
+                    .lock()
+                    .expect("terminal exit state poisoned")
+                    .take();
+                if this
+                    .update(cx, |this, cx| {
+                        if let Some(status) = status {
+                            this.stop(format!("exited: {status}"));
+                        }
+                        cx.notify();
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
+
+        (state, repaint_task)
+    }
+
+    fn stop(&mut self, status: String) {
+        let previous = std::mem::replace(
+            &mut self.state,
+            TerminalState::Failed("terminal state unavailable".to_owned()),
+        );
+        self.state = match previous {
+            TerminalState::Running(session) => {
+                let terminal = session.terminal.clone();
+                session.shutdown();
+                TerminalState::Stopped { terminal, status }
+            }
+            state => state,
+        };
+    }
+
+    fn close(&mut self, cx: &mut Context<Self>) {
+        self.stop("closed".to_owned());
+        cx.notify();
+    }
+
+    fn restart(&mut self, cx: &mut Context<Self>) {
+        self.stop("restarting".to_owned());
+        let (state, repaint_task) = Self::start(self.size, cx);
+        self.state = state;
+        self.scroll_delta_y = 0.;
+        self._repaint_task = repaint_task;
+        cx.notify();
+    }
+
     fn resize(&mut self, size: TerminalSize) {
         if self.size == size {
             return;
         }
         self.size = size;
-        if let Ok(session) = &self.session {
+        if let TerminalState::Running(session) = &self.state {
             session.resize(size);
         }
     }
 
     fn on_key_down(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
-        let Ok(session) = &self.session else {
+        let TerminalState::Running(session) = &self.state else {
             return;
         };
         let keystroke = &event.keystroke;
@@ -246,7 +347,7 @@ impl TerminalView {
     }
 
     fn scroll(&mut self, delta: ScrollDelta, cx: &mut Context<Self>) {
-        let Ok(session) = &self.session else {
+        let Some(terminal) = self.state.terminal() else {
             return;
         };
         let delta = delta.pixel_delta(px(CELL_HEIGHT));
@@ -254,9 +355,15 @@ impl TerminalView {
         let rows = (self.scroll_delta_y / SCROLL_PIXELS_PER_LINE).trunc() as i32;
         if rows != 0 {
             self.scroll_delta_y -= rows as f32 * SCROLL_PIXELS_PER_LINE;
-            session.terminal.lock().scroll_display(Scroll::Delta(rows));
+            terminal.lock().scroll_display(Scroll::Delta(rows));
             cx.notify();
         }
+    }
+}
+
+impl Drop for TerminalView {
+    fn drop(&mut self) {
+        self.stop("closed".to_owned());
     }
 }
 
@@ -281,11 +388,52 @@ impl Render for TerminalView {
         let entity = cx.entity();
         div()
             .size_full()
+            .flex()
+            .flex_col()
             .bg(rgb(BACKGROUND))
             .occlude()
-            .track_focus(&self.focus)
-            .on_key_down(cx.listener(Self::on_key_down))
-            .child(TerminalElement { entity })
+            .child(
+                div()
+                    .h(px(22.))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .px_2()
+                    .text_xs()
+                    .text_color(rgb(0x8f8f8f))
+                    .bg(rgb(0x202020))
+                    .child(format!("TERMINAL · {}", self.state.label()))
+                    .child(
+                        div()
+                            .flex()
+                            .gap_3()
+                            .child(
+                                div()
+                                    .id("close-terminal")
+                                    .cursor_pointer()
+                                    .text_color(rgb(0xffb080))
+                                    .child("close")
+                                    .on_click(cx.listener(|this, _, _, cx| this.close(cx))),
+                            )
+                            .child(
+                                div()
+                                    .id("restart-terminal")
+                                    .cursor_pointer()
+                                    .text_color(rgb(0x80c0ff))
+                                    .child("restart")
+                                    .on_click(cx.listener(|this, _, _, cx| this.restart(cx))),
+                            ),
+                    ),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .track_focus(&self.focus)
+                    .on_key_down(cx.listener(Self::on_key_down))
+                    .child(TerminalElement { entity }),
+            )
     }
 }
 
@@ -318,13 +466,13 @@ struct TerminalSnapshot {
 
 impl TerminalSnapshot {
     fn capture(view: &TerminalView) -> Self {
-        let Ok(session) = &view.session else {
+        let Some(terminal) = view.state.terminal() else {
             return Self {
                 cells: Vec::new(),
                 cursor: None,
             };
         };
-        let terminal = session.terminal.lock();
+        let terminal = terminal.lock();
         let content = terminal.renderable_content();
         let display_offset = content.display_offset;
         let colors = *content.colors;
