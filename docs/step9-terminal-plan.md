@@ -99,8 +99,10 @@ multi-view presentation remains out of scope.
 
 ### 2. Ghostty kill gate: build, replay, and render
 
-- ⬜ Pin a Ghostty revision and build `libghostty-vt` through its C API.
-- ⬜ Record the Zig/toolchain, linking, packaging, unsafe-FFI, API-stability,
+- ✅ Pin `libghostty-vt` through the `libghostty-vt` 0.2.1 Rust wrapper,
+  whose sys crate builds Ghostty commit
+  `a887df42c56f6de86c0fe6da9c4eeca37931e083` through its C API.
+- ✅ Record the Zig/toolchain, linking, packaging, unsafe-FFI, API-stability,
   and incremental-build costs.
 - ⬜ Keep the first spike independent of live PTY and session management: feed
   representative recorded terminal byte streams into Ghostty.
@@ -112,6 +114,30 @@ multi-view presentation remains out of scope.
 This gate answers whether Ghostty can fit Knot's dependency and rendering
 boundaries. It does not attempt to prove PTY lifecycle, input completeness,
 font parity, or production terminal behavior.
+
+#### Build integration evidence
+
+Measured on Apple Silicon macOS with Rust 1.97.1 and Zig 0.15.2:
+
+- `libghostty-vt` 0.2.1 contains the unsafe C boundary in its
+  `libghostty-vt-sys` dependency; Knot can use safe `Terminal` and
+  `RenderState` wrappers. Handles are deliberately `!Send + !Sync`.
+- The sys crate fetches its pinned Ghostty source during the Cargo build and
+  builds both static and dynamic artifacts. Knot links the static archive by
+  default; dynamic and `pkg-config` modes are optional.
+- Network-free packaging requires prefetching the Ghostty source and Zig
+  packages, then setting `GHOSTTY_SOURCE_DIR` and
+  `GHOSTTY_ZIG_SYSTEM_DIR`.
+- The C API and both Rust crates are pre-1.0. The wrapper couples checked-in
+  bindings to its Ghostty pin, containing API churn at the dependency upgrade
+  boundary.
+- The first native debug build took about one minute. A repeated no-change
+  `cargo check` took 3.1 seconds. Generated source, libraries, and Zig cache
+  occupied 327 MB under `target`.
+
+This cost is material but not yet disproportionate for the prototype. Revisit
+it after the render-state spike establishes whether the API earns the build
+burden.
 
 ### 3. Ghostty kill gate: minimal live terminal
 
