@@ -110,6 +110,8 @@ multi-view presentation remains out of scope.
   including visible graphemes, style/color presence, and cursor position.
 - ✅ Draw the inspected visible rows as an unstyled static gpui grid in the
   spike's `--gui` mode.
+- ✅ Preserve cell positions in a Knot-owned snapshot and draw Ghostty-resolved
+  foreground, background, and inverse colors through gpui.
 - ⬜ Read Ghostty's render state and draw a minimal grid through gpui, including
   styled cells, colors, cursor state, Unicode graphemes, and scrollback.
 - ⬜ Stop and reject Ghostty if the build or FFI burden is disproportionate, or
@@ -123,8 +125,8 @@ The `ghostty-spike` harness replays deterministic styled Unicode, cursor and
 scrollback, and alternate-screen byte streams in small chunks into separate
 8-row Ghostty terminals. It inspects their visible cells and cursor through
 `RenderState`, and `--gui` draws the visible rows as an unstyled static gpui
-grid. It has no PTY, shell process, or session lifecycle; cell styling, colors,
-and cursor drawing remain pending.
+grid with resolved cell colors. It has no PTY, shell process, or session
+lifecycle; font attributes and cursor drawing remain pending.
 
 #### Build integration evidence
 

@@ -2,6 +2,7 @@ use gpui::*;
 use libghostty_vt::{
     RenderState, Terminal, TerminalOptions,
     render::{CellIterator, RowIterator},
+    style::RgbColor,
 };
 
 const COLUMNS: u16 = 40;
@@ -83,8 +84,8 @@ fn replay_recordings() -> anyhow::Result<Vec<(&'static str, RenderInspection)>> 
             inspection.colored_cells,
             inspection.cursor,
         );
-        for row in &inspection.visible_rows {
-            println!("  {row:?}");
+        for row in &inspection.cells {
+            println!("  {:?}", visible_text(row));
         }
         inspections.push((recording.name, inspection));
     }
@@ -103,7 +104,14 @@ struct RenderInspection {
     styled_cells: usize,
     colored_cells: usize,
     cursor: Option<(u16, u16)>,
-    visible_rows: Vec<String>,
+    cells: Vec<Vec<RenderCell>>,
+}
+
+#[derive(Debug)]
+struct RenderCell {
+    text: String,
+    foreground: u32,
+    background: u32,
 }
 
 fn inspect_render_state(terminal: &Terminal<'_, '_>) -> anyhow::Result<RenderInspection> {
@@ -115,26 +123,37 @@ fn inspect_render_state(terminal: &Terminal<'_, '_>) -> anyhow::Result<RenderIns
     let mut text_cells = 0;
     let mut styled_cells = 0;
     let mut colored_cells = 0;
-    let mut visible_rows = Vec::with_capacity(snapshot.rows()?.into());
+    let colors = snapshot.colors()?;
+    let mut grid = Vec::with_capacity(snapshot.rows()?.into());
     let mut row_iter = rows.update(&snapshot)?;
 
     while let Some(row) = row_iter.next() {
-        let mut visible_row = String::new();
+        let mut visible_row = Vec::with_capacity(snapshot.cols()?.into());
         let mut cell_iter = cells.update(row)?;
 
         while let Some(cell) = cell_iter.next() {
-            let graphemes = cell.graphemes()?;
-            if graphemes.is_empty() {
-                visible_row.push(' ');
-            } else {
+            let text = cell.graphemes()?.into_iter().collect::<String>();
+            if !text.is_empty() {
                 text_cells += 1;
-                visible_row.extend(graphemes);
             }
             styled_cells += usize::from(cell.has_styling()?);
-            colored_cells += usize::from(cell.fg_color()?.is_some() || cell.bg_color()?.is_some());
+            let foreground = cell.fg_color()?;
+            let background = cell.bg_color()?;
+            colored_cells += usize::from(foreground.is_some() || background.is_some());
+
+            let mut foreground = foreground.unwrap_or(colors.foreground);
+            let mut background = background.unwrap_or(colors.background);
+            if cell.style()?.inverse {
+                std::mem::swap(&mut foreground, &mut background);
+            }
+            visible_row.push(RenderCell {
+                text,
+                foreground: packed_color(foreground),
+                background: packed_color(background),
+            });
         }
 
-        visible_rows.push(visible_row.trim_end().to_owned());
+        grid.push(visible_row);
     }
 
     let cursor = snapshot
@@ -151,8 +170,24 @@ fn inspect_render_state(terminal: &Terminal<'_, '_>) -> anyhow::Result<RenderIns
         styled_cells,
         colored_cells,
         cursor,
-        visible_rows,
+        cells: grid,
     })
+}
+
+fn packed_color(color: RgbColor) -> u32 {
+    u32::from(color.r) << 16 | u32::from(color.g) << 8 | u32::from(color.b)
+}
+
+fn visible_text(row: &[RenderCell]) -> String {
+    let text = row.iter().fold(String::new(), |mut text, cell| {
+        if cell.text.is_empty() {
+            text.push(' ');
+        } else {
+            text.push_str(&cell.text);
+        }
+        text
+    });
+    text.trim_end().to_owned()
 }
 
 struct GhosttyGrid {
@@ -177,8 +212,20 @@ impl Render for GhosttyGrid {
                 .font_family("Menlo")
                 .text_size(px(13.))
                 .line_height(px(18.));
-            for row in &inspection.visible_rows {
-                grid = grid.child(div().h(px(18.)).child(row.clone()));
+            for row in &inspection.cells {
+                let mut rendered_row = div().h(px(18.)).flex();
+                for cell in row {
+                    rendered_row = rendered_row.child(
+                        div()
+                            .w(px(8.))
+                            .h(px(18.))
+                            .flex_none()
+                            .bg(rgb(cell.background))
+                            .text_color(rgb(cell.foreground))
+                            .child(cell.text.clone()),
+                    );
+                }
+                grid = grid.child(rendered_row);
             }
 
             root = root.child(
