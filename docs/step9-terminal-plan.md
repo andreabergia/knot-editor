@@ -114,7 +114,9 @@ multi-view presentation remains out of scope.
   foreground, background, and inverse colors through gpui.
 - ✅ Draw the replay fixture's bold, italic, underline, and strikethrough cell
   attributes through gpui.
-- ⬜ Read Ghostty's render state and draw a minimal grid through gpui, including
+- ✅ Draw Ghostty's visible cursor position, shape, and resolved color through
+  gpui.
+- ✅ Read Ghostty's render state and draw a minimal grid through gpui, including
   styled cells, colors, cursor state, Unicode graphemes, and scrollback.
 - ⬜ Stop and reject Ghostty if the build or FFI burden is disproportionate, or
   if its render-state API does not support Knot-owned gpui rendering cleanly.
@@ -128,7 +130,7 @@ scrollback, and alternate-screen byte streams in small chunks into separate
 8-row Ghostty terminals. It inspects their visible cells and cursor through
 `RenderState`, and `--gui` draws the visible rows as a static gpui grid with
 resolved cell colors and the fixture's font attributes. It has no PTY, shell
-process, or session lifecycle; cursor drawing remains pending.
+process, or session lifecycle.
 
 #### Build integration evidence
 

@@ -1,7 +1,7 @@
 use gpui::*;
 use libghostty_vt::{
     RenderState, Terminal, TerminalOptions,
-    render::{CellIterator, RowIterator},
+    render::{CellIterator, CursorVisualStyle, RowIterator},
     style::{RgbColor, Underline},
 };
 
@@ -103,7 +103,7 @@ struct RenderInspection {
     text_cells: usize,
     styled_cells: usize,
     colored_cells: usize,
-    cursor: Option<(u16, u16)>,
+    cursor: Option<RenderCursor>,
     cells: Vec<Vec<RenderCell>>,
 }
 
@@ -116,6 +116,22 @@ struct RenderCell {
     italic: bool,
     underline: bool,
     strikethrough: bool,
+}
+
+#[derive(Debug)]
+struct RenderCursor {
+    x: u16,
+    y: u16,
+    shape: CursorShape,
+    color: u32,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum CursorShape {
+    Bar,
+    Block,
+    Underline,
+    HollowBlock,
 }
 
 fn inspect_render_state(terminal: &Terminal<'_, '_>) -> anyhow::Result<RenderInspection> {
@@ -165,12 +181,32 @@ fn inspect_render_state(terminal: &Terminal<'_, '_>) -> anyhow::Result<RenderIns
         grid.push(visible_row);
     }
 
-    let cursor = snapshot
-        .cursor_visible()?
-        .then(|| snapshot.cursor_viewport())
-        .transpose()?
-        .flatten()
-        .map(|cursor| (cursor.x, cursor.y));
+    let cursor = if snapshot.cursor_visible()? {
+        snapshot
+            .cursor_viewport()?
+            .map(|cursor| -> anyhow::Result<_> {
+                let shape = match snapshot.cursor_visual_style()? {
+                    CursorVisualStyle::Bar => CursorShape::Bar,
+                    CursorVisualStyle::Block => CursorShape::Block,
+                    CursorVisualStyle::Underline => CursorShape::Underline,
+                    CursorVisualStyle::BlockHollow => CursorShape::HollowBlock,
+                    _ => CursorShape::Block,
+                };
+                let color = snapshot
+                    .cursor_color()?
+                    .or(colors.cursor)
+                    .unwrap_or(colors.foreground);
+                Ok(RenderCursor {
+                    x: cursor.x,
+                    y: cursor.y,
+                    shape,
+                    color: packed_color(color),
+                })
+            })
+            .transpose()?
+    } else {
+        None
+    };
 
     Ok(RenderInspection {
         cols: snapshot.cols()?,
@@ -221,9 +257,9 @@ impl Render for GhosttyGrid {
                 .font_family("Menlo")
                 .text_size(px(13.))
                 .line_height(px(18.));
-            for row in &inspection.cells {
+            for (row_index, row) in inspection.cells.iter().enumerate() {
                 let mut rendered_row = div().h(px(18.)).flex();
-                for cell in row {
+                for (column_index, cell) in row.iter().enumerate() {
                     let mut rendered_cell = div()
                         .w(px(8.))
                         .h(px(18.))
@@ -241,6 +277,25 @@ impl Render for GhosttyGrid {
                     }
                     if cell.strikethrough {
                         rendered_cell = rendered_cell.line_through();
+                    }
+                    if let Some(cursor) = &inspection.cursor
+                        && usize::from(cursor.x) == column_index
+                        && usize::from(cursor.y) == row_index
+                    {
+                        rendered_cell = match cursor.shape {
+                            CursorShape::Bar => {
+                                rendered_cell.border_l_1().border_color(rgb(cursor.color))
+                            }
+                            CursorShape::Block => rendered_cell
+                                .bg(rgb(cursor.color))
+                                .text_color(rgb(cell.background)),
+                            CursorShape::Underline => {
+                                rendered_cell.border_b_1().border_color(rgb(cursor.color))
+                            }
+                            CursorShape::HollowBlock => {
+                                rendered_cell.border_1().border_color(rgb(cursor.color))
+                            }
+                        };
                     }
                     rendered_row = rendered_row.child(rendered_cell.child(cell.text.clone()));
                 }
