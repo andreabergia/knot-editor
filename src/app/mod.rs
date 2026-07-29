@@ -37,6 +37,8 @@ use tree_view::{TreeProviderIdentity, TreeView, TreeViewEvent, TreeViewRegistrat
 actions!(knot, [Quit]);
 
 const MIN_PANE: f32 = 120.;
+const MIN_TERMINAL_HEIGHT: f32 = 96.;
+const MIN_EDITOR_HEIGHT: f32 = 160.;
 const DEFAULT_FIXTURE_NAME: &str = "rust_sample";
 const RUNTIME_PROBE_SOURCE: &str = r#"
 import { commands, editor, workbench } from "knot:editor";
@@ -159,6 +161,9 @@ struct DividerDrag {
     which: usize,
 }
 
+#[derive(Clone, Copy)]
+struct TerminalDividerDrag;
+
 /// Invisible drag-ghost view gpui renders while the drag is in progress.
 /// Required by `on_drag`'s constructor; we don't want a visible ghost.
 struct DragGhost;
@@ -178,6 +183,9 @@ struct Shell {
     /// `(which, start_x, start_width)` captured on the first drag-move event
     /// of an in-progress divider drag; cleared on drop.
     drag_origin: Option<(usize, Pixels, f32)>,
+    terminal_height: f32,
+    /// `(start_y, start_height)` captured on the first terminal-divider move.
+    terminal_drag_origin: Option<(Pixels, f32)>,
     /// Each view is an independent presentation over the active shared model.
     editor: Entity<EditorView>,
     secondary_editor: Entity<EditorView>,
@@ -375,6 +383,8 @@ impl Shell {
             left_width: 260.,
             right_width: 220.,
             drag_origin: None,
+            terminal_height: 180.,
+            terminal_drag_origin: None,
             editor,
             secondary_editor,
             terminal,
@@ -915,6 +925,19 @@ impl Shell {
                 cx.new(|_| DragGhost)
             })
     }
+
+    fn terminal_divider() -> impl IntoElement {
+        div()
+            .id("terminal-divider")
+            .w_full()
+            .h(px(6.))
+            .flex_none()
+            .bg(rgb(0x333333))
+            .cursor_ns_resize()
+            .on_drag(TerminalDividerDrag, |_value, _offset, _window, cx| {
+                cx.new(|_| DragGhost)
+            })
+    }
 }
 
 impl Drop for Shell {
@@ -991,6 +1014,30 @@ impl Render for Shell {
                 this.drag_origin = None;
                 cx.notify();
             }))
+            .on_drag_move::<TerminalDividerDrag>(cx.listener(
+                |this, event: &DragMoveEvent<TerminalDividerDrag>, window, cx| {
+                    let pos_y = event.event.position.y;
+                    let (start_y, start_height) = match this.terminal_drag_origin {
+                        Some(origin) => origin,
+                        None => {
+                            let origin = (pos_y, this.terminal_height);
+                            this.terminal_drag_origin = Some(origin);
+                            origin
+                        }
+                    };
+                    let max_height = (f32::from(window.viewport_size().height) - MIN_EDITOR_HEIGHT)
+                        .max(MIN_TERMINAL_HEIGHT);
+                    this.terminal_height = (start_height - f32::from(pos_y - start_y))
+                        .clamp(MIN_TERMINAL_HEIGHT, max_height);
+                    cx.notify();
+                },
+            ))
+            .on_drop::<TerminalDividerDrag>(cx.listener(
+                |this, _value: &TerminalDividerDrag, _window, cx| {
+                    this.terminal_drag_origin = None;
+                    cx.notify();
+                },
+            ))
             .child(
                 div()
                     .flex()
@@ -1077,8 +1124,13 @@ impl Render for Shell {
                                     ),
                             ),
                     )
-                    .child(div().h(px(1.)).w_full().bg(rgb(0x3a3a3a)))
-                    .child(div().h(px(180.)).flex_none().child(self.terminal.clone()))
+                    .child(Self::terminal_divider())
+                    .child(
+                        div()
+                            .h(px(self.terminal_height))
+                            .flex_none()
+                            .child(self.terminal.clone()),
+                    )
                     .child(
                         div()
                             .flex()
