@@ -106,6 +106,8 @@ multi-view presentation remains out of scope.
   and incremental-build costs.
 - ✅ Keep the first spike independent of live PTY and session management: feed
   representative recorded terminal byte streams into Ghostty.
+- ✅ Inspect each replay fixture through Ghostty's safe `RenderState` API,
+  including visible graphemes, style/color presence, and cursor position.
 - ⬜ Read Ghostty's render state and draw a minimal grid through gpui, including
   styled cells, colors, cursor state, Unicode graphemes, and scrollback.
 - ⬜ Stop and reject Ghostty if the build or FFI burden is disproportionate, or
@@ -116,9 +118,10 @@ boundaries. It does not attempt to prove PTY lifecycle, input completeness,
 font parity, or production terminal behavior.
 
 The `ghostty-spike` harness replays deterministic styled Unicode, cursor and
-scrollback, and alternate-screen byte streams in small chunks into an 8-row
-Ghostty terminal. It has no PTY, shell process, session lifecycle, or gpui
-integration; render-state inspection remains the next substep.
+scrollback, and alternate-screen byte streams in small chunks into separate
+8-row Ghostty terminals. It inspects their visible cells and cursor through
+`RenderState`, but has no PTY, shell process, session lifecycle, or gpui
+integration; drawing the inspected state remains the next substep.
 
 #### Build integration evidence
 

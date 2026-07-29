@@ -1,4 +1,7 @@
-use libghostty_vt::{Terminal, TerminalOptions};
+use libghostty_vt::{
+    RenderState, Terminal, TerminalOptions,
+    render::{CellIterator, RowIterator},
+};
 
 const COLUMNS: u16 = 40;
 const ROWS: u16 = 8;
@@ -44,27 +47,98 @@ const RECORDINGS: &[Recording] = &[
 ];
 
 fn main() -> anyhow::Result<()> {
-    let mut terminal = Terminal::new(TerminalOptions {
-        cols: COLUMNS,
-        rows: ROWS,
-        max_scrollback: 100,
-    })?;
-
     let mut bytes_replayed = 0;
     for recording in RECORDINGS {
+        let mut terminal = Terminal::new(TerminalOptions {
+            cols: COLUMNS,
+            rows: ROWS,
+            max_scrollback: 100,
+        })?;
+
         for chunk in recording.bytes.chunks(REPLAY_CHUNK_SIZE) {
             terminal.vt_write(chunk);
         }
         bytes_replayed += recording.bytes.len();
+
+        let inspection = inspect_render_state(&terminal)?;
         println!(
-            "replayed {} ({} bytes)",
+            "replayed {} ({} bytes): {}x{}, {} text cells, {} styled cells, {} colored cells, cursor={:?}",
             recording.name,
-            recording.bytes.len()
+            recording.bytes.len(),
+            inspection.cols,
+            inspection.rows,
+            inspection.text_cells,
+            inspection.styled_cells,
+            inspection.colored_cells,
+            inspection.cursor,
         );
+        for row in inspection.visible_rows {
+            println!("  {row:?}");
+        }
     }
 
     println!(
         "fed {bytes_replayed} recorded bytes into a {COLUMNS}x{ROWS} Ghostty terminal without a PTY"
     );
     Ok(())
+}
+
+#[derive(Debug)]
+struct RenderInspection {
+    cols: u16,
+    rows: u16,
+    text_cells: usize,
+    styled_cells: usize,
+    colored_cells: usize,
+    cursor: Option<(u16, u16)>,
+    visible_rows: Vec<String>,
+}
+
+fn inspect_render_state(terminal: &Terminal<'_, '_>) -> anyhow::Result<RenderInspection> {
+    let mut render_state = RenderState::new()?;
+    let mut rows = RowIterator::new()?;
+    let mut cells = CellIterator::new()?;
+    let snapshot = render_state.update(terminal)?;
+
+    let mut text_cells = 0;
+    let mut styled_cells = 0;
+    let mut colored_cells = 0;
+    let mut visible_rows = Vec::with_capacity(snapshot.rows()?.into());
+    let mut row_iter = rows.update(&snapshot)?;
+
+    while let Some(row) = row_iter.next() {
+        let mut visible_row = String::new();
+        let mut cell_iter = cells.update(row)?;
+
+        while let Some(cell) = cell_iter.next() {
+            let graphemes = cell.graphemes()?;
+            if graphemes.is_empty() {
+                visible_row.push(' ');
+            } else {
+                text_cells += 1;
+                visible_row.extend(graphemes);
+            }
+            styled_cells += usize::from(cell.has_styling()?);
+            colored_cells += usize::from(cell.fg_color()?.is_some() || cell.bg_color()?.is_some());
+        }
+
+        visible_rows.push(visible_row.trim_end().to_owned());
+    }
+
+    let cursor = snapshot
+        .cursor_visible()?
+        .then(|| snapshot.cursor_viewport())
+        .transpose()?
+        .flatten()
+        .map(|cursor| (cursor.x, cursor.y));
+
+    Ok(RenderInspection {
+        cols: snapshot.cols()?,
+        rows: snapshot.rows()?,
+        text_cells,
+        styled_cells,
+        colored_cells,
+        cursor,
+        visible_rows,
+    })
 }
