@@ -1,3 +1,4 @@
+use gpui::*;
 use libghostty_vt::{
     RenderState, Terminal, TerminalOptions,
     render::{CellIterator, RowIterator},
@@ -47,7 +48,17 @@ const RECORDINGS: &[Recording] = &[
 ];
 
 fn main() -> anyhow::Result<()> {
+    let inspections = replay_recordings()?;
+    if std::env::args().any(|argument| argument == "--gui") {
+        show_grid(inspections);
+    }
+    Ok(())
+}
+
+fn replay_recordings() -> anyhow::Result<Vec<(&'static str, RenderInspection)>> {
     let mut bytes_replayed = 0;
+    let mut inspections = Vec::with_capacity(RECORDINGS.len());
+
     for recording in RECORDINGS {
         let mut terminal = Terminal::new(TerminalOptions {
             cols: COLUMNS,
@@ -72,15 +83,16 @@ fn main() -> anyhow::Result<()> {
             inspection.colored_cells,
             inspection.cursor,
         );
-        for row in inspection.visible_rows {
+        for row in &inspection.visible_rows {
             println!("  {row:?}");
         }
+        inspections.push((recording.name, inspection));
     }
 
     println!(
         "fed {bytes_replayed} recorded bytes into a {COLUMNS}x{ROWS} Ghostty terminal without a PTY"
     );
-    Ok(())
+    Ok(inspections)
 }
 
 #[derive(Debug)]
@@ -141,4 +153,70 @@ fn inspect_render_state(terminal: &Terminal<'_, '_>) -> anyhow::Result<RenderIns
         cursor,
         visible_rows,
     })
+}
+
+struct GhosttyGrid {
+    recordings: Vec<(&'static str, RenderInspection)>,
+}
+
+impl Render for GhosttyGrid {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let mut root = div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .gap_4()
+            .p_4()
+            .bg(rgb(0x181818))
+            .text_color(rgb(0xd4d4d4));
+
+        for (name, inspection) in &self.recordings {
+            let mut grid = div()
+                .flex()
+                .flex_col()
+                .font_family("Menlo")
+                .text_size(px(13.))
+                .line_height(px(18.));
+            for row in &inspection.visible_rows {
+                grid = grid.child(div().h(px(18.)).child(row.clone()));
+            }
+
+            root = root.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(rgb(0x8f8f8f))
+                            .child(format!("{name} · {}×{}", inspection.cols, inspection.rows)),
+                    )
+                    .child(grid),
+            );
+        }
+
+        root
+    }
+}
+
+fn show_grid(recordings: Vec<(&'static str, RenderInspection)>) {
+    Application::new().run(move |app: &mut App| {
+        app.on_window_closed(|app| {
+            if app.windows().is_empty() {
+                app.quit();
+            }
+        })
+        .detach();
+
+        let bounds = Bounds::centered(None, size(px(560.), px(620.)), app);
+        app.open_window(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                ..Default::default()
+            },
+            move |_, cx| cx.new(|_| GhosttyGrid { recordings }),
+        )
+        .expect("open Ghostty spike window");
+        app.activate(true);
+    });
 }
