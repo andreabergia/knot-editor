@@ -90,7 +90,7 @@ multi-view presentation remains out of scope.
 - ✅ Close, reap, and restart the subprocess cleanly.
 - ✅ Make the terminal height draggable so row resizing can be validated with
   a full-screen application.
-- ⬜ Run one alternate-screen full-screen TUI.
+- ✅ Run one alternate-screen full-screen TUI.
 - ⬜ Flood the PTY with output while verifying that the UI remains responsive.
 
 ### 2. Rendering-parity fixture
