@@ -118,8 +118,9 @@ multi-view presentation remains out of scope.
   gpui.
 - ✅ Read Ghostty's render state and draw a minimal grid through gpui, including
   styled cells, colors, cursor state, Unicode graphemes, and scrollback.
-- ⬜ Stop and reject Ghostty if the build or FFI burden is disproportionate, or
-  if its render-state API does not support Knot-owned gpui rendering cleanly.
+- ✅ Pass the build-and-render kill gate: the build and FFI costs are material
+  but acceptable for the prototype, and the safe render-state API supports a
+  Knot-owned gpui snapshot cleanly. Proceed to the minimal live terminal gate.
 
 This gate answers whether Ghostty can fit Knot's dependency and rendering
 boundaries. It does not attempt to prove PTY lifecycle, input completeness,
@@ -152,9 +153,9 @@ Measured on Apple Silicon macOS with Rust 1.97.1 and Zig 0.15.2:
   `cargo check` took 3.1 seconds. Generated source, libraries, and Zig cache
   occupied 327 MB under `target`.
 
-This cost is material but not yet disproportionate for the prototype. Revisit
-it after the render-state spike establishes whether the API earns the build
-burden.
+This cost is material but not disproportionate for the prototype. The
+render-state spike demonstrates that the API earns the build burden well
+enough to proceed to the minimal live terminal gate.
 
 ### 3. Ghostty kill gate: minimal live terminal
 
