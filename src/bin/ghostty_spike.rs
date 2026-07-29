@@ -2,7 +2,7 @@ use gpui::*;
 use libghostty_vt::{
     RenderState, Terminal, TerminalOptions,
     render::{CellIterator, RowIterator},
-    style::RgbColor,
+    style::{RgbColor, Underline},
 };
 
 const COLUMNS: u16 = 40;
@@ -112,6 +112,10 @@ struct RenderCell {
     text: String,
     foreground: u32,
     background: u32,
+    bold: bool,
+    italic: bool,
+    underline: bool,
+    strikethrough: bool,
 }
 
 fn inspect_render_state(terminal: &Terminal<'_, '_>) -> anyhow::Result<RenderInspection> {
@@ -143,13 +147,18 @@ fn inspect_render_state(terminal: &Terminal<'_, '_>) -> anyhow::Result<RenderIns
 
             let mut foreground = foreground.unwrap_or(colors.foreground);
             let mut background = background.unwrap_or(colors.background);
-            if cell.style()?.inverse {
+            let style = cell.style()?;
+            if style.inverse {
                 std::mem::swap(&mut foreground, &mut background);
             }
             visible_row.push(RenderCell {
                 text,
                 foreground: packed_color(foreground),
                 background: packed_color(background),
+                bold: style.bold,
+                italic: style.italic,
+                underline: style.underline != Underline::None,
+                strikethrough: style.strikethrough,
             });
         }
 
@@ -215,15 +224,25 @@ impl Render for GhosttyGrid {
             for row in &inspection.cells {
                 let mut rendered_row = div().h(px(18.)).flex();
                 for cell in row {
-                    rendered_row = rendered_row.child(
-                        div()
-                            .w(px(8.))
-                            .h(px(18.))
-                            .flex_none()
-                            .bg(rgb(cell.background))
-                            .text_color(rgb(cell.foreground))
-                            .child(cell.text.clone()),
-                    );
+                    let mut rendered_cell = div()
+                        .w(px(8.))
+                        .h(px(18.))
+                        .flex_none()
+                        .bg(rgb(cell.background))
+                        .text_color(rgb(cell.foreground));
+                    if cell.bold {
+                        rendered_cell = rendered_cell.font_weight(FontWeight::BOLD);
+                    }
+                    if cell.italic {
+                        rendered_cell = rendered_cell.italic();
+                    }
+                    if cell.underline {
+                        rendered_cell = rendered_cell.underline();
+                    }
+                    if cell.strikethrough {
+                        rendered_cell = rendered_cell.line_through();
+                    }
+                    rendered_row = rendered_row.child(rendered_cell.child(cell.text.clone()));
                 }
                 grid = grid.child(rendered_row);
             }
