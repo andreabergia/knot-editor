@@ -31,12 +31,14 @@ Only these terminal implementations are in scope:
 2. `libghostty-vt` with Knot/gpui rendering. This tests Ghostty's emulator,
    Unicode behavior, input encoding, scrollback, and render-state API while
    retaining Knot's rendering pipeline.
-3. Full `libghostty` rendering as a bounded comparison. It remains viable only
-   if it composes cleanly with gpui and meets the font-parity requirement.
+3. Full `libghostty` rendering remains a possible follow-up only if
+   `libghostty-vt` is compelling and using Ghostty's renderer offers a concrete
+   advantage over gpui rendering.
 
-Ghostty's renderer is neither assumed nor excluded. Its Metal/OpenGL lifecycle,
-clipping, scaling, input/IME ownership, and future Windows path are part of the
-comparison.
+The working Alacritty implementation is the frozen baseline while Ghostty
+viability is tested. Do not deepen its rendering, settings, or interaction
+implementation until the Ghostty spike determines which comparison work is
+useful.
 
 ## Implementation boundary
 
@@ -80,7 +82,7 @@ multi-view presentation remains out of scope.
 
 ## Execution
 
-### 1. Alacritty baseline
+### 1. Freeze the Alacritty baseline
 
 - ✅ Add a `TerminalView` using `alacritty_terminal`.
 - ✅ Start one local interactive shell and route keyboard input to its PTY.
@@ -92,28 +94,59 @@ multi-view presentation remains out of scope.
   a full-screen application.
 - ✅ Run one alternate-screen full-screen TUI.
 - ✅ Flood the PTY with output while verifying that the UI remains responsive.
+- ✅ Preserve this implementation as the behavioral baseline without adding
+  further terminal detail during the Ghostty viability spike.
 
-### 2. Rendering-parity fixture
+### 2. Ghostty kill gate: build, replay, and render
 
-- ⬜ Centralize the Knot settings used by editor and terminal rendering: font
+- ⬜ Pin a Ghostty revision and build `libghostty-vt` through its C API.
+- ⬜ Record the Zig/toolchain, linking, packaging, unsafe-FFI, API-stability,
+  and incremental-build costs.
+- ⬜ Keep the first spike independent of live PTY and session management: feed
+  representative recorded terminal byte streams into Ghostty.
+- ⬜ Read Ghostty's render state and draw a minimal grid through gpui, including
+  styled cells, colors, cursor state, Unicode graphemes, and scrollback.
+- ⬜ Stop and reject Ghostty if the build or FFI burden is disproportionate, or
+  if its render-state API does not support Knot-owned gpui rendering cleanly.
+
+This gate answers whether Ghostty can fit Knot's dependency and rendering
+boundaries. It does not attempt to prove PTY lifecycle, input completeness,
+font parity, or production terminal behavior.
+
+### 3. Ghostty kill gate: minimal live terminal
+
+Proceed only if the build-and-render gate succeeds.
+
+- ⬜ Add the smallest disposable PTY/session path needed for a local interactive
+  shell; do not introduce a production backend abstraction.
+- ⬜ Route shell output into Ghostty and encode keyboard input through its API.
+- ⬜ Exercise resize, scrollback, cursor state, colors, restart, one
+  alternate-screen TUI, and sustained output.
+- ⬜ Confirm PTY work remains off the gpui foreground thread and foreground
+  updates remain bounded or coalesced.
+- ⬜ Compare compatibility, Unicode behavior, runtime ownership, integration
+  size, and maintenance burden against the frozen Alacritty baseline.
+- ⬜ Stop and reject Ghostty if reaching behavioral parity requires production
+  infrastructure or materially more integration machinery than Alacritty.
+
+### 4. Candidate-focused rendering parity
+
+Proceed after the Ghostty kill gates establish which candidates remain viable.
+
+- ⬜ Centralize the Knot settings required by the remaining candidates: font
   family, resolved face, size, weight, variable axes, font features, fallback,
   line height, and palette.
 - ⬜ Render a side-by-side editor/terminal fixture containing ASCII, ligatures,
   Nerd Font symbols, combining marks, emoji, CJK, bold, and italic text.
 - ⬜ Compare glyph appearance, fallback, baseline, advance, weight, and
   rasterization at multiple scale factors.
+- ⬜ Refine only the implementations needed to make the candidate comparison
+  fair.
 
-### 3. Ghostty VT spike
+### 5. Optional full Ghostty renderer comparison
 
-- ⬜ Integrate `libghostty-vt` through its C API and record the Zig/build and
-  unsafe-FFI cost.
-- ⬜ Exercise the same shell, alternate-screen TUI, resize, scrollback, cursor,
-  color, input, restart, and output-flood cases.
-- ⬜ Render its grid through the same gpui path and run the same parity fixture.
-- ⬜ Compare compatibility, Unicode behavior, runtime ownership, API stability,
-  integration size, and maintenance burden against the Alacritty baseline.
-
-### 4. Full Ghostty renderer comparison
+Run this only if the VT spike is compelling and evidence suggests Ghostty's
+renderer could materially improve correctness, performance, or maintenance.
 
 - ⬜ Verify that Ghostty can render into a gpui-managed view region without
   owning Knot's window or input dispatch.
@@ -123,7 +156,7 @@ multi-view presentation remains out of scope.
 - ⬜ Reject this path if it cannot provide identical font output or introduces
   a second window/rendering lifecycle that does not compose cleanly with gpui.
 
-### 5. Decision and cleanup
+### 6. Decision and cleanup
 
 - ⬜ Select Alacritty, Ghostty VT, or full Ghostty using the evidence above.
 - ✅ Treat the compact terminal frontend as disposable prototype code; its
