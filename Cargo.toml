@@ -62,3 +62,7 @@ path = "src/bin/anno_bench.rs"
 [[bin]]
 name = "v8-bench"
 path = "src/bin/v8_bench.rs"
+
+[[bin]]
+name = "ghostty-spike"
+path = "src/bin/ghostty_spike.rs"
