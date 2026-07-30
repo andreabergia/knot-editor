@@ -79,15 +79,20 @@ per-parent loading/error generations. It renders and handles input from cached
 foreground state only.
 
 `TerminalView` is a native gpui surface that owns one authoritative local PTY
-session, Ghostty emulator grid, and its focus state. A dedicated session thread
-owns Ghostty's non-thread-safe handles and performs parsing, input encoding,
-PTY writes, resize, and snapshot generation. A blocking reader feeds that
-thread through a bounded channel. The foreground sends commands through a
-channel and paints the latest immutable snapshot; a size-one wakeup channel
-coalesces sustained output. The view does not use or expose an editor model.
-Layout bounds determine the grid and PTY dimensions. Child exit is reported
-back to the view; closing or replacing a session shuts it down and reaps the
-child off the foreground thread.
+session, Alacritty emulator grid, and its focus state. Alacritty's event loop
+performs PTY reads, parsing, and writes on a background thread and sends
+coalesced wakeups to the gpui foreground. The foreground routes input and
+resize messages to that event loop and renders the grid through gpui. The view
+does not use or expose an editor model. Layout bounds determine the grid and
+PTY dimensions. Child exit is reported back to the view; closing or replacing
+a session shuts it down and reaps the child off the foreground thread.
+
+The production boundary separates a stable `TerminalSession`, which owns the
+PTY, emulator, and process lifecycle, from a disposable `TerminalView`, which
+owns presentation, focus, and layout. A session survives view reconstruction
+or relocation across tabs and windows. Explicit terminal closure terminates
+the session, and reopening creates a new one; detached persistence and
+simultaneous presentations remain out of scope.
 
 ```text
 gpui Shell / registries
@@ -194,6 +199,6 @@ or input.
 - Production undo history, edit grouping, and view-state restoration.
 - Focus-target command routing and complete keymaps.
 - Filesystem and capability-provider aggregation.
-- Native terminal implementation.
+- Production terminal interaction and rendering.
 - Production extension scheduling, quotas, and slow-consumer policy.
 - Public platform accessibility integration.

@@ -30,7 +30,8 @@ Evidence:
 
 ## 9. Native terminal view experiment
 
-Status: next.
+Status: complete. Alacritty was selected with Knot/gpui rendering; Ghostty VT
+was viable but did not justify its additional integration and build burden.
 
 Execution plan: [step9-terminal-plan.md](step9-terminal-plan.md).
 
@@ -50,8 +51,10 @@ headless lifetime, persistence, exhaustive compatibility, mouse reporting,
 hyperlinks, shell integration, remote PTYs, and cross-platform polish are out
 of scope.
 
-Decision checkpoint: do view-owned PTY lifecycle, emulator state, and native
-rendering fit Knot's view and async architecture?
+Decision: view-owned PTY lifecycle, emulator state, and native rendering fit
+Knot's view and async architecture. Production will separate a stable session
+from its disposable presentation so a running shell can move across tabs and
+windows without adding persistence after explicit closure.
 
 ## 10. Text as a primary surface
 

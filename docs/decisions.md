@@ -118,7 +118,19 @@ Evidence: [V8 runtime evidence](step7-v8-runtime.md).
 ## Terminal
 
 - A terminal is a native, single-view surface, not a `TextBuffer` subtype.
-- `TerminalView` initially owns its PTY and emulator session. Independent
-  session ownership should be extracted only when persistence without a view
-  or another concrete requirement appears.
+- Knot uses `alacritty_terminal` for terminal emulation and renders its grid
+  through gpui. Ghostty VT proved viable, but showed no concrete behavioral
+  advantage sufficient to offset its separate PTY integration, pre-1.0 FFI,
+  Zig packaging, larger integration, and poor debug parsing performance.
+- The disposable prototype lets `TerminalView` own its PTY and emulator.
+  Production separates a stable `TerminalSession` from disposable
+  presentation so a running shell survives moving or reconstructing its view
+  across tabs and windows.
+- Stable session identity does not imply persistence after closure. Explicitly
+  closing a terminal terminates its session; reopening creates a new session.
+  Detached persistence and simultaneous presentations are deferred.
+- Knot will use Zed's GPL-compatible terminal implementation as an attributed
+  source for the production Alacritty adapter, model, key mappings, gpui
+  renderer, resize flow, and event handling.
 
+Evidence: [terminal evaluation](step9-terminal-plan.md).
