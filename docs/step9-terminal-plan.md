@@ -166,7 +166,8 @@ Proceed only if the build-and-render gate succeeds.
 - ✅ Route shell output into Ghostty and encode keyboard input through its API.
 - ✅ Exercise resize with a live full-screen application.
 - ✅ Exercise cursor state, colors, and one alternate-screen TUI using Neovim.
-- ⬜ Exercise scrollback, restart, and sustained output.
+- ✅ Exercise scrollback with trackpad input.
+- ⬜ Exercise restart and sustained output with prompt input response.
 - ✅ Confirm PTY work remains off the gpui foreground thread and foreground
   updates remain bounded or coalesced.
 - ⬜ Compare compatibility, Unicode behavior, runtime ownership, integration
