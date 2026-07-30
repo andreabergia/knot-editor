@@ -181,9 +181,11 @@ event loop. Ghostty's non-thread-safe terminal, render-state, and key-encoder
 handles stay on one session thread, which publishes the latest Knot-owned
 snapshot. PTY reads are backpressured by a bounded 16-chunk channel and
 foreground wakeups by a size-one channel. Each session-loop iteration parses
-at most four output chunks before returning to command handling, so an
+at most one 8 KiB output chunk before returning to command handling, so an
 always-readable producer cannot starve input. Full immutable snapshots are
-published at most once per 16 ms rather than at the producer's rate.
+published at most once per 16 ms rather than at the producer's rate. gpui's
+positive scrollback delta is inverted at the Ghostty boundary, whose API uses
+negative deltas for scrolling up.
 
 ### 4. Candidate-focused rendering parity
 

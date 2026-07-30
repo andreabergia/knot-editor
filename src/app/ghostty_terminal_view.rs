@@ -24,7 +24,7 @@ const CELL_HEIGHT: f32 = 16.;
 const FONT_SIZE: f32 = 13.;
 const BACKGROUND: u32 = 0x181818;
 const FOREGROUND: u32 = 0xd4d4d4;
-const MAX_OUTPUT_CHUNKS_PER_TICK: usize = 4;
+const PTY_READ_CHUNK_SIZE: usize = 8 * 1024;
 const SNAPSHOT_INTERVAL: Duration = Duration::from_millis(16);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -345,12 +345,6 @@ fn run_session(
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
             }
             if changed {
-                for _ in 1..MAX_OUTPUT_CHUNKS_PER_TICK {
-                    let Ok(bytes) = output_rx.try_recv() else {
-                        break;
-                    };
-                    terminal.vt_write(&bytes);
-                }
                 snapshot_dirty = true;
             }
             let replies = replies.take();
@@ -388,7 +382,7 @@ fn spawn_reader(mut reader: Box<dyn Read + Send>, output: SyncSender<Vec<u8>>) -
         .name("Ghostty PTY reader".into())
         .spawn(move || {
             loop {
-                let mut bytes = vec![0; 64 * 1024];
+                let mut bytes = vec![0; PTY_READ_CHUNK_SIZE];
                 match reader.read(&mut bytes) {
                     Ok(0) => break,
                     Ok(length) => {
@@ -604,7 +598,7 @@ impl TerminalView {
         let rows = (self.scroll_delta_y / 4.).trunc() as isize;
         if rows != 0 {
             self.scroll_delta_y -= rows as f32 * 4.;
-            session.send(SessionCommand::Scroll(rows));
+            session.send(SessionCommand::Scroll(-rows));
             cx.notify();
         }
     }
