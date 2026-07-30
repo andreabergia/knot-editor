@@ -24,7 +24,7 @@ const CELL_HEIGHT: f32 = 16.;
 const FONT_SIZE: f32 = 13.;
 const BACKGROUND: u32 = 0x181818;
 const FOREGROUND: u32 = 0xd4d4d4;
-const PTY_READ_CHUNK_SIZE: usize = 8 * 1024;
+const PTY_READ_CHUNK_SIZE: usize = 256;
 const SNAPSHOT_INTERVAL: Duration = Duration::from_millis(16);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
