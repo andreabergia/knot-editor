@@ -6,7 +6,7 @@ use std::{
         mpsc::{self, Receiver, Sender, SyncSender},
     },
     thread::JoinHandle,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use gpui::*;
@@ -25,6 +25,7 @@ const FONT_SIZE: f32 = 13.;
 const BACKGROUND: u32 = 0x181818;
 const FOREGROUND: u32 = 0xd4d4d4;
 const MAX_OUTPUT_CHUNKS_PER_TICK: usize = 4;
+const SNAPSHOT_INTERVAL: Duration = Duration::from_millis(16);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct TerminalSize {
@@ -317,6 +318,8 @@ fn run_session(
         let mut encoder = KeyEncoder::new()?;
         let mut render_state = RenderState::new()?;
         shared.publish(TerminalSnapshot::capture(&terminal, &mut render_state)?);
+        let mut last_snapshot = Instant::now();
+        let mut snapshot_dirty = false;
         let mut running = true;
         while running {
             while let Ok(command) = commands.try_recv() {
@@ -326,6 +329,8 @@ fn run_session(
                     break;
                 }
                 shared.publish(TerminalSnapshot::capture(&terminal, &mut render_state)?);
+                last_snapshot = Instant::now();
+                snapshot_dirty = false;
             }
             if !running {
                 break;
@@ -346,19 +351,25 @@ fn run_session(
                     };
                     terminal.vt_write(&bytes);
                 }
+                snapshot_dirty = true;
             }
             let replies = replies.take();
             if !replies.is_empty() {
                 writer.write_all(&replies)?;
                 writer.flush()?;
             }
-            if changed {
+            if snapshot_dirty && last_snapshot.elapsed() >= SNAPSHOT_INTERVAL {
                 shared.publish(TerminalSnapshot::capture(&terminal, &mut render_state)?);
+                last_snapshot = Instant::now();
+                snapshot_dirty = false;
             }
             if let Some(status) = child.try_wait()? {
                 shared.status(format!("exited: {status}"));
                 running = false;
             }
+        }
+        if snapshot_dirty {
+            shared.publish(TerminalSnapshot::capture(&terminal, &mut render_state)?);
         }
         Ok(())
     })();

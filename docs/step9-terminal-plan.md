@@ -181,8 +181,9 @@ event loop. Ghostty's non-thread-safe terminal, render-state, and key-encoder
 handles stay on one session thread, which publishes the latest Knot-owned
 snapshot. PTY reads are backpressured by a bounded 16-chunk channel and
 foreground wakeups by a size-one channel. Each session-loop iteration parses
-at most four output chunks before publishing and returning to command handling,
-so an always-readable producer cannot starve input or snapshots.
+at most four output chunks before returning to command handling, so an
+always-readable producer cannot starve input. Full immutable snapshots are
+published at most once per 16 ms rather than at the producer's rate.
 
 ### 4. Candidate-focused rendering parity
 
