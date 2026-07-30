@@ -35,10 +35,9 @@ Only these terminal implementations are in scope:
    `libghostty-vt` is compelling and using Ghostty's renderer offers a concrete
    advantage over gpui rendering.
 
-The working Alacritty implementation is the frozen baseline while Ghostty
-viability is tested. Do not deepen its rendering, settings, or interaction
-implementation until the Ghostty spike determines which comparison work is
-useful.
+Alacritty is the selected backend. The Ghostty spikes remain recorded below as
+decision evidence, but their code and dependencies are removed rather than
+retained behind a permanent backend abstraction.
 
 ## Implementation boundary
 
@@ -75,10 +74,12 @@ stable TerminalSession entity
   - gpui rendering
 ```
 
-The production session is the authoritative terminal identity and may outlive
-view reconstruction. The view presents one session without owning its process
-or emulator. Preserve one presentation per session initially; independent
-multi-view presentation remains out of scope.
+The production session is the authoritative terminal identity and survives
+view reconstruction or relocation across tabs and windows. The view presents
+one session without owning its process or emulator. Explicitly closing a
+terminal terminates its session; reopening creates a new session. Preserve one
+presentation per session initially; independent simultaneous presentations and
+detached persistence remain out of scope.
 
 ## Execution
 
@@ -167,13 +168,16 @@ Proceed only if the build-and-render gate succeeds.
 - ✅ Exercise resize with a live full-screen application.
 - ✅ Exercise cursor state, colors, and one alternate-screen TUI using Neovim.
 - ✅ Exercise scrollback with trackpad input.
-- ⬜ Exercise restart and sustained output with prompt input response.
+- ⏭️ Stop before separately exercising Ghostty restart and another sustained
+  output run; Alacritty had already passed both behaviors, while Ghostty's
+  debug parsing cost and additional scheduling machinery counted against it.
 - ✅ Confirm PTY work remains off the gpui foreground thread and foreground
   updates remain bounded or coalesced.
-- ⬜ Compare compatibility, Unicode behavior, runtime ownership, integration
+- ✅ Compare compatibility, Unicode behavior, runtime ownership, integration
   size, and maintenance burden against the frozen Alacritty baseline.
-- ⬜ Stop and reject Ghostty if reaching behavioral parity requires production
-  infrastructure or materially more integration machinery than Alacritty.
+- ✅ Reject Ghostty because the tested behavior showed no concrete advantage
+  over Alacritty while requiring a second PTY stack, a dedicated scheduling
+  path, pre-1.0 FFI, Zig packaging, and materially worse debug parsing.
 
 The live spike reuses the baseline's gpui focus, layout, sizing, lifecycle UI,
 paint strategy, and coalesced foreground notification pattern. PTY creation is
@@ -192,54 +196,58 @@ In the native debug build, parsing a synthetic scrolling stream took about
 7 ms for 256 bytes, 92 ms for 1 KiB, 575 ms for 4 KiB, and 1.2 seconds for
 8 KiB; snapshot inspection remained about 0.5 ms. The deliberately small read
 quantum keeps input latency acceptable during prototype iteration, but this
-debug-mode behavior counts against Ghostty's development ergonomics and must be
-compared with release performance before selection.
+debug-mode behavior counted against Ghostty's development ergonomics.
 
 ### 4. Candidate-focused rendering parity
 
-Proceed after the Ghostty kill gates establish which candidates remain viable.
+Alacritty is the only remaining candidate. Identical editor/terminal fonts
+remain required, but are production rendering work rather than a backend
+selection gate because both candidates rendered through Knot and gpui.
 
-- ⬜ Centralize the Knot settings required by the remaining candidates: font
+- ⏭️ Centralize the Knot settings required by the remaining candidate: font
   family, resolved face, size, weight, variable axes, font features, fallback,
   line height, and palette.
-- ⬜ Render a side-by-side editor/terminal fixture containing ASCII, ligatures,
+- ⏭️ Render a side-by-side editor/terminal fixture containing ASCII, ligatures,
   Nerd Font symbols, combining marks, emoji, CJK, bold, and italic text.
-- ⬜ Compare glyph appearance, fallback, baseline, advance, weight, and
+- ⏭️ Compare glyph appearance, fallback, baseline, advance, weight, and
   rasterization at multiple scale factors.
-- ⬜ Refine only the implementations needed to make the candidate comparison
-  fair.
+- ⏭️ Refine the selected implementation as part of production terminal
+  rendering rather than extending the disposable prototype.
 
 ### 5. Optional full Ghostty renderer comparison
 
 Run this only if the VT spike is compelling and evidence suggests Ghostty's
 renderer could materially improve correctness, performance, or maintenance.
 
-- ⬜ Verify that Ghostty can render into a gpui-managed view region without
+- ⏭️ Do not pursue full Ghostty rendering: the VT spike showed no concrete
+  correctness, performance, or maintenance advantage that would justify a
+  second renderer and window lifecycle.
+- ⏭️ Verify that Ghostty can render into a gpui-managed view region without
   owning Knot's window or input dispatch.
-- ⬜ Test clipping, resize, scale-factor changes, occlusion, focus, and IME
+- ⏭️ Test clipping, resize, scale-factor changes, occlusion, focus, and IME
   interaction.
-- ⬜ Drive all presentation settings from Knot and run the same parity fixture.
-- ⬜ Reject this path if it cannot provide identical font output or introduces
-  a second window/rendering lifecycle that does not compose cleanly with gpui.
+- ⏭️ Drive all presentation settings from Knot and run the same parity fixture.
+- ✅ Reject this path because no evidence justified accepting a second
+  window/rendering lifecycle.
 
 ### 6. Decision and cleanup
 
-- ⬜ Select Alacritty, Ghostty VT, or full Ghostty using the evidence above.
+- ✅ Select `alacritty_terminal` with Knot/gpui rendering.
 - ✅ Treat the compact terminal frontend as disposable prototype code; its
   current scope and organization are sufficient for candidate validation.
-- ⬜ For the production implementation, use Zed's GPL-compatible terminal code
+- ✅ For the production implementation, use Zed's GPL-compatible terminal code
   as an attributed source for the Alacritty adapter, terminal model, mode-aware
   [key mappings](https://github.com/zed-industries/zed/tree/main/crates/terminal/src/mappings),
   gpui renderer, resize flow, and event handling rather than independently
   rebuilding those mature paths. Replace the prototype boundary with the stable
   session/disposable view ownership model above rather than incrementally
   growing `TerminalView`.
-- ⬜ Remove the rejected candidate code rather than retain a permanent
+- ✅ Remove the rejected candidate code rather than retain a permanent
   multi-backend abstraction.
-- ⬜ Record the validated choice and rationale in `decisions.md`.
-- ⬜ Update `architecture.md` with the resulting ownership, dependency
+- ✅ Record the validated choice and rationale in `decisions.md`.
+- ✅ Update `architecture.md` with the resulting ownership, dependency
   direction, and PTY-to-render runtime flow.
-- ⬜ Mark roadmap step 9 complete and summarize the result.
+- ✅ Mark roadmap step 9 complete and summarize the result.
 
 ## Out of scope
 
