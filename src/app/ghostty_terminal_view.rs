@@ -24,6 +24,7 @@ const CELL_HEIGHT: f32 = 16.;
 const FONT_SIZE: f32 = 13.;
 const BACKGROUND: u32 = 0x181818;
 const FOREGROUND: u32 = 0xd4d4d4;
+const MAX_OUTPUT_CHUNKS_PER_TICK: usize = 4;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct TerminalSize {
@@ -338,9 +339,13 @@ fn run_session(
                 Err(mpsc::RecvTimeoutError::Disconnected) => running = false,
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
             }
-            while let Ok(bytes) = output_rx.try_recv() {
-                terminal.vt_write(&bytes);
-                changed = true;
+            if changed {
+                for _ in 1..MAX_OUTPUT_CHUNKS_PER_TICK {
+                    let Ok(bytes) = output_rx.try_recv() else {
+                        break;
+                    };
+                    terminal.vt_write(&bytes);
+                }
             }
             let replies = replies.take();
             if !replies.is_empty() {
