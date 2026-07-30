@@ -161,17 +161,25 @@ enough to proceed to the minimal live terminal gate.
 
 Proceed only if the build-and-render gate succeeds.
 
-- ⬜ Add the smallest disposable PTY/session path needed for a local interactive
+- ✅ Add the smallest disposable PTY/session path needed for a local interactive
   shell; do not introduce a production backend abstraction.
-- ⬜ Route shell output into Ghostty and encode keyboard input through its API.
+- ✅ Route shell output into Ghostty and encode keyboard input through its API.
 - ⬜ Exercise resize, scrollback, cursor state, colors, restart, one
   alternate-screen TUI, and sustained output.
-- ⬜ Confirm PTY work remains off the gpui foreground thread and foreground
+- ✅ Confirm PTY work remains off the gpui foreground thread and foreground
   updates remain bounded or coalesced.
 - ⬜ Compare compatibility, Unicode behavior, runtime ownership, integration
   size, and maintenance burden against the frozen Alacritty baseline.
 - ⬜ Stop and reject Ghostty if reaching behavioral parity requires production
   infrastructure or materially more integration machinery than Alacritty.
+
+The live spike reuses the baseline's gpui focus, layout, sizing, lifecycle UI,
+paint strategy, and coalesced foreground notification pattern. PTY creation is
+isolated behind `portable-pty` rather than reusing Alacritty's emulator-coupled
+event loop. Ghostty's non-thread-safe terminal, render-state, and key-encoder
+handles stay on one session thread, which publishes the latest Knot-owned
+snapshot. PTY reads are backpressured by a bounded 16-chunk channel and
+foreground wakeups by a size-one channel.
 
 ### 4. Candidate-focused rendering parity
 

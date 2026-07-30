@@ -20,18 +20,18 @@ use crate::host::{
 };
 
 mod editor;
+mod ghostty_terminal_view;
 pub mod model;
-mod terminal_view;
 mod tree_view;
 
 use editor::{
     EditorContributionAction, EditorRenderingOptions, EditorView, seed_fixture_contributions,
 };
+use ghostty_terminal_view::TerminalView;
 use model::{
     BufferAccessError, BufferModel, BufferRegistry, BufferSubscriptionRegistry, CommandRegistry,
     ContributionError, ContributionSource,
 };
-use terminal_view::TerminalView;
 use tree_view::{TreeProviderIdentity, TreeView, TreeViewEvent, TreeViewRegistrationError};
 
 actions!(knot, [Quit]);
