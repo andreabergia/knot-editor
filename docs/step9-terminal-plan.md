@@ -164,8 +164,9 @@ Proceed only if the build-and-render gate succeeds.
 - ✅ Add the smallest disposable PTY/session path needed for a local interactive
   shell; do not introduce a production backend abstraction.
 - ✅ Route shell output into Ghostty and encode keyboard input through its API.
-- ⬜ Exercise resize, scrollback, cursor state, colors, restart, one
-  alternate-screen TUI, and sustained output.
+- ✅ Exercise resize with a live full-screen application.
+- ✅ Exercise cursor state, colors, and one alternate-screen TUI using Neovim.
+- ⬜ Exercise scrollback, restart, and sustained output.
 - ✅ Confirm PTY work remains off the gpui foreground thread and foreground
   updates remain bounded or coalesced.
 - ⬜ Compare compatibility, Unicode behavior, runtime ownership, integration
