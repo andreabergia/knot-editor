@@ -41,7 +41,6 @@ impl OpenBufferEntry {
         &self.model
     }
 
-    #[cfg(test)]
     pub(crate) fn search_results(&self) -> Option<&SearchResultsController> {
         self.search_results.as_ref()
     }

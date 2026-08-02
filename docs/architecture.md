@@ -120,7 +120,10 @@ Native fixture search captures an immutable source snapshot and revision. Its
 controller derives semantic matches, formats them into a read-only
 `BufferModel`, and attaches built-in actions to the emitted result ranges. The
 normal open-buffer and editor paths render the generated model; search identity
-does not enter `TextBuffer` or `BufferModel`.
+does not enter `TextBuffer` or `BufferModel`. Activating a result carries its
+emitted byte range back to the selected controller, which resolves the recorded
+source target only while the source revision still matches. The primary source
+editor then selects, reveals, and focuses that range.
 
 ## Extension host
 

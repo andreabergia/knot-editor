@@ -75,13 +75,16 @@ struct RenderedContributionAction {
     end: usize,
     command: String,
     source: ContributionSource,
+    range: ByteRange,
     gutter: bool,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub(crate) struct EditorContributionAction {
     pub command: String,
     pub source: ContributionSource,
+    pub range: ByteRange,
+    pub window: Option<AnyWindowHandle>,
 }
 
 #[derive(Clone, Copy)]
@@ -155,7 +158,6 @@ pub struct EditorView {
 }
 
 impl EditorView {
-    #[cfg(test)]
     pub(crate) fn model(&self) -> &Entity<BufferModel> {
         &self.model
     }
@@ -163,6 +165,37 @@ impl EditorView {
     #[cfg(test)]
     pub(crate) fn responsiveness_state(&self) -> (usize, f32, u64) {
         (self.cursor_line, self.scroll, self.paint_count)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn interaction_bounds(&self) -> Bounds<Pixels> {
+        self.bounds
+    }
+
+    #[cfg(test)]
+    pub(crate) fn selected_byte_range(&self) -> Option<Range<usize>> {
+        self.selection_range().map(|(start, end)| {
+            self.to_flat_byte(start.0, start.1)..self.to_flat_byte(end.0, end.1)
+        })
+    }
+
+    /// Select a source byte range, reveal its caret, and transfer focus here.
+    pub(crate) fn select_reveal_and_focus(
+        &mut self,
+        range: ByteRange,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let anchor = self.from_flat_byte(range.start_byte_offset);
+        let caret = self.from_flat_byte(range.end_byte_offset);
+        self.anchor_line = anchor.0;
+        self.anchor_col = anchor.1;
+        self.cursor_line = caret.0;
+        self.cursor_col = caret.1;
+        self.preferred_col = self.cursor_col;
+        self.has_selection = range.start_byte_offset != range.end_byte_offset;
+        self.focus.focus(window);
+        self.finish_position_change(cx);
     }
 
     /// Build an editor using the default projection for arbitrary buffer text.
@@ -722,6 +755,8 @@ impl EditorView {
             cx.emit(EditorContributionAction {
                 command: action.command.clone(),
                 source: action.source,
+                range: action.range,
+                window: Some(window.window_handle()),
             });
             cx.stop_propagation();
             return;
@@ -1088,6 +1123,7 @@ fn project_contributions(
                     end: segment_end - line_start,
                     command: command.clone(),
                     source: contribution.source,
+                    range: contribution.range,
                     gutter: contribution.gutter.is_some() && line == first_line,
                 });
             }
@@ -1999,6 +2035,13 @@ mod tests {
         );
         assert_eq!(gutters.len(), 1);
         assert_eq!(gutters[0].line, 0);
+        assert!(actions.iter().all(|action| {
+            action.range
+                == ByteRange {
+                    start_byte_offset: 1,
+                    end_byte_offset: 9,
+                }
+        }));
         assert_eq!(
             actions
                 .iter()

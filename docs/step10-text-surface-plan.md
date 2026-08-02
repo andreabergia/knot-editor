@@ -136,15 +136,15 @@ without changing search, target identity, or navigation.
 
 ### 5. Navigate without parsing displayed text
 
-- ⬜ Include the activated contribution's result-buffer range in the editor
+- ✅ Include the activated contribution's result-buffer range in the editor
   action event; do not introduce general command arguments ahead of step 11.
-- ⬜ Resolve that range through the selected result controller to obtain the
+- ✅ Resolve that range through the selected result controller to obtain the
   recorded source target.
-- ⬜ Reject activation if the source revision no longer matches the search
+- ✅ Reject activation if the source revision no longer matches the search
   snapshot instead of navigating to a potentially incorrect byte range.
-- ⬜ Add a narrow editor operation that selects, reveals, and focuses a source
+- ✅ Add a narrow editor operation that selects, reveals, and focuses a source
   byte range.
-- ⬜ Exercise activation by clicking the command-bearing result region. Keyboard
+- ✅ Exercise activation by clicking the command-bearing result region. Keyboard
   command routing remains step 11 work.
 
 ### 6. Validate the text-surface checkpoint

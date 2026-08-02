@@ -25,6 +25,19 @@ pub(crate) struct EmittedSearchResult {
     pub match_index: usize,
 }
 
+#[derive(Clone)]
+pub(crate) struct SearchResultTarget {
+    pub source: OpenBufferId,
+    pub source_model: Entity<BufferModel>,
+    pub source_range: ByteRange,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SearchResultActivationError {
+    UnknownResult,
+    StaleSource,
+}
+
 #[derive(Debug, Eq, PartialEq)]
 struct FormattedSearchResults {
     text: String,
@@ -92,6 +105,27 @@ impl SearchResultsController {
 
     pub(crate) fn model(&self) -> &Entity<BufferModel> {
         &self.model
+    }
+
+    pub(crate) fn resolve_target(
+        &self,
+        output_range: ByteRange,
+        cx: &App,
+    ) -> Result<SearchResultTarget, SearchResultActivationError> {
+        let emitted = self
+            .emitted_results
+            .iter()
+            .find(|result| result.output_range == output_range)
+            .ok_or(SearchResultActivationError::UnknownResult)?;
+        if self.source_model.read(cx).revision() != self.source_revision {
+            return Err(SearchResultActivationError::StaleSource);
+        }
+        let result_match = &self.matches[emitted.match_index];
+        Ok(SearchResultTarget {
+            source: result_match.source,
+            source_model: self.source_model.clone(),
+            source_range: result_match.source_range,
+        })
     }
 
     #[cfg(test)]
@@ -213,5 +247,37 @@ mod tests {
                 Some(ACTIVATE_SEARCH_RESULT_COMMAND)
             );
         }
+    }
+
+    #[gpui::test]
+    fn target_resolution_uses_output_ranges_and_rejects_stale_sources(cx: &mut TestAppContext) {
+        let source_id = OpenBufferId::from_value(7);
+        let source = cx.new(|_| BufferModel::from_text("Node tail"));
+        let controller = cx.update(|cx| {
+            SearchResultsController::search("Node", source_id, "fixture.rs", source.clone(), cx)
+        });
+        let output_range = controller.emitted_results()[0].output_range;
+
+        let target = cx.read(|cx| controller.resolve_target(output_range, cx).unwrap());
+        assert_eq!(target.source, source_id);
+        assert_eq!(target.source_range.start_byte_offset, 0);
+        assert!(matches!(
+            cx.read(|cx| controller.resolve_target(
+                ByteRange {
+                    start_byte_offset: output_range.start_byte_offset + 1,
+                    ..output_range
+                },
+                cx,
+            )),
+            Err(SearchResultActivationError::UnknownResult)
+        ));
+
+        source.update(cx, |model, _| {
+            model.replace(0..0, "changed ").unwrap();
+        });
+        assert!(matches!(
+            cx.read(|cx| controller.resolve_target(output_range, cx)),
+            Err(SearchResultActivationError::StaleSource)
+        ));
     }
 }

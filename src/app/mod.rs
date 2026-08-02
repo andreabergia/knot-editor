@@ -13,9 +13,9 @@ use crate::host::{
     ExtensionRequestInbox, ExtensionRuntimeControl, ExtensionRuntimeParts, ExtensionRuntimeThread,
     V8Host,
     protocol::{
-        BufferChange, CommandInvocation, CommandInvocationId, ExtensionId, HostOperation,
-        HostRequest, HostRequestError, HostResponse, HostResponseValue, TreeChildrenResponse,
-        TreeProviderError, TreeProviderRegistrationId,
+        BufferChange, ByteRange, CommandInvocation, CommandInvocationId, ExtensionId,
+        HostOperation, HostRequest, HostRequestError, HostResponse, HostResponseValue,
+        TreeChildrenResponse, TreeProviderError, TreeProviderRegistrationId,
     },
 };
 
@@ -34,7 +34,7 @@ use model::{
     ContributionError, ContributionSource,
 };
 use open_buffers::{OpenBufferCollection, OpenBufferId};
-use search_results::SearchResultsController;
+use search_results::{ACTIVATE_SEARCH_RESULT_COMMAND, SearchResultsController};
 use terminal_view::TerminalView;
 use tree_view::{TreeProviderIdentity, TreeView, TreeViewEvent, TreeViewRegistrationError};
 
@@ -762,6 +762,12 @@ impl Shell {
         action: &EditorContributionAction,
         cx: &mut Context<Self>,
     ) {
+        if action.source == ContributionSource::BuiltIn
+            && action.command == ACTIVATE_SEARCH_RESULT_COMMAND
+        {
+            self.activate_search_result(action.range, action.window, cx);
+            return;
+        }
         let ContributionSource::Extension {
             extension,
             lifecycle,
@@ -787,6 +793,40 @@ impl Shell {
             return;
         }
         self.invoke_command_target(target, cx);
+    }
+
+    fn activate_search_result(
+        &mut self,
+        result_range: ByteRange,
+        window_handle: Option<AnyWindowHandle>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(controller) = self
+            .open_buffers
+            .selected()
+            .and_then(|entry| entry.search_results())
+        else {
+            return;
+        };
+        let Ok(target) = controller.resolve_target(result_range, cx) else {
+            return;
+        };
+        if target.source != self.source_buffer
+            || target.source_model != *self.editor.read(cx).model()
+        {
+            return;
+        }
+        let Some(window_handle) = window_handle else {
+            return;
+        };
+        let editor = self.editor.clone();
+        cx.defer(move |cx| {
+            let _ = cx.update_window(window_handle, move |_, window, cx| {
+                editor.update(cx, |editor, cx| {
+                    editor.select_reveal_and_focus(target.source_range, window, cx);
+                });
+            });
+        });
     }
 
     fn invoke_command_target(&mut self, target: model::CommandTarget, cx: &mut Context<Self>) {
@@ -1290,7 +1330,7 @@ pub fn run() {
 mod tests {
     use std::time::Duration;
 
-    use gpui::{AppContext, Entity, Focusable, TestAppContext};
+    use gpui::{AppContext, Entity, Focusable, Modifiers, MouseButton, TestAppContext, point, px};
 
     use super::{
         BufferModel, ContributionSource, Shell, editor::EditorContributionAction,
@@ -1471,6 +1511,43 @@ mod tests {
     }
 
     #[gpui::test]
+    fn clicking_a_search_result_selects_and_focuses_its_source(cx: &mut TestAppContext) {
+        let runtime = V8Host::new()
+            .spawn_extension(ExtensionId::new(82))
+            .into_parts();
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(runtime, cx));
+        shell.update(cx, |shell, cx| shell.search_fixture("Node", cx));
+        cx.refresh().unwrap();
+
+        let (click, expected_range) = cx.read(|cx| {
+            let shell = shell.read(cx);
+            let bounds = shell.secondary_editor.read(cx).interaction_bounds();
+            let controller = shell
+                .open_buffers
+                .selected()
+                .unwrap()
+                .search_results()
+                .unwrap();
+            (
+                point(bounds.origin.x + px(20.), bounds.origin.y + px(10.)),
+                controller.matches()[0].source_range,
+            )
+        });
+        cx.simulate_mouse_down(click, MouseButton::Left, Modifiers::default());
+        cx.run_until_parked();
+
+        cx.update(|window, cx| {
+            let editor = shell.read(cx).editor.clone();
+            let editor = editor.read(cx);
+            assert_eq!(
+                editor.selected_byte_range(),
+                Some(expected_range.start_byte_offset..expected_range.end_byte_offset)
+            );
+            assert!(editor.focus_handle(cx).is_focused(window));
+        });
+    }
+
+    #[gpui::test]
     async fn extension_buffer_proxy_reads_and_edits_the_displayed_model(cx: &mut TestAppContext) {
         let runtime = V8Host::new()
             .spawn_extension(ExtensionId::new(9))
@@ -1607,6 +1684,11 @@ mod tests {
                         extension: identity.0,
                         lifecycle: identity.1,
                     },
+                    range: ByteRange {
+                        start_byte_offset: 0,
+                        end_byte_offset: 0,
+                    },
+                    window: None,
                 },
                 cx,
             );
@@ -1636,6 +1718,11 @@ mod tests {
                         extension: identity.0,
                         lifecycle: identity.1,
                     },
+                    range: ByteRange {
+                        start_byte_offset: 0,
+                        end_byte_offset: 0,
+                    },
+                    window: None,
                 },
                 cx,
             );
