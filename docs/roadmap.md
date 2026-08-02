@@ -58,10 +58,13 @@ windows without adding persistence after explicit closure.
 
 ## 10. Text as a primary surface
 
-- Implement search results as an inspectable, optionally read-only
-  `TextBuffer`.
+Execution plan: [step10-text-surface-plan.md](step10-text-surface-plan.md).
+
+- Implement search results as an inspectable, read-only `BufferModel` backed
+  by a normal `TextBuffer`.
 - Use the normal editor-view pipeline and attach commands to result regions.
-- Refresh its contents once.
+- Retain multiple result buffers and revisit them through the same buffer list
+  as the source buffer.
 - Try a second generated surface only if search results do not expose useful
   limits.
 
