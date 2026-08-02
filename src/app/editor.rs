@@ -165,6 +165,31 @@ impl EditorView {
         (self.cursor_line, self.scroll, self.paint_count)
     }
 
+    /// Build an editor using the default projection for arbitrary buffer text.
+    pub fn new(model: Entity<BufferModel>, cx: &mut Context<Self>) -> Self {
+        let (lines, segs) = default_projection(&model.read(cx).text());
+        Self::from_projection(
+            model,
+            lines,
+            segs,
+            0,
+            EditorRenderingOptions::default(),
+            cx,
+        )
+    }
+
+    pub(crate) fn new_with_options(
+        model: Entity<BufferModel>,
+        element_id: usize,
+        rendering: EditorRenderingOptions,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut editor = Self::new(model, cx);
+        editor.element_id = element_id;
+        editor.rendering = rendering;
+        editor
+    }
+
     /// Build an editor preloaded with a styled fixture.
     pub fn from_fixture(
         fixture: &crate::view::fixture::Fixture,
@@ -249,6 +274,17 @@ impl EditorView {
             segs.push(row);
         }
 
+        Self::from_projection(model, lines, segs, element_id, rendering, cx)
+    }
+
+    fn from_projection(
+        model: Entity<BufferModel>,
+        lines: Vec<String>,
+        segs: Vec<Vec<Seg>>,
+        element_id: usize,
+        rendering: EditorRenderingOptions,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let (decorations, gutter_markers, contribution_actions) =
             project_contributions(&lines, model.read(cx).resolved_contributions());
 
@@ -1929,6 +1965,19 @@ mod tests {
         assert_eq!(lines, ["three", "two"]);
         assert_eq!(segs[0][0].end, "three".len());
         assert_eq!(segs[1][0].end, "two".len());
+    }
+
+    #[gpui::test]
+    fn constructs_from_arbitrary_buffer_text(cx: &mut TestAppContext) {
+        let model = cx.new(|_| BufferModel::from_text("generated\ntext"));
+        let editor = cx.new(|cx| EditorView::new(model.clone(), cx));
+
+        cx.read(|cx| {
+            let editor = editor.read(cx);
+            assert_eq!(editor.model(), &model);
+            assert_eq!(editor.lines, ["generated", "text"]);
+            assert!(editor.rendering.show_gutter_markers);
+        });
     }
 
     #[test]

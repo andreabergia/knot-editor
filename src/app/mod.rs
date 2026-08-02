@@ -879,12 +879,43 @@ impl Shell {
             .hover(|s| s.bg(rgb(0x222222)))
             .on_click(move |_ev, _window, cx| {
                 entity.update(cx, |s, cx| {
-                    if s.open_buffers.select(id) {
-                        cx.notify();
-                    }
+                    s.select_open_buffer(id, cx);
                 });
             })
             .into_any_element()
+    }
+
+    fn select_open_buffer(&mut self, id: OpenBufferId, cx: &mut Context<Self>) {
+        if self.open_buffers.selected_id() == Some(id) || !self.open_buffers.select(id) {
+            return;
+        }
+
+        let model = self
+            .open_buffers
+            .selected()
+            .expect("selected open buffer exists")
+            .model()
+            .clone();
+        let secondary_editor = cx.new(|cx| {
+            EditorView::new_with_options(
+                model,
+                1,
+                EditorRenderingOptions {
+                    show_gutter_markers: false,
+                },
+                cx,
+            )
+        });
+        let action_subscription = cx.subscribe(
+            &secondary_editor,
+            |this, _editor, action: &EditorContributionAction, cx| {
+                this.invoke_contribution_action(action, cx);
+            },
+        );
+
+        self.secondary_editor = secondary_editor;
+        self._editor_action_subscriptions[1] = action_subscription;
+        cx.notify();
     }
 
     /// A pane that hosts a selectable single-row list.
@@ -1220,7 +1251,7 @@ mod tests {
 
     use gpui::{AppContext, Entity, Focusable, TestAppContext};
 
-    use super::{ContributionSource, Shell, editor::EditorContributionAction};
+    use super::{BufferModel, ContributionSource, Shell, editor::EditorContributionAction};
     use crate::host::{
         ExtensionRuntimeControl, ExtensionRuntimeExecutionError, V8Host,
         protocol::{
@@ -1317,6 +1348,39 @@ mod tests {
             (resolved, displayed)
         });
         assert_eq!(resolved, displayed);
+    }
+
+    #[gpui::test]
+    fn selecting_an_open_buffer_reconstructs_only_the_secondary_view(cx: &mut TestAppContext) {
+        let runtime = V8Host::new()
+            .spawn_extension(ExtensionId::new(8))
+            .into_parts();
+        let shell = cx.new(|cx| Shell::new(runtime, cx));
+        let generated = cx.new(|_| BufferModel::from_text("generated\nresult"));
+
+        let (source_editor, old_secondary, generated_id) = shell.update(cx, |shell, _| {
+            let generated_id = shell.open_buffers.add("Generated", generated.clone());
+            (
+                shell.editor.clone(),
+                shell.secondary_editor.downgrade(),
+                generated_id,
+            )
+        });
+        shell.update(cx, |shell, cx| {
+            shell.select_open_buffer(generated_id, cx);
+        });
+        cx.run_until_parked();
+
+        cx.read(|cx| {
+            let shell = shell.read(cx);
+            assert_eq!(shell.editor, source_editor);
+            assert_eq!(shell.secondary_editor.read(cx).model(), &generated);
+            assert_eq!(
+                shell.secondary_editor.read(cx).responsiveness_state(),
+                (0, 0., 0)
+            );
+            assert!(old_secondary.upgrade().is_none());
+        });
     }
 
     #[gpui::test]

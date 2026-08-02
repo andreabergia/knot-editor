@@ -105,17 +105,17 @@ without changing search, target identity, or navigation.
 - ✅ Do not introduce URI, filesystem, dirty-state, save, persistence, MRU, or
   close-confirmation behavior.
 
-### 3. Make the editor usable with arbitrary buffer text
+### 3. Make the editor usable with arbitrary buffer text ✅
 
-- ⬜ Add a normal `EditorView` construction path from any `BufferModel`, using
+- ✅ Add a normal `EditorView` construction path from any `BufferModel`, using
   the existing default text projection.
-- ⬜ Preserve the fixture-specific constructor only for fixture styling needed
+- ✅ Preserve the fixture-specific constructor only for fixture styling needed
   by earlier experiments.
-- ⬜ When the selected buffer changes, reconstruct the secondary editor over
+- ✅ When the selected buffer changes, reconstruct the secondary editor over
   the retained model and replace its action subscription.
-- ⬜ Leave the primary editor fixed on the source model so result activation
+- ✅ Leave the primary editor fixed on the source model so result activation
   has an unambiguous navigation target.
-- ⬜ Do not preserve cursor, selection, or scroll across secondary-view
+- ✅ Do not preserve cursor, selection, or scroll across secondary-view
   reconstruction; buffer retention, not view-history restoration, is under
   test.
 
