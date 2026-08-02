@@ -124,6 +124,7 @@ globalThis.knotFixtureTreeRegistration =
 fn map_buffer_error(error: BufferAccessError) -> HostRequestError {
     match error {
         BufferAccessError::Closed => HostRequestError::BufferClosed,
+        BufferAccessError::ReadOnly => HostRequestError::UnsupportedOperation,
         BufferAccessError::InvalidRange => HostRequestError::InvalidRange,
         BufferAccessError::InvalidEditBatch => HostRequestError::InvalidEditBatch,
         BufferAccessError::RevisionConflict => HostRequestError::RevisionConflict,
@@ -1581,7 +1582,7 @@ mod tests {
                 changed
             }));
             model.update(cx, |model, cx| {
-                assert!(model.replace(0..1, "C"));
+                assert!(model.replace(0..1, "C").unwrap());
                 cx.notify();
             });
         });

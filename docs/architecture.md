@@ -55,6 +55,7 @@ gpui's foreground thread exclusively owns editor state.
 Each `BufferModel` owns:
 
 - one `TextBuffer`;
+- an application-level editable or read-only access policy;
 - one shared `AnchoredRangeStore`;
 - source-owned semantic editor contributions;
 - open/closed lifecycle and public revision;
@@ -62,7 +63,9 @@ Each `BufferModel` owns:
 
 Presentation metadata stays in `app` and refers to core range IDs. A model
 commit advances the public revision once, invalidates the snapshot cache, and
-notifies every observing view.
+notifies every observing view. All text mutation paths enforce the model's
+access policy; read-only models still permit snapshots, view anchors,
+contributions, and closure. `core::TextBuffer` remains unconditionally mutable.
 
 `BufferRegistry` assigns monotonic transport handles and holds weak model
 references. Its active-buffer entry is the prototype command context.

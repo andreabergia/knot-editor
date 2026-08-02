@@ -57,6 +57,13 @@ pub(crate) enum ContributionError {
     NotFound,
 }
 
+/// Whether foreground-owned text mutations are permitted for a buffer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum BufferAccessPolicy {
+    Editable,
+    ReadOnly,
+}
+
 struct ContributionSet {
     anchored_ranges: Vec<AnchoredRangeId>,
 }
@@ -86,6 +93,7 @@ impl ContributionRegistry {
 /// The authoritative document owned by gpui's foreground thread.
 pub struct BufferModel {
     buffer: TextBuffer,
+    access_policy: BufferAccessPolicy,
     anchored_ranges: AnchoredRangeStore,
     contributions: ContributionRegistry,
     revision: u64,
@@ -110,8 +118,21 @@ pub(crate) struct CommittedBufferChange {
 
 impl BufferModel {
     pub fn from_text(text: impl Into<Box<str>>) -> Self {
+        Self::with_access_policy(text, BufferAccessPolicy::Editable)
+    }
+
+    #[allow(
+        dead_code,
+        reason = "the current shell constructs only editable fixture buffers"
+    )]
+    pub(crate) fn from_read_only_text(text: impl Into<Box<str>>) -> Self {
+        Self::with_access_policy(text, BufferAccessPolicy::ReadOnly)
+    }
+
+    fn with_access_policy(text: impl Into<Box<str>>, access_policy: BufferAccessPolicy) -> Self {
         Self {
             buffer: TextBuffer::from_text(text),
+            access_policy,
             anchored_ranges: AnchoredRangeStore::new(),
             contributions: ContributionRegistry::new(),
             revision: 0,
@@ -428,6 +449,9 @@ impl BufferModel {
         if !self.open {
             return Err(BufferAccessError::Closed);
         }
+        if self.access_policy == BufferAccessPolicy::ReadOnly {
+            return Err(BufferAccessError::ReadOnly);
+        }
         if if_revision != self.revision {
             return Err(BufferAccessError::RevisionConflict);
         }
@@ -470,10 +494,17 @@ impl BufferModel {
     ///
     /// `TextBuffer::replace` may emit multiple primitive edit-log entries;
     /// that private cursor is deliberately independent of `revision`.
-    pub fn replace(&mut self, range: Range<usize>, text: &str) -> bool {
+    pub(crate) fn replace(
+        &mut self,
+        range: Range<usize>,
+        text: &str,
+    ) -> Result<bool, BufferAccessError> {
         assert!(self.open, "cannot edit a closed buffer");
+        if self.access_policy == BufferAccessPolicy::ReadOnly {
+            return Err(BufferAccessError::ReadOnly);
+        }
         if range.is_empty() && text.is_empty() {
-            return false;
+            return Ok(false);
         }
         let edit = crate::host::protocol::TextEdit {
             range: ByteRange {
@@ -491,7 +522,7 @@ impl BufferModel {
             revision: self.revision,
             edits: vec![edit],
         });
-        true
+        Ok(true)
     }
 
     pub(crate) fn take_pending_change(&mut self) -> Option<CommittedBufferChange> {
@@ -525,6 +556,7 @@ pub struct BufferClosed;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum BufferAccessError {
     Closed,
+    ReadOnly,
     InvalidRange,
     InvalidEditBatch,
     RevisionConflict,
@@ -858,13 +890,69 @@ mod tests {
     #[test]
     fn replacement_is_one_public_commit() {
         let mut model = BufferModel::from_text("abc");
-        assert!(model.replace(1..2, "XYZ"));
+        assert!(model.replace(1..2, "XYZ").unwrap());
         assert_eq!(model.text(), "aXYZc");
         assert_eq!(model.revision(), 1);
         assert_eq!(model.edit_seq(), 2);
 
-        assert!(!model.replace(0..0, ""));
+        assert!(!model.replace(0..0, "").unwrap());
         assert_eq!(model.revision(), 1);
+    }
+
+    #[test]
+    fn read_only_models_reject_local_and_extension_text_edits() {
+        let mut model = BufferModel::from_read_only_text("generated text");
+        let extension_edit = TextEdit {
+            range: ByteRange {
+                start_byte_offset: 0,
+                end_byte_offset: 9,
+            },
+            text: "changed".into(),
+        };
+
+        assert_eq!(model.access_policy, BufferAccessPolicy::ReadOnly);
+        assert_eq!(
+            model.replace(0..9, "changed"),
+            Err(BufferAccessError::ReadOnly)
+        );
+        assert_eq!(
+            model.apply_edits(&[extension_edit], 0),
+            Err(BufferAccessError::ReadOnly)
+        );
+        assert_eq!(model.text(), "generated text");
+        assert_eq!(model.revision(), 0);
+        assert_eq!(model.take_pending_change(), None);
+    }
+
+    #[test]
+    fn read_only_models_keep_non_text_operations_available() {
+        let mut model = BufferModel::from_read_only_text("generated text");
+        let position = model.add_view_position(0..9);
+
+        model
+            .replace_contributions(
+                ContributionSource::BuiltIn,
+                &[EditorContribution {
+                    range: ByteRange {
+                        start_byte_offset: 0,
+                        end_byte_offset: 9,
+                    },
+                    decoration: Some(DecorationToken::Info),
+                    gutter: None,
+                    command: None,
+                }],
+                0,
+            )
+            .unwrap();
+
+        assert_eq!(
+            model.snapshot(None).unwrap().text.to_utf8(),
+            "generated text"
+        );
+        assert_eq!(model.resolve_view_position(position), Some(0..9));
+        assert_eq!(model.resolved_contributions().len(), 1);
+        model.close();
+        assert!(!model.is_open());
     }
 
     #[test]
@@ -890,7 +978,7 @@ mod tests {
             )
             .unwrap();
 
-        assert!(model.replace(0..0, "++"));
+        assert!(model.replace(0..0, "++").unwrap());
         assert_eq!(
             model.resolved_contributions(),
             [ResolvedEditorContribution {
@@ -1092,7 +1180,7 @@ mod tests {
             )
             .unwrap();
 
-        assert!(model.replace(4..7, ""));
+        assert!(model.replace(4..7, "").unwrap());
 
         assert!(model.resolved_contributions().is_empty());
         assert!(model.contributions.metadata.is_empty());
@@ -1310,7 +1398,7 @@ mod tests {
         };
         assert!(Arc::ptr_eq(&first, &second));
 
-        assert!(model.replace(1..2, "B"));
+        assert!(model.replace(1..2, "B").unwrap());
         let third = model.snapshot(None).unwrap();
         let SnapshotText::Utf16(third) = third.text else {
             panic!("buffer snapshots must use UTF-16 cache storage");

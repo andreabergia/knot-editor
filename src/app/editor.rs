@@ -873,7 +873,7 @@ impl EditorView {
     fn splice(&mut self, byte_start: usize, byte_end: usize, text: &str, cx: &mut Context<Self>) {
         let model = self.model.clone();
         model.update(cx, |model, cx| {
-            if model.replace(byte_start..byte_end, text) {
+            if model.replace(byte_start..byte_end, text).unwrap_or(false) {
                 cx.notify();
             }
         });
@@ -1923,7 +1923,7 @@ mod tests {
     #[test]
     fn projection_refreshes_from_authoritative_buffer_text() {
         let mut model = BufferModel::from_text("one\ntwo");
-        model.replace(0..3, "three");
+        model.replace(0..3, "three").unwrap();
         let (lines, segs) = default_projection(&model.text());
 
         assert_eq!(lines, ["three", "two"]);
@@ -2037,7 +2037,7 @@ mod tests {
         });
 
         model.update(cx, |model, cx| {
-            assert!(model.replace(0..0, "shared\n"));
+            assert!(model.replace(0..0, "shared\n").unwrap());
             model
                 .replace_contributions(
                     ContributionSource::BuiltIn,
@@ -2094,7 +2094,7 @@ mod tests {
             view.sync_view_position(cx);
         });
         model.update(cx, |model, cx| {
-            assert!(model.replace(1..2, ""));
+            assert!(model.replace(1..2, "").unwrap());
             cx.notify();
         });
         cx.run_until_parked();

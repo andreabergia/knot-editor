@@ -79,17 +79,17 @@ without changing search, target identity, or navigation.
 
 ### 1. Add model-level access policy
 
-- ⬜ Add a small application-level access policy to `BufferModel`, initially
+- ✅ Add a small application-level access policy to `BufferModel`, initially
   editable or read-only.
-- ⬜ Keep `core::TextBuffer` unconditionally mutable; access policy belongs to
+- ✅ Keep `core::TextBuffer` unconditionally mutable; access policy belongs to
   its foreground application owner.
-- ⬜ Make every text mutation entry point reject read-only models, including
+- ✅ Make every text mutation entry point reject read-only models, including
   local editor edits and extension edit batches.
-- ⬜ Keep non-text mutations such as selection anchors, contributions,
+- ✅ Keep non-text mutations such as selection anchors, contributions,
   snapshots, and closure available on read-only models.
-- ⬜ Construct generated buffers from their final text as read-only; do not add
+- ✅ Construct generated buffers from their final text as read-only; do not add
   a privileged refresh path for this experiment.
-- ⬜ Add focused model tests proving that local and extension edit paths cannot
+- ✅ Add focused model tests proving that local and extension edit paths cannot
   bypass the policy.
 
 ### 2. Introduce user-visible open-buffer ownership
