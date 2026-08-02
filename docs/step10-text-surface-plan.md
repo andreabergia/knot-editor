@@ -94,15 +94,15 @@ without changing search, target identity, or navigation.
 
 ### 2. Introduce user-visible open-buffer ownership
 
-- ⬜ Add an application-owned `OpenBufferCollection` with monotonic local
+- ✅ Add an application-owned `OpenBufferCollection` with monotonic local
   identities, display titles, strong `Entity<BufferModel>` ownership, and one
   selected entry for the prototype shell.
-- ⬜ Add the source fixture as the initial file-like entry.
-- ⬜ Replace the shell's static explorer labels with entries from the
+- ✅ Add the source fixture as the initial file-like entry.
+- ✅ Replace the shell's static explorer labels with entries from the
   collection and label the pane `BUFFERS`.
-- ⬜ Keep `BufferRegistry` unchanged in purpose: weak model lookup for opaque
+- ✅ Keep `BufferRegistry` unchanged in purpose: weak model lookup for opaque
   extension transport handles plus the current prototype command context.
-- ⬜ Do not introduce URI, filesystem, dirty-state, save, persistence, MRU, or
+- ✅ Do not introduce URI, filesystem, dirty-state, save, persistence, MRU, or
   close-confirmation behavior.
 
 ### 3. Make the editor usable with arbitrary buffer text

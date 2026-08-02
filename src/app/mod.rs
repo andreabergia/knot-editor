@@ -21,6 +21,7 @@ use crate::host::{
 
 mod editor;
 pub mod model;
+mod open_buffers;
 mod terminal_view;
 mod tree_view;
 
@@ -31,6 +32,7 @@ use model::{
     BufferAccessError, BufferModel, BufferRegistry, BufferSubscriptionRegistry, CommandRegistry,
     ContributionError, ContributionSource,
 };
+use open_buffers::{OpenBufferCollection, OpenBufferId};
 use terminal_view::TerminalView;
 use tree_view::{TreeProviderIdentity, TreeView, TreeViewEvent, TreeViewRegistrationError};
 
@@ -176,8 +178,7 @@ impl Render for DragGhost {
 }
 
 struct Shell {
-    left_files: Vec<SharedString>,
-    left_selected: Option<usize>,
+    open_buffers: OpenBufferCollection,
     outline: Entity<TreeView>,
     left_width: f32,
     right_width: f32,
@@ -266,6 +267,8 @@ impl Shell {
         let mut buffer_registry = BufferRegistry::new();
         let handle = buffer_registry.open(&model);
         buffer_registry.set_active(Some(handle));
+        let mut open_buffers = OpenBufferCollection::new();
+        open_buffers.add(format!("{fixture_name}.kfx"), model.clone());
         let editor = cx.new(|cx| EditorView::from_fixture(&fixture, model.clone(), cx));
         let secondary_editor = cx.new(|cx| {
             EditorView::from_fixture_with_options(
@@ -367,19 +370,7 @@ impl Shell {
             }
         });
         Shell {
-            left_files: vec![
-                "src/lib.rs".into(),
-                "src/main.rs".into(),
-                "src/app/mod.rs".into(),
-                "src/app/editor.rs".into(),
-                "src/app/model.rs".into(),
-                "docs/roadmap.md".into(),
-                "docs/design.md".into(),
-                "docs/step3-framework-comparison.md".into(),
-                "Cargo.toml".into(),
-                "AGENTS.md".into(),
-            ],
-            left_selected: Some(2),
+            open_buffers,
             outline,
             left_width: 260.,
             right_width: 220.,
@@ -868,16 +859,15 @@ impl Shell {
 
     /// Build a single selectable row: a div wrapping `label`; clicking selects it,
     /// the selected row gets a highlight bg, all rows get a hover bg.
-    fn row(
-        id_prefix: &'static str,
-        ix: usize,
+    fn buffer_row(
+        id: OpenBufferId,
         label: SharedString,
-        selected: Option<usize>,
+        selected: Option<OpenBufferId>,
         entity: Entity<Shell>,
     ) -> AnyElement {
-        let is_selected = selected == Some(ix);
+        let is_selected = selected == Some(id);
         div()
-            .id((id_prefix, ix))
+            .id(("buffer", id.value()))
             .w_full()
             .px_2()
             .py_1()
@@ -889,25 +879,28 @@ impl Shell {
             .hover(|s| s.bg(rgb(0x222222)))
             .on_click(move |_ev, _window, cx| {
                 entity.update(cx, |s, cx| {
-                    s.left_selected = Some(ix);
-                    cx.notify();
+                    if s.open_buffers.select(id) {
+                        cx.notify();
+                    }
                 });
             })
             .into_any_element()
     }
 
     /// A pane that hosts a selectable single-row list.
-    fn pane(
-        &self,
-        id_prefix: &'static str,
-        items: &[SharedString],
-        selected: Option<usize>,
-        entity: Entity<Shell>,
-    ) -> impl IntoElement {
-        let items: Vec<SharedString> = items.to_vec();
-        uniform_list(id_prefix, items.len(), move |range, _window, _cx| {
+    fn buffer_pane(&self, entity: Entity<Shell>) -> impl IntoElement {
+        let entries: Vec<_> = self
+            .open_buffers
+            .entries()
+            .map(|entry| (entry.id(), entry.title().clone()))
+            .collect();
+        let selected = self.open_buffers.selected_id();
+        uniform_list("buffers", entries.len(), move |range, _window, _cx| {
             range
-                .map(|ix| Self::row(id_prefix, ix, items[ix].clone(), selected, entity.clone()))
+                .map(|ix| {
+                    let (id, title) = entries[ix].clone();
+                    Self::buffer_row(id, title, selected, entity.clone())
+                })
                 .collect()
         })
         .h_full()
@@ -957,13 +950,10 @@ impl Drop for Shell {
 impl Render for Shell {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let entity = cx.entity();
-        let left_selected = self.left_selected;
-        let left_files = self.left_files.clone();
         let revision = self
-            .buffer_registry
-            .active_handle()
-            .and_then(|handle| self.buffer_registry.resolve(handle).ok())
-            .map(|model| model.read(cx).revision().to_string())
+            .open_buffers
+            .selected()
+            .map(|entry| entry.model().read(cx).revision().to_string())
             .unwrap_or_else(|| "closed".into());
         let runtime_error = self
             .latest_runtime_error
@@ -1052,9 +1042,9 @@ impl Render for Shell {
                             .py_1()
                             .text_xs()
                             .text_color(rgb(0x888888))
-                            .child("EXPLORER"),
+                            .child("BUFFERS"),
                     )
-                    .child(self.pane("left", &left_files, left_selected, entity.clone())),
+                    .child(self.buffer_pane(entity.clone())),
             )
             .child(Self::divider(0))
             .child(
@@ -1321,6 +1311,9 @@ mod tests {
             let handle = shell.buffer_registry.active_handle().unwrap();
             let resolved = shell.buffer_registry.resolve(handle).unwrap();
             let displayed = shell.editor.read(cx).model().clone();
+            let source = shell.open_buffers.selected().unwrap();
+            assert_eq!(source.title(), "rust_sample.kfx");
+            assert_eq!(source.model(), &displayed);
             (resolved, displayed)
         });
         assert_eq!(resolved, displayed);

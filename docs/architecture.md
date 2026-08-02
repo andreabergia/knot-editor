@@ -69,6 +69,9 @@ contributions, and closure. `core::TextBuffer` remains unconditionally mutable.
 
 `BufferRegistry` assigns monotonic transport handles and holds weak model
 references. Its active-buffer entry is the prototype command context.
+`OpenBufferCollection` independently assigns local presentation identities and
+strongly owns the titled models visible in the shell, including its selected
+entry. It does not own transport handles or file and persistence state.
 `CommandRegistry` binds command names to one extension lifecycle.
 `BufferSubscriptionRegistry` routes committed changes to interested extension
 lifecycles.
