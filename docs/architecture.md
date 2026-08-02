@@ -71,7 +71,10 @@ contributions, and closure. `core::TextBuffer` remains unconditionally mutable.
 references. Its active-buffer entry is the prototype command context.
 `OpenBufferCollection` independently assigns local presentation identities and
 strongly owns the titled models visible in the shell, including its selected
-entry. It does not own transport handles or file and persistence state.
+entry. Generated search entries also retain their application-owned
+`SearchResultsController`, which keeps source targets and emitted output ranges
+separate from the generated text. The collection does not own transport
+handles or file and persistence state.
 `CommandRegistry` binds command names to one extension lifecycle.
 `BufferSubscriptionRegistry` routes committed changes to interested extension
 lifecycles.
@@ -112,6 +115,12 @@ TextBuffer   AnchoredRangeStore
        /       \
 EditorView A  EditorView B
 ```
+
+Native fixture search captures an immutable source snapshot and revision. Its
+controller derives semantic matches, formats them into a read-only
+`BufferModel`, and attaches built-in actions to the emitted result ranges. The
+normal open-buffer and editor paths render the generated model; search identity
+does not enter `TextBuffer` or `BufferModel`.
 
 ## Extension host
 

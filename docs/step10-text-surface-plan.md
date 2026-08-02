@@ -121,17 +121,17 @@ without changing search, target identity, or navigation.
 
 ### 4. Generate search-result buffers
 
-- ⬜ Add a native `SearchResultsController` that searches an immutable snapshot
+- ✅ Add a native `SearchResultsController` that searches an immutable snapshot
   of the source fixture and records the source revision.
-- ⬜ Represent semantic matches independently of formatting, including source
+- ✅ Represent semantic matches independently of formatting, including source
   identity, byte range, line number, and preview text.
-- ⬜ Add one formatter that emits a complete line per match and records the
+- ✅ Add one formatter that emits a complete line per match and records the
   exact output byte range associated with each target.
-- ⬜ Attach one built-in action contribution to each emitted result range.
-- ⬜ Provide two small fixture search actions so the shell can retain and list
+- ✅ Attach one built-in action contribution to each emitted result range.
+- ✅ Provide two small fixture search actions so the shell can retain and list
   more than one result buffer without building a search-input widget.
-- ⬜ Give each generated entry a descriptive title such as `Search: "Node"`.
-- ⬜ Keep every generated buffer and controller alive in the open-buffer
+- ✅ Give each generated entry a descriptive title such as `Search: "Node"`.
+- ✅ Keep every generated buffer and controller alive in the open-buffer
   collection for the duration of the prototype.
 
 ### 5. Navigate without parsing displayed text

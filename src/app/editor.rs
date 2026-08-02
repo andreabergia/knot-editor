@@ -168,14 +168,7 @@ impl EditorView {
     /// Build an editor using the default projection for arbitrary buffer text.
     pub fn new(model: Entity<BufferModel>, cx: &mut Context<Self>) -> Self {
         let (lines, segs) = default_projection(&model.read(cx).text());
-        Self::from_projection(
-            model,
-            lines,
-            segs,
-            0,
-            EditorRenderingOptions::default(),
-            cx,
-        )
+        Self::from_projection(model, lines, segs, 0, EditorRenderingOptions::default(), cx)
     }
 
     pub(crate) fn new_with_options(

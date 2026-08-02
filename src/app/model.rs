@@ -121,10 +121,6 @@ impl BufferModel {
         Self::with_access_policy(text, BufferAccessPolicy::Editable)
     }
 
-    #[allow(
-        dead_code,
-        reason = "the current shell constructs only editable fixture buffers"
-    )]
     pub(crate) fn from_read_only_text(text: impl Into<Box<str>>) -> Self {
         Self::with_access_policy(text, BufferAccessPolicy::ReadOnly)
     }

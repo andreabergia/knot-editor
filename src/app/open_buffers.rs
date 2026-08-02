@@ -1,11 +1,17 @@
 use gpui::{Entity, SharedString};
 
 use super::model::BufferModel;
+use super::search_results::SearchResultsController;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct OpenBufferId(u64);
 
 impl OpenBufferId {
+    #[cfg(test)]
+    pub(crate) const fn from_value(value: u64) -> Self {
+        Self(value)
+    }
+
     pub(crate) fn value(self) -> u64 {
         self.0
     }
@@ -15,6 +21,11 @@ pub(crate) struct OpenBufferEntry {
     id: OpenBufferId,
     title: SharedString,
     model: Entity<BufferModel>,
+    #[allow(
+        dead_code,
+        reason = "retained with the generated model as its semantic companion"
+    )]
+    search_results: Option<SearchResultsController>,
 }
 
 impl OpenBufferEntry {
@@ -28,6 +39,11 @@ impl OpenBufferEntry {
 
     pub(crate) fn model(&self) -> &Entity<BufferModel> {
         &self.model
+    }
+
+    #[cfg(test)]
+    pub(crate) fn search_results(&self) -> Option<&SearchResultsController> {
+        self.search_results.as_ref()
     }
 }
 
@@ -61,6 +77,26 @@ impl OpenBufferCollection {
             id,
             title: title.into(),
             model,
+            search_results: None,
+        });
+        self.selected.get_or_insert(id);
+        id
+    }
+
+    pub(crate) fn add_search_results(
+        &mut self,
+        controller: SearchResultsController,
+    ) -> OpenBufferId {
+        let id = OpenBufferId(self.next_id);
+        self.next_id = self
+            .next_id
+            .checked_add(1)
+            .expect("open buffer identity space exhausted");
+        self.entries.push(OpenBufferEntry {
+            id,
+            title: controller.title().into(),
+            model: controller.model().clone(),
+            search_results: Some(controller),
         });
         self.selected.get_or_insert(id);
         id

@@ -22,6 +22,7 @@ use crate::host::{
 mod editor;
 pub mod model;
 mod open_buffers;
+mod search_results;
 mod terminal_view;
 mod tree_view;
 
@@ -33,6 +34,7 @@ use model::{
     ContributionError, ContributionSource,
 };
 use open_buffers::{OpenBufferCollection, OpenBufferId};
+use search_results::SearchResultsController;
 use terminal_view::TerminalView;
 use tree_view::{TreeProviderIdentity, TreeView, TreeViewEvent, TreeViewRegistrationError};
 
@@ -179,6 +181,7 @@ impl Render for DragGhost {
 
 struct Shell {
     open_buffers: OpenBufferCollection,
+    source_buffer: OpenBufferId,
     outline: Entity<TreeView>,
     left_width: f32,
     right_width: f32,
@@ -268,7 +271,7 @@ impl Shell {
         let handle = buffer_registry.open(&model);
         buffer_registry.set_active(Some(handle));
         let mut open_buffers = OpenBufferCollection::new();
-        open_buffers.add(format!("{fixture_name}.kfx"), model.clone());
+        let source_buffer = open_buffers.add(format!("{fixture_name}.kfx"), model.clone());
         let editor = cx.new(|cx| EditorView::from_fixture(&fixture, model.clone(), cx));
         let secondary_editor = cx.new(|cx| {
             EditorView::from_fixture_with_options(
@@ -371,6 +374,7 @@ impl Shell {
         });
         Shell {
             open_buffers,
+            source_buffer,
             outline,
             left_width: 260.,
             right_width: 220.,
@@ -918,6 +922,23 @@ impl Shell {
         cx.notify();
     }
 
+    fn search_fixture(&mut self, query: &'static str, cx: &mut Context<Self>) {
+        let source = self
+            .open_buffers
+            .entries()
+            .find(|entry| entry.id() == self.source_buffer)
+            .expect("source buffer remains open");
+        let controller = SearchResultsController::search(
+            query,
+            self.source_buffer,
+            source.title(),
+            source.model().clone(),
+            cx,
+        );
+        let result_buffer = self.open_buffers.add_search_results(controller);
+        self.select_open_buffer(result_buffer, cx);
+    }
+
     /// A pane that hosts a selectable single-row list.
     fn buffer_pane(&self, entity: Entity<Shell>) -> impl IntoElement {
         let entries: Vec<_> = self
@@ -1186,6 +1207,26 @@ impl Render for Shell {
                                         this.cancel_active_command(cx);
                                     })),
                             )
+                            .child(
+                                div()
+                                    .id("search-fixture-node")
+                                    .cursor_pointer()
+                                    .text_color(rgb(0x80c0ff))
+                                    .child("search Node")
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.search_fixture("Node", cx);
+                                    })),
+                            )
+                            .child(
+                                div()
+                                    .id("search-fixture-rope")
+                                    .cursor_pointer()
+                                    .text_color(rgb(0x80c0ff))
+                                    .child("search Rope")
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.search_fixture("Rope", cx);
+                                    })),
+                            )
                             .child(format!("error {runtime_error}"))
                             .child(format!("heartbeat {}", self.heartbeat)),
                     ),
@@ -1251,7 +1292,10 @@ mod tests {
 
     use gpui::{AppContext, Entity, Focusable, TestAppContext};
 
-    use super::{BufferModel, ContributionSource, Shell, editor::EditorContributionAction};
+    use super::{
+        BufferModel, ContributionSource, Shell, editor::EditorContributionAction,
+        model::BufferAccessError,
+    };
     use crate::host::{
         ExtensionRuntimeControl, ExtensionRuntimeExecutionError, V8Host,
         protocol::{
@@ -1381,6 +1425,49 @@ mod tests {
             );
             assert!(old_secondary.upgrade().is_none());
         });
+    }
+
+    #[gpui::test]
+    fn fixture_searches_create_retained_read_only_buffers(cx: &mut TestAppContext) {
+        let runtime = V8Host::new()
+            .spawn_extension(ExtensionId::new(81))
+            .into_parts();
+        let shell = cx.new(|cx| Shell::new(runtime, cx));
+
+        shell.update(cx, |shell, cx| {
+            shell.search_fixture("Node", cx);
+            shell.search_fixture("Rope", cx);
+        });
+        cx.run_until_parked();
+
+        let first_result = shell.read_with(cx, |shell, cx| {
+            let entries = shell.open_buffers.entries().collect::<Vec<_>>();
+            assert_eq!(entries.len(), 3);
+            assert_eq!(entries[1].title(), "Search: \"Node\"");
+            assert_eq!(entries[2].title(), "Search: \"Rope\"");
+            assert!(entries[1].search_results().is_some());
+            assert!(entries[2].search_results().is_some());
+            assert_eq!(shell.open_buffers.selected_id(), Some(entries[2].id()));
+            assert!(
+                !entries[1]
+                    .model()
+                    .read(cx)
+                    .resolved_contributions()
+                    .is_empty()
+            );
+            assert!(
+                !entries[2]
+                    .model()
+                    .read(cx)
+                    .resolved_contributions()
+                    .is_empty()
+            );
+            entries[1].model().clone()
+        });
+        assert_eq!(
+            first_result.update(cx, |model, _| model.replace(0..0, "edit")),
+            Err(BufferAccessError::ReadOnly)
+        );
     }
 
     #[gpui::test]
