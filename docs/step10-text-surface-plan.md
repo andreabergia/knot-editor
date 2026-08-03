@@ -172,13 +172,21 @@ table is the only duplicated structure required to keep the text actionable;
 it duplicates result ordering and output geometry, not previews, grouping, or
 source identity.
 
-### 7. Record the decision
+### 7. Record the decision ✅
 
-- ⬜ Update `architecture.md` with open-buffer ownership, read-only enforcement,
+- ✅ Update `architecture.md` with open-buffer ownership, read-only enforcement,
   and the generated-text controller flow if the experiment validates them.
-- ⬜ Record the result and liabilities in `decisions.md`.
-- ⬜ Mark roadmap step 10 complete and summarize the checkpoint.
-- ⬜ Update this plan with the executed and deliberately skipped work.
+- ✅ Record the result and liabilities in `decisions.md`.
+- ✅ Mark roadmap step 10 complete and summarize the checkpoint.
+- ✅ Update this plan with the executed and deliberately skipped work.
+
+Decision result: generated text is validated as the default for surfaces whose
+content remains independently useful as text. Generic buffer ownership and
+editing require no search-specific behavior; a controller retains only semantic
+matches and emitted-range associations. Immutable snapshots, stale-revision
+rejection, refresh, and view-state restoration remain known limitations. The
+optional second generated surface was deliberately skipped because search
+results did not expose a useful additional boundary to test.
 
 ## Commit boundaries
 

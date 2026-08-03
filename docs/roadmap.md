@@ -56,7 +56,7 @@ Knot's view and async architecture. Production will separate a stable session
 from its disposable presentation so a running shell can move across tabs and
 windows without adding persistence after explicit closure.
 
-## 10. Text as a primary surface
+## 10. Text as a primary surface ✅
 
 Execution plan: [step10-text-surface-plan.md](step10-text-surface-plan.md).
 
@@ -68,8 +68,14 @@ Execution plan: [step10-text-surface-plan.md](step10-text-surface-plan.md).
 - Try a second generated surface only if search results do not expose useful
   limits.
 
-Decision checkpoint: where does representing generated surfaces as text become
-a liability?
+Decision: generated content remains an ordinary buffer while the text is useful
+on its own. Application-owned controllers retain semantic identity and map
+emitted ranges to actions without parsing the display. The approach becomes a
+liability when a surface needs a second authoritative presentation model or
+special behavior in generic buffer ownership or editing; search results needed
+neither. Refresh and stale-target recovery remain deferred. A second
+generated surface was deliberately skipped because search exposed no useful
+boundary requiring it.
 
 ## 11. Command and keymap dispatch
 

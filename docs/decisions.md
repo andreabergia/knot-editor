@@ -134,3 +134,31 @@ Evidence: [V8 runtime evidence](step7-v8-runtime.md).
   renderer, resize flow, and event handling.
 
 Evidence: [terminal evaluation](step9-terminal-plan.md).
+
+## Generated text surfaces
+
+- Generated content defaults to an ordinary `TextBuffer` presented through the
+  normal buffer and editor lifecycle when it remains useful as selectable,
+  scrollable, copyable text.
+- `OpenBufferCollection` strongly owns user-visible titled buffers and their
+  selection. `BufferRegistry` remains a separate weak registry for extension
+  transport handles.
+- Editability is application policy on `BufferModel`; `TextBuffer` remains
+  unconditionally mutable. Every model text-mutation path enforces the policy,
+  while view state, snapshots, contributions, and closure remain available for
+  read-only models.
+- Surface-specific controllers own semantic identity and action metadata.
+  Generated text is presentation output, never an identity format: activation
+  resolves an emitted output range to a recorded source target without parsing
+  displayed text.
+- The validated search surface duplicates only result ordering and emitted
+  range geometry. It does not duplicate previews, grouping, or source identity
+  in a second presentation model.
+- Generated search buffers are immutable snapshots. Navigation is rejected
+  after the source revision changes; refresh, incremental updates, and restored
+  view state remain deferred liabilities.
+- A second generated surface was unnecessary for this checkpoint because
+  search results did not force special behavior into generic buffer ownership,
+  the text model, or the editor pipeline.
+
+Evidence: [text-surface experiment](step10-text-surface-plan.md).
