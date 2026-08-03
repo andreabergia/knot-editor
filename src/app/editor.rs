@@ -143,6 +143,9 @@ pub struct EditorView {
     anchor_line: usize,
     anchor_col: usize,
     has_selection: bool,
+    /// An action-region press owns the gesture through mouse-up; pointer
+    /// jitter must not turn it into a text drag from the old caret.
+    suppress_drag_selection: bool,
     position_range: Option<AnchoredRangeId>,
     selection_reversed: bool,
     /// IME preedit (marked) range as flat UTF-16 offsets into the
@@ -349,6 +352,7 @@ impl EditorView {
             anchor_line: 0,
             anchor_col: 0,
             has_selection: false,
+            suppress_drag_selection: false,
             position_range,
             selection_reversed: false,
             marked_range_utf16: None,
@@ -752,6 +756,7 @@ impl EditorView {
                         || (col >= action.start && col < action.end)
                 }
         }) {
+            self.suppress_drag_selection = true;
             cx.emit(EditorContributionAction {
                 command: action.command.clone(),
                 source: action.source,
@@ -761,6 +766,7 @@ impl EditorView {
             cx.stop_propagation();
             return;
         }
+        self.suppress_drag_selection = false;
         if ev.modifiers.shift {
             if !self.has_selection {
                 self.anchor_line = self.cursor_line;
@@ -790,6 +796,10 @@ impl EditorView {
     /// for the prototype; a drag-capture fix is deferred.)
     fn on_mouse_move(&mut self, ev: &MouseMoveEvent, window: &mut Window, cx: &mut Context<Self>) {
         if !ev.dragging() {
+            self.suppress_drag_selection = false;
+            return;
+        }
+        if self.suppress_drag_selection {
             return;
         }
         let (line, col) = self.hit_test(ev.position, window);
@@ -1976,7 +1986,10 @@ fn x_for_index_dir(s: &ShapedLine, index: usize, line_str: &str) -> Pixels {
 
 #[cfg(test)]
 mod tests {
-    use gpui::{AppContext, TestAppContext};
+    use gpui::{
+        AppContext, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, TestAppContext, point,
+        px,
+    };
 
     use super::{
         BufferModel, ContributionSource, EditorRenderingOptions, EditorView,
@@ -2006,6 +2019,61 @@ mod tests {
             assert_eq!(editor.model(), &model);
             assert_eq!(editor.lines, ["generated", "text"]);
             assert!(editor.rendering.show_gutter_markers);
+        });
+    }
+
+    #[gpui::test]
+    fn action_click_pointer_jitter_does_not_start_text_selection(cx: &mut TestAppContext) {
+        let model = cx.new(|_| {
+            let mut model = BufferModel::from_read_only_text("result");
+            model
+                .replace_contributions(
+                    ContributionSource::BuiltIn,
+                    &[EditorContribution {
+                        range: ByteRange {
+                            start_byte_offset: 0,
+                            end_byte_offset: 6,
+                        },
+                        decoration: None,
+                        gutter: None,
+                        command: Some("fixture.action".into()),
+                    }],
+                    0,
+                )
+                .unwrap();
+            model
+        });
+        let (editor, cx) = cx.add_window_view(|_, cx| EditorView::new(model, cx));
+        cx.refresh().unwrap();
+        let click = cx.read(|cx| {
+            let bounds = editor.read(cx).interaction_bounds();
+            point(bounds.origin.x + px(20.), bounds.origin.y + px(10.))
+        });
+
+        cx.update(|window, cx| {
+            editor.update(cx, |editor, cx| {
+                editor.on_mouse_down(
+                    &MouseDownEvent {
+                        position: click,
+                        modifiers: Modifiers::default(),
+                        button: MouseButton::Left,
+                        click_count: 1,
+                        first_mouse: false,
+                    },
+                    window,
+                    cx,
+                );
+                editor.on_mouse_move(
+                    &MouseMoveEvent {
+                        position: point(click.x + px(3.), click.y),
+                        modifiers: Modifiers::default(),
+                        pressed_button: Some(MouseButton::Left),
+                    },
+                    window,
+                    cx,
+                );
+                assert_eq!(editor.selected_byte_range(), None);
+            });
         });
     }
 
