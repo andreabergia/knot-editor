@@ -147,20 +147,30 @@ without changing search, target identity, or navigation.
 - ✅ Exercise activation by clicking the command-bearing result region. Keyboard
   command routing remains step 11 work.
 
-### 6. Validate the text-surface checkpoint
+### 6. Validate the text-surface checkpoint ✅
 
-- ⬜ Create at least two searches and switch repeatedly among their retained
+- ✅ Create at least two searches and switch repeatedly among their retained
   entries and the source entry through `BUFFERS`.
-- ⬜ Confirm generated content supports ordinary inspection, selection,
+- ✅ Confirm generated content supports ordinary inspection, selection,
   scrolling, and copying while rejecting edits through every available path.
-- ⬜ Confirm result activation reaches the recorded source range after switching
+- ✅ Confirm result activation reaches the recorded source range after switching
   away from and back to the result buffer.
-- ⬜ Confirm changing only the formatter would not affect semantic match or
+- ✅ Confirm changing only the formatter would not affect semantic match or
   navigation identity.
-- ⬜ Record any duplicated structured state required solely to keep the text
+- ✅ Record any duplicated structured state required solely to keep the text
   actionable.
-- ⬜ Run the focused test suite, then run `cargo fmt` once at the end of Rust
+- ✅ Run the focused test suite, then run `cargo fmt` once at the end of Rust
   work and run the full test suite.
+
+Checkpoint result: generated and file-like buffers use the same list, editor,
+selection, scrolling, copying, and model access paths. Two retained searches
+remain independently actionable after repeated buffer switching. Formatting
+produces text plus `output_range -> match_index` associations; semantic source
+identity and ranges remain in `SearchMatch`, so changing the formatter does not
+change navigation identity or require parsing output text. The emitted range
+table is the only duplicated structure required to keep the text actionable;
+it duplicates result ordering and output geometry, not previews, grouping, or
+source identity.
 
 ### 7. Record the decision
 

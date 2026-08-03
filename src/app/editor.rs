@@ -1987,8 +1987,8 @@ fn x_for_index_dir(s: &ShapedLine, index: usize, line_str: &str) -> Pixels {
 #[cfg(test)]
 mod tests {
     use gpui::{
-        AppContext, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, TestAppContext, point,
-        px,
+        AppContext, EntityInputHandler, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent,
+        ScrollDelta, ScrollWheelEvent, TestAppContext, point, px,
     };
 
     use super::{
@@ -2074,6 +2074,50 @@ mod tests {
                 );
                 assert_eq!(editor.selected_byte_range(), None);
             });
+        });
+    }
+
+    #[gpui::test]
+    fn read_only_text_keeps_normal_selection_copy_and_scroll_behavior(cx: &mut TestAppContext) {
+        let text = (0..100)
+            .map(|line| format!("result {line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let model = cx.new(|_| BufferModel::from_read_only_text(text.clone()));
+        let (editor, cx) = cx.add_window_view(|_, cx| EditorView::new(model.clone(), cx));
+        cx.refresh().unwrap();
+
+        cx.update(|window, cx| {
+            editor.update(cx, |editor, cx| {
+                editor.select_reveal_and_focus(
+                    ByteRange {
+                        start_byte_offset: 0,
+                        end_byte_offset: 8,
+                    },
+                    window,
+                    cx,
+                );
+                let selection = editor.selected_text_range(false, window, cx).unwrap();
+                assert_eq!(selection.range, 0..8);
+                assert_eq!(
+                    editor.text_for_range(selection.range, &mut None, window, cx),
+                    Some("result 0".into())
+                );
+
+                editor.replace_text_in_range(None, "changed", window, cx);
+            });
+        });
+        cx.simulate_event(ScrollWheelEvent {
+            position: cx.read(|cx| editor.read(cx).interaction_bounds().center()),
+            delta: ScrollDelta::Lines(point(0., -5.)),
+            ..Default::default()
+        });
+        cx.run_until_parked();
+
+        cx.read(|cx| {
+            let editor = editor.read(cx);
+            assert_eq!(editor.model().read(cx).text(), text);
+            assert!(editor.scroll > 0.);
         });
     }
 

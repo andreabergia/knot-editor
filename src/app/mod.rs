@@ -1511,12 +1511,23 @@ mod tests {
     }
 
     #[gpui::test]
-    fn clicking_a_search_result_selects_and_focuses_its_source(cx: &mut TestAppContext) {
+    fn retained_search_result_activates_after_repeated_buffer_switching(cx: &mut TestAppContext) {
         let runtime = V8Host::new()
             .spawn_extension(ExtensionId::new(82))
             .into_parts();
         let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(runtime, cx));
-        shell.update(cx, |shell, cx| shell.search_fixture("Node", cx));
+        shell.update(cx, |shell, cx| {
+            shell.search_fixture("Node", cx);
+            shell.search_fixture("Rope", cx);
+            let ids = shell
+                .open_buffers
+                .entries()
+                .map(|entry| entry.id())
+                .collect::<Vec<_>>();
+            for id in [ids[0], ids[1], ids[2], ids[0], ids[2], ids[1]] {
+                shell.select_open_buffer(id, cx);
+            }
+        });
         cx.refresh().unwrap();
 
         let (click, expected_range) = cx.read(|cx| {
