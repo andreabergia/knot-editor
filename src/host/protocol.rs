@@ -5,7 +5,7 @@
 //! editor to access a buffer; neither side needs to expose a V8, Deno, gpui,
 //! or Rust editor-model object to JavaScript.
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::{borrow::Borrow, collections::BTreeMap, fmt, sync::Arc};
 
 /// An extension-owned identity, opaque outside the host boundary.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -117,6 +117,43 @@ impl BufferHandle {
     }
 }
 
+/// The stable, globally unique name of a command definition.
+#[derive(
+    Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, serde::Deserialize, serde::Serialize,
+)]
+#[serde(transparent)]
+pub struct CommandName(String);
+
+impl AsRef<str> for CommandName {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Borrow<str> for CommandName {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for CommandName {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+impl From<String> for CommandName {
+    fn from(name: String) -> Self {
+        Self(name)
+    }
+}
+
+impl From<&str> for CommandName {
+    fn from(name: &str) -> Self {
+        Self(name.into())
+    }
+}
+
 /// One JSON-compatible value carried as an explicit command argument.
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(untagged)]
@@ -132,7 +169,7 @@ pub enum CommandArgumentValue {
 /// A semantic command independent of its invocation source and native adapter.
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct Command {
-    pub name: String,
+    pub name: CommandName,
     pub arguments: CommandArgumentValue,
 }
 
@@ -257,7 +294,7 @@ pub enum HostOperation {
         if_revision: u64,
     },
     RegisterCommand {
-        name: String,
+        name: CommandName,
     },
     UnregisterCommand {
         registration: CommandRegistrationId,

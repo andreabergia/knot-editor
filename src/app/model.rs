@@ -15,8 +15,9 @@ use crate::{
         buffer::TextBuffer,
     },
     host::protocol::{
-        BufferHandle, BufferSubscriptionId, ByteRange, CommandRegistrationId, DecorationToken,
-        EditorContribution, ExtensionId, ExtensionLifecycleId, GutterToken, SnapshotText,
+        BufferHandle, BufferSubscriptionId, ByteRange, CommandName, CommandRegistrationId,
+        DecorationToken, EditorContribution, ExtensionId, ExtensionLifecycleId, GutterToken,
+        SnapshotText,
     },
 };
 
@@ -659,7 +660,7 @@ pub enum CommandOwner {
 /// Foreground-owned metadata for one discoverable command.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CommandDefinition {
-    pub name: String,
+    pub name: CommandName,
     pub title: String,
     pub owner: CommandOwner,
 }
@@ -667,8 +668,8 @@ pub struct CommandDefinition {
 /// Foreground-authoritative command names and their extension ownership.
 pub struct CommandRegistry {
     next_registration: u64,
-    by_name: HashMap<String, CommandRegistration>,
-    by_id: HashMap<CommandRegistrationId, String>,
+    by_name: HashMap<CommandName, CommandRegistration>,
+    by_id: HashMap<CommandRegistrationId, CommandName>,
 }
 
 /// Foreground-authoritative buffer-change subscriptions.
@@ -800,7 +801,7 @@ impl CommandRegistry {
 
     pub(crate) fn register(
         &mut self,
-        name: String,
+        name: CommandName,
         extension: ExtensionId,
         lifecycle: ExtensionLifecycleId,
     ) -> Result<CommandRegistrationId, CommandRegistryError> {
@@ -1484,10 +1485,10 @@ mod tests {
             },
         };
 
-        assert_eq!(native.name, "editor.copy");
+        assert_eq!(native.name.as_ref(), "editor.copy");
         assert_eq!(native.title, "Copy");
         assert_eq!(native.owner, CommandOwner::Native);
-        assert_eq!(extension.name, "example.transform");
+        assert_eq!(extension.name.as_ref(), "example.transform");
         assert_eq!(
             extension.owner,
             CommandOwner::Extension {
