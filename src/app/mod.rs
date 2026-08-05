@@ -30,7 +30,7 @@ use editor::{
     EditorContributionAction, EditorRenderingOptions, EditorView, seed_fixture_contributions,
 };
 use model::{
-    BufferAccessError, BufferModel, BufferRegistry, BufferSubscriptionRegistry, CommandRegistry,
+    BufferAccessError, BufferModel, BufferRegistry, BufferSubscriptionRegistry, CommandCatalog,
     ContributionError, ContributionSource,
 };
 use open_buffers::{OpenBufferCollection, OpenBufferId};
@@ -135,10 +135,10 @@ fn map_buffer_error(error: BufferAccessError) -> HostRequestError {
     }
 }
 
-fn map_command_error(error: model::CommandRegistryError) -> HostRequestError {
+fn map_command_error(error: model::CommandCatalogError) -> HostRequestError {
     match error {
-        model::CommandRegistryError::NameInUse => HostRequestError::CommandNameInUse,
-        model::CommandRegistryError::NotFound => HostRequestError::CommandNotFound,
+        model::CommandCatalogError::NameInUse => HostRequestError::CommandNameInUse,
+        model::CommandCatalogError::NotFound => HostRequestError::CommandNotFound,
     }
 }
 
@@ -197,7 +197,7 @@ struct Shell {
     terminal: Entity<TerminalView>,
     buffer_registry: BufferRegistry,
     buffer_subscriptions: BufferSubscriptionRegistry,
-    command_registry: CommandRegistry,
+    command_catalog: CommandCatalog,
     next_tree_registration: u64,
     next_command_invocation: u64,
     active_command: Option<CommandInvocationId>,
@@ -386,7 +386,7 @@ impl Shell {
             terminal,
             buffer_registry,
             buffer_subscriptions: BufferSubscriptionRegistry::new(),
-            command_registry: CommandRegistry::new(),
+            command_catalog: CommandCatalog::new(),
             next_tree_registration: 1,
             next_command_invocation: 1,
             active_command: None,
@@ -432,7 +432,7 @@ impl Shell {
             let (extension, lifecycle) = control.identity();
             let _ = this.update(cx, |this, cx| {
                 this.extension_controls.remove(&(extension, lifecycle));
-                this.command_registry.remove_lifecycle(extension, lifecycle);
+                this.command_catalog.remove_lifecycle(extension, lifecycle);
                 this.buffer_subscriptions
                     .remove_lifecycle(extension, lifecycle);
                 this.buffer_registry
@@ -501,13 +501,13 @@ impl Shell {
                         .read_with(cx, |model, _| model.revision());
                     HostResponseValue::AppliedEdits { revision }
                 }),
-            HostOperation::RegisterCommand { name } => self
-                .command_registry
-                .register(name, request.extension, request.lifecycle)
+            HostOperation::RegisterCommand { name, title } => self
+                .command_catalog
+                .register_extension(name, title, request.extension, request.lifecycle)
                 .map(|registration| HostResponseValue::CommandRegistered { registration })
                 .map_err(map_command_error),
             HostOperation::UnregisterCommand { registration } => self
-                .command_registry
+                .command_catalog
                 .unregister(registration, request.extension, request.lifecycle)
                 .map(|()| HostResponseValue::CommandUnregistered { registration })
                 .map_err(map_command_error),
@@ -695,7 +695,7 @@ impl Shell {
                 .detach();
             }
             TreeViewEvent::InvokeCommand { provider, command } => {
-                let Ok(target) = self.command_registry.resolve(&command) else {
+                let Ok(target) = self.command_catalog.resolve_extension(&command) else {
                     return;
                 };
                 if target.extension == provider.extension && target.lifecycle == provider.lifecycle
@@ -746,7 +746,7 @@ impl Shell {
         if self.active_command.is_some() {
             return;
         }
-        let target = match self.command_registry.resolve("knot.fixture.edit") {
+        let target = match self.command_catalog.resolve_extension("knot.fixture.edit") {
             Ok(target) => target,
             Err(_) => {
                 self.command_state = "unavailable".into();
@@ -786,7 +786,7 @@ impl Shell {
         }) {
             return;
         }
-        let Ok(target) = self.command_registry.resolve(&action.command) else {
+        let Ok(target) = self.command_catalog.resolve_extension(&action.command) else {
             return;
         };
         if target.extension != extension || target.lifecycle != lifecycle {
@@ -2054,7 +2054,7 @@ mod tests {
         let (first_extension, first_lifecycle) = first.identity();
         shell.update(cx, |shell, _| {
             shell
-                .command_registry
+                .command_catalog
                 .remove_lifecycle(first_extension, first_lifecycle);
         });
         second
@@ -2335,7 +2335,7 @@ mod tests {
             let (target, active_buffer) = cx.read(|cx| {
                 let shell = shell.read(cx);
                 (
-                    shell.command_registry.resolve(name).unwrap(),
+                    shell.command_catalog.resolve_extension(name).unwrap(),
                     shell.buffer_registry.active_handle(),
                 )
             });
@@ -2370,8 +2370,8 @@ mod tests {
         assert!(cx.read(|cx| {
             shell
                 .read(cx)
-                .command_registry
-                .resolve("knot.fixture.disposed")
+                .command_catalog
+                .resolve_extension("knot.fixture.disposed")
                 .is_err()
         }));
 

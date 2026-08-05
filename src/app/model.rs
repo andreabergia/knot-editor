@@ -665,10 +665,10 @@ pub struct CommandDefinition {
     pub owner: CommandOwner,
 }
 
-/// Foreground-authoritative command names and their extension ownership.
-pub struct CommandRegistry {
+/// Foreground-authoritative command definitions and their ownership.
+pub struct CommandCatalog {
     next_registration: u64,
-    by_name: HashMap<CommandName, CommandRegistration>,
+    by_name: HashMap<CommandName, CommandCatalogEntry>,
     by_id: HashMap<CommandRegistrationId, CommandName>,
 }
 
@@ -770,10 +770,9 @@ impl Default for BufferSubscriptionRegistry {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct CommandRegistration {
-    id: CommandRegistrationId,
-    extension: ExtensionId,
-    lifecycle: ExtensionLifecycleId,
+struct CommandCatalogEntry {
+    definition: CommandDefinition,
+    extension_registration: CommandRegistrationId,
 }
 
 /// The extension lifetime authorized to receive a named command invocation.
@@ -785,12 +784,12 @@ pub(crate) struct CommandTarget {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CommandRegistryError {
+pub(crate) enum CommandCatalogError {
     NameInUse,
     NotFound,
 }
 
-impl CommandRegistry {
+impl CommandCatalog {
     pub fn new() -> Self {
         Self {
             next_registration: 1,
@@ -799,14 +798,15 @@ impl CommandRegistry {
         }
     }
 
-    pub(crate) fn register(
+    pub(crate) fn register_extension(
         &mut self,
         name: CommandName,
+        title: String,
         extension: ExtensionId,
         lifecycle: ExtensionLifecycleId,
-    ) -> Result<CommandRegistrationId, CommandRegistryError> {
+    ) -> Result<CommandRegistrationId, CommandCatalogError> {
         if self.by_name.contains_key(&name) {
-            return Err(CommandRegistryError::NameInUse);
+            return Err(CommandCatalogError::NameInUse);
         }
         let id = CommandRegistrationId::new(self.next_registration);
         self.next_registration = self
@@ -815,25 +815,45 @@ impl CommandRegistry {
             .expect("command registration space exhausted");
         self.by_name.insert(
             name.clone(),
-            CommandRegistration {
-                id,
-                extension,
-                lifecycle,
+            CommandCatalogEntry {
+                definition: CommandDefinition {
+                    name: name.clone(),
+                    title,
+                    owner: CommandOwner::Extension {
+                        extension,
+                        lifecycle,
+                    },
+                },
+                extension_registration: id,
             },
         );
         self.by_id.insert(id, name);
         Ok(id)
     }
 
-    pub(crate) fn resolve(&self, name: &str) -> Result<CommandTarget, CommandRegistryError> {
-        let registration = self
+    pub fn definitions(&self) -> impl Iterator<Item = &CommandDefinition> {
+        self.by_name.values().map(|entry| &entry.definition)
+    }
+
+    pub(crate) fn resolve_extension(
+        &self,
+        name: &str,
+    ) -> Result<CommandTarget, CommandCatalogError> {
+        let entry = self
             .by_name
             .get(name)
-            .ok_or(CommandRegistryError::NotFound)?;
+            .ok_or(CommandCatalogError::NotFound)?;
+        let CommandOwner::Extension {
+            extension,
+            lifecycle,
+        } = entry.definition.owner
+        else {
+            return Err(CommandCatalogError::NotFound);
+        };
         Ok(CommandTarget {
-            registration: registration.id,
-            extension: registration.extension,
-            lifecycle: registration.lifecycle,
+            registration: entry.extension_registration,
+            extension,
+            lifecycle,
         })
     }
 
@@ -842,11 +862,16 @@ impl CommandRegistry {
         id: CommandRegistrationId,
         extension: ExtensionId,
         lifecycle: ExtensionLifecycleId,
-    ) -> Result<(), CommandRegistryError> {
-        let name = self.by_id.get(&id).ok_or(CommandRegistryError::NotFound)?;
-        let registration = self.by_name.get(name).expect("command indexes agree");
-        if registration.extension != extension || registration.lifecycle != lifecycle {
-            return Err(CommandRegistryError::NotFound);
+    ) -> Result<(), CommandCatalogError> {
+        let name = self.by_id.get(&id).ok_or(CommandCatalogError::NotFound)?;
+        let entry = self.by_name.get(name).expect("command indexes agree");
+        if entry.definition.owner
+            != (CommandOwner::Extension {
+                extension,
+                lifecycle,
+            })
+        {
+            return Err(CommandCatalogError::NotFound);
         }
         let name = self.by_id.remove(&id).expect("command exists");
         self.by_name.remove(&name);
@@ -862,8 +887,12 @@ impl CommandRegistry {
             .by_name
             .iter()
             .filter_map(|(name, registration)| {
-                (registration.extension == extension && registration.lifecycle == lifecycle)
-                    .then_some((registration.id, name.clone()))
+                (registration.definition.owner
+                    == (CommandOwner::Extension {
+                        extension,
+                        lifecycle,
+                    }))
+                .then_some((registration.extension_registration, name.clone()))
             })
             .collect();
         for (id, name) in registrations {
@@ -873,7 +902,7 @@ impl CommandRegistry {
     }
 }
 
-impl Default for CommandRegistry {
+impl Default for CommandCatalog {
     fn default() -> Self {
         Self::new()
     }
@@ -1424,15 +1453,31 @@ mod tests {
 
     #[test]
     fn command_names_belong_to_one_extension_lifetime() {
-        let mut registry = CommandRegistry::new();
+        let mut catalog = CommandCatalog::new();
         let extension = ExtensionId::new(7);
         let lifecycle = ExtensionLifecycleId::new(3);
-        let registration = registry
-            .register("knot.fixture.edit".into(), extension, lifecycle)
+        let registration = catalog
+            .register_extension(
+                "knot.fixture.edit".into(),
+                "Edit fixture".into(),
+                extension,
+                lifecycle,
+            )
             .unwrap();
 
         assert_eq!(
-            registry.resolve("knot.fixture.edit").unwrap(),
+            catalog.definitions().cloned().collect::<Vec<_>>(),
+            vec![CommandDefinition {
+                name: "knot.fixture.edit".into(),
+                title: "Edit fixture".into(),
+                owner: CommandOwner::Extension {
+                    extension,
+                    lifecycle,
+                },
+            }]
+        );
+        assert_eq!(
+            catalog.resolve_extension("knot.fixture.edit").unwrap(),
             CommandTarget {
                 registration,
                 extension,
@@ -1440,32 +1485,38 @@ mod tests {
             }
         );
         assert_eq!(
-            registry.register(
+            catalog.register_extension(
                 "knot.fixture.edit".into(),
+                "Other edit".into(),
                 ExtensionId::new(8),
                 ExtensionLifecycleId::new(4),
             ),
-            Err(CommandRegistryError::NameInUse)
+            Err(CommandCatalogError::NameInUse)
         );
         assert_eq!(
-            registry.unregister(registration, extension, ExtensionLifecycleId::new(4)),
-            Err(CommandRegistryError::NotFound)
+            catalog.unregister(registration, extension, ExtensionLifecycleId::new(4)),
+            Err(CommandCatalogError::NotFound)
         );
-        registry
+        catalog
             .unregister(registration, extension, lifecycle)
             .unwrap();
         assert_eq!(
-            registry.resolve("knot.fixture.edit"),
-            Err(CommandRegistryError::NotFound)
+            catalog.resolve_extension("knot.fixture.edit"),
+            Err(CommandCatalogError::NotFound)
         );
 
-        let replacement = registry
-            .register("knot.fixture.edit".into(), extension, lifecycle)
+        let replacement = catalog
+            .register_extension(
+                "knot.fixture.edit".into(),
+                "Edit fixture".into(),
+                extension,
+                lifecycle,
+            )
             .unwrap();
-        registry.remove_lifecycle(extension, lifecycle);
+        catalog.remove_lifecycle(extension, lifecycle);
         assert_eq!(
-            registry.unregister(replacement, extension, lifecycle),
-            Err(CommandRegistryError::NotFound)
+            catalog.unregister(replacement, extension, lifecycle),
+            Err(CommandCatalogError::NotFound)
         );
     }
 

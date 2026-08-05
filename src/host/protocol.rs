@@ -295,6 +295,7 @@ pub enum HostOperation {
     },
     RegisterCommand {
         name: CommandName,
+        title: String,
     },
     UnregisterCommand {
         registration: CommandRegistrationId,

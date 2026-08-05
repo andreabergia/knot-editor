@@ -735,8 +735,14 @@ async fn op_command_register(
     state: Rc<RefCell<OpState>>,
     #[string] name: String,
 ) -> Result<u64, JsErrorBox> {
-    let response =
-        request_host_operation(state, HostOperation::RegisterCommand { name: name.into() }).await?;
+    let response = request_host_operation(
+        state,
+        HostOperation::RegisterCommand {
+            title: name.clone(),
+            name: name.into(),
+        },
+    )
+    .await?;
     match response.result {
         Ok(HostResponseValue::CommandRegistered { registration }) => Ok(registration.value()),
         Ok(_) => Err(JsErrorBox::generic(
@@ -2602,6 +2608,7 @@ mod tests {
             request.operation,
             HostOperation::RegisterCommand {
                 name: "knot.fixture.command".into(),
+                title: "knot.fixture.command".into(),
             }
         );
         runtime

@@ -98,7 +98,7 @@ to retarget the command.
   the Knot-owned protocol boundary.
 - ✅ Add minimal definition metadata needed for discovery: stable name,
   display title, and native or extension ownership.
-- ⬜ Refactor the existing extension-only `CommandRegistry` into the
+- ✅ Refactor the existing extension-only `CommandRegistry` into the
   authoritative command catalog without moving native handlers into it.
 - ⬜ Reserve native command names and preserve lifecycle cleanup for extension
   definitions.
