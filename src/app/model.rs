@@ -646,6 +646,24 @@ impl Default for BufferRegistry {
     }
 }
 
+/// The application owner of a discoverable command definition.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CommandOwner {
+    Native,
+    Extension {
+        extension: ExtensionId,
+        lifecycle: ExtensionLifecycleId,
+    },
+}
+
+/// Foreground-owned metadata for one discoverable command.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CommandDefinition {
+    pub name: String,
+    pub title: String,
+    pub owner: CommandOwner,
+}
+
 /// Foreground-authoritative command names and their extension ownership.
 pub struct CommandRegistry {
     next_registration: u64,
@@ -1447,6 +1465,35 @@ mod tests {
         assert_eq!(
             registry.unregister(replacement, extension, lifecycle),
             Err(CommandRegistryError::NotFound)
+        );
+    }
+
+    #[test]
+    fn command_definitions_describe_native_and_extension_ownership() {
+        let native = CommandDefinition {
+            name: "editor.copy".into(),
+            title: "Copy".into(),
+            owner: CommandOwner::Native,
+        };
+        let extension = CommandDefinition {
+            name: "example.transform".into(),
+            title: "Transform Selection".into(),
+            owner: CommandOwner::Extension {
+                extension: ExtensionId::new(7),
+                lifecycle: ExtensionLifecycleId::new(3),
+            },
+        };
+
+        assert_eq!(native.name, "editor.copy");
+        assert_eq!(native.title, "Copy");
+        assert_eq!(native.owner, CommandOwner::Native);
+        assert_eq!(extension.name, "example.transform");
+        assert_eq!(
+            extension.owner,
+            CommandOwner::Extension {
+                extension: ExtensionId::new(7),
+                lifecycle: ExtensionLifecycleId::new(3),
+            }
         );
     }
 

@@ -96,7 +96,7 @@ to retarget the command.
 
 - ✅ Add a serializable `Command` value with a name and JSON-like arguments at
   the Knot-owned protocol boundary.
-- ⬜ Add minimal definition metadata needed for discovery: stable name,
+- ✅ Add minimal definition metadata needed for discovery: stable name,
   display title, and native or extension ownership.
 - ⬜ Refactor the existing extension-only `CommandRegistry` into the
   authoritative command catalog without moving native handlers into it.
