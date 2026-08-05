@@ -94,7 +94,7 @@ to retarget the command.
 
 ### 1. Separate command values, definitions, and ownership
 
-- ⬜ Add a serializable `Command` value with a name and JSON-like arguments at
+- ✅ Add a serializable `Command` value with a name and JSON-like arguments at
   the Knot-owned protocol boundary.
 - ⬜ Add minimal definition metadata needed for discovery: stable name,
   display title, and native or extension ownership.

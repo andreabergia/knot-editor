@@ -5,7 +5,7 @@
 //! editor to access a buffer; neither side needs to expose a V8, Deno, gpui,
 //! or Rust editor-model object to JavaScript.
 
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 /// An extension-owned identity, opaque outside the host boundary.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -115,6 +115,25 @@ impl BufferHandle {
     pub(crate) const fn value(self) -> u64 {
         self.0
     }
+}
+
+/// One JSON-compatible value carried as an explicit command argument.
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(untagged)]
+pub enum CommandArgumentValue {
+    Null,
+    Boolean(bool),
+    Number(f64),
+    String(String),
+    Array(Vec<Self>),
+    Object(BTreeMap<String, Self>),
+}
+
+/// A semantic command independent of its invocation source and native adapter.
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct Command {
+    pub name: String,
+    pub arguments: CommandArgumentValue,
 }
 
 /// A half-open range in UTF-8 byte offsets.
@@ -386,9 +405,44 @@ pub enum HostRequestError {
 #[cfg(test)]
 mod tests {
     use super::{
-        BufferHandle, ExtensionId, ExtensionLifecycleId, HostOperation, HostRequest, HostResponse,
-        HostResponseValue, RequestId,
+        BufferHandle, Command, CommandArgumentValue, ExtensionId, ExtensionLifecycleId,
+        HostOperation, HostRequest, HostResponse, HostResponseValue, RequestId,
     };
+
+    #[test]
+    fn command_round_trips_json_compatible_arguments() {
+        let command = Command {
+            name: "editor.insert".into(),
+            arguments: CommandArgumentValue::Object(
+                [
+                    ("enabled".into(), CommandArgumentValue::Boolean(true)),
+                    (
+                        "options".into(),
+                        CommandArgumentValue::Array(vec![
+                            CommandArgumentValue::Null,
+                            CommandArgumentValue::Number(3.5),
+                        ]),
+                    ),
+                    ("text".into(), CommandArgumentValue::String("λ".into())),
+                ]
+                .into(),
+            ),
+        };
+
+        let json = serde_json::to_string(&command).unwrap();
+        assert_eq!(serde_json::from_str::<Command>(&json).unwrap(), command);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&json).unwrap(),
+            serde_json::json!({
+                "name": "editor.insert",
+                "arguments": {
+                    "enabled": true,
+                    "options": [null, 3.5],
+                    "text": "λ"
+                }
+            })
+        );
+    }
 
     #[test]
     fn response_keeps_the_extension_and_request_identity() {
