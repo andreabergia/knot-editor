@@ -79,14 +79,16 @@ boundary requiring it.
 
 ## 11. Command and keymap dispatch
 
+Execution plan: [step11-command-keymap-plan.md](step11-command-keymap-plan.md).
+
 - Make commands first-class values with names, arguments, and programmatic
   invocation.
 - Capture focused target, optional buffer, window/workspace, and invocation
   identity at dispatch time.
 - Route native commands through the focus hierarchy.
 - Revalidate captured targets after asynchronous waits.
-- Add transient and active keymaps, prefix-style invocation, and command
-  composition.
+- Exercise transient and active keymap contexts and multi-keystroke invocation
+  through gpui's existing keymap machinery.
 - Exercise one operation from keybinding, command palette, and script with the
   same explicit arguments.
 
@@ -95,6 +97,23 @@ protocols do not become registered commands.
 
 Decision checkpoint: does context-targeted focus routing cover text and
 non-text surfaces without fabricating buffers?
+
+## 11b. Async command invocation
+
+Exploration plan:
+[step11b-async-command-plan.md](step11b-async-command-plan.md).
+
+- Explore command-to-command invocation separately from focus routing.
+- Use ordinary JavaScript as the composition mechanism; do not add a command
+  DSL, pipelines, repetition, or decorators.
+- Determine whether native, cross-extension, and same-extension invocations can
+  be awaited without violating serial extension callbacks.
+- Define result, cancellation, context inheritance, and concurrency semantics
+  only where concrete composition fixtures require them.
+
+Decision checkpoint: can JavaScript commands safely reuse and await other
+commands without turning the dispatcher into a second function or task-graph
+system?
 
 ## 12. Capability aggregation
 
