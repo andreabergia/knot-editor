@@ -1329,8 +1329,12 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
+    use std::{cell::RefCell, rc::Rc};
 
-    use gpui::{AppContext, Entity, Focusable, Modifiers, MouseButton, TestAppContext, point, px};
+    use gpui::{
+        AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement,
+        Modifiers, MouseButton, ParentElement, Render, TestAppContext, Window, div, point, px,
+    };
 
     use super::{
         BufferModel, ContributionSource, Shell, editor::EditorContributionAction,
@@ -1343,6 +1347,72 @@ mod tests {
             GutterToken, HostOperation, HostRequest, HostRequestError, RequestId, TextEdit,
         },
     };
+
+    gpui::actions!(step11_probe, [ClaimedProbe, FallbackProbe]);
+
+    struct FocusDispatchProbe {
+        target: FocusHandle,
+        other: FocusHandle,
+        visits: Rc<RefCell<Vec<&'static str>>>,
+    }
+
+    impl Render for FocusDispatchProbe {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let child_claimed_visits = self.visits.clone();
+            let child_fallback_visits = self.visits.clone();
+            let parent_claimed_visits = self.visits.clone();
+            let parent_fallback_visits = self.visits.clone();
+
+            div()
+                .on_action(move |_: &ClaimedProbe, _, _| {
+                    parent_claimed_visits.borrow_mut().push("parent-claimed");
+                })
+                .on_action(move |_: &FallbackProbe, _, _| {
+                    parent_fallback_visits.borrow_mut().push("parent-fallback");
+                })
+                .child(
+                    div()
+                        .track_focus(&self.target)
+                        .on_action(move |_: &ClaimedProbe, _, _| {
+                            child_claimed_visits.borrow_mut().push("child-claimed");
+                        })
+                        .on_action(move |_: &FallbackProbe, _, cx| {
+                            child_fallback_visits.borrow_mut().push("child-fallback");
+                            cx.propagate();
+                        }),
+                )
+                .child(div().track_focus(&self.other))
+        }
+    }
+
+    #[gpui::test]
+    fn focus_handle_dispatch_preserves_focus_and_uses_normal_bubbling(cx: &mut TestAppContext) {
+        let visits = Rc::new(RefCell::new(Vec::new()));
+        let fixture_visits = visits.clone();
+        let (probe, cx) = cx.add_window_view(move |_, cx| FocusDispatchProbe {
+            target: cx.focus_handle(),
+            other: cx.focus_handle(),
+            visits: fixture_visits,
+        });
+
+        cx.update(|window, cx| {
+            let (target, other) = {
+                let probe = probe.read(cx);
+                (probe.target.clone(), probe.other.clone())
+            };
+            window.focus(&other);
+
+            target.dispatch_action(&ClaimedProbe, window, cx);
+            target.dispatch_action(&FallbackProbe, window, cx);
+
+            assert!(other.is_focused(window));
+        });
+
+        assert_eq!(
+            visits.borrow().as_slice(),
+            ["child-claimed", "child-fallback", "parent-fallback"]
+        );
+    }
 
     async fn wait_for_runtime_state(
         shell: &Entity<Shell>,

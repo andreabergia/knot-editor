@@ -147,6 +147,11 @@ explicit `FocusHandle` dispatch in tests before adding catalog or palette UI.
 If gpui's public routing cannot preserve the required context, record the
 specific gap before introducing any Knot-owned routing table.
 
+✅ A focused gpui fixture verifies that dispatching at an explicit rendered
+`FocusHandle` does not change visible focus, stops at the nearest handler by
+default, and reaches an enclosing handler when the nearest handler explicitly
+continues propagation.
+
 ### 4. Add a target-preserving command palette
 
 - ⬜ Add a minimal native palette that lists discoverable command definitions,
