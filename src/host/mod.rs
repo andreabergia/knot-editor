@@ -40,9 +40,13 @@ const EXTENSION_HEAP_LIMIT_BYTES: usize = 32 * 1024 * 1024;
 const PRIVATE_BOOTSTRAP_SOURCE: &str = r#"
 const nativeOps = Deno.core.ops;
 
-async function bufferRequest(request) {
-  const response = await nativeOps.op_buffer_request(request);
-  return nativeOps.op_buffer_response_take(response);
+async function nativeResponse(request) {
+  const response = await request;
+  return nativeOps.op_native_response_take(response);
+}
+
+function bufferRequest(request) {
+  return nativeResponse(nativeOps.op_buffer_request(request));
 }
 
 const buffers = new Map();
@@ -210,7 +214,9 @@ export async function registerCommand(name, handler) {
   if (typeof name !== "string" || typeof handler !== "function") {
     throw new TypeError("commands.register requires a name and handler");
   }
-  const registration = await nativeOps.op_command_register(name);
+  const result = await nativeResponse(nativeOps.op_command_register(name));
+  if (result.kind === "error") hostError(result.error);
+  const registration = result.registration;
   commandHandlers.set(registration, handler);
   let disposed = false;
   return Object.freeze({
@@ -218,7 +224,9 @@ export async function registerCommand(name, handler) {
       if (disposed) return;
       disposed = true;
       commandHandlers.delete(registration);
-      void nativeOps.op_command_unregister(registration);
+      void nativeResponse(nativeOps.op_command_unregister(registration)).then((result) => {
+        if (result.kind === "error") hostError(result.error);
+      });
     },
   });
 }
@@ -405,7 +413,7 @@ deno_core::extension!(
     ops = [
         op_buffer_active,
         op_buffer_request,
-        op_buffer_response_take,
+        op_native_response_take,
         op_command_register,
         op_command_unregister,
         op_buffer_subscribe,
@@ -477,17 +485,27 @@ enum NativeBufferOperation {
     DisposeEditorContributions,
 }
 
-enum NativeBufferResponse {
-    Snapshot { snapshot: protocol::TextSnapshot },
-    AppliedEdits { revision: u64 },
+enum NativeResponse {
+    Snapshot {
+        snapshot: protocol::TextSnapshot,
+    },
+    AppliedEdits {
+        revision: u64,
+    },
     EditorContributionsReplaced,
     EditorContributionsDisposed,
-    HostError { error: protocol::HostRequestError },
+    CommandRegistered {
+        registration: protocol::CommandRegistrationId,
+    },
+    CommandUnregistered,
+    HostError {
+        error: protocol::HostRequestError,
+    },
 }
 
 struct NativeResponseStore {
     next: u32,
-    responses: HashMap<u32, NativeBufferResponse>,
+    responses: HashMap<u32, NativeResponse>,
 }
 
 #[derive(serde::Deserialize)]
@@ -513,7 +531,7 @@ impl NativeResponseStore {
         }
     }
 
-    fn insert(&mut self, response: NativeBufferResponse) -> u32 {
+    fn insert(&mut self, response: NativeResponse) -> u32 {
         let id = self.next;
         self.next = self
             .next
@@ -563,7 +581,7 @@ unsafe extern "C" fn drop_external_utf16(data: *mut u16, len: usize) {
     drop(unsafe { Arc::<[u16]>::from_raw(slice) });
 }
 
-impl NativeBufferResponse {
+impl NativeResponse {
     fn to_v8<'a>(
         self,
         scope: &mut deno_core::v8::PinScope<'a, '_>,
@@ -603,6 +621,16 @@ impl NativeBufferResponse {
             }
             Self::EditorContributionsDisposed => {
                 let kind = v8_text(scope, "editorContributionsDisposed")?;
+                set_v8_property(scope, response, "kind", kind.into())?;
+            }
+            Self::CommandRegistered { registration } => {
+                let kind = v8_text(scope, "commandRegistered")?;
+                set_v8_property(scope, response, "kind", kind.into())?;
+                let registration = deno_core::v8::Number::new(scope, registration.value() as f64);
+                set_v8_property(scope, response, "registration", registration.into())?;
+            }
+            Self::CommandUnregistered => {
+                let kind = v8_text(scope, "commandUnregistered")?;
                 set_v8_property(scope, response, "kind", kind.into())?;
             }
             Self::HostError { error } => {
@@ -692,22 +720,22 @@ async fn op_buffer_request(
     };
     let response = request_host_operation(Rc::clone(&state), operation).await?;
     let response = match response.result {
-        Ok(HostResponseValue::Snapshot(snapshot)) => NativeBufferResponse::Snapshot { snapshot },
+        Ok(HostResponseValue::Snapshot(snapshot)) => NativeResponse::Snapshot { snapshot },
         Ok(HostResponseValue::AppliedEdits { revision }) => {
-            NativeBufferResponse::AppliedEdits { revision }
+            NativeResponse::AppliedEdits { revision }
         }
         Ok(HostResponseValue::EditorContributionsReplaced) => {
-            NativeBufferResponse::EditorContributionsReplaced
+            NativeResponse::EditorContributionsReplaced
         }
         Ok(HostResponseValue::EditorContributionsDisposed) => {
-            NativeBufferResponse::EditorContributionsDisposed
+            NativeResponse::EditorContributionsDisposed
         }
         Ok(_) => {
             return Err(JsErrorBox::generic(
                 "Knot host returned the wrong response type",
             ));
         }
-        Err(error) => NativeBufferResponse::HostError { error },
+        Err(error) => NativeResponse::HostError { error },
     };
     Ok(state
         .borrow_mut()
@@ -716,7 +744,7 @@ async fn op_buffer_request(
 }
 
 #[deno_core::op2]
-fn op_buffer_response_take<'a>(
+fn op_native_response_take<'a>(
     scope: &mut v8::PinScope<'a, '_>,
     state: &mut OpState,
     #[smi] response: u32,
@@ -730,51 +758,58 @@ fn op_buffer_response_take<'a>(
 }
 
 #[deno_core::op2]
-#[number]
+#[smi]
 async fn op_command_register(
     state: Rc<RefCell<OpState>>,
     #[string] name: String,
-) -> Result<u64, JsErrorBox> {
+) -> Result<u32, JsErrorBox> {
     let response = request_host_operation(
-        state,
+        Rc::clone(&state),
         HostOperation::RegisterCommand {
             title: name.clone(),
             name: name.into(),
         },
     )
     .await?;
-    match response.result {
-        Ok(HostResponseValue::CommandRegistered { registration }) => Ok(registration.value()),
+    let response = match response.result {
+        Ok(HostResponseValue::CommandRegistered { registration }) => {
+            NativeResponse::CommandRegistered { registration }
+        }
         Ok(_) => Err(JsErrorBox::generic(
             "Knot host returned the wrong response type",
-        )),
-        Err(error) => Err(JsErrorBox::generic(format!(
-            "Knot host rejected command registration: {error:?}"
-        ))),
-    }
+        ))?,
+        Err(error) => NativeResponse::HostError { error },
+    };
+    Ok(state
+        .borrow_mut()
+        .borrow_mut::<NativeResponseStore>()
+        .insert(response))
 }
 
 #[deno_core::op2]
+#[smi]
 async fn op_command_unregister(
     state: Rc<RefCell<OpState>>,
     #[number] registration: u64,
-) -> Result<(), JsErrorBox> {
+) -> Result<u32, JsErrorBox> {
     let response = request_host_operation(
-        state,
+        Rc::clone(&state),
         HostOperation::UnregisterCommand {
             registration: protocol::CommandRegistrationId::new(registration),
         },
     )
     .await?;
-    match response.result {
-        Ok(HostResponseValue::CommandUnregistered { .. }) => Ok(()),
+    let response = match response.result {
+        Ok(HostResponseValue::CommandUnregistered { .. }) => NativeResponse::CommandUnregistered,
         Ok(_) => Err(JsErrorBox::generic(
             "Knot host returned the wrong response type",
-        )),
-        Err(error) => Err(JsErrorBox::generic(format!(
-            "Knot host rejected command unregistration: {error:?}"
-        ))),
-    }
+        ))?,
+        Err(error) => NativeResponse::HostError { error },
+    };
+    Ok(state
+        .borrow_mut()
+        .borrow_mut::<NativeResponseStore>()
+        .insert(response))
 }
 
 #[deno_core::op2]
@@ -2052,8 +2087,8 @@ mod tests {
     use crate::host::protocol::{
         BufferChange, BufferHandle, BufferSubscriptionId, ByteRange, CommandInvocation,
         CommandInvocationId, CommandRegistrationId, ExtensionId, ExtensionLifecycleId,
-        HostOperation, HostResponse, HostResponseValue, RequestId, SnapshotText, TextEdit,
-        TextSnapshot, TreeChildrenRequest, TreeCollapsibleState, TreeIcon,
+        HostOperation, HostRequestError, HostResponse, HostResponseValue, RequestId, SnapshotText,
+        TextEdit, TextSnapshot, TreeChildrenRequest, TreeCollapsibleState, TreeIcon,
         TreeProviderRegistrationId,
     };
 
@@ -2636,6 +2671,36 @@ mod tests {
             "if (globalThis.commandRuns !== 1) throw new Error('command did not run')",
         ))
         .unwrap();
+        runtime.shutdown();
+    }
+
+    #[test]
+    fn command_registration_errors_reach_javascript_with_stable_names() {
+        let host = V8Host::new();
+        let extension = ExtensionId::new(7);
+        let mut runtime = host.spawn_extension(extension);
+        let execution = runtime.execute_fixture_module(
+            "file:///fixtures/duplicate-command.js",
+            r#"
+                import { commands } from "knot:editor";
+                await commands.register("editor.copy", () => {});
+            "#,
+        );
+        let request = pollster::block_on(runtime.receive_request()).unwrap();
+        runtime
+            .respond(HostResponse {
+                extension,
+                lifecycle: request.lifecycle,
+                id: request.id,
+                result: Err(HostRequestError::CommandNameInUse),
+            })
+            .unwrap();
+
+        let error = pollster::block_on(execution).unwrap_err();
+        let ExtensionRuntimeExecutionError::JavaScriptException { report } = error else {
+            panic!("expected JavaScript exception: {error:?}");
+        };
+        assert!(report.contains("CommandNameInUseError"), "{report}");
         runtime.shutdown();
     }
 

@@ -1492,6 +1492,10 @@ mod tests {
         let mut catalog = CommandCatalog::new();
         let extension = ExtensionId::new(7);
         let lifecycle = ExtensionLifecycleId::new(3);
+        assert_eq!(
+            catalog.resolve_extension("knot.fixture.missing"),
+            Err(CommandCatalogError::NotFound)
+        );
         let registration = catalog
             .register_extension(
                 "knot.fixture.edit".into(),
@@ -1566,6 +1570,10 @@ mod tests {
             .register_native("editor.copy".into(), "Copy".into())
             .unwrap();
         assert_eq!(
+            catalog.register_native("editor.copy".into(), "Other copy".into()),
+            Err(CommandCatalogError::NameInUse)
+        );
+        assert_eq!(
             catalog.register_extension(
                 "editor.copy".into(),
                 "Replacement copy".into(),
@@ -1583,6 +1591,10 @@ mod tests {
                 lifecycle,
             )
             .unwrap();
+        assert_eq!(
+            catalog.register_native("example.transform".into(), "Native transform".into()),
+            Err(CommandCatalogError::NameInUse)
+        );
         catalog.remove_lifecycle(extension, lifecycle);
 
         assert_eq!(

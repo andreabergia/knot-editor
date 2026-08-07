@@ -102,7 +102,7 @@ to retarget the command.
   authoritative command catalog without moving native handlers into it.
 - ✅ Reserve native command names and preserve lifecycle cleanup for extension
   definitions.
-- ⬜ Reject duplicate native/extension names and invocations of missing or
+- ✅ Reject duplicate native/extension names and invocations of missing or
   disposed definitions with explicit errors.
 - ⬜ Keep argument validation in handlers; do not add schemas, coercion, or
   generic argument UI.
