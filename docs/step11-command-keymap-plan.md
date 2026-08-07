@@ -100,7 +100,7 @@ to retarget the command.
   display title, and native or extension ownership.
 - ✅ Refactor the existing extension-only `CommandRegistry` into the
   authoritative command catalog without moving native handlers into it.
-- ⬜ Reserve native command names and preserve lifecycle cleanup for extension
+- ✅ Reserve native command names and preserve lifecycle cleanup for extension
   definitions.
 - ⬜ Reject duplicate native/extension names and invocations of missing or
   disposed definitions with explicit errors.

@@ -772,7 +772,7 @@ impl Default for BufferSubscriptionRegistry {
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct CommandCatalogEntry {
     definition: CommandDefinition,
-    extension_registration: CommandRegistrationId,
+    extension_registration: Option<CommandRegistrationId>,
 }
 
 /// The extension lifetime authorized to receive a named command invocation.
@@ -824,11 +824,37 @@ impl CommandCatalog {
                         lifecycle,
                     },
                 },
-                extension_registration: id,
+                extension_registration: Some(id),
             },
         );
         self.by_id.insert(id, name);
         Ok(id)
+    }
+
+    #[allow(
+        dead_code,
+        reason = "native definitions are registered when native command routing is introduced"
+    )]
+    pub(crate) fn register_native(
+        &mut self,
+        name: CommandName,
+        title: String,
+    ) -> Result<(), CommandCatalogError> {
+        if self.by_name.contains_key(&name) {
+            return Err(CommandCatalogError::NameInUse);
+        }
+        self.by_name.insert(
+            name.clone(),
+            CommandCatalogEntry {
+                definition: CommandDefinition {
+                    name,
+                    title,
+                    owner: CommandOwner::Native,
+                },
+                extension_registration: None,
+            },
+        );
+        Ok(())
     }
 
     pub fn definitions(&self) -> impl Iterator<Item = &CommandDefinition> {
@@ -851,7 +877,9 @@ impl CommandCatalog {
             return Err(CommandCatalogError::NotFound);
         };
         Ok(CommandTarget {
-            registration: entry.extension_registration,
+            registration: entry
+                .extension_registration
+                .expect("extension definitions have registrations"),
             extension,
             lifecycle,
         })
@@ -886,13 +914,21 @@ impl CommandCatalog {
         let registrations: Vec<_> = self
             .by_name
             .iter()
-            .filter_map(|(name, registration)| {
-                (registration.definition.owner
-                    == (CommandOwner::Extension {
+            .filter_map(|(name, entry)| {
+                if entry.definition.owner
+                    != (CommandOwner::Extension {
                         extension,
                         lifecycle,
-                    }))
-                .then_some((registration.extension_registration, name.clone()))
+                    })
+                {
+                    return None;
+                }
+                Some((
+                    entry
+                        .extension_registration
+                        .expect("extension definitions have registrations"),
+                    name.clone(),
+                ))
             })
             .collect();
         for (id, name) in registrations {
@@ -1517,6 +1553,54 @@ mod tests {
         assert_eq!(
             catalog.unregister(replacement, extension, lifecycle),
             Err(CommandCatalogError::NotFound)
+        );
+    }
+
+    #[test]
+    fn native_command_names_remain_reserved_across_extension_cleanup() {
+        let mut catalog = CommandCatalog::new();
+        let extension = ExtensionId::new(7);
+        let lifecycle = ExtensionLifecycleId::new(3);
+
+        catalog
+            .register_native("editor.copy".into(), "Copy".into())
+            .unwrap();
+        assert_eq!(
+            catalog.register_extension(
+                "editor.copy".into(),
+                "Replacement copy".into(),
+                extension,
+                lifecycle,
+            ),
+            Err(CommandCatalogError::NameInUse)
+        );
+
+        catalog
+            .register_extension(
+                "example.transform".into(),
+                "Transform Selection".into(),
+                extension,
+                lifecycle,
+            )
+            .unwrap();
+        catalog.remove_lifecycle(extension, lifecycle);
+
+        assert_eq!(
+            catalog.definitions().cloned().collect::<Vec<_>>(),
+            vec![CommandDefinition {
+                name: "editor.copy".into(),
+                title: "Copy".into(),
+                owner: CommandOwner::Native,
+            }]
+        );
+        assert_eq!(
+            catalog.register_extension(
+                "editor.copy".into(),
+                "Replacement copy".into(),
+                extension,
+                ExtensionLifecycleId::new(4),
+            ),
+            Err(CommandCatalogError::NameInUse)
         );
     }
 
