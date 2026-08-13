@@ -597,6 +597,12 @@ impl BufferRegistry {
         self.active
     }
 
+    pub(crate) fn handle_for(&self, model: &Entity<BufferModel>) -> Option<BufferHandle> {
+        self.buffers.iter().find_map(|(handle, candidate)| {
+            (candidate.upgrade().as_ref() == Some(model)).then_some(*handle)
+        })
+    }
+
     pub fn resolve(&self, handle: BufferHandle) -> Result<Entity<BufferModel>, BufferClosed> {
         self.buffers
             .get(&handle)

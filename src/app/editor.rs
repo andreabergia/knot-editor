@@ -84,7 +84,9 @@ pub(crate) struct EditorContributionAction {
     pub command: String,
     pub source: ContributionSource,
     pub range: ByteRange,
-    pub window: Option<AnyWindowHandle>,
+    pub model: Entity<BufferModel>,
+    pub window: AnyWindowHandle,
+    pub focus: WeakFocusHandle,
 }
 
 #[derive(Clone, Copy)]
@@ -761,7 +763,9 @@ impl EditorView {
                 command: action.command.clone(),
                 source: action.source,
                 range: action.range,
-                window: Some(window.window_handle()),
+                model: self.model.clone(),
+                window: window.window_handle(),
+                focus: self.focus.downgrade(),
             });
             cx.stop_propagation();
             return;

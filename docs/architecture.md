@@ -79,9 +79,15 @@ Generated search entries retain their application-owned
 `SearchResultsController` alongside the model. The controller keeps semantic
 source targets and emitted output ranges separate from the generated text; the
 generic collection and model have no search-result semantics.
-`CommandRegistry` binds command names to one extension lifecycle.
+`CommandCatalog` owns native and extension command definitions; extension
+definitions bind their names to one lifecycle while native handlers remain on
+the gpui dispatch path.
 `BufferSubscriptionRegistry` routes committed changes to interested extension
 lifecycles.
+
+Each accepted command invocation retains its originating window, weak shell and
+focus identities, and optional surface-associated buffer for the duration of
+the invocation. These native target identities remain inside `app`.
 
 Each `EditorView` owns cursor, selection, scroll, focus, IME, rendering choices,
 and its persistent selection range. Multiple views may observe one model while

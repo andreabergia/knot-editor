@@ -113,7 +113,7 @@ to retarget the command.
   captured context alongside any in-flight extension command.
 - ✅ Keep the current restriction of at most one in-flight extension command;
   concurrent scheduling belongs to step 11b.
-- ⬜ Capture the target window, workspace/shell, weak focus handle, and optional
+- ✅ Capture the target window, workspace/shell, weak focus handle, and optional
   associated buffer when dispatch begins.
 - ⬜ Ensure a later focus or active-buffer change does not retarget an existing
   invocation.

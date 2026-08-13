@@ -169,11 +169,26 @@ struct DividerDrag {
 #[derive(Clone, Copy)]
 struct TerminalDividerDrag;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
+struct CommandOrigin {
+    window: AnyWindowHandle,
+    focus: WeakFocusHandle,
+    buffer: Option<BufferHandle>,
+}
+
+#[derive(Clone, Eq, PartialEq)]
+struct CapturedInvocationContext {
+    window: AnyWindowHandle,
+    workspace: WeakEntity<Shell>,
+    focus: WeakFocusHandle,
+    buffer: Option<BufferHandle>,
+}
+
+#[derive(Clone, Eq, PartialEq)]
 struct InFlightExtensionCommand {
     id: CommandInvocationId,
     target: model::CommandTarget,
-    buffer: Option<BufferHandle>,
+    context: CapturedInvocationContext,
 }
 
 /// Invisible drag-ghost view gpui renders while the drag is in progress.
@@ -701,13 +716,26 @@ impl Shell {
                 })
                 .detach();
             }
-            TreeViewEvent::InvokeCommand { provider, command } => {
+            TreeViewEvent::InvokeCommand {
+                provider,
+                command,
+                window,
+                focus,
+            } => {
                 let Ok(target) = self.command_catalog.resolve_extension(&command) else {
                     return;
                 };
                 if target.extension == provider.extension && target.lifecycle == provider.lifecycle
                 {
-                    self.invoke_command_target(target, cx);
+                    self.invoke_command_target(
+                        target,
+                        CommandOrigin {
+                            window,
+                            focus,
+                            buffer: None,
+                        },
+                        cx,
+                    );
                 }
             }
         }
@@ -749,10 +777,15 @@ impl Shell {
         }
     }
 
-    fn invoke_fixture_command(&mut self, cx: &mut Context<Self>) {
+    fn invoke_fixture_command(&mut self, window: &Window, cx: &mut Context<Self>) {
         if self.active_command.is_some() {
             return;
         }
+        let Some(focus) = window.focused(cx) else {
+            self.command_state = "invalid-target".into();
+            cx.notify();
+            return;
+        };
         let target = match self.command_catalog.resolve_extension("knot.fixture.edit") {
             Ok(target) => target,
             Err(_) => {
@@ -761,7 +794,15 @@ impl Shell {
                 return;
             }
         };
-        self.invoke_command_target(target, cx);
+        self.invoke_command_target(
+            target,
+            CommandOrigin {
+                window: window.window_handle(),
+                focus: focus.downgrade(),
+                buffer: self.buffer_registry.active_handle(),
+            },
+            cx,
+        );
     }
 
     fn invoke_contribution_action(
@@ -772,7 +813,7 @@ impl Shell {
         if action.source == ContributionSource::BuiltIn
             && action.command == ACTIVATE_SEARCH_RESULT_COMMAND
         {
-            self.activate_search_result(action.range, action.window, cx);
+            self.activate_search_result(action.range, Some(action.window), cx);
             return;
         }
         let ContributionSource::Extension {
@@ -782,7 +823,7 @@ impl Shell {
         else {
             return;
         };
-        let Some(buffer) = self.buffer_registry.active_handle() else {
+        let Some(buffer) = self.buffer_registry.handle_for(&action.model) else {
             return;
         };
         let Ok(model) = self.buffer_registry.resolve(buffer) else {
@@ -799,7 +840,15 @@ impl Shell {
         if target.extension != extension || target.lifecycle != lifecycle {
             return;
         }
-        self.invoke_command_target(target, cx);
+        self.invoke_command_target(
+            target,
+            CommandOrigin {
+                window: action.window,
+                focus: action.focus.clone(),
+                buffer: Some(buffer),
+            },
+            cx,
+        );
     }
 
     fn activate_search_result(
@@ -836,7 +885,12 @@ impl Shell {
         });
     }
 
-    fn invoke_command_target(&mut self, target: model::CommandTarget, cx: &mut Context<Self>) {
+    fn invoke_command_target(
+        &mut self,
+        target: model::CommandTarget,
+        origin: CommandOrigin,
+        cx: &mut Context<Self>,
+    ) {
         if self.active_command.is_some() {
             return;
         }
@@ -852,23 +906,30 @@ impl Shell {
         let command = InFlightExtensionCommand {
             id: self.allocate_command_invocation(),
             target,
-            buffer: self.buffer_registry.active_handle(),
+            context: CapturedInvocationContext {
+                window: origin.window,
+                workspace: cx.entity().downgrade(),
+                focus: origin.focus,
+                buffer: origin.buffer,
+            },
         };
+        let id = command.id;
+        let buffer = command.context.buffer;
         self.active_command = Some(command);
         self.command_state = "running".into();
         let execution = control.invoke_command(
             CommandInvocation {
-                id: command.id,
-                registration: command.target.registration,
-                extension: command.target.extension,
-                lifecycle: command.target.lifecycle,
+                id,
+                registration: target.registration,
+                extension: target.extension,
+                lifecycle: target.lifecycle,
             },
-            command.buffer,
+            buffer,
         );
         cx.spawn(async move |this, cx| {
             let result = execution.await;
             let _ = this.update(cx, |this, cx| {
-                this.finish_command(command.id, result.is_ok(), cx);
+                this.finish_command(id, result.is_ok(), cx);
             });
         })
         .detach();
@@ -890,7 +951,7 @@ impl Shell {
         succeeded: bool,
         cx: &mut Context<Self>,
     ) {
-        if self.active_command.map(|command| command.id) != Some(invocation) {
+        if self.active_command.as_ref().map(|command| command.id) != Some(invocation) {
             return;
         }
         self.active_command = None;
@@ -905,7 +966,7 @@ impl Shell {
     }
 
     fn cancel_active_command(&mut self, cx: &mut Context<Self>) {
-        if let Some(command) = self.active_command {
+        if let Some(command) = &self.active_command {
             self.cancelled_commands.insert(command.id);
             self.command_state = "cancelling".into();
             cx.notify();
@@ -1244,8 +1305,8 @@ impl Render for Shell {
                                     .cursor_pointer()
                                     .text_color(rgb(0x80c0ff))
                                     .child("run command")
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.invoke_fixture_command(cx);
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.invoke_fixture_command(window, cx);
                                     })),
                             )
                             .child(
@@ -1344,7 +1405,8 @@ mod tests {
 
     use gpui::{
         AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement,
-        Modifiers, MouseButton, ParentElement, Render, TestAppContext, Window, div, point, px,
+        Modifiers, MouseButton, ParentElement, Render, TestAppContext, VisualContext,
+        VisualTestContext, Window, div, point, px,
     };
 
     use super::{
@@ -1481,6 +1543,34 @@ mod tests {
                 .cloned()
                 .expect("shell has the requested runtime control")
         })
+    }
+
+    fn invoke_fixture_command_in_window(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
+        shell.update_in(cx, |shell, window, cx| {
+            let focus = shell.editor.focus_handle(cx);
+            window.focus(&focus);
+            shell.invoke_fixture_command(window, cx);
+        });
+    }
+
+    fn invoke_extension_target_in_window(
+        shell: &Entity<Shell>,
+        target: super::model::CommandTarget,
+        cx: &mut VisualTestContext,
+    ) {
+        shell.update_in(cx, |shell, window, cx| {
+            let focus = shell.editor.focus_handle(cx);
+            window.focus(&focus);
+            shell.invoke_command_target(
+                target,
+                super::CommandOrigin {
+                    window: window.window_handle(),
+                    focus: focus.downgrade(),
+                    buffer: shell.buffer_registry.active_handle(),
+                },
+                cx,
+            );
+        });
     }
 
     #[gpui::test]
@@ -1703,7 +1793,7 @@ mod tests {
             .spawn_extension(ExtensionId::new(10))
             .into_parts();
         let identity = runtime.control.identity();
-        let shell = cx.new(|cx| Shell::new(runtime, cx));
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(runtime, cx));
         wait_for_runtime_state(&shell, "running", cx).await;
         let control = only_runtime_control(&shell, cx);
 
@@ -1768,7 +1858,9 @@ mod tests {
             }));
         });
 
-        shell.update(cx, |shell, cx| {
+        shell.update_in(cx, |shell, window, cx| {
+            let focus = shell.editor.focus_handle(cx).downgrade();
+            let model = shell.editor.read(cx).model().clone();
             shell.invoke_contribution_action(
                 &EditorContributionAction {
                     command: "knot.fixture.test-contribution".into(),
@@ -1780,7 +1872,9 @@ mod tests {
                         start_byte_offset: 0,
                         end_byte_offset: 0,
                     },
-                    window: None,
+                    model,
+                    window: window.window_handle(),
+                    focus,
                 },
                 cx,
             );
@@ -1802,7 +1896,9 @@ mod tests {
                     .all(|contribution| contribution.command.is_none())
             );
         });
-        shell.update(cx, |shell, cx| {
+        shell.update_in(cx, |shell, window, cx| {
+            let focus = shell.editor.focus_handle(cx).downgrade();
+            let model = shell.editor.read(cx).model().clone();
             shell.invoke_contribution_action(
                 &EditorContributionAction {
                     command: "knot.fixture.test-contribution".into(),
@@ -1814,7 +1910,9 @@ mod tests {
                         start_byte_offset: 0,
                         end_byte_offset: 0,
                     },
-                    window: None,
+                    model,
+                    window: window.window_handle(),
+                    focus,
                 },
                 cx,
             );
@@ -1961,10 +2059,10 @@ mod tests {
         let runtime = V8Host::new()
             .spawn_extension(ExtensionId::new(10))
             .into_parts();
-        let shell = cx.new(|cx| Shell::new(runtime, cx));
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(runtime, cx));
         wait_for_runtime_state(&shell, "running", cx).await;
         let heartbeat = cx.read(|cx| shell.read(cx).heartbeat);
-        shell.update(cx, |shell, cx| shell.invoke_fixture_command(cx));
+        invoke_fixture_command_in_window(&shell, cx);
         wait_for_command_state(&shell, "completed", cx).await;
 
         let text = cx.read(|cx| {
@@ -2038,7 +2136,7 @@ mod tests {
     #[gpui::test]
     async fn fixture_command_runs_on_its_registered_extension(cx: &mut TestAppContext) {
         let host = V8Host::new();
-        let shell = cx.new(|cx| {
+        let (shell, cx) = cx.add_window_view(|_, cx| {
             Shell::new_with_runtimes(
                 vec![
                     host.spawn_extension(ExtensionId::new(14)).into_parts(),
@@ -2081,7 +2179,7 @@ mod tests {
             .await
             .unwrap();
 
-        shell.update(cx, |shell, cx| shell.invoke_fixture_command(cx));
+        invoke_fixture_command_in_window(&shell, cx);
         wait_for_command_state(&shell, "completed", cx).await;
         second
             .execute_fixture_script(
@@ -2099,7 +2197,7 @@ mod tests {
         let runtime = V8Host::new()
             .spawn_extension(ExtensionId::new(19))
             .into_parts();
-        let shell = cx.new(|cx| Shell::new(runtime, cx));
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(runtime, cx));
         wait_for_runtime_state(&shell, "running", cx).await;
         let control = only_runtime_control(&shell, cx);
         control
@@ -2127,19 +2225,23 @@ mod tests {
                 shell.buffer_registry.active_handle(),
             )
         });
-        shell.update(cx, |shell, cx| shell.invoke_command_target(target, cx));
+        invoke_extension_target_in_window(&shell, target, cx);
+        let window = cx.window_handle();
         cx.read(|cx| {
-            let command = shell.read(cx).active_command.unwrap();
+            let command = shell.read(cx).active_command.as_ref().unwrap();
             assert_eq!(command.id, CommandInvocationId::new(1));
             assert_eq!(command.target, target);
-            assert_eq!(command.buffer, buffer);
+            assert!(command.context.window == window);
+            assert_eq!(command.context.buffer, buffer);
+            assert_eq!(command.context.workspace.upgrade(), Some(shell.clone()));
+            assert!(command.context.focus.upgrade().is_some());
         });
 
-        shell.update(cx, |shell, cx| shell.invoke_command_target(target, cx));
+        invoke_extension_target_in_window(&shell, target, cx);
         cx.read(|cx| {
             let shell = shell.read(cx);
             assert_eq!(
-                shell.active_command.map(|command| command.id),
+                shell.active_command.as_ref().map(|command| command.id),
                 Some(CommandInvocationId::new(1))
             );
             assert_eq!(shell.next_command_invocation, 2);
@@ -2153,12 +2255,12 @@ mod tests {
             .await
             .unwrap();
 
-        shell.update(cx, |shell, cx| shell.invoke_command_target(target, cx));
+        invoke_extension_target_in_window(&shell, target, cx);
         cx.read(|cx| {
-            let command = shell.read(cx).active_command.unwrap();
+            let command = shell.read(cx).active_command.as_ref().unwrap();
             assert_eq!(command.id, CommandInvocationId::new(2));
             assert_eq!(command.target, target);
-            assert_eq!(command.buffer, buffer);
+            assert_eq!(command.context.buffer, buffer);
         });
         wait_for_command_state(&shell, "completed", cx).await;
         control
@@ -2177,7 +2279,7 @@ mod tests {
         let runtime = V8Host::new()
             .spawn_extension(ExtensionId::new(11))
             .into_parts();
-        let shell = cx.new(|cx| Shell::new(runtime, cx));
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(runtime, cx));
         wait_for_runtime_state(&shell, "running", cx).await;
         let initial_text = cx.read(|cx| {
             let shell = shell.read(cx);
@@ -2189,8 +2291,10 @@ mod tests {
                 .read_with(cx, |model, _| model.text())
         });
 
-        shell.update(cx, |shell, cx| {
-            shell.invoke_fixture_command(cx);
+        shell.update_in(cx, |shell, window, cx| {
+            let focus = shell.editor.focus_handle(cx);
+            window.focus(&focus);
+            shell.invoke_fixture_command(window, cx);
             shell.cancel_active_command(cx);
         });
         wait_for_command_state(&shell, "cancelled", cx).await;
@@ -2363,7 +2467,7 @@ mod tests {
     #[gpui::test]
     async fn extension_failures_are_isolated_together_through_gpui(cx: &mut TestAppContext) {
         let host = V8Host::new();
-        let shell = cx.new(|cx| {
+        let (shell, cx) = cx.add_window_view(|_, cx| {
             Shell::new_with_runtimes(
                 (20..24)
                     .map(|id| host.spawn_extension(ExtensionId::new(id)).into_parts())
@@ -2473,8 +2577,10 @@ mod tests {
                 .unwrap()
                 .read_with(cx, |model, _| model.text())
         });
-        shell.update(cx, |shell, cx| {
-            shell.invoke_fixture_command(cx);
+        shell.update_in(cx, |shell, window, cx| {
+            let focus = shell.editor.focus_handle(cx);
+            window.focus(&focus);
+            shell.invoke_fixture_command(window, cx);
             shell.cancel_active_command(cx);
         });
         wait_for_command_state(&shell, "cancelled", cx).await;

@@ -16,7 +16,7 @@ pub(crate) struct TreeProviderIdentity {
     pub registration: TreeProviderRegistrationId,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub(crate) enum TreeViewEvent {
     RequestChildren {
         provider: TreeProviderIdentity,
@@ -25,6 +25,8 @@ pub(crate) enum TreeViewEvent {
     InvokeCommand {
         provider: TreeProviderIdentity,
         command: String,
+        window: AnyWindowHandle,
+        focus: WeakFocusHandle,
     },
 }
 
@@ -285,7 +287,7 @@ impl TreeView {
         }
     }
 
-    fn activate(&mut self, id: &str, cx: &mut Context<Self>) {
+    fn activate(&mut self, id: &str, window: AnyWindowHandle, cx: &mut Context<Self>) {
         self.selected = Some(id.to_owned());
         let item = self
             .children
@@ -299,7 +301,12 @@ impl TreeView {
         match item.collapsible_state {
             TreeCollapsibleState::None => {
                 if let (Some(provider), Some(command)) = (self.provider, item.command) {
-                    cx.emit(TreeViewEvent::InvokeCommand { provider, command });
+                    cx.emit(TreeViewEvent::InvokeCommand {
+                        provider,
+                        command,
+                        window,
+                        focus: self.focus.downgrade(),
+                    });
                 }
             }
             _ if self.expanded.remove(id) => {}
@@ -315,7 +322,7 @@ impl TreeView {
         cx.notify();
     }
 
-    fn on_key_down(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+    fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let rows = self.visible_rows();
         let item_rows = rows
             .iter()
@@ -353,7 +360,7 @@ impl TreeView {
                 let Some(index) = current.or(Some(0)) else {
                     return;
                 };
-                self.activate(item_rows[index].0, cx);
+                self.activate(item_rows[index].0, window.window_handle(), cx);
                 cx.stop_propagation();
                 return;
             }
@@ -429,8 +436,9 @@ impl Render for TreeView {
                             })
                             .on_click({
                                 let entity = entity.clone();
-                                move |_, _, cx| {
-                                    entity.update(cx, |tree, cx| tree.activate(&id, cx));
+                                move |_, window, cx| {
+                                    let window = window.window_handle();
+                                    entity.update(cx, |tree, cx| tree.activate(&id, window, cx));
                                 }
                             })
                             .into_any_element()
