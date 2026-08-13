@@ -2093,7 +2093,9 @@ mod tests {
     }
 
     #[gpui::test]
-    async fn accepted_commands_retain_context_with_monotonic_identities(cx: &mut TestAppContext) {
+    async fn commands_retain_context_with_monotonic_identities_and_reject_overlap(
+        cx: &mut TestAppContext,
+    ) {
         let runtime = V8Host::new()
             .spawn_extension(ExtensionId::new(19))
             .into_parts();
@@ -2106,6 +2108,8 @@ mod tests {
                 r#"
                     import { commands } from "knot:editor";
                     await commands.register("knot.fixture.slow", async () => {
+                      globalThis.slowCommandRuns =
+                        (globalThis.slowCommandRuns ?? 0) + 1;
                       await globalThis.__knotFixtureDelay(25);
                     });
                 "#,
@@ -2130,7 +2134,24 @@ mod tests {
             assert_eq!(command.target, target);
             assert_eq!(command.buffer, buffer);
         });
+
+        shell.update(cx, |shell, cx| shell.invoke_command_target(target, cx));
+        cx.read(|cx| {
+            let shell = shell.read(cx);
+            assert_eq!(
+                shell.active_command.map(|command| command.id),
+                Some(CommandInvocationId::new(1))
+            );
+            assert_eq!(shell.next_command_invocation, 2);
+        });
         wait_for_command_state(&shell, "completed", cx).await;
+        control
+            .execute_fixture_script(
+                "verify-single-command.js",
+                "if (globalThis.slowCommandRuns !== 1) throw new Error('overlapping command ran')",
+            )
+            .await
+            .unwrap();
 
         shell.update(cx, |shell, cx| shell.invoke_command_target(target, cx));
         cx.read(|cx| {
@@ -2140,6 +2161,13 @@ mod tests {
             assert_eq!(command.buffer, buffer);
         });
         wait_for_command_state(&shell, "completed", cx).await;
+        control
+            .execute_fixture_script(
+                "verify-second-command.js",
+                "if (globalThis.slowCommandRuns !== 2) throw new Error('second command did not run')",
+            )
+            .await
+            .unwrap();
     }
 
     #[gpui::test]
