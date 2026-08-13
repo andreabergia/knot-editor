@@ -109,7 +109,7 @@ to retarget the command.
 
 ### 2. Introduce captured invocation context
 
-- ⬜ Allocate monotonic identities for every accepted invocation and retain the
+- ✅ Allocate monotonic identities for every accepted invocation and retain the
   captured context alongside any in-flight extension command.
 - ⬜ Keep the current restriction of at most one in-flight extension command;
   concurrent scheduling belongs to step 11b.

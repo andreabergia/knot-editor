@@ -62,10 +62,6 @@ impl CommandRegistrationId {
 pub struct CommandInvocationId(u64);
 
 impl CommandInvocationId {
-    #[allow(
-        dead_code,
-        reason = "invocation allocation lands with command execution in the next Step 7 slice"
-    )]
     pub(crate) const fn new(value: u64) -> Self {
         Self(value)
     }

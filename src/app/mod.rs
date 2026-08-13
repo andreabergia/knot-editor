@@ -13,7 +13,7 @@ use crate::host::{
     ExtensionRequestInbox, ExtensionRuntimeControl, ExtensionRuntimeParts, ExtensionRuntimeThread,
     V8Host,
     protocol::{
-        BufferChange, ByteRange, CommandInvocation, CommandInvocationId, ExtensionId,
+        BufferChange, BufferHandle, ByteRange, CommandInvocation, CommandInvocationId, ExtensionId,
         HostOperation, HostRequest, HostRequestError, HostResponse, HostResponseValue,
         TreeChildrenResponse, TreeProviderError, TreeProviderRegistrationId,
     },
@@ -169,6 +169,13 @@ struct DividerDrag {
 #[derive(Clone, Copy)]
 struct TerminalDividerDrag;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct InFlightExtensionCommand {
+    id: CommandInvocationId,
+    target: model::CommandTarget,
+    buffer: Option<BufferHandle>,
+}
+
 /// Invisible drag-ghost view gpui renders while the drag is in progress.
 /// Required by `on_drag`'s constructor; we don't want a visible ghost.
 struct DragGhost;
@@ -200,7 +207,7 @@ struct Shell {
     command_catalog: CommandCatalog,
     next_tree_registration: u64,
     next_command_invocation: u64,
-    active_command: Option<CommandInvocationId>,
+    active_command: Option<InFlightExtensionCommand>,
     cancelled_commands: HashSet<CommandInvocationId>,
     command_state: SharedString,
     heartbeat: u64,
@@ -842,22 +849,26 @@ impl Shell {
             cx.notify();
             return;
         };
-        let id = self.allocate_command_invocation();
-        self.active_command = Some(id);
+        let command = InFlightExtensionCommand {
+            id: self.allocate_command_invocation(),
+            target,
+            buffer: self.buffer_registry.active_handle(),
+        };
+        self.active_command = Some(command);
         self.command_state = "running".into();
         let execution = control.invoke_command(
             CommandInvocation {
-                id,
-                registration: target.registration,
-                extension: target.extension,
-                lifecycle: target.lifecycle,
+                id: command.id,
+                registration: command.target.registration,
+                extension: command.target.extension,
+                lifecycle: command.target.lifecycle,
             },
-            self.buffer_registry.active_handle(),
+            command.buffer,
         );
         cx.spawn(async move |this, cx| {
             let result = execution.await;
             let _ = this.update(cx, |this, cx| {
-                this.finish_command(id, result.is_ok(), cx);
+                this.finish_command(command.id, result.is_ok(), cx);
             });
         })
         .detach();
@@ -879,7 +890,7 @@ impl Shell {
         succeeded: bool,
         cx: &mut Context<Self>,
     ) {
-        if self.active_command != Some(invocation) {
+        if self.active_command.map(|command| command.id) != Some(invocation) {
             return;
         }
         self.active_command = None;
@@ -894,8 +905,8 @@ impl Shell {
     }
 
     fn cancel_active_command(&mut self, cx: &mut Context<Self>) {
-        if let Some(invocation) = self.active_command {
-            self.cancelled_commands.insert(invocation);
+        if let Some(command) = self.active_command {
+            self.cancelled_commands.insert(command.id);
             self.command_state = "cancelling".into();
             cx.notify();
         }
@@ -2079,6 +2090,56 @@ mod tests {
             )
             .await
             .unwrap();
+    }
+
+    #[gpui::test]
+    async fn accepted_commands_retain_context_with_monotonic_identities(cx: &mut TestAppContext) {
+        let runtime = V8Host::new()
+            .spawn_extension(ExtensionId::new(19))
+            .into_parts();
+        let shell = cx.new(|cx| Shell::new(runtime, cx));
+        wait_for_runtime_state(&shell, "running", cx).await;
+        let control = only_runtime_control(&shell, cx);
+        control
+            .execute_fixture_module(
+                "file:///fixtures/slow-command.js",
+                r#"
+                    import { commands } from "knot:editor";
+                    await commands.register("knot.fixture.slow", async () => {
+                      await globalThis.__knotFixtureDelay(25);
+                    });
+                "#,
+            )
+            .await
+            .unwrap();
+
+        let (target, buffer) = cx.read(|cx| {
+            let shell = shell.read(cx);
+            (
+                shell
+                    .command_catalog
+                    .resolve_extension("knot.fixture.slow")
+                    .unwrap(),
+                shell.buffer_registry.active_handle(),
+            )
+        });
+        shell.update(cx, |shell, cx| shell.invoke_command_target(target, cx));
+        cx.read(|cx| {
+            let command = shell.read(cx).active_command.unwrap();
+            assert_eq!(command.id, CommandInvocationId::new(1));
+            assert_eq!(command.target, target);
+            assert_eq!(command.buffer, buffer);
+        });
+        wait_for_command_state(&shell, "completed", cx).await;
+
+        shell.update(cx, |shell, cx| shell.invoke_command_target(target, cx));
+        cx.read(|cx| {
+            let command = shell.read(cx).active_command.unwrap();
+            assert_eq!(command.id, CommandInvocationId::new(2));
+            assert_eq!(command.target, target);
+            assert_eq!(command.buffer, buffer);
+        });
+        wait_for_command_state(&shell, "completed", cx).await;
     }
 
     #[gpui::test]
