@@ -104,7 +104,7 @@ to retarget the command.
   definitions.
 - ✅ Reject duplicate native/extension names and invocations of missing or
   disposed definitions with explicit errors.
-- ⬜ Keep argument validation in handlers; do not add schemas, coercion, or
+- ✅ Keep argument validation in handlers; do not add schemas, coercion, or
   generic argument UI.
 
 ### 2. Introduce captured invocation context
