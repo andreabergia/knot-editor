@@ -2273,6 +2273,82 @@ mod tests {
     }
 
     #[gpui::test]
+    async fn command_keeps_its_captured_buffer_after_focus_and_active_buffer_change(
+        cx: &mut TestAppContext,
+    ) {
+        let runtime = V8Host::new()
+            .spawn_extension(ExtensionId::new(20))
+            .into_parts();
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(runtime, cx));
+        wait_for_runtime_state(&shell, "running", cx).await;
+        let control = only_runtime_control(&shell, cx);
+        control
+            .execute_fixture_module(
+                "file:///fixtures/captured-buffer-command.js",
+                r#"
+                    import { commands } from "knot:editor";
+                    await commands.register("knot.fixture.captured-buffer", async (context) => {
+                      await globalThis.__knotFixtureDelay(25);
+                      const snapshot = await context.buffer.snapshot();
+                      await context.buffer.applyEdits(
+                        [{ range: { startByteOffset: 0, endByteOffset: 0 }, text: "captured\n" }],
+                        { ifRevision: snapshot.revision },
+                      );
+                    });
+                "#,
+            )
+            .await
+            .unwrap();
+
+        let replacement = cx.new(|_| BufferModel::from_text("replacement"));
+        let (target, captured_model, captured_handle) = cx.read(|cx| {
+            let shell = shell.read(cx);
+            let captured_handle = shell.buffer_registry.active_handle().unwrap();
+            (
+                shell
+                    .command_catalog
+                    .resolve_extension("knot.fixture.captured-buffer")
+                    .unwrap(),
+                shell.buffer_registry.resolve(captured_handle).unwrap(),
+                captured_handle,
+            )
+        });
+
+        invoke_extension_target_in_window(&shell, target, cx);
+        let replacement_handle = shell.update_in(cx, |shell, window, cx| {
+            let replacement_handle = shell.buffer_registry.open(&replacement);
+            shell.buffer_registry.set_active(Some(replacement_handle));
+            let terminal_focus = shell.terminal.focus_handle(cx);
+            window.focus(&terminal_focus);
+            replacement_handle
+        });
+
+        cx.read(|cx| {
+            let shell = shell.read(cx);
+            let command = shell.active_command.as_ref().unwrap();
+            assert_eq!(command.context.buffer, Some(captured_handle));
+            assert_eq!(
+                shell.buffer_registry.active_handle(),
+                Some(replacement_handle)
+            );
+        });
+        cx.update(|window, cx| {
+            assert!(shell.read(cx).terminal.focus_handle(cx).is_focused(window));
+        });
+        wait_for_command_state(&shell, "completed", cx).await;
+
+        assert!(
+            captured_model
+                .read_with(cx, |model, _| model.text())
+                .starts_with("captured\n")
+        );
+        assert_eq!(
+            replacement.read_with(cx, |model, _| model.text()),
+            "replacement"
+        );
+    }
+
+    #[gpui::test]
     async fn cancelling_before_the_awaited_command_request_prevents_its_edit(
         cx: &mut TestAppContext,
     ) {

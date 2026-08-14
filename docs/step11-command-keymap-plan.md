@@ -115,7 +115,7 @@ to retarget the command.
   concurrent scheduling belongs to step 11b.
 - ✅ Capture the target window, workspace/shell, weak focus handle, and optional
   associated buffer when dispatch begins.
-- ⬜ Ensure a later focus or active-buffer change does not retarget an existing
+- ✅ Ensure a later focus or active-buffer change does not retarget an existing
   invocation.
 - ⬜ Revalidate weak target, window/workspace ownership, buffer existence,
   extension lifecycle, cancellation, and invocation identity immediately
