@@ -117,7 +117,7 @@ to retarget the command.
   associated buffer when dispatch begins.
 - ✅ Ensure a later focus or active-buffer change does not retarget an existing
   invocation.
-- ⬜ Revalidate weak target, window/workspace ownership, buffer existence,
+- ✅ Revalidate weak target, window/workspace ownership, buffer existence,
   extension lifecycle, cancellation, and invocation identity immediately
   before applying a delayed mutation.
 - ⬜ Keep native target data inside `app`; extend the extension protocol only

@@ -482,8 +482,10 @@ impl Shell {
         let lifecycle_live = self
             .extension_controls
             .contains_key(&(request.extension, request.lifecycle));
+        let command_mutation_error = self.validate_command_mutation(&request, cx).err();
         let result = match request.operation {
             _ if cancelled || !lifecycle_live => Err(HostRequestError::Cancelled),
+            _ if command_mutation_error.is_some() => Err(command_mutation_error.unwrap()),
             HostOperation::ActiveBuffer => Ok(HostResponseValue::ActiveBuffer(
                 self.buffer_registry.active_handle(),
             )),
@@ -664,6 +666,46 @@ impl Shell {
             id: request.id,
             result,
         }
+    }
+
+    fn validate_command_mutation(
+        &self,
+        request: &HostRequest,
+        cx: &Context<Self>,
+    ) -> Result<(), HostRequestError> {
+        let buffer = match &request.operation {
+            HostOperation::ApplyEdits { buffer, .. }
+            | HostOperation::ReplaceEditorContributions { buffer, .. }
+            | HostOperation::DisposeEditorContributions { buffer } => *buffer,
+            _ => return Ok(()),
+        };
+        let Some(invocation) = request.invocation else {
+            return Ok(());
+        };
+        let Some(command) = self.active_command.as_ref() else {
+            return Err(HostRequestError::Cancelled);
+        };
+        if command.id != invocation
+            || command.target.extension != request.extension
+            || command.target.lifecycle != request.lifecycle
+            || self.cancelled_commands.contains(&invocation)
+        {
+            return Err(HostRequestError::Cancelled);
+        }
+
+        let workspace = cx.entity();
+        if command.context.workspace.upgrade() != Some(workspace.clone())
+            || !cx.windows().contains(&command.context.window)
+            || command.context.focus.upgrade().is_none()
+            || command.context.buffer != Some(buffer)
+        {
+            return Err(HostRequestError::Cancelled);
+        }
+
+        self.buffer_registry
+            .resolve(buffer)
+            .map(|_| ())
+            .map_err(|_| HostRequestError::BufferClosed)
     }
 
     fn publish_buffer_change(&self, change: BufferChange) {
@@ -1406,7 +1448,7 @@ mod tests {
     use gpui::{
         AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement,
         Modifiers, MouseButton, ParentElement, Render, TestAppContext, VisualContext,
-        VisualTestContext, Window, div, point, px,
+        VisualTestContext, WeakEntity, Window, div, point, px,
     };
 
     use super::{
@@ -2346,6 +2388,106 @@ mod tests {
             replacement.read_with(cx, |model, _| model.text()),
             "replacement"
         );
+    }
+
+    #[gpui::test]
+    async fn command_mutations_revalidate_the_captured_context(cx: &mut TestAppContext) {
+        let runtime = V8Host::new()
+            .spawn_extension(ExtensionId::new(21))
+            .into_parts();
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(runtime, cx));
+        wait_for_runtime_state(&shell, "running", cx).await;
+        let control = only_runtime_control(&shell, cx);
+        control
+            .execute_fixture_module(
+                "file:///fixtures/context-validation-command.js",
+                r#"
+                    import { commands } from "knot:editor";
+                    await commands.register("knot.fixture.context-validation", async () => {
+                      await globalThis.__knotFixtureDelay(25);
+                    });
+                "#,
+            )
+            .await
+            .unwrap();
+        let target = cx.read(|cx| {
+            shell
+                .read(cx)
+                .command_catalog
+                .resolve_extension("knot.fixture.context-validation")
+                .unwrap()
+        });
+        invoke_extension_target_in_window(&shell, target, cx);
+
+        shell.update_in(cx, |shell, _window, cx| {
+            let command = shell.active_command.as_ref().unwrap().clone();
+            let buffer = command.context.buffer.unwrap();
+            let revision = shell
+                .buffer_registry
+                .resolve(buffer)
+                .unwrap()
+                .read_with(cx, |model, _| model.revision());
+            let request = HostRequest {
+                extension: target.extension,
+                lifecycle: target.lifecycle,
+                id: RequestId::new(1),
+                invocation: Some(command.id),
+                operation: HostOperation::ApplyEdits {
+                    buffer,
+                    edits: Vec::new(),
+                    if_revision: revision,
+                },
+            };
+            assert_eq!(shell.validate_command_mutation(&request, cx), Ok(()));
+
+            let mut stale = request.clone();
+            stale.invocation = Some(CommandInvocationId::new(999));
+            assert_eq!(
+                shell.validate_command_mutation(&stale, cx),
+                Err(HostRequestError::Cancelled)
+            );
+
+            stale = request.clone();
+            stale.lifecycle = crate::host::protocol::ExtensionLifecycleId::new(999);
+            assert_eq!(
+                shell.validate_command_mutation(&stale, cx),
+                Err(HostRequestError::Cancelled)
+            );
+
+            shell.cancelled_commands.insert(command.id);
+            assert_eq!(
+                shell.validate_command_mutation(&request, cx),
+                Err(HostRequestError::Cancelled)
+            );
+            shell.cancelled_commands.remove(&command.id);
+
+            let live_focus = command.context.focus.clone();
+            let dead_focus = {
+                let focus = cx.focus_handle();
+                focus.downgrade()
+            };
+            shell.active_command.as_mut().unwrap().context.focus = dead_focus;
+            assert_eq!(
+                shell.validate_command_mutation(&request, cx),
+                Err(HostRequestError::Cancelled)
+            );
+            shell.active_command.as_mut().unwrap().context.focus = live_focus;
+
+            let live_workspace = command.context.workspace.clone();
+            shell.active_command.as_mut().unwrap().context.workspace = WeakEntity::new_invalid();
+            assert_eq!(
+                shell.validate_command_mutation(&request, cx),
+                Err(HostRequestError::Cancelled)
+            );
+            shell.active_command.as_mut().unwrap().context.workspace = live_workspace;
+
+            shell.close_buffer(buffer, cx);
+            assert_eq!(
+                shell.validate_command_mutation(&request, cx),
+                Err(HostRequestError::BufferClosed)
+            );
+        });
+        wait_for_command_state(&shell, "completed", cx).await;
     }
 
     #[gpui::test]
