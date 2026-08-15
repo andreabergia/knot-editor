@@ -129,7 +129,7 @@ to retarget the command.
 
 ### 3. Adapt commands to gpui focus routing
 
-- ⬜ Introduce the smallest gpui action adapter that carries a Knot `Command`
+- ✅ Introduce the smallest gpui action adapter that carries a Knot `Command`
   and invocation context without making gpui actions the registry identity.
 - ⬜ Dispatch the action at the captured focus handle and let gpui perform its
   normal capture/bubble traversal.

@@ -185,6 +185,17 @@ struct CapturedInvocationContext {
     buffer: Option<BufferHandle>,
 }
 
+#[derive(Clone, PartialEq, Action)]
+#[action(namespace = knot, no_json)]
+#[allow(
+    dead_code,
+    reason = "command dispatch uses this adapter when native focus routing is connected"
+)]
+struct CommandAction {
+    command: Command,
+    context: CapturedInvocationContext,
+}
+
 #[derive(Clone, PartialEq)]
 struct InFlightExtensionCommand {
     id: CommandInvocationId,
