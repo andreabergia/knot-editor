@@ -123,7 +123,7 @@ to retarget the command.
 - ✅ Keep native target data inside `app`; extend the extension protocol only
   with semantic command arguments and opaque context handles required by the
   exercise.
-- ⬜ Return structured unavailable, invalid-target, invalid-argument,
+- ✅ Return structured unavailable, invalid-target, invalid-argument,
   cancelled, and handler-failure outcomes instead of silently dropping an
   invocation.
 

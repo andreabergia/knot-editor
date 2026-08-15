@@ -169,6 +169,18 @@ pub struct Command {
     pub arguments: CommandArgumentValue,
 }
 
+/// The stable result of attempting to invoke a command.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum CommandOutcome {
+    Completed,
+    Unavailable,
+    InvalidTarget,
+    InvalidArgument { message: String },
+    Cancelled,
+    HandlerFailure { message: String },
+}
+
 /// A half-open range in UTF-8 byte offsets.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]

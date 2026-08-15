@@ -231,6 +231,12 @@ export async function registerCommand(name, handler) {
   });
 }
 
+export function invalidCommandArguments(message) {
+  const error = new Error(String(message));
+  error.name = "InvalidCommandArgumentsError";
+  throw error;
+}
+
 export async function registerTreeDataProvider(viewId, provider) {
   if (typeof viewId !== "string" || typeof provider?.getChildren !== "function") {
     throw new TypeError("workbench.registerTreeDataProvider requires a view ID and getChildren provider");
@@ -315,13 +321,19 @@ globalThis.__knotDispatchBufferChange = async (subscription, change) => {
 };
 "#;
 const PUBLIC_FACADE_SOURCE: &str = r#"
-import { activeBuffer, registerCommand, registerTreeDataProvider } from "knot:bootstrap";
+import {
+  activeBuffer,
+  invalidCommandArguments,
+  registerCommand,
+  registerTreeDataProvider,
+} from "knot:bootstrap";
 
 export const editor = {
   activeBuffer,
 };
 
 export const commands = {
+  invalidArguments: invalidCommandArguments,
   register: registerCommand,
 };
 
@@ -1397,6 +1409,7 @@ pub enum ExtensionRuntimeExecutionError {
     InvalidModuleSpecifier,
     MemoryLimitExceeded,
     Terminated,
+    InvalidCommandArguments { report: String },
     JavaScriptException { report: String },
 }
 
@@ -1404,6 +1417,15 @@ impl ExtensionRuntimeExecutionError {
     fn javascript_exception(error: impl std::fmt::Display) -> Self {
         Self::JavaScriptException {
             report: format!("{error:#}"),
+        }
+    }
+
+    fn command_handler(error: impl std::fmt::Display) -> Self {
+        let report = format!("{error:#}");
+        if report.contains("InvalidCommandArgumentsError") {
+            Self::InvalidCommandArguments { report }
+        } else {
+            Self::JavaScriptException { report }
         }
     }
 }
@@ -1955,11 +1977,11 @@ impl ExtensionRuntime {
                     let result = self
                         .js_runtime
                         .execute_script("knot:command-invocation", source)
-                        .map_err(ExtensionRuntimeExecutionError::javascript_exception)
+                        .map_err(ExtensionRuntimeExecutionError::command_handler)
                         .and_then(|_| {
                             self.event_loop_runtime
                                 .block_on(self.js_runtime.run_event_loop(Default::default()))
-                                .map_err(ExtensionRuntimeExecutionError::javascript_exception)
+                                .map_err(ExtensionRuntimeExecutionError::command_handler)
                         });
                     self.js_runtime
                         .op_state()
