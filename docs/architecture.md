@@ -181,9 +181,10 @@ registrations, subscriptions, resource limits, and teardown. Callbacks are
 serial per extension. Independent extension threads may progress in parallel.
 Fatal interruption or disposal removes work belonging to that lifecycle.
 
-Commands are invoked on their owning extension with an invocation identity and
-optional active-buffer handle. Cancellation is checked again before applying
-foreground mutations, preventing late completion from editing a document.
+Commands are invoked on their owning extension with an invocation identity,
+explicit JSON-like arguments, and an optional captured-buffer handle.
+Cancellation is checked again before applying foreground mutations, preventing
+late completion from editing a document.
 
 Buffer snapshots are immutable. An extension-local response store transfers a
 shared UTF-16 allocation to an external V8 string without exposing mutable

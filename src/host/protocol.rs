@@ -363,12 +363,13 @@ pub enum HostResponseValue {
 }
 
 /// A foreground-authorized command invocation routed to its extension owner.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct CommandInvocation {
     pub id: CommandInvocationId,
     pub registration: CommandRegistrationId,
     pub extension: ExtensionId,
     pub lifecycle: ExtensionLifecycleId,
+    pub arguments: CommandArgumentValue,
 }
 
 /// Immutable text storage for a snapshot crossing the runtime boundary.

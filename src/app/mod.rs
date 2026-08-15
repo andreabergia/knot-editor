@@ -13,9 +13,10 @@ use crate::host::{
     ExtensionRequestInbox, ExtensionRuntimeControl, ExtensionRuntimeParts, ExtensionRuntimeThread,
     V8Host,
     protocol::{
-        BufferChange, BufferHandle, ByteRange, CommandInvocation, CommandInvocationId, ExtensionId,
-        HostOperation, HostRequest, HostRequestError, HostResponse, HostResponseValue,
-        TreeChildrenResponse, TreeProviderError, TreeProviderRegistrationId,
+        BufferChange, BufferHandle, ByteRange, Command, CommandArgumentValue, CommandInvocation,
+        CommandInvocationId, ExtensionId, HostOperation, HostRequest, HostRequestError,
+        HostResponse, HostResponseValue, TreeChildrenResponse, TreeProviderError,
+        TreeProviderRegistrationId,
     },
 };
 
@@ -184,9 +185,10 @@ struct CapturedInvocationContext {
     buffer: Option<BufferHandle>,
 }
 
-#[derive(Clone, Eq, PartialEq)]
+#[derive(Clone, PartialEq)]
 struct InFlightExtensionCommand {
     id: CommandInvocationId,
+    command: Command,
     target: model::CommandTarget,
     context: CapturedInvocationContext,
 }
@@ -771,6 +773,10 @@ impl Shell {
                 {
                     self.invoke_command_target(
                         target,
+                        Command {
+                            name: command.into(),
+                            arguments: CommandArgumentValue::Null,
+                        },
                         CommandOrigin {
                             window,
                             focus,
@@ -838,6 +844,10 @@ impl Shell {
         };
         self.invoke_command_target(
             target,
+            Command {
+                name: "knot.fixture.edit".into(),
+                arguments: CommandArgumentValue::Null,
+            },
             CommandOrigin {
                 window: window.window_handle(),
                 focus: focus.downgrade(),
@@ -884,6 +894,10 @@ impl Shell {
         }
         self.invoke_command_target(
             target,
+            Command {
+                name: action.command.as_str().into(),
+                arguments: CommandArgumentValue::Null,
+            },
             CommandOrigin {
                 window: action.window,
                 focus: action.focus.clone(),
@@ -930,6 +944,7 @@ impl Shell {
     fn invoke_command_target(
         &mut self,
         target: model::CommandTarget,
+        value: Command,
         origin: CommandOrigin,
         cx: &mut Context<Self>,
     ) {
@@ -947,6 +962,7 @@ impl Shell {
         };
         let command = InFlightExtensionCommand {
             id: self.allocate_command_invocation(),
+            command: value,
             target,
             context: CapturedInvocationContext {
                 window: origin.window,
@@ -957,6 +973,7 @@ impl Shell {
         };
         let id = command.id;
         let buffer = command.context.buffer;
+        let arguments = command.command.arguments.clone();
         self.active_command = Some(command);
         self.command_state = "running".into();
         let execution = control.invoke_command(
@@ -965,6 +982,7 @@ impl Shell {
                 registration: target.registration,
                 extension: target.extension,
                 lifecycle: target.lifecycle,
+                arguments,
             },
             buffer,
         );
@@ -1458,8 +1476,9 @@ mod tests {
     use crate::host::{
         ExtensionRuntimeControl, ExtensionRuntimeExecutionError, V8Host,
         protocol::{
-            ByteRange, CommandInvocation, CommandInvocationId, DecorationToken, ExtensionId,
-            GutterToken, HostOperation, HostRequest, HostRequestError, RequestId, TextEdit,
+            ByteRange, Command, CommandArgumentValue, CommandInvocation, CommandInvocationId,
+            DecorationToken, ExtensionId, GutterToken, HostOperation, HostRequest,
+            HostRequestError, RequestId, TextEdit,
         },
     };
 
@@ -1598,6 +1617,7 @@ mod tests {
     fn invoke_extension_target_in_window(
         shell: &Entity<Shell>,
         target: super::model::CommandTarget,
+        name: &str,
         cx: &mut VisualTestContext,
     ) {
         shell.update_in(cx, |shell, window, cx| {
@@ -1605,6 +1625,10 @@ mod tests {
             window.focus(&focus);
             shell.invoke_command_target(
                 target,
+                Command {
+                    name: name.into(),
+                    arguments: CommandArgumentValue::Null,
+                },
                 super::CommandOrigin {
                     window: window.window_handle(),
                     focus: focus.downgrade(),
@@ -2267,11 +2291,13 @@ mod tests {
                 shell.buffer_registry.active_handle(),
             )
         });
-        invoke_extension_target_in_window(&shell, target, cx);
+        invoke_extension_target_in_window(&shell, target, "knot.fixture.slow", cx);
         let window = cx.window_handle();
         cx.read(|cx| {
             let command = shell.read(cx).active_command.as_ref().unwrap();
             assert_eq!(command.id, CommandInvocationId::new(1));
+            assert_eq!(command.command.name, "knot.fixture.slow".into());
+            assert_eq!(command.command.arguments, CommandArgumentValue::Null);
             assert_eq!(command.target, target);
             assert!(command.context.window == window);
             assert_eq!(command.context.buffer, buffer);
@@ -2279,7 +2305,7 @@ mod tests {
             assert!(command.context.focus.upgrade().is_some());
         });
 
-        invoke_extension_target_in_window(&shell, target, cx);
+        invoke_extension_target_in_window(&shell, target, "knot.fixture.slow", cx);
         cx.read(|cx| {
             let shell = shell.read(cx);
             assert_eq!(
@@ -2297,7 +2323,7 @@ mod tests {
             .await
             .unwrap();
 
-        invoke_extension_target_in_window(&shell, target, cx);
+        invoke_extension_target_in_window(&shell, target, "knot.fixture.slow", cx);
         cx.read(|cx| {
             let command = shell.read(cx).active_command.as_ref().unwrap();
             assert_eq!(command.id, CommandInvocationId::new(2));
@@ -2356,7 +2382,7 @@ mod tests {
             )
         });
 
-        invoke_extension_target_in_window(&shell, target, cx);
+        invoke_extension_target_in_window(&shell, target, "knot.fixture.captured-buffer", cx);
         let replacement_handle = shell.update_in(cx, |shell, window, cx| {
             let replacement_handle = shell.buffer_registry.open(&replacement);
             shell.buffer_registry.set_active(Some(replacement_handle));
@@ -2417,7 +2443,7 @@ mod tests {
                 .resolve_extension("knot.fixture.context-validation")
                 .unwrap()
         });
-        invoke_extension_target_in_window(&shell, target, cx);
+        invoke_extension_target_in_window(&shell, target, "knot.fixture.context-validation", cx);
 
         shell.update_in(cx, |shell, _window, cx| {
             let command = shell.active_command.as_ref().unwrap().clone();
@@ -2761,6 +2787,7 @@ mod tests {
                         registration: target.registration,
                         extension: target.extension,
                         lifecycle: target.lifecycle,
+                        arguments: CommandArgumentValue::Null,
                     },
                     active_buffer,
                 )

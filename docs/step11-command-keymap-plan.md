@@ -120,7 +120,7 @@ to retarget the command.
 - ✅ Revalidate weak target, window/workspace ownership, buffer existence,
   extension lifecycle, cancellation, and invocation identity immediately
   before applying a delayed mutation.
-- ⬜ Keep native target data inside `app`; extend the extension protocol only
+- ✅ Keep native target data inside `app`; extend the extension protocol only
   with semantic command arguments and opaque context handles required by the
   exercise.
 - ⬜ Return structured unavailable, invalid-target, invalid-argument,

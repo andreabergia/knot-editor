@@ -284,7 +284,7 @@ globalThis.__knotRequestTreeChildren = async (registration, parentId, generation
 globalThis.__knotFixtureDelay = (milliseconds) =>
   nativeOps.op_fixture_delay(milliseconds);
 
-globalThis.__knotInvokeCommand = async (registration, activeHandle) => {
+globalThis.__knotInvokeCommand = async (registration, activeHandle, commandArguments) => {
   const handler = commandHandlers.get(registration);
   if (!handler) throw new Error("Knot command registration is disposed");
   const controller = new KnotAbortController();
@@ -292,6 +292,7 @@ globalThis.__knotInvokeCommand = async (registration, activeHandle) => {
   try {
     return await handler(Object.freeze({
       buffer: activeHandle === null ? null : bufferFor(activeHandle),
+      arguments: commandArguments,
       signal: controller.signal,
     }));
   } finally {
@@ -1944,8 +1945,10 @@ impl ExtensionRuntime {
                         .borrow_mut()
                         .borrow_mut::<ExtensionRequestRouter>()
                         .invocation = Some(invocation.id);
+                    let arguments = serde_json::to_string(&invocation.arguments)
+                        .expect("command arguments are JSON-compatible");
                     let source = format!(
-                        "globalThis.__knotInvokeCommand({}, {})",
+                        "globalThis.__knotInvokeCommand({}, {}, {arguments})",
                         invocation.registration.value(),
                         active_buffer.map_or("null".into(), |buffer| buffer.value().to_string()),
                     );
@@ -2085,11 +2088,11 @@ mod tests {
         ExtensionRuntimeResponseError, V8Host,
     };
     use crate::host::protocol::{
-        BufferChange, BufferHandle, BufferSubscriptionId, ByteRange, CommandInvocation,
-        CommandInvocationId, CommandRegistrationId, ExtensionId, ExtensionLifecycleId,
-        HostOperation, HostRequestError, HostResponse, HostResponseValue, RequestId, SnapshotText,
-        TextEdit, TextSnapshot, TreeChildrenRequest, TreeCollapsibleState, TreeIcon,
-        TreeProviderRegistrationId,
+        BufferChange, BufferHandle, BufferSubscriptionId, ByteRange, CommandArgumentValue,
+        CommandInvocation, CommandInvocationId, CommandRegistrationId, ExtensionId,
+        ExtensionLifecycleId, HostOperation, HostRequestError, HostResponse, HostResponseValue,
+        RequestId, SnapshotText, TextEdit, TextSnapshot, TreeChildrenRequest, TreeCollapsibleState,
+        TreeIcon, TreeProviderRegistrationId,
     };
 
     #[test]
@@ -2633,8 +2636,9 @@ mod tests {
             "file:///fixtures/command.js",
             r#"
                 import { commands } from "knot:editor";
-                await commands.register("knot.fixture.command", () => {
+                await commands.register("knot.fixture.command", (context) => {
                     globalThis.commandRuns = (globalThis.commandRuns ?? 0) + 1;
+                    globalThis.commandArguments = context.arguments;
                 });
             "#,
         );
@@ -2662,13 +2666,19 @@ mod tests {
                 registration,
                 extension,
                 lifecycle: request.lifecycle,
+                arguments: CommandArgumentValue::String("fixture-argument".into()),
             },
             None,
         ))
         .unwrap();
         pollster::block_on(runtime.execute_fixture_script(
             "verify-command.js",
-            "if (globalThis.commandRuns !== 1) throw new Error('command did not run')",
+            r#"
+                if (globalThis.commandRuns !== 1) throw new Error('command did not run');
+                if (globalThis.commandArguments !== "fixture-argument") {
+                  throw new Error('command arguments were not delivered');
+                }
+            "#,
         ))
         .unwrap();
         runtime.shutdown();
@@ -2751,6 +2761,7 @@ mod tests {
                 registration,
                 extension,
                 lifecycle: request.lifecycle,
+                arguments: CommandArgumentValue::Null,
             },
             None,
         ))
