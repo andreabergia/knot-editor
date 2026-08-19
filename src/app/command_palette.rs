@@ -1,20 +1,42 @@
 use gpui::{prelude::*, *};
 
-use crate::host::protocol::CommandName;
+use crate::host::protocol::{Command, CommandArgumentValue};
 
 use super::{CommandOrigin, model::CommandDefinition};
 
-#[derive(Clone, Eq, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub(crate) enum CommandPaletteEvent {
     Confirmed {
-        name: CommandName,
+        command: Command,
         origin: CommandOrigin,
     },
     Dismissed,
 }
 
+#[derive(Clone)]
+pub(crate) struct CommandPaletteEntry {
+    definition: CommandDefinition,
+    arguments: CommandArgumentValue,
+}
+
+impl CommandPaletteEntry {
+    pub(crate) fn new(definition: CommandDefinition, arguments: CommandArgumentValue) -> Self {
+        Self {
+            definition,
+            arguments,
+        }
+    }
+
+    fn command(&self) -> Command {
+        Command {
+            name: self.definition.name.clone(),
+            arguments: self.arguments.clone(),
+        }
+    }
+}
+
 pub(crate) struct CommandPalette {
-    definitions: Vec<CommandDefinition>,
+    entries: Vec<CommandPaletteEntry>,
     query: String,
     selected: usize,
     focus: FocusHandle,
@@ -23,14 +45,14 @@ pub(crate) struct CommandPalette {
 
 impl CommandPalette {
     pub(crate) fn new(
-        definitions: impl IntoIterator<Item = CommandDefinition>,
+        entries: impl IntoIterator<Item = CommandPaletteEntry>,
         origin: CommandOrigin,
         cx: &mut Context<Self>,
     ) -> Self {
-        let mut definitions = definitions.into_iter().collect::<Vec<_>>();
-        definitions.sort_by(|left, right| left.name.cmp(&right.name));
+        let mut entries = entries.into_iter().collect::<Vec<_>>();
+        entries.sort_by(|left, right| left.definition.name.cmp(&right.definition.name));
         Self {
-            definitions,
+            entries,
             query: String::new(),
             selected: 0,
             focus: cx.focus_handle(),
@@ -42,20 +64,36 @@ impl CommandPalette {
         self.origin.clone()
     }
 
-    pub(crate) fn visible_definitions(&self) -> Vec<&CommandDefinition> {
+    fn visible_entries(&self) -> Vec<&CommandPaletteEntry> {
         let query = self.query.to_lowercase();
-        self.definitions
+        self.entries
             .iter()
-            .filter(|definition| {
+            .filter(|entry| {
                 query.is_empty()
-                    || definition.name.as_ref().to_lowercase().contains(&query)
-                    || definition.title.to_lowercase().contains(&query)
+                    || entry
+                        .definition
+                        .name
+                        .as_ref()
+                        .to_lowercase()
+                        .contains(&query)
+                    || entry.definition.title.to_lowercase().contains(&query)
             })
             .collect()
     }
 
+    #[cfg(test)]
+    pub(crate) fn visible_definitions(&self) -> Vec<&CommandDefinition> {
+        self.visible_entries()
+            .into_iter()
+            .map(|entry| &entry.definition)
+            .collect()
+    }
+
+    #[cfg(test)]
     pub(crate) fn selected_definition(&self) -> Option<&CommandDefinition> {
-        self.visible_definitions().get(self.selected).copied()
+        self.visible_entries()
+            .get(self.selected)
+            .map(|entry| &entry.definition)
     }
 
     fn set_query(&mut self, query: String, cx: &mut Context<Self>) {
@@ -65,7 +103,7 @@ impl CommandPalette {
     }
 
     fn move_selection(&mut self, delta: isize, cx: &mut Context<Self>) {
-        let count = self.visible_definitions().len();
+        let count = self.visible_entries().len();
         if count == 0 {
             self.selected = 0;
             return;
@@ -78,9 +116,9 @@ impl CommandPalette {
     }
 
     fn confirm(&mut self, cx: &mut Context<Self>) {
-        if let Some(definition) = self.selected_definition() {
+        if let Some(entry) = self.visible_entries().get(self.selected) {
             cx.emit(CommandPaletteEvent::Confirmed {
-                name: definition.name.clone(),
+                command: entry.command(),
                 origin: self.origin(),
             });
         }
@@ -127,12 +165,14 @@ impl Render for CommandPalette {
         let entity = cx.entity();
         let selected = self.selected;
         let rows = self
-            .visible_definitions()
+            .visible_entries()
             .into_iter()
             .enumerate()
-            .map(|(index, definition)| {
+            .map(|(index, entry)| {
                 let entity = entity.clone();
-                let name = definition.name.clone();
+                let command = entry.command();
+                let arguments = (entry.arguments != CommandArgumentValue::Null)
+                    .then(|| serde_json::to_string(&entry.arguments).expect("arguments serialize"));
                 div()
                     .id(("command-palette-entry", index))
                     .px_3()
@@ -141,17 +181,23 @@ impl Render for CommandPalette {
                     .flex_col()
                     .when(index == selected, |row| row.bg(rgb(0x2a4a7a)))
                     .hover(|row| row.bg(rgb(0x333333)))
-                    .child(definition.title.clone())
+                    .child(entry.definition.title.clone())
                     .child(
                         div()
                             .text_xs()
                             .text_color(rgb(0x999999))
-                            .child(definition.name.to_string()),
+                            .child(entry.definition.name.to_string()),
                     )
+                    .children(arguments.map(|arguments| {
+                        div()
+                            .text_xs()
+                            .text_color(rgb(0xc586c0))
+                            .child(format!("Arguments: {arguments}"))
+                    }))
                     .on_click(move |_, _, cx| {
                         entity.update(cx, |palette, cx| {
                             cx.emit(CommandPaletteEvent::Confirmed {
-                                name: name.clone(),
+                                command: command.clone(),
                                 origin: palette.origin(),
                             });
                         });
@@ -204,9 +250,10 @@ mod tests {
 
     use gpui::TestAppContext;
 
-    use super::{CommandPalette, CommandPaletteEvent};
+    use super::{CommandPalette, CommandPaletteEntry, CommandPaletteEvent};
     use crate::app::CommandOrigin;
     use crate::app::model::{CommandDefinition, CommandOwner};
+    use crate::host::protocol::{Command, CommandArgumentValue};
 
     #[gpui::test]
     fn filters_by_name_and_title_and_confirms_the_selection(cx: &mut TestAppContext) {
@@ -214,16 +261,22 @@ mod tests {
             let origin_focus = cx.focus_handle();
             CommandPalette::new(
                 [
-                    CommandDefinition {
-                        name: "editor.copy".into(),
-                        title: "Copy selection".into(),
-                        owner: CommandOwner::Native,
-                    },
-                    CommandDefinition {
-                        name: "workspace.close".into(),
-                        title: "Close window".into(),
-                        owner: CommandOwner::Native,
-                    },
+                    CommandPaletteEntry::new(
+                        CommandDefinition {
+                            name: "editor.copy".into(),
+                            title: "Copy selection".into(),
+                            owner: CommandOwner::Native,
+                        },
+                        CommandArgumentValue::String("fixture".into()),
+                    ),
+                    CommandPaletteEntry::new(
+                        CommandDefinition {
+                            name: "workspace.close".into(),
+                            title: "Close window".into(),
+                            owner: CommandOwner::Native,
+                        },
+                        CommandArgumentValue::Null,
+                    ),
                 ],
                 CommandOrigin {
                     window: window.window_handle(),
@@ -258,7 +311,10 @@ mod tests {
         assert!(
             events.borrow().as_slice()
                 == [CommandPaletteEvent::Confirmed {
-                    name: "editor.copy".into(),
+                    command: Command {
+                        name: "editor.copy".into(),
+                        arguments: CommandArgumentValue::String("fixture".into()),
+                    },
                     origin: expected_origin,
                 }]
                 .as_slice()
@@ -270,11 +326,14 @@ mod tests {
         let (palette, cx) = cx.add_window_view(|window, cx| {
             let origin_focus = cx.focus_handle();
             CommandPalette::new(
-                [CommandDefinition {
-                    name: "editor.copy".into(),
-                    title: "Copy selection".into(),
-                    owner: CommandOwner::Native,
-                }],
+                [CommandPaletteEntry::new(
+                    CommandDefinition {
+                        name: "editor.copy".into(),
+                        title: "Copy selection".into(),
+                        owner: CommandOwner::Native,
+                    },
+                    CommandArgumentValue::Null,
+                )],
                 CommandOrigin {
                     window: window.window_handle(),
                     focus: origin_focus.downgrade(),

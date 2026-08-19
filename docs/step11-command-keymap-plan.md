@@ -164,7 +164,7 @@ continues propagation.
   refocusing it first.
 - ✅ Reject invocation if the originating target has disappeared while the
   palette is open.
-- ⬜ Use one fixture palette entry carrying fixed, visible arguments for the
+- ✅ Use one fixture palette entry carrying fixed, visible arguments for the
   cross-origin exercise. General argument prompting remains deferred.
 
 ### 5. Exercise contextual and transient keymaps

@@ -28,7 +28,7 @@ mod search_results;
 mod terminal_view;
 mod tree_view;
 
-use command_palette::{CommandPalette, CommandPaletteEvent};
+use command_palette::{CommandPalette, CommandPaletteEntry, CommandPaletteEvent};
 use editor::{
     EditorContributionAction, EditorRenderingOptions, EditorView, seed_fixture_contributions,
 };
@@ -48,6 +48,8 @@ const MIN_TERMINAL_HEIGHT: f32 = 96.;
 const MIN_EDITOR_HEIGHT: f32 = 160.;
 const DEFAULT_FIXTURE_NAME: &str = "rust_sample";
 const DIAGNOSTIC_COMMAND: &str = "knot.diagnostic.command-context";
+const FIXTURE_EDIT_COMMAND: &str = "knot.fixture.edit";
+const PALETTE_FIXTURE_ARGUMENT: &str = "// palette command\n";
 const RUNTIME_PROBE_SOURCE: &str = r#"
 import { commands, editor, workbench } from "knot:editor";
 
@@ -69,8 +71,11 @@ await commands.register("knot.fixture.edit", async (context) => {
     globalThis.knotFixtureCommandAborted = true;
   });
   const snapshot = await context.buffer.snapshot();
+  const text = typeof context.arguments === "string"
+    ? context.arguments
+    : "// command\n";
   await context.buffer.applyEdits(
-    [{ range: { startByteOffset: 0, endByteOffset: 0 }, text: "// command\n" }],
+    [{ range: { startByteOffset: 0, endByteOffset: 0 }, text }],
     { ifRevision: snapshot.revision },
   );
 });
@@ -1204,19 +1209,26 @@ impl Shell {
         let Some(origin) = self.command_origin(window, cx) else {
             return;
         };
-        let definitions = self
+        let entries = self
             .command_catalog
             .definitions()
-            .cloned()
+            .map(|definition| {
+                let arguments = if definition.name.as_ref() == FIXTURE_EDIT_COMMAND {
+                    CommandArgumentValue::String(PALETTE_FIXTURE_ARGUMENT.into())
+                } else {
+                    CommandArgumentValue::Null
+                };
+                CommandPaletteEntry::new(definition.clone(), arguments)
+            })
             .collect::<Vec<_>>();
-        let palette = cx.new(|cx| CommandPalette::new(definitions, origin, cx));
+        let palette = cx.new(|cx| CommandPalette::new(entries, origin, cx));
         let subscription = cx.subscribe(
             &palette,
             |this, _palette, event: &CommandPaletteEvent, cx| {
                 this.command_palette = None;
                 this.command_palette_subscription = None;
-                if let CommandPaletteEvent::Confirmed { name, origin } = event {
-                    this.dispatch_palette_command(name.clone(), origin.clone(), cx);
+                if let CommandPaletteEvent::Confirmed { command, origin } = event {
+                    this.dispatch_palette_command(command.clone(), origin.clone(), cx);
                 }
                 cx.notify();
             },
@@ -1229,7 +1241,7 @@ impl Shell {
 
     fn dispatch_palette_command(
         &mut self,
-        name: crate::host::protocol::CommandName,
+        command: Command,
         origin: CommandOrigin,
         cx: &mut Context<Self>,
     ) {
@@ -1239,15 +1251,7 @@ impl Shell {
             let shell_for_window = shell.clone();
             let result = cx.update_window(window_handle, move |_, window, cx| {
                 let prepared = shell_for_window.update(cx, |shell, cx| {
-                    shell.prepare_command_action(
-                        Command {
-                            name,
-                            arguments: CommandArgumentValue::Null,
-                        },
-                        origin,
-                        window,
-                        cx,
-                    )
+                    shell.prepare_command_action(command, origin, window, cx)
                 });
                 match prepared {
                     Ok(action) => {
@@ -1811,8 +1815,8 @@ mod tests {
     };
 
     use super::{
-        BufferModel, ContributionSource, Shell, editor::EditorContributionAction,
-        model::BufferAccessError,
+        BufferModel, ContributionSource, PALETTE_FIXTURE_ARGUMENT, Shell,
+        editor::EditorContributionAction, model::BufferAccessError,
     };
     use crate::host::{
         ExtensionRuntimeControl, ExtensionRuntimeExecutionError, V8Host,
@@ -2200,7 +2204,7 @@ mod tests {
         );
         assert_eq!(
             cx.read(|cx| shell.read(cx).editor.read(cx).model().read(cx).text()),
-            format!("// command\n{initial_text}")
+            format!("{PALETTE_FIXTURE_ARGUMENT}{initial_text}")
         );
         assert!(!cx.update(|window, cx| shell.read(cx).editor.focus_handle(cx).is_focused(window)));
     }
