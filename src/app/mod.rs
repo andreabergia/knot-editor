@@ -20,6 +20,7 @@ use crate::host::{
     },
 };
 
+mod command_palette;
 mod editor;
 pub mod model;
 mod open_buffers;
@@ -27,6 +28,7 @@ mod search_results;
 mod terminal_view;
 mod tree_view;
 
+use command_palette::{CommandPalette, CommandPaletteEvent};
 use editor::{
     EditorContributionAction, EditorRenderingOptions, EditorView, seed_fixture_contributions,
 };
@@ -292,6 +294,8 @@ struct Shell {
     command_state: SharedString,
     command_outcome: Option<CommandOutcome>,
     command_diagnostic: Option<CommandDiagnostic>,
+    command_palette: Option<Entity<CommandPalette>>,
+    command_palette_subscription: Option<Subscription>,
     heartbeat: u64,
     runtime_state: SharedString,
     latest_runtime_error: Option<SharedString>,
@@ -490,6 +494,8 @@ impl Shell {
             command_state: "idle".into(),
             command_outcome: None,
             command_diagnostic: None,
+            command_palette: None,
+            command_palette_subscription: None,
             heartbeat: 0,
             runtime_state: "starting".into(),
             latest_runtime_error: None,
@@ -1177,6 +1183,27 @@ impl Shell {
         self.record_command_outcome(CommandOutcome::Completed, cx);
     }
 
+    fn open_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let definitions = self
+            .command_catalog
+            .definitions()
+            .cloned()
+            .collect::<Vec<_>>();
+        let palette = cx.new(|cx| CommandPalette::new(definitions, cx));
+        let subscription = cx.subscribe(
+            &palette,
+            |this, _palette, _event: &CommandPaletteEvent, cx| {
+                this.command_palette = None;
+                this.command_palette_subscription = None;
+                cx.notify();
+            },
+        );
+        window.focus(&palette.focus_handle(cx));
+        self.command_palette = Some(palette);
+        self.command_palette_subscription = Some(subscription);
+        cx.notify();
+    }
+
     fn allocate_command_invocation(&mut self) -> CommandInvocationId {
         let id = CommandInvocationId::new(self.next_command_invocation);
         self.next_command_invocation = self
@@ -1389,6 +1416,7 @@ impl Render for Shell {
             .latest_runtime_error
             .clone()
             .unwrap_or_else(|| "none".into());
+        let command_palette = self.command_palette.clone();
 
         div()
             .flex()
@@ -1568,6 +1596,16 @@ impl Render for Shell {
                             .child(format!("command {}", self.command_state))
                             .child(
                                 div()
+                                    .id("open-command-palette")
+                                    .cursor_pointer()
+                                    .text_color(rgb(0x80c0ff))
+                                    .child("commands")
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.open_command_palette(window, cx);
+                                    })),
+                            )
+                            .child(
+                                div()
                                     .id("run-fixture-command")
                                     .cursor_pointer()
                                     .text_color(rgb(0x80c0ff))
@@ -1628,6 +1666,21 @@ impl Render for Shell {
                     )
                     .child(self.outline.clone()),
             )
+            .when_some(command_palette, |root, palette| {
+                root.child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .size_full()
+                        .flex()
+                        .items_start()
+                        .justify_center()
+                        .pt(px(72.))
+                        .bg(rgba(0x00000088))
+                        .child(palette),
+                )
+            })
     }
 }
 
@@ -1899,6 +1952,49 @@ mod tests {
             assert_eq!(diagnostic.surface, expected_surface);
             assert_eq!(diagnostic.has_buffer, expected_buffer);
         }
+    }
+
+    #[gpui::test]
+    async fn command_palette_uses_the_live_catalog_and_dismisses_cleanly(cx: &mut TestAppContext) {
+        let runtime = V8Host::new()
+            .spawn_extension(ExtensionId::new(45))
+            .into_parts();
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(runtime, cx));
+        wait_for_runtime_state(&shell, "running", cx).await;
+
+        let expected = cx.read(|cx| {
+            let mut names = shell
+                .read(cx)
+                .command_catalog
+                .definitions()
+                .map(|definition| definition.name.clone())
+                .collect::<Vec<_>>();
+            names.sort();
+            names
+        });
+        shell.update_in(cx, |shell, window, cx| {
+            shell.open_command_palette(window, cx);
+        });
+
+        let palette = cx.read(|cx| shell.read(cx).command_palette.clone().unwrap());
+        assert!(cx.update(|window, cx| palette.focus_handle(cx).is_focused(window)));
+        assert_eq!(
+            cx.read(|cx| {
+                palette
+                    .read(cx)
+                    .visible_definitions()
+                    .iter()
+                    .map(|definition| definition.name.clone())
+                    .collect::<Vec<_>>()
+            }),
+            expected
+        );
+
+        palette.update(cx, |_palette, cx| {
+            cx.emit(super::CommandPaletteEvent::Dismissed);
+        });
+        assert!(cx.read(|cx| shell.read(cx).command_palette.is_none()));
+        assert!(cx.read(|cx| shell.read(cx).command_palette_subscription.is_none()));
     }
 
     async fn wait_for_runtime_state(

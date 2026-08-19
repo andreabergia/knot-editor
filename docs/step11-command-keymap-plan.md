@@ -154,7 +154,7 @@ continues propagation.
 
 ### 4. Add a target-preserving command palette
 
-- ⬜ Add a minimal native palette that lists discoverable command definitions,
+- ✅ Add a minimal native palette that lists discoverable command definitions,
   filters them by name/title, selects an entry, and dismisses cleanly.
 - ⬜ Capture the originating `WeakFocusHandle` and semantic context when the
   palette opens.
