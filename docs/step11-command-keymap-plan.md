@@ -131,7 +131,7 @@ to retarget the command.
 
 - ✅ Introduce the smallest gpui action adapter that carries a Knot `Command`
   and invocation context without making gpui actions the registry identity.
-- ⬜ Dispatch the action at the captured focus handle and let gpui perform its
+- ✅ Dispatch the action at the captured focus handle and let gpui perform its
   normal capture/bubble traversal.
 - ⬜ Attach native handlers at surface and enclosing shell scopes. A handler
   claims a recognized command; otherwise routing continues outward.

@@ -1049,6 +1049,41 @@ impl Shell {
         Ok(CommandExecution { id, completion })
     }
 
+    #[allow(
+        dead_code,
+        reason = "command sources use focus dispatch when native handlers are connected"
+    )]
+    fn dispatch_command_action(
+        &mut self,
+        command: Command,
+        origin: CommandOrigin,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(), CommandOutcome> {
+        let Some(focus) = origin.focus.upgrade() else {
+            return Err(CommandOutcome::InvalidTarget);
+        };
+        if origin.window != window.window_handle()
+            || !cx.windows().contains(&origin.window)
+            || origin
+                .buffer
+                .is_some_and(|buffer| self.buffer_registry.resolve(buffer).is_err())
+        {
+            return Err(CommandOutcome::InvalidTarget);
+        }
+        let action = CommandAction {
+            command,
+            context: CapturedInvocationContext {
+                window: origin.window,
+                workspace: cx.entity().downgrade(),
+                focus: origin.focus,
+                buffer: origin.buffer,
+            },
+        };
+        focus.dispatch_action(&action, window, cx);
+        Ok(())
+    }
+
     fn allocate_command_invocation(&mut self) -> CommandInvocationId {
         let id = CommandInvocationId::new(self.next_command_invocation);
         self.next_command_invocation = self
@@ -1624,6 +1659,46 @@ mod tests {
             visits.borrow().as_slice(),
             ["child-claimed", "child-fallback", "parent-fallback"]
         );
+    }
+
+    #[gpui::test]
+    fn command_action_reaches_bubble_dispatch_with_captured_context(cx: &mut TestAppContext) {
+        let observed = Rc::new(RefCell::new(None));
+        let observed_action = observed.clone();
+        cx.update(move |cx| {
+            cx.on_action(move |action: &super::CommandAction, _| {
+                *observed_action.borrow_mut() = Some(action.clone());
+            });
+        });
+
+        let runtime = V8Host::new()
+            .spawn_extension(ExtensionId::new(42))
+            .into_parts();
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(runtime, cx));
+        let command = Command {
+            name: "knot.fixture.dispatch".into(),
+            arguments: CommandArgumentValue::String("argument".into()),
+        };
+
+        shell.update_in(cx, |shell, window, cx| {
+            let focus = shell.editor.focus_handle(cx);
+            let origin = super::CommandOrigin {
+                window: window.window_handle(),
+                focus: focus.downgrade(),
+                buffer: shell.buffer_registry.active_handle(),
+            };
+            shell
+                .dispatch_command_action(command.clone(), origin.clone(), window, cx)
+                .unwrap();
+
+            let action = observed.borrow();
+            let action = action.as_ref().expect("unhandled action reaches app scope");
+            assert_eq!(action.command, command);
+            assert!(action.context.window == origin.window);
+            assert_eq!(action.context.focus, origin.focus);
+            assert_eq!(action.context.buffer, origin.buffer);
+            assert_eq!(action.context.workspace.upgrade(), Some(cx.entity()));
+        });
     }
 
     async fn wait_for_runtime_state(
