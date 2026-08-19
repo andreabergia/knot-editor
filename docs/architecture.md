@@ -81,7 +81,9 @@ source targets and emitted output ranges separate from the generated text; the
 generic collection and model have no search-result semantics.
 `CommandCatalog` owns native and extension command definitions; extension
 definitions bind their names to one lifecycle while native handlers remain on
-the gpui dispatch path.
+the gpui dispatch path. Fixed gpui keybindings carry Knot command values; the
+shell captures their focused origin and sends them through the same deferred,
+target-preserving dispatcher used by the command palette.
 `BufferSubscriptionRegistry` routes committed changes to interested extension
 lifecycles.
 

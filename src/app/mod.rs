@@ -49,7 +49,8 @@ const MIN_EDITOR_HEIGHT: f32 = 160.;
 const DEFAULT_FIXTURE_NAME: &str = "rust_sample";
 const DIAGNOSTIC_COMMAND: &str = "knot.diagnostic.command-context";
 const FIXTURE_EDIT_COMMAND: &str = "knot.fixture.edit";
-const PALETTE_FIXTURE_ARGUMENT: &str = "// palette command\n";
+const FIXTURE_EDIT_ARGUMENT: &str = "// palette command\n";
+const DIAGNOSTIC_BINDING_ARGUMENT: &str = "keybinding.diagnostic";
 const RUNTIME_PROBE_SOURCE: &str = r#"
 import { commands, editor, workbench } from "knot:editor";
 
@@ -202,6 +203,37 @@ struct CapturedInvocationContext {
 struct CommandAction {
     command: Command,
     context: CapturedInvocationContext,
+}
+
+#[derive(Clone, PartialEq, Action)]
+#[action(namespace = knot, no_json)]
+struct KeybindingCommand {
+    command: Command,
+}
+
+fn fixed_command_bindings() -> [KeyBinding; 2] {
+    [
+        KeyBinding::new(
+            "ctrl-alt-d",
+            KeybindingCommand {
+                command: Command {
+                    name: DIAGNOSTIC_COMMAND.into(),
+                    arguments: CommandArgumentValue::String(DIAGNOSTIC_BINDING_ARGUMENT.into()),
+                },
+            },
+            None,
+        ),
+        KeyBinding::new(
+            "ctrl-alt-e",
+            KeybindingCommand {
+                command: Command {
+                    name: FIXTURE_EDIT_COMMAND.into(),
+                    arguments: CommandArgumentValue::String(FIXTURE_EDIT_ARGUMENT.into()),
+                },
+            },
+            None,
+        ),
+    ]
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1214,7 +1246,7 @@ impl Shell {
             .definitions()
             .map(|definition| {
                 let arguments = if definition.name.as_ref() == FIXTURE_EDIT_COMMAND {
-                    CommandArgumentValue::String(PALETTE_FIXTURE_ARGUMENT.into())
+                    CommandArgumentValue::String(FIXTURE_EDIT_ARGUMENT.into())
                 } else {
                     CommandArgumentValue::Null
                 };
@@ -1228,7 +1260,7 @@ impl Shell {
                 this.command_palette = None;
                 this.command_palette_subscription = None;
                 if let CommandPaletteEvent::Confirmed { command, origin } = event {
-                    this.dispatch_palette_command(command.clone(), origin.clone(), cx);
+                    this.dispatch_command(command.clone(), origin.clone(), cx);
                 }
                 cx.notify();
             },
@@ -1239,7 +1271,20 @@ impl Shell {
         cx.notify();
     }
 
-    fn dispatch_palette_command(
+    fn on_keybinding_command(
+        &mut self,
+        action: &KeybindingCommand,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(origin) = self.command_origin(window, cx) else {
+            self.record_command_outcome(CommandOutcome::InvalidTarget, cx);
+            return;
+        };
+        self.dispatch_command(action.command.clone(), origin, cx);
+    }
+
+    fn dispatch_command(
         &mut self,
         command: Command,
         origin: CommandOrigin,
@@ -1509,6 +1554,7 @@ impl Render for Shell {
             .size_full()
             .bg(rgb(0x1e1e1e))
             .text_color(rgb(0xd4d4d4))
+            .on_action(cx.listener(Self::on_keybinding_command))
             .on_action(cx.listener(Self::on_command_action))
             // Drag resize listeners on the root: on_drag_move fires (capture phase)
             // for every move while a DividerDrag is active, regardless of mouse
@@ -1780,9 +1826,11 @@ pub fn run() {
     Application::new().run(move |app: &mut App| {
         app.on_action(|_action: &Quit, app: &mut App| app.quit());
 
-        app.key_bindings()
-            .borrow_mut()
-            .add_bindings([KeyBinding::new("cmd-q", Quit, None)]);
+        app.bind_keys(
+            fixed_command_bindings()
+                .into_iter()
+                .chain([KeyBinding::new("cmd-q", Quit, None)]),
+        );
 
         let bounds = Bounds::centered(None, size(px(1200.), px(800.)), app);
         app.open_window(
@@ -1815,7 +1863,7 @@ mod tests {
     };
 
     use super::{
-        BufferModel, ContributionSource, PALETTE_FIXTURE_ARGUMENT, Shell,
+        BufferModel, ContributionSource, FIXTURE_EDIT_ARGUMENT, Shell,
         editor::EditorContributionAction, model::BufferAccessError,
     };
     use crate::host::{
@@ -2204,7 +2252,7 @@ mod tests {
         );
         assert_eq!(
             cx.read(|cx| shell.read(cx).editor.read(cx).model().read(cx).text()),
-            format!("{PALETTE_FIXTURE_ARGUMENT}{initial_text}")
+            format!("{FIXTURE_EDIT_ARGUMENT}{initial_text}")
         );
         assert!(!cx.update(|window, cx| shell.read(cx).editor.focus_handle(cx).is_focused(window)));
     }
@@ -2239,6 +2287,61 @@ mod tests {
         );
         assert_eq!(cx.read(|cx| shell.read(cx).command_diagnostic), None);
         assert!(cx.read(|cx| shell.read(cx).command_palette.is_none()));
+    }
+
+    #[gpui::test]
+    async fn fixed_keybindings_dispatch_commands_with_explicit_arguments(cx: &mut TestAppContext) {
+        let bindings = super::fixed_command_bindings();
+        let diagnostic = bindings[0]
+            .action()
+            .as_any()
+            .downcast_ref::<super::KeybindingCommand>()
+            .unwrap();
+        assert_eq!(
+            diagnostic.command.arguments,
+            CommandArgumentValue::String(super::DIAGNOSTIC_BINDING_ARGUMENT.into())
+        );
+        let edit = bindings[1]
+            .action()
+            .as_any()
+            .downcast_ref::<super::KeybindingCommand>()
+            .unwrap();
+        assert_eq!(
+            edit.command.arguments,
+            CommandArgumentValue::String(FIXTURE_EDIT_ARGUMENT.into())
+        );
+        cx.update(|cx| cx.bind_keys(bindings));
+
+        let runtime = V8Host::new()
+            .spawn_extension(ExtensionId::new(50))
+            .into_parts();
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(runtime, cx));
+        wait_for_runtime_state(&shell, "running", cx).await;
+        let initial_text = cx.read(|cx| shell.read(cx).editor.read(cx).model().read(cx).text());
+
+        shell.update_in(cx, |shell, window, cx| {
+            window.focus(&shell.terminal.focus_handle(cx));
+        });
+        cx.refresh().unwrap();
+        cx.simulate_keystrokes("ctrl-alt-d");
+        assert_eq!(
+            cx.read(|cx| shell.read(cx).command_diagnostic),
+            Some(super::CommandDiagnostic {
+                invocation: CommandInvocationId::new(1),
+                surface: super::CommandSurfaceKind::Terminal,
+                has_buffer: false,
+            })
+        );
+
+        shell.update_in(cx, |shell, window, cx| {
+            window.focus(&shell.editor.focus_handle(cx));
+        });
+        cx.simulate_keystrokes("ctrl-alt-e");
+        wait_for_command_state(&shell, "completed", cx).await;
+        assert_eq!(
+            cx.read(|cx| shell.read(cx).editor.read(cx).model().read(cx).text()),
+            format!("{FIXTURE_EDIT_ARGUMENT}{initial_text}")
+        );
     }
 
     async fn wait_for_runtime_state(
