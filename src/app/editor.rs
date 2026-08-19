@@ -35,7 +35,10 @@ use unicode_segmentation::UnicodeSegmentation;
 use crate::core::anchored_range::AnchoredRangeId;
 use crate::host::protocol::{ByteRange, DecorationToken, EditorContribution, GutterToken};
 
-use super::model::{BufferModel, ContributionSource, ResolvedEditorContribution};
+use super::{
+    CommandAction,
+    model::{BufferModel, ContributionSource, ResolvedEditorContribution},
+};
 
 /// Owned, frame-stable copy of one styled segment of one line.
 /// Mirrors `knot::view::fixture`'s borrowed `Segment`/`SegSpec` but holds
@@ -1408,6 +1411,7 @@ impl Render for EditorView {
             // auto-focuses a tracked element on mouse-down) and so on_key_down
             // listeners below actually receive keystrokes.
             .track_focus(&self.focus)
+            .on_action(cx.listener(Self::on_command_action))
             .on_key_down(cx.listener(Self::on_key_down))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
             // Mouse-move extends the selection while the left button is held
@@ -1431,6 +1435,28 @@ impl Render for EditorView {
                 cx.notify();
             }))
             .child(EditorElement { entity })
+    }
+}
+
+impl EditorView {
+    fn on_command_action(
+        &mut self,
+        action: &CommandAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.handle_native_command(action, window, cx) {
+            cx.propagate();
+        }
+    }
+
+    fn handle_native_command(
+        &mut self,
+        _action: &CommandAction,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> bool {
+        false
     }
 }
 

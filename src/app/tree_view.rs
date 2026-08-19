@@ -9,6 +9,8 @@ use crate::host::protocol::{
     TreeCollapsibleState, TreeIcon, TreeItem, TreeProviderRegistrationId,
 };
 
+use super::CommandAction;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct TreeProviderIdentity {
     pub extension: ExtensionId,
@@ -392,6 +394,26 @@ impl TreeView {
             None => "",
         }
     }
+
+    fn on_command_action(
+        &mut self,
+        action: &CommandAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.handle_native_command(action, window, cx) {
+            cx.propagate();
+        }
+    }
+
+    fn handle_native_command(
+        &mut self,
+        _action: &CommandAction,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> bool {
+        false
+    }
 }
 
 impl EventEmitter<TreeViewEvent> for TreeView {}
@@ -462,6 +484,7 @@ impl Render for TreeView {
         .h_full()
         .track_scroll(self.scroll.clone())
         .track_focus(&self.focus)
+        .on_action(cx.listener(Self::on_command_action))
         .on_key_down(cx.listener(Self::on_key_down))
     }
 }

@@ -196,6 +196,23 @@ struct CommandAction {
     context: CapturedInvocationContext,
 }
 
+impl CommandAction {
+    #[allow(
+        dead_code,
+        reason = "command sources dispatch prepared actions when native commands are registered"
+    )]
+    fn dispatch(&self, window: &mut Window, cx: &mut App) -> Result<(), CommandOutcome> {
+        let Some(focus) = self.context.focus.upgrade() else {
+            return Err(CommandOutcome::InvalidTarget);
+        };
+        if self.context.window != window.window_handle() {
+            return Err(CommandOutcome::InvalidTarget);
+        }
+        focus.dispatch_action(self, window, cx);
+        Ok(())
+    }
+}
+
 #[derive(Clone, PartialEq)]
 struct InFlightExtensionCommand {
     id: CommandInvocationId,
@@ -1053,16 +1070,16 @@ impl Shell {
         dead_code,
         reason = "command sources use focus dispatch when native handlers are connected"
     )]
-    fn dispatch_command_action(
-        &mut self,
+    fn prepare_command_action(
+        &self,
         command: Command,
         origin: CommandOrigin,
-        window: &mut Window,
+        window: &Window,
         cx: &mut Context<Self>,
-    ) -> Result<(), CommandOutcome> {
-        let Some(focus) = origin.focus.upgrade() else {
+    ) -> Result<CommandAction, CommandOutcome> {
+        if origin.focus.upgrade().is_none() {
             return Err(CommandOutcome::InvalidTarget);
-        };
+        }
         if origin.window != window.window_handle()
             || !cx.windows().contains(&origin.window)
             || origin
@@ -1071,7 +1088,7 @@ impl Shell {
         {
             return Err(CommandOutcome::InvalidTarget);
         }
-        let action = CommandAction {
+        Ok(CommandAction {
             command,
             context: CapturedInvocationContext {
                 window: origin.window,
@@ -1079,9 +1096,27 @@ impl Shell {
                 focus: origin.focus,
                 buffer: origin.buffer,
             },
-        };
-        focus.dispatch_action(&action, window, cx);
-        Ok(())
+        })
+    }
+
+    fn on_command_action(
+        &mut self,
+        action: &CommandAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.handle_native_command(action, window, cx) {
+            cx.propagate();
+        }
+    }
+
+    fn handle_native_command(
+        &mut self,
+        _action: &CommandAction,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> bool {
+        false
     }
 
     fn allocate_command_invocation(&mut self) -> CommandInvocationId {
@@ -1303,6 +1338,7 @@ impl Render for Shell {
             .size_full()
             .bg(rgb(0x1e1e1e))
             .text_color(rgb(0xd4d4d4))
+            .on_action(cx.listener(Self::on_command_action))
             // Drag resize listeners on the root: on_drag_move fires (capture phase)
             // for every move while a DividerDrag is active, regardless of mouse
             // position, so the root — not the handle — owns the resize math.
@@ -1680,25 +1716,28 @@ mod tests {
             arguments: CommandArgumentValue::String("argument".into()),
         };
 
-        shell.update_in(cx, |shell, window, cx| {
+        let action = shell.update_in(cx, |shell, window, cx| {
             let focus = shell.editor.focus_handle(cx);
             let origin = super::CommandOrigin {
                 window: window.window_handle(),
                 focus: focus.downgrade(),
                 buffer: shell.buffer_registry.active_handle(),
             };
-            shell
-                .dispatch_command_action(command.clone(), origin.clone(), window, cx)
+            let action = shell
+                .prepare_command_action(command.clone(), origin.clone(), window, cx)
                 .unwrap();
-
-            let action = observed.borrow();
-            let action = action.as_ref().expect("unhandled action reaches app scope");
-            assert_eq!(action.command, command);
-            assert!(action.context.window == origin.window);
-            assert_eq!(action.context.focus, origin.focus);
-            assert_eq!(action.context.buffer, origin.buffer);
-            assert_eq!(action.context.workspace.upgrade(), Some(cx.entity()));
+            (action, origin)
         });
+        let (action, origin) = action;
+        cx.update(|window, cx| action.dispatch(window, cx).unwrap());
+
+        let action = observed.borrow();
+        let action = action.as_ref().expect("unhandled action reaches app scope");
+        assert_eq!(action.command, command);
+        assert!(action.context.window == origin.window);
+        assert_eq!(action.context.focus, origin.focus);
+        assert_eq!(action.context.buffer, origin.buffer);
+        assert_eq!(action.context.workspace.upgrade(), Some(shell.clone()));
     }
 
     async fn wait_for_runtime_state(

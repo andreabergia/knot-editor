@@ -133,7 +133,7 @@ to retarget the command.
   and invocation context without making gpui actions the registry identity.
 - ✅ Dispatch the action at the captured focus handle and let gpui perform its
   normal capture/bubble traversal.
-- ⬜ Attach native handlers at surface and enclosing shell scopes. A handler
+- ✅ Attach native handlers at surface and enclosing shell scopes. A handler
   claims a recognized command; otherwise routing continues outward.
 - ⬜ Add a diagnostic native command used only by the prototype to record the
   resolved surface kind and whether the context contains a buffer.

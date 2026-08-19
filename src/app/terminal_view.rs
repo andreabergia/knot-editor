@@ -17,6 +17,8 @@ use alacritty_terminal::{
 };
 use gpui::*;
 
+use super::CommandAction;
+
 const INITIAL_COLUMNS: usize = 80;
 const INITIAL_LINES: usize = 11;
 const CELL_WIDTH: f32 = 8.;
@@ -359,6 +361,26 @@ impl TerminalView {
             cx.notify();
         }
     }
+
+    fn on_command_action(
+        &mut self,
+        action: &CommandAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.handle_native_command(action, window, cx) {
+            cx.propagate();
+        }
+    }
+
+    fn handle_native_command(
+        &mut self,
+        _action: &CommandAction,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> bool {
+        false
+    }
 }
 
 impl Drop for TerminalView {
@@ -431,6 +453,7 @@ impl Render for TerminalView {
                     .flex_1()
                     .min_h_0()
                     .track_focus(&self.focus)
+                    .on_action(cx.listener(Self::on_command_action))
                     .on_key_down(cx.listener(Self::on_key_down))
                     .child(TerminalElement { entity }),
             )
