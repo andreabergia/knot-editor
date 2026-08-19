@@ -85,6 +85,9 @@ the gpui dispatch path. Fixed gpui keybindings carry Knot command values; the
 shell captures their focused origin and sends them through the same deferred,
 target-preserving dispatcher used by the command palette. Focus-owning editor,
 tree, terminal, and palette views publish their own semantic gpui key context.
+The shell owns persistent active-map and one-shot transient-map context flags;
+central command dispatch consumes transient state, while cancellation clears it
+without invoking a command.
 `BufferSubscriptionRegistry` routes committed changes to interested extension
 lifecycles.
 

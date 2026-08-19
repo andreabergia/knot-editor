@@ -41,7 +41,15 @@ use search_results::{ACTIVATE_SEARCH_RESULT_COMMAND, SearchResultsController};
 use terminal_view::TerminalView;
 use tree_view::{TreeProviderIdentity, TreeView, TreeViewEvent, TreeViewRegistrationError};
 
-actions!(knot, [Quit]);
+actions!(
+    knot,
+    [
+        Quit,
+        ToggleActiveKeymap,
+        ActivateTransientKeymap,
+        CancelTransientKeymap
+    ]
+);
 
 const MIN_PANE: f32 = 120.;
 const MIN_TERMINAL_HEIGHT: f32 = 96.;
@@ -55,6 +63,8 @@ const EDITOR_KEY_CONTEXT: &str = "editor";
 const TREE_KEY_CONTEXT: &str = "tree";
 const TERMINAL_KEY_CONTEXT: &str = "terminal";
 const PALETTE_KEY_CONTEXT: &str = "palette";
+const ACTIVE_KEYMAP_CONTEXT: &str = "active_keymap";
+const TRANSIENT_KEYMAP_CONTEXT: &str = "transient_keymap";
 const RUNTIME_PROBE_SOURCE: &str = r#"
 import { commands, editor, workbench } from "knot:editor";
 
@@ -240,6 +250,18 @@ fn fixed_command_bindings() -> [KeyBinding; 2] {
     ]
 }
 
+fn keymap_control_bindings() -> [KeyBinding; 3] {
+    [
+        KeyBinding::new("ctrl-alt-a", ToggleActiveKeymap, None),
+        KeyBinding::new("ctrl-alt-t", ActivateTransientKeymap, None),
+        KeyBinding::new(
+            "ctrl-alt-c",
+            CancelTransientKeymap,
+            Some(TRANSIENT_KEYMAP_CONTEXT),
+        ),
+    ]
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CommandSurfaceKind {
     Editor,
@@ -337,6 +359,8 @@ struct Shell {
     command_diagnostic: Option<CommandDiagnostic>,
     command_palette: Option<Entity<CommandPalette>>,
     command_palette_subscription: Option<Subscription>,
+    active_keymap: bool,
+    transient_keymap: bool,
     heartbeat: u64,
     runtime_state: SharedString,
     latest_runtime_error: Option<SharedString>,
@@ -537,6 +561,8 @@ impl Shell {
             command_diagnostic: None,
             command_palette: None,
             command_palette_subscription: None,
+            active_keymap: false,
+            transient_keymap: false,
             heartbeat: 0,
             runtime_state: "starting".into(),
             latest_runtime_error: None,
@@ -1288,12 +1314,49 @@ impl Shell {
         self.dispatch_command(action.command.clone(), origin, cx);
     }
 
+    fn toggle_active_keymap(
+        &mut self,
+        _: &ToggleActiveKeymap,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.active_keymap = !self.active_keymap;
+        cx.notify();
+    }
+
+    fn activate_transient_keymap(
+        &mut self,
+        _: &ActivateTransientKeymap,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.transient_keymap = true;
+        cx.notify();
+    }
+
+    fn cancel_transient_keymap(
+        &mut self,
+        _: &CancelTransientKeymap,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.clear_transient_keymap(cx);
+    }
+
+    fn clear_transient_keymap(&mut self, cx: &mut Context<Self>) {
+        if self.transient_keymap {
+            self.transient_keymap = false;
+            cx.notify();
+        }
+    }
+
     fn dispatch_command(
         &mut self,
         command: Command,
         origin: CommandOrigin,
         cx: &mut Context<Self>,
     ) {
+        self.clear_transient_keymap(cx);
         let shell = cx.entity();
         let window_handle = origin.window;
         cx.defer(move |cx| {
@@ -1551,6 +1614,14 @@ impl Render for Shell {
             .clone()
             .unwrap_or_else(|| "none".into());
         let command_palette = self.command_palette.clone();
+        let mut keymap_context = KeyContext::default();
+        keymap_context.add("keymap");
+        if self.active_keymap {
+            keymap_context.add(ACTIVE_KEYMAP_CONTEXT);
+        }
+        if self.transient_keymap {
+            keymap_context.add(TRANSIENT_KEYMAP_CONTEXT);
+        }
 
         div()
             .flex()
@@ -1558,6 +1629,10 @@ impl Render for Shell {
             .size_full()
             .bg(rgb(0x1e1e1e))
             .text_color(rgb(0xd4d4d4))
+            .key_context(keymap_context)
+            .on_action(cx.listener(Self::toggle_active_keymap))
+            .on_action(cx.listener(Self::activate_transient_keymap))
+            .on_action(cx.listener(Self::cancel_transient_keymap))
             .on_action(cx.listener(Self::on_keybinding_command))
             .on_action(cx.listener(Self::on_command_action))
             // Drag resize listeners on the root: on_drag_move fires (capture phase)
@@ -1833,6 +1908,7 @@ pub fn run() {
         app.bind_keys(
             fixed_command_bindings()
                 .into_iter()
+                .chain(keymap_control_bindings())
                 .chain([KeyBinding::new("cmd-q", Quit, None)]),
         );
 
@@ -1882,7 +1958,14 @@ mod tests {
     gpui::actions!(step11_probe, [ClaimedProbe, FallbackProbe]);
     gpui::actions!(
         surface_context_probe,
-        [EditorContext, TreeContext, TerminalContext, PaletteContext]
+        [
+            EditorContext,
+            TreeContext,
+            TerminalContext,
+            PaletteContext,
+            ActiveMapContext,
+            TransientMapContext
+        ]
     );
 
     struct FocusDispatchProbe {
@@ -2413,6 +2496,76 @@ mod tests {
             visits.borrow().as_slice(),
             ["editor", "tree", "terminal", "palette"]
         );
+    }
+
+    #[gpui::test]
+    async fn active_and_transient_keymap_contexts_follow_their_lifetimes(cx: &mut TestAppContext) {
+        let visits = Rc::new(RefCell::new(Vec::new()));
+        cx.update(|cx| {
+            let observed = visits.clone();
+            cx.on_action(move |_: &ActiveMapContext, _| observed.borrow_mut().push("active"));
+            let observed = visits.clone();
+            cx.on_action(move |_: &TransientMapContext, _| observed.borrow_mut().push("transient"));
+            cx.bind_keys(
+                super::fixed_command_bindings()
+                    .into_iter()
+                    .chain(super::keymap_control_bindings())
+                    .chain([
+                        KeyBinding::new(
+                            "ctrl-alt-y",
+                            ActiveMapContext,
+                            Some(super::ACTIVE_KEYMAP_CONTEXT),
+                        ),
+                        KeyBinding::new(
+                            "ctrl-alt-u",
+                            TransientMapContext,
+                            Some(super::TRANSIENT_KEYMAP_CONTEXT),
+                        ),
+                    ]),
+            );
+        });
+
+        let runtime = V8Host::new()
+            .spawn_extension(ExtensionId::new(52))
+            .into_parts();
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(runtime, cx));
+        wait_for_runtime_state(&shell, "running", cx).await;
+        shell.update_in(cx, |shell, window, cx| {
+            window.focus(&shell.editor.focus_handle(cx));
+        });
+        cx.refresh().unwrap();
+
+        cx.simulate_keystrokes("ctrl-alt-a");
+        assert!(cx.read(|cx| shell.read(cx).active_keymap));
+        cx.refresh().unwrap();
+        cx.simulate_keystrokes("ctrl-alt-y");
+
+        cx.simulate_keystrokes("ctrl-alt-t");
+        assert!(cx.read(|cx| shell.read(cx).transient_keymap));
+        cx.refresh().unwrap();
+        cx.simulate_keystrokes("ctrl-alt-u");
+        assert_eq!(visits.borrow().as_slice(), ["active", "transient"]);
+
+        cx.simulate_keystrokes("ctrl-alt-d");
+        assert!(cx.read(|cx| shell.read(cx).active_keymap));
+        assert!(!cx.read(|cx| shell.read(cx).transient_keymap));
+        assert_eq!(
+            cx.read(|cx| shell.read(cx).command_diagnostic),
+            Some(super::CommandDiagnostic {
+                invocation: CommandInvocationId::new(1),
+                surface: super::CommandSurfaceKind::Editor,
+                has_buffer: true,
+            })
+        );
+        cx.refresh().unwrap();
+        cx.simulate_keystrokes("ctrl-alt-u");
+        assert_eq!(visits.borrow().as_slice(), ["active", "transient"]);
+
+        cx.simulate_keystrokes("ctrl-alt-t");
+        cx.refresh().unwrap();
+        cx.simulate_keystrokes("ctrl-alt-c");
+        assert!(cx.read(|cx| shell.read(cx).active_keymap));
+        assert!(!cx.read(|cx| shell.read(cx).transient_keymap));
     }
 
     async fn wait_for_runtime_state(
