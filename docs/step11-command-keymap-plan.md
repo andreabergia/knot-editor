@@ -158,7 +158,7 @@ continues propagation.
   filters them by name/title, selects an entry, and dismisses cleanly.
 - ✅ Capture the originating `WeakFocusHandle` and semantic context when the
   palette opens.
-- ⬜ Keep navigation, filtering, dismissal, and text input local to the palette;
+- ✅ Keep navigation, filtering, dismissal, and text input local to the palette;
   these controls do not replace the preserved semantic target.
 - ⬜ Dispatch the selected command at the preserved target without visibly
   refocusing it first.

@@ -54,6 +54,10 @@ impl CommandPalette {
             .collect()
     }
 
+    pub(crate) fn selected_definition(&self) -> Option<&CommandDefinition> {
+        self.visible_definitions().get(self.selected).copied()
+    }
+
     fn set_query(&mut self, query: String, cx: &mut Context<Self>) {
         self.query = query;
         self.selected = 0;
@@ -74,7 +78,7 @@ impl CommandPalette {
     }
 
     fn confirm(&mut self, cx: &mut Context<Self>) {
-        if let Some(definition) = self.visible_definitions().get(self.selected) {
+        if let Some(definition) = self.selected_definition() {
             cx.emit(CommandPaletteEvent::Confirmed {
                 name: definition.name.clone(),
                 origin: self.origin(),

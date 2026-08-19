@@ -2030,6 +2030,57 @@ mod tests {
         assert!(cx.read(|cx| shell.read(cx).command_palette_subscription.is_none()));
     }
 
+    #[gpui::test]
+    async fn command_palette_controls_remain_local_to_the_preserved_origin(
+        cx: &mut TestAppContext,
+    ) {
+        let runtime = V8Host::new()
+            .spawn_extension(ExtensionId::new(46))
+            .into_parts();
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(runtime, cx));
+        wait_for_runtime_state(&shell, "running", cx).await;
+
+        let origin = shell.update_in(cx, |shell, window, cx| {
+            let editor_focus = shell.editor.focus_handle(cx);
+            window.focus(&editor_focus);
+            shell.open_command_palette(window, cx);
+            shell.command_palette.as_ref().unwrap().read(cx).origin()
+        });
+        let palette = cx.read(|cx| shell.read(cx).command_palette.clone().unwrap());
+        cx.refresh().unwrap();
+
+        let initially_selected =
+            cx.read(|cx| palette.read(cx).selected_definition().unwrap().name.clone());
+        cx.simulate_keystrokes("down");
+        assert_ne!(
+            cx.read(|cx| { palette.read(cx).selected_definition().unwrap().name.clone() }),
+            initially_selected
+        );
+
+        cx.simulate_keystrokes("d i a g n o s t i c");
+        assert_eq!(
+            cx.read(|cx| {
+                palette
+                    .read(cx)
+                    .visible_definitions()
+                    .iter()
+                    .map(|definition| definition.name.clone())
+                    .collect::<Vec<_>>()
+            }),
+            vec![super::DIAGNOSTIC_COMMAND.into()]
+        );
+        assert!(cx.read(|cx| palette.read(cx).origin() == origin));
+        assert!(origin.focus.upgrade().is_some());
+        assert_eq!(
+            origin.buffer,
+            cx.read(|cx| shell.read(cx).buffer_registry.active_handle())
+        );
+
+        cx.simulate_keystrokes("backspace escape");
+        assert!(cx.read(|cx| shell.read(cx).command_palette.is_none()));
+        assert_eq!(cx.read(|cx| shell.read(cx).command_outcome.clone()), None);
+    }
+
     async fn wait_for_runtime_state(
         shell: &Entity<Shell>,
         expected: &str,
