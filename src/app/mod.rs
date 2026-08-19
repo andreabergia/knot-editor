@@ -1146,9 +1146,26 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.handle_native_command(action, window, cx) {
-            cx.propagate();
+        if self.handle_native_command(action, window, cx) {
+            return;
         }
+        let Ok(target) = self
+            .command_catalog
+            .resolve_extension(action.command.name.as_ref())
+        else {
+            cx.propagate();
+            return;
+        };
+        let _ = self.invoke_command_target(
+            target,
+            action.command.clone(),
+            CommandOrigin {
+                window: action.context.window,
+                focus: action.context.focus.clone(),
+                buffer: action.context.buffer,
+            },
+            cx,
+        );
     }
 
     fn handle_native_command(
@@ -1195,9 +1212,12 @@ impl Shell {
         let palette = cx.new(|cx| CommandPalette::new(definitions, origin, cx));
         let subscription = cx.subscribe(
             &palette,
-            |this, _palette, _event: &CommandPaletteEvent, cx| {
+            |this, _palette, event: &CommandPaletteEvent, cx| {
                 this.command_palette = None;
                 this.command_palette_subscription = None;
+                if let CommandPaletteEvent::Confirmed { name, origin } = event {
+                    this.dispatch_palette_command(name.clone(), origin.clone(), cx);
+                }
                 cx.notify();
             },
         );
@@ -1205,6 +1225,51 @@ impl Shell {
         self.command_palette = Some(palette);
         self.command_palette_subscription = Some(subscription);
         cx.notify();
+    }
+
+    fn dispatch_palette_command(
+        &mut self,
+        name: crate::host::protocol::CommandName,
+        origin: CommandOrigin,
+        cx: &mut Context<Self>,
+    ) {
+        let shell = cx.entity();
+        let window_handle = origin.window;
+        cx.defer(move |cx| {
+            let shell_for_window = shell.clone();
+            let result = cx.update_window(window_handle, move |_, window, cx| {
+                let prepared = shell_for_window.update(cx, |shell, cx| {
+                    shell.prepare_command_action(
+                        Command {
+                            name,
+                            arguments: CommandArgumentValue::Null,
+                        },
+                        origin,
+                        window,
+                        cx,
+                    )
+                });
+                match prepared {
+                    Ok(action) => {
+                        if let Err(outcome) = action.dispatch(window, cx) {
+                            shell_for_window.update(cx, |shell, cx| {
+                                shell.record_command_outcome(outcome, cx);
+                            });
+                        }
+                    }
+                    Err(outcome) => {
+                        shell_for_window.update(cx, |shell, cx| {
+                            shell.record_command_outcome(outcome, cx);
+                        });
+                    }
+                }
+            });
+            if result.is_err() {
+                shell.update(cx, |shell, cx| {
+                    shell.record_command_outcome(CommandOutcome::InvalidTarget, cx);
+                });
+            }
+        });
     }
 
     fn command_origin(&self, window: &Window, cx: &App) -> Option<CommandOrigin> {
@@ -2079,6 +2144,65 @@ mod tests {
         cx.simulate_keystrokes("backspace escape");
         assert!(cx.read(|cx| shell.read(cx).command_palette.is_none()));
         assert_eq!(cx.read(|cx| shell.read(cx).command_outcome.clone()), None);
+    }
+
+    #[gpui::test]
+    async fn command_palette_dispatches_native_command_at_the_unfocused_origin(
+        cx: &mut TestAppContext,
+    ) {
+        let runtime = V8Host::new()
+            .spawn_extension(ExtensionId::new(47))
+            .into_parts();
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(runtime, cx));
+        wait_for_runtime_state(&shell, "running", cx).await;
+
+        shell.update_in(cx, |shell, window, cx| {
+            window.focus(&shell.editor.focus_handle(cx));
+            shell.open_command_palette(window, cx);
+        });
+        cx.refresh().unwrap();
+        cx.simulate_keystrokes("d i a g n o s t i c enter");
+
+        assert_eq!(
+            cx.read(|cx| shell.read(cx).command_diagnostic),
+            Some(super::CommandDiagnostic {
+                invocation: CommandInvocationId::new(1),
+                surface: super::CommandSurfaceKind::Editor,
+                has_buffer: true,
+            })
+        );
+        assert!(cx.read(|cx| shell.read(cx).command_palette.is_none()));
+        assert!(!cx.update(|window, cx| shell.read(cx).editor.focus_handle(cx).is_focused(window)));
+    }
+
+    #[gpui::test]
+    async fn command_palette_dispatches_extension_command_at_the_unfocused_origin(
+        cx: &mut TestAppContext,
+    ) {
+        let runtime = V8Host::new()
+            .spawn_extension(ExtensionId::new(48))
+            .into_parts();
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(runtime, cx));
+        wait_for_runtime_state(&shell, "running", cx).await;
+        let initial_text = cx.read(|cx| shell.read(cx).editor.read(cx).model().read(cx).text());
+
+        shell.update_in(cx, |shell, window, cx| {
+            window.focus(&shell.editor.focus_handle(cx));
+            shell.open_command_palette(window, cx);
+        });
+        cx.refresh().unwrap();
+        cx.simulate_keystrokes("f i x t u r e . e d i t enter");
+        wait_for_command_state(&shell, "completed", cx).await;
+
+        assert_eq!(
+            cx.read(|cx| shell.read(cx).command_outcome.clone()),
+            Some(CommandOutcome::Completed)
+        );
+        assert_eq!(
+            cx.read(|cx| shell.read(cx).editor.read(cx).model().read(cx).text()),
+            format!("// command\n{initial_text}")
+        );
+        assert!(!cx.update(|window, cx| shell.read(cx).editor.focus_handle(cx).is_focused(window)));
     }
 
     async fn wait_for_runtime_state(

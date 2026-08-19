@@ -160,7 +160,7 @@ continues propagation.
   palette opens.
 - ✅ Keep navigation, filtering, dismissal, and text input local to the palette;
   these controls do not replace the preserved semantic target.
-- ⬜ Dispatch the selected command at the preserved target without visibly
+- ✅ Dispatch the selected command at the preserved target without visibly
   refocusing it first.
 - ⬜ Reject invocation if the originating target has disappeared while the
   palette is open.
