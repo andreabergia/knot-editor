@@ -171,7 +171,7 @@ continues propagation.
 
 - ✅ Register a small fixed set of gpui bindings whose actions carry Knot
   command values with explicit arguments.
-- ⬜ Add surface key contexts for editor, tree, terminal, and palette routing.
+- ✅ Add surface key contexts for editor, tree, terminal, and palette routing.
 - ⬜ Exercise one persistent active-map context and one transient-map context,
   with the transient context cleared after its next command or cancellation.
 - ⬜ Exercise one multi-keystroke binding through gpui's existing pending-key

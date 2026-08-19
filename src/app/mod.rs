@@ -51,6 +51,10 @@ const DIAGNOSTIC_COMMAND: &str = "knot.diagnostic.command-context";
 const FIXTURE_EDIT_COMMAND: &str = "knot.fixture.edit";
 const FIXTURE_EDIT_ARGUMENT: &str = "// palette command\n";
 const DIAGNOSTIC_BINDING_ARGUMENT: &str = "keybinding.diagnostic";
+const EDITOR_KEY_CONTEXT: &str = "editor";
+const TREE_KEY_CONTEXT: &str = "tree";
+const TERMINAL_KEY_CONTEXT: &str = "terminal";
+const PALETTE_KEY_CONTEXT: &str = "palette";
 const RUNTIME_PROBE_SOURCE: &str = r#"
 import { commands, editor, workbench } from "knot:editor";
 
@@ -1858,7 +1862,7 @@ mod tests {
 
     use gpui::{
         AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement,
-        Modifiers, MouseButton, ParentElement, Render, TestAppContext, VisualContext,
+        KeyBinding, Modifiers, MouseButton, ParentElement, Render, TestAppContext, VisualContext,
         VisualTestContext, WeakEntity, Window, div, point, px,
     };
 
@@ -1876,6 +1880,10 @@ mod tests {
     };
 
     gpui::actions!(step11_probe, [ClaimedProbe, FallbackProbe]);
+    gpui::actions!(
+        surface_context_probe,
+        [EditorContext, TreeContext, TerminalContext, PaletteContext]
+    );
 
     struct FocusDispatchProbe {
         target: FocusHandle,
@@ -2341,6 +2349,69 @@ mod tests {
         assert_eq!(
             cx.read(|cx| shell.read(cx).editor.read(cx).model().read(cx).text()),
             format!("{FIXTURE_EDIT_ARGUMENT}{initial_text}")
+        );
+    }
+
+    #[gpui::test]
+    async fn focused_surfaces_publish_distinct_key_contexts(cx: &mut TestAppContext) {
+        let visits = Rc::new(RefCell::new(Vec::new()));
+        cx.update(|cx| {
+            let observed = visits.clone();
+            cx.on_action(move |_: &EditorContext, _| observed.borrow_mut().push("editor"));
+            let observed = visits.clone();
+            cx.on_action(move |_: &TreeContext, _| observed.borrow_mut().push("tree"));
+            let observed = visits.clone();
+            cx.on_action(move |_: &TerminalContext, _| observed.borrow_mut().push("terminal"));
+            let observed = visits.clone();
+            cx.on_action(move |_: &PaletteContext, _| observed.borrow_mut().push("palette"));
+            cx.bind_keys([
+                KeyBinding::new("ctrl-alt-x", EditorContext, Some(super::EDITOR_KEY_CONTEXT)),
+                KeyBinding::new("ctrl-alt-x", TreeContext, Some(super::TREE_KEY_CONTEXT)),
+                KeyBinding::new(
+                    "ctrl-alt-x",
+                    TerminalContext,
+                    Some(super::TERMINAL_KEY_CONTEXT),
+                ),
+                KeyBinding::new(
+                    "ctrl-alt-x",
+                    PaletteContext,
+                    Some(super::PALETTE_KEY_CONTEXT),
+                ),
+            ]);
+        });
+
+        let runtime = V8Host::new()
+            .spawn_extension(ExtensionId::new(51))
+            .into_parts();
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(runtime, cx));
+        wait_for_runtime_state(&shell, "running", cx).await;
+        cx.refresh().unwrap();
+
+        shell.update_in(cx, |shell, window, cx| {
+            window.focus(&shell.editor.focus_handle(cx));
+        });
+        cx.simulate_keystrokes("ctrl-alt-x");
+
+        shell.update_in(cx, |shell, window, cx| {
+            window.focus(&shell.outline.focus_handle(cx));
+        });
+        cx.simulate_keystrokes("ctrl-alt-x");
+
+        shell.update_in(cx, |shell, window, cx| {
+            window.focus(&shell.terminal.focus_handle(cx));
+        });
+        cx.simulate_keystrokes("ctrl-alt-x");
+
+        shell.update_in(cx, |shell, window, cx| {
+            window.focus(&shell.editor.focus_handle(cx));
+            shell.open_command_palette(window, cx);
+        });
+        cx.refresh().unwrap();
+        cx.simulate_keystrokes("ctrl-alt-x");
+
+        assert_eq!(
+            visits.borrow().as_slice(),
+            ["editor", "tree", "terminal", "palette"]
         );
     }
 

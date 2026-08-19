@@ -36,7 +36,7 @@ use crate::core::anchored_range::AnchoredRangeId;
 use crate::host::protocol::{ByteRange, DecorationToken, EditorContribution, GutterToken};
 
 use super::{
-    CommandAction, CommandSurfaceKind, DIAGNOSTIC_COMMAND,
+    CommandAction, CommandSurfaceKind, DIAGNOSTIC_COMMAND, EDITOR_KEY_CONTEXT,
     model::{BufferModel, ContributionSource, ResolvedEditorContribution},
 };
 
@@ -1411,6 +1411,7 @@ impl Render for EditorView {
             // auto-focuses a tracked element on mouse-down) and so on_key_down
             // listeners below actually receive keystrokes.
             .track_focus(&self.focus)
+            .key_context(EDITOR_KEY_CONTEXT)
             .on_action(cx.listener(Self::on_command_action))
             .on_key_down(cx.listener(Self::on_key_down))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))

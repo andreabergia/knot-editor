@@ -2,7 +2,7 @@ use gpui::{prelude::*, *};
 
 use crate::host::protocol::{Command, CommandArgumentValue};
 
-use super::{CommandOrigin, model::CommandDefinition};
+use super::{CommandOrigin, PALETTE_KEY_CONTEXT, model::CommandDefinition};
 
 #[derive(Clone, PartialEq)]
 pub(crate) enum CommandPaletteEvent {
@@ -217,6 +217,7 @@ impl Render for CommandPalette {
             .bg(rgb(0x252526))
             .shadow_lg()
             .track_focus(&self.focus)
+            .key_context(PALETTE_KEY_CONTEXT)
             .on_key_down(cx.listener(Self::on_key_down))
             .child(
                 div()

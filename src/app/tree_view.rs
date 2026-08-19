@@ -9,7 +9,7 @@ use crate::host::protocol::{
     TreeCollapsibleState, TreeIcon, TreeItem, TreeProviderRegistrationId,
 };
 
-use super::{CommandAction, CommandSurfaceKind, DIAGNOSTIC_COMMAND};
+use super::{CommandAction, CommandSurfaceKind, DIAGNOSTIC_COMMAND, TREE_KEY_CONTEXT};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct TreeProviderIdentity {
@@ -488,6 +488,7 @@ impl Render for TreeView {
         .h_full()
         .track_scroll(self.scroll.clone())
         .track_focus(&self.focus)
+        .key_context(TREE_KEY_CONTEXT)
         .on_action(cx.listener(Self::on_command_action))
         .on_key_down(cx.listener(Self::on_key_down))
     }

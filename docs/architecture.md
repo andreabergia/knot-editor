@@ -83,7 +83,8 @@ generic collection and model have no search-result semantics.
 definitions bind their names to one lifecycle while native handlers remain on
 the gpui dispatch path. Fixed gpui keybindings carry Knot command values; the
 shell captures their focused origin and sends them through the same deferred,
-target-preserving dispatcher used by the command palette.
+target-preserving dispatcher used by the command palette. Focus-owning editor,
+tree, terminal, and palette views publish their own semantic gpui key context.
 `BufferSubscriptionRegistry` routes committed changes to interested extension
 lifecycles.
 

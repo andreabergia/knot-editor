@@ -17,7 +17,7 @@ use alacritty_terminal::{
 };
 use gpui::*;
 
-use super::{CommandAction, CommandSurfaceKind, DIAGNOSTIC_COMMAND};
+use super::{CommandAction, CommandSurfaceKind, DIAGNOSTIC_COMMAND, TERMINAL_KEY_CONTEXT};
 
 const INITIAL_COLUMNS: usize = 80;
 const INITIAL_LINES: usize = 11;
@@ -457,6 +457,7 @@ impl Render for TerminalView {
                     .flex_1()
                     .min_h_0()
                     .track_focus(&self.focus)
+                    .key_context(TERMINAL_KEY_CONTEXT)
                     .on_action(cx.listener(Self::on_command_action))
                     .on_key_down(cx.listener(Self::on_key_down))
                     .child(TerminalElement { entity }),
