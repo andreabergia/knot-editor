@@ -139,7 +139,7 @@ to retarget the command.
   resolved surface kind and whether the context contains a buffer.
 - ✅ Exercise that command from `EditorView`, `TreeView`, and `TerminalView`,
   proving the editor supplies a buffer while tree and terminal do not.
-- ⬜ Add focused tests for nearest-handler precedence, outward fallback,
+- ✅ Add focused tests for nearest-handler precedence, outward fallback,
   unhandled commands, and destroyed focus targets.
 
 The first implementation slice should verify gpui action propagation and

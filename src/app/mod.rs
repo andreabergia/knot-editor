@@ -1756,7 +1756,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn command_action_reaches_bubble_dispatch_with_captured_context(cx: &mut TestAppContext) {
+    fn unhandled_command_action_reaches_app_scope_with_captured_context(cx: &mut TestAppContext) {
         let observed = Rc::new(RefCell::new(None));
         let observed_action = observed.clone();
         cx.update(move |cx| {
@@ -1796,6 +1796,45 @@ mod tests {
         assert_eq!(action.context.focus, origin.focus);
         assert_eq!(action.context.buffer, origin.buffer);
         assert_eq!(action.context.workspace.upgrade(), Some(shell.clone()));
+    }
+
+    #[gpui::test]
+    fn command_action_rejects_a_focus_target_destroyed_after_capture(cx: &mut TestAppContext) {
+        let runtime = V8Host::new()
+            .spawn_extension(ExtensionId::new(44))
+            .into_parts();
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(runtime, cx));
+
+        let (action, focus) = shell.update_in(cx, |shell, window, cx| {
+            let focus = cx.focus_handle();
+            let action = shell
+                .prepare_command_action(
+                    Command {
+                        name: super::DIAGNOSTIC_COMMAND.into(),
+                        arguments: CommandArgumentValue::Null,
+                    },
+                    super::CommandOrigin {
+                        window: window.window_handle(),
+                        focus: focus.downgrade(),
+                        buffer: None,
+                    },
+                    window,
+                    cx,
+                )
+                .unwrap();
+            (action, focus)
+        });
+        drop(focus);
+
+        assert_eq!(
+            cx.update(|window, cx| action.dispatch(window, cx)),
+            Err(CommandOutcome::InvalidTarget)
+        );
+        assert_eq!(
+            cx.read(|cx| shell.read(cx).command_diagnostic),
+            None,
+            "a destroyed target must not fall back to the shell"
+        );
     }
 
     #[gpui::test]
