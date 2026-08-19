@@ -137,7 +137,7 @@ to retarget the command.
   claims a recognized command; otherwise routing continues outward.
 - ✅ Add a diagnostic native command used only by the prototype to record the
   resolved surface kind and whether the context contains a buffer.
-- ⬜ Exercise that command from `EditorView`, `TreeView`, and `TerminalView`,
+- ✅ Exercise that command from `EditorView`, `TreeView`, and `TerminalView`,
   proving the editor supplies a buffer while tree and terminal do not.
 - ⬜ Add focused tests for nearest-handler precedence, outward fallback,
   unhandled commands, and destroyed focus targets.

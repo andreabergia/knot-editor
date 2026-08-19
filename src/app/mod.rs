@@ -1798,6 +1798,70 @@ mod tests {
         assert_eq!(action.context.workspace.upgrade(), Some(shell.clone()));
     }
 
+    #[gpui::test]
+    fn diagnostic_command_resolves_each_surface_and_its_buffer_context(cx: &mut TestAppContext) {
+        let runtime = V8Host::new()
+            .spawn_extension(ExtensionId::new(43))
+            .into_parts();
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(runtime, cx));
+        cx.refresh().unwrap();
+
+        let surfaces = shell.update_in(cx, |shell, window, cx| {
+            let buffer = shell.buffer_registry.active_handle().unwrap();
+            [
+                (
+                    shell.editor.focus_handle(cx),
+                    Some(buffer),
+                    super::CommandSurfaceKind::Editor,
+                    true,
+                ),
+                (
+                    shell.outline.focus_handle(cx),
+                    None,
+                    super::CommandSurfaceKind::Tree,
+                    false,
+                ),
+                (
+                    shell.terminal.focus_handle(cx),
+                    None,
+                    super::CommandSurfaceKind::Terminal,
+                    false,
+                ),
+            ]
+            .map(|(focus, buffer, expected_surface, expected_buffer)| {
+                let action = shell
+                    .prepare_command_action(
+                        Command {
+                            name: super::DIAGNOSTIC_COMMAND.into(),
+                            arguments: CommandArgumentValue::Null,
+                        },
+                        super::CommandOrigin {
+                            window: window.window_handle(),
+                            focus: focus.downgrade(),
+                            buffer,
+                        },
+                        window,
+                        cx,
+                    )
+                    .unwrap();
+                (action, expected_surface, expected_buffer)
+            })
+        });
+
+        for (index, (action, expected_surface, expected_buffer)) in surfaces.into_iter().enumerate()
+        {
+            cx.update(|window, cx| action.dispatch(window, cx).unwrap());
+
+            let diagnostic = cx.read(|cx| shell.read(cx).command_diagnostic.unwrap());
+            assert_eq!(
+                diagnostic.invocation,
+                CommandInvocationId::new(index as u64 + 1)
+            );
+            assert_eq!(diagnostic.surface, expected_surface);
+            assert_eq!(diagnostic.has_buffer, expected_buffer);
+        }
+    }
+
     async fn wait_for_runtime_state(
         shell: &Entity<Shell>,
         expected: &str,
