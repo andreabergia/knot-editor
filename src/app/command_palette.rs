@@ -2,11 +2,14 @@ use gpui::{prelude::*, *};
 
 use crate::host::protocol::CommandName;
 
-use super::model::CommandDefinition;
+use super::{CommandOrigin, model::CommandDefinition};
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub(crate) enum CommandPaletteEvent {
-    Confirmed(CommandName),
+    Confirmed {
+        name: CommandName,
+        origin: CommandOrigin,
+    },
     Dismissed,
 }
 
@@ -15,11 +18,13 @@ pub(crate) struct CommandPalette {
     query: String,
     selected: usize,
     focus: FocusHandle,
+    origin: CommandOrigin,
 }
 
 impl CommandPalette {
     pub(crate) fn new(
         definitions: impl IntoIterator<Item = CommandDefinition>,
+        origin: CommandOrigin,
         cx: &mut Context<Self>,
     ) -> Self {
         let mut definitions = definitions.into_iter().collect::<Vec<_>>();
@@ -29,7 +34,12 @@ impl CommandPalette {
             query: String::new(),
             selected: 0,
             focus: cx.focus_handle(),
+            origin,
         }
+    }
+
+    pub(crate) fn origin(&self) -> CommandOrigin {
+        self.origin.clone()
     }
 
     pub(crate) fn visible_definitions(&self) -> Vec<&CommandDefinition> {
@@ -65,7 +75,10 @@ impl CommandPalette {
 
     fn confirm(&mut self, cx: &mut Context<Self>) {
         if let Some(definition) = self.visible_definitions().get(self.selected) {
-            cx.emit(CommandPaletteEvent::Confirmed(definition.name.clone()));
+            cx.emit(CommandPaletteEvent::Confirmed {
+                name: definition.name.clone(),
+                origin: self.origin(),
+            });
         }
     }
 
@@ -132,8 +145,11 @@ impl Render for CommandPalette {
                             .child(definition.name.to_string()),
                     )
                     .on_click(move |_, _, cx| {
-                        entity.update(cx, |_palette, cx| {
-                            cx.emit(CommandPaletteEvent::Confirmed(name.clone()));
+                        entity.update(cx, |palette, cx| {
+                            cx.emit(CommandPaletteEvent::Confirmed {
+                                name: name.clone(),
+                                origin: palette.origin(),
+                            });
                         });
                     })
             })
@@ -182,14 +198,16 @@ impl Render for CommandPalette {
 mod tests {
     use std::{cell::RefCell, rc::Rc};
 
-    use gpui::{AppContext, TestAppContext};
+    use gpui::TestAppContext;
 
     use super::{CommandPalette, CommandPaletteEvent};
+    use crate::app::CommandOrigin;
     use crate::app::model::{CommandDefinition, CommandOwner};
 
     #[gpui::test]
     fn filters_by_name_and_title_and_confirms_the_selection(cx: &mut TestAppContext) {
-        let palette = cx.new(|cx| {
+        let (palette, cx) = cx.add_window_view(|window, cx| {
+            let origin_focus = cx.focus_handle();
             CommandPalette::new(
                 [
                     CommandDefinition {
@@ -203,17 +221,23 @@ mod tests {
                         owner: CommandOwner::Native,
                     },
                 ],
+                CommandOrigin {
+                    window: window.window_handle(),
+                    focus: origin_focus.downgrade(),
+                    buffer: None,
+                },
                 cx,
             )
         });
         let events = Rc::new(RefCell::new(Vec::new()));
         let observed = events.clone();
-        let _subscription = cx.update(|cx| {
+        let _subscription = cx.update(|_, cx| {
             cx.subscribe(&palette, move |_, event, _| {
                 observed.borrow_mut().push(event.clone());
             })
         });
 
+        let expected_origin = palette.read_with(cx, |palette, _| palette.origin());
         palette.update(cx, |palette, cx| {
             palette.set_query("selection".into(), cx);
             assert_eq!(
@@ -227,27 +251,37 @@ mod tests {
             palette.confirm(cx);
         });
 
-        assert_eq!(
-            events.borrow().as_slice(),
-            [CommandPaletteEvent::Confirmed("editor.copy".into())]
+        assert!(
+            events.borrow().as_slice()
+                == [CommandPaletteEvent::Confirmed {
+                    name: "editor.copy".into(),
+                    origin: expected_origin,
+                }]
+                .as_slice()
         );
     }
 
     #[gpui::test]
     fn selection_is_clamped_and_dismissal_is_emitted(cx: &mut TestAppContext) {
-        let palette = cx.new(|cx| {
+        let (palette, cx) = cx.add_window_view(|window, cx| {
+            let origin_focus = cx.focus_handle();
             CommandPalette::new(
                 [CommandDefinition {
                     name: "editor.copy".into(),
                     title: "Copy selection".into(),
                     owner: CommandOwner::Native,
                 }],
+                CommandOrigin {
+                    window: window.window_handle(),
+                    focus: origin_focus.downgrade(),
+                    buffer: None,
+                },
                 cx,
             )
         });
         let events = Rc::new(RefCell::new(Vec::new()));
         let observed = events.clone();
-        let _subscription = cx.update(|cx| {
+        let _subscription = cx.update(|_, cx| {
             cx.subscribe(&palette, move |_, event, _| {
                 observed.borrow_mut().push(event.clone());
             })
@@ -259,6 +293,6 @@ mod tests {
             palette.dismiss(cx);
         });
 
-        assert_eq!(events.borrow().as_slice(), [CommandPaletteEvent::Dismissed]);
+        assert!(events.borrow().as_slice() == [CommandPaletteEvent::Dismissed].as_slice());
     }
 }

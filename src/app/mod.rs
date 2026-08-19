@@ -1184,12 +1184,15 @@ impl Shell {
     }
 
     fn open_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(origin) = self.command_origin(window, cx) else {
+            return;
+        };
         let definitions = self
             .command_catalog
             .definitions()
             .cloned()
             .collect::<Vec<_>>();
-        let palette = cx.new(|cx| CommandPalette::new(definitions, cx));
+        let palette = cx.new(|cx| CommandPalette::new(definitions, origin, cx));
         let subscription = cx.subscribe(
             &palette,
             |this, _palette, _event: &CommandPaletteEvent, cx| {
@@ -1202,6 +1205,19 @@ impl Shell {
         self.command_palette = Some(palette);
         self.command_palette_subscription = Some(subscription);
         cx.notify();
+    }
+
+    fn command_origin(&self, window: &Window, cx: &App) -> Option<CommandOrigin> {
+        let focus = window.focused(cx)?;
+        let buffer = [&self.editor, &self.secondary_editor]
+            .into_iter()
+            .find(|editor| editor.focus_handle(cx).is_focused(window))
+            .and_then(|editor| self.buffer_registry.handle_for(editor.read(cx).model()));
+        Some(CommandOrigin {
+            window: window.window_handle(),
+            focus: focus.downgrade(),
+            buffer,
+        })
     }
 
     fn allocate_command_invocation(&mut self) -> CommandInvocationId {
@@ -1972,12 +1988,21 @@ mod tests {
             names.sort();
             names
         });
-        shell.update_in(cx, |shell, window, cx| {
+        let expected_origin = shell.update_in(cx, |shell, window, cx| {
+            let editor_focus = shell.editor.focus_handle(cx);
+            window.focus(&editor_focus);
+            let origin = shell.command_origin(window, cx).unwrap();
             shell.open_command_palette(window, cx);
+            origin
         });
 
         let palette = cx.read(|cx| shell.read(cx).command_palette.clone().unwrap());
         assert!(cx.update(|window, cx| palette.focus_handle(cx).is_focused(window)));
+        assert!(cx.read(|cx| palette.read(cx).origin() == expected_origin));
+        assert_eq!(
+            expected_origin.buffer,
+            cx.read(|cx| shell.read(cx).buffer_registry.active_handle())
+        );
         assert_eq!(
             cx.read(|cx| {
                 palette
@@ -1988,6 +2013,14 @@ mod tests {
                     .collect::<Vec<_>>()
             }),
             expected
+        );
+
+        cx.update(|window, cx| {
+            window.focus(&shell.read(cx).terminal.focus_handle(cx));
+        });
+        assert!(
+            cx.read(|cx| palette.read(cx).origin() == expected_origin),
+            "later focus changes must not mutate the palette origin"
         );
 
         palette.update(cx, |_palette, cx| {
