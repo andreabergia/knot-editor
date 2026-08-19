@@ -135,7 +135,7 @@ to retarget the command.
   normal capture/bubble traversal.
 - ✅ Attach native handlers at surface and enclosing shell scopes. A handler
   claims a recognized command; otherwise routing continues outward.
-- ⬜ Add a diagnostic native command used only by the prototype to record the
+- ✅ Add a diagnostic native command used only by the prototype to record the
   resolved surface kind and whether the context contains a buffer.
 - ⬜ Exercise that command from `EditorView`, `TreeView`, and `TerminalView`,
   proving the editor supplies a buffer while tree and terminal do not.

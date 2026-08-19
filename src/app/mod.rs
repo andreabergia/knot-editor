@@ -45,6 +45,7 @@ const MIN_PANE: f32 = 120.;
 const MIN_TERMINAL_HEIGHT: f32 = 96.;
 const MIN_EDITOR_HEIGHT: f32 = 160.;
 const DEFAULT_FIXTURE_NAME: &str = "rust_sample";
+const DIAGNOSTIC_COMMAND: &str = "knot.diagnostic.command-context";
 const RUNTIME_PROBE_SOURCE: &str = r#"
 import { commands, editor, workbench } from "knot:editor";
 
@@ -196,6 +197,21 @@ struct CommandAction {
     context: CapturedInvocationContext,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CommandSurfaceKind {
+    Editor,
+    Tree,
+    Terminal,
+    Shell,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct CommandDiagnostic {
+    invocation: CommandInvocationId,
+    surface: CommandSurfaceKind,
+    has_buffer: bool,
+}
+
 impl CommandAction {
     #[allow(
         dead_code,
@@ -210,6 +226,16 @@ impl CommandAction {
         }
         focus.dispatch_action(self, window, cx);
         Ok(())
+    }
+
+    fn record_diagnostic(&self, surface: CommandSurfaceKind, cx: &mut App) {
+        let Some(workspace) = self.context.workspace.upgrade() else {
+            return;
+        };
+        let has_buffer = self.context.buffer.is_some();
+        let _ = workspace.update(cx, |shell, cx| {
+            shell.record_command_diagnostic(surface, has_buffer, cx);
+        });
     }
 }
 
@@ -265,6 +291,7 @@ struct Shell {
     cancelled_commands: HashSet<CommandInvocationId>,
     command_state: SharedString,
     command_outcome: Option<CommandOutcome>,
+    command_diagnostic: Option<CommandDiagnostic>,
     heartbeat: u64,
     runtime_state: SharedString,
     latest_runtime_error: Option<SharedString>,
@@ -434,6 +461,13 @@ impl Shell {
                 }
             }
         });
+        let mut command_catalog = CommandCatalog::new();
+        command_catalog
+            .register_native(
+                DIAGNOSTIC_COMMAND.into(),
+                "Record resolved command context".into(),
+            )
+            .expect("diagnostic command name is unique");
         Shell {
             open_buffers,
             source_buffer,
@@ -448,13 +482,14 @@ impl Shell {
             terminal,
             buffer_registry,
             buffer_subscriptions: BufferSubscriptionRegistry::new(),
-            command_catalog: CommandCatalog::new(),
+            command_catalog,
             next_tree_registration: 1,
             next_command_invocation: 1,
             active_command: None,
             cancelled_commands: HashSet::new(),
             command_state: "idle".into(),
             command_outcome: None,
+            command_diagnostic: None,
             heartbeat: 0,
             runtime_state: "starting".into(),
             latest_runtime_error: None,
@@ -1112,11 +1147,34 @@ impl Shell {
 
     fn handle_native_command(
         &mut self,
-        _action: &CommandAction,
+        action: &CommandAction,
         _window: &mut Window,
-        _cx: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) -> bool {
-        false
+        if action.command.name.as_ref() != DIAGNOSTIC_COMMAND {
+            return false;
+        }
+        self.record_command_diagnostic(
+            CommandSurfaceKind::Shell,
+            action.context.buffer.is_some(),
+            cx,
+        );
+        true
+    }
+
+    fn record_command_diagnostic(
+        &mut self,
+        surface: CommandSurfaceKind,
+        has_buffer: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let invocation = self.allocate_command_invocation();
+        self.command_diagnostic = Some(CommandDiagnostic {
+            invocation,
+            surface,
+            has_buffer,
+        });
+        self.record_command_outcome(CommandOutcome::Completed, cx);
     }
 
     fn allocate_command_invocation(&mut self) -> CommandInvocationId {

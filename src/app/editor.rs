@@ -36,7 +36,7 @@ use crate::core::anchored_range::AnchoredRangeId;
 use crate::host::protocol::{ByteRange, DecorationToken, EditorContribution, GutterToken};
 
 use super::{
-    CommandAction,
+    CommandAction, CommandSurfaceKind, DIAGNOSTIC_COMMAND,
     model::{BufferModel, ContributionSource, ResolvedEditorContribution},
 };
 
@@ -1452,11 +1452,15 @@ impl EditorView {
 
     fn handle_native_command(
         &mut self,
-        _action: &CommandAction,
+        action: &CommandAction,
         _window: &mut Window,
-        _cx: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) -> bool {
-        false
+        if action.command.name.as_ref() != DIAGNOSTIC_COMMAND {
+            return false;
+        }
+        action.record_diagnostic(CommandSurfaceKind::Editor, cx);
+        true
     }
 }
 

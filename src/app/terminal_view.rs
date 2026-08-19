@@ -17,7 +17,7 @@ use alacritty_terminal::{
 };
 use gpui::*;
 
-use super::CommandAction;
+use super::{CommandAction, CommandSurfaceKind, DIAGNOSTIC_COMMAND};
 
 const INITIAL_COLUMNS: usize = 80;
 const INITIAL_LINES: usize = 11;
@@ -375,11 +375,15 @@ impl TerminalView {
 
     fn handle_native_command(
         &mut self,
-        _action: &CommandAction,
+        action: &CommandAction,
         _window: &mut Window,
-        _cx: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) -> bool {
-        false
+        if action.command.name.as_ref() != DIAGNOSTIC_COMMAND {
+            return false;
+        }
+        action.record_diagnostic(CommandSurfaceKind::Terminal, cx);
+        true
     }
 }
 
