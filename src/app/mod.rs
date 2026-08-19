@@ -2205,6 +2205,38 @@ mod tests {
         assert!(!cx.update(|window, cx| shell.read(cx).editor.focus_handle(cx).is_focused(window)));
     }
 
+    #[gpui::test]
+    async fn command_palette_rejects_an_origin_that_disappears_before_confirmation(
+        cx: &mut TestAppContext,
+    ) {
+        let runtime = V8Host::new()
+            .spawn_extension(ExtensionId::new(49))
+            .into_parts();
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(runtime, cx));
+        wait_for_runtime_state(&shell, "running", cx).await;
+
+        let origin = shell.update_in(cx, |shell, window, cx| {
+            window.focus(&shell.secondary_editor.focus_handle(cx));
+            shell.open_command_palette(window, cx);
+            shell.command_palette.as_ref().unwrap().read(cx).origin()
+        });
+        cx.refresh().unwrap();
+        cx.simulate_keystrokes("d i a g n o s t i c");
+
+        shell.update(cx, |shell, cx| shell.search_fixture("Node", cx));
+        cx.refresh().unwrap();
+        assert!(origin.focus.upgrade().is_none());
+
+        cx.simulate_keystrokes("enter");
+
+        assert_eq!(
+            cx.read(|cx| shell.read(cx).command_outcome.clone()),
+            Some(CommandOutcome::InvalidTarget)
+        );
+        assert_eq!(cx.read(|cx| shell.read(cx).command_diagnostic), None);
+        assert!(cx.read(|cx| shell.read(cx).command_palette.is_none()));
+    }
+
     async fn wait_for_runtime_state(
         shell: &Entity<Shell>,
         expected: &str,

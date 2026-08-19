@@ -162,7 +162,7 @@ continues propagation.
   these controls do not replace the preserved semantic target.
 - ✅ Dispatch the selected command at the preserved target without visibly
   refocusing it first.
-- ⬜ Reject invocation if the originating target has disappeared while the
+- ✅ Reject invocation if the originating target has disappeared while the
   palette is open.
 - ⬜ Use one fixture palette entry carrying fixed, visible arguments for the
   cross-origin exercise. General argument prompting remains deferred.
