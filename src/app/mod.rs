@@ -59,6 +59,7 @@ const DIAGNOSTIC_COMMAND: &str = "knot.diagnostic.command-context";
 const FIXTURE_EDIT_COMMAND: &str = "knot.fixture.edit";
 const FIXTURE_EDIT_ARGUMENT: &str = "// palette command\n";
 const DIAGNOSTIC_BINDING_ARGUMENT: &str = "keybinding.diagnostic";
+const MULTI_KEY_DIAGNOSTIC_ARGUMENT: &str = "keybinding.multi-keystroke-diagnostic";
 const EDITOR_KEY_CONTEXT: &str = "editor";
 const TREE_KEY_CONTEXT: &str = "tree";
 const TERMINAL_KEY_CONTEXT: &str = "terminal";
@@ -225,7 +226,7 @@ struct KeybindingCommand {
     command: Command,
 }
 
-fn fixed_command_bindings() -> [KeyBinding; 2] {
+fn fixed_command_bindings() -> [KeyBinding; 3] {
     [
         KeyBinding::new(
             "ctrl-alt-d",
@@ -243,6 +244,16 @@ fn fixed_command_bindings() -> [KeyBinding; 2] {
                 command: Command {
                     name: FIXTURE_EDIT_COMMAND.into(),
                     arguments: CommandArgumentValue::String(FIXTURE_EDIT_ARGUMENT.into()),
+                },
+            },
+            None,
+        ),
+        KeyBinding::new(
+            "ctrl-alt-k ctrl-alt-d",
+            KeybindingCommand {
+                command: Command {
+                    name: DIAGNOSTIC_COMMAND.into(),
+                    arguments: CommandArgumentValue::String(MULTI_KEY_DIAGNOSTIC_ARGUMENT.into()),
                 },
             },
             None,
@@ -2401,6 +2412,15 @@ mod tests {
             edit.command.arguments,
             CommandArgumentValue::String(FIXTURE_EDIT_ARGUMENT.into())
         );
+        let multi_key = bindings[2]
+            .action()
+            .as_any()
+            .downcast_ref::<super::KeybindingCommand>()
+            .unwrap();
+        assert_eq!(
+            multi_key.command.arguments,
+            CommandArgumentValue::String(super::MULTI_KEY_DIAGNOSTIC_ARGUMENT.into())
+        );
         cx.update(|cx| cx.bind_keys(bindings));
 
         let runtime = V8Host::new()
@@ -2432,6 +2452,36 @@ mod tests {
         assert_eq!(
             cx.read(|cx| shell.read(cx).editor.read(cx).model().read(cx).text()),
             format!("{FIXTURE_EDIT_ARGUMENT}{initial_text}")
+        );
+    }
+
+    #[gpui::test]
+    async fn multi_keystroke_binding_uses_gpui_pending_input(cx: &mut TestAppContext) {
+        cx.update(|cx| cx.bind_keys(super::fixed_command_bindings()));
+
+        let runtime = V8Host::new()
+            .spawn_extension(ExtensionId::new(53))
+            .into_parts();
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(runtime, cx));
+        wait_for_runtime_state(&shell, "running", cx).await;
+        shell.update_in(cx, |shell, window, cx| {
+            window.focus(&shell.editor.focus_handle(cx));
+        });
+        cx.refresh().unwrap();
+
+        cx.simulate_keystrokes("ctrl-alt-k");
+        assert!(shell.update_in(cx, |_, window, _| window.has_pending_keystrokes()));
+        assert_eq!(cx.read(|cx| shell.read(cx).command_diagnostic), None);
+
+        cx.simulate_keystrokes("ctrl-alt-d");
+        assert!(!shell.update_in(cx, |_, window, _| window.has_pending_keystrokes()));
+        assert_eq!(
+            cx.read(|cx| shell.read(cx).command_diagnostic),
+            Some(super::CommandDiagnostic {
+                invocation: CommandInvocationId::new(1),
+                surface: super::CommandSurfaceKind::Editor,
+                has_buffer: true,
+            })
         );
     }
 

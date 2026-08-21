@@ -174,7 +174,7 @@ continues propagation.
 - ✅ Add surface key contexts for editor, tree, terminal, and palette routing.
 - ✅ Exercise one persistent active-map context and one transient-map context,
   with the transient context cleared after its next command or cancellation.
-- ⬜ Exercise one multi-keystroke binding through gpui's existing pending-key
+- ✅ Exercise one multi-keystroke binding through gpui's existing pending-key
   machinery.
 - ⬜ Verify precedence among the base binding, active context, transient
   context, and the more specific focused surface.
