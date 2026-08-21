@@ -279,7 +279,7 @@ pub struct TreeChildrenResponse {
 }
 
 /// A request sent by one extension runtime to the editor foreground owner.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct HostRequest {
     pub extension: ExtensionId,
     pub lifecycle: ExtensionLifecycleId,
@@ -289,7 +289,7 @@ pub struct HostRequest {
 }
 
 /// Editor operations available to the initial buffer API boundary.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum HostOperation {
     ActiveBuffer,
     Snapshot {
@@ -307,6 +307,9 @@ pub enum HostOperation {
     },
     UnregisterCommand {
         registration: CommandRegistrationId,
+    },
+    InvokeCommand {
+        command: Command,
     },
     SubscribeBufferChanges {
         buffer: BufferHandle,
@@ -356,6 +359,9 @@ pub enum HostResponseValue {
     },
     CommandUnregistered {
         registration: CommandRegistrationId,
+    },
+    CommandInvoked {
+        outcome: CommandOutcome,
     },
     BufferChangesSubscribed {
         subscription: BufferSubscriptionId,

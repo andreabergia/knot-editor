@@ -183,7 +183,7 @@ continues propagation.
 
 ### 6. Unify keybinding, palette, and script invocation
 
-- ⬜ Add a top-level JavaScript `commands.invoke(name, arguments)` operation
+- ✅ Add a top-level JavaScript `commands.invoke(name, arguments)` operation
   that enters the same dispatcher and completes with the same structured
   outcome as other invocation sources.
 - ⬜ Reject `commands.invoke` while the calling extension is already executing
@@ -200,6 +200,11 @@ The fixture operation may be intentionally narrow, such as inserting a fixed
 text value into the captured editable buffer. Its purpose is to validate
 origin equivalence and explicit arguments, not to define a production editing
 command set.
+
+Top-level cross-runtime invocation uses the normal focus dispatcher. A
+same-runtime target currently completes as unavailable rather than queueing
+behind the calling script; reentrant and same-runtime scheduling remain step
+11b work.
 
 ### 7. Validate suspended-target rejection
 

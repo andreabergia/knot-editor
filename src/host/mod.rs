@@ -231,6 +231,17 @@ export async function registerCommand(name, handler) {
   });
 }
 
+export async function invokeCommand(name, commandArguments) {
+  if (typeof name !== "string") {
+    throw new TypeError("commands.invoke requires a command name");
+  }
+  const outcome = await nativeOps.op_command_invoke(
+    name,
+    commandArguments === undefined ? null : commandArguments,
+  );
+  return Object.freeze(outcome);
+}
+
 export function invalidCommandArguments(message) {
   const error = new Error(String(message));
   error.name = "InvalidCommandArgumentsError";
@@ -324,6 +335,7 @@ const PUBLIC_FACADE_SOURCE: &str = r#"
 import {
   activeBuffer,
   invalidCommandArguments,
+  invokeCommand,
   registerCommand,
   registerTreeDataProvider,
 } from "knot:bootstrap";
@@ -334,6 +346,7 @@ export const editor = {
 
 export const commands = {
   invalidArguments: invalidCommandArguments,
+  invoke: invokeCommand,
   register: registerCommand,
 };
 
@@ -429,6 +442,7 @@ deno_core::extension!(
         op_native_response_take,
         op_command_register,
         op_command_unregister,
+        op_command_invoke,
         op_buffer_subscribe,
         op_buffer_unsubscribe,
         op_tree_register,
@@ -823,6 +837,34 @@ async fn op_command_unregister(
         .borrow_mut()
         .borrow_mut::<NativeResponseStore>()
         .insert(response))
+}
+
+#[deno_core::op2]
+#[serde]
+async fn op_command_invoke(
+    state: Rc<RefCell<OpState>>,
+    #[string] name: String,
+    #[serde] arguments: protocol::CommandArgumentValue,
+) -> Result<protocol::CommandOutcome, JsErrorBox> {
+    let response = request_host_operation(
+        state,
+        HostOperation::InvokeCommand {
+            command: protocol::Command {
+                name: name.into(),
+                arguments,
+            },
+        },
+    )
+    .await?;
+    match response.result {
+        Ok(HostResponseValue::CommandInvoked { outcome }) => Ok(outcome),
+        Ok(_) => Err(JsErrorBox::generic(
+            "Knot host returned the wrong response type",
+        )),
+        Err(error) => Err(JsErrorBox::generic(format!(
+            "Knot host rejected command invocation: {error:?}"
+        ))),
+    }
 }
 
 #[deno_core::op2]

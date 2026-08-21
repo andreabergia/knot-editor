@@ -6,6 +6,7 @@
 use gpui::{prelude::FluentBuilder, *};
 use std::{
     collections::{HashMap, HashSet},
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
@@ -210,6 +211,69 @@ struct CapturedInvocationContext {
     buffer: Option<BufferHandle>,
 }
 
+struct CommandDispatchCompletionState {
+    claimed: bool,
+    sender: Option<tokio::sync::oneshot::Sender<CommandOutcome>>,
+}
+
+#[derive(Clone)]
+struct CommandDispatchCompletion {
+    caller: (ExtensionId, crate::host::protocol::ExtensionLifecycleId),
+    state: Arc<Mutex<CommandDispatchCompletionState>>,
+}
+
+impl PartialEq for CommandDispatchCompletion {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.state, &other.state)
+    }
+}
+
+impl CommandDispatchCompletion {
+    fn new(
+        caller: (ExtensionId, crate::host::protocol::ExtensionLifecycleId),
+    ) -> (Self, tokio::sync::oneshot::Receiver<CommandOutcome>) {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        (
+            Self {
+                caller,
+                state: Arc::new(Mutex::new(CommandDispatchCompletionState {
+                    claimed: false,
+                    sender: Some(sender),
+                })),
+            },
+            receiver,
+        )
+    }
+
+    fn claim(&self) {
+        self.state
+            .lock()
+            .expect("command completion lock poisoned")
+            .claimed = true;
+    }
+
+    fn complete(&self, outcome: CommandOutcome) {
+        let sender = self
+            .state
+            .lock()
+            .expect("command completion lock poisoned")
+            .sender
+            .take();
+        if let Some(sender) = sender {
+            let _ = sender.send(outcome);
+        }
+    }
+
+    fn complete_if_unclaimed(&self) {
+        let mut state = self.state.lock().expect("command completion lock poisoned");
+        if !state.claimed {
+            if let Some(sender) = state.sender.take() {
+                let _ = sender.send(CommandOutcome::Unavailable);
+            }
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, Action)]
 #[action(namespace = knot, no_json)]
 #[allow(
@@ -219,6 +283,7 @@ struct CapturedInvocationContext {
 struct CommandAction {
     command: Command,
     context: CapturedInvocationContext,
+    completion: Option<CommandDispatchCompletion>,
 }
 
 #[derive(Clone, PartialEq, Action)]
@@ -296,23 +361,43 @@ impl CommandAction {
     )]
     fn dispatch(&self, window: &mut Window, cx: &mut App) -> Result<(), CommandOutcome> {
         let Some(focus) = self.context.focus.upgrade() else {
+            self.complete(CommandOutcome::InvalidTarget);
             return Err(CommandOutcome::InvalidTarget);
         };
         if self.context.window != window.window_handle() {
+            self.complete(CommandOutcome::InvalidTarget);
             return Err(CommandOutcome::InvalidTarget);
         }
         focus.dispatch_action(self, window, cx);
+        if let Some(completion) = &self.completion {
+            completion.complete_if_unclaimed();
+        }
         Ok(())
     }
 
+    fn claim(&self) {
+        if let Some(completion) = &self.completion {
+            completion.claim();
+        }
+    }
+
+    fn complete(&self, outcome: CommandOutcome) {
+        if let Some(completion) = &self.completion {
+            completion.complete(outcome);
+        }
+    }
+
     fn record_diagnostic(&self, surface: CommandSurfaceKind, cx: &mut App) {
+        self.claim();
         let Some(workspace) = self.context.workspace.upgrade() else {
+            self.complete(CommandOutcome::InvalidTarget);
             return;
         };
         let has_buffer = self.context.buffer.is_some();
         let _ = workspace.update(cx, |shell, cx| {
             shell.record_command_diagnostic(surface, has_buffer, cx);
         });
+        self.complete(CommandOutcome::Completed);
     }
 }
 
@@ -602,11 +687,78 @@ impl Shell {
         cx.spawn(async move |this, cx| {
             let mut failure = None;
             while let Some(request) = requests.receive().await {
-                let response =
+                let response = if let HostOperation::InvokeCommand { command } =
+                    request.operation.clone()
+                {
+                    let caller = (request.extension, request.lifecycle);
+                    let id = request.id;
+                    let outcome = cx
+                        .update(|cx| {
+                            let Some(shell) = this.upgrade() else {
+                                return None;
+                            };
+                            let windows = cx.window_stack().unwrap_or_else(|| cx.windows());
+                            for window_handle in windows {
+                                let command = command.clone();
+                                let receiver = cx
+                                    .update_window(window_handle, |_, window, cx| {
+                                        if window.root::<Shell>().flatten().as_ref() != Some(&shell)
+                                        {
+                                            return None;
+                                        }
+                                        let (completion, receiver) =
+                                            CommandDispatchCompletion::new(caller);
+                                        let action = shell.update(cx, |shell, cx| {
+                                            let Some(origin) = shell.command_origin(window, cx)
+                                            else {
+                                                completion.complete(CommandOutcome::InvalidTarget);
+                                                return None;
+                                            };
+                                            match shell.prepare_command_action_with_completion(
+                                                command,
+                                                origin,
+                                                Some(completion.clone()),
+                                                window,
+                                                cx,
+                                            ) {
+                                                Ok(action) => Some(action),
+                                                Err(outcome) => {
+                                                    completion.complete(outcome);
+                                                    None
+                                                }
+                                            }
+                                        });
+                                        if let Some(action) = action {
+                                            let _ = action.dispatch(window, cx);
+                                        }
+                                        Some(receiver)
+                                    })
+                                    .ok()
+                                    .flatten();
+                                if receiver.is_some() {
+                                    return receiver;
+                                }
+                            }
+                            None
+                        })
+                        .ok()
+                        .flatten();
+                    let outcome = match outcome {
+                        Some(receiver) => receiver.await.unwrap_or(CommandOutcome::Unavailable),
+                        None => CommandOutcome::InvalidTarget,
+                    };
+                    HostResponse {
+                        extension: caller.0,
+                        lifecycle: caller.1,
+                        id,
+                        result: Ok(HostResponseValue::CommandInvoked { outcome }),
+                    }
+                } else {
                     match this.update(cx, |this, cx| this.dispatch_host_request(request, cx)) {
                         Ok(response) => response,
                         Err(_) => return,
-                    };
+                    }
+                };
                 if let Err(error) = control.respond(response) {
                     failure = Some(format!("runtime response failed: {error:?}"));
                     break;
@@ -696,6 +848,9 @@ impl Shell {
                 .unregister(registration, request.extension, request.lifecycle)
                 .map(|()| HostResponseValue::CommandUnregistered { registration })
                 .map_err(map_command_error),
+            HostOperation::InvokeCommand { .. } => unreachable!(
+                "programmatic command invocation is completed by the asynchronous bridge"
+            ),
             HostOperation::SubscribeBufferChanges { buffer } => self
                 .buffer_registry
                 .resolve(buffer)
@@ -1197,6 +1352,17 @@ impl Shell {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> Result<CommandAction, CommandOutcome> {
+        self.prepare_command_action_with_completion(command, origin, None, window, cx)
+    }
+
+    fn prepare_command_action_with_completion(
+        &self,
+        command: Command,
+        origin: CommandOrigin,
+        completion: Option<CommandDispatchCompletion>,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Result<CommandAction, CommandOutcome> {
         if origin.focus.upgrade().is_none() {
             return Err(CommandOutcome::InvalidTarget);
         }
@@ -1216,6 +1382,7 @@ impl Shell {
                 focus: origin.focus,
                 buffer: origin.buffer,
             },
+            completion,
         })
     }
 
@@ -1235,7 +1402,17 @@ impl Shell {
             cx.propagate();
             return;
         };
-        let _ = self.invoke_command_target(
+        if action
+            .completion
+            .as_ref()
+            .is_some_and(|completion| completion.caller == (target.extension, target.lifecycle))
+        {
+            action.claim();
+            action.complete(CommandOutcome::Unavailable);
+            return;
+        }
+        action.claim();
+        let result = self.invoke_command_target(
             target,
             action.command.clone(),
             CommandOrigin {
@@ -1245,6 +1422,21 @@ impl Shell {
             },
             cx,
         );
+        match result {
+            Ok(execution) => {
+                if let Some(completion) = action.completion.clone() {
+                    cx.spawn(async move |_, _| {
+                        let outcome = execution
+                            .completion
+                            .await
+                            .unwrap_or(CommandOutcome::Unavailable);
+                        completion.complete(outcome);
+                    })
+                    .detach();
+                }
+            }
+            Err(outcome) => action.complete(outcome),
+        }
     }
 
     fn handle_native_command(
@@ -1256,11 +1448,13 @@ impl Shell {
         if action.command.name.as_ref() != DIAGNOSTIC_COMMAND {
             return false;
         }
+        action.claim();
         self.record_command_diagnostic(
             CommandSurfaceKind::Shell,
             action.context.buffer.is_some(),
             cx,
         );
+        action.complete(CommandOutcome::Completed);
         true
     }
 
@@ -2804,6 +2998,53 @@ mod tests {
             (resolved, displayed)
         });
         assert_eq!(resolved, displayed);
+    }
+
+    #[gpui::test]
+    async fn top_level_script_invokes_a_command_through_the_captured_editor_target(
+        cx: &mut TestAppContext,
+    ) {
+        let host = V8Host::new();
+        let (shell, cx) = cx.add_window_view(|_, cx| {
+            Shell::new_with_runtimes(
+                [ExtensionId::new(55), ExtensionId::new(56)]
+                    .map(|extension| host.spawn_extension(extension).into_parts())
+                    .into(),
+                cx,
+            )
+        });
+        wait_for_runtime_state(&shell, "running", cx).await;
+        shell.update_in(cx, |shell, window, cx| {
+            window.focus(&shell.editor.focus_handle(cx));
+        });
+        let caller = runtime_control(&shell, ExtensionId::new(56), cx);
+
+        caller
+            .execute_fixture_module(
+                "file:///fixtures/top-level-command.js",
+                r#"
+                    import { commands } from "knot:editor";
+                    const outcome = await commands.invoke(
+                      "knot.fixture.edit",
+                      "// script command\n",
+                    );
+                    if (outcome.kind !== "completed") {
+                      throw new Error(`unexpected command outcome: ${outcome.kind}`);
+                    }
+                "#,
+            )
+            .await
+            .unwrap();
+
+        let text = cx.read(|cx| {
+            let shell = shell.read(cx);
+            shell
+                .editor
+                .read(cx)
+                .model()
+                .read_with(cx, |model, _| model.text())
+        });
+        assert!(text.starts_with("// script command\n"));
     }
 
     #[gpui::test]
