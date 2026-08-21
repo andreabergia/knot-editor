@@ -176,7 +176,7 @@ continues propagation.
   with the transient context cleared after its next command or cancellation.
 - ✅ Exercise one multi-keystroke binding through gpui's existing pending-key
   machinery.
-- ⬜ Verify precedence among the base binding, active context, transient
+- ✅ Verify precedence among the base binding, active context, transient
   context, and the more specific focused surface.
 - ⬜ Do not add configuration loading, keymap editing, arbitrary runtime layer
   installation, universal arguments, or numeric repetition.

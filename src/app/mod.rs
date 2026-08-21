@@ -64,6 +64,7 @@ const EDITOR_KEY_CONTEXT: &str = "editor";
 const TREE_KEY_CONTEXT: &str = "tree";
 const TERMINAL_KEY_CONTEXT: &str = "terminal";
 const PALETTE_KEY_CONTEXT: &str = "palette";
+const BASE_KEYMAP_CONTEXT: &str = "keymap";
 const ACTIVE_KEYMAP_CONTEXT: &str = "active_keymap";
 const TRANSIENT_KEYMAP_CONTEXT: &str = "transient_keymap";
 const RUNTIME_PROBE_SOURCE: &str = r#"
@@ -236,7 +237,7 @@ fn fixed_command_bindings() -> [KeyBinding; 3] {
                     arguments: CommandArgumentValue::String(DIAGNOSTIC_BINDING_ARGUMENT.into()),
                 },
             },
-            None,
+            Some(BASE_KEYMAP_CONTEXT),
         ),
         KeyBinding::new(
             "ctrl-alt-e",
@@ -246,7 +247,7 @@ fn fixed_command_bindings() -> [KeyBinding; 3] {
                     arguments: CommandArgumentValue::String(FIXTURE_EDIT_ARGUMENT.into()),
                 },
             },
-            None,
+            Some(BASE_KEYMAP_CONTEXT),
         ),
         KeyBinding::new(
             "ctrl-alt-k ctrl-alt-d",
@@ -256,7 +257,7 @@ fn fixed_command_bindings() -> [KeyBinding; 3] {
                     arguments: CommandArgumentValue::String(MULTI_KEY_DIAGNOSTIC_ARGUMENT.into()),
                 },
             },
-            None,
+            Some(BASE_KEYMAP_CONTEXT),
         ),
     ]
 }
@@ -1626,7 +1627,7 @@ impl Render for Shell {
             .unwrap_or_else(|| "none".into());
         let command_palette = self.command_palette.clone();
         let mut keymap_context = KeyContext::default();
-        keymap_context.add("keymap");
+        keymap_context.add(BASE_KEYMAP_CONTEXT);
         if self.active_keymap {
             keymap_context.add(ACTIVE_KEYMAP_CONTEXT);
         }
@@ -1974,6 +1975,7 @@ mod tests {
             TreeContext,
             TerminalContext,
             PaletteContext,
+            BaseMapContext,
             ActiveMapContext,
             TransientMapContext
         ]
@@ -2616,6 +2618,69 @@ mod tests {
         cx.simulate_keystrokes("ctrl-alt-c");
         assert!(cx.read(|cx| shell.read(cx).active_keymap));
         assert!(!cx.read(|cx| shell.read(cx).transient_keymap));
+    }
+
+    #[gpui::test]
+    async fn keymap_precedence_follows_surface_then_transient_active_and_base(
+        cx: &mut TestAppContext,
+    ) {
+        let visits = Rc::new(RefCell::new(Vec::new()));
+        cx.update(|cx| {
+            let observed = visits.clone();
+            cx.on_action(move |_: &BaseMapContext, _| observed.borrow_mut().push("base"));
+            let observed = visits.clone();
+            cx.on_action(move |_: &ActiveMapContext, _| observed.borrow_mut().push("active"));
+            let observed = visits.clone();
+            cx.on_action(move |_: &TransientMapContext, _| observed.borrow_mut().push("transient"));
+            let observed = visits.clone();
+            cx.on_action(move |_: &EditorContext, _| observed.borrow_mut().push("editor"));
+            cx.bind_keys(super::keymap_control_bindings().into_iter().chain([
+                KeyBinding::new(
+                    "ctrl-alt-p",
+                    BaseMapContext,
+                    Some(super::BASE_KEYMAP_CONTEXT),
+                ),
+                KeyBinding::new(
+                    "ctrl-alt-p",
+                    ActiveMapContext,
+                    Some(super::ACTIVE_KEYMAP_CONTEXT),
+                ),
+                KeyBinding::new(
+                    "ctrl-alt-p",
+                    TransientMapContext,
+                    Some(super::TRANSIENT_KEYMAP_CONTEXT),
+                ),
+                KeyBinding::new("ctrl-alt-p", EditorContext, Some(super::EDITOR_KEY_CONTEXT)),
+            ]));
+        });
+
+        let runtime = V8Host::new()
+            .spawn_extension(ExtensionId::new(54))
+            .into_parts();
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(runtime, cx));
+        wait_for_runtime_state(&shell, "running", cx).await;
+        shell.update_in(cx, |shell, window, cx| {
+            window.focus(&shell.outline.focus_handle(cx));
+        });
+        cx.refresh().unwrap();
+
+        cx.simulate_keystrokes("ctrl-alt-p");
+        cx.simulate_keystrokes("ctrl-alt-a");
+        cx.refresh().unwrap();
+        cx.simulate_keystrokes("ctrl-alt-p");
+        cx.simulate_keystrokes("ctrl-alt-t");
+        cx.refresh().unwrap();
+        cx.simulate_keystrokes("ctrl-alt-p");
+
+        shell.update_in(cx, |shell, window, cx| {
+            window.focus(&shell.editor.focus_handle(cx));
+        });
+        cx.simulate_keystrokes("ctrl-alt-p");
+
+        assert_eq!(
+            visits.borrow().as_slice(),
+            ["base", "active", "transient", "editor"]
+        );
     }
 
     async fn wait_for_runtime_state(
