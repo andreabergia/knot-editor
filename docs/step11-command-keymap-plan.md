@@ -178,7 +178,7 @@ continues propagation.
   machinery.
 - ✅ Verify precedence among the base binding, active context, transient
   context, and the more specific focused surface.
-- ⬜ Do not add configuration loading, keymap editing, arbitrary runtime layer
+- ✅ Do not add configuration loading, keymap editing, arbitrary runtime layer
   installation, universal arguments, or numeric repetition.
 
 ### 6. Unify keybinding, palette, and script invocation
