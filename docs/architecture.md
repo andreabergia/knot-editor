@@ -83,8 +83,36 @@ generic collection and model have no search-result semantics.
 lifecycles.
 
 Each `EditorView` owns cursor, selection, scroll, focus, IME, rendering choices,
-and its persistent selection range. Multiple views may observe one model while
-retaining independent presentation state.
+its persistent selection range, and at most one completion controller and
+surface. Multiple views may observe one model while retaining independent
+presentation state. Completion request state and merged semantic candidates
+belong to the controller; the replaceable list and compact surfaces own only
+selection, layout, and rendering.
+
+The shell-owned `CompletionProviderRegistry` assigns monotonic registration
+identities and order to lifecycle-owned, shell-wide providers. An editor
+completion invocation snapshots registry membership, buffer identity and
+revision, cursor and prefix range, and a view-local generation before the shell
+fans requests out to independent extension runtimes.
+
+```text
+CompletionProviderRegistry snapshot
+                 |
+                 v
+EditorView -> CompletionController -> independent extension runtimes
+   |                    ^                         |
+   |                    +--- validated results ---+
+   |                              |
+   +---- list or compact surface <-+
+```
+
+Responses reach a controller only while the registration and lifecycle remain
+live and weak editor identity, active generation, buffer handle, and public
+revision still match. The controller merges partial results deterministically
+and assigns stable semantic item identities. Surface replacement reattaches to
+the current immutable snapshot without restarting provider work. Acceptance
+resolves the selected identity through the controller and performs one
+revision-checked prefix replacement.
 
 `TreeView` owns cached semantic items, expansion, selection, focus, scroll, and
 per-parent loading/error generations. It renders and handles input from cached
@@ -301,6 +329,12 @@ Responses apply only while registration, parent, generation, and extension
 lifecycle still match. JavaScript never participates synchronously in painting
 or input.
 
+Completion providers use the same asynchronous reverse-runtime direction but
+remain completion-specific: the shell snapshots ordered registrations, the
+view-owned controller tracks one-shot provider states and merge policy, and a
+native surface consumes semantic snapshots. Provider objects and request
+machinery never enter surfaces, buffers, or `core`.
+
 ## Invariants
 
 - `core` has no platform, rendering, or scripting dependencies.
@@ -317,7 +351,7 @@ or input.
 
 - Production undo history, edit grouping, and view-state restoration.
 - Focus-target command routing and complete keymaps.
-- Filesystem and capability-provider aggregation.
+- Filesystem providers and production capability applicability policy.
 - Production terminal interaction and rendering.
 - Production extension scheduling, quotas, and slow-consumer policy.
 - Public platform accessibility integration.

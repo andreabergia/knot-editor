@@ -220,3 +220,36 @@ Evidence: [terminal evaluation](step9-terminal-plan.md).
   the text model, or the editor pipeline.
 
 Evidence: [text-surface experiment](step10-text-surface-plan.md).
+
+## Capability aggregation
+
+- Completion providers are lifecycle-owned, shell-wide registrations with
+  monotonic identity and registration order. An invocation snapshots provider
+  membership so later registration changes cannot alter in-flight work.
+- Each `EditorView` owns at most one completion controller and presentation.
+  Completion state does not belong to `BufferModel`, `core`, or an extension
+  runtime.
+- Independent extension runtimes execute one-shot providers concurrently.
+  Incremental results are accepted only after registration, lifecycle, weak
+  editor, generation, buffer identity, and revision validation.
+- Completion composition is deliberately feature-specific. ASCII prefix
+  filtering, case-sensitive then case-insensitive ranking, registration order,
+  provider-local order, and insertion-text deduplication produce results that
+  do not depend on arrival timing.
+- Recoverable failure is local to one provider and request. Other candidates
+  remain visible, and the provider participates again on the next invocation
+  without re-registration.
+- The controller assigns stable semantic item identities and owns acceptance.
+  Native list and compact surfaces receive immutable snapshots and own only
+  selection, layout, and rendering. Replacing a surface during an in-flight
+  request does not restart providers and deliberately resets presentation
+  selection.
+- Acceptance resolves the selected semantic identity and performs one
+  revision-checked prefix replacement. Rendered labels are never parsed back
+  into editor semantics.
+- Provider applicability, automatic triggers, streaming, active cancellation
+  of superseded work, timeouts, backpressure, fuzzy or configurable ranking,
+  richer completion edits, production popup polish, and extension-owned
+  presentation remain deferred.
+
+Evidence: [capability aggregation experiment](step12-capability-aggregation-plan.md).

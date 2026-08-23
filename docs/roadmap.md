@@ -129,7 +129,10 @@ task graph. Same-extension reuse is an inline nested handler frame; direct
 functions remain the simpler choice when command lookup and routing semantics
 are unnecessary.
 
-## 12. Capability aggregation
+## 12. Capability aggregation ✅
+
+Status: complete. Two independent extension runtimes feed one view-owned
+completion controller incrementally while native presentation is replaced.
 
 Execution plan:
 [step12-capability-aggregation-plan.md](step12-capability-aggregation-plan.md).
@@ -140,8 +143,13 @@ Execution plan:
 - Preserve one provider's results when another fails.
 - Use a deliberately completion-specific merge policy.
 
-Decision checkpoint: can providers and replaceable presentation remain
-independent in a real asynchronous feature?
+Decision: providers, completion-specific composition, and replaceable native
+presentation remain independent. Shell registration order gives deterministic
+composition; view generation, buffer revision, registration, lifecycle, and
+weak editor identity reject stale work. Provider failure remains isolated, and
+surface replacement transfers only the semantic snapshot without restarting
+provider requests. Applicability policy and extension-owned presentation remain
+deferred.
 
 ## 13. URI and filesystem providers
 

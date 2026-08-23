@@ -164,28 +164,28 @@ across implementations.
   and recover on a later request without re-registration.
 - ✅ Make pending, incremental arrival, deterministic reordering,
   deduplication, isolated failure, and recovery visible in the running app.
-- ⬜ Exercise explicit invocation, keyboard selection, acceptance, dismissal,
+- ✅ Exercise explicit invocation, keyboard selection, acceptance, dismissal,
   and both directions of surface replacement while the slow provider is
   pending.
-- ⬜ Confirm provider waits and late stale responses never block the gpui
+- ✅ Confirm provider waits and late stale responses never block the gpui
   foreground thread.
 
 ### 6. Validate and record the decision
 
-- ⬜ Add focused tests for deterministic merge/deduplication, stale response
+- ✅ Add focused tests for deterministic merge/deduplication, stale response
   rejection, failure isolation, surface replacement with an in-flight request,
   selection preservation within one surface, and revision-checked acceptance.
-- ⬜ Use the running fixture for timing, visual replacement, keyboard
+- ✅ Use the running fixture for timing, visual replacement, keyboard
   interaction, and foreground responsiveness rather than building exhaustive
   UI tests.
-- ⬜ Update `architecture.md` with provider registry, view-owned completion
+- ✅ Update `architecture.md` with provider registry, view-owned completion
   session, response-validation flow, and replaceable presentation ownership if
   the experiment validates them.
-- ⬜ Record the validated choices and liabilities in `decisions.md` and mark
+- ✅ Record the validated choices and liabilities in `decisions.md` and mark
   roadmap step 12 complete with its checkpoint result.
-- ⬜ Update this plan with ✅ markers, deliberately skipped work, and the final
+- ✅ Update this plan with ✅ markers, deliberately skipped work, and the final
   result.
-- ⬜ Run focused tests, run `cargo fmt` once at the end of Rust work, then run
+- ✅ Run focused tests, run `cargo fmt` once at the end of Rust work, then run
   the full test suite.
 
 ## Commit boundaries
@@ -244,3 +244,17 @@ The boundary is not validated if surfaces need provider objects or runtime
 knowledge, if providers must restart when presentation changes, if completion
 state leaks into `BufferModel`, or if late results can overwrite a newer editor
 session.
+
+## Final result
+
+✅ Capability aggregation is validated within the prototype boundary. Two
+independent extension lifecycles contribute incrementally and recover from an
+isolated provider failure while the gpui foreground remains responsive.
+Deterministic composition is independent of arrival timing, stale work is
+rejected by the full native identity chain, and swapping list and compact
+presentation preserves the controller and in-flight provider work.
+
+Extension-owned presentation was deliberately not implemented. Applicability,
+automatic and streaming requests, cancellation policy for superseded runtime
+work, richer completion semantics, production ranking, and popup polish remain
+the deferred liabilities listed above.
