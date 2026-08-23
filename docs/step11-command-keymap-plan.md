@@ -186,7 +186,7 @@ continues propagation.
 - ✅ Add a top-level JavaScript `commands.invoke(name, arguments)` operation
   that enters the same dispatcher and completes with the same structured
   outcome as other invocation sources.
-- ⬜ Reject `commands.invoke` while the calling extension is already executing
+- ✅ Reject `commands.invoke` while the calling extension is already executing
   a command handler; nested and concurrent execution semantics are step 11b.
 - ⬜ Choose one argument-bearing fixture operation and invoke the identical
   command value from a keybinding, the palette fixture entry, and a top-level

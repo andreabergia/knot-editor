@@ -692,60 +692,66 @@ impl Shell {
                 {
                     let caller = (request.extension, request.lifecycle);
                     let id = request.id;
-                    let outcome = cx
-                        .update(|cx| {
-                            let Some(shell) = this.upgrade() else {
-                                return None;
-                            };
-                            let windows = cx.window_stack().unwrap_or_else(|| cx.windows());
-                            for window_handle in windows {
-                                let command = command.clone();
-                                let receiver = cx
-                                    .update_window(window_handle, |_, window, cx| {
-                                        if window.root::<Shell>().flatten().as_ref() != Some(&shell)
-                                        {
-                                            return None;
-                                        }
-                                        let (completion, receiver) =
-                                            CommandDispatchCompletion::new(caller);
-                                        let action = shell.update(cx, |shell, cx| {
-                                            let Some(origin) = shell.command_origin(window, cx)
-                                            else {
-                                                completion.complete(CommandOutcome::InvalidTarget);
+                    let outcome = if request.invocation.is_some() {
+                        CommandOutcome::Unavailable
+                    } else {
+                        let receiver = cx
+                            .update(|cx| {
+                                let Some(shell) = this.upgrade() else {
+                                    return None;
+                                };
+                                let windows = cx.window_stack().unwrap_or_else(|| cx.windows());
+                                for window_handle in windows {
+                                    let command = command.clone();
+                                    let receiver = cx
+                                        .update_window(window_handle, |_, window, cx| {
+                                            if window.root::<Shell>().flatten().as_ref()
+                                                != Some(&shell)
+                                            {
                                                 return None;
-                                            };
-                                            match shell.prepare_command_action_with_completion(
-                                                command,
-                                                origin,
-                                                Some(completion.clone()),
-                                                window,
-                                                cx,
-                                            ) {
-                                                Ok(action) => Some(action),
-                                                Err(outcome) => {
-                                                    completion.complete(outcome);
-                                                    None
-                                                }
                                             }
-                                        });
-                                        if let Some(action) = action {
-                                            let _ = action.dispatch(window, cx);
-                                        }
-                                        Some(receiver)
-                                    })
-                                    .ok()
-                                    .flatten();
-                                if receiver.is_some() {
-                                    return receiver;
+                                            let (completion, receiver) =
+                                                CommandDispatchCompletion::new(caller);
+                                            let action = shell.update(cx, |shell, cx| {
+                                                let Some(origin) = shell.command_origin(window, cx)
+                                                else {
+                                                    completion
+                                                        .complete(CommandOutcome::InvalidTarget);
+                                                    return None;
+                                                };
+                                                match shell.prepare_command_action_with_completion(
+                                                    command,
+                                                    origin,
+                                                    Some(completion.clone()),
+                                                    window,
+                                                    cx,
+                                                ) {
+                                                    Ok(action) => Some(action),
+                                                    Err(outcome) => {
+                                                        completion.complete(outcome);
+                                                        None
+                                                    }
+                                                }
+                                            });
+                                            if let Some(action) = action {
+                                                let _ = action.dispatch(window, cx);
+                                            }
+                                            Some(receiver)
+                                        })
+                                        .ok()
+                                        .flatten();
+                                    if receiver.is_some() {
+                                        return receiver;
+                                    }
                                 }
-                            }
-                            None
-                        })
-                        .ok()
-                        .flatten();
-                    let outcome = match outcome {
-                        Some(receiver) => receiver.await.unwrap_or(CommandOutcome::Unavailable),
-                        None => CommandOutcome::InvalidTarget,
+                                None
+                            })
+                            .ok()
+                            .flatten();
+                        match receiver {
+                            Some(receiver) => receiver.await.unwrap_or(CommandOutcome::Unavailable),
+                            None => CommandOutcome::InvalidTarget,
+                        }
                     };
                     HostResponse {
                         extension: caller.0,
@@ -3045,6 +3051,67 @@ mod tests {
                 .read_with(cx, |model, _| model.text())
         });
         assert!(text.starts_with("// script command\n"));
+    }
+
+    #[gpui::test]
+    async fn extension_handler_cannot_invoke_another_command(cx: &mut TestAppContext) {
+        let host = V8Host::new();
+        let (shell, cx) = cx.add_window_view(|_, cx| {
+            Shell::new_with_runtimes(
+                [ExtensionId::new(57), ExtensionId::new(58)]
+                    .map(|extension| host.spawn_extension(extension).into_parts())
+                    .into(),
+                cx,
+            )
+        });
+        wait_for_runtime_state(&shell, "running", cx).await;
+        let caller = runtime_control(&shell, ExtensionId::new(58), cx);
+        caller
+            .execute_fixture_module(
+                "file:///fixtures/nested-command.js",
+                r#"
+                    import { commands } from "knot:editor";
+                    await commands.register("knot.fixture.nested", async () => {
+                      const outcome = await commands.invoke(
+                        "knot.fixture.edit",
+                        "// nested command\n",
+                      );
+                      if (outcome.kind !== "unavailable") {
+                        throw new Error(`unexpected nested outcome: ${outcome.kind}`);
+                      }
+                    });
+                "#,
+            )
+            .await
+            .unwrap();
+
+        let (target, initial_text) = cx.read(|cx| {
+            let shell = shell.read(cx);
+            let target = shell
+                .command_catalog
+                .resolve_extension("knot.fixture.nested")
+                .unwrap();
+            let text = shell
+                .editor
+                .read(cx)
+                .model()
+                .read_with(cx, |model, _| model.text());
+            (target, text)
+        });
+        invoke_extension_target_in_window(&shell, target, "knot.fixture.nested", cx);
+        wait_for_command_state(&shell, "completed", cx).await;
+
+        let (outcome, text) = cx.read(|cx| {
+            let shell = shell.read(cx);
+            let text = shell
+                .editor
+                .read(cx)
+                .model()
+                .read_with(cx, |model, _| model.text());
+            (shell.command_outcome.clone(), text)
+        });
+        assert_eq!(outcome, Some(CommandOutcome::Completed));
+        assert_eq!(text, initial_text);
     }
 
     #[gpui::test]
