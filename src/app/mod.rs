@@ -22,6 +22,7 @@ use crate::host::{
 };
 
 mod command_palette;
+mod completion;
 mod editor;
 pub mod model;
 mod open_buffers;
@@ -30,6 +31,7 @@ mod terminal_view;
 mod tree_view;
 
 use command_palette::{CommandPalette, CommandPaletteEntry, CommandPaletteEvent};
+use completion::CompletionProviderRegistry;
 use editor::{
     EditorContributionAction, EditorRenderingOptions, EditorView, seed_fixture_contributions,
 };
@@ -430,6 +432,7 @@ struct Shell {
     buffer_registry: BufferRegistry,
     buffer_subscriptions: BufferSubscriptionRegistry,
     command_catalog: CommandCatalog,
+    completion_providers: CompletionProviderRegistry,
     next_tree_registration: u64,
     next_command_invocation: u64,
     command_invocations: HashMap<CommandInvocationId, CommandInvocationNode>,
@@ -639,6 +642,7 @@ impl Shell {
             buffer_registry,
             buffer_subscriptions: BufferSubscriptionRegistry::new(),
             command_catalog,
+            completion_providers: CompletionProviderRegistry::new(),
             next_tree_registration: 1,
             next_command_invocation: 1,
             command_invocations: HashMap::new(),
@@ -792,6 +796,8 @@ impl Shell {
                 this.cancel_command_lifecycle(extension, lifecycle, cx);
                 this.extension_controls.remove(&(extension, lifecycle));
                 this.command_catalog.remove_lifecycle(extension, lifecycle);
+                this.completion_providers
+                    .remove_lifecycle(extension, lifecycle);
                 this.buffer_subscriptions
                     .remove_lifecycle(extension, lifecycle);
                 this.buffer_registry
@@ -1029,6 +1035,25 @@ impl Shell {
                         .update(cx, |tree, cx| tree.unregister_provider(registration, cx))
                         .map(|()| HostResponseValue::TreeProviderUnregistered { registration })
                         .map_err(map_tree_error)
+                }
+            }
+            HostOperation::RegisterCompletionProvider { label } => {
+                let registration = self.completion_providers.register(
+                    request.extension,
+                    request.lifecycle,
+                    label,
+                );
+                Ok(HostResponseValue::CompletionProviderRegistered { registration })
+            }
+            HostOperation::UnregisterCompletionProvider { registration } => {
+                if self.completion_providers.unregister(
+                    registration,
+                    request.extension,
+                    request.lifecycle,
+                ) {
+                    Ok(HostResponseValue::CompletionProviderUnregistered { registration })
+                } else {
+                    Err(HostRequestError::CompletionProviderNotFound)
                 }
             }
         };

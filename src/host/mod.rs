@@ -30,9 +30,10 @@ pub mod protocol;
 
 use protocol::{
     BufferChange, BufferHandle, BufferSubscriptionId, ByteRange, CommandInvocation,
-    CommandInvocationId, CommandInvokeDispatch, CommandOutcome, ExtensionId, ExtensionLifecycleId,
-    HostOperation, HostRequest, HostResponse, HostResponseValue, RequestId, TextEdit,
-    TreeChildrenRequest, TreeChildrenResponse, TreeProviderError,
+    CommandInvocationId, CommandInvokeDispatch, CommandOutcome, CompletionProviderError,
+    CompletionRequest, CompletionResponse, ExtensionId, ExtensionLifecycleId, HostOperation,
+    HostRequest, HostResponse, HostResponseValue, RequestId, TextEdit, TreeChildrenRequest,
+    TreeChildrenResponse, TreeProviderError,
 };
 
 const PRIVATE_BOOTSTRAP_SPECIFIER: &str = "knot:bootstrap";
@@ -54,6 +55,7 @@ const buffers = new Map();
 const commandHandlers = new Map();
 const bufferChangeListeners = new Map();
 const treeProviders = new Map();
+const completionProviders = new Map();
 const activeCommandFrames = [];
 const snapshotTables = new WeakMap();
 
@@ -282,6 +284,56 @@ export async function registerTreeDataProvider(viewId, provider) {
   });
 }
 
+export async function registerCompletionProvider(label, provider) {
+  if (typeof label !== "string" || typeof provider?.provideCompletions !== "function") {
+    throw new TypeError("editor.registerCompletionProvider requires a label and provideCompletions provider");
+  }
+  const registration = await nativeOps.op_completion_register(label);
+  completionProviders.set(registration, provider);
+  let disposed = false;
+  return Object.freeze({
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      completionProviders.delete(registration);
+      void nativeOps.op_completion_unregister(registration);
+    },
+  });
+}
+
+globalThis.__knotRequestCompletions = async (
+  registration,
+  handle,
+  revision,
+  cursorByteOffset,
+  prefix,
+  generation,
+) => {
+  const provider = completionProviders.get(registration);
+  if (!provider) {
+    nativeOps.op_completion_complete({
+      registration, revision, generation, error: "completion provider is disposed",
+    });
+    return;
+  }
+  try {
+    const provided = await provider.provideCompletions(Object.freeze({
+      buffer: bufferFor(handle), revision, cursorByteOffset, prefix, generation,
+    }));
+    const items = Array.from(provided, (item) => {
+      if (typeof item?.label !== "string" || typeof item?.insertText !== "string") {
+        throw new TypeError("completion items require string label and insertText properties");
+      }
+      return Object.freeze({ label: item.label, insertText: item.insertText });
+    });
+    nativeOps.op_completion_complete({ registration, revision, generation, items });
+  } catch (error) {
+    nativeOps.op_completion_complete({
+      registration, revision, generation, error: String(error?.stack ?? error),
+    });
+  }
+};
+
 globalThis.__knotRequestTreeChildren = async (registration, parentId, generation) => {
   const provider = treeProviders.get(registration);
   if (!provider) {
@@ -398,11 +450,13 @@ import {
   invalidCommandArguments,
   invokeCommand,
   registerCommand,
+  registerCompletionProvider,
   registerTreeDataProvider,
 } from "knot:bootstrap";
 
 export const editor = {
   activeBuffer,
+  registerCompletionProvider,
 };
 
 export const commands = {
@@ -513,6 +567,9 @@ deno_core::extension!(
         op_tree_invalidate,
         op_tree_unregister,
         op_tree_children_complete,
+        op_completion_register,
+        op_completion_unregister,
+        op_completion_complete,
         op_fixture_delay,
         op_fixture_shared_host_runtime,
     ],
@@ -609,9 +666,24 @@ struct NativeTreeChildrenCompletion {
     error: Option<String>,
 }
 
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeCompletionCompletion {
+    registration: u64,
+    revision: u64,
+    generation: u64,
+    items: Option<Vec<protocol::CompletionResultItem>>,
+    error: Option<String>,
+}
+
 #[derive(Default)]
 struct TreeCallbackStore {
     response: Option<TreeChildrenResponse>,
+}
+
+#[derive(Default)]
+struct CompletionCallbackStore {
+    response: Option<CompletionResponse>,
 }
 
 impl NativeResponseStore {
@@ -1140,6 +1212,79 @@ fn op_tree_children_complete(
     Ok(())
 }
 
+#[deno_core::op2]
+#[number]
+async fn op_completion_register(
+    state: Rc<RefCell<OpState>>,
+    #[string] label: String,
+) -> Result<u64, JsErrorBox> {
+    let response = request_host_operation(
+        state,
+        HostOperation::RegisterCompletionProvider { label },
+    )
+    .await?;
+    match response.result {
+        Ok(HostResponseValue::CompletionProviderRegistered { registration }) => {
+            Ok(registration.value())
+        }
+        Ok(_) => Err(JsErrorBox::generic(
+            "Knot host returned the wrong response type",
+        )),
+        Err(error) => Err(JsErrorBox::generic(format!(
+            "Knot host rejected completion provider registration: {error:?}"
+        ))),
+    }
+}
+
+#[deno_core::op2]
+async fn op_completion_unregister(
+    state: Rc<RefCell<OpState>>,
+    #[number] registration: u64,
+) -> Result<(), JsErrorBox> {
+    let registration = protocol::CompletionProviderRegistrationId::new(registration);
+    let response = request_host_operation(
+        state,
+        HostOperation::UnregisterCompletionProvider { registration },
+    )
+    .await?;
+    match response.result {
+        Ok(HostResponseValue::CompletionProviderUnregistered { .. }) => Ok(()),
+        Ok(_) => Err(JsErrorBox::generic(
+            "Knot host returned the wrong response type",
+        )),
+        Err(error) => Err(JsErrorBox::generic(format!(
+            "Knot host rejected completion provider disposal: {error:?}"
+        ))),
+    }
+}
+
+#[deno_core::op2]
+fn op_completion_complete(
+    state: &mut OpState,
+    #[serde] completion: NativeCompletionCompletion,
+) -> Result<(), JsErrorBox> {
+    let result = match (completion.items, completion.error) {
+        (Some(items), None) => Ok(items),
+        (_, Some(message)) => Err(CompletionProviderError { message }),
+        _ => Err(CompletionProviderError {
+            message: "completion provider returned no items".into(),
+        }),
+    };
+    let response = CompletionResponse {
+        registration: protocol::CompletionProviderRegistrationId::new(completion.registration),
+        revision: completion.revision,
+        generation: completion.generation,
+        result,
+    };
+    let store = state.borrow_mut::<CompletionCallbackStore>();
+    if store.response.replace(response).is_some() {
+        return Err(JsErrorBox::generic(
+            "completion provider completed one request more than once",
+        ));
+    }
+    Ok(())
+}
+
 async fn request_host_operation(
     state: Rc<RefCell<OpState>>,
     operation: HostOperation,
@@ -1323,6 +1468,11 @@ impl ExtensionRuntimeHandle {
         self.control.request_tree_children(request)
     }
 
+    /// Queue one native editor completion request on this extension's thread.
+    pub fn request_completions(&self, request: CompletionRequest) -> ExtensionCompletionRequest {
+        self.control.request_completions(request)
+    }
+
     /// Asynchronously receive the next request emitted by the extension thread.
     pub async fn receive_request(&mut self) -> Option<HostRequest> {
         self.requests.receive().await
@@ -1464,6 +1614,17 @@ impl ExtensionRuntimeControl {
         }
     }
 
+    pub fn request_completions(&self, request: CompletionRequest) -> ExtensionCompletionRequest {
+        let (completion, completed) = tokio::sync::oneshot::channel();
+        let _ = self.commands.send(RuntimeCommand::RequestCompletions {
+            request,
+            completion,
+        });
+        ExtensionCompletionRequest {
+            completion: completed,
+        }
+    }
+
     /// Return measurements for buffer-change callback delivery on this extension.
     ///
     /// These are evidence only: the runtime does not drop, coalesce, block, or
@@ -1551,6 +1712,23 @@ pub struct ExtensionTreeRequest {
 
 impl Future for ExtensionTreeRequest {
     type Output = Result<TreeChildrenResponse, ExtensionRuntimeExecutionError>;
+
+    fn poll(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
+        Pin::new(&mut self.completion)
+            .poll(context)
+            .map(|completion| completion.unwrap_or(Err(ExtensionRuntimeExecutionError::Closed)))
+    }
+}
+
+/// Awaitable response to one asynchronous completion-provider callback.
+#[must_use = "completion requests must be awaited or explicitly discarded"]
+pub struct ExtensionCompletionRequest {
+    completion:
+        tokio::sync::oneshot::Receiver<Result<CompletionResponse, ExtensionRuntimeExecutionError>>,
+}
+
+impl Future for ExtensionCompletionRequest {
+    type Output = Result<CompletionResponse, ExtensionRuntimeExecutionError>;
 
     fn poll(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
         Pin::new(&mut self.completion)
@@ -1647,6 +1825,12 @@ enum RuntimeCommand {
         request: TreeChildrenRequest,
         completion: tokio::sync::oneshot::Sender<
             Result<TreeChildrenResponse, ExtensionRuntimeExecutionError>,
+        >,
+    },
+    RequestCompletions {
+        request: CompletionRequest,
+        completion: tokio::sync::oneshot::Sender<
+            Result<CompletionResponse, ExtensionRuntimeExecutionError>,
         >,
     },
     Shutdown,
@@ -2150,6 +2334,10 @@ impl ExtensionRuntime {
         js_runtime
             .op_state()
             .borrow_mut()
+            .put(CompletionCallbackStore::default());
+        js_runtime
+            .op_state()
+            .borrow_mut()
             .put(ExtensionRequestRouter {
                 extension,
                 lifecycle_id,
@@ -2377,6 +2565,54 @@ impl ExtensionRuntime {
                     {
                         eprintln!("[knot] tree provider callback failed: {}", error.message);
                     }
+                    let _ = completion.send(result);
+                    if self.lifecycle.termination().is_some() {
+                        break;
+                    }
+                }
+                RuntimeCommand::RequestCompletions {
+                    request,
+                    completion,
+                } => {
+                    let _runtime_guard = self.event_loop_runtime.enter();
+                    self.js_runtime
+                        .op_state()
+                        .borrow_mut()
+                        .borrow_mut::<CompletionCallbackStore>()
+                        .response = None;
+                    let prefix =
+                        serde_json::to_string(&request.prefix).expect("completion prefix serializes");
+                    let source = format!(
+                        "globalThis.__knotRequestCompletions({}, {}, {}, {}, {}, {})",
+                        request.registration.value(),
+                        request.buffer.value(),
+                        request.revision,
+                        request.cursor_byte_offset,
+                        prefix,
+                        request.generation,
+                    );
+                    let result = self
+                        .js_runtime
+                        .execute_script("knot:completions", source)
+                        .map_err(ExtensionRuntimeExecutionError::javascript_exception)
+                        .and_then(|_| {
+                            self.event_loop_runtime
+                                .block_on(self.js_runtime.run_event_loop(Default::default()))
+                                .map_err(ExtensionRuntimeExecutionError::javascript_exception)
+                        })
+                        .and_then(|()| {
+                            self.js_runtime
+                                .op_state()
+                                .borrow_mut()
+                                .borrow_mut::<CompletionCallbackStore>()
+                                .response
+                                .take()
+                                .ok_or_else(|| {
+                                    ExtensionRuntimeExecutionError::javascript_exception(
+                                        "completion provider did not complete its request",
+                                    )
+                                })
+                        });
                     let _ = completion.send(result);
                     if self.lifecycle.termination().is_some() {
                         break;

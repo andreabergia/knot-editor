@@ -92,13 +92,13 @@ across implementations.
 
 ### 1. Add the completion provider protocol and registry
 
-- ⬜ Add Knot-owned protocol identities and serializable request, result-item,
+- ✅ Add Knot-owned protocol identities and serializable request, result-item,
   response, and recoverable provider-error types.
-- ⬜ Add a minimal JavaScript API for registering and disposing one-shot
+- ✅ Add a minimal JavaScript API for registering and disposing one-shot
   completion providers, with lifecycle-owned cleanup.
-- ⬜ Store active registrations in a shell-owned registry with monotonic
+- ✅ Store active registrations in a shell-owned registry with monotonic
   registration identity and registration order.
-- ⬜ Dispatch requests through the existing reverse runtime path without
+- ✅ Dispatch requests through the existing reverse runtime path without
   letting JavaScript participate synchronously in editor input or rendering.
 - ⬜ Revalidate registration and extension lifecycle on completion; reject
   duplicate completion and results from disposed providers.

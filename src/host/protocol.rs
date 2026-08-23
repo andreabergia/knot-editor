@@ -99,6 +99,20 @@ impl TreeProviderRegistrationId {
     }
 }
 
+/// An opaque identity for one completion-provider registration.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct CompletionProviderRegistrationId(u64);
+
+impl CompletionProviderRegistrationId {
+    pub(crate) const fn new(value: u64) -> Self {
+        Self(value)
+    }
+
+    pub(crate) const fn value(self) -> u64 {
+        self.0
+    }
+}
+
 /// An opaque reference to an editor buffer.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct BufferHandle(u64);
@@ -299,6 +313,40 @@ pub struct TreeChildrenResponse {
     pub result: Result<Vec<TreeItem>, TreeProviderError>,
 }
 
+/// One asynchronous completion request issued by an editor view.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CompletionRequest {
+    pub registration: CompletionProviderRegistrationId,
+    pub buffer: BufferHandle,
+    pub revision: u64,
+    pub cursor_byte_offset: usize,
+    pub prefix: String,
+    pub generation: u64,
+}
+
+/// One semantic completion candidate returned by an extension provider.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompletionResultItem {
+    pub label: String,
+    pub insert_text: String,
+}
+
+/// A recoverable completion-provider callback failure.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CompletionProviderError {
+    pub message: String,
+}
+
+/// One extension callback result returned to an editor completion session.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CompletionResponse {
+    pub registration: CompletionProviderRegistrationId,
+    pub revision: u64,
+    pub generation: u64,
+    pub result: Result<Vec<CompletionResultItem>, CompletionProviderError>,
+}
+
 /// A request sent by one extension runtime to the editor foreground owner.
 #[derive(Clone, Debug, PartialEq)]
 pub struct HostRequest {
@@ -360,6 +408,12 @@ pub enum HostOperation {
     UnregisterTreeProvider {
         registration: TreeProviderRegistrationId,
     },
+    RegisterCompletionProvider {
+        label: String,
+    },
+    UnregisterCompletionProvider {
+        registration: CompletionProviderRegistrationId,
+    },
 }
 
 /// A reply sent back to the extension runtime for one [`HostRequest`].
@@ -405,6 +459,12 @@ pub enum HostResponseValue {
     TreeProviderInvalidated,
     TreeProviderUnregistered {
         registration: TreeProviderRegistrationId,
+    },
+    CompletionProviderRegistered {
+        registration: CompletionProviderRegistrationId,
+    },
+    CompletionProviderUnregistered {
+        registration: CompletionProviderRegistrationId,
     },
 }
 
@@ -478,6 +538,7 @@ pub enum HostRequestError {
     TreeViewNotFound,
     TreeProviderInUse,
     TreeProviderNotFound,
+    CompletionProviderNotFound,
     CommandNameInUse,
     CommandNotFound,
     Cancelled,
