@@ -151,6 +151,10 @@ impl BufferModel {
         self.open
     }
 
+    pub(crate) fn is_editable(&self) -> bool {
+        self.open && self.access_policy == BufferAccessPolicy::Editable
+    }
+
     /// Atomically replace one source-owned set against the current revision.
     pub(crate) fn replace_contributions(
         &mut self,

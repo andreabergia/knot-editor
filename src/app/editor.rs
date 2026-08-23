@@ -33,10 +33,20 @@ use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::core::anchored_range::AnchoredRangeId;
-use crate::host::protocol::{ByteRange, DecorationToken, EditorContribution, GutterToken};
+use crate::host::protocol::{
+    BufferHandle, ByteRange, CommandOutcome, CompletionProviderRegistrationId,
+    CompletionRequest, CompletionResponse, DecorationToken, EditorContribution, GutterToken,
+    TextEdit,
+};
 
 use super::{
-    CommandAction, CommandSurfaceKind, DIAGNOSTIC_COMMAND, EDITOR_KEY_CONTEXT,
+    CommandAction, CommandSurfaceKind, CompletionAccept, CompletionDismiss, CompletionNext,
+    CompletionPrevious, DIAGNOSTIC_COMMAND, EDITOR_KEY_CONTEXT, SHOW_COMPLETIONS_COMMAND,
+    SWAP_COMPLETION_SURFACE_COMMAND,
+    completion::{
+        CompactCompletionSurface, CompletionController, CompletionProviderRegistration,
+        CompletionSurface, CompletionSurfaceKind, ListCompletionSurface,
+    },
     model::{BufferModel, ContributionSource, ResolvedEditorContribution},
 };
 
@@ -159,6 +169,10 @@ pub struct EditorView {
     /// `unmark_text`. The element paints an underline over this span.
     marked_range_utf16: Option<Range<usize>>,
     focus: FocusHandle,
+    completion: Option<CompletionController>,
+    completion_surface: Option<Box<dyn CompletionSurface>>,
+    completion_tasks: Vec<(CompletionProviderRegistrationId, Task<()>)>,
+    next_completion_generation: u64,
     #[cfg(test)]
     paint_count: u64,
     _model_subscription: Subscription,
@@ -325,6 +339,17 @@ impl EditorView {
         let position_range = model.update(cx, |model, _| model.add_view_position(0..0));
         let model_subscription = cx.observe(&model, |this, model, cx| {
             let model = model.read(cx);
+            if this
+                .completion
+                .as_ref()
+                .is_some_and(|completion| {
+                    completion.revision() != model.revision() || !model.is_open()
+                })
+            {
+                this.completion = None;
+                this.completion_surface = None;
+                this.completion_tasks.clear();
+            }
             this.rebuild_projection(
                 &model.text(),
                 model.resolved_contributions(),
@@ -362,6 +387,10 @@ impl EditorView {
             selection_reversed: false,
             marked_range_utf16: None,
             focus: cx.focus_handle(),
+            completion: None,
+            completion_surface: None,
+            completion_tasks: Vec::new(),
+            next_completion_generation: 1,
             #[cfg(test)]
             paint_count: 0,
             _model_subscription: model_subscription,
@@ -421,6 +450,7 @@ impl EditorView {
     }
 
     fn finish_position_change(&mut self, cx: &mut Context<Self>) {
+        self.dismiss_completion();
         self.ensure_cursor_visible(self.viewport_h);
         self.clamp_scroll();
         self.sync_view_position(cx);
@@ -952,6 +982,7 @@ impl EditorView {
     /// Commit a replacement to the authoritative model. Its notification
     /// refreshes the derived line/segment projection.
     fn splice(&mut self, byte_start: usize, byte_end: usize, text: &str, cx: &mut Context<Self>) {
+        self.dismiss_completion();
         let model = self.model.clone();
         model.update(cx, |model, cx| {
             if model.replace(byte_start..byte_end, text).unwrap_or(false) {
@@ -1401,8 +1432,17 @@ impl EntityInputHandler for EditorView {
 }
 
 impl Render for EditorView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let entity = cx.entity();
+        let mut key_context = KeyContext::default();
+        key_context.add(EDITOR_KEY_CONTEXT);
+        if self.completion.is_some() {
+            key_context.add("editor_completion");
+        }
+        let completion = self
+            .completion_surface
+            .as_ref()
+            .map(|surface| surface.render(self.completion_anchor(window)));
         div()
             .id(("editor", self.element_id))
             .size_full()
@@ -1411,8 +1451,12 @@ impl Render for EditorView {
             // auto-focuses a tracked element on mouse-down) and so on_key_down
             // listeners below actually receive keystrokes.
             .track_focus(&self.focus)
-            .key_context(EDITOR_KEY_CONTEXT)
+            .key_context(key_context)
             .on_action(cx.listener(Self::on_command_action))
+            .on_action(cx.listener(Self::completion_previous))
+            .on_action(cx.listener(Self::completion_next))
+            .on_action(cx.listener(Self::completion_accept))
+            .on_action(cx.listener(Self::completion_dismiss))
             .on_key_down(cx.listener(Self::on_key_down))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
             // Mouse-move extends the selection while the left button is held
@@ -1436,6 +1480,7 @@ impl Render for EditorView {
                 cx.notify();
             }))
             .child(EditorElement { entity })
+            .children(completion)
     }
 }
 
@@ -1457,11 +1502,249 @@ impl EditorView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if action.command.name.as_ref() != DIAGNOSTIC_COMMAND {
+        match action.command.name.as_ref() {
+            DIAGNOSTIC_COMMAND => {
+                action.record_diagnostic(CommandSurfaceKind::Editor, cx);
+                true
+            }
+            SHOW_COMPLETIONS_COMMAND => {
+                action.show_completions(cx.entity(), cx);
+                true
+            }
+            SWAP_COMPLETION_SURFACE_COMMAND => {
+                self.swap_completion_surface(cx);
+                action.complete_native(CommandOutcome::Completed, cx);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    pub(crate) fn start_completion(
+        &mut self,
+        buffer: BufferHandle,
+        providers: Vec<CompletionProviderRegistration>,
+        cx: &mut Context<Self>,
+    ) -> Vec<(CompletionProviderRegistration, CompletionRequest)> {
+        self.dismiss_completion();
+        let cursor_byte_offset = self.to_flat_byte(self.cursor_line, self.cursor_col);
+        let Some((text, revision)) = self.model.read_with(cx, |model, _| {
+            model.is_editable().then(|| (model.text(), model.revision()))
+        }) else {
+            return Vec::new();
+        };
+        if cursor_byte_offset > text.len() || !text.is_char_boundary(cursor_byte_offset) {
+            return Vec::new();
+        }
+        let mut prefix_start = cursor_byte_offset;
+        while prefix_start > 0 {
+            let byte = text.as_bytes()[prefix_start - 1];
+            if !byte.is_ascii_alphanumeric() && byte != b'_' {
+                break;
+            }
+            prefix_start -= 1;
+        }
+        let generation = self.next_completion_generation;
+        self.next_completion_generation = self
+            .next_completion_generation
+            .checked_add(1)
+            .expect("completion generation space exhausted");
+        let controller = CompletionController::new(
+            buffer,
+            revision,
+            cursor_byte_offset,
+            prefix_start..cursor_byte_offset,
+            text[prefix_start..cursor_byte_offset].into(),
+            generation,
+            providers,
+        );
+        let requests = controller.requests();
+        self.completion_surface = Some(Box::new(ListCompletionSurface::attach(
+            controller.snapshot().clone(),
+        )));
+        self.completion = Some(controller);
+        cx.notify();
+        requests
+    }
+
+    pub(crate) fn apply_completion_response(
+        &mut self,
+        buffer: BufferHandle,
+        response: CompletionResponse,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let revision = self.model.read(cx).revision();
+        let Some(controller) = self.completion.as_mut() else {
+            return false;
+        };
+        if controller.buffer() != buffer || controller.revision() != revision {
             return false;
         }
-        action.record_diagnostic(CommandSurfaceKind::Editor, cx);
-        true
+        if controller.apply_response(response) {
+            if let Some(surface) = self.completion_surface.as_mut() {
+                surface.update(controller.snapshot().clone());
+            }
+            cx.notify();
+            true
+        } else {
+            false
+        }
+    }
+
+    pub(crate) fn retain_completion_task(
+        &mut self,
+        generation: u64,
+        registration: CompletionProviderRegistrationId,
+        task: Task<()>,
+    ) {
+        if self
+            .completion
+            .as_ref()
+            .is_some_and(|controller| controller.generation() == generation)
+        {
+            self.completion_tasks.push((registration, task));
+        }
+    }
+
+    pub(crate) fn cancel_completion_provider(
+        &mut self,
+        registration: CompletionProviderRegistrationId,
+        cx: &mut Context<Self>,
+    ) {
+        self.completion_tasks
+            .retain(|(provider, _)| *provider != registration);
+        if let Some(controller) = self.completion.as_mut()
+            && controller.provider_unavailable(registration)
+        {
+            if let Some(surface) = self.completion_surface.as_mut() {
+                surface.update(controller.snapshot().clone());
+            }
+            cx.notify();
+        }
+    }
+
+    fn dismiss_completion(&mut self) {
+        if let Some(surface) = self.completion_surface.as_mut() {
+            surface.detach();
+        }
+        self.completion_surface = None;
+        self.completion = None;
+        self.completion_tasks.clear();
+    }
+
+    fn completion_anchor(&self, window: &mut Window) -> Point<Pixels> {
+        let line = self.cursor_line.min(self.lines.len().saturating_sub(1));
+        let text = self.lines.get(line).map(String::as_str).unwrap_or("");
+        let x = if text.is_empty() {
+            px(0.)
+        } else {
+            let shaped = window.text_system().shape_line(
+                SharedString::from(text.to_owned()),
+                px(FONT_SIZE),
+                &runs_for(text, &self.segs[line]),
+                None,
+            );
+            self.line_x_offset(line, shaped.width, self.bounds.size.width)
+                + x_for_index_dir(&shaped, self.cursor_col, text)
+        };
+        let y = px((line + 1) as f32 * LINE_HEIGHT - self.scroll);
+        point(
+            x.min((self.bounds.size.width - px(380.)).max(px(0.))),
+            y.min((self.bounds.size.height - px(230.)).max(px(0.))),
+        )
+    }
+
+    fn completion_previous(
+        &mut self,
+        _: &CompletionPrevious,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(surface) = self.completion_surface.as_mut() {
+            surface.move_selection(-1);
+            cx.notify();
+        }
+    }
+
+    fn completion_next(
+        &mut self,
+        _: &CompletionNext,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(surface) = self.completion_surface.as_mut() {
+            surface.move_selection(1);
+            cx.notify();
+        }
+    }
+
+    fn completion_accept(
+        &mut self,
+        _: &CompletionAccept,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let selected = self
+            .completion_surface
+            .as_ref()
+            .and_then(|surface| surface.selected_item());
+        let accepted = selected.and_then(|selected| {
+            let controller = self.completion.as_ref()?;
+            let item = controller.item(selected)?;
+            Some((
+                controller.revision(),
+                controller.prefix_range(),
+                item.insert_text.clone(),
+            ))
+        });
+        self.dismiss_completion();
+        let Some((revision, range, insert_text)) = accepted else {
+            cx.notify();
+            return;
+        };
+        let edit = TextEdit {
+            range: ByteRange {
+                start_byte_offset: range.start,
+                end_byte_offset: range.end,
+            },
+            text: insert_text,
+        };
+        self.model.update(cx, |model, cx| {
+            if model.apply_edits(&[edit], revision).unwrap_or(false) {
+                cx.notify();
+            }
+        });
+    }
+
+    fn completion_dismiss(
+        &mut self,
+        _: &CompletionDismiss,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dismiss_completion();
+        cx.notify();
+    }
+
+    fn swap_completion_surface(&mut self, cx: &mut Context<Self>) {
+        let Some(controller) = self.completion.as_ref() else {
+            return;
+        };
+        let next: Box<dyn CompletionSurface> = match self
+            .completion_surface
+            .as_ref()
+            .map(|surface| surface.kind())
+        {
+            Some(CompletionSurfaceKind::List) => Box::new(CompactCompletionSurface::attach(
+                controller.snapshot().clone(),
+            )),
+            _ => Box::new(ListCompletionSurface::attach(controller.snapshot().clone())),
+        };
+        if let Some(surface) = self.completion_surface.as_mut() {
+            surface.detach();
+        }
+        self.completion_surface = Some(next);
+        cx.notify();
     }
 }
 

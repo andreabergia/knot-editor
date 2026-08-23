@@ -15,9 +15,9 @@ use crate::host::{
     V8Host,
     protocol::{
         BufferChange, BufferHandle, ByteRange, Command, CommandArgumentValue, CommandInvocation,
-        CommandInvocationId, CommandInvokeDispatch, CommandOutcome, ExtensionId, HostOperation,
-        HostRequest, HostRequestError, HostResponse, HostResponseValue, TreeChildrenResponse,
-        TreeProviderError, TreeProviderRegistrationId,
+        CommandInvocationId, CommandInvokeDispatch, CommandOutcome, CompletionProviderError,
+        CompletionResponse, ExtensionId, HostOperation, HostRequest, HostRequestError, HostResponse,
+        HostResponseValue, TreeChildrenResponse, TreeProviderError, TreeProviderRegistrationId,
     },
 };
 
@@ -50,7 +50,11 @@ actions!(
         Quit,
         ToggleActiveKeymap,
         ActivateTransientKeymap,
-        CancelTransientKeymap
+        CancelTransientKeymap,
+        CompletionPrevious,
+        CompletionNext,
+        CompletionAccept,
+        CompletionDismiss
     ]
 );
 
@@ -61,6 +65,8 @@ const DEFAULT_FIXTURE_NAME: &str = "rust_sample";
 const DIAGNOSTIC_COMMAND: &str = "knot.diagnostic.command-context";
 const FIXTURE_SEARCH_COMMAND: &str = "knot.fixture.search";
 const FIXTURE_EDIT_COMMAND: &str = "knot.fixture.edit";
+const SHOW_COMPLETIONS_COMMAND: &str = "editor.show-completions";
+const SWAP_COMPLETION_SURFACE_COMMAND: &str = "knot.fixture.swap-completion-surface";
 const FIXTURE_EDIT_ARGUMENT: &str = "// fixture command\n";
 const DIAGNOSTIC_BINDING_ARGUMENT: &str = "keybinding.diagnostic";
 const MULTI_KEY_DIAGNOSTIC_ARGUMENT: &str = "keybinding.multi-keystroke-diagnostic";
@@ -157,6 +163,43 @@ globalThis.knotFixtureTreeRegistration =
     ];
     return [];
   },
+  });
+globalThis.knotFastCompletionRegistration =
+  await editor.registerCompletionProvider("fast-provider", {
+    async provideCompletions(context) {
+      await globalThis.__knotFixtureDelay(120);
+      const prefix = context.prefix;
+      return [
+        { label: `${prefix}Alpha`, insertText: `${prefix}Alpha` },
+        { label: `${prefix}Shared`, insertText: `${prefix}Shared` },
+        { label: `${prefix.toUpperCase()}Case`, insertText: `${prefix}Case` },
+      ];
+    },
+  });
+"#;
+
+const SLOW_COMPLETION_FIXTURE_SOURCE: &str = r#"
+import { commands, editor } from "knot:editor";
+
+let failNextRequest = false;
+await commands.register("knot.fixture.completion-fail-next", async () => {
+  failNextRequest = true;
+});
+globalThis.knotSlowCompletionRegistration =
+  await editor.registerCompletionProvider("slow-provider", {
+    async provideCompletions(context) {
+      await globalThis.__knotFixtureDelay(1500);
+      if (failNextRequest) {
+        failNextRequest = false;
+        throw new Error("expected one-shot slow completion failure");
+      }
+      const prefix = context.prefix;
+      return [
+        { label: `${prefix}Aardvark`, insertText: `${prefix}Aardvark` },
+        { label: `${prefix}Shared duplicate`, insertText: `${prefix}Shared` },
+        { label: `${prefix}Zeta`, insertText: `${prefix}Zeta` },
+      ];
+    },
   });
 "#;
 
@@ -278,7 +321,7 @@ struct KeybindingCommand {
     command: Command,
 }
 
-fn fixed_command_bindings() -> [KeyBinding; 3] {
+fn fixed_command_bindings() -> [KeyBinding; 4] {
     [
         KeyBinding::new(
             "ctrl-alt-d",
@@ -289,6 +332,16 @@ fn fixed_command_bindings() -> [KeyBinding; 3] {
                 },
             },
             Some(BASE_KEYMAP_CONTEXT),
+        ),
+        KeyBinding::new(
+            "ctrl-space",
+            KeybindingCommand {
+                command: Command {
+                    name: SHOW_COMPLETIONS_COMMAND.into(),
+                    arguments: CommandArgumentValue::Null,
+                },
+            },
+            Some(EDITOR_KEY_CONTEXT),
         ),
         KeyBinding::new(
             "ctrl-alt-e",
@@ -321,6 +374,25 @@ fn keymap_control_bindings() -> [KeyBinding; 3] {
             "ctrl-alt-c",
             CancelTransientKeymap,
             Some(TRANSIENT_KEYMAP_CONTEXT),
+        ),
+    ]
+}
+
+fn completion_bindings() -> [KeyBinding; 5] {
+    [
+        KeyBinding::new("up", CompletionPrevious, Some("editor_completion")),
+        KeyBinding::new("down", CompletionNext, Some("editor_completion")),
+        KeyBinding::new("enter", CompletionAccept, Some("editor_completion")),
+        KeyBinding::new("escape", CompletionDismiss, Some("editor_completion")),
+        KeyBinding::new(
+            "ctrl-alt-s",
+            KeybindingCommand {
+                command: Command {
+                    name: SWAP_COMPLETION_SURFACE_COMMAND.into(),
+                    arguments: CommandArgumentValue::Null,
+                },
+            },
+            Some("editor_completion"),
         ),
     ]
 }
@@ -363,6 +435,27 @@ impl CommandAction {
         let has_buffer = self.context.buffer.is_some();
         let _ = workspace.update(cx, |shell, cx| {
             shell.record_command_diagnostic(self.invocation, surface, has_buffer, cx);
+        });
+    }
+
+    fn show_completions(&self, editor: Entity<EditorView>, cx: &mut App) {
+        let Some(workspace) = self.context.workspace.upgrade() else {
+            return;
+        };
+        let invocation = self.invocation;
+        let buffer = self.context.buffer;
+        let _ = workspace.update(cx, |shell, cx| {
+            shell.start_completion(invocation, editor, buffer, cx);
+        });
+    }
+
+    fn complete_native(&self, outcome: CommandOutcome, cx: &mut App) {
+        let Some(workspace) = self.context.workspace.upgrade() else {
+            return;
+        };
+        let invocation = self.invocation;
+        let _ = workspace.update(cx, |shell, cx| {
+            shell.finish_command_invocation(invocation, outcome, cx);
         });
     }
 }
@@ -455,7 +548,7 @@ struct Shell {
     runtime_threads: Vec<ExtensionRuntimeThread>,
     background_executor: BackgroundExecutor,
     _runtime_bridge_tasks: Vec<Task<()>>,
-    _runtime_execution_task: Task<()>,
+    _runtime_execution_tasks: Vec<Task<()>>,
     _model_subscription: Subscription,
     _editor_action_subscriptions: Vec<Subscription>,
     _tree_view_subscription: Subscription,
@@ -564,12 +657,17 @@ impl Shell {
             cx,
         )];
         let mut runtime_threads = vec![runtime_thread];
+        let mut extra_runtime_executions = Vec::new();
         for ExtensionRuntimeParts {
             control,
             requests,
             thread,
         } in runtimes
         {
+            extra_runtime_executions.push(control.execute_fixture_module(
+                "file:///fixtures/slow-completion-provider.js",
+                SLOW_COMPLETION_FIXTURE_SOURCE,
+            ));
             extension_controls.insert(control.identity(), control.clone());
             runtime_bridge_tasks.push(Self::spawn_runtime_bridge(requests, control, cx));
             runtime_threads.push(thread);
@@ -598,6 +696,19 @@ impl Shell {
                 cx.notify();
             });
         });
+        let mut runtime_execution_tasks = vec![runtime_execution_task];
+        for execution in extra_runtime_executions {
+            runtime_execution_tasks.push(cx.spawn(async move |this, cx| {
+                let result = execution.await;
+                let _ = this.update(cx, |this, cx| {
+                    if let Err(error) = result {
+                        this.runtime_state = "failed".into();
+                        this.latest_runtime_error = Some(format!("{error:?}").into());
+                    }
+                    cx.notify();
+                });
+            }));
+        }
         let heartbeat_task = cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor()
@@ -627,6 +738,18 @@ impl Shell {
                 "Search captured buffer".into(),
             )
             .expect("fixture search command name is unique");
+        command_catalog
+            .register_native(
+                SHOW_COMPLETIONS_COMMAND.into(),
+                "Show editor completions".into(),
+            )
+            .expect("completion command name is unique");
+        command_catalog
+            .register_native(
+                SWAP_COMPLETION_SURFACE_COMMAND.into(),
+                "Swap completion fixture surface".into(),
+            )
+            .expect("completion surface fixture command name is unique");
         Shell {
             open_buffers,
             source_buffer,
@@ -662,7 +785,7 @@ impl Shell {
             runtime_threads,
             background_executor: cx.background_executor().clone(),
             _runtime_bridge_tasks: runtime_bridge_tasks,
-            _runtime_execution_task: runtime_execution_task,
+            _runtime_execution_tasks: runtime_execution_tasks,
             _model_subscription: model_subscription,
             _editor_action_subscriptions: vec![
                 editor_action_subscription,
@@ -796,8 +919,12 @@ impl Shell {
                 this.cancel_command_lifecycle(extension, lifecycle, cx);
                 this.extension_controls.remove(&(extension, lifecycle));
                 this.command_catalog.remove_lifecycle(extension, lifecycle);
-                this.completion_providers
+                let removed_completion_providers = this
+                    .completion_providers
                     .remove_lifecycle(extension, lifecycle);
+                for registration in removed_completion_providers {
+                    this.cancel_completion_provider(registration, cx);
+                }
                 this.buffer_subscriptions
                     .remove_lifecycle(extension, lifecycle);
                 this.buffer_registry
@@ -1051,6 +1178,7 @@ impl Shell {
                     request.extension,
                     request.lifecycle,
                 ) {
+                    self.cancel_completion_provider(registration, cx);
                     Ok(HostResponseValue::CompletionProviderUnregistered { registration })
                 } else {
                     Err(HostRequestError::CompletionProviderNotFound)
@@ -1191,6 +1319,96 @@ impl Shell {
                 }
             }
         }
+    }
+
+    fn start_completion(
+        &mut self,
+        invocation: CommandInvocationId,
+        editor: Entity<EditorView>,
+        buffer: Option<BufferHandle>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(buffer) = buffer else {
+            self.finish_command_invocation(invocation, CommandOutcome::InvalidTarget, cx);
+            return;
+        };
+        let model_matches = self
+            .buffer_registry
+            .resolve(buffer)
+            .is_ok_and(|model| model == *editor.read(cx).model());
+        if !model_matches {
+            self.finish_command_invocation(invocation, CommandOutcome::InvalidTarget, cx);
+            return;
+        }
+
+        let requests = editor.update(cx, |editor, cx| {
+            editor.start_completion(buffer, self.completion_providers.snapshot(), cx)
+        });
+        for (provider, request) in requests {
+            let Some(control) = self
+                .extension_controls
+                .get(&(provider.extension, provider.lifecycle))
+                .cloned()
+            else {
+                continue;
+            };
+            let callback = control.request_completions(request.clone());
+            let weak_editor = editor.downgrade();
+            let generation = request.generation;
+            let registration = request.registration;
+            let task = cx.spawn(async move |this, cx| {
+                let response = callback.await.unwrap_or_else(|error| CompletionResponse {
+                    registration: request.registration,
+                    revision: request.revision,
+                    generation: request.generation,
+                    result: Err(CompletionProviderError {
+                        message: format!("{error:?}"),
+                    }),
+                });
+                let _ = this.update(cx, |this, cx| {
+                    if !this.completion_providers.owns(
+                        provider.id,
+                        provider.extension,
+                        provider.lifecycle,
+                    ) || !this
+                        .extension_controls
+                        .contains_key(&(provider.extension, provider.lifecycle))
+                    {
+                        return;
+                    }
+                    let Some(editor) = weak_editor.upgrade() else {
+                        return;
+                    };
+                    if this
+                        .buffer_registry
+                        .resolve(request.buffer)
+                        .is_err()
+                    {
+                        return;
+                    }
+                    editor.update(cx, |editor, cx| {
+                        editor.apply_completion_response(request.buffer, response, cx);
+                    });
+                });
+            });
+            editor.update(cx, |editor, _| {
+                editor.retain_completion_task(generation, registration, task);
+            });
+        }
+        self.finish_command_invocation(invocation, CommandOutcome::Completed, cx);
+    }
+
+    fn cancel_completion_provider(
+        &mut self,
+        registration: crate::host::protocol::CompletionProviderRegistrationId,
+        cx: &mut Context<Self>,
+    ) {
+        self.editor.update(cx, |editor, cx| {
+            editor.cancel_completion_provider(registration, cx);
+        });
+        self.secondary_editor.update(cx, |editor, cx| {
+            editor.cancel_completion_provider(registration, cx);
+        });
     }
 
     #[allow(
@@ -2456,9 +2674,11 @@ pub fn run() {
     let fixture_name = std::env::args()
         .nth(1)
         .unwrap_or_else(|| DEFAULT_FIXTURE_NAME.into());
-    let runtime = V8Host::new()
-        .spawn_extension(ExtensionId::new(1))
-        .into_parts();
+    let host = V8Host::new();
+    let runtimes = vec![
+        host.spawn_extension(ExtensionId::new(1)).into_parts(),
+        host.spawn_extension(ExtensionId::new(2)).into_parts(),
+    ];
 
     Application::new().run(move |app: &mut App| {
         app.on_action(|_action: &Quit, app: &mut App| app.quit());
@@ -2467,6 +2687,7 @@ pub fn run() {
             fixed_command_bindings()
                 .into_iter()
                 .chain(keymap_control_bindings())
+                .chain(completion_bindings())
                 .chain([KeyBinding::new("cmd-q", Quit, None)]),
         );
 
@@ -2477,7 +2698,7 @@ pub fn run() {
                 ..Default::default()
             },
             |_window, cx| {
-                cx.new(|cx| Shell::new_with_runtimes_and_fixture(vec![runtime], fixture_name, cx))
+                cx.new(|cx| Shell::new_with_runtimes_and_fixture(runtimes, fixture_name, cx))
             },
         )
         .unwrap();

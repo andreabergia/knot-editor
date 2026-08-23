@@ -1,8 +1,10 @@
 use std::{collections::{HashMap, HashSet}, ops::Range, sync::Arc};
 
+use gpui::{prelude::*, *};
+
 use crate::host::protocol::{
-    BufferHandle, CompletionProviderRegistrationId, CompletionRequest, CompletionResponse,
-    CompletionResultItem, ExtensionId, ExtensionLifecycleId,
+    BufferHandle, CompletionProviderError, CompletionProviderRegistrationId, CompletionRequest,
+    CompletionResponse, CompletionResultItem, ExtensionId, ExtensionLifecycleId,
 };
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -27,6 +29,203 @@ pub(crate) struct CompletionSnapshot {
     pub(crate) items: Arc<[CompletionItem]>,
     pub(crate) pending_provider_count: usize,
     pub(crate) failures: Arc<[CompletionFailure]>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CompletionSurfaceKind {
+    List,
+    Compact,
+}
+
+pub(crate) trait CompletionSurface {
+    fn kind(&self) -> CompletionSurfaceKind;
+    fn update(&mut self, snapshot: CompletionSnapshot);
+    fn move_selection(&mut self, delta: isize);
+    fn selected_item(&self) -> Option<CompletionItemId>;
+    fn render(&self, anchor: Point<Pixels>) -> AnyElement;
+    fn detach(&mut self);
+}
+
+fn initial_selection(snapshot: &CompletionSnapshot) -> Option<CompletionItemId> {
+    snapshot.items.first().map(|item| item.id)
+}
+
+fn move_selection(
+    snapshot: &CompletionSnapshot,
+    selected: &mut Option<CompletionItemId>,
+    delta: isize,
+) {
+    if snapshot.items.is_empty() {
+        *selected = None;
+        return;
+    }
+    let index = selected
+        .and_then(|selected| snapshot.items.iter().position(|item| item.id == selected))
+        .unwrap_or(0);
+    let last = snapshot.items.len().saturating_sub(1) as isize;
+    let next = (index as isize + delta).clamp(0, last) as usize;
+    *selected = Some(snapshot.items[next].id);
+}
+
+fn preserve_selection(snapshot: &CompletionSnapshot, selected: &mut Option<CompletionItemId>) {
+    if selected.is_none_or(|selected| !snapshot.items.iter().any(|item| item.id == selected)) {
+        *selected = initial_selection(snapshot);
+    }
+}
+
+pub(crate) struct ListCompletionSurface {
+    snapshot: CompletionSnapshot,
+    selected: Option<CompletionItemId>,
+}
+
+impl ListCompletionSurface {
+    pub(crate) fn attach(snapshot: CompletionSnapshot) -> Self {
+        let selected = initial_selection(&snapshot);
+        Self { snapshot, selected }
+    }
+}
+
+impl CompletionSurface for ListCompletionSurface {
+    fn kind(&self) -> CompletionSurfaceKind {
+        CompletionSurfaceKind::List
+    }
+
+    fn update(&mut self, snapshot: CompletionSnapshot) {
+        self.snapshot = snapshot;
+        preserve_selection(&self.snapshot, &mut self.selected);
+    }
+
+    fn move_selection(&mut self, delta: isize) {
+        move_selection(&self.snapshot, &mut self.selected, delta);
+    }
+
+    fn selected_item(&self) -> Option<CompletionItemId> {
+        self.selected
+    }
+
+    fn render(&self, anchor: Point<Pixels>) -> AnyElement {
+        let selected = self.selected;
+        let status = format!(
+            "{} pending · {} failed",
+            self.snapshot.pending_provider_count,
+            self.snapshot.failures.len()
+        );
+        div()
+            .absolute()
+            .left(anchor.x)
+            .top(anchor.y)
+            .w(px(360.))
+            .max_h(px(220.))
+            .overflow_hidden()
+            .rounded_md()
+            .border_1()
+            .border_color(rgb(0x4c566a))
+            .bg(rgb(0x252a34))
+            .text_sm()
+            .children(self.snapshot.items.iter().take(8).map(|item| {
+                div()
+                    .flex()
+                    .justify_between()
+                    .px_2()
+                    .py_1()
+                    .when(Some(item.id) == selected, |row| row.bg(rgb(0x3b4252)))
+                    .child(item.label.clone())
+                    .child(
+                        div()
+                            .text_color(rgb(0x88c0d0))
+                            .child(item.provider_label.clone()),
+                    )
+            }))
+            .children(self.snapshot.failures.iter().map(|failure| {
+                div()
+                    .px_2()
+                    .py_1()
+                    .text_color(rgb(0xbf616a))
+                    .child(format!(
+                        "{}: {}",
+                        failure.provider_label, failure.message
+                    ))
+            }))
+            .child(
+                div()
+                    .border_t_1()
+                    .border_color(rgb(0x4c566a))
+                    .px_2()
+                    .py_1()
+                    .text_color(rgb(0xa3a3a3))
+                    .child(status),
+            )
+            .into_any_element()
+    }
+
+    fn detach(&mut self) {
+        self.selected = None;
+    }
+}
+
+pub(crate) struct CompactCompletionSurface {
+    snapshot: CompletionSnapshot,
+    selected: Option<CompletionItemId>,
+}
+
+impl CompactCompletionSurface {
+    pub(crate) fn attach(snapshot: CompletionSnapshot) -> Self {
+        let selected = initial_selection(&snapshot);
+        Self { snapshot, selected }
+    }
+}
+
+impl CompletionSurface for CompactCompletionSurface {
+    fn kind(&self) -> CompletionSurfaceKind {
+        CompletionSurfaceKind::Compact
+    }
+
+    fn update(&mut self, snapshot: CompletionSnapshot) {
+        self.snapshot = snapshot;
+        preserve_selection(&self.snapshot, &mut self.selected);
+    }
+
+    fn move_selection(&mut self, delta: isize) {
+        move_selection(&self.snapshot, &mut self.selected, delta);
+    }
+
+    fn selected_item(&self) -> Option<CompletionItemId> {
+        self.selected
+    }
+
+    fn render(&self, anchor: Point<Pixels>) -> AnyElement {
+        let candidate = self
+            .selected
+            .and_then(|selected| self.snapshot.items.iter().find(|item| item.id == selected))
+            .map_or_else(|| "waiting…".into(), |item| item.label.clone());
+        let status = format!(
+            "{} items / {} pending / {} failed",
+            self.snapshot.items.len(),
+            self.snapshot.pending_provider_count,
+            self.snapshot.failures.len()
+        );
+        div()
+            .absolute()
+            .left(anchor.x)
+            .top(anchor.y)
+            .flex()
+            .items_center()
+            .gap_2()
+            .rounded_full()
+            .border_1()
+            .border_color(rgb(0xd08770))
+            .bg(rgb(0x3b2f2f))
+            .px_3()
+            .py_1()
+            .text_sm()
+            .child(candidate)
+            .child(div().text_xs().text_color(rgb(0xd8a48f)).child(status))
+            .into_any_element()
+    }
+
+    fn detach(&mut self) {
+        self.selected = None;
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -183,6 +382,20 @@ impl CompletionController {
         true
     }
 
+    pub(crate) fn provider_unavailable(
+        &mut self,
+        registration: CompletionProviderRegistrationId,
+    ) -> bool {
+        self.apply_response(CompletionResponse {
+            registration,
+            revision: self.revision,
+            generation: self.generation,
+            result: Err(CompletionProviderError {
+                message: "provider lifecycle ended".into(),
+            }),
+        })
+    }
+
     fn rebuild_snapshot(&mut self) {
         let mut ranked = Vec::new();
         let mut failures = Vec::new();
@@ -330,16 +543,30 @@ impl CompletionProviderRegistry {
         &mut self,
         extension: ExtensionId,
         lifecycle: ExtensionLifecycleId,
-    ) {
+    ) -> Vec<CompletionProviderRegistrationId> {
+        let removed = self
+            .registrations
+            .values()
+            .filter(|registration| {
+                registration.extension == extension && registration.lifecycle == lifecycle
+            })
+            .map(|registration| registration.id)
+            .collect::<Vec<_>>();
         self.registrations.retain(|_, registration| {
             registration.extension != extension || registration.lifecycle != lifecycle
         });
+        removed
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{CompletionController, CompletionProviderRegistry};
+    use std::sync::Arc;
+
+    use super::{
+        CompactCompletionSurface, CompletionController, CompletionItem, CompletionItemId,
+        CompletionProviderRegistry, CompletionSnapshot, CompletionSurface, ListCompletionSurface,
+    };
     use crate::host::protocol::{
         BufferHandle, CompletionProviderError, CompletionResponse, CompletionResultItem,
         ExtensionId, ExtensionLifecycleId,
@@ -513,5 +740,35 @@ mod tests {
         assert_eq!(controller.snapshot().items[0].label, "visible");
         assert_eq!(controller.snapshot().pending_provider_count, 0);
         assert_eq!(controller.snapshot().failures[0].provider_label, "second");
+    }
+
+    #[test]
+    fn surface_updates_preserve_selection_while_replacement_resets_it() {
+        fn snapshot(items: &[(u64, &str)]) -> CompletionSnapshot {
+            CompletionSnapshot {
+                items: items
+                    .iter()
+                    .map(|(id, label)| CompletionItem {
+                        id: CompletionItemId(*id),
+                        label: (*label).into(),
+                        insert_text: (*label).into(),
+                        provider_label: "fixture".into(),
+                    })
+                    .collect::<Vec<_>>()
+                    .into(),
+                pending_provider_count: 0,
+                failures: Arc::from([]),
+            }
+        }
+
+        let mut list = ListCompletionSurface::attach(snapshot(&[(1, "one"), (2, "two")]));
+        list.move_selection(1);
+        assert_eq!(list.selected_item(), Some(CompletionItemId(2)));
+        let reordered = snapshot(&[(3, "three"), (2, "two"), (1, "one")]);
+        list.update(reordered.clone());
+        assert_eq!(list.selected_item(), Some(CompletionItemId(2)));
+
+        let compact = CompactCompletionSurface::attach(reordered);
+        assert_eq!(compact.selected_item(), Some(CompletionItemId(3)));
     }
 }

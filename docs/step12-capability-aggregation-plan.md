@@ -100,69 +100,69 @@ across implementations.
   registration identity and registration order.
 - ✅ Dispatch requests through the existing reverse runtime path without
   letting JavaScript participate synchronously in editor input or rendering.
-- ⬜ Revalidate registration and extension lifecycle on completion; reject
+- ✅ Revalidate registration and extension lifecycle on completion; reject
   duplicate completion and results from disposed providers.
 
 ### 2. Introduce a view-owned completion controller
 
-- ⬜ Let each `EditorView` own at most one active completion session and keep
+- ✅ Let each `EditorView` own at most one active completion session and keep
   the provider registry outside the view and buffer.
-- ⬜ On `editor.show-completions`, capture the editable buffer, public
+- ✅ On `editor.show-completions`, capture the editable buffer, public
   revision, cursor byte offset, replacement prefix range, and a fresh
   completion generation.
-- ⬜ Fan the request out to a snapshot of active provider registrations so a
+- ✅ Fan the request out to a snapshot of active provider registrations so a
   later registration change cannot alter the membership of an in-flight
   generation.
-- ⬜ Track each provider independently as pending, successful, or failed and
+- ✅ Track each provider independently as pending, successful, or failed and
   publish partial snapshots as responses arrive.
-- ⬜ Apply the completion-specific filter, ranking, and deduplication policy
+- ✅ Apply the completion-specific filter, ranking, and deduplication policy
   without storing completion state in `BufferModel` or `core`.
-- ⬜ Treat a provider failure as recoverable and local to one provider and
+- ✅ Treat a provider failure as recoverable and local to one provider and
   generation. Keep other results visible and invoke the failed provider again
   on the next request.
 
 ### 3. Reject stale work and apply accepted items safely
 
-- ⬜ Accept a provider response only while registration, lifecycle, editor,
+- ✅ Accept a provider response only while registration, lifecycle, editor,
   active session generation, buffer identity, and public revision all match.
-- ⬜ Do not actively cancel a superseded request merely because a newer
+- ✅ Do not actively cancel a superseded request merely because a newer
   request starts; let fixture responses arrive and prove that stale results are
   discarded.
-- ⬜ Cancel outstanding reverse callbacks when the controller closes or a
+- ✅ Cancel outstanding reverse callbacks when the controller closes or a
   provider lifecycle terminates, while continuing to reject any late transport
   completion.
-- ⬜ End the active session and detach its surface immediately on a newer
+- ✅ End the active session and detach its surface immediately on a newer
   invocation, cursor movement, buffer edit, buffer closure, or editor
   destruction.
-- ⬜ On acceptance, resolve the stable item identity and replace the captured
+- ✅ On acceptance, resolve the stable item identity and replace the captured
   prefix range with `insert_text` only if the buffer revision and editor
   session still match. Otherwise dismiss without mutation.
 
 ### 4. Add two replaceable native completion surfaces
 
-- ⬜ Define the smallest application-owned completion presentation boundary:
+- ✅ Define the smallest application-owned completion presentation boundary:
   attach with a semantic snapshot, update with later snapshots, render, move
   selection, expose selected item identity, and detach.
-- ⬜ Implement a normal list popup showing merged candidates, provider labels,
+- ✅ Implement a normal list popup showing merged candidates, provider labels,
   pending-provider count, and non-blocking provider failures.
-- ⬜ Implement a visibly different compact popup that presents the selected
+- ✅ Implement a visibly different compact popup that presents the selected
   candidate and aggregate status without depending on provider objects or
   request machinery.
-- ⬜ Anchor both non-focus-taking surfaces to the originating editor cursor
+- ✅ Anchor both non-focus-taking surfaces to the originating editor cursor
   and route up/down, accept, dismiss, and surface-swap controls through an
   active editor key context.
-- ⬜ Add a fixture command that replaces the active surface during an
+- ✅ Add a fixture command that replaces the active surface during an
   in-flight request. Attach the replacement to the current snapshot and deliver
   later results without restarting or reissuing provider work.
 
 ### 5. Add observable provider fixtures
 
-- ⬜ Run two providers in separate extension lifecycles with distinct labels,
+- ✅ Run two providers in separate extension lifecycles with distinct labels,
   overlapping insertion text, and deterministic response delays: one fast and
   one approximately 1.5 seconds slower.
-- ⬜ Add a fixture control that makes the slow provider fail for one request
+- ✅ Add a fixture control that makes the slow provider fail for one request
   and recover on a later request without re-registration.
-- ⬜ Make pending, incremental arrival, deterministic reordering,
+- ✅ Make pending, incremental arrival, deterministic reordering,
   deduplication, isolated failure, and recovery visible in the running app.
 - ⬜ Exercise explicit invocation, keyboard selection, acceptance, dismissal,
   and both directions of surface replacement while the slow provider is
