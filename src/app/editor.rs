@@ -1684,6 +1684,10 @@ impl EditorView {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.accept_selected_completion(cx);
+    }
+
+    fn accept_selected_completion(&mut self, cx: &mut Context<Self>) {
         let selected = self
             .completion_surface
             .as_ref()
@@ -2313,7 +2317,13 @@ mod tests {
         BufferModel, ContributionSource, EditorRenderingOptions, EditorView,
         ResolvedEditorContribution, default_projection, project_contributions,
     };
-    use crate::host::protocol::{ByteRange, DecorationToken, EditorContribution, GutterToken};
+    use crate::{
+        app::completion::CompletionProviderRegistry,
+        host::protocol::{
+            BufferHandle, ByteRange, CompletionResponse, CompletionResultItem, DecorationToken,
+            EditorContribution, ExtensionId, ExtensionLifecycleId, GutterToken,
+        },
+    };
     use crate::view::fixture::Fixture;
 
     #[test]
@@ -2338,6 +2348,74 @@ mod tests {
             assert_eq!(editor.lines, ["generated", "text"]);
             assert!(editor.rendering.show_gutter_markers);
         });
+    }
+
+    #[gpui::test]
+    fn completion_acceptance_rechecks_the_captured_revision(cx: &mut TestAppContext) {
+        let model = cx.new(|_| BufferModel::from_text("fo"));
+        let editor = cx.new(|cx| EditorView::new(model.clone(), cx));
+        let mut registry = CompletionProviderRegistry::new();
+        registry.register(
+            ExtensionId::new(1),
+            ExtensionLifecycleId::new(1),
+            "fixture".into(),
+        );
+
+        let request = editor.update(cx, |editor, cx| {
+            editor.cursor_col = 2;
+            editor
+                .start_completion(BufferHandle::new(1), registry.snapshot(), cx)
+                .remove(0)
+                .1
+        });
+        editor.update(cx, |editor, cx| {
+            assert!(editor.apply_completion_response(
+                request.buffer,
+                CompletionResponse {
+                    registration: request.registration,
+                    revision: request.revision,
+                    generation: request.generation,
+                    result: Ok(vec![CompletionResultItem {
+                        label: "foo".into(),
+                        insert_text: "foo".into(),
+                    }]),
+                },
+                cx,
+            ));
+        });
+        model.update(cx, |model, _| {
+            assert!(model.replace(0..0, "x").unwrap());
+        });
+        editor.update(cx, |editor, cx| editor.accept_selected_completion(cx));
+
+        cx.read(|cx| assert_eq!(model.read(cx).text(), "xfo"));
+
+        let model = cx.new(|_| BufferModel::from_text("fo"));
+        let editor = cx.new(|cx| EditorView::new(model.clone(), cx));
+        let request = editor.update(cx, |editor, cx| {
+            editor.cursor_col = 2;
+            editor
+                .start_completion(BufferHandle::new(2), registry.snapshot(), cx)
+                .remove(0)
+                .1
+        });
+        editor.update(cx, |editor, cx| {
+            assert!(editor.apply_completion_response(
+                request.buffer,
+                CompletionResponse {
+                    registration: request.registration,
+                    revision: request.revision,
+                    generation: request.generation,
+                    result: Ok(vec![CompletionResultItem {
+                        label: "foo".into(),
+                        insert_text: "foo".into(),
+                    }]),
+                },
+                cx,
+            ));
+            editor.accept_selected_completion(cx);
+        });
+        cx.read(|cx| assert_eq!(model.read(cx).text(), "foo"));
     }
 
     #[gpui::test]
