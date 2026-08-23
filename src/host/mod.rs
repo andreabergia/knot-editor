@@ -2647,7 +2647,8 @@ mod tests {
         CommandInvocation, CommandInvocationId, CommandInvokeDispatch, CommandOutcome,
         CommandRegistrationId, ExtensionId, ExtensionLifecycleId, HostOperation, HostRequestError,
         HostResponse, HostResponseValue, RequestId, SnapshotText, TextEdit, TextSnapshot,
-        TreeChildrenRequest, TreeCollapsibleState, TreeIcon, TreeProviderRegistrationId,
+        CompletionProviderRegistrationId, CompletionRequest, TreeChildrenRequest,
+        TreeCollapsibleState, TreeIcon, TreeProviderRegistrationId,
     };
 
     #[test]
@@ -2938,6 +2939,56 @@ mod tests {
                 .message
                 .contains("expected tree failure")
         );
+        runtime.shutdown();
+    }
+
+    #[test]
+    fn completion_provider_registration_and_callback_use_typed_reverse_transport() {
+        let host = V8Host::new();
+        let extension = ExtensionId::new(73);
+        let mut runtime = host.spawn_extension(extension);
+        let registration = CompletionProviderRegistrationId::new(5);
+        let execution = runtime.execute_fixture_module(
+            "file:///fixtures/completion-provider.js",
+            r#"
+                import { editor } from "knot:editor";
+                await editor.registerCompletionProvider("fixture", {
+                  async provideCompletions(context) {
+                    return [{ label: `${context.prefix}Item`, insertText: "inserted" }];
+                  },
+                });
+            "#,
+        );
+        let register_request = pollster::block_on(runtime.receive_request()).unwrap();
+        assert_eq!(
+            register_request.operation,
+            HostOperation::RegisterCompletionProvider {
+                label: "fixture".into()
+            }
+        );
+        runtime
+            .respond(HostResponse {
+                extension,
+                lifecycle: register_request.lifecycle,
+                id: register_request.id,
+                result: Ok(HostResponseValue::CompletionProviderRegistered { registration }),
+            })
+            .unwrap();
+        pollster::block_on(execution).unwrap();
+
+        let response = pollster::block_on(runtime.request_completions(CompletionRequest {
+            registration,
+            buffer: BufferHandle::new(2),
+            revision: 11,
+            cursor_byte_offset: 4,
+            prefix: "pre".into(),
+            generation: 9,
+        }))
+        .unwrap();
+        assert_eq!(response.registration, registration);
+        assert_eq!(response.revision, 11);
+        assert_eq!(response.generation, 9);
+        assert_eq!(response.result.unwrap()[0].label, "preItem");
         runtime.shutdown();
     }
 
