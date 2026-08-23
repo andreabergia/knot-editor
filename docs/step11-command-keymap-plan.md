@@ -188,7 +188,7 @@ continues propagation.
   outcome as other invocation sources.
 - ✅ Reject `commands.invoke` while the calling extension is already executing
   a command handler; nested and concurrent execution semantics are step 11b.
-- ⬜ Choose one argument-bearing fixture operation and invoke the identical
+- ✅ Choose one argument-bearing fixture operation and invoke the identical
   command value from a keybinding, the palette fixture entry, and a top-level
   script.
 - ⬜ Confirm all three sources reach the same handler with equal arguments and

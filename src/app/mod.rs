@@ -58,7 +58,7 @@ const MIN_EDITOR_HEIGHT: f32 = 160.;
 const DEFAULT_FIXTURE_NAME: &str = "rust_sample";
 const DIAGNOSTIC_COMMAND: &str = "knot.diagnostic.command-context";
 const FIXTURE_EDIT_COMMAND: &str = "knot.fixture.edit";
-const FIXTURE_EDIT_ARGUMENT: &str = "// palette command\n";
+const FIXTURE_EDIT_ARGUMENT: &str = "// fixture command\n";
 const DIAGNOSTIC_BINDING_ARGUMENT: &str = "keybinding.diagnostic";
 const MULTI_KEY_DIAGNOSTIC_ARGUMENT: &str = "keybinding.multi-keystroke-diagnostic";
 const EDITOR_KEY_CONTEXT: &str = "editor";
@@ -3024,21 +3024,23 @@ mod tests {
             window.focus(&shell.editor.focus_handle(cx));
         });
         let caller = runtime_control(&shell, ExtensionId::new(56), cx);
+        let source = r#"
+                import { commands } from "knot:editor";
+                const outcome = await commands.invoke(
+                  "knot.fixture.edit",
+                  __FIXTURE_EDIT_ARGUMENT__,
+                );
+                if (outcome.kind !== "completed") {
+                  throw new Error(`unexpected command outcome: ${outcome.kind}`);
+                }
+            "#
+        .replace(
+            "__FIXTURE_EDIT_ARGUMENT__",
+            &serde_json::to_string(FIXTURE_EDIT_ARGUMENT).unwrap(),
+        );
 
         caller
-            .execute_fixture_module(
-                "file:///fixtures/top-level-command.js",
-                r#"
-                    import { commands } from "knot:editor";
-                    const outcome = await commands.invoke(
-                      "knot.fixture.edit",
-                      "// script command\n",
-                    );
-                    if (outcome.kind !== "completed") {
-                      throw new Error(`unexpected command outcome: ${outcome.kind}`);
-                    }
-                "#,
-            )
+            .execute_fixture_module("file:///fixtures/top-level-command.js", source)
             .await
             .unwrap();
 
@@ -3050,7 +3052,7 @@ mod tests {
                 .model()
                 .read_with(cx, |model, _| model.text())
         });
-        assert!(text.starts_with("// script command\n"));
+        assert!(text.starts_with(FIXTURE_EDIT_ARGUMENT));
     }
 
     #[gpui::test]
