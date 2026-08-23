@@ -70,69 +70,69 @@ concurrent command executor or task graph.
 
 ### 1. Establish concrete composition fixtures
 
-- ⬜ Add a composite extension command that asks a second extension command to
+- ✅ Add a composite extension command that asks a second extension command to
   insert a unique marker into the captured source buffer, then invokes a native
   search command for that marker. Verify that the search observes the edit and
   produces the normal generated results buffer.
-- ⬜ Invoke the same-extension path with a small wrapper command and verify that
+- ✅ Invoke the same-extension path with a small wrapper command and verify that
   the nested handler completes inline without admitting another extension
   callback.
-- ⬜ Make the first child fail and verify that the second operation runs only if
+- ✅ Make the first child fail and verify that the second operation runs only if
   the composite JavaScript explicitly continues.
-- ⬜ Suspend a child, cancel the root, and verify that neither the child nor the
+- ✅ Suspend a child, cancel the root, and verify that neither the child nor the
   remaining sequence performs a late mutation.
-- ⬜ Keep command completion limited to the existing structured outcome unless
+- ✅ Keep command completion limited to the existing structured outcome unless
   these fixtures demonstrate that a serializable value is necessary.
 
 ### 2. Separate admission from execution
 
-- ⬜ Replace the fire-and-forget `dispatch_command` entry point with one internal
+- ✅ Replace the fire-and-forget `dispatch_command` entry point with one internal
   enqueue path that captures context, allocates identity, and owns completion.
-- ⬜ Route keybindings, palette confirmation, and top-level scripts through that
+- ✅ Route keybindings, palette confirmation, and top-level scripts through that
   path without changing gpui focus dispatch.
-- ⬜ Queue root invocations rather than rejecting them merely because another
+- ✅ Queue root invocations rather than rejecting them merely because another
   root is active; start the next root after the current invocation tree settles.
-- ⬜ Preserve the current behavior for invalid origins, missing commands,
+- ✅ Preserve the current behavior for invalid origins, missing commands,
   disposed lifecycles, and unclaimed native actions.
-- ⬜ Ensure every admitted invocation completes exactly once during success,
+- ✅ Ensure every admitted invocation completes exactly once during success,
   rejection, cancellation, target loss, lifecycle teardown, and shell teardown.
 
 ### 3. Permit awaited child execution
 
-- ⬜ Carry the active invocation identity on handler-originated host requests and
+- ✅ Carry the active invocation identity on handler-originated host requests and
   reject requests whose claimed parent is no longer active.
-- ⬜ Route a native child through gpui from the inherited captured focus and
+- ✅ Route a native child through gpui from the inherited captured focus and
   complete its promise from the native action outcome.
-- ⬜ Route a cross-extension child to its owning runtime while retaining the
+- ✅ Route a cross-extension child to its owning runtime while retaining the
   parent's suspended state and serial callback ownership in both runtimes.
-- ⬜ Detect ancestry cycles before dispatching to a runtime already occupied by
+- ✅ Detect ancestry cycles before dispatching to a runtime already occupied by
   an ancestor and return a structured unavailable outcome.
-- ⬜ Resume root scheduling only after the root and all attached child work have
+- ✅ Resume root scheduling only after the root and all attached child work have
   settled.
 
 ### 4. Handle same-extension invocation inline
 
-- ⬜ Resolve command ownership through the catalog before selecting the inline
+- ✅ Resolve command ownership through the catalog before selecting the inline
   path; do not bypass global name ownership in JavaScript.
-- ⬜ Invoke the registered handler as a nested JavaScript call with inherited
+- ✅ Invoke the registered handler as a nested JavaScript call with inherited
   buffer, arguments, context, and cancellation signal.
-- ⬜ Verify nested ordering across synchronous work and asynchronous waits while
+- ✅ Verify nested ordering across synchronous work and asynchronous waits while
   no unrelated callback enters that extension runtime.
-- ⬜ Bound or reject recursive same-extension command cycles so accidental
+- ✅ Bound or reject recursive same-extension command cycles so accidental
   recursion fails predictably rather than exhausting the isolate stack.
-- ⬜ Keep ordinary shared implementation functions as the recommended mechanism
+- ✅ Keep ordinary shared implementation functions as the recommended mechanism
   when an extension does not need command lookup or dispatch semantics.
 
 ### 5. Define cancellation and lifecycle cleanup
 
-- ⬜ Record explicit parent/child identities only to the extent needed for
+- ✅ Record explicit parent/child identities only to the extent needed for
   ancestry checks, completion, and cancellation propagation.
-- ⬜ Propagate root cancellation and lifecycle teardown through unfinished
+- ✅ Propagate root cancellation and lifecycle teardown through unfinished
   descendants, including a child owned by another extension.
-- ⬜ Revalidate the inherited invocation context immediately before every
+- ✅ Revalidate the inherited invocation context immediately before every
   delayed foreground mutation; never fall back to current focus or active
   buffer.
-- ⬜ Ignore late completion after cancellation without allowing it to overwrite
+- ✅ Ignore late completion after cancellation without allowing it to overwrite
   the terminal outcome or start the next composed step.
 - ⬜ Confirm that disposing either participating extension settles all affected
   promises and allows the root queue to continue.

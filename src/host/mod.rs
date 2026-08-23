@@ -29,7 +29,8 @@ pub mod bench;
 pub mod protocol;
 
 use protocol::{
-    BufferChange, BufferHandle, BufferSubscriptionId, ByteRange, CommandInvocation, ExtensionId,
+    BufferChange, BufferHandle, BufferSubscriptionId, ByteRange, CommandInvocation,
+    CommandInvocationId, CommandInvokeDispatch, CommandOutcome, ExtensionId,
     ExtensionLifecycleId, HostOperation, HostRequest, HostResponse, HostResponseValue, RequestId,
     TextEdit, TreeChildrenRequest, TreeChildrenResponse, TreeProviderError,
 };
@@ -53,7 +54,7 @@ const buffers = new Map();
 const commandHandlers = new Map();
 const bufferChangeListeners = new Map();
 const treeProviders = new Map();
-let activeCommandController = null;
+const activeCommandFrames = [];
 const snapshotTables = new WeakMap();
 
 class KnotAbortSignal {
@@ -86,7 +87,9 @@ class KnotAbortController {
 }
 
 function hostError(error) {
-  if (error === "Cancelled") activeCommandController?.abort(new Error("command cancelled"));
+  if (error === "Cancelled") {
+    activeCommandFrames.at(-1)?.controller.abort(new Error("command cancelled"));
+  }
   const names = {
     BufferClosed: "BufferClosedError",
     InvalidRange: "RangeError",
@@ -235,10 +238,20 @@ export async function invokeCommand(name, commandArguments) {
   if (typeof name !== "string") {
     throw new TypeError("commands.invoke requires a command name");
   }
-  const outcome = await nativeOps.op_command_invoke(
+  const dispatch = await nativeOps.op_command_invoke(
     name,
     commandArguments === undefined ? null : commandArguments,
   );
+  if (dispatch.kind === "outcome") return Object.freeze(dispatch.outcome);
+
+  const outcome = await invokeRegisteredCommand(
+    dispatch.invocation,
+    dispatch.registration,
+    activeCommandFrames.at(-1)?.buffer ?? null,
+    commandArguments === undefined ? null : commandArguments,
+    true,
+  );
+  await nativeOps.op_command_inline_complete(dispatch.invocation, outcome);
   return Object.freeze(outcome);
 }
 
@@ -301,20 +314,68 @@ globalThis.__knotRequestTreeChildren = async (registration, parentId, generation
 globalThis.__knotFixtureDelay = (milliseconds) =>
   nativeOps.op_fixture_delay(milliseconds);
 
-globalThis.__knotInvokeCommand = async (registration, activeHandle, commandArguments) => {
+async function invokeRegisteredCommand(
+  invocation,
+  registration,
+  activeHandle,
+  commandArguments,
+  classifyFailure,
+) {
   const handler = commandHandlers.get(registration);
-  if (!handler) throw new Error("Knot command registration is disposed");
-  const controller = new KnotAbortController();
-  activeCommandController = controller;
-  try {
-    return await handler(Object.freeze({
-      buffer: activeHandle === null ? null : bufferFor(activeHandle),
-      arguments: commandArguments,
-      signal: controller.signal,
-    }));
-  } finally {
-    activeCommandController = null;
+  if (!handler) {
+    const error = new Error("Knot command registration is disposed");
+    if (classifyFailure) {
+      return { kind: "handlerFailure", message: String(error.stack ?? error) };
+    }
+    throw error;
   }
+  const controller = new KnotAbortController();
+  const frame = { invocation, controller, buffer: activeHandle };
+  activeCommandFrames.push(frame);
+  const cancellation = nativeOps.op_command_cancellation(invocation).then((cancelled) => {
+    if (cancelled) controller.abort(new Error("command cancelled"));
+  });
+  try {
+    try {
+      await handler(Object.freeze({
+        buffer: activeHandle === null ? null : bufferFor(activeHandle),
+        arguments: commandArguments,
+        signal: controller.signal,
+      }));
+      if (controller.signal.aborted) return { kind: "cancelled" };
+      return classifyFailure ? { kind: "completed" } : undefined;
+    } catch (error) {
+      if (!classifyFailure) throw error;
+      if (controller.signal.aborted || error?.name === "AbortError") {
+        return { kind: "cancelled" };
+      }
+      const message = String(error?.stack ?? error);
+      if (error?.name === "InvalidCommandArgumentsError") {
+        return { kind: "invalidArgument", message };
+      }
+      return { kind: "handlerFailure", message };
+    }
+  } finally {
+    nativeOps.op_command_cancellation_finish(invocation);
+    await cancellation;
+    const popped = activeCommandFrames.pop();
+    if (popped !== frame) throw new Error("Knot command frame stack is corrupted");
+  }
+}
+
+globalThis.__knotInvokeCommand = async (
+  invocation,
+  registration,
+  activeHandle,
+  commandArguments,
+) => {
+  await invokeRegisteredCommand(
+    invocation,
+    registration,
+    activeHandle,
+    commandArguments,
+    false,
+  );
 };
 
 globalThis.__knotDispatchBufferChange = async (subscription, change) => {
@@ -443,6 +504,9 @@ deno_core::extension!(
         op_command_register,
         op_command_unregister,
         op_command_invoke,
+        op_command_inline_complete,
+        op_command_cancellation,
+        op_command_cancellation_finish,
         op_buffer_subscribe,
         op_buffer_unsubscribe,
         op_tree_register,
@@ -845,9 +909,9 @@ async fn op_command_invoke(
     state: Rc<RefCell<OpState>>,
     #[string] name: String,
     #[serde] arguments: protocol::CommandArgumentValue,
-) -> Result<protocol::CommandOutcome, JsErrorBox> {
+) -> Result<CommandInvokeDispatch, JsErrorBox> {
     let response = request_host_operation(
-        state,
+        Rc::clone(&state),
         HostOperation::InvokeCommand {
             command: protocol::Command {
                 name: name.into(),
@@ -857,7 +921,16 @@ async fn op_command_invoke(
     )
     .await?;
     match response.result {
-        Ok(HostResponseValue::CommandInvoked { outcome }) => Ok(outcome),
+        Ok(HostResponseValue::CommandInvoked { dispatch }) => {
+            if let CommandInvokeDispatch::Inline { invocation, .. } = dispatch {
+                state
+                    .borrow_mut()
+                    .borrow_mut::<ExtensionRequestRouter>()
+                    .invocations
+                    .push(invocation);
+            }
+            Ok(dispatch)
+        }
         Ok(_) => Err(JsErrorBox::generic(
             "Knot host returned the wrong response type",
         )),
@@ -865,6 +938,74 @@ async fn op_command_invoke(
             "Knot host rejected command invocation: {error:?}"
         ))),
     }
+}
+
+#[deno_core::op2]
+async fn op_command_inline_complete(
+    state: Rc<RefCell<OpState>>,
+    #[number] invocation: u64,
+    #[serde] outcome: CommandOutcome,
+) -> Result<(), JsErrorBox> {
+    let invocation = CommandInvocationId::new(invocation);
+    let active = state
+        .borrow()
+        .borrow::<ExtensionRequestRouter>()
+        .invocations
+        .last()
+        .copied();
+    if active != Some(invocation) {
+        return Err(JsErrorBox::generic(
+            "Knot inline command completion does not match the active frame",
+        ));
+    }
+    let response = request_host_operation(
+        Rc::clone(&state),
+        HostOperation::CompleteInlineCommand {
+            invocation,
+            outcome,
+        },
+    )
+    .await;
+    let popped = state
+        .borrow_mut()
+        .borrow_mut::<ExtensionRequestRouter>()
+        .invocations
+        .pop();
+    debug_assert_eq!(popped, Some(invocation));
+    let response = response?;
+    match response.result {
+        Ok(HostResponseValue::InlineCommandCompleted {
+            invocation: completed,
+        }) if completed == invocation => Ok(()),
+        Ok(_) => Err(JsErrorBox::generic(
+            "Knot host returned the wrong inline command completion",
+        )),
+        Err(error) => Err(JsErrorBox::generic(format!(
+            "Knot host rejected inline command completion: {error:?}"
+        ))),
+    }
+}
+
+#[deno_core::op2]
+async fn op_command_cancellation(
+    state: Rc<RefCell<OpState>>,
+    #[number] invocation: u64,
+) -> bool {
+    let lifecycle = Arc::clone(
+        &state
+            .borrow()
+            .borrow::<ExtensionRequestRouter>()
+            .lifecycle,
+    );
+    lifecycle
+        .wait_for_command_cancellation(CommandInvocationId::new(invocation))
+        .await
+}
+
+#[deno_core::op2(fast)]
+fn op_command_cancellation_finish(state: &mut OpState, #[number] invocation: u64) {
+    let lifecycle = Arc::clone(&state.borrow::<ExtensionRequestRouter>().lifecycle);
+    lifecycle.finish_command_cancellation(CommandInvocationId::new(invocation));
 }
 
 #[deno_core::op2]
@@ -1168,6 +1309,14 @@ impl ExtensionRuntimeHandle {
         self.control.invoke_command(invocation, active_buffer)
     }
 
+    /// Abort one active command without queueing work behind its JavaScript.
+    pub fn cancel_command(
+        &self,
+        invocation: CommandInvocationId,
+    ) -> Result<(), ExtensionRuntimeClosed> {
+        self.control.cancel_command(invocation)
+    }
+
     /// Queue one committed buffer change for this extension's subscription.
     pub fn dispatch_buffer_change(
         &self,
@@ -1283,6 +1432,14 @@ impl ExtensionRuntimeControl {
         ExtensionRuntimeExecution {
             completion: completed,
         }
+    }
+
+    /// Abort one active command without queueing work behind its JavaScript.
+    pub fn cancel_command(
+        &self,
+        invocation: CommandInvocationId,
+    ) -> Result<(), ExtensionRuntimeClosed> {
+        self.lifecycle.cancel_command(invocation)
     }
 
     pub fn dispatch_buffer_change(
@@ -1522,6 +1679,28 @@ struct ExtensionLifecycleState {
     watchdog: ExtensionWatchdogState,
     buffer_change_queue: BufferChangeQueueMetrics,
     queued_buffer_change_callbacks: usize,
+    command_cancellations: HashMap<CommandInvocationId, CommandCancellationEntry>,
+}
+
+struct CommandCancellationEntry {
+    sender: tokio::sync::watch::Sender<CommandCancellationState>,
+    watcher_finished: bool,
+}
+
+impl CommandCancellationEntry {
+    fn running() -> Self {
+        Self {
+            sender: tokio::sync::watch::channel(CommandCancellationState::Running).0,
+            watcher_finished: false,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CommandCancellationState {
+    Running,
+    Cancelled,
+    Finished,
 }
 
 /// Observed buffer-change callback pressure for one extension runtime.
@@ -1534,6 +1713,79 @@ pub struct BufferChangeQueueMetrics {
 }
 
 impl ExtensionLifecycle {
+    async fn wait_for_command_cancellation(&self, invocation: CommandInvocationId) -> bool {
+        let mut receiver = {
+            let mut state = self
+                .state
+                .lock()
+                .expect("extension lifecycle lock poisoned");
+            state
+                .command_cancellations
+                .entry(invocation)
+                .or_insert_with(CommandCancellationEntry::running)
+                .sender
+                .subscribe()
+        };
+        let cancelled = loop {
+            let current = *receiver.borrow_and_update();
+            match current {
+                CommandCancellationState::Cancelled => break true,
+                CommandCancellationState::Finished => break false,
+                CommandCancellationState::Running => {}
+            }
+            if receiver.changed().await.is_err() {
+                break false;
+            }
+        };
+        let mut state = self
+            .state
+            .lock()
+            .expect("extension lifecycle lock poisoned");
+        if let Some(entry) = state.command_cancellations.get_mut(&invocation) {
+            entry.watcher_finished = true;
+            if *entry.sender.borrow() == CommandCancellationState::Finished {
+                state.command_cancellations.remove(&invocation);
+            }
+        }
+        cancelled
+    }
+
+    fn cancel_command(&self, invocation: CommandInvocationId) -> Result<(), ExtensionRuntimeClosed> {
+        let mut state = self
+            .state
+            .lock()
+            .expect("extension lifecycle lock poisoned");
+        if state.torn_down {
+            return Err(ExtensionRuntimeClosed);
+        }
+        let entry = state
+            .command_cancellations
+            .entry(invocation)
+            .or_insert_with(CommandCancellationEntry::running);
+        entry
+            .sender
+            .send_replace(CommandCancellationState::Cancelled);
+        Ok(())
+    }
+
+    fn finish_command_cancellation(&self, invocation: CommandInvocationId) {
+        let mut state = self
+            .state
+            .lock()
+            .expect("extension lifecycle lock poisoned");
+        let entry = state
+            .command_cancellations
+            .entry(invocation)
+            .or_insert_with(CommandCancellationEntry::running);
+        if entry.watcher_finished {
+            state.command_cancellations.remove(&invocation);
+        } else {
+            entry
+                .sender
+                .send_replace(CommandCancellationState::Finished);
+        }
+    }
+
     fn buffer_change_enqueued(&self) {
         let mut state = self
             .state
@@ -1769,7 +2021,7 @@ struct ExtensionRequestRouter {
     extension: ExtensionId,
     lifecycle_id: ExtensionLifecycleId,
     next_request_id: u64,
-    invocation: Option<protocol::CommandInvocationId>,
+    invocations: Vec<CommandInvocationId>,
     request_sender: tokio::sync::mpsc::UnboundedSender<HostRequest>,
     lifecycle: Arc<ExtensionLifecycle>,
 }
@@ -1789,7 +2041,7 @@ impl ExtensionRequestRouter {
                 extension: self.extension,
                 lifecycle: self.lifecycle_id,
                 id,
-                invocation: self.invocation,
+                invocation: self.invocations.last().copied(),
                 operation,
             })
             .map_err(|_| ExtensionRuntimeClosed)
@@ -1902,7 +2154,7 @@ impl ExtensionRuntime {
                 extension,
                 lifecycle_id,
                 next_request_id: 0,
-                invocation: None,
+                invocations: Vec::new(),
                 request_sender,
                 lifecycle: Arc::clone(&lifecycle),
             });
@@ -2008,11 +2260,13 @@ impl ExtensionRuntime {
                         .op_state()
                         .borrow_mut()
                         .borrow_mut::<ExtensionRequestRouter>()
-                        .invocation = Some(invocation.id);
+                        .invocations
+                        .push(invocation.id);
                     let arguments = serde_json::to_string(&invocation.arguments)
                         .expect("command arguments are JSON-compatible");
                     let source = format!(
-                        "globalThis.__knotInvokeCommand({}, {}, {arguments})",
+                        "globalThis.__knotInvokeCommand({}, {}, {}, {arguments})",
+                        invocation.id.value(),
                         invocation.registration.value(),
                         active_buffer.map_or("null".into(), |buffer| buffer.value().to_string()),
                     );
@@ -2029,7 +2283,8 @@ impl ExtensionRuntime {
                         .op_state()
                         .borrow_mut()
                         .borrow_mut::<ExtensionRequestRouter>()
-                        .invocation = None;
+                        .invocations
+                        .pop();
                     let termination = self.lifecycle.termination();
                     let _ = completion.send(match termination {
                         Some(ExtensionTermination::MemoryLimitExceeded) => {
@@ -2153,10 +2408,10 @@ mod tests {
     };
     use crate::host::protocol::{
         BufferChange, BufferHandle, BufferSubscriptionId, ByteRange, CommandArgumentValue,
-        CommandInvocation, CommandInvocationId, CommandRegistrationId, ExtensionId,
-        ExtensionLifecycleId, HostOperation, HostRequestError, HostResponse, HostResponseValue,
-        RequestId, SnapshotText, TextEdit, TextSnapshot, TreeChildrenRequest, TreeCollapsibleState,
-        TreeIcon, TreeProviderRegistrationId,
+        CommandInvocation, CommandInvocationId, CommandInvokeDispatch, CommandOutcome,
+        CommandRegistrationId, ExtensionId, ExtensionLifecycleId, HostOperation, HostRequestError,
+        HostResponse, HostResponseValue, RequestId, SnapshotText, TextEdit, TextSnapshot,
+        TreeChildrenRequest, TreeCollapsibleState, TreeIcon, TreeProviderRegistrationId,
     };
 
     #[test]
@@ -2741,6 +2996,161 @@ mod tests {
                 if (globalThis.commandRuns !== 1) throw new Error('command did not run');
                 if (globalThis.commandArguments !== "fixture-argument") {
                   throw new Error('command arguments were not delivered');
+                }
+            "#,
+        ))
+        .unwrap();
+        runtime.shutdown();
+    }
+
+    #[test]
+    fn same_runtime_command_invocation_executes_inline_and_restores_the_parent_frame() {
+        let host = V8Host::new();
+        let extension = ExtensionId::new(70);
+        let mut runtime = host.spawn_extension(extension);
+        let outer_registration = CommandRegistrationId::new(70);
+        let inner_registration = CommandRegistrationId::new(71);
+        let registration = runtime.execute_fixture_module(
+            "file:///fixtures/inline-commands.js",
+            r#"
+                import { commands } from "knot:editor";
+                globalThis.inlineEvents = [];
+                await commands.register("knot.fixture.outer", async () => {
+                  globalThis.inlineEvents.push("outer-before");
+                  const outcome = await commands.invoke("knot.fixture.inner", null);
+                  globalThis.inlineEvents.push(`inner-${outcome.kind}`);
+                  globalThis.inlineEvents.push("outer-after");
+                });
+                await commands.register("knot.fixture.inner", async () => {
+                  globalThis.inlineEvents.push("inner-before");
+                  await Promise.resolve();
+                  globalThis.inlineEvents.push("inner-after");
+                });
+            "#,
+        );
+        for expected in [outer_registration, inner_registration] {
+            let request = pollster::block_on(runtime.receive_request()).unwrap();
+            runtime
+                .respond(HostResponse {
+                    extension,
+                    lifecycle: request.lifecycle,
+                    id: request.id,
+                    result: Ok(HostResponseValue::CommandRegistered {
+                        registration: expected,
+                    }),
+                })
+                .unwrap();
+        }
+        pollster::block_on(registration).unwrap();
+
+        let lifecycle = runtime.control.lifecycle_id;
+        let invocation = runtime.invoke_command(
+            CommandInvocation {
+                id: CommandInvocationId::new(700),
+                registration: outer_registration,
+                extension,
+                lifecycle,
+                arguments: CommandArgumentValue::Null,
+            },
+            None,
+        );
+        let request = pollster::block_on(runtime.receive_request()).unwrap();
+        assert_eq!(request.invocation, Some(CommandInvocationId::new(700)));
+        assert!(matches!(request.operation, HostOperation::InvokeCommand { .. }));
+        runtime
+            .respond(HostResponse {
+                extension,
+                lifecycle,
+                id: request.id,
+                result: Ok(HostResponseValue::CommandInvoked {
+                    dispatch: CommandInvokeDispatch::Inline {
+                        invocation: CommandInvocationId::new(701),
+                        registration: inner_registration,
+                    },
+                }),
+            })
+            .unwrap();
+
+        let completion = pollster::block_on(runtime.receive_request()).unwrap();
+        assert_eq!(completion.invocation, Some(CommandInvocationId::new(701)));
+        assert_eq!(
+            completion.operation,
+            HostOperation::CompleteInlineCommand {
+                invocation: CommandInvocationId::new(701),
+                outcome: CommandOutcome::Completed,
+            }
+        );
+        runtime
+            .respond(HostResponse {
+                extension,
+                lifecycle,
+                id: completion.id,
+                result: Ok(HostResponseValue::InlineCommandCompleted {
+                    invocation: CommandInvocationId::new(701),
+                }),
+            })
+            .unwrap();
+
+        pollster::block_on(invocation).unwrap();
+
+        pollster::block_on(runtime.execute_fixture_script(
+            "verify-inline-commands.js",
+            r#"
+                if (globalThis.inlineEvents.join(",") !==
+                    "outer-before,inner-before,inner-after,inner-completed,outer-after") {
+                  throw new Error(`unexpected inline ordering: ${globalThis.inlineEvents}`);
+                }
+            "#,
+        ))
+        .unwrap();
+        runtime.shutdown();
+    }
+
+    #[test]
+    fn command_cancellation_aborts_a_suspended_handler_without_queueing_runtime_work() {
+        let host = V8Host::new();
+        let extension = ExtensionId::new(72);
+        let mut runtime = host.spawn_extension(extension);
+        let registration = CommandRegistrationId::new(72);
+        let setup = runtime.execute_fixture_module(
+            "file:///fixtures/cancellable-command.js",
+            r#"
+                import { commands } from "knot:editor";
+                await commands.register("knot.fixture.cancellable", async ({ signal }) => {
+                  await new Promise((resolve) => signal.addEventListener("abort", resolve));
+                  globalThis.cancellationObserved = signal.aborted;
+                });
+            "#,
+        );
+        let request = pollster::block_on(runtime.receive_request()).unwrap();
+        runtime
+            .respond(HostResponse {
+                extension,
+                lifecycle: request.lifecycle,
+                id: request.id,
+                result: Ok(HostResponseValue::CommandRegistered { registration }),
+            })
+            .unwrap();
+        pollster::block_on(setup).unwrap();
+
+        let invocation_id = CommandInvocationId::new(720);
+        let invocation = runtime.invoke_command(
+            CommandInvocation {
+                id: invocation_id,
+                registration,
+                extension,
+                lifecycle: request.lifecycle,
+                arguments: CommandArgumentValue::Null,
+            },
+            None,
+        );
+        runtime.cancel_command(invocation_id).unwrap();
+        pollster::block_on(invocation).unwrap();
+        pollster::block_on(runtime.execute_fixture_script(
+            "verify-command-cancellation.js",
+            r#"
+                if (!globalThis.cancellationObserved) {
+                  throw new Error("command did not observe prompt cancellation");
                 }
             "#,
         ))

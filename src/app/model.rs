@@ -789,6 +789,13 @@ pub(crate) struct CommandTarget {
     pub lifecycle: ExtensionLifecycleId,
 }
 
+/// The authoritative dispatch target for one globally owned command name.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CommandTargetKind {
+    Native,
+    Extension(CommandTarget),
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CommandCatalogError {
     NameInUse,
@@ -867,28 +874,37 @@ impl CommandCatalog {
         self.by_name.values().map(|entry| &entry.definition)
     }
 
-    pub(crate) fn resolve_extension(
+    pub(crate) fn resolve(
         &self,
         name: &str,
-    ) -> Result<CommandTarget, CommandCatalogError> {
+    ) -> Result<CommandTargetKind, CommandCatalogError> {
         let entry = self
             .by_name
             .get(name)
             .ok_or(CommandCatalogError::NotFound)?;
-        let CommandOwner::Extension {
-            extension,
-            lifecycle,
-        } = entry.definition.owner
-        else {
-            return Err(CommandCatalogError::NotFound);
-        };
-        Ok(CommandTarget {
-            registration: entry
-                .extension_registration
-                .expect("extension definitions have registrations"),
-            extension,
-            lifecycle,
-        })
+        match entry.definition.owner {
+            CommandOwner::Native => Ok(CommandTargetKind::Native),
+            CommandOwner::Extension {
+                extension,
+                lifecycle,
+            } => Ok(CommandTargetKind::Extension(CommandTarget {
+                registration: entry
+                    .extension_registration
+                    .expect("extension definitions have registrations"),
+                extension,
+                lifecycle,
+            })),
+        }
+    }
+
+    pub(crate) fn resolve_extension(
+        &self,
+        name: &str,
+    ) -> Result<CommandTarget, CommandCatalogError> {
+        match self.resolve(name)? {
+            CommandTargetKind::Native => Err(CommandCatalogError::NotFound),
+            CommandTargetKind::Extension(target) => Ok(target),
+        }
     }
 
     pub(crate) fn unregister(
@@ -1531,6 +1547,14 @@ mod tests {
             }
         );
         assert_eq!(
+            catalog.resolve("knot.fixture.edit"),
+            Ok(CommandTargetKind::Extension(CommandTarget {
+                registration,
+                extension,
+                lifecycle,
+            }))
+        );
+        assert_eq!(
             catalog.register_extension(
                 "knot.fixture.edit".into(),
                 "Other edit".into(),
@@ -1575,6 +1599,14 @@ mod tests {
         catalog
             .register_native("editor.copy".into(), "Copy".into())
             .unwrap();
+        assert_eq!(
+            catalog.resolve("editor.copy"),
+            Ok(CommandTargetKind::Native)
+        );
+        assert_eq!(
+            catalog.resolve_extension("editor.copy"),
+            Err(CommandCatalogError::NotFound)
+        );
         assert_eq!(
             catalog.register_native("editor.copy".into(), "Other copy".into()),
             Err(CommandCatalogError::NameInUse)

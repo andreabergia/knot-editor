@@ -44,7 +44,7 @@ impl ExtensionLifecycleId {
 }
 
 /// An opaque identity for one extension command registration.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct CommandRegistrationId(u64);
 
 impl CommandRegistrationId {
@@ -58,12 +58,16 @@ impl CommandRegistrationId {
 }
 
 /// An opaque identity for one command invocation.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct CommandInvocationId(u64);
 
 impl CommandInvocationId {
     pub(crate) const fn new(value: u64) -> Self {
         Self(value)
+    }
+
+    pub(crate) const fn value(self) -> u64 {
+        self.0
     }
 }
 
@@ -179,6 +183,23 @@ pub enum CommandOutcome {
     InvalidArgument { message: String },
     Cancelled,
     HandlerFailure { message: String },
+}
+
+/// The private routing result for a command requested by JavaScript.
+///
+/// Same-runtime commands are returned to the requesting isolate for a nested
+/// handler call. All other routes settle through the dispatcher before the
+/// host responds.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum CommandInvokeDispatch {
+    Outcome {
+        outcome: CommandOutcome,
+    },
+    Inline {
+        invocation: CommandInvocationId,
+        registration: CommandRegistrationId,
+    },
 }
 
 /// A half-open range in UTF-8 byte offsets.
@@ -311,6 +332,10 @@ pub enum HostOperation {
     InvokeCommand {
         command: Command,
     },
+    CompleteInlineCommand {
+        invocation: CommandInvocationId,
+        outcome: CommandOutcome,
+    },
     SubscribeBufferChanges {
         buffer: BufferHandle,
     },
@@ -361,7 +386,10 @@ pub enum HostResponseValue {
         registration: CommandRegistrationId,
     },
     CommandInvoked {
-        outcome: CommandOutcome,
+        dispatch: CommandInvokeDispatch,
+    },
+    InlineCommandCompleted {
+        invocation: CommandInvocationId,
     },
     BufferChangesSubscribed {
         subscription: BufferSubscriptionId,

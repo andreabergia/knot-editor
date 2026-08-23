@@ -5,7 +5,7 @@
 
 use gpui::{prelude::FluentBuilder, *};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -15,9 +15,9 @@ use crate::host::{
     V8Host,
     protocol::{
         BufferChange, BufferHandle, ByteRange, Command, CommandArgumentValue, CommandInvocation,
-        CommandInvocationId, CommandOutcome, ExtensionId, HostOperation, HostRequest,
-        HostRequestError, HostResponse, HostResponseValue, TreeChildrenResponse, TreeProviderError,
-        TreeProviderRegistrationId,
+        CommandInvocationId, CommandInvokeDispatch, CommandOutcome, ExtensionId, HostOperation,
+        HostRequest, HostRequestError, HostResponse, HostResponseValue, TreeChildrenResponse,
+        TreeProviderError, TreeProviderRegistrationId,
     },
 };
 
@@ -57,6 +57,7 @@ const MIN_TERMINAL_HEIGHT: f32 = 96.;
 const MIN_EDITOR_HEIGHT: f32 = 160.;
 const DEFAULT_FIXTURE_NAME: &str = "rust_sample";
 const DIAGNOSTIC_COMMAND: &str = "knot.diagnostic.command-context";
+const FIXTURE_SEARCH_COMMAND: &str = "knot.fixture.search";
 const FIXTURE_EDIT_COMMAND: &str = "knot.fixture.edit";
 const FIXTURE_EDIT_ARGUMENT: &str = "// fixture command\n";
 const DIAGNOSTIC_BINDING_ARGUMENT: &str = "keybinding.diagnostic";
@@ -216,45 +217,32 @@ struct CapturedInvocationContext {
     buffer: Option<BufferHandle>,
 }
 
-struct CommandDispatchCompletionState {
-    claimed: bool,
+struct CommandCompletionState {
     sender: Option<tokio::sync::oneshot::Sender<CommandOutcome>>,
 }
 
 #[derive(Clone)]
-struct CommandDispatchCompletion {
-    caller: (ExtensionId, crate::host::protocol::ExtensionLifecycleId),
-    state: Arc<Mutex<CommandDispatchCompletionState>>,
+struct CommandCompletion {
+    state: Arc<Mutex<CommandCompletionState>>,
 }
 
-impl PartialEq for CommandDispatchCompletion {
+impl PartialEq for CommandCompletion {
     fn eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.state, &other.state)
     }
 }
 
-impl CommandDispatchCompletion {
-    fn new(
-        caller: (ExtensionId, crate::host::protocol::ExtensionLifecycleId),
-    ) -> (Self, tokio::sync::oneshot::Receiver<CommandOutcome>) {
+impl CommandCompletion {
+    fn new() -> (Self, tokio::sync::oneshot::Receiver<CommandOutcome>) {
         let (sender, receiver) = tokio::sync::oneshot::channel();
         (
             Self {
-                caller,
-                state: Arc::new(Mutex::new(CommandDispatchCompletionState {
-                    claimed: false,
+                state: Arc::new(Mutex::new(CommandCompletionState {
                     sender: Some(sender),
                 })),
             },
             receiver,
         )
-    }
-
-    fn claim(&self) {
-        self.state
-            .lock()
-            .expect("command completion lock poisoned")
-            .claimed = true;
     }
 
     fn complete(&self, outcome: CommandOutcome) {
@@ -269,14 +257,6 @@ impl CommandDispatchCompletion {
         }
     }
 
-    fn complete_if_unclaimed(&self) {
-        let mut state = self.state.lock().expect("command completion lock poisoned");
-        if !state.claimed {
-            if let Some(sender) = state.sender.take() {
-                let _ = sender.send(CommandOutcome::Unavailable);
-            }
-        }
-    }
 }
 
 #[derive(Clone, PartialEq, Action)]
@@ -286,9 +266,9 @@ impl CommandDispatchCompletion {
     reason = "command dispatch uses this adapter when native focus routing is connected"
 )]
 struct CommandAction {
+    invocation: CommandInvocationId,
     command: Command,
     context: CapturedInvocationContext,
-    completion: Option<CommandDispatchCompletion>,
 }
 
 #[derive(Clone, PartialEq, Action)]
@@ -366,52 +346,42 @@ impl CommandAction {
     )]
     fn dispatch(&self, window: &mut Window, cx: &mut App) -> Result<(), CommandOutcome> {
         let Some(focus) = self.context.focus.upgrade() else {
-            self.complete(CommandOutcome::InvalidTarget);
             return Err(CommandOutcome::InvalidTarget);
         };
         if self.context.window != window.window_handle() {
-            self.complete(CommandOutcome::InvalidTarget);
             return Err(CommandOutcome::InvalidTarget);
         }
         focus.dispatch_action(self, window, cx);
-        if let Some(completion) = &self.completion {
-            completion.complete_if_unclaimed();
-        }
         Ok(())
     }
 
-    fn claim(&self) {
-        if let Some(completion) = &self.completion {
-            completion.claim();
-        }
-    }
-
-    fn complete(&self, outcome: CommandOutcome) {
-        if let Some(completion) = &self.completion {
-            completion.complete(outcome);
-        }
-    }
-
     fn record_diagnostic(&self, surface: CommandSurfaceKind, cx: &mut App) {
-        self.claim();
         let Some(workspace) = self.context.workspace.upgrade() else {
-            self.complete(CommandOutcome::InvalidTarget);
             return;
         };
         let has_buffer = self.context.buffer.is_some();
         let _ = workspace.update(cx, |shell, cx| {
-            shell.record_command_diagnostic(surface, has_buffer, cx);
+            shell.record_command_diagnostic(self.invocation, surface, has_buffer, cx);
         });
-        self.complete(CommandOutcome::Completed);
     }
 }
 
-#[derive(Clone, PartialEq)]
-struct InFlightExtensionCommand {
-    id: CommandInvocationId,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum InvocationTarget {
+    Native,
+    Extension(model::CommandTarget),
+}
+
+struct CommandInvocationNode {
     command: Command,
-    target: model::CommandTarget,
+    target: InvocationTarget,
     context: CapturedInvocationContext,
+    parent: Option<CommandInvocationId>,
+    children: HashSet<CommandInvocationId>,
+    completion: CommandCompletion,
+    handler_outcome: Option<CommandOutcome>,
+    started: bool,
+    cancelled: bool,
 }
 
 #[allow(
@@ -421,6 +391,14 @@ struct InFlightExtensionCommand {
 struct CommandExecution {
     id: CommandInvocationId,
     completion: tokio::sync::oneshot::Receiver<CommandOutcome>,
+}
+
+enum ChildCommandAdmission {
+    Await(CommandExecution),
+    Inline {
+        invocation: CommandInvocationId,
+        registration: crate::host::protocol::CommandRegistrationId,
+    },
 }
 
 /// Invisible drag-ghost view gpui renders while the drag is in progress.
@@ -454,8 +432,9 @@ struct Shell {
     command_catalog: CommandCatalog,
     next_tree_registration: u64,
     next_command_invocation: u64,
-    active_command: Option<InFlightExtensionCommand>,
-    cancelled_commands: HashSet<CommandInvocationId>,
+    command_invocations: HashMap<CommandInvocationId, CommandInvocationNode>,
+    queued_command_roots: VecDeque<CommandInvocationId>,
+    active_command_root: Option<CommandInvocationId>,
     command_state: SharedString,
     command_outcome: Option<CommandOutcome>,
     command_diagnostic: Option<CommandDiagnostic>,
@@ -639,6 +618,9 @@ impl Shell {
                 "Record resolved command context".into(),
             )
             .expect("diagnostic command name is unique");
+        command_catalog
+            .register_native(FIXTURE_SEARCH_COMMAND.into(), "Search captured buffer".into())
+            .expect("fixture search command name is unique");
         Shell {
             open_buffers,
             source_buffer,
@@ -656,8 +638,9 @@ impl Shell {
             command_catalog,
             next_tree_registration: 1,
             next_command_invocation: 1,
-            active_command: None,
-            cancelled_commands: HashSet::new(),
+            command_invocations: HashMap::new(),
+            queued_command_roots: VecDeque::new(),
+            active_command_root: None,
             command_state: "idle".into(),
             command_outcome: None,
             command_diagnostic: None,
@@ -692,83 +675,107 @@ impl Shell {
         cx.spawn(async move |this, cx| {
             let mut failure = None;
             while let Some(request) = requests.receive().await {
-                let response = if let HostOperation::InvokeCommand { command } =
-                    request.operation.clone()
-                {
+                if let HostOperation::InvokeCommand { command } = request.operation.clone() {
                     let caller = (request.extension, request.lifecycle);
-                    let id = request.id;
-                    let outcome = if request.invocation.is_some() {
-                        CommandOutcome::Unavailable
+                    let request_id = request.id;
+                    let admission = if let Some(parent) = request.invocation {
+                        this.update(cx, |this, cx| {
+                            this.enqueue_command_child(parent, command, caller, cx)
+                        })
+                        .unwrap_or(Err(CommandOutcome::Unavailable))
                     } else {
-                        let receiver = cx
-                            .update(|cx| {
-                                let Some(shell) = this.upgrade() else {
-                                    return None;
-                                };
-                                let windows = cx.window_stack().unwrap_or_else(|| cx.windows());
-                                for window_handle in windows {
-                                    let command = command.clone();
-                                    let receiver = cx
-                                        .update_window(window_handle, |_, window, cx| {
-                                            if window.root::<Shell>().flatten().as_ref()
-                                                != Some(&shell)
-                                            {
-                                                return None;
-                                            }
-                                            let (completion, receiver) =
-                                                CommandDispatchCompletion::new(caller);
-                                            let action = shell.update(cx, |shell, cx| {
-                                                let Some(origin) = shell.command_origin(window, cx)
-                                                else {
-                                                    completion
-                                                        .complete(CommandOutcome::InvalidTarget);
-                                                    return None;
-                                                };
-                                                match shell.prepare_command_action_with_completion(
-                                                    command,
-                                                    origin,
-                                                    Some(completion.clone()),
-                                                    window,
-                                                    cx,
-                                                ) {
-                                                    Ok(action) => Some(action),
-                                                    Err(outcome) => {
-                                                        completion.complete(outcome);
-                                                        None
-                                                    }
-                                                }
-                                            });
-                                            if let Some(action) = action {
-                                                let _ = action.dispatch(window, cx);
-                                            }
-                                            Some(receiver)
+                        cx.update(|cx| {
+                            let Some(shell) = this.upgrade() else {
+                                return Err(CommandOutcome::Unavailable);
+                            };
+                            let windows = cx.window_stack().unwrap_or_else(|| cx.windows());
+                            for window_handle in windows {
+                                let command = command.clone();
+                                let execution = cx
+                                    .update_window(window_handle, |_, window, cx| {
+                                        if window.root::<Shell>().flatten().as_ref() != Some(&shell)
+                                        {
+                                            return None;
+                                        }
+                                        shell.update(cx, |shell, cx| {
+                                            shell.command_origin(window, cx).map(|origin| {
+                                                shell.enqueue_command_root(
+                                                    command, origin, Some(caller), cx,
+                                                )
+                                            })
                                         })
-                                        .ok()
-                                        .flatten();
-                                    if receiver.is_some() {
-                                        return receiver;
-                                    }
+                                    })
+                                    .ok()
+                                    .flatten();
+                                if let Some(execution) = execution {
+                                    return Ok(ChildCommandAdmission::Await(execution));
                                 }
-                                None
-                            })
-                            .ok()
-                            .flatten();
-                        match receiver {
-                            Some(receiver) => receiver.await.unwrap_or(CommandOutcome::Unavailable),
-                            None => CommandOutcome::InvalidTarget,
-                        }
+                            }
+                            Err(CommandOutcome::InvalidTarget)
+                        })
+                        .unwrap_or(Err(CommandOutcome::Unavailable))
                     };
-                    HostResponse {
-                        extension: caller.0,
-                        lifecycle: caller.1,
-                        id,
-                        result: Ok(HostResponseValue::CommandInvoked { outcome }),
+                    match admission {
+                        Ok(ChildCommandAdmission::Inline {
+                            invocation,
+                            registration,
+                        }) => {
+                            let response = HostResponse {
+                                extension: caller.0,
+                                lifecycle: caller.1,
+                                id: request_id,
+                                result: Ok(HostResponseValue::CommandInvoked {
+                                    dispatch: CommandInvokeDispatch::Inline {
+                                        invocation,
+                                        registration,
+                                    },
+                                }),
+                            };
+                            if let Err(error) = control.respond(response) {
+                                failure = Some(format!("runtime response failed: {error:?}"));
+                                break;
+                            }
+                        }
+                        Ok(ChildCommandAdmission::Await(execution)) => {
+                            let response_control = control.clone();
+                            cx.spawn(async move |_| {
+                                let outcome = execution
+                                    .completion
+                                    .await
+                                    .unwrap_or(CommandOutcome::Cancelled);
+                                let _ = response_control.respond(HostResponse {
+                                    extension: caller.0,
+                                    lifecycle: caller.1,
+                                    id: request_id,
+                                    result: Ok(HostResponseValue::CommandInvoked {
+                                        dispatch: CommandInvokeDispatch::Outcome { outcome },
+                                    }),
+                                });
+                            })
+                            .detach();
+                        }
+                        Err(outcome) => {
+                            let response = HostResponse {
+                                extension: caller.0,
+                                lifecycle: caller.1,
+                                id: request_id,
+                                result: Ok(HostResponseValue::CommandInvoked {
+                                    dispatch: CommandInvokeDispatch::Outcome { outcome },
+                                }),
+                            };
+                            if let Err(error) = control.respond(response) {
+                                failure = Some(format!("runtime response failed: {error:?}"));
+                                break;
+                            }
+                        }
                     }
-                } else {
-                    match this.update(cx, |this, cx| this.dispatch_host_request(request, cx)) {
-                        Ok(response) => response,
-                        Err(_) => return,
-                    }
+                    continue;
+                }
+                let response = match this.update(cx, |this, cx| {
+                    this.dispatch_host_request(request, cx)
+                }) {
+                    Ok(response) => response,
+                    Err(_) => return,
                 };
                 if let Err(error) = control.respond(response) {
                     failure = Some(format!("runtime response failed: {error:?}"));
@@ -777,6 +784,7 @@ impl Shell {
             }
             let (extension, lifecycle) = control.identity();
             let _ = this.update(cx, |this, cx| {
+                this.cancel_command_lifecycle(extension, lifecycle, cx);
                 this.extension_controls.remove(&(extension, lifecycle));
                 this.command_catalog.remove_lifecycle(extension, lifecycle);
                 this.buffer_subscriptions
@@ -800,9 +808,41 @@ impl Shell {
         request: HostRequest,
         cx: &mut Context<Self>,
     ) -> HostResponse {
-        let cancelled = request
-            .invocation
-            .is_some_and(|invocation| self.cancelled_commands.contains(&invocation));
+        if let HostOperation::CompleteInlineCommand {
+            invocation,
+            outcome,
+        } = request.operation.clone()
+        {
+            let authorized = request.invocation == Some(invocation)
+                && self
+                    .command_invocations
+                    .get(&invocation)
+                    .is_some_and(|node| {
+                        matches!(
+                            node.target,
+                            InvocationTarget::Extension(target)
+                                if target.extension == request.extension
+                                    && target.lifecycle == request.lifecycle
+                        )
+                    });
+            let result = if authorized {
+                self.finish_command_invocation(invocation, outcome, cx);
+                Ok(HostResponseValue::InlineCommandCompleted { invocation })
+            } else {
+                Err(HostRequestError::Cancelled)
+            };
+            return HostResponse {
+                extension: request.extension,
+                lifecycle: request.lifecycle,
+                id: request.id,
+                result,
+            };
+        }
+        let cancelled = request.invocation.is_some_and(|invocation| {
+            self.command_invocations
+                .get(&invocation)
+                .is_none_or(|command| command.cancelled)
+        });
         let lifecycle_live = self
             .extension_controls
             .contains_key(&(request.extension, request.lifecycle));
@@ -859,6 +899,7 @@ impl Shell {
                 .unregister(registration, request.extension, request.lifecycle)
                 .map(|()| HostResponseValue::CommandUnregistered { registration })
                 .map_err(map_command_error),
+            HostOperation::CompleteInlineCommand { .. } => unreachable!(),
             HostOperation::InvokeCommand { .. } => unreachable!(
                 "programmatic command invocation is completed by the asynchronous bridge"
             ),
@@ -1009,13 +1050,15 @@ impl Shell {
         let Some(invocation) = request.invocation else {
             return Ok(());
         };
-        let Some(command) = self.active_command.as_ref() else {
+        let Some(command) = self.command_invocations.get(&invocation) else {
             return Err(HostRequestError::Cancelled);
         };
-        if command.id != invocation
-            || command.target.extension != request.extension
-            || command.target.lifecycle != request.lifecycle
-            || self.cancelled_commands.contains(&invocation)
+        let InvocationTarget::Extension(target) = command.target else {
+            return Err(HostRequestError::Cancelled);
+        };
+        if target.extension != request.extension
+            || target.lifecycle != request.lifecycle
+            || command.cancelled
         {
             return Err(HostRequestError::Cancelled);
         }
@@ -1100,8 +1143,7 @@ impl Shell {
                 };
                 if target.extension == provider.extension && target.lifecycle == provider.lifecycle
                 {
-                    let _ = self.invoke_command_target(
-                        target,
+                    let _ = self.enqueue_command_root(
                         Command {
                             name: command.into(),
                             arguments: CommandArgumentValue::Null,
@@ -1111,6 +1153,7 @@ impl Shell {
                             focus,
                             buffer: None,
                         },
+                        None,
                         cx,
                     );
                 } else {
@@ -1161,24 +1204,21 @@ impl Shell {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> Result<CommandExecution, CommandOutcome> {
-        if self.active_command.is_some() {
-            return Err(CommandOutcome::Unavailable);
-        }
         let Some(focus) = window.focused(cx) else {
             let outcome = CommandOutcome::InvalidTarget;
             self.record_command_outcome(outcome.clone(), cx);
             return Err(outcome);
         };
-        let target = match self.command_catalog.resolve_extension("knot.fixture.edit") {
-            Ok(target) => target,
-            Err(_) => {
-                let outcome = CommandOutcome::Unavailable;
-                self.record_command_outcome(outcome.clone(), cx);
-                return Err(outcome);
-            }
-        };
-        self.invoke_command_target(
-            target,
+        if self
+            .command_catalog
+            .resolve_extension("knot.fixture.edit")
+            .is_err()
+        {
+            let outcome = CommandOutcome::Unavailable;
+            self.record_command_outcome(outcome.clone(), cx);
+            return Err(outcome);
+        }
+        Ok(self.enqueue_command_root(
             Command {
                 name: "knot.fixture.edit".into(),
                 arguments: CommandArgumentValue::Null,
@@ -1188,8 +1228,9 @@ impl Shell {
                 focus: focus.downgrade(),
                 buffer: self.buffer_registry.active_handle(),
             },
+            None,
             cx,
-        )
+        ))
     }
 
     fn invoke_contribution_action(
@@ -1227,8 +1268,7 @@ impl Shell {
         if target.extension != extension || target.lifecycle != lifecycle {
             return;
         }
-        let _ = self.invoke_command_target(
-            target,
+        let _ = self.enqueue_command_root(
             Command {
                 name: action.command.as_str().into(),
                 arguments: CommandArgumentValue::Null,
@@ -1238,6 +1278,7 @@ impl Shell {
                 focus: action.focus.clone(),
                 buffer: Some(buffer),
             },
+            None,
             cx,
         );
     }
@@ -1276,108 +1317,93 @@ impl Shell {
         });
     }
 
+    fn enqueue_command_root(
+        &mut self,
+        command: Command,
+        origin: CommandOrigin,
+        caller: Option<(ExtensionId, crate::host::protocol::ExtensionLifecycleId)>,
+        cx: &mut Context<Self>,
+    ) -> CommandExecution {
+        let id = self.allocate_command_invocation();
+        let (completion, receiver) = CommandCompletion::new();
+        let execution = CommandExecution {
+            id,
+            completion: receiver,
+        };
+        let target = match self.command_catalog.resolve(command.name.as_ref()) {
+            Ok(model::CommandTargetKind::Native) => InvocationTarget::Native,
+            Ok(model::CommandTargetKind::Extension(target)) => {
+                if caller == Some((target.extension, target.lifecycle)) {
+                    completion.complete(CommandOutcome::Unavailable);
+                    self.record_command_outcome(CommandOutcome::Unavailable, cx);
+                    return execution;
+                }
+                InvocationTarget::Extension(target)
+            }
+            Err(_) => {
+                completion.complete(CommandOutcome::Unavailable);
+                self.record_command_outcome(CommandOutcome::Unavailable, cx);
+                return execution;
+            }
+        };
+        let context = CapturedInvocationContext {
+            window: origin.window,
+            workspace: cx.entity().downgrade(),
+            focus: origin.focus,
+            buffer: origin.buffer,
+        };
+        let invalid_target = context.focus.upgrade().is_none()
+            || !cx.windows().contains(&context.window)
+            || context
+                .buffer
+                .is_some_and(|buffer| self.buffer_registry.resolve(buffer).is_err());
+        if invalid_target {
+            completion.complete(CommandOutcome::InvalidTarget);
+            self.record_command_outcome(CommandOutcome::InvalidTarget, cx);
+            return execution;
+        }
+        self.command_invocations.insert(
+            id,
+            CommandInvocationNode {
+                command,
+                target,
+                context,
+                parent: None,
+                children: HashSet::new(),
+                completion,
+                handler_outcome: None,
+                started: false,
+                cancelled: false,
+            },
+        );
+        self.queued_command_roots.push_back(id);
+        self.start_next_command_root(cx);
+        execution
+    }
+
+    #[cfg(test)]
     fn invoke_command_target(
         &mut self,
         target: model::CommandTarget,
-        value: Command,
+        command: Command,
         origin: CommandOrigin,
         cx: &mut Context<Self>,
     ) -> Result<CommandExecution, CommandOutcome> {
-        if self.active_command.is_some() {
+        if self.command_catalog.resolve_extension(command.name.as_ref()) != Ok(target) {
             return Err(CommandOutcome::Unavailable);
         }
-        if self.command_catalog.resolve_extension(value.name.as_ref()) != Ok(target) {
-            let outcome = CommandOutcome::Unavailable;
-            self.record_command_outcome(outcome.clone(), cx);
-            return Err(outcome);
-        }
-        if origin.focus.upgrade().is_none()
-            || !cx.windows().contains(&origin.window)
-            || origin
-                .buffer
-                .is_some_and(|buffer| self.buffer_registry.resolve(buffer).is_err())
-        {
-            let outcome = CommandOutcome::InvalidTarget;
-            self.record_command_outcome(outcome.clone(), cx);
-            return Err(outcome);
-        }
-        let Some(control) = self
-            .extension_controls
-            .get(&(target.extension, target.lifecycle))
-            .cloned()
-        else {
-            let outcome = CommandOutcome::Unavailable;
-            self.record_command_outcome(outcome.clone(), cx);
-            return Err(outcome);
-        };
-        let command = InFlightExtensionCommand {
-            id: self.allocate_command_invocation(),
-            command: value,
-            target,
-            context: CapturedInvocationContext {
-                window: origin.window,
-                workspace: cx.entity().downgrade(),
-                focus: origin.focus,
-                buffer: origin.buffer,
-            },
-        };
-        let id = command.id;
-        let buffer = command.context.buffer;
-        let arguments = command.command.arguments.clone();
-        self.active_command = Some(command);
-        self.command_state = "running".into();
-        self.command_outcome = None;
-        let execution = control.invoke_command(
-            CommandInvocation {
-                id,
-                registration: target.registration,
-                extension: target.extension,
-                lifecycle: target.lifecycle,
-                arguments,
-            },
-            buffer,
-        );
-        let (completion_sender, completion) = tokio::sync::oneshot::channel();
-        cx.spawn(async move |this, cx| {
-            let result = execution.await;
-            let outcome = this
-                .update(cx, |this, cx| this.finish_command(id, result, cx))
-                .ok()
-                .flatten()
-                .unwrap_or(CommandOutcome::Unavailable);
-            let _ = completion_sender.send(outcome);
-        })
-        .detach();
-        cx.notify();
-        Ok(CommandExecution { id, completion })
+        Ok(self.enqueue_command_root(command, origin, None, cx))
     }
 
-    #[allow(
-        dead_code,
-        reason = "command sources use focus dispatch when native handlers are connected"
-    )]
+    #[cfg(test)]
     fn prepare_command_action(
-        &self,
+        &mut self,
         command: Command,
         origin: CommandOrigin,
-        window: &Window,
+        _window: &Window,
         cx: &mut Context<Self>,
     ) -> Result<CommandAction, CommandOutcome> {
-        self.prepare_command_action_with_completion(command, origin, None, window, cx)
-    }
-
-    fn prepare_command_action_with_completion(
-        &self,
-        command: Command,
-        origin: CommandOrigin,
-        completion: Option<CommandDispatchCompletion>,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) -> Result<CommandAction, CommandOutcome> {
-        if origin.focus.upgrade().is_none() {
-            return Err(CommandOutcome::InvalidTarget);
-        }
-        if origin.window != window.window_handle()
+        if origin.focus.upgrade().is_none()
             || !cx.windows().contains(&origin.window)
             || origin
                 .buffer
@@ -1386,6 +1412,7 @@ impl Shell {
             return Err(CommandOutcome::InvalidTarget);
         }
         Ok(CommandAction {
+            invocation: self.allocate_command_invocation(),
             command,
             context: CapturedInvocationContext {
                 window: origin.window,
@@ -1393,8 +1420,191 @@ impl Shell {
                 focus: origin.focus,
                 buffer: origin.buffer,
             },
-            completion,
         })
+    }
+
+    fn enqueue_command_child(
+        &mut self,
+        parent: CommandInvocationId,
+        command: Command,
+        caller: (ExtensionId, crate::host::protocol::ExtensionLifecycleId),
+        cx: &mut Context<Self>,
+    ) -> Result<ChildCommandAdmission, CommandOutcome> {
+        let Some(parent_node) = self.command_invocations.get(&parent) else {
+            return Err(CommandOutcome::Unavailable);
+        };
+        if parent_node.cancelled
+            || parent_node.handler_outcome.is_some()
+            || !parent_node.children.is_empty()
+            || !matches!(
+                parent_node.target,
+                InvocationTarget::Extension(target)
+                    if (target.extension, target.lifecycle) == caller
+            )
+        {
+            return Err(if parent_node.cancelled {
+                CommandOutcome::Cancelled
+            } else {
+                CommandOutcome::Unavailable
+            });
+        }
+        let target = match self.command_catalog.resolve(command.name.as_ref()) {
+            Ok(model::CommandTargetKind::Native) => InvocationTarget::Native,
+            Ok(model::CommandTargetKind::Extension(target)) => {
+                InvocationTarget::Extension(target)
+            }
+            Err(_) => return Err(CommandOutcome::Unavailable),
+        };
+        let same_runtime = matches!(
+            target,
+            InvocationTarget::Extension(target)
+                if (target.extension, target.lifecycle) == caller
+        );
+        let mut ancestor = Some(parent);
+        while let Some(id) = ancestor {
+            let node = self
+                .command_invocations
+                .get(&id)
+                .expect("command ancestry remains active");
+            if let InvocationTarget::Extension(ancestor_target) = node.target {
+                if let InvocationTarget::Extension(child_target) = target {
+                    let same_owner = (ancestor_target.extension, ancestor_target.lifecycle)
+                        == (child_target.extension, child_target.lifecycle);
+                    if same_owner
+                        && (!same_runtime
+                            || ancestor_target.registration == child_target.registration)
+                    {
+                        return Err(CommandOutcome::Unavailable);
+                    }
+                }
+            }
+            ancestor = node.parent;
+        }
+        let id = self.allocate_command_invocation();
+        let (completion, receiver) = CommandCompletion::new();
+        let context = self
+            .command_invocations
+            .get(&parent)
+            .expect("validated parent remains active")
+            .context
+            .clone();
+        self.command_invocations.insert(
+            id,
+            CommandInvocationNode {
+                command,
+                target,
+                context,
+                parent: Some(parent),
+                children: HashSet::new(),
+                completion,
+                handler_outcome: None,
+                started: same_runtime,
+                cancelled: false,
+            },
+        );
+        self.command_invocations
+            .get_mut(&parent)
+            .expect("validated parent remains active")
+            .children
+            .insert(id);
+        if same_runtime {
+            let InvocationTarget::Extension(target) = target else {
+                unreachable!();
+            };
+            Ok(ChildCommandAdmission::Inline {
+                invocation: id,
+                registration: target.registration,
+            })
+        } else {
+            self.start_command_invocation(id, cx);
+            Ok(ChildCommandAdmission::Await(CommandExecution {
+                id,
+                completion: receiver,
+            }))
+        }
+    }
+
+    fn start_next_command_root(&mut self, cx: &mut Context<Self>) {
+        if self.active_command_root.is_some() {
+            return;
+        }
+        let Some(id) = self.queued_command_roots.pop_front() else {
+            return;
+        };
+        self.active_command_root = Some(id);
+        self.start_command_invocation(id, cx);
+    }
+
+    fn start_command_invocation(&mut self, id: CommandInvocationId, cx: &mut Context<Self>) {
+        let Some(node) = self.command_invocations.get_mut(&id) else {
+            return;
+        };
+        if node.started {
+            return;
+        }
+        node.started = true;
+        self.command_state = "running".into();
+        self.command_outcome = None;
+        let action = CommandAction {
+            invocation: id,
+            command: node.command.clone(),
+            context: node.context.clone(),
+        };
+        let shell = cx.entity();
+        let window_handle = node.context.window;
+        cx.defer(move |cx| {
+            let shell_for_window = shell.clone();
+            let result = cx.update_window(window_handle, move |_, window, cx| {
+                if let Err(outcome) = action.dispatch(window, cx) {
+                    shell_for_window.update(cx, |shell, cx| {
+                        shell.finish_command_invocation(id, outcome, cx);
+                    });
+                }
+            });
+            if result.is_err() {
+                shell.update(cx, |shell, cx| {
+                    shell.finish_command_invocation(id, CommandOutcome::InvalidTarget, cx);
+                });
+            }
+        });
+        cx.notify();
+    }
+
+    fn start_extension_command(
+        &mut self,
+        id: CommandInvocationId,
+        target: model::CommandTarget,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(node) = self.command_invocations.get(&id) else {
+            return;
+        };
+        let Some(control) = self
+            .extension_controls
+            .get(&(target.extension, target.lifecycle))
+            .cloned()
+        else {
+            self.finish_command_invocation(id, CommandOutcome::Unavailable, cx);
+            return;
+        };
+        let execution = control.invoke_command(
+            CommandInvocation {
+                id,
+                registration: target.registration,
+                extension: target.extension,
+                lifecycle: target.lifecycle,
+                arguments: node.command.arguments.clone(),
+            },
+            node.context.buffer,
+        );
+        cx.spawn(async move |this, cx| {
+            let result = execution.await;
+            let _ = this.update(cx, |this, cx| {
+                let outcome = this.command_runtime_outcome(id, result);
+                this.finish_command_invocation(id, outcome, cx);
+            });
+        })
+        .detach();
     }
 
     fn on_command_action(
@@ -1406,47 +1616,22 @@ impl Shell {
         if self.handle_native_command(action, window, cx) {
             return;
         }
-        let Ok(target) = self
-            .command_catalog
-            .resolve_extension(action.command.name.as_ref())
-        else {
-            cx.propagate();
-            return;
-        };
-        if action
-            .completion
-            .as_ref()
-            .is_some_and(|completion| completion.caller == (target.extension, target.lifecycle))
+        match self
+            .command_invocations
+            .get(&action.invocation)
+            .map(|node| node.target)
         {
-            action.claim();
-            action.complete(CommandOutcome::Unavailable);
-            return;
-        }
-        action.claim();
-        let result = self.invoke_command_target(
-            target,
-            action.command.clone(),
-            CommandOrigin {
-                window: action.context.window,
-                focus: action.context.focus.clone(),
-                buffer: action.context.buffer,
-            },
-            cx,
-        );
-        match result {
-            Ok(execution) => {
-                if let Some(completion) = action.completion.clone() {
-                    cx.spawn(async move |_, _| {
-                        let outcome = execution
-                            .completion
-                            .await
-                            .unwrap_or(CommandOutcome::Unavailable);
-                        completion.complete(outcome);
-                    })
-                    .detach();
-                }
+            Some(InvocationTarget::Extension(target)) => {
+                self.start_extension_command(action.invocation, target, cx);
             }
-            Err(outcome) => action.complete(outcome),
+            Some(InvocationTarget::Native) => {
+                self.finish_command_invocation(
+                    action.invocation,
+                    CommandOutcome::Unavailable,
+                    cx,
+                );
+            }
+            None => cx.propagate(),
         }
     }
 
@@ -1456,32 +1641,69 @@ impl Shell {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if action.command.name.as_ref() != DIAGNOSTIC_COMMAND {
-            return false;
+        match action.command.name.as_ref() {
+            DIAGNOSTIC_COMMAND => {
+                self.record_command_diagnostic(
+                    action.invocation,
+                    CommandSurfaceKind::Shell,
+                    action.context.buffer.is_some(),
+                    cx,
+                );
+            }
+            FIXTURE_SEARCH_COMMAND => {
+                let CommandArgumentValue::String(query) = &action.command.arguments else {
+                    self.finish_command_invocation(
+                        action.invocation,
+                        CommandOutcome::InvalidArgument {
+                            message: "fixture search requires a string query".into(),
+                        },
+                        cx,
+                    );
+                    return true;
+                };
+                let outcome = action
+                    .context
+                    .buffer
+                    .and_then(|buffer| self.buffer_registry.resolve(buffer).ok())
+                    .and_then(|model| {
+                        self.open_buffers
+                            .entries()
+                            .find(|entry| entry.model() == &model)
+                            .map(|entry| (entry.id(), entry.title().clone(), model))
+                    })
+                    .map(|(source, title, model)| {
+                        let controller = SearchResultsController::search(
+                            query.clone(),
+                            source,
+                            &title,
+                            model,
+                            cx,
+                        );
+                        let result = self.open_buffers.add_search_results(controller);
+                        self.select_open_buffer(result, cx);
+                        CommandOutcome::Completed
+                    })
+                    .unwrap_or(CommandOutcome::InvalidTarget);
+                self.finish_command_invocation(action.invocation, outcome, cx);
+            }
+            _ => return false,
         }
-        action.claim();
-        self.record_command_diagnostic(
-            CommandSurfaceKind::Shell,
-            action.context.buffer.is_some(),
-            cx,
-        );
-        action.complete(CommandOutcome::Completed);
         true
     }
 
     fn record_command_diagnostic(
         &mut self,
+        invocation: CommandInvocationId,
         surface: CommandSurfaceKind,
         has_buffer: bool,
         cx: &mut Context<Self>,
     ) {
-        let invocation = self.allocate_command_invocation();
         self.command_diagnostic = Some(CommandDiagnostic {
             invocation,
             surface,
             has_buffer,
         });
-        self.record_command_outcome(CommandOutcome::Completed, cx);
+        self.finish_command_invocation(invocation, CommandOutcome::Completed, cx);
     }
 
     fn open_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1574,35 +1796,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         self.clear_transient_keymap(cx);
-        let shell = cx.entity();
-        let window_handle = origin.window;
-        cx.defer(move |cx| {
-            let shell_for_window = shell.clone();
-            let result = cx.update_window(window_handle, move |_, window, cx| {
-                let prepared = shell_for_window.update(cx, |shell, cx| {
-                    shell.prepare_command_action(command, origin, window, cx)
-                });
-                match prepared {
-                    Ok(action) => {
-                        if let Err(outcome) = action.dispatch(window, cx) {
-                            shell_for_window.update(cx, |shell, cx| {
-                                shell.record_command_outcome(outcome, cx);
-                            });
-                        }
-                    }
-                    Err(outcome) => {
-                        shell_for_window.update(cx, |shell, cx| {
-                            shell.record_command_outcome(outcome, cx);
-                        });
-                    }
-                }
-            });
-            if result.is_err() {
-                shell.update(cx, |shell, cx| {
-                    shell.record_command_outcome(CommandOutcome::InvalidTarget, cx);
-                });
-            }
-        });
+        let _ = self.enqueue_command_root(command, origin, None, cx);
     }
 
     fn command_origin(&self, window: &Window, cx: &App) -> Option<CommandOrigin> {
@@ -1627,17 +1821,16 @@ impl Shell {
         id
     }
 
-    fn finish_command(
-        &mut self,
+    fn command_runtime_outcome(
+        &self,
         invocation: CommandInvocationId,
         result: Result<(), crate::host::ExtensionRuntimeExecutionError>,
-        cx: &mut Context<Self>,
-    ) -> Option<CommandOutcome> {
-        if self.active_command.as_ref().map(|command| command.id) != Some(invocation) {
-            return None;
-        }
-        self.active_command = None;
-        let outcome = if self.cancelled_commands.remove(&invocation) {
+    ) -> CommandOutcome {
+        if self
+            .command_invocations
+            .get(&invocation)
+            .is_none_or(|node| node.cancelled)
+        {
             CommandOutcome::Cancelled
         } else {
             match result {
@@ -1653,9 +1846,70 @@ impl Shell {
                     message: format!("{error:?}"),
                 },
             }
+        }
+    }
+
+    fn finish_command_invocation(
+        &mut self,
+        invocation: CommandInvocationId,
+        outcome: CommandOutcome,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(node) = self.command_invocations.get_mut(&invocation) else {
+            return;
         };
-        self.record_command_outcome(outcome.clone(), cx);
-        Some(outcome)
+        if node.handler_outcome.is_some() {
+            return;
+        }
+        node.handler_outcome = Some(if node.cancelled {
+            CommandOutcome::Cancelled
+        } else {
+            outcome
+        });
+        let unfinished_children = node.children.iter().copied().collect::<Vec<_>>();
+        if !unfinished_children.is_empty() {
+            for child in unfinished_children {
+                self.cancel_command_subtree(child);
+            }
+            return;
+        }
+        self.settle_command_invocation(invocation, cx);
+    }
+
+    fn settle_command_invocation(
+        &mut self,
+        invocation: CommandInvocationId,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(node) = self.command_invocations.remove(&invocation) else {
+            return;
+        };
+        let outcome = node
+            .handler_outcome
+            .unwrap_or(if node.cancelled {
+                CommandOutcome::Cancelled
+            } else {
+                CommandOutcome::Unavailable
+            });
+        node.completion.complete(outcome.clone());
+        if let Some(parent) = node.parent {
+            let parent_ready = self
+                .command_invocations
+                .get_mut(&parent)
+                .is_some_and(|parent| {
+                    parent.children.remove(&invocation);
+                    parent.children.is_empty() && parent.handler_outcome.is_some()
+                });
+            if parent_ready {
+                self.settle_command_invocation(parent, cx);
+            }
+        } else if self.active_command_root == Some(invocation) {
+            self.active_command_root = None;
+            self.record_command_outcome(outcome, cx);
+            self.start_next_command_root(cx);
+        } else {
+            self.queued_command_roots.retain(|queued| *queued != invocation);
+        }
     }
 
     fn record_command_outcome(&mut self, outcome: CommandOutcome, cx: &mut Context<Self>) {
@@ -1673,10 +1927,58 @@ impl Shell {
     }
 
     fn cancel_active_command(&mut self, cx: &mut Context<Self>) {
-        if let Some(command) = &self.active_command {
-            self.cancelled_commands.insert(command.id);
+        if let Some(root) = self.active_command_root {
+            self.cancel_command_subtree(root);
             self.command_state = "cancelling".into();
             cx.notify();
+        }
+    }
+
+    fn cancel_command_subtree(&mut self, invocation: CommandInvocationId) {
+        let Some(node) = self.command_invocations.get_mut(&invocation) else {
+            return;
+        };
+        if node.cancelled {
+            return;
+        }
+        node.cancelled = true;
+        let children = node.children.iter().copied().collect::<Vec<_>>();
+        if let InvocationTarget::Extension(target) = node.target {
+            if let Some(control) = self
+                .extension_controls
+                .get(&(target.extension, target.lifecycle))
+            {
+                let _ = control.cancel_command(invocation);
+            }
+        }
+        for child in children {
+            self.cancel_command_subtree(child);
+        }
+    }
+
+    fn cancel_command_lifecycle(
+        &mut self,
+        extension: ExtensionId,
+        lifecycle: crate::host::protocol::ExtensionLifecycleId,
+        cx: &mut Context<Self>,
+    ) {
+        let affected = self
+            .command_invocations
+            .iter()
+            .filter_map(|(id, node)| {
+                matches!(
+                    node.target,
+                    InvocationTarget::Extension(target)
+                        if target.extension == extension && target.lifecycle == lifecycle
+                )
+                .then_some(*id)
+            })
+            .collect::<Vec<_>>();
+        for invocation in &affected {
+            self.cancel_command_subtree(*invocation);
+        }
+        for invocation in affected {
+            self.finish_command_invocation(invocation, CommandOutcome::Cancelled, cx);
         }
     }
 
@@ -1807,6 +2109,11 @@ impl Shell {
 
 impl Drop for Shell {
     fn drop(&mut self) {
+        for (_, invocation) in self.command_invocations.drain() {
+            invocation.completion.complete(CommandOutcome::Cancelled);
+        }
+        self.queued_command_roots.clear();
+        self.active_command_root = None;
         for control in self.extension_controls.values() {
             control.request_shutdown();
         }
@@ -3150,7 +3457,9 @@ mod tests {
     }
 
     #[gpui::test]
-    async fn extension_handler_cannot_invoke_another_command(cx: &mut TestAppContext) {
+    async fn extension_command_awaits_cross_extension_edit_then_native_search(
+        cx: &mut TestAppContext,
+    ) {
         let host = V8Host::new();
         let (shell, cx) = cx.add_window_view(|_, cx| {
             Shell::new_with_runtimes(
@@ -3164,16 +3473,21 @@ mod tests {
         let caller = runtime_control(&shell, ExtensionId::new(58), cx);
         caller
             .execute_fixture_module(
-                "file:///fixtures/nested-command.js",
+                "file:///fixtures/composed-command.js",
                 r#"
                     import { commands } from "knot:editor";
-                    await commands.register("knot.fixture.nested", async () => {
-                      const outcome = await commands.invoke(
+                    await commands.register("knot.fixture.composed", async () => {
+                      const edit = await commands.invoke(
                         "knot.fixture.edit",
-                        "// nested command\n",
+                        "KNOT_STEP_11B_MARKER\n",
                       );
-                      if (outcome.kind !== "unavailable") {
-                        throw new Error(`unexpected nested outcome: ${outcome.kind}`);
+                      if (edit.kind !== "completed") return;
+                      const search = await commands.invoke(
+                        "knot.fixture.search",
+                        "KNOT_STEP_11B_MARKER",
+                      );
+                      if (search.kind !== "completed") {
+                        throw new Error(`unexpected search outcome: ${search.kind}`);
                       }
                     });
                 "#,
@@ -3185,7 +3499,7 @@ mod tests {
             let shell = shell.read(cx);
             let target = shell
                 .command_catalog
-                .resolve_extension("knot.fixture.nested")
+                .resolve_extension("knot.fixture.composed")
                 .unwrap();
             let text = shell
                 .editor
@@ -3194,20 +3508,357 @@ mod tests {
                 .read_with(cx, |model, _| model.text());
             (target, text)
         });
-        invoke_extension_target_in_window(&shell, target, "knot.fixture.nested", cx);
+        invoke_extension_target_in_window(&shell, target, "knot.fixture.composed", cx);
         wait_for_command_state(&shell, "completed", cx).await;
 
-        let (outcome, text) = cx.read(|cx| {
+        let (outcome, text, title, result_text) = cx.read(|cx| {
             let shell = shell.read(cx);
-            let text = shell
+            let source_text = shell
                 .editor
                 .read(cx)
                 .model()
                 .read_with(cx, |model, _| model.text());
-            (shell.command_outcome.clone(), text)
+            let selected = shell.open_buffers.selected().unwrap();
+            let result_text = selected.model().read_with(cx, |model, _| model.text());
+            (
+                shell.command_outcome.clone(),
+                source_text,
+                selected.title().to_string(),
+                result_text,
+            )
         });
         assert_eq!(outcome, Some(CommandOutcome::Completed));
-        assert_eq!(text, initial_text);
+        assert!(text.starts_with("KNOT_STEP_11B_MARKER\n"));
+        assert_ne!(text, initial_text);
+        assert_eq!(title, "Search: \"KNOT_STEP_11B_MARKER\"");
+        assert!(result_text.contains("KNOT_STEP_11B_MARKER"));
+    }
+
+    #[gpui::test]
+    async fn same_extension_commands_execute_inline_and_reject_recursive_cycles(
+        cx: &mut TestAppContext,
+    ) {
+        let runtime = V8Host::new()
+            .spawn_extension(ExtensionId::new(82))
+            .into_parts();
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(runtime, cx));
+        wait_for_runtime_state(&shell, "running", cx).await;
+        let control = only_runtime_control(&shell, cx);
+        control
+            .execute_fixture_module(
+                "file:///fixtures/inline-composition.js",
+                r#"
+                    import { commands } from "knot:editor";
+                    globalThis.inlineCompositionEvents = [];
+                    await commands.register("knot.fixture.inline-child", async () => {
+                      globalThis.inlineCompositionEvents.push("child-before");
+                      await globalThis.__knotFixtureDelay(25);
+                      globalThis.inlineCompositionEvents.push("child-after");
+                    });
+                    await commands.register("knot.fixture.inline-recursive", async () => {
+                      globalThis.recursiveCycle = await commands.invoke(
+                        "knot.fixture.inline-recursive",
+                        null,
+                      );
+                    });
+                    await commands.register("knot.fixture.inline-wrapper", async () => {
+                      globalThis.inlineCompositionEvents.push("parent-before");
+                      const child = await commands.invoke("knot.fixture.inline-child", null);
+                      globalThis.inlineCompositionEvents.push(`child-${child.kind}`);
+                      const recursive = await commands.invoke(
+                        "knot.fixture.inline-recursive",
+                        null,
+                      );
+                      globalThis.inlineCompositionEvents.push(`recursive-${recursive.kind}`);
+                      globalThis.inlineCompositionEvents.push("parent-after");
+                    });
+                "#,
+            )
+            .await
+            .unwrap();
+        let target = cx.read(|cx| {
+            shell
+                .read(cx)
+                .command_catalog
+                .resolve_extension("knot.fixture.inline-wrapper")
+                .unwrap()
+        });
+        invoke_extension_target_in_window(&shell, target, "knot.fixture.inline-wrapper", cx);
+        wait_for_command_state(&shell, "completed", cx).await;
+
+        control
+            .execute_fixture_script(
+                "verify-inline-composition.js",
+                r#"
+                    const expected = [
+                      "parent-before", "child-before", "child-after", "child-completed",
+                      "recursive-completed", "parent-after",
+                    ];
+                    if (globalThis.inlineCompositionEvents.join(",") !== expected.join(",")) {
+                      throw new Error(`unexpected inline events: ${globalThis.inlineCompositionEvents}`);
+                    }
+                    if (globalThis.recursiveCycle?.kind !== "unavailable") {
+                      throw new Error(`unexpected recursive cycle: ${globalThis.recursiveCycle?.kind}`);
+                    }
+                "#,
+            )
+            .await
+            .unwrap();
+    }
+
+    #[gpui::test]
+    async fn cross_extension_cycle_is_unavailable_without_deadlocking_the_root(
+        cx: &mut TestAppContext,
+    ) {
+        let host = V8Host::new();
+        let (shell, cx) = cx.add_window_view(|_, cx| {
+            Shell::new_with_runtimes(
+                [ExtensionId::new(83), ExtensionId::new(84)]
+                    .map(|extension| host.spawn_extension(extension).into_parts())
+                    .into(),
+                cx,
+            )
+        });
+        wait_for_runtime_state(&shell, "running", cx).await;
+        let second = runtime_control(&shell, ExtensionId::new(84), cx);
+        second
+            .execute_fixture_module(
+                "file:///fixtures/cycle-child.js",
+                r#"
+                    import { commands } from "knot:editor";
+                    await commands.register("knot.fixture.cycle-child", async () => {
+                      globalThis.cycleOutcome = await commands.invoke("knot.fixture.edit", null);
+                    });
+                "#,
+            )
+            .await
+            .unwrap();
+        let first = runtime_control(&shell, ExtensionId::new(83), cx);
+        first
+            .execute_fixture_module(
+                "file:///fixtures/cycle-root.js",
+                r#"
+                    import { commands } from "knot:editor";
+                    await commands.register("knot.fixture.cycle-root", async () => {
+                      const child = await commands.invoke("knot.fixture.cycle-child", null);
+                      if (child.kind !== "completed") throw new Error(child.kind);
+                    });
+                "#,
+            )
+            .await
+            .unwrap();
+        let target = cx.read(|cx| {
+            shell
+                .read(cx)
+                .command_catalog
+                .resolve_extension("knot.fixture.cycle-root")
+                .unwrap()
+        });
+        invoke_extension_target_in_window(&shell, target, "knot.fixture.cycle-root", cx);
+        wait_for_command_state(&shell, "completed", cx).await;
+        second
+            .execute_fixture_script(
+                "verify-cycle.js",
+                r#"
+                    if (globalThis.cycleOutcome?.kind !== "unavailable") {
+                      throw new Error(`unexpected cycle outcome: ${globalThis.cycleOutcome?.kind}`);
+                    }
+                "#,
+            )
+            .await
+            .unwrap();
+    }
+
+    #[gpui::test]
+    async fn unsuccessful_child_only_controls_composition_when_javascript_branches_on_it(
+        cx: &mut TestAppContext,
+    ) {
+        let host = V8Host::new();
+        let (shell, cx) = cx.add_window_view(|_, cx| {
+            Shell::new_with_runtimes(
+                [ExtensionId::new(85), ExtensionId::new(86)]
+                    .map(|extension| host.spawn_extension(extension).into_parts())
+                    .into(),
+                cx,
+            )
+        });
+        wait_for_runtime_state(&shell, "running", cx).await;
+        let owner = runtime_control(&shell, ExtensionId::new(85), cx);
+        owner
+            .execute_fixture_module(
+                "file:///fixtures/failing-child.js",
+                r#"
+                    import { commands } from "knot:editor";
+                    await commands.register("knot.fixture.failing-child", () => {
+                      throw new Error("expected child failure");
+                    });
+                "#,
+            )
+            .await
+            .unwrap();
+        let caller = runtime_control(&shell, ExtensionId::new(86), cx);
+        caller
+            .execute_fixture_module(
+                "file:///fixtures/failure-composition.js",
+                r#"
+                    import { commands } from "knot:editor";
+                    await commands.register("knot.fixture.stop-after-failure", async () => {
+                      const child = await commands.invoke("knot.fixture.failing-child", null);
+                      if (child.kind !== "completed") return;
+                      await commands.invoke("knot.fixture.search", "Node");
+                    });
+                    await commands.register("knot.fixture.continue-after-failure", async () => {
+                      const child = await commands.invoke("knot.fixture.failing-child", null);
+                      globalThis.observedFailure = child.kind;
+                      await commands.invoke("knot.fixture.search", "Node");
+                    });
+                "#,
+            )
+            .await
+            .unwrap();
+
+        for (name, expected_buffers) in [
+            ("knot.fixture.stop-after-failure", 1),
+            ("knot.fixture.continue-after-failure", 2),
+        ] {
+            let target = cx.read(|cx| {
+                shell
+                    .read(cx)
+                    .command_catalog
+                    .resolve_extension(name)
+                    .unwrap()
+            });
+            invoke_extension_target_in_window(&shell, target, name, cx);
+            wait_for_command_state(&shell, "completed", cx).await;
+            assert_eq!(
+                cx.read(|cx| shell.read(cx).open_buffers.entries().count()),
+                expected_buffers
+            );
+        }
+        caller
+            .execute_fixture_script(
+                "verify-observed-failure.js",
+                r#"
+                    if (globalThis.observedFailure !== "handlerFailure") {
+                      throw new Error(`unexpected child failure: ${globalThis.observedFailure}`);
+                    }
+                "#,
+            )
+            .await
+            .unwrap();
+    }
+
+    #[gpui::test]
+    async fn cancelling_root_aborts_child_skips_remaining_sequence_and_releases_queue(
+        cx: &mut TestAppContext,
+    ) {
+        let host = V8Host::new();
+        let (shell, cx) = cx.add_window_view(|_, cx| {
+            Shell::new_with_runtimes(
+                [ExtensionId::new(87), ExtensionId::new(88)]
+                    .map(|extension| host.spawn_extension(extension).into_parts())
+                    .into(),
+                cx,
+            )
+        });
+        wait_for_runtime_state(&shell, "running", cx).await;
+        let child_owner = runtime_control(&shell, ExtensionId::new(87), cx);
+        child_owner
+            .execute_fixture_module(
+                "file:///fixtures/cancellable-child.js",
+                r#"
+                    import { commands } from "knot:editor";
+                    await commands.register("knot.fixture.cancellable-child", async (context) => {
+                      await new Promise((resolve) => context.signal.addEventListener("abort", resolve));
+                      try {
+                        const snapshot = await context.buffer.snapshot();
+                        await context.buffer.applyEdits(
+                          [{ range: { startByteOffset: 0, endByteOffset: 0 }, text: "late-child\n" }],
+                          { ifRevision: snapshot.revision },
+                        );
+                      } catch (error) {
+                        globalThis.cancelledChildMutation = error.name;
+                      }
+                    });
+                "#,
+            )
+            .await
+            .unwrap();
+        let parent_owner = runtime_control(&shell, ExtensionId::new(88), cx);
+        parent_owner
+            .execute_fixture_module(
+                "file:///fixtures/cancellable-root.js",
+                r#"
+                    import { commands } from "knot:editor";
+                    await commands.register("knot.fixture.cancellable-root", async () => {
+                      const child = await commands.invoke("knot.fixture.cancellable-child", null);
+                      if (child.kind === "completed") {
+                        await commands.invoke("knot.fixture.search", "late-child");
+                      }
+                    });
+                    await commands.register("knot.fixture.after-cancel", () => {
+                      globalThis.afterCancellationRan = true;
+                    });
+                "#,
+            )
+            .await
+            .unwrap();
+        let initial_text = cx.read(|cx| shell.read(cx).editor.read(cx).model().read(cx).text());
+        let (root, queued) = shell.update_in(cx, |shell, window, cx| {
+            let focus = shell.editor.focus_handle(cx);
+            window.focus(&focus);
+            let origin = super::CommandOrigin {
+                window: window.window_handle(),
+                focus: focus.downgrade(),
+                buffer: shell.buffer_registry.active_handle(),
+            };
+            let root = shell.enqueue_command_root(
+                Command {
+                    name: "knot.fixture.cancellable-root".into(),
+                    arguments: CommandArgumentValue::Null,
+                },
+                origin.clone(),
+                None,
+                cx,
+            );
+            let queued = shell.enqueue_command_root(
+                Command {
+                    name: "knot.fixture.after-cancel".into(),
+                    arguments: CommandArgumentValue::Null,
+                },
+                origin,
+                None,
+                cx,
+            );
+            (root, queued)
+        });
+        while cx.read(|cx| shell.read(cx).command_invocations.len() < 3) {
+            shell.next_notification(Duration::ZERO, cx).await;
+        }
+        shell.update(cx, |shell, cx| shell.cancel_active_command(cx));
+
+        assert_eq!(root.completion.await.unwrap(), CommandOutcome::Cancelled);
+        assert_eq!(queued.completion.await.unwrap(), CommandOutcome::Completed);
+        assert_eq!(
+            cx.read(|cx| shell.read(cx).editor.read(cx).model().read(cx).text()),
+            initial_text
+        );
+        assert_eq!(
+            cx.read(|cx| shell.read(cx).open_buffers.entries().count()),
+            1,
+            "the cancelled parent must not run its remaining native child"
+        );
+        parent_owner
+            .execute_fixture_script(
+                "verify-root-queue-after-cancel.js",
+                r#"
+                    if (!globalThis.afterCancellationRan) {
+                      throw new Error("queued root did not run after cancellation");
+                    }
+                "#,
+            )
+            .await
+            .unwrap();
     }
 
     #[gpui::test]
@@ -3796,7 +4447,7 @@ mod tests {
     }
 
     #[gpui::test]
-    async fn commands_retain_context_with_monotonic_identities_and_reject_overlap(
+    async fn commands_retain_context_with_monotonic_identities_and_queue_roots_fifo(
         cx: &mut TestAppContext,
     ) {
         let runtime = V8Host::new()
@@ -3833,11 +4484,14 @@ mod tests {
         invoke_extension_target_in_window(&shell, target, "knot.fixture.slow", cx);
         let window = cx.window_handle();
         cx.read(|cx| {
-            let command = shell.read(cx).active_command.as_ref().unwrap();
-            assert_eq!(command.id, CommandInvocationId::new(1));
+            let shell_state = shell.read(cx);
+            let command = shell_state
+                .command_invocations
+                .get(&shell_state.active_command_root.unwrap())
+                .unwrap();
             assert_eq!(command.command.name, "knot.fixture.slow".into());
             assert_eq!(command.command.arguments, CommandArgumentValue::Null);
-            assert_eq!(command.target, target);
+            assert_eq!(command.target, super::InvocationTarget::Extension(target));
             assert!(command.context.window == window);
             assert_eq!(command.context.buffer, buffer);
             assert_eq!(command.context.workspace.upgrade(), Some(shell.clone()));
@@ -3847,33 +4501,18 @@ mod tests {
         invoke_extension_target_in_window(&shell, target, "knot.fixture.slow", cx);
         cx.read(|cx| {
             let shell = shell.read(cx);
+            assert_eq!(shell.active_command_root, Some(CommandInvocationId::new(1)));
             assert_eq!(
-                shell.active_command.as_ref().map(|command| command.id),
-                Some(CommandInvocationId::new(1))
+                shell.queued_command_roots.iter().copied().collect::<Vec<_>>(),
+                vec![CommandInvocationId::new(2)]
             );
-            assert_eq!(shell.next_command_invocation, 2);
+            assert_eq!(shell.next_command_invocation, 3);
         });
         wait_for_command_state(&shell, "completed", cx).await;
         control
             .execute_fixture_script(
-                "verify-single-command.js",
-                "if (globalThis.slowCommandRuns !== 1) throw new Error('overlapping command ran')",
-            )
-            .await
-            .unwrap();
-
-        invoke_extension_target_in_window(&shell, target, "knot.fixture.slow", cx);
-        cx.read(|cx| {
-            let command = shell.read(cx).active_command.as_ref().unwrap();
-            assert_eq!(command.id, CommandInvocationId::new(2));
-            assert_eq!(command.target, target);
-            assert_eq!(command.context.buffer, buffer);
-        });
-        wait_for_command_state(&shell, "completed", cx).await;
-        control
-            .execute_fixture_script(
-                "verify-second-command.js",
-                "if (globalThis.slowCommandRuns !== 2) throw new Error('second command did not run')",
+                "verify-queued-commands.js",
+                "if (globalThis.slowCommandRuns !== 2) throw new Error('queued roots did not both run')",
             )
             .await
             .unwrap();
@@ -3932,7 +4571,10 @@ mod tests {
 
         cx.read(|cx| {
             let shell = shell.read(cx);
-            let command = shell.active_command.as_ref().unwrap();
+            let command = shell
+                .command_invocations
+                .get(&shell.active_command_root.unwrap())
+                .unwrap();
             assert_eq!(command.context.buffer, Some(captured_handle));
             assert_eq!(
                 shell.buffer_registry.active_handle(),
@@ -4074,8 +4716,11 @@ mod tests {
         invoke_extension_target_in_window(&shell, target, "knot.fixture.context-validation", cx);
 
         shell.update_in(cx, |shell, _window, cx| {
-            let command = shell.active_command.as_ref().unwrap().clone();
+            let command_id = shell.active_command_root.unwrap();
+            let command = shell.command_invocations.get(&command_id).unwrap();
             let buffer = command.context.buffer.unwrap();
+            let live_focus = command.context.focus.clone();
+            let live_workspace = command.context.workspace.clone();
             let revision = shell
                 .buffer_registry
                 .resolve(buffer)
@@ -4085,7 +4730,7 @@ mod tests {
                 extension: target.extension,
                 lifecycle: target.lifecycle,
                 id: RequestId::new(1),
-                invocation: Some(command.id),
+                invocation: Some(command_id),
                 operation: HostOperation::ApplyEdits {
                     buffer,
                     edits: Vec::new(),
@@ -4108,32 +4753,40 @@ mod tests {
                 Err(HostRequestError::Cancelled)
             );
 
-            shell.cancelled_commands.insert(command.id);
+            shell.command_invocations.get_mut(&command_id).unwrap().cancelled = true;
             assert_eq!(
                 shell.validate_command_mutation(&request, cx),
                 Err(HostRequestError::Cancelled)
             );
-            shell.cancelled_commands.remove(&command.id);
+            shell.command_invocations.get_mut(&command_id).unwrap().cancelled = false;
 
-            let live_focus = command.context.focus.clone();
             let dead_focus = {
                 let focus = cx.focus_handle();
                 focus.downgrade()
             };
-            shell.active_command.as_mut().unwrap().context.focus = dead_focus;
+            shell.command_invocations.get_mut(&command_id).unwrap().context.focus = dead_focus;
             assert_eq!(
                 shell.validate_command_mutation(&request, cx),
                 Err(HostRequestError::Cancelled)
             );
-            shell.active_command.as_mut().unwrap().context.focus = live_focus;
+            shell.command_invocations.get_mut(&command_id).unwrap().context.focus = live_focus;
 
-            let live_workspace = command.context.workspace.clone();
-            shell.active_command.as_mut().unwrap().context.workspace = WeakEntity::new_invalid();
+            shell
+                .command_invocations
+                .get_mut(&command_id)
+                .unwrap()
+                .context
+                .workspace = WeakEntity::new_invalid();
             assert_eq!(
                 shell.validate_command_mutation(&request, cx),
                 Err(HostRequestError::Cancelled)
             );
-            shell.active_command.as_mut().unwrap().context.workspace = live_workspace;
+            shell
+                .command_invocations
+                .get_mut(&command_id)
+                .unwrap()
+                .context
+                .workspace = live_workspace;
 
             shell.close_buffer(buffer, cx);
             assert_eq!(
@@ -4327,7 +4980,6 @@ mod tests {
                 .resolve(buffer)
                 .unwrap()
                 .read_with(cx, |model, _| model.revision());
-            shell.cancelled_commands.insert(invocation);
             shell.dispatch_host_request(
                 HostRequest {
                     extension,
