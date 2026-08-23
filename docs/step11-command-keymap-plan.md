@@ -191,7 +191,7 @@ continues propagation.
 - ✅ Choose one argument-bearing fixture operation and invoke the identical
   command value from a keybinding, the palette fixture entry, and a top-level
   script.
-- ⬜ Confirm all three sources reach the same handler with equal arguments and
+- ✅ Confirm all three sources reach the same handler with equal arguments and
   equivalent captured semantic context.
 - ⬜ Keep the cross-surface diagnostic separate so the argument-bearing
   operation does not need contrived editor, tree, and terminal semantics.

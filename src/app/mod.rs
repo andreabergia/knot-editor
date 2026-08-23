@@ -76,6 +76,7 @@ if (!globalThis.knotActiveBuffer) {
   throw new Error("Knot has no active editor buffer");
 }
 globalThis.knotFixtureEvents = [];
+globalThis.knotFixtureCommandInvocations = [];
 await globalThis.knotActiveBuffer.onDidChange((event) => {
   globalThis.knotFixtureEvents.push({
     beforeRevision: event.beforeRevision,
@@ -85,6 +86,10 @@ await globalThis.knotActiveBuffer.onDidChange((event) => {
 });
 await commands.register("knot.fixture.edit", async (context) => {
   if (!context.buffer) throw new Error("Knot has no active editor buffer");
+  globalThis.knotFixtureCommandInvocations.push({
+    arguments: context.arguments,
+    capturedActiveBuffer: context.buffer === globalThis.knotActiveBuffer,
+  });
   context.signal.addEventListener("abort", () => {
     globalThis.knotFixtureCommandAborted = true;
   });
@@ -2903,6 +2908,29 @@ mod tests {
         }
     }
 
+    async fn wait_for_editor_text(shell: &Entity<Shell>, expected: &str, cx: &mut TestAppContext) {
+        while cx.read(|cx| shell.read(cx).editor.read(cx).model().read(cx).text() != expected) {
+            shell.next_notification(Duration::ZERO, cx).await;
+        }
+    }
+
+    fn top_level_fixture_command_source() -> String {
+        r#"
+            import { commands } from "knot:editor";
+            const outcome = await commands.invoke(
+              "knot.fixture.edit",
+              __FIXTURE_EDIT_ARGUMENT__,
+            );
+            if (outcome.kind !== "completed") {
+              throw new Error(`unexpected command outcome: ${outcome.kind}`);
+            }
+        "#
+        .replace(
+            "__FIXTURE_EDIT_ARGUMENT__",
+            &serde_json::to_string(FIXTURE_EDIT_ARGUMENT).unwrap(),
+        )
+    }
+
     async fn wait_for_tree_error(shell: &Entity<Shell>, cx: &mut TestAppContext) {
         let outline = cx.read(|cx| shell.read(cx).outline.clone());
         while cx.read(|cx| outline.read(cx).lifecycle_state().3 == 0) {
@@ -3024,23 +3052,12 @@ mod tests {
             window.focus(&shell.editor.focus_handle(cx));
         });
         let caller = runtime_control(&shell, ExtensionId::new(56), cx);
-        let source = r#"
-                import { commands } from "knot:editor";
-                const outcome = await commands.invoke(
-                  "knot.fixture.edit",
-                  __FIXTURE_EDIT_ARGUMENT__,
-                );
-                if (outcome.kind !== "completed") {
-                  throw new Error(`unexpected command outcome: ${outcome.kind}`);
-                }
-            "#
-        .replace(
-            "__FIXTURE_EDIT_ARGUMENT__",
-            &serde_json::to_string(FIXTURE_EDIT_ARGUMENT).unwrap(),
-        );
 
         caller
-            .execute_fixture_module("file:///fixtures/top-level-command.js", source)
+            .execute_fixture_module(
+                "file:///fixtures/top-level-command.js",
+                top_level_fixture_command_source(),
+            )
             .await
             .unwrap();
 
@@ -3053,6 +3070,78 @@ mod tests {
                 .read_with(cx, |model, _| model.text())
         });
         assert!(text.starts_with(FIXTURE_EDIT_ARGUMENT));
+    }
+
+    #[gpui::test]
+    async fn command_sources_reach_one_handler_with_equal_arguments_and_buffer_context(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(|cx| cx.bind_keys(super::fixed_command_bindings()));
+        let host = V8Host::new();
+        let (shell, cx) = cx.add_window_view(|_, cx| {
+            Shell::new_with_runtimes(
+                [ExtensionId::new(59), ExtensionId::new(60)]
+                    .map(|extension| host.spawn_extension(extension).into_parts())
+                    .into(),
+                cx,
+            )
+        });
+        wait_for_runtime_state(&shell, "running", cx).await;
+        let initial_text = cx.read(|cx| shell.read(cx).editor.read(cx).model().read(cx).text());
+
+        shell.update_in(cx, |shell, window, cx| {
+            window.focus(&shell.editor.focus_handle(cx));
+        });
+        cx.refresh().unwrap();
+        cx.simulate_keystrokes("ctrl-alt-e");
+        let one_edit = format!("{FIXTURE_EDIT_ARGUMENT}{initial_text}");
+        wait_for_editor_text(&shell, &one_edit, cx).await;
+
+        shell.update_in(cx, |shell, window, cx| {
+            window.focus(&shell.editor.focus_handle(cx));
+            shell.open_command_palette(window, cx);
+        });
+        cx.refresh().unwrap();
+        cx.simulate_keystrokes("f i x t u r e . e d i t enter");
+        let two_edits = format!("{FIXTURE_EDIT_ARGUMENT}{one_edit}");
+        wait_for_editor_text(&shell, &two_edits, cx).await;
+
+        shell.update_in(cx, |shell, window, cx| {
+            window.focus(&shell.editor.focus_handle(cx));
+        });
+        let script = runtime_control(&shell, ExtensionId::new(60), cx);
+        script
+            .execute_fixture_module(
+                "file:///fixtures/equivalent-command-source.js",
+                top_level_fixture_command_source(),
+            )
+            .await
+            .unwrap();
+
+        let owner = runtime_control(&shell, ExtensionId::new(59), cx);
+        let verification = r#"
+                const expected = __FIXTURE_EDIT_ARGUMENT__;
+                const invocations = globalThis.knotFixtureCommandInvocations;
+                if (invocations.length !== 3) {
+                  throw new Error(`expected three invocations, got ${invocations.length}`);
+                }
+                if (!invocations.every((entry) =>
+                  entry.arguments === expected && entry.capturedActiveBuffer
+                )) {
+                  throw new Error("command sources did not preserve arguments and buffer context");
+                }
+            "#
+        .replace(
+            "__FIXTURE_EDIT_ARGUMENT__",
+            &serde_json::to_string(FIXTURE_EDIT_ARGUMENT).unwrap(),
+        );
+        owner
+            .execute_fixture_script("verify-equivalent-command-sources.js", verification)
+            .await
+            .unwrap();
+
+        let final_text = cx.read(|cx| shell.read(cx).editor.read(cx).model().read(cx).text());
+        assert_eq!(final_text, format!("{FIXTURE_EDIT_ARGUMENT}{two_edits}"));
     }
 
     #[gpui::test]
