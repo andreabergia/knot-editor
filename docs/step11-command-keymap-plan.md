@@ -208,13 +208,13 @@ behind the calling script; reentrant and same-runtime scheduling remain step
 
 ### 7. Validate suspended-target rejection
 
-- ⬜ Invoke one existing asynchronous extension fixture command against a
+- ✅ Invoke one existing asynchronous extension fixture command against a
   captured buffer, suspend it on an already-supported host wait, then close or
   invalidate the target before it attempts mutation.
-- ⬜ Confirm the late mutation is rejected rather than applied to the newly
+- ✅ Confirm the late mutation is rejected rather than applied to the newly
   focused or active buffer.
-- ⬜ Confirm the foreground remains responsive while the extension waits.
-- ⬜ Do not add general concurrent invocation, nested invocation, result
+- ✅ Confirm the foreground remains responsive while the extension waits.
+- ✅ Do not add general concurrent invocation, nested invocation, result
   pipelines, or cancellation trees in this step.
 
 ### 8. Record the decision

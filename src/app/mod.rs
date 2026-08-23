@@ -3956,6 +3956,95 @@ mod tests {
     }
 
     #[gpui::test]
+    async fn suspended_command_rejects_a_late_mutation_after_its_target_closes(
+        cx: &mut TestAppContext,
+    ) {
+        let runtime = V8Host::new()
+            .spawn_extension(ExtensionId::new(61))
+            .into_parts();
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(runtime, cx));
+        wait_for_runtime_state(&shell, "running", cx).await;
+        let control = only_runtime_control(&shell, cx);
+        control
+            .execute_fixture_module(
+                "file:///fixtures/suspended-target-command.js",
+                r#"
+                    import { commands } from "knot:editor";
+                    await commands.register("knot.fixture.suspended-target", async (context) => {
+                      await globalThis.__knotFixtureDelay(150);
+                      try {
+                        await context.buffer.applyEdits(
+                          [{ range: { startByteOffset: 0, endByteOffset: 0 }, text: "late\n" }],
+                          { ifRevision: 0 },
+                        );
+                        globalThis.suspendedTargetMutation = "applied";
+                      } catch (error) {
+                        globalThis.suspendedTargetMutation = error.name;
+                      }
+                    });
+                "#,
+            )
+            .await
+            .unwrap();
+
+        let replacement = cx.new(|_| BufferModel::from_text("replacement"));
+        let (target, captured_model, captured_handle, initial_text, heartbeat) = cx.read(|cx| {
+            let shell = shell.read(cx);
+            let captured_handle = shell.buffer_registry.active_handle().unwrap();
+            let captured_model = shell.buffer_registry.resolve(captured_handle).unwrap();
+            let initial_text = captured_model.read_with(cx, |model, _| model.text());
+            (
+                shell
+                    .command_catalog
+                    .resolve_extension("knot.fixture.suspended-target")
+                    .unwrap(),
+                captured_model,
+                captured_handle,
+                initial_text,
+                shell.heartbeat,
+            )
+        });
+
+        invoke_extension_target_in_window(&shell, target, "knot.fixture.suspended-target", cx);
+        shell.update_in(cx, |shell, window, cx| {
+            shell.close_buffer(captured_handle, cx);
+            let replacement_handle = shell.buffer_registry.open(&replacement);
+            shell.buffer_registry.set_active(Some(replacement_handle));
+            window.focus(&shell.terminal.focus_handle(cx));
+        });
+
+        cx.executor().advance_clock(Duration::from_millis(500));
+        cx.run_until_parked();
+        cx.read(|cx| {
+            let shell = shell.read(cx);
+            assert_eq!(shell.command_state.as_ref(), "running");
+            assert!(shell.heartbeat > heartbeat);
+        });
+
+        wait_for_command_state(&shell, "completed", cx).await;
+        control
+            .execute_fixture_script(
+                "verify-suspended-target-command.js",
+                r#"
+                    if (globalThis.suspendedTargetMutation !== "BufferClosedError") {
+                      throw new Error(`unexpected late mutation result: ${globalThis.suspendedTargetMutation}`);
+                    }
+                "#,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            captured_model.read_with(cx, |model, _| model.text()),
+            initial_text
+        );
+        assert_eq!(
+            replacement.read_with(cx, |model, _| model.text()),
+            "replacement"
+        );
+    }
+
+    #[gpui::test]
     async fn command_mutations_revalidate_the_captured_context(cx: &mut TestAppContext) {
         let runtime = V8Host::new()
             .spawn_extension(ExtensionId::new(21))
