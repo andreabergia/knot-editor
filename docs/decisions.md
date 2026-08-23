@@ -97,6 +97,45 @@ Evidence: [annotation benchmark](step5-annotation-benchmark.md).
 
 Evidence: [V8 runtime evidence](step7-v8-runtime.md).
 
+## Commands and keymaps
+
+- Commands are Knot-owned values with a globally unique name and explicit
+  JSON-like arguments. `CommandCatalog` owns discovery metadata and native or
+  extension name ownership, while native handlers remain on gpui's focus
+  dispatch path.
+- Native and extension commands share one namespace. Native definitions reserve
+  their names; each extension definition belongs to one lifecycle and is
+  removed with it. Handlers validate arguments because schemas and generated
+  argument UI have not been justified.
+- Dispatch captures the window, workspace, weak focus target, optional buffer,
+  and monotonic invocation identity. Native target identities never cross the
+  extension boundary. Editor, tree, and terminal handlers can therefore share
+  semantic commands without a common surface type or fabricated buffers.
+- gpui routes native commands from the captured focus target through enclosing
+  scopes. An extension handler is a lifecycle-validated global destination
+  after native routing, rather than an entry in a Knot-owned view routing
+  table.
+- Focus-stealing UI preserves an explicit target. The palette invokes at the
+  weak origin captured before it took focus, without visibly restoring focus;
+  a destroyed origin is an invalid target and is never replaced with current
+  focus.
+- Keybindings, the palette, and top-level scripts enter the same dispatcher and
+  produce the same structured outcomes. Fixed gpui bindings and semantic key
+  contexts are sufficient for the prototype's base, surface, active,
+  transient, and multi-keystroke cases.
+- Delayed mutations revalidate invocation, lifecycle, window/workspace, focus,
+  and optional buffer identity. They cannot fall back to the current active
+  buffer after the captured target disappears.
+- Configurable keymap loading, extension-defined bindings, argument schemas,
+  aliases, macros, repetition, and command composition remain deferred. The
+  prototype also allows only one in-flight extension command and rejects
+  command-to-command invocation from an executing handler; concurrency,
+  context inheritance, and cancellation trees are liabilities for step 11b.
+- IME, text insertion, pointer motion, scrolling, focus changes, and other raw
+  input protocols remain outside the registered command model.
+
+Evidence: [command and keymap experiment](step11-command-keymap-plan.md).
+
 ## Views and extension UI
 
 - Text and contributions are shared buffer state. Cursor, selection, scroll,

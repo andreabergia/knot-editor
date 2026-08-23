@@ -79,21 +79,8 @@ Generated search entries retain their application-owned
 `SearchResultsController` alongside the model. The controller keeps semantic
 source targets and emitted output ranges separate from the generated text; the
 generic collection and model have no search-result semantics.
-`CommandCatalog` owns native and extension command definitions; extension
-definitions bind their names to one lifecycle while native handlers remain on
-the gpui dispatch path. Fixed gpui keybindings carry Knot command values; the
-shell captures their focused origin and sends them through the same deferred,
-target-preserving dispatcher used by the command palette. Focus-owning editor,
-tree, terminal, and palette views publish their own semantic gpui key context.
-The shell owns persistent active-map and one-shot transient-map context flags;
-central command dispatch consumes transient state, while cancellation clears it
-without invoking a command.
 `BufferSubscriptionRegistry` routes committed changes to interested extension
 lifecycles.
-
-Each accepted command invocation retains its originating window, weak shell and
-focus identities, and optional surface-associated buffer for the duration of
-the invocation. These native target identities remain inside `app`.
 
 Each `EditorView` owns cursor, selection, scroll, focus, IME, rendering choices,
 and its persistent selection range. Multiple views may observe one model while
@@ -131,6 +118,55 @@ TextBuffer   AnchoredRangeStore
        /       \
 EditorView A  EditorView B
 ```
+
+### Command dispatch
+
+`CommandCatalog` owns discovery metadata and name ownership for native and
+extension commands. Extension definitions bind their names to one lifecycle;
+native handlers remain attached to gpui views and shells rather than moving
+into the catalog. Both use Knot-owned `Command` values containing a stable name
+and explicit JSON-like arguments.
+
+Keybindings, the command palette, and top-level scripts enter one dispatcher:
+
+```text
+keybinding / palette / top-level script
+                   |
+                   v
+        Command + captured origin
+                   |
+                   v
+      gpui action at captured focus
+                   |
+       focused view -> enclosing shell
+                   |
+          native handler or extension runtime
+```
+
+Dispatch captures the originating window, weak shell and focus identities, and
+optional surface-associated buffer. These native target identities remain
+inside `app`; extensions receive the invocation identity, arguments, and an
+optional opaque buffer handle. gpui routes the private action from the captured
+focus target, so editor, tree, and terminal handlers can claim the same command
+without a shared surface type. Unclaimed extension commands reach the shell as
+the global destination.
+
+The command palette keeps the weak focus target captured before the palette
+takes visible focus. Palette controls target the palette, while confirmation
+dispatches the selected command at the preserved origin without refocusing it.
+A missing origin is rejected rather than replaced with current focus.
+
+Extension execution retains the captured context for the invocation lifetime.
+Immediately before a delayed foreground mutation, the shell revalidates the
+invocation, lifecycle, window and shell ownership, focus target, and optional
+buffer. Every invocation completes with a structured outcome; the prototype
+permits at most one in-flight extension command and rejects nested invocation
+from its executing handler.
+
+Focus-owning editor, tree, terminal, and palette views publish semantic gpui
+key contexts. Fixed bindings exercise base, focused-surface, persistent active,
+one-shot transient, and multi-keystroke routing. Central dispatch consumes the
+transient context; cancellation clears it without invoking a command.
 
 Native fixture search captures an immutable source snapshot and revision. Its
 controller derives semantic matches, formats them into a read-only

@@ -77,7 +77,10 @@ neither. Refresh and stale-target recovery remain deferred. A second
 generated surface was deliberately skipped because search exposed no useful
 boundary requiring it.
 
-## 11. Command and keymap dispatch
+## 11. Command and keymap dispatch ✅
+
+Status: complete. Captured focus routing covered editor, tree, and terminal
+surfaces without a shared surface model or fabricated buffers.
 
 Execution plan: [step11-command-keymap-plan.md](step11-command-keymap-plan.md).
 
@@ -95,8 +98,13 @@ Execution plan: [step11-command-keymap-plan.md](step11-command-keymap-plan.md).
 Native view identities remain opaque to extensions. IME and other raw input
 protocols do not become registered commands.
 
-Decision checkpoint: does context-targeted focus routing cover text and
-non-text surfaces without fabricating buffers?
+Decision: Knot-owned command values enter one target-preserving dispatcher from
+keybindings, the palette, and top-level scripts. gpui routes native handlers
+from the captured focus target, while lifecycle-owned extension handlers remain
+a global destination and receive only semantic opaque context. Captured targets
+are revalidated before delayed mutation, so destroyed origins are rejected
+rather than silently retargeted. Configurable keymaps and nested or concurrent
+command execution remain deferred.
 
 ## 11b. Async command invocation
 

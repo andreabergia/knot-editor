@@ -219,10 +219,10 @@ behind the calling script; reentrant and same-runtime scheduling remain step
 
 ### 8. Record the decision
 
-- ⬜ Update `architecture.md` if the experiment validates command catalog
+- ✅ Update `architecture.md` if the experiment validates command catalog
   ownership, captured context, gpui routing, and palette target preservation.
-- ⬜ Record validated choices and liabilities in `decisions.md`.
-- ⬜ Mark roadmap step 11 complete and summarize the checkpoint.
+- ✅ Record validated choices and liabilities in `decisions.md`.
+- ✅ Mark roadmap step 11 complete and summarize the checkpoint.
 - ⬜ Update this plan with ✅ markers, deliberately skipped work, and the final
   checkpoint result.
 - ⬜ Run focused tests, run `cargo fmt` once at the end of Rust work, then run
