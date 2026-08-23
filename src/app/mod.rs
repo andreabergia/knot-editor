@@ -444,8 +444,10 @@ impl CommandAction {
         };
         let invocation = self.invocation;
         let buffer = self.context.buffer;
-        let _ = workspace.update(cx, |shell, cx| {
-            shell.start_completion(invocation, editor, buffer, cx);
+        cx.defer(move |cx| {
+            let _ = workspace.update(cx, |shell, cx| {
+                shell.start_completion(invocation, editor, buffer, cx);
+            });
         });
     }
 
@@ -5015,6 +5017,261 @@ mod tests {
         });
 
         wait_for_runtime_state(&shell, "running", cx).await;
+    }
+
+    #[gpui::test]
+    async fn completion_surface_replacement_keeps_in_flight_provider_work_responsive(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(|cx| cx.bind_keys(super::completion_bindings()));
+        let host = V8Host::new();
+        let (shell, cx) = cx.add_window_view(|_, cx| {
+            Shell::new_with_runtimes(
+                vec![
+                    host.spawn_extension(ExtensionId::new(81)).into_parts(),
+                    host.spawn_extension(ExtensionId::new(82)).into_parts(),
+                ],
+                cx,
+            )
+        });
+        while cx.read(|cx| shell.read(cx).completion_providers.snapshot().len()) != 2 {
+            shell.next_notification(Duration::ZERO, cx).await;
+        }
+
+        shell.update_in(cx, |shell, window, cx| {
+            window.focus(&shell.editor.focus_handle(cx));
+            let origin = shell.command_origin(window, cx).unwrap();
+            shell.dispatch_command(
+                Command {
+                    name: super::SHOW_COMPLETIONS_COMMAND.into(),
+                    arguments: CommandArgumentValue::Null,
+                },
+                origin,
+                cx,
+            );
+        });
+        while !cx.read(|cx| {
+            shell
+                .read(cx)
+                .editor
+                .read(cx)
+                .completion_state()
+                .is_some_and(|state| state.0 > 0 && state.1 == 1)
+        }) {
+            shell.next_notification(Duration::ZERO, cx).await;
+        }
+        let (heartbeat, generation) = cx.read(|cx| {
+            let shell = shell.read(cx);
+            (
+                shell.heartbeat,
+                shell.editor.read(cx).completion_state().unwrap().4,
+            )
+        });
+        cx.simulate_keystrokes("down");
+
+        shell.update_in(cx, |shell, window, cx| {
+            let origin = shell.command_origin(window, cx).unwrap();
+            shell.dispatch_command(
+                Command {
+                    name: super::SWAP_COMPLETION_SURFACE_COMMAND.into(),
+                    arguments: CommandArgumentValue::Null,
+                },
+                origin,
+                cx,
+            );
+        });
+        cx.run_until_parked();
+        cx.read(|cx| {
+            let state = shell
+                .read(cx)
+                .editor
+                .read(cx)
+                .completion_state()
+                .unwrap();
+            assert_eq!(state.3, super::completion::CompletionSurfaceKind::Compact);
+            assert_eq!(state.4, generation);
+            assert_eq!(state.1, 1);
+        });
+
+        shell.update_in(cx, |shell, window, cx| {
+            let origin = shell.command_origin(window, cx).unwrap();
+            shell.dispatch_command(
+                Command {
+                    name: super::SWAP_COMPLETION_SURFACE_COMMAND.into(),
+                    arguments: CommandArgumentValue::Null,
+                },
+                origin,
+                cx,
+            );
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            cx.read(|cx| {
+                shell
+                    .read(cx)
+                    .editor
+                    .read(cx)
+                    .completion_state()
+                    .unwrap()
+                    .3
+            }),
+            super::completion::CompletionSurfaceKind::List
+        );
+        shell.update_in(cx, |shell, window, cx| {
+            let origin = shell.command_origin(window, cx).unwrap();
+            shell.dispatch_command(
+                Command {
+                    name: super::SWAP_COMPLETION_SURFACE_COMMAND.into(),
+                    arguments: CommandArgumentValue::Null,
+                },
+                origin,
+                cx,
+            );
+        });
+        cx.run_until_parked();
+
+        cx.executor().advance_clock(Duration::from_millis(500));
+        cx.run_until_parked();
+        assert!(cx.read(|cx| shell.read(cx).heartbeat) > heartbeat);
+
+        while cx.read(|cx| {
+            shell
+                .read(cx)
+                .editor
+                .read(cx)
+                .completion_state()
+                .is_some_and(|state| state.1 > 0)
+        }) {
+            shell.next_notification(Duration::ZERO, cx).await;
+        }
+        cx.read(|cx| {
+            let state = shell
+                .read(cx)
+                .editor
+                .read(cx)
+                .completion_state()
+                .unwrap();
+            assert_eq!(state.0, 5);
+            assert_eq!(state.2, 0);
+            assert_eq!(state.3, super::completion::CompletionSurfaceKind::Compact);
+        });
+
+        shell.update_in(cx, |shell, window, cx| {
+            let origin = shell.command_origin(window, cx).unwrap();
+            shell.dispatch_command(
+                Command {
+                    name: "knot.fixture.completion-fail-next".into(),
+                    arguments: CommandArgumentValue::Null,
+                },
+                origin,
+                cx,
+            );
+        });
+        wait_for_command_state(&shell, "completed", cx).await;
+        let prior_generation = generation;
+        shell.update_in(cx, |shell, window, cx| {
+            let origin = shell.command_origin(window, cx).unwrap();
+            shell.dispatch_command(
+                Command {
+                    name: super::SHOW_COMPLETIONS_COMMAND.into(),
+                    arguments: CommandArgumentValue::Null,
+                },
+                origin,
+                cx,
+            );
+        });
+        while !cx.read(|cx| {
+            shell
+                .read(cx)
+                .editor
+                .read(cx)
+                .completion_state()
+                .is_some_and(|state| state.4 > prior_generation && state.1 == 0)
+        }) {
+            shell.next_notification(Duration::ZERO, cx).await;
+        }
+        let failed_generation = cx.read(|cx| {
+            let state = shell
+                .read(cx)
+                .editor
+                .read(cx)
+                .completion_state()
+                .unwrap();
+            assert_eq!(state.0, 3);
+            assert_eq!(state.2, 1);
+            state.4
+        });
+
+        shell.update_in(cx, |shell, window, cx| {
+            let origin = shell.command_origin(window, cx).unwrap();
+            shell.dispatch_command(
+                Command {
+                    name: super::SHOW_COMPLETIONS_COMMAND.into(),
+                    arguments: CommandArgumentValue::Null,
+                },
+                origin,
+                cx,
+            );
+        });
+        while !cx.read(|cx| {
+            shell
+                .read(cx)
+                .editor
+                .read(cx)
+                .completion_state()
+                .is_some_and(|state| state.4 > failed_generation && state.1 == 0)
+        }) {
+            shell.next_notification(Duration::ZERO, cx).await;
+        }
+        cx.read(|cx| {
+            let state = shell
+                .read(cx)
+                .editor
+                .read(cx)
+                .completion_state()
+                .unwrap();
+            assert_eq!(state.0, 5);
+            assert_eq!(state.2, 0);
+        });
+
+        cx.simulate_keystrokes("escape");
+        assert!(cx.read(|cx| {
+            shell
+                .read(cx)
+                .editor
+                .read(cx)
+                .completion_state()
+                .is_none()
+        }));
+
+        shell.update_in(cx, |shell, window, cx| {
+            let origin = shell.command_origin(window, cx).unwrap();
+            shell.dispatch_command(
+                Command {
+                    name: super::SHOW_COMPLETIONS_COMMAND.into(),
+                    arguments: CommandArgumentValue::Null,
+                },
+                origin,
+                cx,
+            );
+        });
+        while !cx.read(|cx| {
+            shell
+                .read(cx)
+                .editor
+                .read(cx)
+                .completion_state()
+                .is_some_and(|state| state.0 > 0)
+        }) {
+            shell.next_notification(Duration::ZERO, cx).await;
+        }
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        cx.read(|cx| {
+            let editor = shell.read(cx).editor.read(cx);
+            assert!(editor.completion_state().is_none());
+            assert!(editor.model().read(cx).text().starts_with("Alpha"));
+        });
     }
 
     #[gpui::test]

@@ -195,6 +195,21 @@ impl EditorView {
     }
 
     #[cfg(test)]
+    pub(crate) fn completion_state(
+        &self,
+    ) -> Option<(usize, usize, usize, CompletionSurfaceKind, u64)> {
+        let controller = self.completion.as_ref()?;
+        let snapshot = controller.snapshot();
+        Some((
+            snapshot.items.len(),
+            snapshot.pending_provider_count,
+            snapshot.failures.len(),
+            self.completion_surface.as_ref()?.kind(),
+            controller.generation(),
+        ))
+    }
+
+    #[cfg(test)]
     pub(crate) fn selected_byte_range(&self) -> Option<Range<usize>> {
         self.selection_range().map(|(start, end)| {
             self.to_flat_byte(start.0, start.1)..self.to_flat_byte(end.0, end.1)
