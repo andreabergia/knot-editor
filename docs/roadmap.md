@@ -131,6 +131,9 @@ are unnecessary.
 
 ## 12. Capability aggregation
 
+Execution plan:
+[step12-capability-aggregation-plan.md](step12-capability-aggregation-plan.md).
+
 - Feed one completion surface from two providers with different response times.
 - Tag requests and results with revisions; discard stale late results.
 - Replace the surface during the session without restarting providers.
