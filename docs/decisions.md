@@ -126,11 +126,30 @@ Evidence: [V8 runtime evidence](step7-v8-runtime.md).
 - Delayed mutations revalidate invocation, lifecycle, window/workspace, focus,
   and optional buffer identity. They cannot fall back to the current active
   buffer after the captured target disappears.
+- Command-to-command invocation uses ordinary awaited JavaScript and the same
+  structured outcomes as top-level invocation. The shell admits roots into one
+  FIFO queue and runs one root plus its descendants at a time. Child commands
+  inherit the captured target; unrelated roots cannot enter while a parent is
+  suspended.
+- Native children retain gpui focus routing. Cross-extension children run on
+  their owning serial runtime. Same-extension children run as catalog-authorized
+  nested handler frames inside the current callback, avoiding self-queue
+  deadlock without allowing unrelated callbacks to enter.
+- Runtime ancestry rejects cross-extension cycles, and registration ancestry
+  rejects recursive same-extension command cycles. One unfinished child per
+  parent is the deliberate boundary between composition and a task graph.
+- Cancellation propagates from a parent to unfinished descendants, actively
+  aborts handler signals, rejects late mutations, and does not release the next
+  root until the tree settles. Child cancellation does not propagate upward;
+  JavaScript observes the cancelled outcome and decides whether to continue.
+- Command handlers still do not return semantic values. A handler's successful
+  return completes its invocation; unsuccessful children affect a parent only
+  when its JavaScript branches or throws. Direct JavaScript functions remain
+  preferable when global command lookup, focus routing, or cross-extension
+  reuse is unnecessary.
 - Configurable keymap loading, extension-defined bindings, argument schemas,
-  aliases, macros, repetition, and command composition remain deferred. The
-  prototype also allows only one in-flight extension command and rejects
-  command-to-command invocation from an executing handler; concurrency,
-  context inheritance, and cancellation trees are liabilities for step 11b.
+  aliases, macros, repetition, detached children, concurrent roots, priorities,
+  and general task-graph scheduling remain deferred.
 - IME, text insertion, pointer motion, scrolling, focus changes, and other raw
   input protocols remain outside the registered command model.
 

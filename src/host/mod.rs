@@ -30,9 +30,9 @@ pub mod protocol;
 
 use protocol::{
     BufferChange, BufferHandle, BufferSubscriptionId, ByteRange, CommandInvocation,
-    CommandInvocationId, CommandInvokeDispatch, CommandOutcome, ExtensionId,
-    ExtensionLifecycleId, HostOperation, HostRequest, HostResponse, HostResponseValue, RequestId,
-    TextEdit, TreeChildrenRequest, TreeChildrenResponse, TreeProviderError,
+    CommandInvocationId, CommandInvokeDispatch, CommandOutcome, ExtensionId, ExtensionLifecycleId,
+    HostOperation, HostRequest, HostResponse, HostResponseValue, RequestId, TextEdit,
+    TreeChildrenRequest, TreeChildrenResponse, TreeProviderError,
 };
 
 const PRIVATE_BOOTSTRAP_SPECIFIER: &str = "knot:bootstrap";
@@ -987,16 +987,8 @@ async fn op_command_inline_complete(
 }
 
 #[deno_core::op2]
-async fn op_command_cancellation(
-    state: Rc<RefCell<OpState>>,
-    #[number] invocation: u64,
-) -> bool {
-    let lifecycle = Arc::clone(
-        &state
-            .borrow()
-            .borrow::<ExtensionRequestRouter>()
-            .lifecycle,
-    );
+async fn op_command_cancellation(state: Rc<RefCell<OpState>>, #[number] invocation: u64) -> bool {
+    let lifecycle = Arc::clone(&state.borrow().borrow::<ExtensionRequestRouter>().lifecycle);
     lifecycle
         .wait_for_command_cancellation(CommandInvocationId::new(invocation))
         .await
@@ -1750,7 +1742,10 @@ impl ExtensionLifecycle {
         cancelled
     }
 
-    fn cancel_command(&self, invocation: CommandInvocationId) -> Result<(), ExtensionRuntimeClosed> {
+    fn cancel_command(
+        &self,
+        invocation: CommandInvocationId,
+    ) -> Result<(), ExtensionRuntimeClosed> {
         let mut state = self
             .state
             .lock()
@@ -1909,6 +1904,11 @@ impl ExtensionLifecycle {
         state
             .termination
             .get_or_insert(ExtensionTermination::Requested);
+        for cancellation in state.command_cancellations.values() {
+            let _ = cancellation
+                .sender
+                .send(CommandCancellationState::Cancelled);
+        }
         if state.watchdog.is_ready() {
             let _ = state.watchdog.terminate();
         }
@@ -3056,7 +3056,10 @@ mod tests {
         );
         let request = pollster::block_on(runtime.receive_request()).unwrap();
         assert_eq!(request.invocation, Some(CommandInvocationId::new(700)));
-        assert!(matches!(request.operation, HostOperation::InvokeCommand { .. }));
+        assert!(matches!(
+            request.operation,
+            HostOperation::InvokeCommand { .. }
+        ));
         runtime
             .respond(HostResponse {
                 extension,

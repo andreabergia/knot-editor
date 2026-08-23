@@ -874,10 +874,7 @@ impl CommandCatalog {
         self.by_name.values().map(|entry| &entry.definition)
     }
 
-    pub(crate) fn resolve(
-        &self,
-        name: &str,
-    ) -> Result<CommandTargetKind, CommandCatalogError> {
+    pub(crate) fn resolve(&self, name: &str) -> Result<CommandTargetKind, CommandCatalogError> {
         let entry = self
             .by_name
             .get(name)

@@ -127,13 +127,18 @@ native handlers remain attached to gpui views and shells rather than moving
 into the catalog. Both use Knot-owned `Command` values containing a stable name
 and explicit JSON-like arguments.
 
-Keybindings, the command palette, and top-level scripts enter one dispatcher:
+Keybindings, the command palette, and top-level scripts enter one dispatcher.
+Admission allocates the invocation identity, captures the origin, and creates
+the completion before routing begins:
 
 ```text
 keybinding / palette / top-level script
                    |
                    v
-        Command + captured origin
+        admitted Command + captured origin
+                   |
+                   v
+       serialized root FIFO queue
                    |
                    v
       gpui action at captured focus
@@ -151,17 +156,37 @@ focus target, so editor, tree, and terminal handlers can claim the same command
 without a shared surface type. Unclaimed extension commands reach the shell as
 the global destination.
 
+One shell runs one root invocation tree at a time. Additional roots remain in
+FIFO order until the active root and its attached descendants settle. A
+handler-originated invocation is attached as one child of its active parent
+and inherits the parent's captured window, workspace, focus, and optional
+buffer. Native children use the same gpui focus route. Cross-extension
+children run on their owning runtime while the caller remains suspended;
+unrelated roots cannot enter that gap. A second unfinished child from the same
+parent is rejected, so this remains command composition rather than a task
+graph.
+
 The command palette keeps the weak focus target captured before the palette
 takes visible focus. Palette controls target the palette, while confirmation
 dispatches the selected command at the preserved origin without refocusing it.
 A missing origin is rejected rather than replaced with current focus.
 
-Extension execution retains the captured context for the invocation lifetime.
-Immediately before a delayed foreground mutation, the shell revalidates the
-invocation, lifecycle, window and shell ownership, focus target, and optional
-buffer. Every invocation completes with a structured outcome; the prototype
-permits at most one in-flight extension command and rejects nested invocation
-from its executing handler.
+Extension execution retains the inherited captured context for the invocation
+lifetime. Immediately before execution and every delayed foreground mutation,
+the shell revalidates the invocation, lifecycle, window and shell ownership,
+focus target, and optional buffer. Every admitted invocation completes once
+with a structured outcome.
+
+The catalog resolves global ownership before choosing how a child runs. A
+same-extension child executes as a nested JavaScript handler frame in the
+current serial callback. Cross-extension ancestry is checked before dispatch;
+targeting a runtime already occupied by an ancestor is unavailable rather than
+deadlocking. Repeating a same-extension command registration in its active
+ancestry is rejected. Root cancellation propagates downward, actively aborts
+extension handler signals, rejects late foreground mutations, and waits for
+the invocation tree to settle before the next root starts. Cancelling a child
+does not cancel its parent. Runtime or shell teardown settles affected work and
+cannot overwrite an existing terminal outcome.
 
 Focus-owning editor, tree, terminal, and palette views publish semantic gpui
 key contexts. Fixed bindings exercise base, focused-surface, persistent active,
@@ -220,7 +245,9 @@ application registries and models
 
 Runtime lifecycle state owns pending work, cancellation, command
 registrations, subscriptions, resource limits, and teardown. Callbacks are
-serial per extension. Independent extension threads may progress in parallel.
+serial per extension. A same-runtime composed command is a nested handler frame
+inside the active callback rather than a queued callback. Independent
+extension threads may progress in parallel.
 Fatal interruption or disposal removes work belonging to that lifecycle.
 
 Commands are invoked on their owning extension with an invocation identity,

@@ -256,7 +256,6 @@ impl CommandCompletion {
             let _ = sender.send(outcome);
         }
     }
-
 }
 
 #[derive(Clone, PartialEq, Action)]
@@ -370,6 +369,7 @@ impl CommandAction {
 enum InvocationTarget {
     Native,
     Extension(model::CommandTarget),
+    Unavailable,
 }
 
 struct CommandInvocationNode {
@@ -619,7 +619,10 @@ impl Shell {
             )
             .expect("diagnostic command name is unique");
         command_catalog
-            .register_native(FIXTURE_SEARCH_COMMAND.into(), "Search captured buffer".into())
+            .register_native(
+                FIXTURE_SEARCH_COMMAND.into(),
+                "Search captured buffer".into(),
+            )
             .expect("fixture search command name is unique");
         Shell {
             open_buffers,
@@ -700,7 +703,10 @@ impl Shell {
                                         shell.update(cx, |shell, cx| {
                                             shell.command_origin(window, cx).map(|origin| {
                                                 shell.enqueue_command_root(
-                                                    command, origin, Some(caller), cx,
+                                                    command,
+                                                    origin,
+                                                    Some(caller),
+                                                    cx,
                                                 )
                                             })
                                         })
@@ -771,12 +777,11 @@ impl Shell {
                     }
                     continue;
                 }
-                let response = match this.update(cx, |this, cx| {
-                    this.dispatch_host_request(request, cx)
-                }) {
-                    Ok(response) => response,
-                    Err(_) => return,
-                };
+                let response =
+                    match this.update(cx, |this, cx| this.dispatch_host_request(request, cx)) {
+                        Ok(response) => response,
+                        Err(_) => return,
+                    };
                 if let Err(error) = control.respond(response) {
                     failure = Some(format!("runtime response failed: {error:?}"));
                     break;
@@ -1334,17 +1339,12 @@ impl Shell {
             Ok(model::CommandTargetKind::Native) => InvocationTarget::Native,
             Ok(model::CommandTargetKind::Extension(target)) => {
                 if caller == Some((target.extension, target.lifecycle)) {
-                    completion.complete(CommandOutcome::Unavailable);
-                    self.record_command_outcome(CommandOutcome::Unavailable, cx);
-                    return execution;
+                    InvocationTarget::Unavailable
+                } else {
+                    InvocationTarget::Extension(target)
                 }
-                InvocationTarget::Extension(target)
             }
-            Err(_) => {
-                completion.complete(CommandOutcome::Unavailable);
-                self.record_command_outcome(CommandOutcome::Unavailable, cx);
-                return execution;
-            }
+            Err(_) => InvocationTarget::Unavailable,
         };
         let context = CapturedInvocationContext {
             window: origin.window,
@@ -1352,16 +1352,6 @@ impl Shell {
             focus: origin.focus,
             buffer: origin.buffer,
         };
-        let invalid_target = context.focus.upgrade().is_none()
-            || !cx.windows().contains(&context.window)
-            || context
-                .buffer
-                .is_some_and(|buffer| self.buffer_registry.resolve(buffer).is_err());
-        if invalid_target {
-            completion.complete(CommandOutcome::InvalidTarget);
-            self.record_command_outcome(CommandOutcome::InvalidTarget, cx);
-            return execution;
-        }
         self.command_invocations.insert(
             id,
             CommandInvocationNode {
@@ -1389,7 +1379,11 @@ impl Shell {
         origin: CommandOrigin,
         cx: &mut Context<Self>,
     ) -> Result<CommandExecution, CommandOutcome> {
-        if self.command_catalog.resolve_extension(command.name.as_ref()) != Ok(target) {
+        if self
+            .command_catalog
+            .resolve_extension(command.name.as_ref())
+            != Ok(target)
+        {
             return Err(CommandOutcome::Unavailable);
         }
         Ok(self.enqueue_command_root(command, origin, None, cx))
@@ -1450,9 +1444,7 @@ impl Shell {
         }
         let target = match self.command_catalog.resolve(command.name.as_ref()) {
             Ok(model::CommandTargetKind::Native) => InvocationTarget::Native,
-            Ok(model::CommandTargetKind::Extension(target)) => {
-                InvocationTarget::Extension(target)
-            }
+            Ok(model::CommandTargetKind::Extension(target)) => InvocationTarget::Extension(target),
             Err(_) => return Err(CommandOutcome::Unavailable),
         };
         let same_runtime = matches!(
@@ -1536,12 +1528,31 @@ impl Shell {
     }
 
     fn start_command_invocation(&mut self, id: CommandInvocationId, cx: &mut Context<Self>) {
-        let Some(node) = self.command_invocations.get_mut(&id) else {
+        let Some(node) = self.command_invocations.get(&id) else {
             return;
         };
         if node.started {
             return;
         }
+        let context = node.context.clone();
+        let target_is_live = context.workspace.upgrade() == Some(cx.entity())
+            && cx.windows().contains(&context.window)
+            && context.focus.upgrade().is_some()
+            && context
+                .buffer
+                .is_none_or(|buffer| self.buffer_registry.resolve(buffer).is_ok());
+        if !target_is_live {
+            self.finish_command_invocation(id, CommandOutcome::InvalidTarget, cx);
+            return;
+        }
+        if node.target == InvocationTarget::Unavailable {
+            self.finish_command_invocation(id, CommandOutcome::Unavailable, cx);
+            return;
+        }
+        let node = self
+            .command_invocations
+            .get_mut(&id)
+            .expect("validated invocation remains active");
         node.started = true;
         self.command_state = "running".into();
         self.command_outcome = None;
@@ -1625,11 +1636,10 @@ impl Shell {
                 self.start_extension_command(action.invocation, target, cx);
             }
             Some(InvocationTarget::Native) => {
-                self.finish_command_invocation(
-                    action.invocation,
-                    CommandOutcome::Unavailable,
-                    cx,
-                );
+                self.finish_command_invocation(action.invocation, CommandOutcome::Unavailable, cx);
+            }
+            Some(InvocationTarget::Unavailable) => {
+                self.finish_command_invocation(action.invocation, CommandOutcome::Unavailable, cx);
             }
             None => cx.propagate(),
         }
@@ -1884,13 +1894,11 @@ impl Shell {
         let Some(node) = self.command_invocations.remove(&invocation) else {
             return;
         };
-        let outcome = node
-            .handler_outcome
-            .unwrap_or(if node.cancelled {
-                CommandOutcome::Cancelled
-            } else {
-                CommandOutcome::Unavailable
-            });
+        let outcome = node.handler_outcome.unwrap_or(if node.cancelled {
+            CommandOutcome::Cancelled
+        } else {
+            CommandOutcome::Unavailable
+        });
         node.completion.complete(outcome.clone());
         if let Some(parent) = node.parent {
             let parent_ready = self
@@ -1908,7 +1916,8 @@ impl Shell {
             self.record_command_outcome(outcome, cx);
             self.start_next_command_root(cx);
         } else {
-            self.queued_command_roots.retain(|queued| *queued != invocation);
+            self.queued_command_roots
+                .retain(|queued| *queued != invocation);
         }
     }
 
@@ -3862,6 +3871,380 @@ mod tests {
     }
 
     #[gpui::test]
+    async fn cancelling_only_a_child_leaves_parent_in_control_of_composition(
+        cx: &mut TestAppContext,
+    ) {
+        let host = V8Host::new();
+        let (shell, cx) = cx.add_window_view(|_, cx| {
+            Shell::new_with_runtimes(
+                [ExtensionId::new(94), ExtensionId::new(95)]
+                    .map(|extension| host.spawn_extension(extension).into_parts())
+                    .into(),
+                cx,
+            )
+        });
+        wait_for_runtime_state(&shell, "running", cx).await;
+        let child_owner = runtime_control(&shell, ExtensionId::new(94), cx);
+        child_owner
+            .execute_fixture_module(
+                "file:///fixtures/child-only-cancellation.js",
+                r#"
+                    import { commands } from "knot:editor";
+                    await commands.register("knot.fixture.child-only-cancellation", async ({ signal }) => {
+                      await new Promise((resolve) => signal.addEventListener("abort", resolve));
+                    });
+                "#,
+            )
+            .await
+            .unwrap();
+        let parent_owner = runtime_control(&shell, ExtensionId::new(95), cx);
+        parent_owner
+            .execute_fixture_module(
+                "file:///fixtures/parent-after-child-cancellation.js",
+                r#"
+                    import { commands } from "knot:editor";
+                    await commands.register("knot.fixture.parent-after-child-cancellation", async () => {
+                      const child = await commands.invoke(
+                        "knot.fixture.child-only-cancellation",
+                        null,
+                      );
+                      globalThis.childOnlyCancellationOutcome = child.kind;
+                      await commands.invoke("knot.fixture.search", "Node");
+                    });
+                "#,
+            )
+            .await
+            .unwrap();
+        let execution = shell.update_in(cx, |shell, window, cx| {
+            let focus = shell.editor.focus_handle(cx);
+            window.focus(&focus);
+            shell.enqueue_command_root(
+                Command {
+                    name: "knot.fixture.parent-after-child-cancellation".into(),
+                    arguments: CommandArgumentValue::Null,
+                },
+                super::CommandOrigin {
+                    window: window.window_handle(),
+                    focus: focus.downgrade(),
+                    buffer: shell.buffer_registry.active_handle(),
+                },
+                None,
+                cx,
+            )
+        });
+        while cx.read(|cx| shell.read(cx).command_invocations.len() < 2) {
+            shell.next_notification(Duration::ZERO, cx).await;
+        }
+        shell.update(cx, |shell, _| {
+            let root = shell.active_command_root.unwrap();
+            let child = *shell
+                .command_invocations
+                .get(&root)
+                .unwrap()
+                .children
+                .iter()
+                .next()
+                .unwrap();
+            shell.cancel_command_subtree(child);
+            assert!(!shell.command_invocations.get(&root).unwrap().cancelled);
+        });
+
+        assert_eq!(
+            execution.completion.await.unwrap(),
+            CommandOutcome::Completed
+        );
+        assert_eq!(
+            cx.read(|cx| shell.read(cx).open_buffers.entries().count()),
+            2
+        );
+        parent_owner
+            .execute_fixture_script(
+                "verify-child-only-cancellation.js",
+                r#"
+                    if (globalThis.childOnlyCancellationOutcome !== "cancelled") {
+                      throw new Error(
+                        `unexpected child outcome: ${globalThis.childOnlyCancellationOutcome}`,
+                      );
+                    }
+                "#,
+            )
+            .await
+            .unwrap();
+    }
+
+    #[gpui::test]
+    async fn disposing_suspended_child_settles_parent_and_releases_root_queue(
+        cx: &mut TestAppContext,
+    ) {
+        let host = V8Host::new();
+        let (shell, cx) = cx.add_window_view(|_, cx| {
+            Shell::new_with_runtimes(
+                [ExtensionId::new(89), ExtensionId::new(90)]
+                    .map(|extension| host.spawn_extension(extension).into_parts())
+                    .into(),
+                cx,
+            )
+        });
+        wait_for_runtime_state(&shell, "running", cx).await;
+        let child_owner = runtime_control(&shell, ExtensionId::new(89), cx);
+        child_owner
+            .execute_fixture_module(
+                "file:///fixtures/disposable-child.js",
+                r#"
+                    import { commands } from "knot:editor";
+                    await commands.register("knot.fixture.disposable-child", async (context) => {
+                      await new Promise((resolve) => context.signal.addEventListener("abort", resolve));
+                    });
+                "#,
+            )
+            .await
+            .unwrap();
+        let parent_owner = runtime_control(&shell, ExtensionId::new(90), cx);
+        parent_owner
+            .execute_fixture_module(
+                "file:///fixtures/parent-after-child-disposal.js",
+                r#"
+                    import { commands } from "knot:editor";
+                    await commands.register("knot.fixture.parent-awaiting-disposal", async () => {
+                      const child = await commands.invoke("knot.fixture.disposable-child", null);
+                      globalThis.disposedChildOutcome = child.kind;
+                      globalThis.parentContinuedAfterChildDisposal = true;
+                    });
+                    await commands.register("knot.fixture.queued-after-child-disposal", () => {
+                      globalThis.queueContinuedAfterChildDisposal = true;
+                    });
+                "#,
+            )
+            .await
+            .unwrap();
+
+        let (root, queued) = shell.update_in(cx, |shell, window, cx| {
+            let focus = shell.editor.focus_handle(cx);
+            window.focus(&focus);
+            let origin = super::CommandOrigin {
+                window: window.window_handle(),
+                focus: focus.downgrade(),
+                buffer: shell.buffer_registry.active_handle(),
+            };
+            let root = shell.enqueue_command_root(
+                Command {
+                    name: "knot.fixture.parent-awaiting-disposal".into(),
+                    arguments: CommandArgumentValue::Null,
+                },
+                origin.clone(),
+                None,
+                cx,
+            );
+            let queued = shell.enqueue_command_root(
+                Command {
+                    name: "knot.fixture.queued-after-child-disposal".into(),
+                    arguments: CommandArgumentValue::Null,
+                },
+                origin,
+                None,
+                cx,
+            );
+            (root, queued)
+        });
+        while cx.read(|cx| shell.read(cx).command_invocations.len() < 3) {
+            shell.next_notification(Duration::ZERO, cx).await;
+        }
+        child_owner.request_shutdown();
+
+        assert_eq!(root.completion.await.unwrap(), CommandOutcome::Completed);
+        assert_eq!(queued.completion.await.unwrap(), CommandOutcome::Completed);
+        parent_owner
+            .execute_fixture_script(
+                "verify-child-disposal-continuation.js",
+                r#"
+                    if (globalThis.disposedChildOutcome !== "cancelled") {
+                      throw new Error(`unexpected child outcome: ${globalThis.disposedChildOutcome}`);
+                    }
+                    if (!globalThis.parentContinuedAfterChildDisposal) {
+                      throw new Error("parent did not continue after child disposal");
+                    }
+                    if (!globalThis.queueContinuedAfterChildDisposal) {
+                      throw new Error("root queue did not continue after child disposal");
+                    }
+                "#,
+            )
+            .await
+            .unwrap();
+    }
+
+    #[gpui::test]
+    async fn disposing_parent_cancels_cross_extension_child_and_releases_queued_root(
+        cx: &mut TestAppContext,
+    ) {
+        let host = V8Host::new();
+        let (shell, cx) = cx.add_window_view(|_, cx| {
+            Shell::new_with_runtimes(
+                [ExtensionId::new(91), ExtensionId::new(92)]
+                    .map(|extension| host.spawn_extension(extension).into_parts())
+                    .into(),
+                cx,
+            )
+        });
+        wait_for_runtime_state(&shell, "running", cx).await;
+        let parent_owner = runtime_control(&shell, ExtensionId::new(91), cx);
+        parent_owner
+            .execute_fixture_module(
+                "file:///fixtures/disposable-parent.js",
+                r#"
+                    import { commands } from "knot:editor";
+                    await commands.register("knot.fixture.disposable-parent", async () => {
+                      await commands.invoke("knot.fixture.child-of-disposed-parent", null);
+                    });
+                "#,
+            )
+            .await
+            .unwrap();
+        let child_owner = runtime_control(&shell, ExtensionId::new(92), cx);
+        child_owner
+            .execute_fixture_module(
+                "file:///fixtures/child-after-parent-disposal.js",
+                r#"
+                    import { commands } from "knot:editor";
+                    await commands.register("knot.fixture.child-of-disposed-parent", async (context) => {
+                      await new Promise((resolve) => context.signal.addEventListener("abort", resolve));
+                      globalThis.childObservedParentDisposal = true;
+                    });
+                    await commands.register("knot.fixture.queued-after-parent-disposal", () => {
+                      globalThis.queueContinuedAfterParentDisposal = true;
+                    });
+                "#,
+            )
+            .await
+            .unwrap();
+
+        let (root, queued) = shell.update_in(cx, |shell, window, cx| {
+            let focus = shell.editor.focus_handle(cx);
+            window.focus(&focus);
+            let origin = super::CommandOrigin {
+                window: window.window_handle(),
+                focus: focus.downgrade(),
+                buffer: shell.buffer_registry.active_handle(),
+            };
+            let root = shell.enqueue_command_root(
+                Command {
+                    name: "knot.fixture.disposable-parent".into(),
+                    arguments: CommandArgumentValue::Null,
+                },
+                origin.clone(),
+                None,
+                cx,
+            );
+            let queued = shell.enqueue_command_root(
+                Command {
+                    name: "knot.fixture.queued-after-parent-disposal".into(),
+                    arguments: CommandArgumentValue::Null,
+                },
+                origin,
+                None,
+                cx,
+            );
+            (root, queued)
+        });
+        while cx.read(|cx| shell.read(cx).command_invocations.len() < 3) {
+            shell.next_notification(Duration::ZERO, cx).await;
+        }
+        parent_owner.request_shutdown();
+
+        assert_eq!(root.completion.await.unwrap(), CommandOutcome::Cancelled);
+        assert_eq!(queued.completion.await.unwrap(), CommandOutcome::Completed);
+        child_owner
+            .execute_fixture_script(
+                "verify-parent-disposal-cancellation.js",
+                r#"
+                    if (!globalThis.childObservedParentDisposal) {
+                      throw new Error("child did not observe parent disposal");
+                    }
+                    if (!globalThis.queueContinuedAfterParentDisposal) {
+                      throw new Error("queued root did not run after parent disposal");
+                    }
+                "#,
+            )
+            .await
+            .unwrap();
+    }
+
+    #[gpui::test]
+    async fn queued_root_revalidates_its_captured_buffer_before_start(cx: &mut TestAppContext) {
+        let runtime = V8Host::new()
+            .spawn_extension(ExtensionId::new(93))
+            .into_parts();
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(runtime, cx));
+        wait_for_runtime_state(&shell, "running", cx).await;
+        let owner = only_runtime_control(&shell, cx);
+        owner
+            .execute_fixture_module(
+                "file:///fixtures/queued-target-loss.js",
+                r#"
+                    import { commands } from "knot:editor";
+                    await commands.register("knot.fixture.blocking-root", async (context) => {
+                      await new Promise((resolve) => context.signal.addEventListener("abort", resolve));
+                    });
+                    await commands.register("knot.fixture.queued-lost-target", () => {
+                      globalThis.lostTargetCommandRan = true;
+                    });
+                "#,
+            )
+            .await
+            .unwrap();
+
+        let (active, queued, buffer) = shell.update_in(cx, |shell, window, cx| {
+            let focus = shell.editor.focus_handle(cx);
+            window.focus(&focus);
+            let buffer = shell.buffer_registry.active_handle().unwrap();
+            let origin = super::CommandOrigin {
+                window: window.window_handle(),
+                focus: focus.downgrade(),
+                buffer: Some(buffer),
+            };
+            let active = shell.enqueue_command_root(
+                Command {
+                    name: "knot.fixture.blocking-root".into(),
+                    arguments: CommandArgumentValue::Null,
+                },
+                origin.clone(),
+                None,
+                cx,
+            );
+            let queued = shell.enqueue_command_root(
+                Command {
+                    name: "knot.fixture.queued-lost-target".into(),
+                    arguments: CommandArgumentValue::Null,
+                },
+                origin,
+                None,
+                cx,
+            );
+            (active, queued, buffer)
+        });
+        shell.update(cx, |shell, cx| {
+            shell.close_buffer(buffer, cx);
+            shell.cancel_active_command(cx);
+        });
+
+        assert_eq!(active.completion.await.unwrap(), CommandOutcome::Cancelled);
+        assert_eq!(
+            queued.completion.await.unwrap(),
+            CommandOutcome::InvalidTarget
+        );
+        owner
+            .execute_fixture_script(
+                "verify-queued-target-loss.js",
+                r#"
+                    if (globalThis.lostTargetCommandRan) {
+                      throw new Error("queued command ran after its target was lost");
+                    }
+                "#,
+            )
+            .await
+            .unwrap();
+    }
+
+    #[gpui::test]
     fn selecting_an_open_buffer_reconstructs_only_the_secondary_view(cx: &mut TestAppContext) {
         let runtime = V8Host::new()
             .spawn_extension(ExtensionId::new(8))
@@ -4503,7 +4886,11 @@ mod tests {
             let shell = shell.read(cx);
             assert_eq!(shell.active_command_root, Some(CommandInvocationId::new(1)));
             assert_eq!(
-                shell.queued_command_roots.iter().copied().collect::<Vec<_>>(),
+                shell
+                    .queued_command_roots
+                    .iter()
+                    .copied()
+                    .collect::<Vec<_>>(),
                 vec![CommandInvocationId::new(2)]
             );
             assert_eq!(shell.next_command_invocation, 3);
@@ -4753,23 +5140,41 @@ mod tests {
                 Err(HostRequestError::Cancelled)
             );
 
-            shell.command_invocations.get_mut(&command_id).unwrap().cancelled = true;
+            shell
+                .command_invocations
+                .get_mut(&command_id)
+                .unwrap()
+                .cancelled = true;
             assert_eq!(
                 shell.validate_command_mutation(&request, cx),
                 Err(HostRequestError::Cancelled)
             );
-            shell.command_invocations.get_mut(&command_id).unwrap().cancelled = false;
+            shell
+                .command_invocations
+                .get_mut(&command_id)
+                .unwrap()
+                .cancelled = false;
 
             let dead_focus = {
                 let focus = cx.focus_handle();
                 focus.downgrade()
             };
-            shell.command_invocations.get_mut(&command_id).unwrap().context.focus = dead_focus;
+            shell
+                .command_invocations
+                .get_mut(&command_id)
+                .unwrap()
+                .context
+                .focus = dead_focus;
             assert_eq!(
                 shell.validate_command_mutation(&request, cx),
                 Err(HostRequestError::Cancelled)
             );
-            shell.command_invocations.get_mut(&command_id).unwrap().context.focus = live_focus;
+            shell
+                .command_invocations
+                .get_mut(&command_id)
+                .unwrap()
+                .context
+                .focus = live_focus;
 
             shell
                 .command_invocations

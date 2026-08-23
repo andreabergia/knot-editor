@@ -134,17 +134,17 @@ concurrent command executor or task graph.
   buffer.
 - ✅ Ignore late completion after cancellation without allowing it to overwrite
   the terminal outcome or start the next composed step.
-- ⬜ Confirm that disposing either participating extension settles all affected
+- ✅ Confirm that disposing either participating extension settles all affected
   promises and allows the root queue to continue.
 
 ### 6. Record or reject the capability
 
-- ⬜ Compare the observed scheduling and failure behavior with direct JavaScript
+- ✅ Compare the observed scheduling and failure behavior with direct JavaScript
   function composition and confirm that command reuse adds real value.
-- ⬜ If these rules are sufficient, update `architecture.md` with admission,
+- ✅ If these rules are sufficient, update `architecture.md` with admission,
   root/child scheduling, context inheritance, and runtime ownership.
-- ⬜ Record the validated choices and remaining liabilities in `decisions.md`.
-- ⬜ Update this plan and `roadmap.md` with ✅ markers and the checkpoint result.
+- ✅ Record the validated choices and remaining liabilities in `decisions.md`.
+- ✅ Update this plan and `roadmap.md` with ✅ markers and the checkpoint result.
 - ⬜ Run focused tests, run `cargo fmt` once at the end of Rust work, then run
   the full test suite.
 
@@ -166,9 +166,10 @@ scheduler remain deferred.
 
 ## Decision checkpoint
 
-Awaitable command-to-command invocation is justified only if the editor fixture
-can reuse native, cross-extension, and same-extension commands with predictable
-ordering, cancellation, inherited target identity, and lifecycle behavior using
-the narrow scheduling rules above. If execution requires general dependency
-scheduling or weakens serial extension callbacks, retain explicit rejection and
-direct extensions toward ordinary JavaScript functions and semantic host APIs.
+✅ Retain awaitable command-to-command invocation. The fixtures reuse native,
+cross-extension, and same-extension commands with predictable ordering,
+inherited target identity, downward cancellation, cycle rejection, and serial
+callbacks. One unfinished child per parent and one root tree per shell avoid a
+general dependency scheduler. Ordinary JavaScript functions remain the
+recommended mechanism when an extension does not need global command lookup,
+focus routing, or cross-extension reuse.

@@ -106,7 +106,11 @@ are revalidated before delayed mutation, so destroyed origins are rejected
 rather than silently retargeted. Configurable keymaps and nested or concurrent
 command execution remain deferred.
 
-## 11b. Async command invocation
+## 11b. Async command invocation ✅
+
+Status: complete. Awaited command reuse is viable with one serialized root
+queue, inherited child targets, runtime-ancestry cycle rejection, and
+downward-only cancellation.
 
 Exploration plan:
 [step11b-async-command-plan.md](step11b-async-command-plan.md).
@@ -119,9 +123,11 @@ Exploration plan:
 - Define result, cancellation, context inheritance, and concurrency semantics
   only where concrete composition fixtures require them.
 
-Decision checkpoint: can JavaScript commands safely reuse and await other
-commands without turning the dispatcher into a second function or task-graph
-system?
+Decision: JavaScript commands can safely reuse native, cross-extension, and
+same-extension commands without a second composition language or a general
+task graph. Same-extension reuse is an inline nested handler frame; direct
+functions remain the simpler choice when command lookup and routing semantics
+are unnecessary.
 
 ## 12. Capability aggregation
 
