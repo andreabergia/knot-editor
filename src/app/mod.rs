@@ -3140,6 +3140,11 @@ mod tests {
             .await
             .unwrap();
 
+        assert_eq!(
+            cx.read(|cx| shell.read(cx).command_diagnostic),
+            None,
+            "the argument-bearing fixture command must not use the cross-surface diagnostic"
+        );
         let final_text = cx.read(|cx| shell.read(cx).editor.read(cx).model().read(cx).text());
         assert_eq!(final_text, format!("{FIXTURE_EDIT_ARGUMENT}{two_edits}"));
     }
