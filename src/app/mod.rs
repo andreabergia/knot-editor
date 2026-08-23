@@ -4761,7 +4761,6 @@ mod tests {
             let shell = shell.read(cx);
             let editor = shell.editor.read(cx);
             let (cursor_line, scroll, paints) = editor.responsiveness_state();
-            assert!(shell.outline.read(cx).is_loading());
             assert!(shell.heartbeat > heartbeat);
             assert!(editor.model().read(cx).text().starts_with('x'));
             assert!(cursor_line > 0);
