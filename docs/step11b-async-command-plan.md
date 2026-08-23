@@ -18,8 +18,9 @@ model. It is not required for the step 11 focus-routing checkpoint.
 - ✅ Composite command definitions, typed pipelines, repetition wrappers,
   decorators, rollback, implicit undo grouping, and serializable command return
   values are not planned.
-- ✅ Step 11 supports only top-level programmatic invocation and rejects
-  invocation from inside a running extension command handler.
+- ✅ Step 11 established top-level programmatic invocation and rejected
+  invocation from inside a running extension command handler before this
+  exploration.
 
 The intended user-level expression remains ordinary JavaScript:
 
@@ -145,7 +146,7 @@ concurrent command executor or task graph.
   root/child scheduling, context inheritance, and runtime ownership.
 - ✅ Record the validated choices and remaining liabilities in `decisions.md`.
 - ✅ Update this plan and `roadmap.md` with ✅ markers and the checkpoint result.
-- ⬜ Run focused tests, run `cargo fmt` once at the end of Rust work, then run
+- ✅ Run focused tests, run `cargo fmt` once at the end of Rust work, then run
   the full test suite.
 
 ## Commit boundaries
