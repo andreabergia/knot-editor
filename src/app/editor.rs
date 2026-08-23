@@ -34,9 +34,8 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use crate::core::anchored_range::AnchoredRangeId;
 use crate::host::protocol::{
-    BufferHandle, ByteRange, CommandOutcome, CompletionProviderRegistrationId,
-    CompletionRequest, CompletionResponse, DecorationToken, EditorContribution, GutterToken,
-    TextEdit,
+    BufferHandle, ByteRange, CommandOutcome, CompletionProviderRegistrationId, CompletionRequest,
+    CompletionResponse, DecorationToken, EditorContribution, GutterToken, TextEdit,
 };
 
 use super::{
@@ -354,13 +353,9 @@ impl EditorView {
         let position_range = model.update(cx, |model, _| model.add_view_position(0..0));
         let model_subscription = cx.observe(&model, |this, model, cx| {
             let model = model.read(cx);
-            if this
-                .completion
-                .as_ref()
-                .is_some_and(|completion| {
-                    completion.revision() != model.revision() || !model.is_open()
-                })
-            {
+            if this.completion.as_ref().is_some_and(|completion| {
+                completion.revision() != model.revision() || !model.is_open()
+            }) {
                 this.completion = None;
                 this.completion_surface = None;
                 this.completion_tasks.clear();
@@ -1544,7 +1539,9 @@ impl EditorView {
         self.dismiss_completion();
         let cursor_byte_offset = self.to_flat_byte(self.cursor_line, self.cursor_col);
         let Some((text, revision)) = self.model.read_with(cx, |model, _| {
-            model.is_editable().then(|| (model.text(), model.revision()))
+            model
+                .is_editable()
+                .then(|| (model.text(), model.revision()))
         }) else {
             return Vec::new();
         };
@@ -1681,24 +1678,14 @@ impl EditorView {
         }
     }
 
-    fn completion_next(
-        &mut self,
-        _: &CompletionNext,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn completion_next(&mut self, _: &CompletionNext, _: &mut Window, cx: &mut Context<Self>) {
         if let Some(surface) = self.completion_surface.as_mut() {
             surface.move_selection(1);
             cx.notify();
         }
     }
 
-    fn completion_accept(
-        &mut self,
-        _: &CompletionAccept,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn completion_accept(&mut self, _: &CompletionAccept, _: &mut Window, cx: &mut Context<Self>) {
         self.accept_selected_completion(cx);
     }
 
@@ -2332,6 +2319,7 @@ mod tests {
         BufferModel, ContributionSource, EditorRenderingOptions, EditorView,
         ResolvedEditorContribution, default_projection, project_contributions,
     };
+    use crate::view::fixture::Fixture;
     use crate::{
         app::completion::CompletionProviderRegistry,
         host::protocol::{
@@ -2339,7 +2327,6 @@ mod tests {
             EditorContribution, ExtensionId, ExtensionLifecycleId, GutterToken,
         },
     };
-    use crate::view::fixture::Fixture;
 
     #[test]
     fn projection_refreshes_from_authoritative_buffer_text() {

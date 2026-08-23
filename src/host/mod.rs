@@ -1218,11 +1218,8 @@ async fn op_completion_register(
     state: Rc<RefCell<OpState>>,
     #[string] label: String,
 ) -> Result<u64, JsErrorBox> {
-    let response = request_host_operation(
-        state,
-        HostOperation::RegisterCompletionProvider { label },
-    )
-    .await?;
+    let response =
+        request_host_operation(state, HostOperation::RegisterCompletionProvider { label }).await?;
     match response.result {
         Ok(HostResponseValue::CompletionProviderRegistered { registration }) => {
             Ok(registration.value())
@@ -2580,8 +2577,8 @@ impl ExtensionRuntime {
                         .borrow_mut()
                         .borrow_mut::<CompletionCallbackStore>()
                         .response = None;
-                    let prefix =
-                        serde_json::to_string(&request.prefix).expect("completion prefix serializes");
+                    let prefix = serde_json::to_string(&request.prefix)
+                        .expect("completion prefix serializes");
                     let source = format!(
                         "globalThis.__knotRequestCompletions({}, {}, {}, {}, {}, {})",
                         request.registration.value(),
@@ -2645,10 +2642,10 @@ mod tests {
     use crate::host::protocol::{
         BufferChange, BufferHandle, BufferSubscriptionId, ByteRange, CommandArgumentValue,
         CommandInvocation, CommandInvocationId, CommandInvokeDispatch, CommandOutcome,
-        CommandRegistrationId, ExtensionId, ExtensionLifecycleId, HostOperation, HostRequestError,
-        HostResponse, HostResponseValue, RequestId, SnapshotText, TextEdit, TextSnapshot,
-        CompletionProviderRegistrationId, CompletionRequest, TreeChildrenRequest,
-        TreeCollapsibleState, TreeIcon, TreeProviderRegistrationId,
+        CommandRegistrationId, CompletionProviderRegistrationId, CompletionRequest, ExtensionId,
+        ExtensionLifecycleId, HostOperation, HostRequestError, HostResponse, HostResponseValue,
+        RequestId, SnapshotText, TextEdit, TextSnapshot, TreeChildrenRequest, TreeCollapsibleState,
+        TreeIcon, TreeProviderRegistrationId,
     };
 
     #[test]

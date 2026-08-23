@@ -16,8 +16,9 @@ use crate::host::{
     protocol::{
         BufferChange, BufferHandle, ByteRange, Command, CommandArgumentValue, CommandInvocation,
         CommandInvocationId, CommandInvokeDispatch, CommandOutcome, CompletionProviderError,
-        CompletionResponse, ExtensionId, HostOperation, HostRequest, HostRequestError, HostResponse,
-        HostResponseValue, TreeChildrenResponse, TreeProviderError, TreeProviderRegistrationId,
+        CompletionResponse, ExtensionId, HostOperation, HostRequest, HostRequestError,
+        HostResponse, HostResponseValue, TreeChildrenResponse, TreeProviderError,
+        TreeProviderRegistrationId,
     },
 };
 
@@ -1167,11 +1168,9 @@ impl Shell {
                 }
             }
             HostOperation::RegisterCompletionProvider { label } => {
-                let registration = self.completion_providers.register(
-                    request.extension,
-                    request.lifecycle,
-                    label,
-                );
+                let registration =
+                    self.completion_providers
+                        .register(request.extension, request.lifecycle, label);
                 Ok(HostResponseValue::CompletionProviderRegistered { registration })
             }
             HostOperation::UnregisterCompletionProvider { registration } => {
@@ -1381,11 +1380,7 @@ impl Shell {
                     let Some(editor) = weak_editor.upgrade() else {
                         return;
                     };
-                    if this
-                        .buffer_registry
-                        .resolve(request.buffer)
-                        .is_err()
-                    {
+                    if this.buffer_registry.resolve(request.buffer).is_err() {
                         return;
                     }
                     editor.update(cx, |editor, cx| {
@@ -3174,7 +3169,13 @@ mod tests {
             diagnostic.command.arguments,
             CommandArgumentValue::String(super::DIAGNOSTIC_BINDING_ARGUMENT.into())
         );
-        let edit = bindings[1]
+        let completion = bindings[1]
+            .action()
+            .as_any()
+            .downcast_ref::<super::KeybindingCommand>()
+            .unwrap();
+        assert_eq!(completion.command.arguments, CommandArgumentValue::Null);
+        let edit = bindings[2]
             .action()
             .as_any()
             .downcast_ref::<super::KeybindingCommand>()
@@ -3183,7 +3184,7 @@ mod tests {
             edit.command.arguments,
             CommandArgumentValue::String(FIXTURE_EDIT_ARGUMENT.into())
         );
-        let multi_key = bindings[2]
+        let multi_key = bindings[3]
             .action()
             .as_any()
             .downcast_ref::<super::KeybindingCommand>()
@@ -5082,12 +5083,7 @@ mod tests {
         });
         cx.run_until_parked();
         cx.read(|cx| {
-            let state = shell
-                .read(cx)
-                .editor
-                .read(cx)
-                .completion_state()
-                .unwrap();
+            let state = shell.read(cx).editor.read(cx).completion_state().unwrap();
             assert_eq!(state.3, super::completion::CompletionSurfaceKind::Compact);
             assert_eq!(state.4, generation);
             assert_eq!(state.1, 1);
@@ -5106,15 +5102,7 @@ mod tests {
         });
         cx.run_until_parked();
         assert_eq!(
-            cx.read(|cx| {
-                shell
-                    .read(cx)
-                    .editor
-                    .read(cx)
-                    .completion_state()
-                    .unwrap()
-                    .3
-            }),
+            cx.read(|cx| { shell.read(cx).editor.read(cx).completion_state().unwrap().3 }),
             super::completion::CompletionSurfaceKind::List
         );
         shell.update_in(cx, |shell, window, cx| {
@@ -5145,12 +5133,7 @@ mod tests {
             shell.next_notification(Duration::ZERO, cx).await;
         }
         cx.read(|cx| {
-            let state = shell
-                .read(cx)
-                .editor
-                .read(cx)
-                .completion_state()
-                .unwrap();
+            let state = shell.read(cx).editor.read(cx).completion_state().unwrap();
             assert_eq!(state.0, 5);
             assert_eq!(state.2, 0);
             assert_eq!(state.3, super::completion::CompletionSurfaceKind::Compact);
@@ -5191,12 +5174,7 @@ mod tests {
             shell.next_notification(Duration::ZERO, cx).await;
         }
         let failed_generation = cx.read(|cx| {
-            let state = shell
-                .read(cx)
-                .editor
-                .read(cx)
-                .completion_state()
-                .unwrap();
+            let state = shell.read(cx).editor.read(cx).completion_state().unwrap();
             assert_eq!(state.0, 3);
             assert_eq!(state.2, 1);
             state.4
@@ -5224,25 +5202,13 @@ mod tests {
             shell.next_notification(Duration::ZERO, cx).await;
         }
         cx.read(|cx| {
-            let state = shell
-                .read(cx)
-                .editor
-                .read(cx)
-                .completion_state()
-                .unwrap();
+            let state = shell.read(cx).editor.read(cx).completion_state().unwrap();
             assert_eq!(state.0, 5);
             assert_eq!(state.2, 0);
         });
 
         cx.simulate_keystrokes("escape");
-        assert!(cx.read(|cx| {
-            shell
-                .read(cx)
-                .editor
-                .read(cx)
-                .completion_state()
-                .is_none()
-        }));
+        assert!(cx.read(|cx| { shell.read(cx).editor.read(cx).completion_state().is_none() }));
 
         shell.update_in(cx, |shell, window, cx| {
             let origin = shell.command_origin(window, cx).unwrap();

@@ -1,4 +1,8 @@
-use std::{collections::{HashMap, HashSet}, ops::Range, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    ops::Range,
+    sync::Arc,
+};
 
 use gpui::{prelude::*, *};
 
@@ -141,10 +145,7 @@ impl CompletionSurface for ListCompletionSurface {
                     .px_2()
                     .py_1()
                     .text_color(rgb(0xbf616a))
-                    .child(format!(
-                        "{}: {}",
-                        failure.provider_label, failure.message
-                    ))
+                    .child(format!("{}: {}", failure.provider_label, failure.message))
             }))
             .child(
                 div()
@@ -448,7 +449,9 @@ impl CompletionController {
             items: ranked
                 .into_iter()
                 .filter_map(|(_, _, _, item)| {
-                    insertion_texts.insert(item.insert_text.clone()).then_some(item)
+                    insertion_texts
+                        .insert(item.insert_text.clone())
+                        .then_some(item)
                 })
                 .collect::<Vec<_>>()
                 .into(),
