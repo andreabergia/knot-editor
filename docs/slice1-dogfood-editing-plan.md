@@ -21,6 +21,11 @@ splits. Syntax highlighting is not required.
 - ⬜ Let each tab own an independent editor view. Multiple tabs, panes, or
   windows may present the same buffer with independent cursor, selection, and
   scroll state.
+- ⬜ Implement user-facing semantic operations as registered native commands.
+  Menus, keybindings, the palette, and JavaScript must enter the same
+  target-preserving dispatcher rather than call separate shell or view methods.
+  Raw text input, IME, pointer gestures, scrolling, and focus changes remain
+  input protocols rather than commands.
 - ⬜ Retain validated prototype code when it fits these behaviors; change
   boundaries only where this slice supplies a concrete counterexample.
 
@@ -32,8 +37,9 @@ splits. Syntax highlighting is not required.
    Save.
 3. `knot <folder>` opens that folder as a workspace. Files selected in its tree
    open as ordinary documents.
-4. New and Open use standard menu items and shortcuts. Open uses the native
-   file dialog and accepts either a file or a folder.
+4. New and Open use standard menu items and shortcuts. These entry points
+   dispatch the same commands exposed through the palette and JavaScript. Open
+   uses the native file dialog and accepts either a file or a folder.
 5. A document can be shown in tabs, splits, and multiple windows. Each view
    retains its own presentation state while edits remain shared.
 6. Save writes the selected document. An untitled document uses the native
@@ -90,7 +96,29 @@ slice does not introduce a general docking or surface framework.
 - ⬜ Keep tab dragging, arbitrary docking, and layout persistence out of this
   slice.
 
-### 3. Make documents and resources user-facing
+### 3. Make product operations first-class commands
+
+- ⬜ Register New, Open, Save, Save As, Close Tab, Close Window, New Window,
+  Quit, Split Horizontal, Split Vertical, Undo, Redo, Cut, Copy, Paste, and
+  Select All as native `CommandCatalog` entries.
+- ⬜ Route native menus and keybindings through the command dispatcher. Do not
+  retain direct menu-to-shell or keybinding-to-shell implementations of the
+  same operations.
+- ⬜ Let the command palette discover and invoke each operation from the
+  catalog without operation-specific palette code.
+- ⬜ Allow JavaScript to invoke and await the same commands through
+  `commands.invoke(...)`. Interactive Open and Save As invocations use the
+  native dialogs; explicit destination arguments remain deferred until an
+  automation use case defines their safety and semantics.
+- ⬜ Preserve captured targets: editing and Save address the focused document,
+  Split the focused pane, Close the focused tab or window, and Open the
+  captured window. Quit coordinates application-owned documents across
+  windows. Reject destroyed targets rather than falling back to current focus.
+- ⬜ Keep asynchronous command invocations pending until dialogs, confirmation,
+  or persistence work settles and return the existing structured command
+  outcome to every caller.
+
+### 4. Make documents and resources user-facing
 
 - ⬜ Represent untitled, destination-associated-but-uncreated, persisted, and
   generated documents explicitly. Dirty state must account for never-saved
@@ -98,14 +126,13 @@ slice does not introduce a general docking or surface framework.
 - ⬜ Deduplicate open files application-wide by normalized resource URI and
   focus an existing view or create another view according to the invoking
   command.
-- ⬜ Add New, Open, Save, Save As, Close Tab, Close Window, and Quit to the
-  native menu and command paths.
+- ⬜ Add the registered document and window commands to the native macOS menu.
 - ⬜ Use native Open and Save dialogs. A selected folder becomes a window
   workspace; a selected file becomes a document regardless of workspace.
 - ⬜ Bind an untitled or destination-associated document to its normalized URI
   only after the relevant create/save operation succeeds.
 
-### 4. Complete ordinary editing behavior
+### 5. Complete ordinary editing behavior
 
 - ⬜ Verify insertion, multiline deletion, newline handling, grapheme-aware
   cursor movement, and selection against ordinary source files.
@@ -118,7 +145,7 @@ slice does not introduce a general docking or surface framework.
 - ⬜ Keep plain text as the only required presentation; syntax highlighting
   and in-buffer Find are deferred.
 
-### 5. Add usable undo and redo
+### 6. Add usable undo and redo
 
 - ⬜ Build per-document undo history from ordinary `EditTransaction` edits so
   undo and redo retain the normal model notification and anchor paths.
@@ -130,7 +157,7 @@ slice does not introduce a general docking or surface framework.
 - ⬜ Clear redo after a divergent edit and preserve independent history across
   document and view switches.
 
-### 6. Make persistence safe enough for daily use
+### 7. Make persistence safe enough for daily use
 
 - ⬜ Extend the provider contract to create new files and atomically replace
   existing local files using a temporary sibling and rename.
@@ -144,7 +171,7 @@ slice does not introduce a general docking or surface framework.
 - ⬜ Surface open, decode, create, conflict, and save failures without losing
   document text or retargeting the operation.
 
-### 7. Close and dogfood the slice
+### 8. Close and dogfood the slice
 
 - ⬜ Protect dirty documents when closing a tab, closing a window, or quitting;
   do not prompt twice for a document visible in multiple places.
@@ -156,6 +183,9 @@ slice does not introduce a general docking or surface framework.
   buffer.
 - ⬜ Exercise undo/redo, Save As outside the workspace, an external-change
   conflict, tab/window closure, and application quit during that session.
+- ⬜ Invoke the slice's registered semantic commands through their applicable
+  menu or keybinding, the command palette, and JavaScript, confirming that all
+  paths preserve the same target and outcome.
 - ⬜ Update `architecture.md` and `decisions.md` for the document, workbench,
   history, and persistence boundaries validated by the finished slice.
 - ⬜ Mark this plan as completed with its result and move any newly deferred
