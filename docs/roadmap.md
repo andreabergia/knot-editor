@@ -5,6 +5,41 @@ development. Completed work is summarized here; durable rationale lives in
 `decisions.md`, current boundaries in `architecture.md`, and measurements in
 the focused evidence reports.
 
+## Exploration conclusion
+
+The exploration phase is complete. The prototype validates Knot's central
+architecture:
+
+- Rust and gpui support the intended native editor and application shell.
+- A foreground-owned editor model composes with asynchronous native work and
+  independent extension runtimes.
+- Stable text positions, anchored ranges, and ordinary reversible edits provide
+  a viable core for text-centric features.
+- Native views can remain surface-specific while sharing commands and semantic
+  application services.
+- Extensions can use typed, asynchronous, semantic APIs without receiving UI
+  framework objects or requiring a general widget protocol.
+- URI-based resources keep workspace and persistence flows independent of
+  local platform paths.
+
+The implementation will evolve into the product rather than be replaced
+wholesale. Validated, non-trivial code is retained where it fits; prototype
+shortcuts are replaced only when a concrete product slice requires different
+behavior or stronger guarantees.
+
+Production development proceeds through end-to-end, usable vertical slices.
+Each slice includes the UI, model, persistence, and hardening required by its
+use case. Shared infrastructure is extracted or generalized when a concrete
+slice demonstrates the need, rather than built as a separate foundations
+phase. Early slices prioritize making Knot useful for its own development so
+that daily use determines what comes next.
+
+Known risks remain visible without extending the exploration phase: Linux
+framework viability, production extension scheduling, and accessibility need
+concrete product checkpoints. The prototype exclusions at the end of this
+document become candidate work for those slices, not a pre-production
+foundation backlog.
+
 ## Completed validations
 
 | Step | Question | Result |
