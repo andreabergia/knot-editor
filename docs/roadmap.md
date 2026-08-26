@@ -153,9 +153,12 @@ deferred.
 
 ## 13. URI and filesystem providers
 
+Execution plan: [step13-uri-filesystem-plan.md](step13-uri-filesystem-plan.md).
+
 - Implement an in-memory provider rooted at a non-`file://` URI.
+- Implement a local-folder provider rooted at a `file://` URI.
 - Support normalization, enumeration, read, write, and stat.
-- Open a workspace and buffer through it.
+- Open workspaces and buffers through both providers.
 - Find and remove or document paths that assume local files.
 
 Decision checkpoint: does the provider abstraction generalize without leaking
