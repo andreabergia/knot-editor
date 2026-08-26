@@ -6,7 +6,10 @@
 use gpui::{prelude::FluentBuilder, *};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex, OnceLock,
+        atomic::{AtomicU64, Ordering},
+    },
     time::Duration,
 };
 
@@ -25,25 +28,38 @@ use crate::host::{
 mod command_palette;
 mod completion;
 mod editor;
+mod filesystem;
 pub mod model;
 mod open_buffers;
+mod resource;
 mod search_results;
 mod terminal_view;
 mod tree_view;
+mod workspace;
+mod workspace_tree;
 
 use command_palette::{CommandPalette, CommandPaletteEntry, CommandPaletteEvent};
 use completion::CompletionProviderRegistry;
 use editor::{
     EditorContributionAction, EditorRenderingOptions, EditorView, seed_fixture_contributions,
 };
+use filesystem::{
+    FileSystemProviderRegistry, LocalFileSystemProvider, MemoryFileSystemProvider, ResourceError,
+    ResourceKind, ResourceStat,
+};
 use model::{
     BufferAccessError, BufferModel, BufferRegistry, BufferSubscriptionRegistry, CommandCatalog,
     ContributionError, ContributionSource,
 };
 use open_buffers::{OpenBufferCollection, OpenBufferId};
+use resource::ResourceUri;
 use search_results::{ACTIVATE_SEARCH_RESULT_COMMAND, SearchResultsController};
 use terminal_view::TerminalView;
 use tree_view::{TreeProviderIdentity, TreeView, TreeViewEvent, TreeViewRegistrationError};
+use workspace::{WorkspaceSnapshot, WorkspaceState};
+use workspace_tree::{
+    WorkspaceTree, WorkspaceTreeEvent, WorkspaceTreeRequest, WorkspaceTreeResponse,
+};
 
 actions!(
     knot,
@@ -509,9 +525,141 @@ impl Render for DragGhost {
     }
 }
 
+#[derive(Debug)]
+enum ResourceBufferError {
+    Provider(ResourceError),
+    InvalidUtf8 { uri: ResourceUri },
+}
+
+impl std::fmt::Display for ResourceBufferError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Provider(error) => error.fmt(formatter),
+            Self::InvalidUtf8 { uri } => write!(formatter, "resource is not valid UTF-8: {uri}"),
+        }
+    }
+}
+
+impl From<ResourceError> for ResourceBufferError {
+    fn from(error: ResourceError) -> Self {
+        Self::Provider(error)
+    }
+}
+
+type FilesystemFixture = (
+    Arc<FileSystemProviderRegistry>,
+    ResourceUri,
+    ResourceUri,
+    Arc<tokio::runtime::Runtime>,
+);
+
+fn build_filesystem_fixture() -> FilesystemFixture {
+    static NATIVE_IO_RUNTIME: OnceLock<Arc<tokio::runtime::Runtime>> = OnceLock::new();
+    let native_io_runtime = NATIVE_IO_RUNTIME
+        .get_or_init(|| {
+            Arc::new(
+                tokio::runtime::Builder::new_multi_thread()
+                    .worker_threads(1)
+                    .enable_all()
+                    .thread_name("knot-filesystem")
+                    .build()
+                    .expect("native filesystem runtime starts"),
+            )
+        })
+        .clone();
+
+    let memory_root = ResourceUri::parse("mem://workspace/").expect("memory fixture root is valid");
+    let memory_provider = Arc::new(
+        MemoryFileSystemProvider::new(memory_root.clone())
+            .expect("memory fixture provider accepts its root"),
+    );
+    let memory_root = memory_provider.root().clone();
+    for directory in ["mem://workspace/src", "mem://workspace/notes"] {
+        memory_provider
+            .seed_directory(ResourceUri::parse(directory).expect("memory fixture URI is valid"))
+            .expect("memory fixture directory can be seeded");
+    }
+    for (uri, bytes) in [
+        (
+            "mem://workspace/README.md",
+            b"# Knot memory workspace\n".as_slice(),
+        ),
+        (
+            "mem://workspace/src/main.rs",
+            b"fn main() {\n    println!(\"memory workspace\");\n}\n".as_slice(),
+        ),
+        (
+            "mem://workspace/notes/todo.txt",
+            b"validate URI persistence\n".as_slice(),
+        ),
+        ("mem://workspace/invalid.bin", &[0xff, 0xfe][..]),
+    ] {
+        memory_provider
+            .seed_file(
+                ResourceUri::parse(uri).expect("memory fixture URI is valid"),
+                bytes,
+            )
+            .expect("memory fixture file can be seeded");
+    }
+
+    static NEXT_LOCAL_FIXTURE: AtomicU64 = AtomicU64::new(1);
+    let fixture_id = NEXT_LOCAL_FIXTURE.fetch_add(1, Ordering::Relaxed);
+    let local_root_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("target")
+        .join(format!(
+            "step13-local-workspace-{}-{fixture_id}",
+            std::process::id()
+        ));
+    std::fs::create_dir_all(local_root_path.join("src"))
+        .expect("local fixture directory can be created");
+    std::fs::write(
+        local_root_path.join("README.md"),
+        b"# Knot local workspace\n",
+    )
+    .expect("local fixture can be seeded");
+    std::fs::write(
+        local_root_path.join("src/lib.rs"),
+        b"pub fn fixture() -> &'static str { \"local workspace\" }\n",
+    )
+    .expect("nested local fixture can be seeded");
+    let local_provider = Arc::new(
+        LocalFileSystemProvider::new(&local_root_path, native_io_runtime.clone())
+            .expect("local fixture provider accepts its root"),
+    );
+    let local_root = local_provider.root().clone();
+
+    let mut providers = FileSystemProviderRegistry::new();
+    providers
+        .register("mem", memory_provider)
+        .expect("memory scheme is unique");
+    providers
+        .register("file", local_provider)
+        .expect("file scheme is unique");
+    (
+        Arc::new(providers),
+        memory_root,
+        local_root,
+        native_io_runtime,
+    )
+}
+
+#[cfg(test)]
+fn shared_test_filesystem_fixture() -> FilesystemFixture {
+    static FIXTURE: OnceLock<FilesystemFixture> = OnceLock::new();
+    FIXTURE.get_or_init(build_filesystem_fixture).clone()
+}
+
 struct Shell {
     open_buffers: OpenBufferCollection,
     source_buffer: OpenBufferId,
+    filesystem_providers: Arc<FileSystemProviderRegistry>,
+    workspace: WorkspaceState,
+    workspace_tree: Entity<WorkspaceTree>,
+    memory_workspace_root: ResourceUri,
+    local_workspace_root: ResourceUri,
+    resource_operation_generation: u64,
+    resource_status: SharedString,
+    latest_resource_error: Option<SharedString>,
     outline: Entity<TreeView>,
     left_width: f32,
     right_width: f32,
@@ -552,9 +700,12 @@ struct Shell {
     background_executor: BackgroundExecutor,
     _runtime_bridge_tasks: Vec<Task<()>>,
     _runtime_execution_tasks: Vec<Task<()>>,
-    _model_subscription: Subscription,
+    _resource_tasks: Vec<Task<()>>,
+    _native_io_runtime: Arc<tokio::runtime::Runtime>,
+    _model_subscriptions: Vec<Subscription>,
     _editor_action_subscriptions: Vec<Subscription>,
     _tree_view_subscription: Subscription,
+    _workspace_tree_subscription: Subscription,
     _heartbeat_task: Task<()>,
     /// Name of the fixture currently loaded (shown in a thin status header
     /// above the editor so it's visible at a glance which fixture is running).
@@ -563,12 +714,29 @@ struct Shell {
 
 impl Shell {
     /// Construct the shell with the default fixture.
+    #[cfg(test)]
     fn new(runtime: ExtensionRuntimeParts, cx: &mut Context<Self>) -> Self {
         Self::new_with_runtimes(vec![runtime], cx)
     }
 
+    #[cfg(test)]
     fn new_with_runtimes(runtimes: Vec<ExtensionRuntimeParts>, cx: &mut Context<Self>) -> Self {
-        Self::new_with_runtimes_and_fixture(runtimes, DEFAULT_FIXTURE_NAME.into(), cx)
+        Self::new_with_runtimes_fixture_and_filesystems(
+            runtimes,
+            DEFAULT_FIXTURE_NAME.into(),
+            shared_test_filesystem_fixture(),
+            cx,
+        )
+    }
+
+    #[cfg(test)]
+    fn new_with_resource_fixture(runtime: ExtensionRuntimeParts, cx: &mut Context<Self>) -> Self {
+        Self::new_with_runtimes_fixture_and_filesystems(
+            vec![runtime],
+            DEFAULT_FIXTURE_NAME.into(),
+            build_filesystem_fixture(),
+            cx,
+        )
     }
 
     /// Construct the shell with an explicitly selected fixture. Fixture
@@ -577,6 +745,20 @@ impl Shell {
     fn new_with_runtimes_and_fixture(
         runtimes: Vec<ExtensionRuntimeParts>,
         fixture_name: String,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self::new_with_runtimes_fixture_and_filesystems(
+            runtimes,
+            fixture_name,
+            build_filesystem_fixture(),
+            cx,
+        )
+    }
+
+    fn new_with_runtimes_fixture_and_filesystems(
+        runtimes: Vec<ExtensionRuntimeParts>,
+        fixture_name: String,
+        filesystems: FilesystemFixture,
         cx: &mut Context<Self>,
     ) -> Self {
         let fixture_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -610,6 +792,23 @@ impl Shell {
         buffer_registry.set_active(Some(handle));
         let mut open_buffers = OpenBufferCollection::new();
         let source_buffer = open_buffers.add(format!("{fixture_name}.kfx"), model.clone());
+        let (filesystem_providers, memory_workspace_root, local_workspace_root, native_io_runtime) =
+            filesystems;
+        let workspace = WorkspaceState::new(memory_workspace_root.clone());
+        let workspace_tree = cx.new(|cx| WorkspaceTree::new(workspace.snapshot(), cx));
+        let workspace_tree_subscription = cx.subscribe(
+            &workspace_tree,
+            |this, _tree, event: &WorkspaceTreeEvent, cx| {
+                this.dispatch_workspace_tree_event(event.clone(), cx);
+            },
+        );
+        #[cfg(not(test))]
+        {
+            let workspace_tree_to_load = workspace_tree.clone();
+            cx.defer(move |cx| {
+                workspace_tree_to_load.update(cx, |tree, cx| tree.load(cx));
+            });
+        }
         let editor = cx.new(|cx| EditorView::from_fixture(&fixture, model.clone(), cx));
         let secondary_editor = cx.new(|cx| {
             EditorView::from_fixture_with_options(
@@ -756,6 +955,14 @@ impl Shell {
         Shell {
             open_buffers,
             source_buffer,
+            filesystem_providers,
+            workspace,
+            workspace_tree,
+            memory_workspace_root,
+            local_workspace_root,
+            resource_operation_generation: 0,
+            resource_status: "ready".into(),
+            latest_resource_error: None,
             outline,
             left_width: 260.,
             right_width: 220.,
@@ -789,12 +996,15 @@ impl Shell {
             background_executor: cx.background_executor().clone(),
             _runtime_bridge_tasks: runtime_bridge_tasks,
             _runtime_execution_tasks: runtime_execution_tasks,
-            _model_subscription: model_subscription,
+            _resource_tasks: Vec::new(),
+            _native_io_runtime: native_io_runtime,
+            _model_subscriptions: vec![model_subscription],
             _editor_action_subscriptions: vec![
                 editor_action_subscription,
                 secondary_editor_action_subscription,
             ],
             _tree_view_subscription: tree_view_subscription,
+            _workspace_tree_subscription: workspace_tree_subscription,
             _heartbeat_task: heartbeat_task,
             fixture_name,
         }
@@ -2259,6 +2469,236 @@ impl Shell {
             .into_any_element()
     }
 
+    fn dispatch_workspace_tree_event(&mut self, event: WorkspaceTreeEvent, cx: &mut Context<Self>) {
+        match event {
+            WorkspaceTreeEvent::RequestChildren(request) => {
+                self.enumerate_workspace_directory(request, cx);
+            }
+            WorkspaceTreeEvent::OpenFile { workspace, uri } => {
+                self.open_workspace_file(workspace, uri, cx);
+            }
+        }
+    }
+
+    fn enumerate_workspace_directory(
+        &mut self,
+        request: WorkspaceTreeRequest,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.workspace.is_current(&request.workspace) {
+            return;
+        }
+        let providers = self.filesystem_providers.clone();
+        let task = cx.spawn(async move |this, cx| {
+            let result = async {
+                let parent = providers.normalize(request.parent.clone()).await?;
+                Self::validate_workspace_target(&request.workspace, &parent)?;
+                let provider = providers.provider(&parent)?;
+                match provider.stat(parent.clone()).await? {
+                    ResourceStat::Directory => provider.enumerate(parent).await,
+                    ResourceStat::File => Err(ResourceError::WrongKind {
+                        uri: parent,
+                        expected: ResourceKind::Directory,
+                        actual: ResourceKind::File,
+                    }),
+                    ResourceStat::Missing => Err(ResourceError::NotFound { uri: parent }),
+                }
+            }
+            .await;
+            let error = result.as_ref().err().map(|error| error.to_string());
+            let response = WorkspaceTreeResponse {
+                workspace: request.workspace.clone(),
+                parent: request.parent,
+                generation: request.generation,
+                result: result.map_err(|error| error.to_string().into()),
+            };
+            let _ = this.update(cx, |this, cx| {
+                if !this.workspace.is_current(&request.workspace) {
+                    return;
+                }
+                let applied = this
+                    .workspace_tree
+                    .update(cx, |tree, cx| tree.apply_response(response, cx));
+                if !applied {
+                    return;
+                }
+                if this.resource_status.starts_with("workspace") || this.resource_status == "ready"
+                {
+                    if let Some(error) = error {
+                        this.resource_status = "workspace enumeration failed".into();
+                        this.latest_resource_error = Some(error.into());
+                    } else {
+                        this.resource_status = "workspace ready".into();
+                        this.latest_resource_error = None;
+                    }
+                }
+                cx.notify();
+            });
+        });
+        self._resource_tasks.push(task);
+    }
+
+    fn open_workspace_file(
+        &mut self,
+        workspace: WorkspaceSnapshot,
+        uri: ResourceUri,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.workspace.is_current(&workspace) {
+            return;
+        }
+        self.resource_operation_generation = self
+            .resource_operation_generation
+            .checked_add(1)
+            .expect("resource operation generation overflowed");
+        let operation_generation = self.resource_operation_generation;
+        self.resource_status = format!("loading {uri}").into();
+        self.latest_resource_error = None;
+        let providers = self.filesystem_providers.clone();
+        let task = cx.spawn(async move |this, cx| {
+            let result: Result<(ResourceUri, String), ResourceBufferError> = async {
+                let normalized = providers.normalize(uri).await?;
+                Self::validate_workspace_target(&workspace, &normalized)?;
+                let provider = providers.provider(&normalized)?;
+                match provider.stat(normalized.clone()).await? {
+                    ResourceStat::File => {}
+                    ResourceStat::Directory => {
+                        return Err(ResourceError::WrongKind {
+                            uri: normalized,
+                            expected: ResourceKind::File,
+                            actual: ResourceKind::Directory,
+                        }
+                        .into());
+                    }
+                    ResourceStat::Missing => {
+                        return Err(ResourceError::NotFound { uri: normalized }.into());
+                    }
+                }
+                let bytes = provider.read(normalized.clone()).await?;
+                let text =
+                    String::from_utf8(bytes).map_err(|_| ResourceBufferError::InvalidUtf8 {
+                        uri: normalized.clone(),
+                    })?;
+                Ok((normalized, text))
+            }
+            .await;
+
+            let _ = this.update(cx, |this, cx| {
+                if !this.workspace.is_current(&workspace)
+                    || this.resource_operation_generation != operation_generation
+                {
+                    return;
+                }
+                match result {
+                    Ok((uri, text)) => {
+                        let title = uri
+                            .as_url()
+                            .path_segments()
+                            .and_then(|segments| {
+                                segments.filter(|segment| !segment.is_empty()).last()
+                            })
+                            .unwrap_or(uri.as_url().as_str())
+                            .to_owned();
+                        let model = cx.new(|_| BufferModel::from_text(text));
+                        let id = this.open_buffers.add_resource(title, model, uri.clone());
+                        this.select_open_buffer(id, cx);
+                        this.resource_status = format!("opened {uri}").into();
+                        this.latest_resource_error = None;
+                    }
+                    Err(error) => {
+                        let message: SharedString = error.to_string().into();
+                        this.resource_status = "open failed".into();
+                        this.latest_resource_error = Some(message);
+                    }
+                }
+                cx.notify();
+            });
+        });
+        self._resource_tasks.push(task);
+        cx.notify();
+    }
+
+    fn save_selected_resource(&mut self, cx: &mut Context<Self>) {
+        let Some(entry) = self.open_buffers.selected() else {
+            return;
+        };
+        let Some(resource) = entry.resource() else {
+            self.resource_status = "buffer is not resource-backed".into();
+            self.latest_resource_error = Some("generated buffers cannot be saved".into());
+            cx.notify();
+            return;
+        };
+        let workspace = self.workspace.snapshot();
+        let id = entry.id();
+        let model = entry.model().clone();
+        let uri = resource.uri().clone();
+        if let Err(error) = Self::validate_workspace_target(&workspace, &uri) {
+            self.resource_status = "save failed".into();
+            self.latest_resource_error = Some(error.to_string().into());
+            cx.notify();
+            return;
+        }
+        let (text, revision) = model.read_with(cx, |model, _| (model.text(), model.revision()));
+        let providers = self.filesystem_providers.clone();
+        self.resource_status = format!("saving {uri}").into();
+        self.latest_resource_error = None;
+        let task = cx.spawn(async move |this, cx| {
+            let result = async {
+                let normalized = providers.normalize(uri.clone()).await?;
+                Self::validate_workspace_target(&workspace, &normalized)?;
+                let provider = providers.provider(&normalized)?;
+                provider.write(normalized, text.into_bytes()).await
+            }
+            .await;
+            let _ = this.update(cx, |this, cx| {
+                if !this.workspace.is_current(&workspace) {
+                    return;
+                }
+                match result {
+                    Ok(()) if this.open_buffers.mark_persisted(id, &model, &uri, revision) => {
+                        this.resource_status = format!("saved {uri} at revision {revision}").into();
+                        this.latest_resource_error = None;
+                    }
+                    Ok(()) => {}
+                    Err(error) => {
+                        this.resource_status = "save failed".into();
+                        this.latest_resource_error = Some(error.to_string().into());
+                    }
+                }
+                cx.notify();
+            });
+        });
+        self._resource_tasks.push(task);
+        cx.notify();
+    }
+
+    fn switch_workspace(&mut self, root: ResourceUri, cx: &mut Context<Self>) {
+        self.resource_operation_generation = self
+            .resource_operation_generation
+            .checked_add(1)
+            .expect("resource operation generation overflowed");
+        let snapshot = self.workspace.replace_root(root);
+        self.workspace_tree
+            .update(cx, |tree, cx| tree.set_workspace(snapshot, cx));
+        self.resource_status = "workspace loading".into();
+        self.latest_resource_error = None;
+        cx.notify();
+    }
+
+    fn validate_workspace_target(
+        workspace: &WorkspaceSnapshot,
+        uri: &ResourceUri,
+    ) -> Result<(), ResourceError> {
+        if uri == workspace.root() || uri.is_descendant_of(workspace.root()) {
+            Ok(())
+        } else {
+            Err(ResourceError::OutsideWorkspace {
+                uri: uri.clone(),
+                root: workspace.root().clone(),
+            })
+        }
+    }
+
     fn select_open_buffer(&mut self, id: OpenBufferId, cx: &mut Context<Self>) {
         if self.open_buffers.selected_id() == Some(id) || !self.open_buffers.select(id) {
             return;
@@ -2270,6 +2710,18 @@ impl Shell {
             .expect("selected open buffer exists")
             .model()
             .clone();
+        let handle = if let Some(handle) = self.buffer_registry.handle_for(&model) {
+            handle
+        } else {
+            let handle = self.buffer_registry.open(&model);
+            let subscription = cx.observe(&model, |this, model, cx| {
+                this.publish_model_change(model, cx);
+                cx.notify();
+            });
+            self._model_subscriptions.push(subscription);
+            handle
+        };
+        self.buffer_registry.set_active(Some(handle));
         let secondary_editor = cx.new(|cx| {
             EditorView::new_with_options(
                 model,
@@ -2310,11 +2762,18 @@ impl Shell {
     }
 
     /// A pane that hosts a selectable single-row list.
-    fn buffer_pane(&self, entity: Entity<Shell>) -> impl IntoElement {
+    fn buffer_pane(&self, entity: Entity<Shell>, cx: &App) -> impl IntoElement {
         let entries: Vec<_> = self
             .open_buffers
             .entries()
-            .map(|entry| (entry.id(), entry.title().clone()))
+            .map(|entry| {
+                let label: SharedString = if entry.is_dirty(cx) {
+                    format!("{} •", entry.title()).into()
+                } else {
+                    entry.title().clone()
+                };
+                (entry.id(), label)
+            })
             .collect();
         let selected = self.open_buffers.selected_id();
         uniform_list("buffers", entries.len(), move |range, _window, _cx| {
@@ -2386,6 +2845,29 @@ impl Render for Shell {
             .latest_runtime_error
             .clone()
             .unwrap_or_else(|| "none".into());
+        let resource_error = self
+            .latest_resource_error
+            .clone()
+            .unwrap_or_else(|| "none".into());
+        let (resource_uri, dirty) = self
+            .open_buffers
+            .selected()
+            .and_then(|entry| {
+                entry
+                    .resource()
+                    .map(|resource| (resource.uri().to_string(), entry.is_dirty(cx)))
+            })
+            .unwrap_or_else(|| ("generated".into(), false));
+        let workspace_root = self.workspace.root().to_string();
+        let workspace_provider = self.workspace.root().scheme().to_owned();
+        let workspace_selection = self
+            .workspace_tree
+            .read(cx)
+            .selected()
+            .map(ToString::to_string)
+            .unwrap_or_else(|| "none".into());
+        let memory_workspace_root = self.memory_workspace_root.clone();
+        let local_workspace_root = self.local_workspace_root.clone();
         let command_palette = self.command_palette.clone();
         let mut keymap_context = KeyContext::default();
         keymap_context.add(BASE_KEYMAP_CONTEXT);
@@ -2480,13 +2962,71 @@ impl Render for Shell {
                     .bg(rgb(0x252526))
                     .child(
                         div()
+                            .flex()
+                            .flex_row()
+                            .justify_between()
+                            .items_center()
+                            .px_2()
+                            .py_1()
+                            .text_xs()
+                            .text_color(rgb(0x888888))
+                            .child("WORKSPACE")
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_row()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .id("use-memory-workspace")
+                                            .cursor_pointer()
+                                            .text_color(rgb(0x80c0ff))
+                                            .child("mem")
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                this.switch_workspace(
+                                                    memory_workspace_root.clone(),
+                                                    cx,
+                                                );
+                                            })),
+                                    )
+                                    .child(
+                                        div()
+                                            .id("use-local-workspace")
+                                            .cursor_pointer()
+                                            .text_color(rgb(0x80c0ff))
+                                            .child("local")
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                this.switch_workspace(
+                                                    local_workspace_root.clone(),
+                                                    cx,
+                                                );
+                                            })),
+                                    ),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_h_0()
+                            .overflow_hidden()
+                            .child(self.workspace_tree.clone()),
+                    )
+                    .child(div().w_full().h(px(1.)).bg(rgb(0x3a3a3a)))
+                    .child(
+                        div()
                             .px_2()
                             .py_1()
                             .text_xs()
                             .text_color(rgb(0x888888))
                             .child("BUFFERS"),
                     )
-                    .child(self.buffer_pane(entity.clone())),
+                    .child(
+                        div()
+                            .h(px(180.))
+                            .flex_none()
+                            .overflow_hidden()
+                            .child(self.buffer_pane(entity.clone(), cx)),
+                    ),
             )
             .child(Self::divider(0))
             .child(
@@ -2575,6 +3115,21 @@ impl Render for Shell {
                             .text_color(rgb(0x9d9d9d))
                             .bg(rgb(0x252526))
                             .child(format!("revision {revision}"))
+                            .child(format!("workspace {workspace_provider} {workspace_root}"))
+                            .child(format!("selected {workspace_selection}"))
+                            .child(format!("resource {resource_uri}"))
+                            .child(if dirty { "dirty" } else { "clean" })
+                            .child(format!("filesystem {}", self.resource_status))
+                            .child(
+                                div()
+                                    .id("save-resource")
+                                    .cursor_pointer()
+                                    .text_color(rgb(0x80c0ff))
+                                    .child("save")
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.save_selected_resource(cx);
+                                    })),
+                            )
                             .child(format!("runtime {}", self.runtime_state))
                             .child(format!("command {}", self.command_state))
                             .child(
@@ -2628,6 +3183,7 @@ impl Render for Shell {
                                     })),
                             )
                             .child(format!("error {runtime_error}"))
+                            .child(format!("filesystem error {resource_error}"))
                             .child(format!("heartbeat {}", self.heartbeat)),
                     ),
             )
@@ -2720,7 +3276,7 @@ mod tests {
 
     use super::{
         BufferModel, ContributionSource, FIXTURE_EDIT_ARGUMENT, Shell,
-        editor::EditorContributionAction, model::BufferAccessError,
+        editor::EditorContributionAction, model::BufferAccessError, resource::ResourceUri,
     };
     use crate::host::{
         ExtensionRuntimeControl, ExtensionRuntimeExecutionError, V8Host,
@@ -3501,6 +4057,178 @@ mod tests {
         while cx.read(|cx| outline.read(cx).lifecycle_state().3 == 0) {
             outline.next_notification(Duration::ZERO, cx).await;
         }
+    }
+
+    async fn wait_for_selected_resource(
+        shell: &Entity<Shell>,
+        expected: &ResourceUri,
+        cx: &mut TestAppContext,
+    ) {
+        while !cx.read(|cx| {
+            if let Some(error) = &shell.read(cx).latest_resource_error {
+                panic!("resource open failed while waiting for {expected}: {error}");
+            }
+            shell
+                .read(cx)
+                .open_buffers
+                .selected()
+                .and_then(|entry| entry.resource())
+                .is_some_and(|resource| resource.uri() == expected)
+        }) {
+            shell.next_notification(Duration::ZERO, cx).await;
+        }
+    }
+
+    async fn wait_for_resource_error(shell: &Entity<Shell>, cx: &mut TestAppContext) {
+        while cx.read(|cx| shell.read(cx).latest_resource_error.is_none()) {
+            shell.next_notification(Duration::ZERO, cx).await;
+        }
+    }
+
+    fn workspace_child(root: &ResourceUri, name: &str) -> ResourceUri {
+        ResourceUri::parse(&format!(
+            "{}/{}",
+            root.to_string().trim_end_matches('/'),
+            name
+        ))
+        .unwrap()
+    }
+
+    #[gpui::test]
+    async fn workspace_resource_flow_covers_rejection_both_providers_and_a_save_race(
+        cx: &mut TestAppContext,
+    ) {
+        let runtime = V8Host::new()
+            .spawn_extension(ExtensionId::new(113))
+            .into_parts();
+        let shell = cx.new(|cx| Shell::new_with_resource_fixture(runtime, cx));
+        let (memory_root, local_root, source) = cx.read(|cx| {
+            let shell = shell.read(cx);
+            (
+                shell.memory_workspace_root.clone(),
+                shell.local_workspace_root.clone(),
+                shell.source_buffer,
+            )
+        });
+
+        let stale_memory_file = workspace_child(&memory_root, "README.md");
+        shell.update(cx, |shell, cx| {
+            let captured = shell.workspace.snapshot();
+            shell.open_workspace_file(captured, stale_memory_file, cx);
+            shell.switch_workspace(local_root.clone(), cx);
+        });
+        let tree = cx.read(|cx| shell.read(cx).workspace_tree.clone());
+        while cx.read(|cx| tree.read(cx).is_loading()) {
+            tree.next_notification(Duration::ZERO, cx).await;
+        }
+        cx.read(|cx| {
+            let shell = shell.read(cx);
+            assert_eq!(shell.open_buffers.entries().count(), 1);
+            assert_eq!(shell.open_buffers.selected_id(), Some(source));
+            assert!(shell.latest_resource_error.is_none());
+        });
+
+        let invalid = workspace_child(&memory_root, "invalid.bin");
+        shell.update(cx, |shell, cx| {
+            shell.switch_workspace(memory_root.clone(), cx);
+            shell.open_workspace_file(shell.workspace.snapshot(), invalid, cx);
+        });
+        wait_for_resource_error(&shell, cx).await;
+        cx.read(|cx| {
+            let shell = shell.read(cx);
+            assert_eq!(shell.open_buffers.entries().count(), 1);
+            assert_eq!(shell.open_buffers.selected_id(), Some(source));
+            assert!(
+                shell
+                    .latest_resource_error
+                    .as_deref()
+                    .unwrap()
+                    .contains("not valid UTF-8")
+            );
+        });
+
+        let roots = [
+            (memory_root, "memory saved\n"),
+            (local_root, "local saved\n"),
+        ];
+        for (root, expected) in roots {
+            shell.update(cx, |shell, cx| {
+                if shell.workspace.root() != &root {
+                    shell.switch_workspace(root.clone(), cx);
+                }
+            });
+            let tree = cx.read(|cx| shell.read(cx).workspace_tree.clone());
+            while cx.read(|cx| tree.read(cx).is_loading()) {
+                tree.next_notification(Duration::ZERO, cx).await;
+            }
+
+            let directory = workspace_child(&root, "src");
+            tree.update(cx, |tree, cx| {
+                assert!(tree.activate_for_test(&directory, cx));
+            });
+            while cx.read(|cx| tree.read(cx).is_loading()) {
+                tree.next_notification(Duration::ZERO, cx).await;
+            }
+
+            let uri = workspace_child(&root, "README.md");
+            tree.update(cx, |tree, cx| {
+                assert!(tree.activate_for_test(&uri, cx));
+            });
+            wait_for_selected_resource(&shell, &uri, cx).await;
+            shell.update(cx, |shell, cx| {
+                let model = shell.open_buffers.selected().unwrap().model().clone();
+                model.update(cx, |model, _| {
+                    let len = model.text().len();
+                    model.replace(0..len, expected).unwrap();
+                });
+                shell.save_selected_resource(cx);
+            });
+            while cx.read(|cx| shell.read(cx).open_buffers.selected().unwrap().is_dirty(cx)) {
+                shell.next_notification(Duration::ZERO, cx).await;
+            }
+            let provider =
+                cx.read(|cx| shell.read(cx).filesystem_providers.provider(&uri).unwrap());
+            assert_eq!(provider.read(uri).await.unwrap(), expected.as_bytes());
+        }
+
+        let (uri, model, captured_text, captured_revision) = shell.update(cx, |shell, cx| {
+            let entry = shell.open_buffers.selected().unwrap();
+            let uri = entry.resource().unwrap().uri().clone();
+            let model = entry.model().clone();
+            model.update(cx, |model, _| {
+                let len = model.text().len();
+                model.replace(0..len, "captured save\n").unwrap();
+            });
+            let captured = model.read_with(cx, |model, _| (model.text(), model.revision()));
+            shell.save_selected_resource(cx);
+            model.update(cx, |model, _| {
+                let len = model.text().len();
+                model.replace(0..len, "newer edit\n").unwrap();
+            });
+            (uri, model, captured.0, captured.1)
+        });
+        while !cx.read(|cx| {
+            shell
+                .read(cx)
+                .open_buffers
+                .selected()
+                .unwrap()
+                .resource()
+                .unwrap()
+                .persisted_revision()
+                == captured_revision
+        }) {
+            shell.next_notification(Duration::ZERO, cx).await;
+        }
+
+        let provider = cx.read(|cx| shell.read(cx).filesystem_providers.provider(&uri).unwrap());
+        assert_eq!(provider.read(uri).await.unwrap(), captured_text.as_bytes());
+        cx.read(|cx| {
+            let shell = shell.read(cx);
+            let entry = shell.open_buffers.selected().unwrap();
+            assert_eq!(entry.model(), &model);
+            assert!(entry.is_dirty(cx));
+        });
     }
 
     fn only_runtime_control(
