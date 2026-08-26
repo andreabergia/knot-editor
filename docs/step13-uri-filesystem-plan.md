@@ -113,90 +113,108 @@ resource are deliberately deferred.
 
 ### 1. Add resource identities and the provider boundary
 
-- ⬜ Add the `url` dependency and an application-owned `ResourceUri` wrapper
+- ✅ Add the `url` dependency and an application-owned `ResourceUri` wrapper
   with absolute parsing, stable display, equality, scheme access, and
   segment-aware descendant checks.
-- ⬜ Define provider-neutral entry, stat, and error types plus an object-safe
+- ✅ Define provider-neutral entry, stat, and error types plus an object-safe
   asynchronous filesystem provider interface.
-- ⬜ Add a shell-owned provider registry with unique scheme registration,
+- ✅ Add a shell-owned provider registry with unique scheme registration,
   lookup, and normalization dispatch.
-- ⬜ Keep `ResourceUri` and filesystem types out of `core` and the extension
+- ✅ Keep `ResourceUri` and filesystem types out of `core` and the extension
   protocol until a concrete extension API requires them.
 
 ### 2. Implement two providers
 
-- ⬜ Implement a deterministic in-memory hierarchy rooted at
+- ✅ Implement a deterministic in-memory hierarchy rooted at
   `mem://workspace/`, including directories, complete reads and writes, stat,
   and immediate-child enumeration.
-- ⬜ Implement a local-folder provider for `file://` URIs using asynchronous
+- ✅ Implement a local-folder provider for `file://` URIs using asynchronous
   filesystem operations and keep every URI-to-path conversion inside it.
-- ⬜ Normalize separators, dot segments, trailing directory slashes, and
+- ✅ Normalize separators, dot segments, trailing directory slashes, and
   percent encoding consistently enough for stable identity and containment.
-- ⬜ Reject unsupported URI shapes, non-file operations, wrong resource kinds,
+- ✅ Reject unsupported URI shapes, non-file operations, wrong resource kinds,
   and lexical attempts to leave the workspace root.
-- ⬜ Exercise local symlinks as trusted filesystem behavior and document that
+- ✅ Exercise local symlinks as trusted filesystem behavior and document that
   they are not constrained as a security boundary.
 
 ### 3. Introduce URI-rooted workspace state and enumeration
 
-- ⬜ Add application-owned workspace state containing one normalized root URI
+- ✅ Add application-owned workspace state containing one normalized root URI
   and the generation needed to reject stale asynchronous results.
-- ⬜ Add a minimal native workspace tree with cached foreground state for
+- ✅ Add a minimal native workspace tree with cached foreground state for
   expansion, selection, loading, and errors.
-- ⬜ Populate the tree only through provider `stat` and enumeration results;
+- ✅ Populate the tree only through provider `stat` and enumeration results;
   rendering and input must never perform filesystem work synchronously.
-- ⬜ Sort directories before files and names deterministically in application
+- ✅ Sort directories before files and names deterministically in application
   code rather than depending on provider order.
-- ⬜ Replace or clearly separate the prototype's fixture-only local load path
+- ✅ Replace or clearly separate the prototype's fixture-only local load path
   from the workspace flow without changing the extension-owned outline tree.
 
 ### 4. Open and save resource-backed buffers
 
-- ⬜ Extend open-buffer entries with optional resource metadata: normalized URI
+- ✅ Extend open-buffer entries with optional resource metadata: normalized URI
   and persisted revision.
-- ⬜ Open a selected workspace file asynchronously, decode it as UTF-8, create
+- ✅ Open a selected workspace file asynchronously, decode it as UTF-8, create
   a normal editable `BufferModel`, register it, and select its editor view.
-- ⬜ Save an edited resource-backed buffer through its provider and advance the
+- ✅ Save an edited resource-backed buffer through its provider and advance the
   persisted revision only for the exact revision successfully written.
-- ⬜ Surface loading, invalid UTF-8, provider, and save failures without
+- ✅ Surface loading, invalid UTF-8, provider, and save failures without
   replacing the active buffer or blocking the foreground thread.
-- ⬜ Keep generated search buffers resource-less and preserve their existing
+- ✅ Keep generated search buffers resource-less and preserve their existing
   ownership and read-only behavior.
 
 ### 5. Add observable fixtures for both implementations
 
-- ⬜ Seed a nested `mem://workspace/` hierarchy and open it through the normal
+- ✅ Seed a nested `mem://workspace/` hierarchy and open it through the normal
   workspace path.
-- ⬜ Open a repository-local fixture folder through the same path using the
+- ✅ Open a repository-local fixture folder through the same path using the
   local-folder provider; do not depend on the process working directory.
-- ⬜ Enumerate, expand, and open files from both workspace trees through the
+- ✅ Enumerate, expand, and open files from both workspace trees through the
   same application controller and presentation.
-- ⬜ Edit and save one file through each provider, then read it through the
+- ✅ Edit and save one file through each provider, then read it through the
   provider to verify the new bytes. Keep local fixture writes isolated from
   checked-in source files.
-- ⬜ Make provider kind, normalized URI, loading/error state, and buffer dirty
+- ✅ Make provider kind, normalized URI, loading/error state, and buffer dirty
   state visible enough to inspect in the running prototype.
 
 ### 6. Audit assumptions and validate the decision
 
-- ⬜ Audit application workspace, open-buffer, title, and persistence paths for
+- ✅ Audit application workspace, open-buffer, title, and persistence paths for
   `Path`, `PathBuf`, `std::fs`, current-directory, and `file://` assumptions;
   remove them or document why they are fixture, benchmark, or extension-module
   concerns outside this boundary.
-- ⬜ Add focused tests for URI normalization and containment, registry routing,
+- ✅ Add focused tests for URI normalization and containment, registry routing,
   provider parity, deterministic enumeration, async stale-result rejection,
   UTF-8 rejection, dirty revision handling, and edits racing a save.
-- ⬜ Use the running fixture to verify both trees, open/edit/save flows, errors,
+- ✅ Use the running fixture to verify both trees, open/edit/save flows, errors,
   and foreground responsiveness rather than adding exhaustive UI tests.
-- ⬜ Update `architecture.md` with URI, provider-registry, workspace,
+- ✅ Update `architecture.md` with URI, provider-registry, workspace,
   resource-backed-buffer, and asynchronous open/save ownership if the
   experiment validates them.
-- ⬜ Record the validated choices and remaining liabilities in `decisions.md`
+- ✅ Record the validated choices and remaining liabilities in `decisions.md`
   and mark roadmap step 13 complete with its checkpoint result.
-- ⬜ Update this plan with ✅ markers, deliberately skipped work, and the final
+- ✅ Update this plan with ✅ markers, deliberately skipped work, and the final
   result.
-- ⬜ Run focused tests, run `cargo fmt` once at the end of Rust work, then run
+- ✅ Run focused tests, run `cargo fmt` once at the end of Rust work, then run
   the full test suite.
+
+## Result
+
+The experiment validated the URI and provider boundary across both the
+in-memory and local-folder implementations. The same workspace tree and
+open/edit/save flow operate on both schemes without leaking local paths into
+resource identity, buffer persistence, or provider-neutral application state.
+Async results are guarded by workspace, tree, buffer, and revision identities.
+
+No planned execution work was deliberately skipped. The exclusions below
+remain deferred by design. Remaining `Path`, `std::fs`, and `file://` uses in
+the application are confined to local fixture bootstrap, renderer fixture
+loading, the local provider itself, terminal current-directory state, or V8
+module identifiers; they do not define workspace or buffer persistence.
+
+Verification completed with focused URI, provider, workspace, open-buffer, and
+end-to-end resource-flow tests, followed by `cargo fmt`, `cargo check --lib`,
+and the full `cargo test` suite (240 library tests passed; one doc test ignored).
 
 ## Explicit exclusions
 
