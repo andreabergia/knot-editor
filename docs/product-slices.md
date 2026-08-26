@@ -37,24 +37,31 @@ The slice targets a dependable local interactive shell inside ordinary windows
 and layouts. Broader compatibility, remote PTYs, detached persistence, and
 shell integration remain deferred until terminal dogfooding requires them.
 
-## 3. Programmable file navigation
+## 3. Programmable file navigation and search
 
-Productionize the minimum extension path by shipping two useful bundled
+Productionize the minimum extension path by shipping three useful bundled
 JavaScript extension commands through public APIs:
 
 - Go to File uses the VS Code macOS binding `cmd-p`.
 - Open Recent uses the VS Code macOS binding `ctrl-r`.
+- Search Across Files uses the VS Code macOS binding `shift-cmd-f`.
 
-Both commands use a focused, palette-like file-selection experience with fuzzy
-completion. The exact presentation boundary is decided by the implementation;
-this horizon does not prescribe a general picker API or widget protocol.
+Go to File and Open Recent use a focused, palette-like file-selection
+experience with fuzzy completion. The exact presentation boundary is decided
+by the implementation; this horizon does not prescribe a general picker API or
+widget protocol.
+
+Search Across Files is extension behavior because its engine, query language,
+ignore rules, scope, ordering, and result presentation are legitimately
+replaceable. The bundled extension may choose tools such as ripgrep for local
+workspaces without making that choice the editor's universal search model.
 
 The native application owns durable editor primitives:
 
 - an application-level, persisted, deduplicated history of recently opened
   resource-backed documents;
-- an asynchronous, cancellable, provider-neutral workspace file query filtered
-  and ordered for fuzzy path search; and
+- an asynchronous, cancellable, provider-neutral workspace file query that
+  accepts a search filter and can support fuzzy path completion; and
 - explicit resource arguments for the registered file-open command.
 
 These services belong to the application layer rather than `src/core`, which
@@ -63,10 +70,13 @@ bundled extension through the same typed public boundary available to other
 extensions.
 
 The extension owns the commands, default bindings, orchestration, and selected
-file-navigation behavior. This slice is the concrete reason to introduce the
-required production extension loading, scheduling, resource APIs, and narrow
-presentation capability. It must not build a general extension foundation
-before the bundled features exercise it.
+file-navigation and cross-file-search behavior. Bundled extensions are normal
+extensions: they ship enabled by default, use only public APIs, can be disabled
+cleanly, and can be replaced by user-installed alternatives. This slice is the
+concrete reason to introduce the required production extension loading,
+scheduling, resource APIs, lifecycle-owned bindings, and narrow presentation
+capabilities. It must not build a general extension foundation before the
+bundled features exercise it.
 
 ## Later slices
 

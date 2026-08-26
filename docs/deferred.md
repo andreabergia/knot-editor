@@ -17,8 +17,7 @@ Each entry records why it is deferred and the trigger for reconsidering it.
 | Tab dragging and general docking | Initial windows, panes, tabs, and splits need only command-driven placement. | Rearranging real sessions is common enough to define the interaction. |
 | Workbench layout and session restoration | Persistence semantics should follow a workbench people actually use. | Window and split behavior stabilizes through daily use. |
 | File drag and drop | Open and Save As establish workspace-independent documents first. | Platform interaction becomes a selected product slice. |
-| Project-wide search | Current-buffer Find and workspace behavior should be learned first. | Repository use shows the required result, refresh, and navigation semantics. |
-| Generated-search refresh and stale-target recovery | Immutable search results validated the text-surface boundary. | Project search becomes an active slice. |
+| Generated-search refresh and stale-target recovery | Immutable search results validated the text-surface boundary. | Bundled cross-file search demonstrates that refresh or recovery is required. |
 
 ## Documents, storage, and history
 

@@ -399,6 +399,40 @@ Extensions may provide:
 - UI surface implementations;
 - capability providers.
 
+## Built-in mechanics and bundled extensions
+
+Knot distinguishes inseparable editor mechanics from opinionated product
+workflows. Text editing, current-buffer Find, document persistence, and
+workbench ownership are built into the native application because the editor
+cannot function coherently without them.
+
+Workflows whose policy is meaningfully replaceable ship as bundled extensions.
+Examples include Go to File, recent-file navigation, and search across files,
+where users may reasonably prefer different matching engines, scope rules,
+ignore behavior, ordering, or presentation.
+
+A bundled extension is a normal extension with a distribution relationship to
+Knot:
+
+- it ships and updates with Knot;
+- it is enabled by default, remains visible, and can be disabled independently;
+- users may replace it by disabling it and installing another extension;
+- it uses only the typed public APIs available to user-installed extensions;
+  and
+- disabling it removes all of its commands, keybindings, providers, and
+  contributions through the ordinary extension lifecycle.
+
+Bundled origin grants no privileged editor API. If bundled behavior requires a
+private host path, the public extension boundary is incomplete. The native
+application may still provide durable primitives such as recent-resource
+history, provider-neutral workspace file queries, resource opening, and native
+presentation. Extensions compose those primitives into replaceable workflows.
+
+Current-file Find remains built in because it is a direct interaction with one
+editor buffer. Search across files is bundled behavior because choosing grep,
+vimgrep, ripgrep, fuzzy matching, ignore semantics, workspace scope, and result
+presentation is product policy rather than a fundamental text-model operation.
+
 ## Isolation and cancellation
 
 Runtime isolation is not by itself a security boundary. A misbehaving extension
