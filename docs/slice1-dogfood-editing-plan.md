@@ -8,7 +8,8 @@ model before polishing editor behavior around a temporary single-view shell.
 
 The slice is successful when Knot can be used safely for an ordinary editing
 session involving existing and new UTF-8 files, multiple windows, tabs, and
-splits. Syntax highlighting is not required.
+splits, including Find within the current file. Syntax highlighting is not
+required.
 
 ## Product constraints
 
@@ -100,7 +101,8 @@ slice does not introduce a general docking or surface framework.
 
 - ⬜ Register New, Open, Save, Save As, Close Tab, Close Window, New Window,
   Quit, Split Horizontal, Split Vertical, Undo, Redo, Cut, Copy, Paste, and
-  Select All as native `CommandCatalog` entries.
+  Select All as native `CommandCatalog` entries. Register Find and its
+  next/previous navigation operations through the same path.
 - ⬜ Route native menus and keybindings through the command dispatcher. Do not
   retain direct menu-to-shell or keybinding-to-shell implementations of the
   same operations.
@@ -142,8 +144,11 @@ slice does not introduce a general docking or surface framework.
   and keeping the caret visible.
 - ⬜ Integrate native clipboard Cut, Copy, Paste, and Select All commands.
 - ⬜ Preserve working IME and Unicode behavior through the product shell.
-- ⬜ Keep plain text as the only required presentation; syntax highlighting
-  and in-buffer Find are deferred.
+- ⬜ Add current-file Find with a focused query field, visible match state,
+  match highlighting, and next/previous navigation that follows buffer edits.
+  Use the VS Code macOS defaults: `cmd-f`, `enter`, and `shift-enter`.
+- ⬜ Keep plain text as the only required presentation; Replace, regular
+  expressions, and syntax highlighting are deferred.
 
 ### 6. Add usable undo and redo
 
@@ -195,7 +200,7 @@ slice does not introduce a general docking or surface framework.
 
 ## Explicit exclusions
 
-The slice does not require Find, syntax highlighting, configurable keymaps,
-layout restoration, tab dragging, live filesystem watching, Linux support, or
-production extension scheduling. These and other known future concerns are
-tracked in [deferred.md](deferred.md).
+The slice does not require Replace, regular-expression search, syntax
+highlighting, configurable keymaps, layout restoration, tab dragging, live
+filesystem watching, Linux support, or production extension scheduling. These
+and other known future concerns are tracked in [deferred.md](deferred.md).

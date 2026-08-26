@@ -11,7 +11,7 @@ Each entry records why it is deferred and the trigger for reconsidering it.
 
 | Work | Why deferred | Reconsider when |
 | --- | --- | --- |
-| In-buffer Find and Replace | Not required for the first editing session. | Daily use makes navigation friction material. |
+| Replace and advanced Find modes | Literal current-file Find is sufficient for the first editing session. | Daily use identifies required replacement, regular-expression, case, or whole-word behavior. |
 | Syntax highlighting | Plain text is sufficient to validate safe editing and workbench ownership. | The editing loop is trustworthy and source readability becomes the dominant problem. |
 | Configurable and extension-defined keymaps | Fixed native bindings cover initial use. | Dogfooding identifies concrete remapping needs or the extension slice requires bindings. |
 | Tab dragging and general docking | Initial windows, panes, tabs, and splits need only command-driven placement. | Rearranging real sessions is common enough to define the interaction. |
