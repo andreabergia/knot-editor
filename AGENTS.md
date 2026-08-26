@@ -5,13 +5,14 @@ modern technologies and paradigms. It is implemented in Rust.
 
 Use @docs/architecture.md for current boundaries and @docs/decisions.md for
 validated choices. Read @docs/design.md only when product vision is relevant,
-and @docs/roadmap.md only for prototype sequencing. Load benchmark evidence
-only when the task depends on it.
+and @docs/product-slices.md only for product sequencing. Active execution plans
+live under @docs/plans. Load archived exploration plans and benchmark evidence
+only when the task depends on them.
 
-It is currently in the prototype phase, and we are attempting to validate the
-various assumptions and the architecture. In the current state, speed and ease
-of iteration is paramount, so leave automated tests to a minimum. We will start
-from scratch after the core choices are validated.
+The architecture exploration is complete. Product development evolves the
+validated prototype in place through end-to-end usable slices. Speed and ease
+of iteration remain important, so keep automated tests focused on the behavior
+and boundaries each slice makes durable.
 
 ## Rules
 

@@ -16,7 +16,8 @@ operations such as Open and Save.
 
 ## 1. Dogfoodable text editing
 
-Status: planned in [slice1-dogfood-editing-plan.md](slice1-dogfood-editing-plan.md).
+Status: planned in
+[slice1-dogfood-editing-plan.md](plans/slice1-dogfood-editing-plan.md).
 
 Make Knot safe and practical for editing its own UTF-8 source on macOS. The
 slice includes native windows and file dialogs, tabs and splits, new and

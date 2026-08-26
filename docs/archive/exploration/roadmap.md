@@ -2,8 +2,8 @@
 
 Knot's prototype validates the riskiest design commitments before production
 development. Completed work is summarized here; durable rationale lives in
-`decisions.md`, current boundaries in `architecture.md`, and measurements in
-the focused evidence reports.
+`../../decisions.md`, current boundaries in `../../architecture.md`, and
+measurements in the focused evidence reports.
 
 ## Exploration conclusion
 

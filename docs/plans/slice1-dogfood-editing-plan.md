@@ -194,7 +194,7 @@ slice does not introduce a general docking or surface framework.
 - ⬜ Update `architecture.md` and `decisions.md` for the document, workbench,
   history, and persistence boundaries validated by the finished slice.
 - ⬜ Mark this plan as completed with its result and move any newly deferred
-  work to `deferred.md`.
+work to [`deferred.md`](../deferred.md).
 - ⬜ Run `cargo fmt` once after the Rust work, then run focused checks and the
   full test suite.
 
@@ -203,4 +203,4 @@ slice does not introduce a general docking or surface framework.
 The slice does not require Replace, regular-expression search, syntax
 highlighting, configurable keymaps, layout restoration, tab dragging, live
 filesystem watching, Linux support, or production extension scheduling. These
-and other known future concerns are tracked in [deferred.md](deferred.md).
+and other known future concerns are tracked in [deferred.md](../deferred.md).

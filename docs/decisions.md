@@ -16,8 +16,8 @@ measurements; Git history contains execution plans and investigation history.
 - Skia was the strongest standalone rendering primitive, but Knot uses gpui's
   rendering path rather than maintaining a separate renderer.
 
-Evidence: [renderer benchmark](step2-renderer-benchmark.md) and
-[framework evaluation](step3-framework-comparison.md).
+Evidence: [renderer benchmark](archive/exploration/step2-renderer-benchmark.md)
+and [framework evaluation](archive/exploration/step3-framework-comparison.md).
 
 ## Text buffer and stable positions
 
@@ -38,7 +38,7 @@ Evidence: [renderer benchmark](step2-renderer-benchmark.md) and
 - Inserted backing storage and the edit log are append-only during the
   prototype. Compaction and reclamation are deferred.
 
-Evidence: [buffer benchmark](step4-buffer-benchmark.md).
+Evidence: [buffer benchmark](archive/exploration/step4-buffer-benchmark.md).
 
 ## Anchored ranges and contributions
 
@@ -57,7 +57,7 @@ Evidence: [buffer benchmark](step4-buffer-benchmark.md).
 - Built-ins and extensions use the same application-owned contribution
   registry.
 
-Evidence: [annotation benchmark](step5-annotation-benchmark.md).
+Evidence: [annotation benchmark](archive/exploration/step5-annotation-benchmark.md).
 
 ## Reversible edits
 
@@ -95,7 +95,7 @@ Evidence: [annotation benchmark](step5-annotation-benchmark.md).
 - Slow-consumer policy, quota policy, packaging, module resolution, and
   production isolate scheduling remain open.
 
-Evidence: [V8 runtime evidence](step7-v8-runtime.md).
+Evidence: [V8 runtime evidence](archive/exploration/step7-v8-runtime.md).
 
 ## Commands and keymaps
 
@@ -153,7 +153,7 @@ Evidence: [V8 runtime evidence](step7-v8-runtime.md).
 - IME, text insertion, pointer motion, scrolling, focus changes, and other raw
   input protocols remain outside the registered command model.
 
-Evidence: [command and keymap experiment](step11-command-keymap-plan.md).
+Evidence: [command and keymap experiment](archive/exploration/step11-command-keymap-plan.md).
 
 ## Views and extension UI
 
@@ -191,7 +191,7 @@ Evidence: [command and keymap experiment](step11-command-keymap-plan.md).
   source for the production Alacritty adapter, model, key mappings, gpui
   renderer, resize flow, and event handling.
 
-Evidence: [terminal evaluation](step9-terminal-plan.md).
+Evidence: [terminal evaluation](archive/exploration/step9-terminal-plan.md).
 
 ## Generated text surfaces
 
@@ -219,7 +219,7 @@ Evidence: [terminal evaluation](step9-terminal-plan.md).
   search results did not force special behavior into generic buffer ownership,
   the text model, or the editor pipeline.
 
-Evidence: [text-surface experiment](step10-text-surface-plan.md).
+Evidence: [text-surface experiment](archive/exploration/step10-text-surface-plan.md).
 
 ## Capability aggregation
 
@@ -252,7 +252,7 @@ Evidence: [text-surface experiment](step10-text-surface-plan.md).
   richer completion edits, production popup polish, and extension-owned
   presentation remain deferred.
 
-Evidence: [capability aggregation experiment](step12-capability-aggregation-plan.md).
+Evidence: [capability aggregation experiment](archive/exploration/step12-capability-aggregation-plan.md).
 
 ## URI workspaces and filesystem providers
 
@@ -292,4 +292,4 @@ Evidence: [capability aggregation experiment](step12-capability-aggregation-plan
   not workspace or persistence APIs. The writable local fixture is isolated
   under the ignored repository `target` directory.
 
-Evidence: [URI and filesystem provider experiment](step13-uri-filesystem-plan.md).
+Evidence: [URI and filesystem provider experiment](archive/exploration/step13-uri-filesystem-plan.md).

@@ -406,7 +406,8 @@ must not be able to freeze the editor indefinitely, exhaust resources
 unchecked, corrupt core state, or prevent cancellation of work it started.
 The scheduling and enforcement mechanisms are implementation decisions to be
 validated by the prototype. The current runtime experiments and candidate
-mechanisms are tracked in roadmap step 7 and `step7-v8-runtime.md`.
+mechanisms are recorded in the archived
+[V8 runtime exploration](archive/exploration/step7-v8-runtime.md).
 
 ---
 
