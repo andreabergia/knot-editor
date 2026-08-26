@@ -72,8 +72,12 @@ references. Its active-buffer entry is the prototype command context.
 `OpenBufferCollection` independently assigns local presentation identities and
 strongly owns the titled models visible in the shell, including its selected
 entry. It is the user-visible buffer lifecycle owner; `BufferRegistry` remains
-only a transport-handle registry. The collection does not own filesystem URIs,
-persistence, dirty state, or view state.
+only a transport-handle registry. A resource-backed entry additionally owns
+its normalized `ResourceUri` and the revision last successfully persisted.
+Dirty state is derived by comparing that revision with the model revision;
+URI and persistence state never enter `BufferModel` or `core`. Generated
+entries have no resource metadata and cannot use the resource save path. View
+state remains outside the collection.
 
 Generated search entries retain their application-owned
 `SearchResultsController` alongside the model. The controller keeps semantic
@@ -118,6 +122,12 @@ revision-checked prefix replacement.
 per-parent loading/error generations. It renders and handles input from cached
 foreground state only.
 
+`WorkspaceTree` is a separate native surface for application-owned filesystem
+resources. It owns the same kinds of foreground presentation state, but emits
+requests containing normalized resource identities and workspace generations
+to the shell. It has no extension provider identity and does not share the
+extension-owned `TreeView` protocol.
+
 `TerminalView` is a native gpui surface that owns one authoritative local PTY
 session, Alacritty emulator grid, and its focus state. Alacritty's event loop
 performs PTY reads, parsing, and writes on a background thread and sends
@@ -133,6 +143,55 @@ owns presentation, focus, and layout. A session survives view reconstruction
 or relocation across tabs and windows. Explicit terminal closure terminates
 the session, and reopening creates a new one; detached persistence and
 simultaneous presentations remain out of scope.
+
+### URI workspaces and persistence
+
+`ResourceUri` is the application boundary for persisted resources. It parses
+absolute hierarchical URIs and provides stable equality, scheme access, and
+segment-aware containment. Scheme-specific providers own normalization. Only
+the local-folder provider converts between `file://` URIs and platform paths;
+generic workspace, tree, buffer, and shell state contains no `Path`.
+
+The shell owns a registry that routes each operation by URI scheme. Providers
+implement one asynchronous byte-oriented contract: normalize, enumerate
+immediate children, read, replace, and stat. The memory and local-folder
+providers implement the same Knot-owned results and structured errors. The
+local provider dispatches native I/O through a Tokio runtime; its lexical root
+is an application boundary rather than a sandbox and filesystem operations
+follow symlinks.
+
+```text
+Shell-owned provider registry
+        scheme -> provider
+                |
+       WorkspaceState
+       root + generation
+          /          \
+         v            v
+ WorkspaceTree   resource open/save
+ cached UI       captured revision
+                         |
+                         v
+                 OpenBufferEntry
+                         |
+                         v
+                    BufferModel
+```
+
+`WorkspaceState` owns one normalized root and a monotonic generation. The
+shell normalizes and checks every target against a captured workspace before
+dispatch and revalidates the capture before applying foreground results.
+`WorkspaceTree` additionally versions each directory request. Enumeration is
+sorted in application code with directories before files and deterministic
+name and URI ordering. Painting and input use only its cached entries,
+loading, selection, expansion, and error state.
+
+Opening a file awaits normalization, stat, byte read, and UTF-8 decoding before
+creating or selecting any model. A later open or workspace replacement rejects
+the stale result. Saving captures entry identity, resource identity, model
+text, revision, and workspace. A successful write advances only the captured
+persisted revision while those identities remain live, so edits racing the
+write remain dirty.
 
 ```text
 gpui Shell / registries
@@ -346,12 +405,17 @@ machinery never enter surfaces, buffers, or `core`.
 - V8 and Deno objects remain inside `host`.
 - Extension requests cross boundaries as Knot-owned semantic data and opaque
   identities.
+- Generic resource state uses normalized URIs; platform paths and native I/O
+  errors remain inside the local provider or explicit fixture/benchmark code.
+- `BufferModel` owns editable text, never resource identity or persistence.
 
 ## Major gaps
 
 - Production undo history, edit grouping, and view-state restoration.
 - Focus-target command routing and complete keymaps.
-- Filesystem providers and production capability applicability policy.
+- Filesystem watching, external-change reload, atomic save, conflict handling,
+  URI deduplication, and multi-root workspaces.
+- Production capability applicability policy.
 - Production terminal interaction and rendering.
 - Production extension scheduling, quotas, and slow-consumer policy.
 - Public platform accessibility integration.

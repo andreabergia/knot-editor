@@ -151,7 +151,11 @@ surface replacement transfers only the semantic snapshot without restarting
 provider requests. Applicability policy and extension-owned presentation remain
 deferred.
 
-## 13. URI and filesystem providers
+## 13. URI and filesystem providers ✅
+
+Status: complete. One URI-based asynchronous provider boundary drives the same
+workspace tree and resource-backed open/save flow for an in-memory hierarchy
+and a trusted local folder.
 
 Execution plan: [step13-uri-filesystem-plan.md](step13-uri-filesystem-plan.md).
 
@@ -161,8 +165,13 @@ Execution plan: [step13-uri-filesystem-plan.md](step13-uri-filesystem-plan.md).
 - Open workspaces and buffers through both providers.
 - Find and remove or document paths that assume local files.
 
-Decision checkpoint: does the provider abstraction generalize without leaking
-`file://` semantics?
+Decision: the provider abstraction generalizes without leaking `file://` or
+platform paths into generic application state. Scheme-specific normalization
+and local path conversion remain provider-owned; workspace and request
+generations reject stale asynchronous results; resource metadata stays on open
+entries rather than text models. Remaining liabilities include symlink escape
+from trusted local roots, non-atomic replacement writes, no external-change
+tracking or conflict handling, UTF-8-only opens, and no URI deduplication.
 
 ## Prototype exclusions
 

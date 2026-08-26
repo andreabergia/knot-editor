@@ -253,3 +253,43 @@ Evidence: [text-surface experiment](step10-text-surface-plan.md).
   presentation remain deferred.
 
 Evidence: [capability aggregation experiment](step12-capability-aggregation-plan.md).
+
+## URI workspaces and filesystem providers
+
+- Persisted application resources use parsed, normalized `ResourceUri` values.
+  Generic workspace, tree, buffer, and shell state does not use `Path` or
+  interpret `file://`; the local-folder provider alone converts between file
+  URIs and platform paths.
+- A shell-owned registry selects one asynchronous filesystem provider by URI
+  scheme. The byte-oriented normalize, enumerate, read, replace, and stat
+  contract is sufficient for both an in-memory hierarchy and a trusted local
+  folder without exposing provider iteration order or native errors.
+- One workspace owns one normalized root URI and a generation. Targets are
+  normalized and checked by path segments against a captured workspace, then
+  the generation is revalidated before foreground results apply.
+- Provider enumeration feeds a dedicated native `WorkspaceTree`. The view owns
+  cached expansion, selection, loading, errors, and per-directory request
+  generations. It sorts directories before files and names deterministically.
+  The extension-owned outline `TreeView` remains a distinct semantic API.
+- Resource-backed open-buffer entries own URI and persisted revision metadata;
+  `BufferModel` remains filesystem-independent. Dirty state is derived from
+  model and persisted revisions. Generated and search buffers remain
+  resource-less.
+- Resource open is asynchronous and UTF-8-only. It creates and activates a
+  model only after provider operations succeed and the workspace/open request
+  remains current. Save captures bytes and revision; successful completion
+  marks only that captured revision persisted if entry, model, URI, and
+  workspace identities still match.
+- A local workspace root is an application boundary, not a security sandbox.
+  Lexical escapes are rejected, while symlinks are deliberately followed and
+  may resolve outside the selected trusted folder.
+- The prototype still lacks watching and external-change reload, atomic writes,
+  conflict detection, save coordination or URI deduplication across multiple
+  opens, binary buffers and encoding detection, save-as, and filesystem
+  mutation operations beyond replacing an existing file.
+- App startup and renderer benchmark fixture setup may use manifest-relative
+  platform paths and synchronous `std::fs`; these are explicit fixture paths,
+  not workspace or persistence APIs. The writable local fixture is isolated
+  under the ignored repository `target` directory.
+
+Evidence: [URI and filesystem provider experiment](step13-uri-filesystem-plan.md).
