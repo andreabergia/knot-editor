@@ -110,7 +110,7 @@ application-owned document model rather than introducing transitional APIs.
   independent cursor, selection, and scroll state.
 - ✅ Cover workbench transformations and document/view lifetime at the model
   boundary.
-- ⬜ Review gate: inspect workbench invariants and lifecycle behavior. No polished
+- ✅ Review gate: inspect workbench invariants and lifecycle behavior. No polished
   native UI is expected yet.
 
 ### Checkpoint 3: Product shell and layout
