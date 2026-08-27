@@ -1,6 +1,6 @@
 # First Product Slice: Dogfoodable Text Editing
 
-Status: in progress — checkpoint 1 implemented, pending review.
+Status: in progress — checkpoint 1 complete.
 
 This slice makes Knot usable for editing its own source on macOS. It evolves
 the validated prototype in place and introduces the real workbench ownership
@@ -96,8 +96,8 @@ application-owned document model rather than introducing transitional APIs.
   model; remove superseded prototype ownership in the same checkpoint.
 - ✅ Cover document lifetime, state transitions, dirty state, and URI
   deduplication with focused tests.
-- 🟡 Review gate: ownership inspection and launch smoke are complete; awaiting
-  code review. No additional manual UI testing is required.
+- ✅ Review gate: ownership inspection, code review, and launch smoke are
+  complete. No additional manual UI testing is required.
 
 ### Checkpoint 2: Workbench state and view lifetime
 
