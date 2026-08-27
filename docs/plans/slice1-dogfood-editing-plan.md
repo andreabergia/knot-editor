@@ -1,6 +1,6 @@
 # First Product Slice: Dogfoodable Text Editing
 
-Status: in progress — checkpoint 1 complete.
+Status: in progress — checkpoint 2 implemented; review gate pending.
 
 This slice makes Knot usable for editing its own source on macOS. It evolves
 the validated prototype in place and introduces the real workbench ownership
@@ -101,16 +101,16 @@ application-owned document model rather than introducing transitional APIs.
 
 ### Checkpoint 2: Workbench state and view lifetime
 
-- Add the window workbench model, split tree, focused pane, ordered pane tabs,
+- ✅ Add the window workbench model, split tree, focused pane, ordered pane tabs,
   and tab-owned editor views.
-- Define tab, pane, last-view, and last-tab transitions independently of native
+- ✅ Define tab, pane, last-view, and last-tab transitions independently of native
   dialogs, using explicit pending-close outcomes where confirmation will later
   be required.
-- Prove that multiple tabs and panes can present one document while retaining
+- ✅ Prove that multiple tabs and panes can present one document while retaining
   independent cursor, selection, and scroll state.
-- Cover workbench transformations and document/view lifetime at the model
+- ✅ Cover workbench transformations and document/view lifetime at the model
   boundary.
-- Review gate: inspect workbench invariants and lifecycle behavior. No polished
+- ⬜ Review gate: inspect workbench invariants and lifecycle behavior. No polished
   native UI is expected yet.
 
 ### Checkpoint 3: Product shell and layout
@@ -239,13 +239,13 @@ application-owned document model rather than introducing transitional APIs.
   extension handles independent of it.
 - ⬜ Give each window a workbench containing a split tree, focused pane, and
   ordered tabs per pane.
-- ⬜ Open the same document in multiple independent editor views and keep their
+- ✅ Open the same document in multiple independent editor views and keep their
   cursor, selection, and scroll state separate.
 - ⬜ Support creating and closing windows, tabs, and horizontal or vertical
   splits with standard native commands and shortcuts.
 - ⬜ Define last-view and last-tab behavior, including dirty confirmation and
   creation of the replacement untitled buffer.
-- ⬜ Keep tab dragging, arbitrary docking, and layout persistence out of this
+- ✅ Keep tab dragging, arbitrary docking, and layout persistence out of this
   slice.
 
 ### 3. Make product operations first-class commands

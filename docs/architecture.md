@@ -97,6 +97,24 @@ presentation state. Completion request state and merged semantic candidates
 belong to the controller; the replaceable list and compact surfaces own only
 selection, layout, and rendering.
 
+`Workbench` is the window-local editor layout model. It owns a binary split
+tree, stable pane and tab identities, the focused pane, and ordered tabs within
+each pane. Split-tree leaves refer to panes; each tab refers to an
+application-owned document and strongly owns one `EditorView`. Splitting a
+pane creates a new view of its active document, and closing a tab drops that
+view. Empty panes are removed and their split branch collapses; closing the
+last tab produces an explicit empty-workbench transition for the product shell
+to handle.
+
+Workbench closure stays independent of native dialogs. The application-wide
+view count determines whether a tab is the last view of its document. A dirty
+last view returns a pending close tied to the exact pane, tab, and document;
+confirmation revalidates those identities and the current application-wide
+view count before applying the transition. A closed final view requests
+document closure but does not remove the application-owned document itself.
+This keeps window-local presentation mutation separate from application-level
+document and confirmation coordination.
+
 The shell-owned `CompletionProviderRegistry` assigns monotonic registration
 identities and order to lifecycle-owned, shell-wide providers. An editor
 completion invocation snapshots registry membership, buffer identity and

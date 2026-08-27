@@ -173,6 +173,25 @@ Evidence: [command and keymap experiment](archive/exploration/step11-command-key
 - Semantic tree state preserves the information needed for accessibility, but
   gpui 0.2.2 lacks the required public platform bridge.
 
+## Workbench layout and view lifetime
+
+- A window workbench is a binary split tree with tabbed panes at its leaves.
+  Stable pane and tab identities keep layout transformations and delayed close
+  outcomes independent of gpui view identity.
+- Tabs strongly own editor views and refer to application-owned documents.
+  Multiple tabs or panes may therefore share one document model while cursor,
+  selection, and scroll remain independent in their editor entities.
+- Closing a pane's final tab removes the pane and collapses its split branch.
+  An empty workbench is an explicit model state; creating a replacement
+  untitled document is product-shell policy rather than a layout invariant.
+- Last-view knowledge is application-wide rather than inferred by one window.
+  Dirty final views yield pending close values tied to the exact pane, tab, and
+  document. Completion rechecks those identities and the current view count,
+  preventing delayed confirmation from closing a replacement tab or
+  incorrectly closing a document that acquired another view.
+- Tab dragging, arbitrary docking, and layout persistence remain outside the
+  workbench model.
+
 ## Terminal
 
 - A terminal is a native, single-view surface, not a `TextBuffer` subtype.
