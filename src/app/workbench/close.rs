@@ -31,6 +31,7 @@ pub(crate) struct PendingClose {
 }
 
 impl PendingClose {
+    #[cfg_attr(not(test), allow(dead_code, reason = "used by protected closure"))]
     pub(crate) fn document_id(&self) -> super::DocumentId {
         self.document_id
     }
@@ -43,6 +44,7 @@ pub(crate) enum CloseRequestOutcome {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(not(test), allow(dead_code, reason = "used by protected closure"))]
 pub(crate) enum CloseConfirmation {
     Close,
     Cancel,
@@ -54,6 +56,7 @@ impl Workbench {
     /// `open_view_count` is application-wide because another native window may
     /// show the same document. A dirty document needs confirmation only when
     /// this tab is its final view.
+    #[cfg_attr(not(test), allow(dead_code, reason = "document convenience API"))]
     pub(crate) fn request_close_tab(
         &mut self,
         pane_id: PaneId,
@@ -62,19 +65,36 @@ impl Workbench {
         open_view_count: usize,
         cx: &mut Context<Self>,
     ) -> Option<CloseRequestOutcome> {
+        self.request_close_tab_with_state(
+            pane_id,
+            tab_id,
+            document.id(),
+            document.is_dirty(cx),
+            open_view_count,
+        )
+    }
+
+    pub(crate) fn request_close_tab_with_state(
+        &mut self,
+        pane_id: PaneId,
+        tab_id: TabId,
+        document_id: super::DocumentId,
+        document_is_dirty: bool,
+        open_view_count: usize,
+    ) -> Option<CloseRequestOutcome> {
         assert!(open_view_count > 0, "the closing tab is an open view");
-        if !self.contains_tab(pane_id, tab_id, document.id()) {
+        if !self.contains_tab(pane_id, tab_id, document_id) {
             return None;
         }
         assert!(
-            open_view_count >= self.view_count(document.id()),
+            open_view_count >= self.view_count(document_id),
             "application view count must include every view in this workbench"
         );
-        if open_view_count == 1 && document.is_dirty(cx) {
+        if open_view_count == 1 && document_is_dirty {
             return Some(CloseRequestOutcome::Pending(PendingClose {
                 pane_id,
                 tab_id,
-                document_id: document.id(),
+                document_id,
             }));
         }
         Some(CloseRequestOutcome::Closed(self.close_tab_now(
@@ -89,6 +109,7 @@ impl Workbench {
     /// The caller resolves Save/Don't Save into `Close` only after persistence
     /// or discard has succeeded. Stale requests are rejected rather than
     /// closing a replacement tab.
+    #[cfg_attr(not(test), allow(dead_code, reason = "used by protected closure"))]
     pub(crate) fn resolve_pending_close(
         &mut self,
         pending: PendingClose,

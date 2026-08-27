@@ -22,8 +22,9 @@ gpui application and views        extension runtimes
 - `view` is the standalone renderer benchmark harness, not the application
   view layer.
 
-The default `knot` binary runs `app::run`. Other binaries exercise prototype
-benchmarks.
+The default `knot` binary runs the product application through `app::run`.
+`knot --fixture [name]` retains the integrated prototype shell as an explicit
+exploration entry point; other binaries exercise focused prototype benchmarks.
 
 ## Core editor model
 
@@ -114,6 +115,18 @@ view count before applying the transition. A closed final view requests
 document closure but does not remove the application-owned document itself.
 This keeps window-local presentation mutation separate from application-level
 document and confirmation coordination.
+
+Each native product window renders one workbench recursively as tabbed panes
+and horizontal or vertical splits. A shell-wide weak workbench registry counts
+document views across windows without owning window lifetime. Clean final-tab
+closure removes the final-view document and immediately installs a new
+untitled document and workbench; dirty final views remain pending for the
+protected-closure flow.
+
+CLI paths and macOS open events become the same normalized `file://` open
+request at the platform boundary. Until the complete asynchronous open flow is
+installed, a targeted product window associates an empty document with that
+destination; application-wide URI deduplication still applies.
 
 The shell-owned `CompletionProviderRegistry` assigns monotonic registration
 identities and order to lifecycle-owned, shell-wide providers. An editor

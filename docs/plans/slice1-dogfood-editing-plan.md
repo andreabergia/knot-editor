@@ -1,6 +1,6 @@
 # First Product Slice: Dogfoodable Text Editing
 
-Status: in progress — checkpoint 3 entry flow implemented; product shell pending.
+Status: in progress — checkpoint 3 implemented; review gate pending.
 
 This slice makes Knot usable for editing its own source on macOS. It evolves
 the validated prototype in place and introduces the real workbench ownership
@@ -115,14 +115,14 @@ application-owned document model rather than introducing transitional APIs.
 
 ### Checkpoint 3: Product shell and layout
 
-- 🔄 Replace default fixture startup with the product shell and keep fixtures
+- ✅ Replace default fixture startup with the product shell and keep fixtures
   available through explicit exploration entry points.
-- Render workbench tabs and horizontal or vertical splits, support multiple
+- ✅ Render workbench tabs and horizontal or vertical splits, support multiple
   native windows, and create a replacement untitled document when required.
 - ✅ Accept the initial CLI path and macOS open events through one application
   entry flow; opening and persistence behavior may remain limited until later
   checkpoints.
-- Add lower-level coverage for shell transitions and UI coverage where layout
+- ✅ Add lower-level coverage for shell transitions and UI coverage where layout
   behavior cannot be established below gpui.
 - Review gate: manually exercise launch, new windows, tabs, both split
   directions, independent views of one document, and final-tab replacement.
@@ -224,24 +224,24 @@ application-owned document model rather than introducing transitional APIs.
 
 ### 1. Establish the product entry path
 
-- ⬜ Replace the fixture-oriented default launch with the minimal product
+- ✅ Replace the fixture-oriented default launch with the minimal product
   shell while keeping exploration fixtures available outside normal startup.
 - ✅ Accept zero or one file-or-folder CLI path and route macOS open events
   through the same application flow.
 - ✅ Convert platform paths to normalized `file://` resources at the macOS and
   local-provider boundary; keep paths out of generic document state.
-- ⬜ Create one empty untitled document when launch or final-tab closure leaves
+- ✅ Create one empty untitled document when launch or final-tab closure leaves
   the application without a visible document.
 
 ### 2. Introduce windows, tabbed panes, and splits
 
 - ✅ Move strong document ownership above individual windows and keep weak
   extension handles independent of it.
-- ⬜ Give each window a workbench containing a split tree, focused pane, and
+- ✅ Give each window a workbench containing a split tree, focused pane, and
   ordered tabs per pane.
 - ✅ Open the same document in multiple independent editor views and keep their
   cursor, selection, and scroll state separate.
-- ⬜ Support creating and closing windows, tabs, and horizontal or vertical
+- ✅ Support creating and closing windows, tabs, and horizontal or vertical
   splits with standard native commands and shortcuts.
 - ⬜ Define last-view and last-tab behavior, including dirty confirmation and
   creation of the replacement untitled buffer.

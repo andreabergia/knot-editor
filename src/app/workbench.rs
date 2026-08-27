@@ -5,11 +5,6 @@
 //! layout and lifecycle transitions independently of native windows and
 //! confirmation dialogs.
 
-#![allow(
-    dead_code,
-    reason = "the product shell starts consuming the workbench in checkpoint 3"
-)]
-
 #[cfg(debug_assertions)]
 use std::collections::HashSet;
 
@@ -23,8 +18,20 @@ use super::{
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct PaneId(u64);
 
+impl PaneId {
+    pub(crate) fn value(self) -> u64 {
+        self.0
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct TabId(u64);
+
+impl TabId {
+    pub(crate) fn value(self) -> u64 {
+        self.0
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SplitDirection {
@@ -34,6 +41,7 @@ pub(crate) enum SplitDirection {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SplitPlacement {
+    #[cfg_attr(not(test), allow(dead_code, reason = "supported layout placement"))]
     Before,
     After,
 }
@@ -170,7 +178,16 @@ pub(crate) struct Workbench {
 }
 
 impl Workbench {
+    #[cfg_attr(not(test), allow(dead_code, reason = "document convenience API"))]
     pub(crate) fn new(document: &Document, cx: &mut Context<Self>) -> Self {
+        Self::new_for_document(document.id(), document.model().clone(), cx)
+    }
+
+    pub(crate) fn new_for_document(
+        document_id: DocumentId,
+        model: Entity<super::model::BufferModel>,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let pane_id = PaneId(1);
         let tab_id = TabId(1);
         let workbench = Self {
@@ -181,8 +198,8 @@ impl Workbench {
                 id: pane_id,
                 tabs: vec![EditorTab {
                     id: tab_id,
-                    document_id: document.id(),
-                    editor: cx.new(|cx| EditorView::new(document.model().clone(), cx)),
+                    document_id,
+                    editor: cx.new(|cx| EditorView::new(model, cx)),
                 }],
                 active_tab: tab_id,
             }],
@@ -196,6 +213,7 @@ impl Workbench {
         self.layout.as_ref()
     }
 
+    #[cfg_attr(not(test), allow(dead_code, reason = "layout inspection API"))]
     pub(crate) fn panes(&self) -> &[Pane] {
         &self.panes
     }
@@ -212,15 +230,6 @@ impl Workbench {
         self.focused_pane.and_then(|id| self.pane(id))
     }
 
-    pub(crate) fn focus_pane(&mut self, id: PaneId) -> bool {
-        if self.pane(id).is_none() {
-            return false;
-        }
-        self.focused_pane = Some(id);
-        self.debug_assert_invariants();
-        true
-    }
-
     pub(crate) fn activate_tab(&mut self, pane_id: PaneId, tab_id: TabId) -> bool {
         let Some(pane) = self.panes.iter_mut().find(|pane| pane.id == pane_id) else {
             return false;
@@ -234,19 +243,30 @@ impl Workbench {
         true
     }
 
+    #[cfg_attr(not(test), allow(dead_code, reason = "document convenience API"))]
     pub(crate) fn open_tab(
         &mut self,
         pane_id: PaneId,
         document: &Document,
         cx: &mut Context<Self>,
     ) -> Option<TabId> {
+        self.open_tab_for_document(pane_id, document.id(), document.model().clone(), cx)
+    }
+
+    pub(crate) fn open_tab_for_document(
+        &mut self,
+        pane_id: PaneId,
+        document_id: DocumentId,
+        model: Entity<super::model::BufferModel>,
+        cx: &mut Context<Self>,
+    ) -> Option<TabId> {
         let pane_index = self.panes.iter().position(|pane| pane.id == pane_id)?;
         let tab_id = self.allocate_tab_id();
-        let editor = cx.new(|cx| EditorView::new(document.model().clone(), cx));
+        let editor = cx.new(|cx| EditorView::new(model, cx));
         let pane = &mut self.panes[pane_index];
         pane.tabs.push(EditorTab {
             id: tab_id,
-            document_id: document.id(),
+            document_id,
             editor,
         });
         pane.active_tab = tab_id;

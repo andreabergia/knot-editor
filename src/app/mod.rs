@@ -32,6 +32,7 @@ mod editor;
 mod entry;
 mod filesystem;
 pub mod model;
+mod product;
 mod resource;
 mod search_results;
 mod terminal_view;
@@ -3261,10 +3262,7 @@ impl Render for Shell {
     }
 }
 
-pub fn run() {
-    let fixture_name = std::env::args()
-        .nth(1)
-        .unwrap_or_else(|| DEFAULT_FIXTURE_NAME.into());
+fn run_fixture(fixture_name: String) {
     let host = V8Host::new();
     let runtimes = vec![
         host.spawn_extension(ExtensionId::new(1)).into_parts(),
@@ -3299,6 +3297,21 @@ pub fn run() {
             items: vec![MenuItem::action("Quit Knot", Quit)],
         }]);
     });
+}
+
+pub fn run() {
+    let launch = entry::LaunchConfiguration::parse(
+        std::env::args(),
+        &std::env::current_dir().expect("Knot requires a current working directory"),
+    )
+    .unwrap_or_else(|error| {
+        eprintln!("[knot] {error}");
+        std::process::exit(2);
+    });
+    match launch {
+        entry::LaunchConfiguration::Product(request) => product::run(request),
+        entry::LaunchConfiguration::Fixture(fixture) => run_fixture(fixture),
+    }
 }
 
 #[cfg(test)]
