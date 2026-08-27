@@ -1,6 +1,6 @@
 # First Product Slice: Dogfoodable Text Editing
 
-Status: in progress — checkpoint 2 implemented; review gate pending.
+Status: in progress — checkpoint 3 entry flow implemented; product shell pending.
 
 This slice makes Knot usable for editing its own source on macOS. It evolves
 the validated prototype in place and introduces the real workbench ownership
@@ -115,11 +115,11 @@ application-owned document model rather than introducing transitional APIs.
 
 ### Checkpoint 3: Product shell and layout
 
-- Replace default fixture startup with the product shell and keep fixtures
+- 🔄 Replace default fixture startup with the product shell and keep fixtures
   available through explicit exploration entry points.
 - Render workbench tabs and horizontal or vertical splits, support multiple
   native windows, and create a replacement untitled document when required.
-- Accept the initial CLI path and macOS open events through one application
+- ✅ Accept the initial CLI path and macOS open events through one application
   entry flow; opening and persistence behavior may remain limited until later
   checkpoints.
 - Add lower-level coverage for shell transitions and UI coverage where layout
@@ -226,9 +226,9 @@ application-owned document model rather than introducing transitional APIs.
 
 - ⬜ Replace the fixture-oriented default launch with the minimal product
   shell while keeping exploration fixtures available outside normal startup.
-- ⬜ Accept zero or one file-or-folder CLI path and route macOS open events
+- ✅ Accept zero or one file-or-folder CLI path and route macOS open events
   through the same application flow.
-- ⬜ Convert platform paths to normalized `file://` resources at the macOS and
+- ✅ Convert platform paths to normalized `file://` resources at the macOS and
   local-provider boundary; keep paths out of generic document state.
 - ⬜ Create one empty untitled document when launch or final-tab closure leaves
   the application without a visible document.

@@ -29,6 +29,7 @@ mod command_palette;
 mod completion;
 mod documents;
 mod editor;
+mod entry;
 mod filesystem;
 pub mod model;
 mod resource;

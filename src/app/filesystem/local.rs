@@ -234,7 +234,7 @@ impl FileSystemProvider for LocalFileSystemProvider {
     }
 }
 
-fn normalize_file_uri(uri: ResourceUri) -> Result<ResourceUri, ResourceError> {
+pub(crate) fn normalize_file_uri(uri: ResourceUri) -> Result<ResourceUri, ResourceError> {
     if uri.as_url().host_str().is_some() {
         return Err(ResourceError::InvalidUri {
             uri: uri.to_string(),
