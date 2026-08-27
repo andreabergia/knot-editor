@@ -5,59 +5,162 @@ vertical slice. An item moves into a slice plan only when a concrete use case
 requires it. Completed decisions remain in `decisions.md`; this document does
 not reopen them or imply implementation order.
 
-Each entry records why it is deferred and the trigger for reconsidering it.
+Each item has a stable `D###` identifier, a reason for deferral, and a concrete
+trigger for reconsideration. IDs are never renumbered or reused. New items take
+the next unused ID. When an item is promoted, its slice plan retains the ID and
+the item is removed from this register.
 
 ## Editing and workbench
 
-| Work | Why deferred | Reconsider when |
-| --- | --- | --- |
-| Replace and advanced Find modes | Literal current-file Find is sufficient for the first editing session. | Daily use identifies required replacement, regular-expression, case, or whole-word behavior. |
-| Syntax highlighting | Plain text is sufficient to validate safe editing and workbench ownership. | The editing loop is trustworthy and source readability becomes the dominant problem. |
-| Configurable and extension-defined keymaps | Fixed native bindings cover initial use. | Dogfooding identifies concrete remapping needs or the extension slice requires bindings. |
-| Tab dragging and general docking | Initial windows, panes, tabs, and splits need only command-driven placement. | Rearranging real sessions is common enough to define the interaction. |
-| Workbench layout and session restoration | Persistence semantics should follow a workbench people actually use. | Window and split behavior stabilizes through daily use. |
-| File drag and drop | Open and Save As establish workspace-independent documents first. | Platform interaction becomes a selected product slice. |
-| Generated-search refresh and stale-target recovery | Immutable search results validated the text-surface boundary. | Bundled cross-file search demonstrates that refresh or recovery is required. |
+- **D001 — Replace and advanced Find modes**
+  - Deferred: Literal current-file Find is sufficient for the first editing
+    session.
+  - Reconsider: Daily use identifies required replacement, regular-expression,
+    case, or whole-word behavior.
+
+- **D002 — Syntax highlighting**
+  - Deferred: Plain text is sufficient to validate safe editing and workbench
+    ownership.
+  - Reconsider: The editing loop is trustworthy and source readability becomes
+    the dominant problem.
+
+- **D003 — Configurable and extension-defined keymaps**
+  - Deferred: Fixed native bindings cover initial use.
+  - Reconsider: Dogfooding identifies concrete remapping needs or the extension
+    slice requires bindings.
+
+- **D004 — Tab dragging and general docking**
+  - Deferred: Initial windows, panes, tabs, and splits need only command-driven
+    placement.
+  - Reconsider: Rearranging real sessions is common enough to define the
+    interaction.
+
+- **D005 — Workbench layout and session restoration**
+  - Deferred: Persistence semantics should follow a workbench people actually
+    use.
+  - Reconsider: Window and split behavior stabilizes through daily use.
+
+- **D006 — File drag and drop**
+  - Deferred: Open and Save As establish workspace-independent documents first.
+  - Reconsider: Platform interaction becomes a selected product slice.
+
+- **D007 — Generated-search refresh and stale-target recovery**
+  - Deferred: Immutable search results validated the text-surface boundary.
+  - Reconsider: Bundled cross-file search demonstrates that refresh or recovery
+    is required.
 
 ## Documents, storage, and history
 
-| Work | Why deferred | Reconsider when |
-| --- | --- | --- |
-| Live filesystem watching and automatic reload | Save-time conflict detection is sufficient for initial safe use. | External edits are frequent enough that discovery only at Save is disruptive. |
-| Binary buffers and encoding detection | The first slice explicitly targets UTF-8 text. | A concrete file workflow requires non-UTF-8 or binary inspection. |
-| Filesystem mutation beyond create and replace | Rename, delete, and directory creation are not needed for text editing. | Workspace file management becomes a vertical slice. |
-| Remote filesystem providers | The URI boundary is validated with local and memory providers. | A specific remote workflow is selected. |
-| Persistent undo, history trees, and view-state restoration | Session-local linear undo is sufficient for dogfooding. | Users need recovery across restarts or branching history. |
-| Piece-table compaction and edit-log reclamation | Prototype storage is append-only and no real workload has shown unacceptable growth. | Long editing sessions produce measured memory or stabilization problems. |
-| Replaceable line-start index | Linear suffix updates passed prototype workloads. | Real files demonstrate unacceptable edit latency. |
-| URI deduplication across processes | The first slice handles identity within one application process. | Multi-process editing or document handoff is introduced. |
-| Sandboxed workspace roots | Local roots are trusted and intentionally follow symlinks. | Knot opens untrusted workspaces under a security boundary. |
+- **D008 — Live filesystem watching and automatic reload**
+  - Deferred: Save-time conflict detection is sufficient for initial safe use.
+  - Reconsider: External edits are frequent enough that discovery only at Save
+    is disruptive.
+
+- **D009 — Binary buffers and encoding detection**
+  - Deferred: The first slice explicitly targets UTF-8 text.
+  - Reconsider: A concrete file workflow requires non-UTF-8 or binary
+    inspection.
+
+- **D010 — Filesystem mutation beyond create and replace**
+  - Deferred: Rename, delete, and directory creation are not needed for text
+    editing.
+  - Reconsider: Workspace file management becomes a vertical slice.
+
+- **D011 — Remote filesystem providers**
+  - Deferred: The URI boundary is validated with local and memory providers.
+  - Reconsider: A specific remote workflow is selected.
+
+- **D012 — Persistent undo, history trees, and view-state restoration**
+  - Deferred: Session-local linear undo is sufficient for dogfooding.
+  - Reconsider: Users need recovery across restarts or branching history.
+
+- **D013 — Piece-table compaction and edit-log reclamation**
+  - Deferred: Prototype storage is append-only and no real workload has shown
+    unacceptable growth.
+  - Reconsider: Long editing sessions produce measured memory or stabilization
+    problems.
+
+- **D014 — Replaceable line-start index**
+  - Deferred: Linear suffix updates passed prototype workloads.
+  - Reconsider: Real files demonstrate unacceptable edit latency.
+
+- **D015 — URI deduplication across processes**
+  - Deferred: The first slice handles identity within one application process.
+  - Reconsider: Multi-process editing or document handoff is introduced.
+
+- **D016 — Sandboxed workspace roots**
+  - Deferred: Local roots are trusted and intentionally follow symlinks.
+  - Reconsider: Knot opens untrusted workspaces under a security boundary.
 
 ## Extensions and automation
 
-| Work | Why deferred | Reconsider when |
-| --- | --- | --- |
-| Production V8 isolate pool and scheduling | Persistent thread-affine prototype runtimes validated the API boundary, not production resource policy. | The first production extension slice is selected. |
-| Extension packaging, dependencies, resolution, and load order | No installable extension product exists yet. | Extensions must be distributed rather than embedded as fixtures. |
-| Quotas, backpressure, slow-consumer policy, and timeouts | Correct policy depends on observed extension workloads. | Real extensions can affect responsiveness or resource use. |
-| Command schemas, aliases, macros, repetition, and concurrent task graphs | Ordinary commands and awaited composition cover validated cases. | A concrete automation workflow cannot be expressed cleanly. |
-| General extension UI or WebView escape hatch | Surface-specific semantic UI remains sufficient. | A selected extension requires genuinely arbitrary UI. |
-| Rich completion policy and presentation | The prototype validated provider aggregation and replaceable native presentation. | Completion becomes part of a dogfood slice. |
-| Standardized AI integration | No concrete user workflow or provider boundary has been selected. | An AI-assisted editing slice is defined. |
+- **D017 — Production V8 isolate pool and scheduling**
+  - Deferred: Persistent thread-affine prototype runtimes validated the API
+    boundary, not production resource policy.
+  - Reconsider: The first production extension slice is selected.
+
+- **D018 — Extension packaging, dependencies, resolution, and load order**
+  - Deferred: No installable extension product exists yet.
+  - Reconsider: Extensions must be distributed rather than embedded as
+    fixtures.
+
+- **D019 — Quotas, backpressure, slow-consumer policy, and timeouts**
+  - Deferred: Correct policy depends on observed extension workloads.
+  - Reconsider: Real extensions can affect responsiveness or resource use.
+
+- **D020 — Command schemas, aliases, macros, repetition, and concurrent task
+  graphs**
+  - Deferred: Ordinary commands and awaited composition cover validated cases.
+  - Reconsider: A concrete automation workflow cannot be expressed cleanly.
+
+- **D021 — General extension UI or WebView escape hatch**
+  - Deferred: Surface-specific semantic UI remains sufficient.
+  - Reconsider: A selected extension requires genuinely arbitrary UI.
+
+- **D022 — Rich completion policy and presentation**
+  - Deferred: The prototype validated provider aggregation and replaceable
+    native presentation.
+  - Reconsider: Completion becomes part of a dogfood slice.
+
+- **D023 — Standardized AI integration**
+  - Deferred: No concrete user workflow or provider boundary has been selected.
+  - Reconsider: An AI-assisted editing slice is defined.
 
 ## Terminals and generated surfaces
 
-| Work | Why deferred | Reconsider when |
-| --- | --- | --- |
-| Production `TerminalSession` separation | The prototype validated the terminal path with view-owned state. | Terminal use enters the product workbench. |
-| Terminal persistence, simultaneous views, remote PTYs, and shell integration | These exceed the validated local interactive-session use case. | Real terminal workflows require them. |
-| Full terminal compatibility, mouse reporting, and hyperlinks | The emulator choice is settled; compatibility breadth is product work. | Terminal dogfooding exposes the required behaviors. |
-| Additional generated text surfaces | Search did not expose another architectural boundary. | A concrete generated output remains useful as text but stresses the current model. |
+- **D024 — Production `TerminalSession` separation**
+  - Deferred: The prototype validated the terminal path with view-owned state.
+  - Reconsider: Terminal use enters the product workbench.
+
+- **D025 — Terminal persistence, simultaneous views, remote PTYs, and shell
+  integration**
+  - Deferred: These exceed the validated local interactive-session use case.
+  - Reconsider: Real terminal workflows require them.
+
+- **D026 — Full terminal compatibility, mouse reporting, and hyperlinks**
+  - Deferred: The emulator choice is settled; compatibility breadth is product
+    work.
+  - Reconsider: Terminal dogfooding exposes the required behaviors.
+
+- **D027 — Additional generated text surfaces**
+  - Deferred: Search did not expose another architectural boundary.
+  - Reconsider: A concrete generated output remains useful as text but stresses
+    the current model.
 
 ## Platforms and accessibility
 
-| Work | Why deferred | Reconsider when |
-| --- | --- | --- |
-| Linux framework checkpoint | Initial product dogfooding targets macOS. | The macOS editing slice is usable; Linux remains required before broader production claims. |
-| Windows product polish | The framework path passed its portability checkpoint, not product validation. | Windows becomes a supported dogfooding platform. |
-| Accessibility bridge | gpui lacks the public platform bridge required by the semantic state already retained. | The framework exposes a viable bridge or Knot selects an implementation strategy. |
+- **D028 — Linux framework checkpoint**
+  - Deferred: Initial product dogfooding targets macOS.
+  - Reconsider: The macOS editing slice is usable; Linux remains required
+    before broader production claims.
+
+- **D029 — Windows product polish**
+  - Deferred: The framework path passed its portability checkpoint, not product
+    validation.
+  - Reconsider: Windows becomes a supported dogfooding platform.
+
+- **D030 — Accessibility bridge**
+  - Deferred: gpui lacks the public platform bridge required by the semantic
+    state already retained.
+  - Reconsider: The framework exposes a viable bridge or Knot selects an
+    implementation strategy.
