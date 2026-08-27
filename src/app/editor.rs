@@ -215,6 +215,36 @@ impl EditorView {
         })
     }
 
+    #[cfg(test)]
+    pub(crate) fn set_test_presentation_state(
+        &mut self,
+        cursor_line: usize,
+        cursor_col: usize,
+        anchor: Option<(usize, usize)>,
+        scroll: f32,
+    ) {
+        self.cursor_line = cursor_line;
+        self.cursor_col = cursor_col;
+        self.preferred_col = cursor_col;
+        self.has_selection = anchor.is_some();
+        if let Some((anchor_line, anchor_col)) = anchor {
+            self.anchor_line = anchor_line;
+            self.anchor_col = anchor_col;
+        }
+        self.scroll = scroll;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_presentation_state(&self) -> (usize, usize, Option<(usize, usize)>, f32) {
+        (
+            self.cursor_line,
+            self.cursor_col,
+            self.has_selection
+                .then_some((self.anchor_line, self.anchor_col)),
+            self.scroll,
+        )
+    }
+
     /// Select a source byte range, reveal its caret, and transfer focus here.
     pub(crate) fn select_reveal_and_focus(
         &mut self,

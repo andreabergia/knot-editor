@@ -35,6 +35,7 @@ mod resource;
 mod search_results;
 mod terminal_view;
 mod tree_view;
+mod workbench;
 mod workspace;
 mod workspace_tree;
 
