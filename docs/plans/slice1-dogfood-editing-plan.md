@@ -1,6 +1,6 @@
 # First Product Slice: Dogfoodable Text Editing
 
-Status: planned.
+Status: in progress — checkpoint 1 implemented, pending review.
 
 This slice makes Knot usable for editing its own source on macOS. It evolves
 the validated prototype in place and introduces the real workbench ownership
@@ -86,18 +86,18 @@ the concern-oriented execution sections below. Existing prototype ownership is
 not a compatibility boundary: replace `OpenBufferCollection` directly with the
 application-owned document model rather than introducing transitional APIs.
 
-### Checkpoint 1: Application-owned documents
+### Checkpoint 1: Application-owned documents ✅
 
-- Introduce the application-owned document collection and explicit untitled,
+- ✅ Introduce the application-owned document collection and explicit untitled,
   destination-associated, persisted, and generated document states.
-- Move strong model ownership, persistence identity and state, dirty-state
+- ✅ Move strong model ownership, persistence identity and state, dirty-state
   semantics, and application-wide normalized-URI deduplication into documents.
-- Preserve the current visible shell while migrating it to the new ownership
+- ✅ Preserve the current visible shell while migrating it to the new ownership
   model; remove superseded prototype ownership in the same checkpoint.
-- Cover document lifetime, state transitions, dirty state, and URI
+- ✅ Cover document lifetime, state transitions, dirty state, and URI
   deduplication with focused tests.
-- Review gate: inspect the ownership boundary and state model. No manual UI
-  testing is required beyond a launch smoke test.
+- 🟡 Review gate: ownership inspection and launch smoke are complete; awaiting
+  code review. No additional manual UI testing is required.
 
 ### Checkpoint 2: Workbench state and view lifetime
 
@@ -235,7 +235,7 @@ application-owned document model rather than introducing transitional APIs.
 
 ### 2. Introduce windows, tabbed panes, and splits
 
-- ⬜ Move strong document ownership above individual windows and keep weak
+- ✅ Move strong document ownership above individual windows and keep weak
   extension handles independent of it.
 - ⬜ Give each window a workbench containing a split tree, focused pane, and
   ordered tabs per pane.
@@ -273,7 +273,7 @@ application-owned document model rather than introducing transitional APIs.
 
 ### 4. Make documents and resources user-facing
 
-- ⬜ Represent untitled, destination-associated-but-uncreated, persisted, and
+- ✅ Represent untitled, destination-associated-but-uncreated, persisted, and
   generated documents explicitly. Dirty state must account for never-saved
   documents rather than relying only on revision comparison.
 - ⬜ Deduplicate open files application-wide by normalized resource URI and

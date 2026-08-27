@@ -69,20 +69,24 @@ contributions, and closure. `core::TextBuffer` remains unconditionally mutable.
 
 `BufferRegistry` assigns monotonic transport handles and holds weak model
 references. Its active-buffer entry is the prototype command context.
-`OpenBufferCollection` independently assigns local presentation identities and
-strongly owns the titled models visible in the shell, including its selected
-entry. It is the user-visible buffer lifecycle owner; `BufferRegistry` remains
-only a transport-handle registry. A resource-backed entry additionally owns
-its normalized `ResourceUri` and the revision last successfully persisted.
-Dirty state is derived by comparing that revision with the model revision;
-URI and persistence state never enter `BufferModel` or `core`. Generated
-entries have no resource metadata and cannot use the resource save path. View
-state remains outside the collection.
+An application-global `DocumentCollection` assigns document identities,
+strongly owns every open document and its model, and deduplicates normalized
+resource URIs across the application. Shell selection is presentation state
+and remains outside the collection; `BufferRegistry` remains only a
+transport-handle registry.
 
-Generated search entries retain their application-owned
+A document explicitly records whether it is untitled,
+destination-associated-but-uncreated, persisted, or generated. Untitled dirty
+state compares the model revision with its initial clean revision; a
+destination-associated document is dirty until persistence succeeds; a
+persisted document compares against its last successfully persisted revision;
+and generated documents are never persistable. URI and persistence state
+never enter `BufferModel` or `core`.
+
+Generated search documents retain their application-owned
 `SearchResultsController` alongside the model. The controller keeps semantic
 source targets and emitted output ranges separate from the generated text; the
-generic collection and model have no search-result semantics.
+generic document collection and model have no search-result semantics.
 `BufferSubscriptionRegistry` routes committed changes to interested extension
 lifecycles.
 
@@ -172,7 +176,7 @@ Shell-owned provider registry
  cached UI       captured revision
                          |
                          v
-                 OpenBufferEntry
+                    Document
                          |
                          v
                     BufferModel
@@ -301,7 +305,7 @@ source snapshot + revision
             +----> generated read-only BufferModel
                               |
                               v
-                    OpenBufferCollection
+                    DocumentCollection
                               |
                               v
                          EditorView

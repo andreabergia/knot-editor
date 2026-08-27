@@ -198,9 +198,10 @@ Evidence: [terminal evaluation](archive/exploration/step9-terminal-plan.md).
 - Generated content defaults to an ordinary `TextBuffer` presented through the
   normal buffer and editor lifecycle when it remains useful as selectable,
   scrollable, copyable text.
-- `OpenBufferCollection` strongly owns user-visible titled buffers and their
-  selection. `BufferRegistry` remains a separate weak registry for extension
-  transport handles.
+- The application-global `DocumentCollection` strongly owns documents and
+  their models. Window or shell selection remains presentation state, while
+  `BufferRegistry` remains a separate weak registry for extension transport
+  handles.
 - Editability is application policy on `BufferModel`; `TextBuffer` remains
   unconditionally mutable. Every model text-mutation path enforces the policy,
   while view state, snapshots, contributions, and closure remain available for

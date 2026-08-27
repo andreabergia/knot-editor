@@ -27,10 +27,10 @@ use crate::host::{
 
 mod command_palette;
 mod completion;
+mod documents;
 mod editor;
 mod filesystem;
 pub mod model;
-mod open_buffers;
 mod resource;
 mod search_results;
 mod terminal_view;
@@ -40,6 +40,7 @@ mod workspace_tree;
 
 use command_palette::{CommandPalette, CommandPaletteEntry, CommandPaletteEvent};
 use completion::CompletionProviderRegistry;
+use documents::{ApplicationDocuments, DocumentCollection, DocumentId, DocumentState};
 use editor::{
     EditorContributionAction, EditorRenderingOptions, EditorView, seed_fixture_contributions,
 };
@@ -51,7 +52,6 @@ use model::{
     BufferAccessError, BufferModel, BufferRegistry, BufferSubscriptionRegistry, CommandCatalog,
     ContributionError, ContributionSource,
 };
-use open_buffers::{OpenBufferCollection, OpenBufferId};
 use resource::ResourceUri;
 use search_results::{ACTIVATE_SEARCH_RESULT_COMMAND, SearchResultsController};
 use terminal_view::TerminalView;
@@ -650,8 +650,8 @@ fn shared_test_filesystem_fixture() -> FilesystemFixture {
 }
 
 struct Shell {
-    open_buffers: OpenBufferCollection,
-    source_buffer: OpenBufferId,
+    selected_document: DocumentId,
+    source_document: DocumentId,
     filesystem_providers: Arc<FileSystemProviderRegistry>,
     workspace: WorkspaceState,
     workspace_tree: Entity<WorkspaceTree>,
@@ -713,6 +713,14 @@ struct Shell {
 }
 
 impl Shell {
+    fn document_collection(cx: &App) -> Entity<DocumentCollection> {
+        cx.global::<ApplicationDocuments>().0.clone()
+    }
+
+    fn documents(cx: &App) -> &DocumentCollection {
+        cx.global::<ApplicationDocuments>().0.read(cx)
+    }
+
     /// Construct the shell with the default fixture.
     #[cfg(test)]
     fn new(runtime: ExtensionRuntimeParts, cx: &mut Context<Self>) -> Self {
@@ -790,8 +798,16 @@ impl Shell {
         let mut buffer_registry = BufferRegistry::new();
         let handle = buffer_registry.open(&model);
         buffer_registry.set_active(Some(handle));
-        let mut open_buffers = OpenBufferCollection::new();
-        let source_buffer = open_buffers.add(format!("{fixture_name}.kfx"), model.clone());
+        let documents = if let Some(documents) = cx.try_global::<ApplicationDocuments>() {
+            documents.0.clone()
+        } else {
+            let documents = cx.new(|_| DocumentCollection::new());
+            cx.set_global(ApplicationDocuments(documents.clone()));
+            documents
+        };
+        let source_document = documents.update(cx, |documents, _| {
+            documents.create_generated(format!("{fixture_name}.kfx"), model.clone())
+        });
         let (filesystem_providers, memory_workspace_root, local_workspace_root, native_io_runtime) =
             filesystems;
         let workspace = WorkspaceState::new(memory_workspace_root.clone());
@@ -953,8 +969,8 @@ impl Shell {
             )
             .expect("completion surface fixture command name is unique");
         Shell {
-            open_buffers,
-            source_buffer,
+            selected_document: source_document,
+            source_document,
             filesystem_providers,
             workspace,
             workspace_tree,
@@ -1744,17 +1760,17 @@ impl Shell {
         window_handle: Option<AnyWindowHandle>,
         cx: &mut Context<Self>,
     ) {
-        let Some(controller) = self
-            .open_buffers
-            .selected()
-            .and_then(|entry| entry.search_results())
+        let documents = Self::documents(cx);
+        let Some(controller) = documents
+            .get(self.selected_document)
+            .and_then(|document| document.search_results())
         else {
             return;
         };
         let Ok(target) = controller.resolve_target(result_range, cx) else {
             return;
         };
-        if target.source != self.source_buffer
+        if target.source != self.source_document
             || target.source_model != *self.editor.read(cx).model()
         {
             return;
@@ -2126,10 +2142,10 @@ impl Shell {
                     .buffer
                     .and_then(|buffer| self.buffer_registry.resolve(buffer).ok())
                     .and_then(|model| {
-                        self.open_buffers
-                            .entries()
-                            .find(|entry| entry.model() == &model)
-                            .map(|entry| (entry.id(), entry.title().clone(), model))
+                        Self::documents(cx)
+                            .documents()
+                            .find(|document| document.model() == &model)
+                            .map(|document| (document.id(), document.title().clone(), model))
                     })
                     .map(|(source, title, model)| {
                         let controller = SearchResultsController::search(
@@ -2139,8 +2155,10 @@ impl Shell {
                             model,
                             cx,
                         );
-                        let result = self.open_buffers.add_search_results(controller);
-                        self.select_open_buffer(result, cx);
+                        let result = Self::document_collection(cx).update(cx, |documents, _| {
+                            documents.create_search_results(controller)
+                        });
+                        self.select_document(result, cx);
                         CommandOutcome::Completed
                     })
                     .unwrap_or(CommandOutcome::InvalidTarget);
@@ -2444,9 +2462,9 @@ impl Shell {
     /// Build a single selectable row: a div wrapping `label`; clicking selects it,
     /// the selected row gets a highlight bg, all rows get a hover bg.
     fn buffer_row(
-        id: OpenBufferId,
+        id: DocumentId,
         label: SharedString,
-        selected: Option<OpenBufferId>,
+        selected: Option<DocumentId>,
         entity: Entity<Shell>,
     ) -> AnyElement {
         let is_selected = selected == Some(id);
@@ -2463,7 +2481,7 @@ impl Shell {
             .hover(|s| s.bg(rgb(0x222222)))
             .on_click(move |_ev, _window, cx| {
                 entity.update(cx, |s, cx| {
-                    s.select_open_buffer(id, cx);
+                    s.select_document(id, cx);
                 });
             })
             .into_any_element()
@@ -2600,8 +2618,10 @@ impl Shell {
                             .unwrap_or(uri.as_url().as_str())
                             .to_owned();
                         let model = cx.new(|_| BufferModel::from_text(text));
-                        let id = this.open_buffers.add_resource(title, model, uri.clone());
-                        this.select_open_buffer(id, cx);
+                        let id = Self::document_collection(cx).update(cx, |documents, _| {
+                            documents.create_persisted(title, model, uri.clone(), 0)
+                        });
+                        this.select_document(id, cx);
                         this.resource_status = format!("opened {uri}").into();
                         this.latest_resource_error = None;
                     }
@@ -2619,19 +2639,20 @@ impl Shell {
     }
 
     fn save_selected_resource(&mut self, cx: &mut Context<Self>) {
-        let Some(entry) = self.open_buffers.selected() else {
+        let documents = Self::documents(cx);
+        let Some(document) = documents.get(self.selected_document) else {
             return;
         };
-        let Some(resource) = entry.resource() else {
+        let Some(uri) = document.resource_uri() else {
             self.resource_status = "buffer is not resource-backed".into();
             self.latest_resource_error = Some("generated buffers cannot be saved".into());
             cx.notify();
             return;
         };
         let workspace = self.workspace.snapshot();
-        let id = entry.id();
-        let model = entry.model().clone();
-        let uri = resource.uri().clone();
+        let id = document.id();
+        let model = document.model().clone();
+        let uri = uri.clone();
         if let Err(error) = Self::validate_workspace_target(&workspace, &uri) {
             self.resource_status = "save failed".into();
             self.latest_resource_error = Some(error.to_string().into());
@@ -2655,7 +2676,11 @@ impl Shell {
                     return;
                 }
                 match result {
-                    Ok(()) if this.open_buffers.mark_persisted(id, &model, &uri, revision) => {
+                    Ok(())
+                        if Self::document_collection(cx).update(cx, |documents, _| {
+                            documents.mark_persisted(id, &model, &uri, revision)
+                        }) =>
+                    {
                         this.resource_status = format!("saved {uri} at revision {revision}").into();
                         this.latest_resource_error = None;
                     }
@@ -2699,17 +2724,17 @@ impl Shell {
         }
     }
 
-    fn select_open_buffer(&mut self, id: OpenBufferId, cx: &mut Context<Self>) {
-        if self.open_buffers.selected_id() == Some(id) || !self.open_buffers.select(id) {
+    fn select_document(&mut self, id: DocumentId, cx: &mut Context<Self>) {
+        if self.selected_document == id {
             return;
         }
-
-        let model = self
-            .open_buffers
-            .selected()
-            .expect("selected open buffer exists")
-            .model()
-            .clone();
+        let Some(model) = Self::documents(cx)
+            .get(id)
+            .map(|document| document.model().clone())
+        else {
+            return;
+        };
+        self.selected_document = id;
         let handle = if let Some(handle) = self.buffer_registry.handle_for(&model) {
             handle
         } else {
@@ -2744,38 +2769,46 @@ impl Shell {
         cx.notify();
     }
 
+    #[cfg(test)]
+    fn selected_document<'a>(&self, cx: &'a App) -> Option<&'a documents::Document> {
+        Self::documents(cx).get(self.selected_document)
+    }
+
     fn search_fixture(&mut self, query: &'static str, cx: &mut Context<Self>) {
-        let source = self
-            .open_buffers
-            .entries()
-            .find(|entry| entry.id() == self.source_buffer)
-            .expect("source buffer remains open");
+        let (source_title, source_model) = {
+            let documents = Self::documents(cx);
+            let source = documents
+                .get(self.source_document)
+                .expect("source document remains open");
+            (source.title().clone(), source.model().clone())
+        };
         let controller = SearchResultsController::search(
             query,
-            self.source_buffer,
-            source.title(),
-            source.model().clone(),
+            self.source_document,
+            &source_title,
+            source_model,
             cx,
         );
-        let result_buffer = self.open_buffers.add_search_results(controller);
-        self.select_open_buffer(result_buffer, cx);
+        let result_document = Self::document_collection(cx).update(cx, |documents, _| {
+            documents.create_search_results(controller)
+        });
+        self.select_document(result_document, cx);
     }
 
     /// A pane that hosts a selectable single-row list.
     fn buffer_pane(&self, entity: Entity<Shell>, cx: &App) -> impl IntoElement {
-        let entries: Vec<_> = self
-            .open_buffers
-            .entries()
-            .map(|entry| {
-                let label: SharedString = if entry.is_dirty(cx) {
-                    format!("{} •", entry.title()).into()
+        let entries: Vec<_> = Self::documents(cx)
+            .documents()
+            .map(|document| {
+                let label: SharedString = if document.is_dirty(cx) {
+                    format!("{} •", document.title()).into()
                 } else {
-                    entry.title().clone()
+                    document.title().clone()
                 };
-                (entry.id(), label)
+                (document.id(), label)
             })
             .collect();
-        let selected = self.open_buffers.selected_id();
+        let selected = Some(self.selected_document);
         uniform_list("buffers", entries.len(), move |range, _window, _cx| {
             range
                 .map(|ix| {
@@ -2836,10 +2869,10 @@ impl Drop for Shell {
 impl Render for Shell {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let entity = cx.entity();
-        let revision = self
-            .open_buffers
-            .selected()
-            .map(|entry| entry.model().read(cx).revision().to_string())
+        let documents = Self::documents(cx);
+        let selected_document = documents.get(self.selected_document);
+        let revision = selected_document
+            .map(|document| document.model().read(cx).revision().to_string())
             .unwrap_or_else(|| "closed".into());
         let runtime_error = self
             .latest_runtime_error
@@ -2849,15 +2882,18 @@ impl Render for Shell {
             .latest_resource_error
             .clone()
             .unwrap_or_else(|| "none".into());
-        let (resource_uri, dirty) = self
-            .open_buffers
-            .selected()
-            .and_then(|entry| {
-                entry
-                    .resource()
-                    .map(|resource| (resource.uri().to_string(), entry.is_dirty(cx)))
+        let (resource_uri, dirty) = selected_document
+            .map(|document| {
+                let identity = match document.state() {
+                    DocumentState::Untitled { .. } => "untitled".into(),
+                    DocumentState::Destination { uri } | DocumentState::Persisted { uri, .. } => {
+                        uri.to_string()
+                    }
+                    DocumentState::Generated => "generated".into(),
+                };
+                (identity, document.is_dirty(cx))
             })
-            .unwrap_or_else(|| ("generated".into(), false));
+            .unwrap_or_else(|| ("closed".into(), false));
         let workspace_root = self.workspace.root().to_string();
         let workspace_provider = self.workspace.root().scheme().to_owned();
         let workspace_selection = self
@@ -4070,10 +4106,9 @@ mod tests {
             }
             shell
                 .read(cx)
-                .open_buffers
-                .selected()
-                .and_then(|entry| entry.resource())
-                .is_some_and(|resource| resource.uri() == expected)
+                .selected_document(cx)
+                .and_then(|document| document.resource_uri())
+                .is_some_and(|uri| uri == expected)
         }) {
             shell.next_notification(Duration::ZERO, cx).await;
         }
@@ -4107,7 +4142,7 @@ mod tests {
             (
                 shell.memory_workspace_root.clone(),
                 shell.local_workspace_root.clone(),
-                shell.source_buffer,
+                shell.source_document,
             )
         });
 
@@ -4123,8 +4158,8 @@ mod tests {
         }
         cx.read(|cx| {
             let shell = shell.read(cx);
-            assert_eq!(shell.open_buffers.entries().count(), 1);
-            assert_eq!(shell.open_buffers.selected_id(), Some(source));
+            assert_eq!(Shell::documents(cx).documents().count(), 1);
+            assert_eq!(shell.selected_document, source);
             assert!(shell.latest_resource_error.is_none());
         });
 
@@ -4136,8 +4171,8 @@ mod tests {
         wait_for_resource_error(&shell, cx).await;
         cx.read(|cx| {
             let shell = shell.read(cx);
-            assert_eq!(shell.open_buffers.entries().count(), 1);
-            assert_eq!(shell.open_buffers.selected_id(), Some(source));
+            assert_eq!(Shell::documents(cx).documents().count(), 1);
+            assert_eq!(shell.selected_document, source);
             assert!(
                 shell
                     .latest_resource_error
@@ -4176,14 +4211,14 @@ mod tests {
             });
             wait_for_selected_resource(&shell, &uri, cx).await;
             shell.update(cx, |shell, cx| {
-                let model = shell.open_buffers.selected().unwrap().model().clone();
+                let model = shell.selected_document(cx).unwrap().model().clone();
                 model.update(cx, |model, _| {
                     let len = model.text().len();
                     model.replace(0..len, expected).unwrap();
                 });
                 shell.save_selected_resource(cx);
             });
-            while cx.read(|cx| shell.read(cx).open_buffers.selected().unwrap().is_dirty(cx)) {
+            while cx.read(|cx| shell.read(cx).selected_document(cx).unwrap().is_dirty(cx)) {
                 shell.next_notification(Duration::ZERO, cx).await;
             }
             let provider =
@@ -4192,9 +4227,9 @@ mod tests {
         }
 
         let (uri, model, captured_text, captured_revision) = shell.update(cx, |shell, cx| {
-            let entry = shell.open_buffers.selected().unwrap();
-            let uri = entry.resource().unwrap().uri().clone();
-            let model = entry.model().clone();
+            let document = shell.selected_document(cx).unwrap();
+            let uri = document.resource_uri().unwrap().clone();
+            let model = document.model().clone();
             model.update(cx, |model, _| {
                 let len = model.text().len();
                 model.replace(0..len, "captured save\n").unwrap();
@@ -4210,13 +4245,11 @@ mod tests {
         while !cx.read(|cx| {
             shell
                 .read(cx)
-                .open_buffers
-                .selected()
+                .selected_document(cx)
                 .unwrap()
-                .resource()
-                .unwrap()
+                .state()
                 .persisted_revision()
-                == captured_revision
+                == Some(captured_revision)
         }) {
             shell.next_notification(Duration::ZERO, cx).await;
         }
@@ -4225,9 +4258,9 @@ mod tests {
         assert_eq!(provider.read(uri).await.unwrap(), captured_text.as_bytes());
         cx.read(|cx| {
             let shell = shell.read(cx);
-            let entry = shell.open_buffers.selected().unwrap();
-            assert_eq!(entry.model(), &model);
-            assert!(entry.is_dirty(cx));
+            let document = shell.selected_document(cx).unwrap();
+            assert_eq!(document.model(), &model);
+            assert!(document.is_dirty(cx));
         });
     }
 
@@ -4319,7 +4352,7 @@ mod tests {
             let handle = shell.buffer_registry.active_handle().unwrap();
             let resolved = shell.buffer_registry.resolve(handle).unwrap();
             let displayed = shell.editor.read(cx).model().clone();
-            let source = shell.open_buffers.selected().unwrap();
+            let source = shell.selected_document(cx).unwrap();
             assert_eq!(source.title(), "rust_sample.kfx");
             assert_eq!(source.model(), &displayed);
             (resolved, displayed)
@@ -4504,7 +4537,7 @@ mod tests {
                 .read(cx)
                 .model()
                 .read_with(cx, |model, _| model.text());
-            let selected = shell.open_buffers.selected().unwrap();
+            let selected = shell.selected_document(cx).unwrap();
             let result_text = selected.model().read_with(cx, |model, _| model.text());
             (
                 shell.command_outcome.clone(),
@@ -4717,7 +4750,7 @@ mod tests {
             invoke_extension_target_in_window(&shell, target, name, cx);
             wait_for_command_state(&shell, "completed", cx).await;
             assert_eq!(
-                cx.read(|cx| shell.read(cx).open_buffers.entries().count()),
+                cx.read(|cx| Shell::documents(cx).documents().count()),
                 expected_buffers
             );
         }
@@ -4830,7 +4863,7 @@ mod tests {
             initial_text
         );
         assert_eq!(
-            cx.read(|cx| shell.read(cx).open_buffers.entries().count()),
+            cx.read(|cx| Shell::documents(cx).documents().count()),
             1,
             "the cancelled parent must not run its remaining native child"
         );
@@ -4930,10 +4963,7 @@ mod tests {
             execution.completion.await.unwrap(),
             CommandOutcome::Completed
         );
-        assert_eq!(
-            cx.read(|cx| shell.read(cx).open_buffers.entries().count()),
-            2
-        );
+        assert_eq!(cx.read(|cx| Shell::documents(cx).documents().count()), 2);
         parent_owner
             .execute_fixture_script(
                 "verify-child-only-cancellation.js",
@@ -5222,15 +5252,18 @@ mod tests {
     }
 
     #[gpui::test]
-    fn selecting_an_open_buffer_reconstructs_only_the_secondary_view(cx: &mut TestAppContext) {
+    async fn selecting_a_document_reconstructs_only_the_secondary_view(cx: &mut TestAppContext) {
         let runtime = V8Host::new()
             .spawn_extension(ExtensionId::new(8))
             .into_parts();
         let shell = cx.new(|cx| Shell::new(runtime, cx));
+        wait_for_runtime_state(&shell, "running", cx).await;
         let generated = cx.new(|_| BufferModel::from_text("generated\nresult"));
 
-        let (source_editor, old_secondary, generated_id) = shell.update(cx, |shell, _| {
-            let generated_id = shell.open_buffers.add("Generated", generated.clone());
+        let (source_editor, old_secondary, generated_id) = shell.update(cx, |shell, cx| {
+            let generated_id = Shell::document_collection(cx).update(cx, |documents, _| {
+                documents.create_generated("Generated", generated.clone())
+            });
             (
                 shell.editor.clone(),
                 shell.secondary_editor.downgrade(),
@@ -5238,9 +5271,8 @@ mod tests {
             )
         });
         shell.update(cx, |shell, cx| {
-            shell.select_open_buffer(generated_id, cx);
+            shell.select_document(generated_id, cx);
         });
-        cx.run_until_parked();
 
         cx.read(|cx| {
             let shell = shell.read(cx);
@@ -5268,13 +5300,13 @@ mod tests {
         cx.run_until_parked();
 
         let first_result = shell.read_with(cx, |shell, cx| {
-            let entries = shell.open_buffers.entries().collect::<Vec<_>>();
+            let entries = Shell::documents(cx).documents().collect::<Vec<_>>();
             assert_eq!(entries.len(), 3);
             assert_eq!(entries[1].title(), "Search: \"Node\"");
             assert_eq!(entries[2].title(), "Search: \"Rope\"");
             assert!(entries[1].search_results().is_some());
             assert!(entries[2].search_results().is_some());
-            assert_eq!(shell.open_buffers.selected_id(), Some(entries[2].id()));
+            assert_eq!(shell.selected_document, entries[2].id());
             assert!(
                 !entries[1]
                     .model()
@@ -5306,13 +5338,12 @@ mod tests {
         shell.update(cx, |shell, cx| {
             shell.search_fixture("Node", cx);
             shell.search_fixture("Rope", cx);
-            let ids = shell
-                .open_buffers
-                .entries()
-                .map(|entry| entry.id())
+            let ids = Shell::documents(cx)
+                .documents()
+                .map(|document| document.id())
                 .collect::<Vec<_>>();
             for id in [ids[0], ids[1], ids[2], ids[0], ids[2], ids[1]] {
-                shell.select_open_buffer(id, cx);
+                shell.select_document(id, cx);
             }
         });
         cx.refresh().unwrap();
@@ -5321,8 +5352,7 @@ mod tests {
             let shell = shell.read(cx);
             let bounds = shell.secondary_editor.read(cx).interaction_bounds();
             let controller = shell
-                .open_buffers
-                .selected()
+                .selected_document(cx)
                 .unwrap()
                 .search_results()
                 .unwrap();

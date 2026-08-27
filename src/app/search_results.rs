@@ -3,8 +3,8 @@ use gpui::{App, AppContext, Entity};
 use crate::host::protocol::{ByteRange, DecorationToken, EditorContribution};
 
 use super::{
+    documents::DocumentId,
     model::{BufferModel, ContributionSource},
-    open_buffers::OpenBufferId,
 };
 
 pub(crate) const ACTIVATE_SEARCH_RESULT_COMMAND: &str = "knot.search-result.activate";
@@ -12,7 +12,7 @@ pub(crate) const ACTIVATE_SEARCH_RESULT_COMMAND: &str = "knot.search-result.acti
 /// One source match, independent of how search results are presented.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct SearchMatch {
-    pub source: OpenBufferId,
+    pub source: DocumentId,
     pub source_range: ByteRange,
     pub line_number: usize,
     pub preview: String,
@@ -27,7 +27,7 @@ pub(crate) struct EmittedSearchResult {
 
 #[derive(Clone)]
 pub(crate) struct SearchResultTarget {
-    pub source: OpenBufferId,
+    pub source: DocumentId,
     pub source_model: Entity<BufferModel>,
     pub source_range: ByteRange,
 }
@@ -61,7 +61,7 @@ pub(crate) struct SearchResultsController {
 impl SearchResultsController {
     pub(crate) fn search(
         query: impl Into<String>,
-        source: OpenBufferId,
+        source: DocumentId,
         source_title: &str,
         source_model: Entity<BufferModel>,
         cx: &mut App,
@@ -149,7 +149,7 @@ impl SearchResultsController {
     }
 }
 
-fn find_matches(text: &str, query: &str, source: OpenBufferId) -> Vec<SearchMatch> {
+fn find_matches(text: &str, query: &str, source: DocumentId) -> Vec<SearchMatch> {
     if query.is_empty() {
         return Vec::new();
     }
@@ -215,7 +215,7 @@ mod tests {
 
     #[gpui::test]
     fn search_keeps_semantics_separate_from_formatted_ranges(cx: &mut TestAppContext) {
-        let source_id = OpenBufferId::from_value(7);
+        let source_id = DocumentId::from_value(7);
         let source = cx.new(|_| BufferModel::from_text("α Node\nNode tail"));
         let controller = cx.update(|cx| {
             SearchResultsController::search("Node", source_id, "fixture.rs", source.clone(), cx)
@@ -251,7 +251,7 @@ mod tests {
 
     #[gpui::test]
     fn target_resolution_uses_output_ranges_and_rejects_stale_sources(cx: &mut TestAppContext) {
-        let source_id = OpenBufferId::from_value(7);
+        let source_id = DocumentId::from_value(7);
         let source = cx.new(|_| BufferModel::from_text("Node tail"));
         let controller = cx.update(|cx| {
             SearchResultsController::search("Node", source_id, "fixture.rs", source.clone(), cx)
