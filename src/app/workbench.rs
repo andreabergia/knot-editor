@@ -32,6 +32,12 @@ pub(crate) enum SplitDirection {
     Vertical,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SplitPlacement {
+    Before,
+    After,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum WorkbenchLayout {
     Pane(PaneId),
@@ -43,20 +49,30 @@ pub(crate) enum WorkbenchLayout {
 }
 
 impl WorkbenchLayout {
-    fn split_pane(&mut self, target: PaneId, new_pane: PaneId, direction: SplitDirection) -> bool {
+    fn split_pane(
+        &mut self,
+        target: PaneId,
+        new_pane: PaneId,
+        direction: SplitDirection,
+        placement: SplitPlacement,
+    ) -> bool {
         match self {
             Self::Pane(pane_id) if *pane_id == target => {
+                let (first, second) = match placement {
+                    SplitPlacement::Before => (new_pane, target),
+                    SplitPlacement::After => (target, new_pane),
+                };
                 *self = Self::Split {
                     direction,
-                    first: Box::new(Self::Pane(target)),
-                    second: Box::new(Self::Pane(new_pane)),
+                    first: Box::new(Self::Pane(first)),
+                    second: Box::new(Self::Pane(second)),
                 };
                 true
             }
             Self::Pane(_) => false,
             Self::Split { first, second, .. } => {
-                first.split_pane(target, new_pane, direction)
-                    || second.split_pane(target, new_pane, direction)
+                first.split_pane(target, new_pane, direction, placement)
+                    || second.split_pane(target, new_pane, direction, placement)
             }
         }
     }
@@ -243,6 +259,7 @@ impl Workbench {
     pub(crate) fn split_focused(
         &mut self,
         direction: SplitDirection,
+        placement: SplitPlacement,
         cx: &mut Context<Self>,
     ) -> Option<PaneId> {
         let focused_id = self.focused_pane?;
@@ -255,7 +272,7 @@ impl Workbench {
 
         let layout = self.layout.as_mut()?;
         assert!(
-            layout.split_pane(focused_id, pane_id, direction),
+            layout.split_pane(focused_id, pane_id, direction, placement),
             "focused pane must occur exactly once in the layout"
         );
         self.panes.push(Pane {
@@ -429,15 +446,15 @@ mod tests {
         workbench.update(cx, |workbench, cx| {
             let first = workbench.focused_pane_id().unwrap();
             let second = workbench
-                .split_focused(SplitDirection::Horizontal, cx)
+                .split_focused(SplitDirection::Horizontal, SplitPlacement::After, cx)
                 .unwrap();
             let third = workbench
-                .split_focused(SplitDirection::Vertical, cx)
+                .split_focused(SplitDirection::Vertical, SplitPlacement::Before, cx)
                 .unwrap();
 
             let mut pane_ids = Vec::new();
             workbench.layout().unwrap().pane_ids(&mut pane_ids);
-            assert_eq!(pane_ids, vec![first, second, third]);
+            assert_eq!(pane_ids, vec![first, third, second]);
             assert_eq!(workbench.focused_pane_id(), Some(third));
             assert_eq!(workbench.panes().len(), 3);
             assert_eq!(workbench.view_count(document), 3);
@@ -455,6 +472,26 @@ mod tests {
                     }
                 )
             ));
+        });
+    }
+
+    #[gpui::test]
+    fn split_placement_orders_the_new_pane_without_changing_its_focus(cx: &mut TestAppContext) {
+        let model = cx.new(|_| BufferModel::from_text("shared"));
+        let mut documents = DocumentCollection::new();
+        let document = cx.update(|cx| documents.create_untitled("Shared", model, cx));
+        let workbench = cx.new(|cx| Workbench::new(documents.get(document).unwrap(), cx));
+
+        workbench.update(cx, |workbench, cx| {
+            let existing = workbench.focused_pane_id().unwrap();
+            let new = workbench
+                .split_focused(SplitDirection::Horizontal, SplitPlacement::Before, cx)
+                .unwrap();
+            let mut pane_ids = Vec::new();
+            workbench.layout().unwrap().pane_ids(&mut pane_ids);
+
+            assert_eq!(pane_ids, vec![new, existing]);
+            assert_eq!(workbench.focused_pane_id(), Some(new));
         });
     }
 
@@ -486,7 +523,7 @@ mod tests {
                 .editor()
                 .clone();
             let split_pane = workbench
-                .split_focused(SplitDirection::Vertical, cx)
+                .split_focused(SplitDirection::Vertical, SplitPlacement::After, cx)
                 .unwrap();
             let third_editor = workbench
                 .pane(split_pane)

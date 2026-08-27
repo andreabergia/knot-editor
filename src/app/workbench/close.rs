@@ -138,7 +138,9 @@ mod tests {
 
     use super::*;
     use crate::app::{
-        documents::DocumentCollection, model::BufferModel, workbench::SplitDirection,
+        documents::DocumentCollection,
+        model::BufferModel,
+        workbench::{SplitDirection, SplitPlacement},
     };
 
     #[gpui::test]
@@ -216,7 +218,7 @@ mod tests {
         workbench.update(cx, |workbench, cx| {
             let remaining_pane = workbench.focused_pane_id().unwrap();
             let closing_pane = workbench
-                .split_focused(SplitDirection::Horizontal, cx)
+                .split_focused(SplitDirection::Horizontal, SplitPlacement::After, cx)
                 .unwrap();
             let closing_tab = workbench.focused_pane().unwrap().active_tab_id();
             let transition = match workbench
@@ -315,7 +317,7 @@ mod tests {
             let first_pane = workbench.focused_pane_id().unwrap();
             let first_tab = workbench.focused_pane().unwrap().active_tab_id();
             workbench
-                .split_focused(SplitDirection::Vertical, cx)
+                .split_focused(SplitDirection::Vertical, SplitPlacement::After, cx)
                 .unwrap();
 
             let outcome = workbench
@@ -383,7 +385,7 @@ mod tests {
                 CloseRequestOutcome::Closed(_) => unreachable!(),
             };
             workbench
-                .split_focused(SplitDirection::Horizontal, cx)
+                .split_focused(SplitDirection::Horizontal, SplitPlacement::After, cx)
                 .unwrap();
 
             let transition = workbench
