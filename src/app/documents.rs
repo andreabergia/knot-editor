@@ -20,22 +20,37 @@ impl DocumentId {
     }
 }
 
+/// A document's persistence relationship.
 #[allow(
     dead_code,
     reason = "all document states are modeled before every product entry path creates them"
 )]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum DocumentState {
-    Untitled {
-        clean_revision: u64,
-    },
-    Destination {
-        uri: ResourceUri,
-    },
+    /// A user document with no destination yet.
+    ///
+    /// It is clean at creation and becomes dirty when its model advances past
+    /// `clean_revision`.
+    Untitled { clean_revision: u64 },
+    /// A user document associated with a destination that does not exist yet.
+    ///
+    /// It remains dirty until the first successful persistence transitions it
+    /// to [`DocumentState::Persisted`].
+    Destination { uri: ResourceUri },
+    /// A user document whose contents have been persisted to a resource.
+    ///
+    /// Edits are dirty while the model revision differs from
+    /// `persisted_revision`.
     Persisted {
         uri: ResourceUri,
         persisted_revision: u64,
     },
+    /// Application-produced text with no persistence identity.
+    ///
+    /// Generated documents use the normal buffer and editor paths so their
+    /// text remains selectable and navigable. They cannot be saved through
+    /// document persistence and are always considered clean. Search results
+    /// are currently the only generated document type.
     Generated,
 }
 
