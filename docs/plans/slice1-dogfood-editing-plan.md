@@ -124,8 +124,9 @@ application-owned document model rather than introducing transitional APIs.
   checkpoints.
 - ✅ Add lower-level coverage for shell transitions and UI coverage where layout
   behavior cannot be established below gpui.
-- Review gate: manually exercise launch, new windows, tabs, both split
-  directions, independent views of one document, and final-tab replacement.
+- 🔄 Review gate: launch smoke complete; manually exercise new windows, tabs,
+  both split directions, independent views of one document, and final-tab
+  replacement.
 
 ### Checkpoint 4: Target-preserving product commands
 
