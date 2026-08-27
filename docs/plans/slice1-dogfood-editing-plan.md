@@ -72,6 +72,154 @@ document lifetime owner.
 This ownership is deliberately limited to the behavior exercised here. The
 slice does not introduce a general docking or surface framework.
 
+## Delivery checkpoints
+
+Implement this slice as a sequence of review-sized goals rather than one
+uninterrupted run. Each checkpoint must leave the repository in a coherent
+state, update the applicable checkboxes below, add focused automated coverage,
+and end with a review summary. Make logical commits within a checkpoint, then
+stop for code review and any listed manual testing before starting the next
+checkpoint.
+
+The checkpoints follow implementation dependencies and therefore cut across
+the concern-oriented execution sections below. Existing prototype ownership is
+not a compatibility boundary: replace `OpenBufferCollection` directly with the
+application-owned document model rather than introducing transitional APIs.
+
+### Checkpoint 1: Application-owned documents
+
+- Introduce the application-owned document collection and explicit untitled,
+  destination-associated, persisted, and generated document states.
+- Move strong model ownership, persistence identity and state, dirty-state
+  semantics, and application-wide normalized-URI deduplication into documents.
+- Preserve the current visible shell while migrating it to the new ownership
+  model; remove superseded prototype ownership in the same checkpoint.
+- Cover document lifetime, state transitions, dirty state, and URI
+  deduplication with focused tests.
+- Review gate: inspect the ownership boundary and state model. No manual UI
+  testing is required beyond a launch smoke test.
+
+### Checkpoint 2: Workbench state and view lifetime
+
+- Add the window workbench model, split tree, focused pane, ordered pane tabs,
+  and tab-owned editor views.
+- Define tab, pane, last-view, and last-tab transitions independently of native
+  dialogs, using explicit pending-close outcomes where confirmation will later
+  be required.
+- Prove that multiple tabs and panes can present one document while retaining
+  independent cursor, selection, and scroll state.
+- Cover workbench transformations and document/view lifetime at the model
+  boundary.
+- Review gate: inspect workbench invariants and lifecycle behavior. No polished
+  native UI is expected yet.
+
+### Checkpoint 3: Product shell and layout
+
+- Replace default fixture startup with the product shell and keep fixtures
+  available through explicit exploration entry points.
+- Render workbench tabs and horizontal or vertical splits, support multiple
+  native windows, and create a replacement untitled document when required.
+- Accept the initial CLI path and macOS open events through one application
+  entry flow; opening and persistence behavior may remain limited until later
+  checkpoints.
+- Add lower-level coverage for shell transitions and UI coverage where layout
+  behavior cannot be established below gpui.
+- Review gate: manually exercise launch, new windows, tabs, both split
+  directions, independent views of one document, and final-tab replacement.
+
+### Checkpoint 4: Target-preserving product commands
+
+- Register the slice's document, window, editing, and Find command names in the
+  native catalog, implementing the commands whose underlying behavior exists.
+- Route native menus, fixed keybindings, the palette, and JavaScript through
+  the shared dispatcher with captured product targets and asynchronous
+  outcomes.
+- Reject destroyed targets without falling back to current focus.
+- Cover routing, discovery, target capture, destruction, and asynchronous
+  completion at command and integration boundaries.
+- Review gate: invoke the implemented commands through every applicable entry
+  path and compare their targets and outcomes.
+
+### Checkpoint 5: New and Open
+
+- Complete zero-or-one-path launch behavior, missing-file destination
+  association, workspace-folder opening, New, and interactive Open.
+- Use native dialogs and normalize platform paths only at the local-provider
+  and macOS boundaries.
+- Open files independently of workspace containment and deduplicate them
+  application-wide.
+- Cover success, cancellation, decode and open failures, stale completions,
+  and resource deduplication.
+- Review gate: manually exercise launch with no path, an existing file, a
+  missing file, and a folder, plus New and Open through all applicable command
+  entry points.
+
+### Checkpoint 6: Safe Save and Save As
+
+- Add new-file creation and atomic local replacement to the provider contract.
+- Implement Save and native Save As without prematurely binding or retargeting
+  a document.
+- Detect external-change conflicts and preserve dirty state across racing edits
+  and stale asynchronous completions.
+- Cover atomic create and replace, overwrite selection, conflicts, races,
+  failures, and document identity changes.
+- Review gate: manually exercise first save, Save As inside and outside the
+  workspace, overwrite confirmation, a racing edit, and an external conflict.
+
+### Checkpoint 7: Protected closure
+
+- Coordinate close-tab, close-window, and quit against application-owned dirty
+  documents using native Save / Don't Save / Cancel alerts.
+- Prompt at most once for a document visible through multiple views or windows
+  and preserve state on cancellation or failure.
+- Cover tab, window, document, and application lifecycle combinations.
+- Review gate: manually exercise all three closure scopes with clean, dirty,
+  multiply viewed, cancelled, saved, and discarded documents.
+
+### Checkpoint 8: Ordinary editor interaction
+
+- Complete keyboard movement and selection variants, mouse placement and
+  selection, scrolling, caret visibility, and native clipboard integration.
+- Verify insertion, multiline deletion, newline, grapheme, Unicode, and IME
+  behavior through the product shell.
+- Add focused model and view tests plus UI coverage for behavior that depends
+  on native input protocols.
+- Review gate: edit representative Rust and Markdown files using keyboard,
+  mouse, clipboard, Unicode, and IME input.
+
+### Checkpoint 9: Undo and redo
+
+- Add per-document history using ordinary `EditTransaction` mutation paths and
+  practical typing and deletion grouping.
+- Break groups at the defined interaction boundaries, clear redo after
+  divergent edits, and keep history independent across documents and views.
+- Route Undo and Redo through the shared command path and cover history,
+  grouping, anchors, notifications, and routing.
+- Review gate: manually exercise grouped typing and deletion, paste, divergent
+  edits, and document or view switching.
+
+### Checkpoint 10: Current-file Find
+
+- Add the focused query field, live match state and highlighting, and
+  next/previous navigation that follows buffer edits.
+- Register and route Find operations with the required macOS bindings.
+- Cover matching, navigation, edits, focus, target preservation, and command
+  entry paths.
+- Review gate: manually search and edit a file with zero, one, and multiple
+  matches using the query field and keyboard navigation.
+
+### Checkpoint 11: Regression and dogfood closure
+
+- Fill remaining coverage gaps across model, lifecycle, command, persistence,
+  integration, and native UI paths.
+- Complete the two-window dogfood session and all cross-entry-point command
+  checks described in section 8.
+- Update architecture and decisions, record the slice result, move newly
+  deferred work, format once, and run focused checks followed by the full test
+  suite.
+- Review gate: review the complete slice against its success criteria and
+  product constraints before marking it completed.
+
 ## Execution
 
 ### 1. Establish the product entry path
