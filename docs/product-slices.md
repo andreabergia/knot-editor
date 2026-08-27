@@ -10,6 +10,13 @@ are introduced by the user-facing slice that needs them, not in advance as a
 foundations phase. User-facing semantic operations are commands so menus,
 keybindings, the palette, and JavaScript share one invocation path.
 
+These slices build the real product, not another disposable prototype.
+Automated regression coverage is part of each slice: durable model and
+lifecycle behavior is tested at the narrowest useful boundary, command and
+asynchronous flows receive integration coverage, and important native UI
+behavior is exercised where lower-level tests cannot establish confidence.
+Manual dogfooding complements these tests but does not replace them.
+
 Knot follows VS Code's default macOS keybindings where an established binding
 fits the interaction, while retaining native macOS conventions for platform
 operations such as Open and Save.

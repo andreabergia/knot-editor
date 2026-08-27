@@ -10,9 +10,13 @@ live under @docs/plans. Load archived exploration plans and benchmark evidence
 only when the task depends on them.
 
 The architecture exploration is complete. Product development evolves the
-validated prototype in place through end-to-end usable slices. Speed and ease
-of iteration remain important, so keep automated tests focused on the behavior
-and boundaries each slice makes durable.
+validated prototype in place through end-to-end usable slices. Knot is now
+building the real product: correctness and regression safety take priority over
+prototype speed. Automated tests are required for durable behavior and every
+completed slice must leave its important model, lifecycle, command, and
+persistence paths covered. Use focused tests where they provide confidence,
+and add UI or integration coverage when behavior cannot be validated at a
+lower boundary.
 
 ## Rules
 

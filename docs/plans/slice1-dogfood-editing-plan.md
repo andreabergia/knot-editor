@@ -29,6 +29,9 @@ required.
   input protocols rather than commands.
 - ⬜ Retain validated prototype code when it fits these behaviors; change
   boundaries only where this slice supplies a concrete counterexample.
+- ⬜ Treat every durable path introduced or hardened by this slice as product
+  code. Add automated regression coverage at the model, command, integration,
+  or UI boundary appropriate to the behavior.
 
 ## User journey
 
@@ -180,9 +183,10 @@ slice does not introduce a general docking or surface framework.
 
 - ⬜ Protect dirty documents when closing a tab, closing a window, or quitting;
   do not prompt twice for a document visible in multiple places.
-- ⬜ Add focused tests for document/view lifetime, URI deduplication, untitled
-  state, undo grouping, save races, atomic create/replace, and conflict
-  rejection. Avoid exhaustive UI automation.
+- ⬜ Add thorough tests for document/view lifetime, URI deduplication, untitled
+  state, undo grouping, save races, atomic create/replace, conflict rejection,
+  and command routing. Cover native UI behavior where model and integration
+  tests cannot establish the interaction contract.
 - ⬜ Use Knot to create a new file and edit several existing files in this
   repository across two windows and a split, including two views of one
   buffer.
