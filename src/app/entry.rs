@@ -117,11 +117,13 @@ mod tests {
 
         assert_eq!(request.uri().to_string(), "file:///tmp/notes%20%C3%BC.md");
         assert_eq!(request.title(), "notes ü.md");
-        assert!(LaunchConfiguration::parse(
-            ["knot".into(), "one".into(), "two".into()],
-            Path::new("/tmp")
-        )
-        .is_err());
+        assert!(
+            LaunchConfiguration::parse(
+                ["knot".into(), "one".into(), "two".into()],
+                Path::new("/tmp")
+            )
+            .is_err()
+        );
     }
 
     #[test]

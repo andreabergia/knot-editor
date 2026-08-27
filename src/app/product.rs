@@ -75,7 +75,12 @@ impl ProductShell {
                 .focused_pane_id()
                 .expect("a product workbench always has a visible pane");
             workbench.open_tab_for_document(pane, document, model, cx);
-            workbench.focused_pane().unwrap().active_tab().editor().clone()
+            workbench
+                .focused_pane()
+                .unwrap()
+                .active_tab()
+                .editor()
+                .clone()
         });
         editor.focus_handle(cx).focus(window);
         self.status = "new untitled document".into();
@@ -158,15 +163,8 @@ impl ProductShell {
         }
         if transition.workbench_is_empty() {
             let replacement = create_untitled_document(&documents, cx);
-            let model = documents
-                .read(cx)
-                .get(replacement)
-                .unwrap()
-                .model()
-                .clone();
-            let workbench = cx.new(|cx| {
-                Workbench::new_for_document(replacement, model, cx)
-            });
+            let model = documents.read(cx).get(replacement).unwrap().model().clone();
+            let workbench = cx.new(|cx| Workbench::new_for_document(replacement, model, cx));
             cx.global::<ApplicationWorkbenches>().register(&workbench);
             self.workbench = workbench;
             self.status = "created replacement untitled document".into();
@@ -188,11 +186,7 @@ impl ProductShell {
         }
     }
 
-    fn render_layout(
-        &self,
-        layout: &WorkbenchLayout,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
+    fn render_layout(&self, layout: &WorkbenchLayout, cx: &mut Context<Self>) -> AnyElement {
         match layout {
             WorkbenchLayout::Pane(pane) => self.render_pane(*pane, cx),
             WorkbenchLayout::Split {
@@ -313,12 +307,10 @@ impl Render for ProductShell {
 
         div()
             .key_context("product")
-            .on_action(cx.listener(|this, _: &NewTab, window, cx| {
-                this.new_tab(window, cx)
-            }))
-            .on_action(cx.listener(|this, _: &CloseTab, window, cx| {
-                this.close_active_tab(window, cx)
-            }))
+            .on_action(cx.listener(|this, _: &NewTab, window, cx| this.new_tab(window, cx)))
+            .on_action(
+                cx.listener(|this, _: &CloseTab, window, cx| this.close_active_tab(window, cx)),
+            )
             .on_action(cx.listener(|this, _: &SplitHorizontal, window, cx| {
                 this.split(SplitDirection::Horizontal, window, cx)
             }))
@@ -350,9 +342,7 @@ impl Render for ProductShell {
                         "split →",
                         "split-horizontal",
                         &entity,
-                        |this, window, cx| {
-                            this.split(SplitDirection::Horizontal, window, cx)
-                        },
+                        |this, window, cx| this.split(SplitDirection::Horizontal, window, cx),
                     ))
                     .child(action_button(
                         "split ↓",
@@ -394,15 +384,10 @@ fn action_button(
         .cursor_pointer()
         .text_color(rgb(0x80c0ff))
         .child(label)
-        .on_click(move |_, window, cx| {
-            shell.update(cx, |shell, cx| action(shell, window, cx))
-        })
+        .on_click(move |_, window, cx| shell.update(cx, |shell, cx| action(shell, window, cx)))
 }
 
-fn create_untitled_document(
-    documents: &Entity<DocumentCollection>,
-    cx: &mut App,
-) -> DocumentId {
+fn create_untitled_document(documents: &Entity<DocumentCollection>, cx: &mut App) -> DocumentId {
     let model = cx.new(|_| BufferModel::from_text(""));
     documents.update(cx, |documents, cx| {
         documents.create_untitled("Untitled", model, cx)
@@ -438,8 +423,7 @@ fn open_product_window(request: Option<OpenRequest>, cx: &mut App) {
             ..Default::default()
         },
         move |window, cx| {
-            let workbench =
-                cx.new(|cx| Workbench::new_for_document(document, model, cx));
+            let workbench = cx.new(|cx| Workbench::new_for_document(document, model, cx));
             cx.global::<ApplicationWorkbenches>().register(&workbench);
             let shell = cx.new(|_| ProductShell::new(workbench));
             shell.read(cx).focus_active_editor(window, cx);
@@ -514,8 +498,8 @@ mod tests {
     use gpui::{AppContext, TestAppContext};
 
     use super::{
-        ApplicationDocuments, ApplicationWorkbenches, DocumentCollection, Entity,
-        OpenRequest, ProductShell, RefCell, SplitDirection, Workbench, WorkbenchLayout,
+        ApplicationDocuments, ApplicationWorkbenches, DocumentCollection, Entity, OpenRequest,
+        ProductShell, RefCell, SplitDirection, Workbench, WorkbenchLayout,
         create_untitled_document, document_for_request,
     };
 
@@ -604,7 +588,10 @@ mod tests {
             assert_ne!(replacement, original);
             assert!(documents.read(cx).get(original).is_none());
             assert!(documents.read(cx).get(replacement).is_some());
-            assert_eq!(shell.read(cx).status, "created replacement untitled document");
+            assert_eq!(
+                shell.read(cx).status,
+                "created replacement untitled document"
+            );
         });
     }
 
@@ -624,14 +611,10 @@ mod tests {
     }
 
     #[gpui::test]
-    fn open_requests_use_destination_documents_and_global_deduplication(
-        cx: &mut TestAppContext,
-    ) {
+    fn open_requests_use_destination_documents_and_global_deduplication(cx: &mut TestAppContext) {
         let documents = install_globals(cx);
         let request = OpenRequest::from_url("file:///tmp/knot-entry.txt").unwrap();
-        let first = cx.update(|cx| {
-            document_for_request(Some(request.clone()), &documents, cx)
-        });
+        let first = cx.update(|cx| document_for_request(Some(request.clone()), &documents, cx));
         let second = cx.update(|cx| document_for_request(Some(request), &documents, cx));
 
         assert_eq!(first, second);
