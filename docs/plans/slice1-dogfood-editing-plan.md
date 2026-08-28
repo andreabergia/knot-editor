@@ -1,6 +1,7 @@
 # First Product Slice: Dogfoodable Text Editing
 
-Status: in progress — checkpoint 3 implemented; review gate pending.
+Status: in progress — checkpoint 3 implemented, including focused-pane tab
+targeting; review gate pending.
 
 This slice makes Knot usable for editing its own source on macOS. It evolves
 the validated prototype in place and introduces the real workbench ownership

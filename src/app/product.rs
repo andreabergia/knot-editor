@@ -59,11 +59,26 @@ impl ProductShell {
         }
     }
 
+    fn sync_focused_pane(&self, window: &Window, cx: &mut Context<Self>) {
+        let focused_pane = self.workbench.read(cx).panes().iter().find_map(|pane| {
+            pane.tabs()
+                .iter()
+                .any(|tab| tab.editor().focus_handle(cx).contains_focused(window, cx))
+                .then_some(pane.id())
+        });
+        if let Some(focused_pane) = focused_pane {
+            self.workbench.update(cx, |workbench, _| {
+                workbench.focus_pane(focused_pane);
+            });
+        }
+    }
+
     fn documents(cx: &App) -> Entity<DocumentCollection> {
         cx.global::<ApplicationDocuments>().0.clone()
     }
 
     fn new_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.sync_focused_pane(window, cx);
         let documents = Self::documents(cx);
         let model = cx.new(|_| BufferModel::from_text(""));
         let document = documents.update(cx, |documents, cx| {
@@ -88,6 +103,7 @@ impl ProductShell {
     }
 
     fn split(&mut self, direction: SplitDirection, window: &mut Window, cx: &mut Context<Self>) {
+        self.sync_focused_pane(window, cx);
         let editor = self.workbench.update(cx, |workbench, cx| {
             workbench.split_focused(direction, SplitPlacement::After, cx)?;
             Some(workbench.focused_pane()?.active_tab().editor().clone())
@@ -121,6 +137,7 @@ impl ProductShell {
     }
 
     fn close_active_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.sync_focused_pane(window, cx);
         let Some((pane, tab, document)) = self.workbench.read(cx).focused_pane().map(|pane| {
             (
                 pane.id(),
@@ -495,7 +512,7 @@ pub(crate) fn run(initial_request: Option<OpenRequest>) {
 
 #[cfg(test)]
 mod tests {
-    use gpui::{AppContext, TestAppContext};
+    use gpui::{AppContext, Focusable, TestAppContext};
 
     use super::{
         ApplicationDocuments, ApplicationWorkbenches, DocumentCollection, Entity, OpenRequest,
@@ -556,6 +573,70 @@ mod tests {
                     .map(|pane| pane.tabs().len())
                     .sum::<usize>(),
                 4
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn new_tab_targets_the_pane_whose_editor_has_focus(cx: &mut TestAppContext) {
+        let documents = install_globals(cx);
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        let (shell, cx) = cx.add_window_view(|_, cx| {
+            let workbench = cx.new(|cx| Workbench::new_for_document(document, model, cx));
+            cx.global::<ApplicationWorkbenches>().register(&workbench);
+            ProductShell::new(workbench)
+        });
+
+        cx.update(|window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.split(SplitDirection::Horizontal, window, cx)
+            });
+        });
+        cx.run_until_parked();
+        cx.refresh().unwrap();
+
+        let (first_pane, first_editor, second_editor) = cx.read(|cx| {
+            let shell = shell.read(cx);
+            let workbench = shell.workbench.read(cx);
+            let first_pane = workbench.panes()[0].id();
+            (
+                first_pane,
+                workbench
+                    .pane(first_pane)
+                    .unwrap()
+                    .active_tab()
+                    .editor()
+                    .clone(),
+                workbench.panes()[1].active_tab().editor().clone(),
+            )
+        });
+        cx.update(|window, cx| second_editor.focus_handle(cx).focus(window));
+        cx.run_until_parked();
+        cx.refresh().unwrap();
+        assert!(cx.update(|window, cx| second_editor.focus_handle(cx).is_focused(window)));
+        cx.update(|window, cx| first_editor.focus_handle(cx).focus(window));
+        cx.run_until_parked();
+        cx.refresh().unwrap();
+        assert!(cx.update(|window, cx| first_editor.focus_handle(cx).is_focused(window)));
+
+        cx.update(|window, cx| {
+            shell.update(cx, |shell, cx| shell.new_tab(window, cx));
+        });
+        cx.run_until_parked();
+
+        cx.read(|cx| {
+            let workbench = shell.read(cx).workbench.read(cx);
+            assert_eq!(workbench.pane(first_pane).unwrap().tabs().len(), 2);
+            assert_eq!(
+                workbench
+                    .panes()
+                    .iter()
+                    .find(|pane| pane.id() != first_pane)
+                    .unwrap()
+                    .tabs()
+                    .len(),
+                1
             );
         });
     }

@@ -230,6 +230,15 @@ impl Workbench {
         self.focused_pane.and_then(|id| self.pane(id))
     }
 
+    pub(crate) fn focus_pane(&mut self, pane_id: PaneId) -> bool {
+        if self.pane(pane_id).is_none() {
+            return false;
+        }
+        self.focused_pane = Some(pane_id);
+        self.debug_assert_invariants();
+        true
+    }
+
     pub(crate) fn activate_tab(&mut self, pane_id: PaneId, tab_id: TabId) -> bool {
         let Some(pane) = self.panes.iter_mut().find(|pane| pane.id == pane_id) else {
             return false;
