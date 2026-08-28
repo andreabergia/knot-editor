@@ -33,6 +33,7 @@ mod entry;
 mod filesystem;
 pub mod model;
 mod product;
+mod product_commands;
 mod resource;
 mod search_results;
 mod terminal_view;

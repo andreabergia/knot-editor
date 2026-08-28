@@ -5,26 +5,23 @@ use std::cell::RefCell;
 use gpui::{prelude::FluentBuilder, *};
 
 use super::{
+    CommandPalette, CommandPaletteEntry, CommandPaletteEvent,
     documents::{ApplicationDocuments, DocumentCollection, DocumentId},
     entry::OpenRequest,
     model::BufferModel,
+    product_commands::{
+        ApplicationProductCommands, CLOSE_TAB_COMMAND, CLOSE_WINDOW_COMMAND, COPY_COMMAND,
+        CUT_COMMAND, FIND_COMMAND, FIND_NEXT_COMMAND, FIND_PREVIOUS_COMMAND, NEW_COMMAND,
+        NEW_WINDOW_COMMAND, OPEN_COMMAND, PASTE_COMMAND, ProductCommandDispatcher,
+        ProductCommandSource, ProductCommandTarget, QUIT_COMMAND, REDO_COMMAND, SAVE_AS_COMMAND,
+        SAVE_COMMAND, SELECT_ALL_COMMAND, SPLIT_HORIZONTAL_COMMAND, SPLIT_VERTICAL_COMMAND,
+        ShowProductCommandPalette, UNDO_COMMAND,
+    },
     workbench::{
         CloseRequestOutcome, DocumentCloseDisposition, PaneId, SplitDirection, SplitPlacement,
         TabId, Workbench, WorkbenchLayout,
     },
 };
-
-actions!(
-    product,
-    [
-        NewWindow,
-        CloseWindow,
-        NewTab,
-        CloseTab,
-        SplitHorizontal,
-        SplitVertical
-    ]
-);
 
 struct ApplicationWorkbenches(RefCell<Vec<WeakEntity<Workbench>>>);
 
@@ -49,6 +46,8 @@ impl ApplicationWorkbenches {
 pub(crate) struct ProductShell {
     workbench: Entity<Workbench>,
     status: SharedString,
+    command_palette: Option<Entity<CommandPalette<ProductCommandTarget>>>,
+    command_palette_subscription: Option<Subscription>,
 }
 
 impl ProductShell {
@@ -56,7 +55,92 @@ impl ProductShell {
         Self {
             workbench,
             status: "ready".into(),
+            command_palette: None,
+            command_palette_subscription: None,
         }
+    }
+
+    fn command_dispatcher(cx: &App) -> Entity<ProductCommandDispatcher> {
+        cx.global::<ApplicationProductCommands>().0.clone()
+    }
+
+    pub(crate) fn capture_command_target(
+        &mut self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Option<ProductCommandTarget> {
+        self.sync_focused_pane(window, cx);
+        let focus = window.focused(cx)?;
+        let workbench = self.workbench.read(cx);
+        let pane = workbench.focused_pane()?;
+        let tab = pane.active_tab();
+        Some(ProductCommandTarget {
+            window: window.window_handle(),
+            shell: cx.entity().downgrade(),
+            workbench: self.workbench.downgrade(),
+            pane: pane.id(),
+            tab: tab.id(),
+            document: tab.document_id(),
+            focus: focus.downgrade(),
+        })
+    }
+
+    fn dispatch_command(
+        &mut self,
+        command: crate::host::protocol::Command,
+        target: ProductCommandTarget,
+        cx: &mut Context<Self>,
+    ) {
+        Self::command_dispatcher(cx).update(cx, |dispatcher, cx| {
+            dispatcher.dispatch(command, target, cx);
+        });
+    }
+
+    fn dispatch_source(
+        &mut self,
+        source: &ProductCommandSource,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(target) = self.capture_command_target(window, cx) else {
+            self.status = "command target is no longer available".into();
+            cx.notify();
+            return;
+        };
+        self.dispatch_command(source.command(), target, cx);
+    }
+
+    fn open_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(origin) = self.capture_command_target(window, cx) else {
+            return;
+        };
+        let entries = Self::command_dispatcher(cx)
+            .read(cx)
+            .definitions()
+            .cloned()
+            .map(|definition| {
+                CommandPaletteEntry::new(
+                    definition,
+                    crate::host::protocol::CommandArgumentValue::Null,
+                )
+            })
+            .collect::<Vec<_>>();
+        let palette = cx.new(|cx| CommandPalette::new(entries, origin, cx));
+        let subscription = cx.subscribe(
+            &palette,
+            |this, _palette, event: &CommandPaletteEvent<ProductCommandTarget>, cx| {
+                this.command_palette = None;
+                this.command_palette_subscription = None;
+                if let CommandPaletteEvent::Confirmed { command, origin } = event {
+                    this.dispatch_command(command.clone(), origin.clone(), cx);
+                }
+                cx.notify();
+            },
+        );
+        window.focus(&palette.focus_handle(cx));
+        self.command_palette = Some(palette);
+        self.command_palette_subscription = Some(subscription);
+        cx.notify();
     }
 
     fn sync_focused_pane(&self, window: &Window, cx: &mut Context<Self>) {
@@ -77,8 +161,24 @@ impl ProductShell {
         cx.global::<ApplicationDocuments>().0.clone()
     }
 
+    #[cfg(test)]
     fn new_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.sync_focused_pane(window, cx);
+        let Some(pane) = self.workbench.read(cx).focused_pane_id() else {
+            return;
+        };
+        self.new_document_in_pane(pane, window, cx);
+    }
+
+    fn new_document_in_pane(
+        &mut self,
+        pane: PaneId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.workbench.read(cx).pane(pane).is_none() {
+            return false;
+        }
         let documents = Self::documents(cx);
         let model = cx.new(|_| BufferModel::from_text(""));
         let document = documents.update(cx, |documents, cx| {
@@ -86,26 +186,33 @@ impl ProductShell {
         });
         let model = documents.read(cx).get(document).unwrap().model().clone();
         let editor = self.workbench.update(cx, |workbench, cx| {
-            let pane = workbench
-                .focused_pane_id()
-                .expect("a product workbench always has a visible pane");
             workbench.open_tab_for_document(pane, document, model, cx);
-            workbench
-                .focused_pane()
-                .unwrap()
-                .active_tab()
-                .editor()
-                .clone()
+            workbench.pane(pane).unwrap().active_tab().editor().clone()
         });
         editor.focus_handle(cx).focus(window);
         self.status = "new untitled document".into();
         cx.notify();
+        true
     }
 
+    #[cfg(test)]
     fn split(&mut self, direction: SplitDirection, window: &mut Window, cx: &mut Context<Self>) {
         self.sync_focused_pane(window, cx);
+        let Some(pane) = self.workbench.read(cx).focused_pane_id() else {
+            return;
+        };
+        self.split_pane(pane, direction, window, cx);
+    }
+
+    fn split_pane(
+        &mut self,
+        pane: PaneId,
+        direction: SplitDirection,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let editor = self.workbench.update(cx, |workbench, cx| {
-            workbench.split_focused(direction, SplitPlacement::After, cx)?;
+            workbench.split_pane(pane, direction, SplitPlacement::After, cx)?;
             Some(workbench.focused_pane()?.active_tab().editor().clone())
         });
         if let Some(editor) = editor {
@@ -116,6 +223,9 @@ impl ProductShell {
             }
             .into();
             cx.notify();
+            true
+        } else {
+            false
         }
     }
 
@@ -136,6 +246,7 @@ impl ProductShell {
         }
     }
 
+    #[cfg(test)]
     fn close_active_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.sync_focused_pane(window, cx);
         let Some((pane, tab, document)) = self.workbench.read(cx).focused_pane().map(|pane| {
@@ -147,6 +258,22 @@ impl ProductShell {
         }) else {
             return;
         };
+        self.close_tab(pane, tab, document, window, cx);
+    }
+
+    fn close_tab(
+        &mut self,
+        pane: PaneId,
+        tab: TabId,
+        document: DocumentId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> crate::host::protocol::CommandOutcome {
+        use crate::host::protocol::CommandOutcome;
+
+        if !self.workbench.read(cx).contains_tab(pane, tab, document) {
+            return CommandOutcome::InvalidTarget;
+        }
         let open_view_count = cx
             .global::<ApplicationWorkbenches>()
             .view_count(document, cx);
@@ -162,13 +289,13 @@ impl ProductShell {
             )
         });
         let Some(outcome) = outcome else {
-            return;
+            return CommandOutcome::InvalidTarget;
         };
         let transition = match outcome {
             CloseRequestOutcome::Pending(_) => {
                 self.status = "save confirmation will be added in checkpoint 7".into();
                 cx.notify();
-                return;
+                return CommandOutcome::Unavailable;
             }
             CloseRequestOutcome::Closed(transition) => transition,
         };
@@ -190,6 +317,7 @@ impl ProductShell {
         }
         self.focus_active_editor(window, cx);
         cx.notify();
+        CommandOutcome::Completed
     }
 
     fn focus_active_editor(&self, window: &mut Window, cx: &App) {
@@ -200,6 +328,72 @@ impl ProductShell {
             .map(|pane| pane.active_tab().editor().clone())
         {
             editor.focus_handle(cx).focus(window);
+        }
+    }
+
+    pub(crate) fn execute_product_command(
+        &mut self,
+        name: &str,
+        target: &ProductCommandTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> crate::host::protocol::CommandOutcome {
+        use crate::host::protocol::CommandOutcome;
+
+        let target_is_live = target.workbench.upgrade() == Some(self.workbench.clone())
+            && self
+                .workbench
+                .read(cx)
+                .contains_tab(target.pane, target.tab, target.document);
+        if !target_is_live {
+            return CommandOutcome::InvalidTarget;
+        }
+
+        match name {
+            NEW_COMMAND => self
+                .new_document_in_pane(target.pane, window, cx)
+                .then_some(CommandOutcome::Completed)
+                .unwrap_or(CommandOutcome::InvalidTarget),
+            CLOSE_TAB_COMMAND => {
+                self.close_tab(target.pane, target.tab, target.document, window, cx)
+            }
+            SPLIT_HORIZONTAL_COMMAND => self
+                .split_pane(target.pane, SplitDirection::Horizontal, window, cx)
+                .then_some(CommandOutcome::Completed)
+                .unwrap_or(CommandOutcome::InvalidTarget),
+            SPLIT_VERTICAL_COMMAND => self
+                .split_pane(target.pane, SplitDirection::Vertical, window, cx)
+                .then_some(CommandOutcome::Completed)
+                .unwrap_or(CommandOutcome::InvalidTarget),
+            CLOSE_WINDOW_COMMAND => {
+                window.remove_window();
+                CommandOutcome::Completed
+            }
+            NEW_WINDOW_COMMAND => {
+                open_product_window(None, cx);
+                CommandOutcome::Completed
+            }
+            QUIT_COMMAND => {
+                cx.quit();
+                CommandOutcome::Completed
+            }
+            OPEN_COMMAND
+            | SAVE_COMMAND
+            | SAVE_AS_COMMAND
+            | UNDO_COMMAND
+            | REDO_COMMAND
+            | CUT_COMMAND
+            | COPY_COMMAND
+            | PASTE_COMMAND
+            | SELECT_ALL_COMMAND
+            | FIND_COMMAND
+            | FIND_NEXT_COMMAND
+            | FIND_PREVIOUS_COMMAND => {
+                self.status = "command is not implemented yet".into();
+                cx.notify();
+                CommandOutcome::Unavailable
+            }
+            _ => CommandOutcome::Unavailable,
         }
     }
 
@@ -320,21 +514,17 @@ impl Render for ProductShell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let layout = self.workbench.read(cx).layout().cloned();
         let entity = cx.entity();
+        let command_palette = self.command_palette.clone();
         window.set_window_title("Knot");
 
         div()
             .key_context("product")
-            .on_action(cx.listener(|this, _: &NewTab, window, cx| this.new_tab(window, cx)))
+            .on_action(cx.listener(Self::dispatch_source))
             .on_action(
-                cx.listener(|this, _: &CloseTab, window, cx| this.close_active_tab(window, cx)),
+                cx.listener(|this, _: &ShowProductCommandPalette, window, cx| {
+                    this.open_command_palette(window, cx)
+                }),
             )
-            .on_action(cx.listener(|this, _: &SplitHorizontal, window, cx| {
-                this.split(SplitDirection::Horizontal, window, cx)
-            }))
-            .on_action(cx.listener(|this, _: &SplitVertical, window, cx| {
-                this.split(SplitDirection::Vertical, window, cx)
-            }))
-            .on_action(|_: &CloseWindow, window, _| window.remove_window())
             .flex()
             .flex_col()
             .size_full()
@@ -349,29 +539,30 @@ impl Render for ProductShell {
                     .py_1()
                     .text_xs()
                     .bg(rgb(0x252526))
-                    .child(action_button(
-                        "new tab",
-                        "new-tab",
-                        &entity,
-                        |this, window, cx| this.new_tab(window, cx),
-                    ))
-                    .child(action_button(
+                    .child(command_button("new tab", "new-tab", &entity, NEW_COMMAND))
+                    .child(command_button(
                         "split →",
                         "split-horizontal",
                         &entity,
-                        |this, window, cx| this.split(SplitDirection::Horizontal, window, cx),
+                        SPLIT_HORIZONTAL_COMMAND,
                     ))
-                    .child(action_button(
+                    .child(command_button(
                         "split ↓",
                         "split-vertical",
                         &entity,
-                        |this, window, cx| this.split(SplitDirection::Vertical, window, cx),
+                        SPLIT_VERTICAL_COMMAND,
                     ))
-                    .child(action_button(
+                    .child(command_button(
                         "close tab",
                         "close-tab",
                         &entity,
-                        |this, window, cx| this.close_active_tab(window, cx),
+                        CLOSE_TAB_COMMAND,
+                    ))
+                    .child(command_button(
+                        "commands",
+                        "product-command-palette",
+                        &entity,
+                        "",
                     ))
                     .child(div().flex_1())
                     .child(self.status.clone()),
@@ -385,15 +576,28 @@ impl Render for ProductShell {
                         element.child(self.render_layout(&layout, cx))
                     }),
             )
+            .when_some(command_palette, |root, palette| {
+                root.child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .flex()
+                        .items_start()
+                        .justify_center()
+                        .pt(px(80.))
+                        .bg(rgba(0x00000080))
+                        .child(palette),
+                )
+            })
             .into_any_element()
     }
 }
 
-fn action_button(
+fn command_button(
     label: &'static str,
     id: &'static str,
     shell: &Entity<ProductShell>,
-    action: impl Fn(&mut ProductShell, &mut Window, &mut Context<ProductShell>) + 'static,
+    command: &'static str,
 ) -> Stateful<Div> {
     let shell = shell.clone();
     div()
@@ -401,7 +605,15 @@ fn action_button(
         .cursor_pointer()
         .text_color(rgb(0x80c0ff))
         .child(label)
-        .on_click(move |_, window, cx| shell.update(cx, |shell, cx| action(shell, window, cx)))
+        .on_click(move |_, window, cx| {
+            shell.update(cx, |shell, cx| {
+                if command.is_empty() {
+                    shell.open_command_palette(window, cx);
+                } else {
+                    shell.dispatch_source(&ProductCommandSource::new(command), window, cx);
+                }
+            })
+        })
 }
 
 fn create_untitled_document(documents: &Entity<DocumentCollection>, cx: &mut App) -> DocumentId {
@@ -428,7 +640,7 @@ fn document_for_request(
     })
 }
 
-fn open_product_window(request: Option<OpenRequest>, cx: &mut App) {
+pub(crate) fn open_product_window(request: Option<OpenRequest>, cx: &mut App) {
     let documents = cx.global::<ApplicationDocuments>().0.clone();
     let document = document_for_request(request, &documents, cx);
     let model = documents.read(cx).get(document).unwrap().model().clone();
@@ -467,36 +679,162 @@ pub(crate) fn run(initial_request: Option<OpenRequest>) {
         let documents = cx.new(|_| DocumentCollection::new());
         cx.set_global(ApplicationDocuments(documents));
         cx.set_global(ApplicationWorkbenches(RefCell::new(Vec::new())));
+        let commands = cx.new(ProductCommandDispatcher::new);
+        cx.set_global(ApplicationProductCommands(commands));
         cx.bind_keys([
-            KeyBinding::new("cmd-n", NewWindow, Some("product")),
-            KeyBinding::new("cmd-t", NewTab, Some("product")),
-            KeyBinding::new("cmd-w", CloseTab, Some("product")),
-            KeyBinding::new("cmd-shift-w", CloseWindow, Some("product")),
-            KeyBinding::new("cmd-k right", SplitHorizontal, Some("product")),
-            KeyBinding::new("cmd-k down", SplitVertical, Some("product")),
-            KeyBinding::new("cmd-q", super::Quit, None),
+            KeyBinding::new(
+                "cmd-n",
+                ProductCommandSource::new(NEW_COMMAND),
+                Some("product"),
+            ),
+            KeyBinding::new(
+                "cmd-t",
+                ProductCommandSource::new(NEW_COMMAND),
+                Some("product"),
+            ),
+            KeyBinding::new(
+                "cmd-shift-n",
+                ProductCommandSource::new(NEW_WINDOW_COMMAND),
+                Some("product"),
+            ),
+            KeyBinding::new(
+                "cmd-o",
+                ProductCommandSource::new(OPEN_COMMAND),
+                Some("product"),
+            ),
+            KeyBinding::new(
+                "cmd-s",
+                ProductCommandSource::new(SAVE_COMMAND),
+                Some("product"),
+            ),
+            KeyBinding::new(
+                "cmd-shift-s",
+                ProductCommandSource::new(SAVE_AS_COMMAND),
+                Some("product"),
+            ),
+            KeyBinding::new(
+                "cmd-w",
+                ProductCommandSource::new(CLOSE_TAB_COMMAND),
+                Some("product"),
+            ),
+            KeyBinding::new(
+                "cmd-shift-w",
+                ProductCommandSource::new(CLOSE_WINDOW_COMMAND),
+                Some("product"),
+            ),
+            KeyBinding::new(
+                "cmd-k right",
+                ProductCommandSource::new(SPLIT_HORIZONTAL_COMMAND),
+                Some("product"),
+            ),
+            KeyBinding::new(
+                "cmd-k down",
+                ProductCommandSource::new(SPLIT_VERTICAL_COMMAND),
+                Some("product"),
+            ),
+            KeyBinding::new("cmd-shift-p", ShowProductCommandPalette, Some("product")),
+            KeyBinding::new(
+                "cmd-z",
+                ProductCommandSource::new(UNDO_COMMAND),
+                Some("product"),
+            ),
+            KeyBinding::new(
+                "cmd-shift-z",
+                ProductCommandSource::new(REDO_COMMAND),
+                Some("product"),
+            ),
+            KeyBinding::new(
+                "cmd-x",
+                ProductCommandSource::new(CUT_COMMAND),
+                Some("product"),
+            ),
+            KeyBinding::new(
+                "cmd-c",
+                ProductCommandSource::new(COPY_COMMAND),
+                Some("product"),
+            ),
+            KeyBinding::new(
+                "cmd-v",
+                ProductCommandSource::new(PASTE_COMMAND),
+                Some("product"),
+            ),
+            KeyBinding::new(
+                "cmd-a",
+                ProductCommandSource::new(SELECT_ALL_COMMAND),
+                Some("product"),
+            ),
+            KeyBinding::new(
+                "cmd-f",
+                ProductCommandSource::new(FIND_COMMAND),
+                Some("product"),
+            ),
+            KeyBinding::new(
+                "cmd-g",
+                ProductCommandSource::new(FIND_NEXT_COMMAND),
+                Some("product"),
+            ),
+            KeyBinding::new(
+                "cmd-shift-g",
+                ProductCommandSource::new(FIND_PREVIOUS_COMMAND),
+                Some("product"),
+            ),
+            KeyBinding::new(
+                "cmd-q",
+                ProductCommandSource::new(QUIT_COMMAND),
+                Some("product"),
+            ),
         ]);
-        cx.on_action(|_: &NewWindow, cx| open_product_window(None, cx));
-        cx.on_action(|_: &super::Quit, cx| cx.quit());
         cx.set_menus(vec![
             Menu {
                 name: "Knot".into(),
-                items: vec![MenuItem::action("Quit Knot", super::Quit)],
+                items: vec![MenuItem::action(
+                    "Quit Knot",
+                    ProductCommandSource::new(QUIT_COMMAND),
+                )],
             },
             Menu {
                 name: "File".into(),
                 items: vec![
-                    MenuItem::action("New Window", NewWindow),
-                    MenuItem::action("New Tab", NewTab),
-                    MenuItem::action("Close Tab", CloseTab),
-                    MenuItem::action("Close Window", CloseWindow),
+                    MenuItem::action("New", ProductCommandSource::new(NEW_COMMAND)),
+                    MenuItem::action("New Window", ProductCommandSource::new(NEW_WINDOW_COMMAND)),
+                    MenuItem::action("Open…", ProductCommandSource::new(OPEN_COMMAND)),
+                    MenuItem::action("Save", ProductCommandSource::new(SAVE_COMMAND)),
+                    MenuItem::action("Save As…", ProductCommandSource::new(SAVE_AS_COMMAND)),
+                    MenuItem::action("Close Tab", ProductCommandSource::new(CLOSE_TAB_COMMAND)),
+                    MenuItem::action(
+                        "Close Window",
+                        ProductCommandSource::new(CLOSE_WINDOW_COMMAND),
+                    ),
+                ],
+            },
+            Menu {
+                name: "Edit".into(),
+                items: vec![
+                    MenuItem::action("Undo", ProductCommandSource::new(UNDO_COMMAND)),
+                    MenuItem::action("Redo", ProductCommandSource::new(REDO_COMMAND)),
+                    MenuItem::action("Cut", ProductCommandSource::new(CUT_COMMAND)),
+                    MenuItem::action("Copy", ProductCommandSource::new(COPY_COMMAND)),
+                    MenuItem::action("Paste", ProductCommandSource::new(PASTE_COMMAND)),
+                    MenuItem::action("Select All", ProductCommandSource::new(SELECT_ALL_COMMAND)),
+                    MenuItem::action("Find", ProductCommandSource::new(FIND_COMMAND)),
+                    MenuItem::action("Find Next", ProductCommandSource::new(FIND_NEXT_COMMAND)),
+                    MenuItem::action(
+                        "Find Previous",
+                        ProductCommandSource::new(FIND_PREVIOUS_COMMAND),
+                    ),
                 ],
             },
             Menu {
                 name: "View".into(),
                 items: vec![
-                    MenuItem::action("Split Right", SplitHorizontal),
-                    MenuItem::action("Split Down", SplitVertical),
+                    MenuItem::action(
+                        "Split Right",
+                        ProductCommandSource::new(SPLIT_HORIZONTAL_COMMAND),
+                    ),
+                    MenuItem::action(
+                        "Split Down",
+                        ProductCommandSource::new(SPLIT_VERTICAL_COMMAND),
+                    ),
                 ],
             },
         ]);
@@ -512,19 +850,327 @@ pub(crate) fn run(initial_request: Option<OpenRequest>) {
 
 #[cfg(test)]
 mod tests {
-    use gpui::{AppContext, Focusable, TestAppContext};
+    use gpui::{AppContext, Focusable, KeyBinding, TestAppContext};
+
+    use crate::host::protocol::{Command, CommandArgumentValue, CommandOutcome};
 
     use super::{
-        ApplicationDocuments, ApplicationWorkbenches, DocumentCollection, Entity, OpenRequest,
-        ProductShell, RefCell, SplitDirection, Workbench, WorkbenchLayout,
-        create_untitled_document, document_for_request,
+        ApplicationDocuments, ApplicationProductCommands, ApplicationWorkbenches,
+        DocumentCollection, Entity, NEW_COMMAND, OpenRequest, ProductCommandDispatcher,
+        ProductCommandSource, ProductShell, RefCell, SAVE_COMMAND, SPLIT_HORIZONTAL_COMMAND,
+        SplitDirection, Workbench, WorkbenchLayout, create_untitled_document, document_for_request,
     };
 
     fn install_globals(cx: &mut TestAppContext) -> Entity<DocumentCollection> {
         let documents = cx.new(|_| DocumentCollection::new());
         cx.set_global(ApplicationDocuments(documents.clone()));
         cx.set_global(ApplicationWorkbenches(RefCell::new(Vec::new())));
+        let commands = cx.new(ProductCommandDispatcher::new);
+        cx.set_global(ApplicationProductCommands(commands));
         documents
+    }
+
+    fn product_window(
+        document: super::DocumentId,
+        model: Entity<super::BufferModel>,
+        cx: &mut TestAppContext,
+    ) -> (Entity<ProductShell>, gpui::AnyWindowHandle) {
+        let (shell, _) = cx.add_window_view(|_, cx| {
+            let workbench = cx.new(|cx| Workbench::new_for_document(document, model, cx));
+            cx.global::<ApplicationWorkbenches>().register(&workbench);
+            ProductShell::new(workbench)
+        });
+        let window = *cx.windows().last().unwrap();
+        (shell, window)
+    }
+
+    #[gpui::test]
+    fn product_catalog_registers_every_slice_command(cx: &mut TestAppContext) {
+        install_globals(cx);
+        cx.read(|cx| {
+            let dispatcher = cx.global::<ApplicationProductCommands>().0.read(cx);
+            let mut actual = dispatcher
+                .definitions()
+                .map(|definition| definition.name.to_string())
+                .collect::<Vec<_>>();
+            let mut expected = super::super::product_commands::product_command_names()
+                .map(str::to_owned)
+                .collect::<Vec<_>>();
+            actual.sort();
+            expected.sort();
+            assert_eq!(actual, expected);
+        });
+    }
+
+    #[gpui::test]
+    async fn dispatch_completion_preserves_the_captured_pane(cx: &mut TestAppContext) {
+        let documents = install_globals(cx);
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        let (shell, window_handle) = product_window(document, model, cx);
+
+        cx.update_window(window_handle, |_, window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.split(SplitDirection::Horizontal, window, cx)
+            });
+        })
+        .unwrap();
+        cx.run_until_parked();
+        cx.refresh().unwrap();
+
+        let (first_pane, second_pane, first_editor, second_editor) = cx.read(|cx| {
+            let workbench = shell.read(cx).workbench.read(cx);
+            let first = &workbench.panes()[0];
+            let second = &workbench.panes()[1];
+            (
+                first.id(),
+                second.id(),
+                first.active_tab().editor().clone(),
+                second.active_tab().editor().clone(),
+            )
+        });
+        let target = cx
+            .update_window(window_handle, |_, window, cx| {
+                first_editor.focus_handle(cx).focus(window);
+                shell.update(cx, |shell, cx| {
+                    shell.capture_command_target(window, cx).unwrap()
+                })
+            })
+            .unwrap();
+        let execution = cx.update(|cx| {
+            let dispatcher = cx.global::<ApplicationProductCommands>().0.clone();
+            dispatcher.update(cx, |dispatcher, cx| {
+                dispatcher.dispatch(
+                    Command {
+                        name: NEW_COMMAND.into(),
+                        arguments: CommandArgumentValue::Null,
+                    },
+                    target,
+                    cx,
+                )
+            })
+        });
+        cx.update_window(window_handle, |_, window, cx| {
+            second_editor.focus_handle(cx).focus(window)
+        })
+        .unwrap();
+
+        assert_eq!(
+            execution.completion.await.unwrap(),
+            CommandOutcome::Completed
+        );
+        cx.read(|cx| {
+            let workbench = shell.read(cx).workbench.read(cx);
+            assert_eq!(workbench.pane(first_pane).unwrap().tabs().len(), 2);
+            assert_eq!(workbench.pane(second_pane).unwrap().tabs().len(), 1);
+        });
+    }
+
+    #[gpui::test]
+    async fn destroyed_product_targets_are_not_retargeted(cx: &mut TestAppContext) {
+        let documents = install_globals(cx);
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        let (shell, window_handle) = product_window(document, model, cx);
+        cx.refresh().unwrap();
+
+        let target = cx
+            .update_window(window_handle, |_, window, cx| {
+                shell.update(cx, |shell, cx| {
+                    shell.focus_active_editor(window, cx);
+                    shell.capture_command_target(window, cx).unwrap()
+                })
+            })
+            .unwrap();
+        cx.update_window(window_handle, |_, window, cx| {
+            shell.update(cx, |shell, cx| shell.close_active_tab(window, cx));
+        })
+        .unwrap();
+        let execution = cx.update(|cx| {
+            let dispatcher = cx.global::<ApplicationProductCommands>().0.clone();
+            dispatcher.update(cx, |dispatcher, cx| {
+                dispatcher.dispatch(
+                    Command {
+                        name: SPLIT_HORIZONTAL_COMMAND.into(),
+                        arguments: CommandArgumentValue::Null,
+                    },
+                    target,
+                    cx,
+                )
+            })
+        });
+
+        assert_eq!(
+            execution.completion.await.unwrap(),
+            CommandOutcome::InvalidTarget
+        );
+        cx.read(|cx| assert_eq!(shell.read(cx).workbench.read(cx).panes().len(), 1));
+    }
+
+    #[gpui::test]
+    async fn keybinding_adapter_enters_the_product_dispatcher(cx: &mut TestAppContext) {
+        let documents = install_globals(cx);
+        cx.update(|cx| {
+            cx.bind_keys([KeyBinding::new(
+                "cmd-n",
+                ProductCommandSource::new(NEW_COMMAND),
+                Some("product"),
+            )]);
+        });
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        let (shell, window_handle) = product_window(document, model, cx);
+        cx.update_window(window_handle, |_, window, cx| {
+            shell.read(cx).focus_active_editor(window, cx)
+        })
+        .unwrap();
+
+        cx.simulate_keystrokes(window_handle, "cmd-n");
+        cx.run_until_parked();
+
+        cx.read(|cx| {
+            assert_eq!(
+                shell
+                    .read(cx)
+                    .workbench
+                    .read(cx)
+                    .focused_pane()
+                    .unwrap()
+                    .tabs()
+                    .len(),
+                2
+            );
+            assert_eq!(
+                cx.global::<ApplicationProductCommands>()
+                    .0
+                    .read(cx)
+                    .last_outcome(),
+                Some(&CommandOutcome::Completed)
+            );
+        });
+    }
+
+    #[gpui::test]
+    async fn palette_discovers_commands_and_keeps_its_opening_target(cx: &mut TestAppContext) {
+        let documents = install_globals(cx);
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        let (shell, window_handle) = product_window(document, model, cx);
+        cx.update_window(window_handle, |_, window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.split(SplitDirection::Horizontal, window, cx)
+            });
+        })
+        .unwrap();
+        cx.refresh().unwrap();
+
+        let (first_pane, second_pane, first_editor) = cx.read(|cx| {
+            let workbench = shell.read(cx).workbench.read(cx);
+            let first = &workbench.panes()[0];
+            (
+                first.id(),
+                workbench.panes()[1].id(),
+                first.active_tab().editor().clone(),
+            )
+        });
+        cx.update_window(window_handle, |_, window, cx| {
+            first_editor.focus_handle(cx).focus(window);
+            shell.update(cx, |shell, cx| shell.open_command_palette(window, cx));
+            let workbench = shell.read(cx).workbench.clone();
+            workbench.update(cx, |workbench, _| {
+                workbench.focus_pane(second_pane);
+            });
+        })
+        .unwrap();
+        cx.refresh().unwrap();
+
+        cx.simulate_keystrokes(window_handle, "f i l e . n e w enter");
+
+        cx.read(|cx| {
+            let workbench = shell.read(cx).workbench.read(cx);
+            assert_eq!(workbench.pane(first_pane).unwrap().tabs().len(), 2);
+            assert_eq!(workbench.pane(second_pane).unwrap().tabs().len(), 1);
+        });
+    }
+
+    #[gpui::test]
+    async fn javascript_awaits_the_same_product_command_outcome(cx: &mut TestAppContext) {
+        let documents = install_globals(cx);
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        let (shell, window_handle) = product_window(document, model, cx);
+        cx.update_window(window_handle, |_, window, cx| {
+            shell.read(cx).focus_active_editor(window, cx)
+        })
+        .unwrap();
+        let runtime = cx.read(|cx| {
+            cx.global::<ApplicationProductCommands>()
+                .0
+                .read(cx)
+                .runtime_control()
+        });
+
+        runtime
+            .execute_fixture_module(
+                "file:///fixtures/product-command.js",
+                format!(
+                    r#"
+                        import {{ commands }} from "knot:editor";
+                        const outcome = await commands.invoke("{NEW_COMMAND}", null);
+                        if (outcome.kind !== "completed") {{
+                          throw new Error(`unexpected outcome: ${{outcome.kind}}`);
+                        }}
+                    "#
+                ),
+            )
+            .await
+            .unwrap();
+
+        cx.read(|cx| {
+            assert_eq!(
+                shell
+                    .read(cx)
+                    .workbench
+                    .read(cx)
+                    .focused_pane()
+                    .unwrap()
+                    .tabs()
+                    .len(),
+                2
+            );
+        });
+    }
+
+    #[gpui::test]
+    async fn registered_but_deferred_commands_complete_as_unavailable(cx: &mut TestAppContext) {
+        let documents = install_globals(cx);
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        let (shell, window_handle) = product_window(document, model, cx);
+        let (target, dispatcher) = cx
+            .update_window(window_handle, |_, window, cx| {
+                shell.read(cx).focus_active_editor(window, cx);
+                let target = shell.update(cx, |shell, cx| {
+                    shell.capture_command_target(window, cx).unwrap()
+                });
+                (target, cx.global::<ApplicationProductCommands>().0.clone())
+            })
+            .unwrap();
+        let execution = dispatcher.update(cx, |dispatcher, cx| {
+            dispatcher.dispatch(
+                Command {
+                    name: SAVE_COMMAND.into(),
+                    arguments: CommandArgumentValue::Null,
+                },
+                target,
+                cx,
+            )
+        });
+
+        assert_eq!(
+            execution.completion.await.unwrap(),
+            CommandOutcome::Unavailable
+        );
     }
 
     #[gpui::test]

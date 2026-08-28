@@ -222,6 +222,7 @@ impl Workbench {
         self.panes.iter().find(|pane| pane.id == id)
     }
 
+    #[cfg_attr(not(test), allow(dead_code, reason = "focused-pane convenience API"))]
     pub(crate) fn focused_pane_id(&self) -> Option<PaneId> {
         self.focused_pane
     }
@@ -285,6 +286,7 @@ impl Workbench {
     }
 
     /// Split the focused pane and show its active document in a fresh view.
+    #[cfg_attr(not(test), allow(dead_code, reason = "focused-pane convenience API"))]
     pub(crate) fn split_focused(
         &mut self,
         direction: SplitDirection,
@@ -292,20 +294,31 @@ impl Workbench {
         cx: &mut Context<Self>,
     ) -> Option<PaneId> {
         let focused_id = self.focused_pane?;
-        let active = self.pane(focused_id)?.active_tab();
+        self.split_pane(focused_id, direction, placement, cx)
+    }
+
+    /// Split one captured pane and show its active document in a fresh view.
+    pub(crate) fn split_pane(
+        &mut self,
+        pane_id: PaneId,
+        direction: SplitDirection,
+        placement: SplitPlacement,
+        cx: &mut Context<Self>,
+    ) -> Option<PaneId> {
+        let active = self.pane(pane_id)?.active_tab();
         let document_id = active.document_id;
         let model = active.editor.read(cx).model().clone();
-        let pane_id = self.allocate_pane_id();
+        let new_pane_id = self.allocate_pane_id();
         let tab_id = self.allocate_tab_id();
         let editor = cx.new(|cx| EditorView::new(model, cx));
 
         let layout = self.layout.as_mut()?;
         assert!(
-            layout.split_pane(focused_id, pane_id, direction, placement),
-            "focused pane must occur exactly once in the layout"
+            layout.split_pane(pane_id, new_pane_id, direction, placement),
+            "captured pane must occur exactly once in the layout"
         );
         self.panes.push(Pane {
-            id: pane_id,
+            id: new_pane_id,
             tabs: vec![EditorTab {
                 id: tab_id,
                 document_id,
@@ -313,9 +326,9 @@ impl Workbench {
             }],
             active_tab: tab_id,
         });
-        self.focused_pane = Some(pane_id);
+        self.focused_pane = Some(new_pane_id);
         self.debug_assert_invariants();
-        Some(pane_id)
+        Some(new_pane_id)
     }
 
     pub(crate) fn view_count(&self, document_id: DocumentId) -> usize {
@@ -382,7 +395,12 @@ impl Workbench {
         }
     }
 
-    fn contains_tab(&self, pane_id: PaneId, tab_id: TabId, document_id: DocumentId) -> bool {
+    pub(crate) fn contains_tab(
+        &self,
+        pane_id: PaneId,
+        tab_id: TabId,
+        document_id: DocumentId,
+    ) -> bool {
         self.pane(pane_id).is_some_and(|pane| {
             pane.tabs
                 .iter()
