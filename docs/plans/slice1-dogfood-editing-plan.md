@@ -1,6 +1,6 @@
 # First Product Slice: Dogfoodable Text Editing
 
-Status: in progress — checkpoint 4 implementation complete; review gate pending.
+Status: in progress — checkpoint 4 complete.
 
 This slice makes Knot usable for editing its own source on macOS. It evolves
 the validated prototype in place and introduces the real workbench ownership
@@ -22,7 +22,7 @@ required.
 - ⬜ Let each tab own an independent editor view. Multiple tabs, panes, or
   windows may present the same buffer with independent cursor, selection, and
   scroll state.
-- ⬜ Implement user-facing semantic operations as registered native commands.
+- ✅ Implement user-facing semantic operations as registered native commands.
   Menus, keybindings, the palette, and JavaScript must enter the same
   target-preserving dispatcher rather than call separate shell or view methods.
   Raw text input, IME, pointer gestures, scrolling, and focus changes remain
@@ -127,7 +127,7 @@ application-owned document model rather than introducing transitional APIs.
 - ✅ Review gate: launch, new windows, tabs, both split directions, independent
   views of one document, and final-tab replacement manually exercised.
 
-### Checkpoint 4: Target-preserving product commands
+### Checkpoint 4: Target-preserving product commands ✅
 
 - ✅ Register the slice's document, window, editing, and Find command names in the
   native catalog, implementing the commands whose underlying behavior exists.
@@ -137,8 +137,9 @@ application-owned document model rather than introducing transitional APIs.
 - ✅ Reject destroyed targets without falling back to current focus.
 - ✅ Cover routing, discovery, target capture, destruction, and asynchronous
   completion at command and integration boundaries.
-- 🧪 Review gate: automated keybinding, palette, and JavaScript entry-path
-  coverage is complete. Native launch and menu smoke remain to be exercised.
+- ✅ Review gate: native launch and menu flows, fixed keybindings, the palette,
+  and awaited JavaScript invocation were exercised with matching targets and
+  structured outcomes.
 
 ### Checkpoint 5: New and Open
 
@@ -259,17 +260,19 @@ application-owned document model rather than introducing transitional APIs.
   same operations.
 - ✅ Let the command palette discover and invoke each operation from the
   catalog without operation-specific palette code.
-- ✅ Allow JavaScript to invoke and await the same commands through
-  `commands.invoke(...)`. Interactive Open and Save As invocations use the
-  native dialogs; explicit destination arguments remain deferred until an
-  automation use case defines their safety and semantics.
+- 🟨 Allow JavaScript to invoke and await the same commands through
+  `commands.invoke(...)`. All names now route and settle consistently;
+  dialog-backed Open and Save As behavior remains in checkpoints 5 and 6.
+  Explicit destination arguments remain deferred until an automation use case
+  defines their safety and semantics.
 - ✅ Preserve captured targets: editing and Save address the focused document,
   Split the focused pane, Close the focused tab or window, and Open the
   captured window. Quit coordinates application-owned documents across
   windows. Reject destroyed targets rather than falling back to current focus.
-- ✅ Keep asynchronous command invocations pending until dialogs, confirmation,
-  or persistence work settles and return the existing structured command
-  outcome to every caller.
+- 🟨 Every current invocation returns the existing structured command outcome
+  asynchronously. Keeping future dialog, confirmation, and persistence
+  handlers pending until their work settles remains with their owning
+  checkpoints.
 
 ### 4. Make documents and resources user-facing
 
