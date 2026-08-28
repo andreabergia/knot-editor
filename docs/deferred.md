@@ -24,10 +24,11 @@ the item is removed from this register.
   - Reconsider: The editing loop is trustworthy and source readability becomes
     the dominant problem.
 
-- **D003 — Configurable and extension-defined keymaps**
-  - Deferred: Fixed native bindings cover initial use.
+- **D003 — JavaScript-configurable and extension-defined keymaps**
+  - Deferred: Fixed native bindings cover initial use; loading and changing
+    bindings through JavaScript is not required by the current slice.
   - Reconsider: Dogfooding identifies concrete remapping needs or the extension
-    slice requires bindings.
+    slice requires JavaScript-defined bindings.
 
 - **D004 — Tab dragging and general docking**
   - Deferred: Initial windows, panes, tabs, and splits need only command-driven
