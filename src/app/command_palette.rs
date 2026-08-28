@@ -2,14 +2,11 @@ use gpui::{prelude::*, *};
 
 use crate::host::protocol::{Command, CommandArgumentValue};
 
-use super::{CommandOrigin, PALETTE_KEY_CONTEXT, model::CommandDefinition};
+use super::{PALETTE_KEY_CONTEXT, model::CommandDefinition};
 
 #[derive(Clone, PartialEq)]
-pub(crate) enum CommandPaletteEvent {
-    Confirmed {
-        command: Command,
-        origin: CommandOrigin,
-    },
+pub(crate) enum CommandPaletteEvent<Origin> {
+    Confirmed { command: Command, origin: Origin },
     Dismissed,
 }
 
@@ -35,18 +32,21 @@ impl CommandPaletteEntry {
     }
 }
 
-pub(crate) struct CommandPalette {
+pub(crate) struct CommandPalette<Origin> {
     entries: Vec<CommandPaletteEntry>,
     query: String,
     selected: usize,
     focus: FocusHandle,
-    origin: CommandOrigin,
+    origin: Origin,
 }
 
-impl CommandPalette {
+impl<Origin> CommandPalette<Origin>
+where
+    Origin: Clone + PartialEq + 'static,
+{
     pub(crate) fn new(
         entries: impl IntoIterator<Item = CommandPaletteEntry>,
-        origin: CommandOrigin,
+        origin: Origin,
         cx: &mut Context<Self>,
     ) -> Self {
         let mut entries = entries.into_iter().collect::<Vec<_>>();
@@ -60,7 +60,7 @@ impl CommandPalette {
         }
     }
 
-    pub(crate) fn origin(&self) -> CommandOrigin {
+    pub(crate) fn origin(&self) -> Origin {
         self.origin.clone()
     }
 
@@ -152,15 +152,24 @@ impl CommandPalette {
     }
 }
 
-impl EventEmitter<CommandPaletteEvent> for CommandPalette {}
+impl<Origin> EventEmitter<CommandPaletteEvent<Origin>> for CommandPalette<Origin> where
+    Origin: Clone + PartialEq + 'static
+{
+}
 
-impl Focusable for CommandPalette {
+impl<Origin> Focusable for CommandPalette<Origin>
+where
+    Origin: Clone + PartialEq + 'static,
+{
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus.clone()
     }
 }
 
-impl Render for CommandPalette {
+impl<Origin> Render for CommandPalette<Origin>
+where
+    Origin: Clone + PartialEq + 'static,
+{
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let entity = cx.entity();
         let selected = self.selected;

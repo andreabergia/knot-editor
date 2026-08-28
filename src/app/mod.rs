@@ -688,7 +688,7 @@ struct Shell {
     command_state: SharedString,
     command_outcome: Option<CommandOutcome>,
     command_diagnostic: Option<CommandDiagnostic>,
-    command_palette: Option<Entity<CommandPalette>>,
+    command_palette: Option<Entity<CommandPalette<CommandOrigin>>>,
     command_palette_subscription: Option<Subscription>,
     active_keymap: bool,
     transient_keymap: bool,
@@ -2206,7 +2206,7 @@ impl Shell {
         let palette = cx.new(|cx| CommandPalette::new(entries, origin, cx));
         let subscription = cx.subscribe(
             &palette,
-            |this, _palette, event: &CommandPaletteEvent, cx| {
+            |this, _palette, event: &CommandPaletteEvent<CommandOrigin>, cx| {
                 this.command_palette = None;
                 this.command_palette_subscription = None;
                 if let CommandPaletteEvent::Confirmed { command, origin } = event {
