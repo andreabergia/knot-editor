@@ -1,6 +1,6 @@
 # First Product Slice: Dogfoodable Text Editing
 
-Status: in progress — checkpoint 3 complete.
+Status: in progress — checkpoint 4 implementation complete; review gate pending.
 
 This slice makes Knot usable for editing its own source on macOS. It evolves
 the validated prototype in place and introduces the real workbench ownership
@@ -129,16 +129,16 @@ application-owned document model rather than introducing transitional APIs.
 
 ### Checkpoint 4: Target-preserving product commands
 
-- Register the slice's document, window, editing, and Find command names in the
+- ✅ Register the slice's document, window, editing, and Find command names in the
   native catalog, implementing the commands whose underlying behavior exists.
-- Route native menus, fixed keybindings, the palette, and JavaScript through
+- ✅ Route native menus, fixed keybindings, the palette, and JavaScript through
   the shared dispatcher with captured product targets and asynchronous
   outcomes.
-- Reject destroyed targets without falling back to current focus.
-- Cover routing, discovery, target capture, destruction, and asynchronous
+- ✅ Reject destroyed targets without falling back to current focus.
+- ✅ Cover routing, discovery, target capture, destruction, and asynchronous
   completion at command and integration boundaries.
-- Review gate: invoke the implemented commands through every applicable entry
-  path and compare their targets and outcomes.
+- 🧪 Review gate: automated keybinding, palette, and JavaScript entry-path
+  coverage is complete. Native launch and menu smoke remain to be exercised.
 
 ### Checkpoint 5: New and Open
 
@@ -250,24 +250,24 @@ application-owned document model rather than introducing transitional APIs.
 
 ### 3. Make product operations first-class commands
 
-- ⬜ Register New, Open, Save, Save As, Close Tab, Close Window, New Window,
+- ✅ Register New, Open, Save, Save As, Close Tab, Close Window, New Window,
   Quit, Split Horizontal, Split Vertical, Undo, Redo, Cut, Copy, Paste, and
   Select All as native `CommandCatalog` entries. Register Find and its
   next/previous navigation operations through the same path.
-- ⬜ Route native menus and keybindings through the command dispatcher. Do not
+- ✅ Route native menus and keybindings through the command dispatcher. Do not
   retain direct menu-to-shell or keybinding-to-shell implementations of the
   same operations.
-- ⬜ Let the command palette discover and invoke each operation from the
+- ✅ Let the command palette discover and invoke each operation from the
   catalog without operation-specific palette code.
-- ⬜ Allow JavaScript to invoke and await the same commands through
+- ✅ Allow JavaScript to invoke and await the same commands through
   `commands.invoke(...)`. Interactive Open and Save As invocations use the
   native dialogs; explicit destination arguments remain deferred until an
   automation use case defines their safety and semantics.
-- ⬜ Preserve captured targets: editing and Save address the focused document,
+- ✅ Preserve captured targets: editing and Save address the focused document,
   Split the focused pane, Close the focused tab or window, and Open the
   captured window. Quit coordinates application-owned documents across
   windows. Reject destroyed targets rather than falling back to current focus.
-- ⬜ Keep asynchronous command invocations pending until dialogs, confirmation,
+- ✅ Keep asynchronous command invocations pending until dialogs, confirmation,
   or persistence work settles and return the existing structured command
   outcome to every caller.
 

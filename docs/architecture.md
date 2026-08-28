@@ -249,9 +249,12 @@ native handlers remain attached to gpui views and shells rather than moving
 into the catalog. Both use Knot-owned `Command` values containing a stable name
 and explicit JSON-like arguments.
 
-Keybindings, the command palette, and top-level scripts enter one dispatcher.
-Admission allocates the invocation identity, captures the origin, and creates
-the completion before routing begins:
+Keybindings, the command palette, and top-level scripts enter the dispatcher
+owned by their application mode. The product application owns one native
+catalog and dispatcher across all product windows; the explicit fixture shell
+retains its extension-capable dispatcher. Admission allocates the invocation
+identity, captures the origin, and creates the completion before routing
+begins:
 
 ```text
 keybinding / palette / top-level script
@@ -277,6 +280,17 @@ optional opaque buffer handle. gpui routes the private action from the captured
 focus target, so editor, tree, and terminal handlers can claim the same command
 without a shared surface type. Unclaimed extension commands reach the shell as
 the global destination.
+
+Product dispatch additionally captures the exact workbench, pane, tab, and
+document selected at admission. Native menu actions, fixed keybindings, the
+product palette, toolbar actions, and the product V8 bridge all submit the same
+`Command` value and captured product target. Dispatch is deferred and every
+source receives the same asynchronous structured outcome. Before execution,
+the dispatcher revalidates the captured window, shell, focus, workbench, pane,
+tab, and document identities. A focus change therefore cannot retarget an
+operation, and a closed or replaced target completes as invalid. Commands
+whose behavior belongs to a later product checkpoint remain discoverable and
+complete as unavailable.
 
 One shell runs one root invocation tree at a time. Additional roots remain in
 FIFO order until the active root and its attached descendants settle. A
@@ -447,7 +461,7 @@ machinery never enter surfaces, buffers, or `core`.
 ## Major gaps
 
 - Production undo history, edit grouping, and view-state restoration.
-- Focus-target command routing and complete keymaps.
+- Configurable keymaps and command applicability policy.
 - Filesystem watching, external-change reload, atomic save, conflict handling,
   URI deduplication, and multi-root workspaces.
 - Production capability applicability policy.
