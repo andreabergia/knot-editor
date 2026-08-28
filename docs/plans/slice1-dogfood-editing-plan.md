@@ -1,7 +1,6 @@
 # First Product Slice: Dogfoodable Text Editing
 
-Status: in progress — checkpoint 3 implemented, including focused-pane tab
-targeting; review gate pending.
+Status: in progress — checkpoint 3 complete.
 
 This slice makes Knot usable for editing its own source on macOS. It evolves
 the validated prototype in place and introduces the real workbench ownership
@@ -114,7 +113,7 @@ application-owned document model rather than introducing transitional APIs.
 - ✅ Review gate: inspect workbench invariants and lifecycle behavior. No polished
   native UI is expected yet.
 
-### Checkpoint 3: Product shell and layout
+### Checkpoint 3: Product shell and layout ✅
 
 - ✅ Replace default fixture startup with the product shell and keep fixtures
   available through explicit exploration entry points.
@@ -125,9 +124,8 @@ application-owned document model rather than introducing transitional APIs.
   checkpoints.
 - ✅ Add lower-level coverage for shell transitions and UI coverage where layout
   behavior cannot be established below gpui.
-- 🔄 Review gate: launch smoke complete; manually exercise new windows, tabs,
-  both split directions, independent views of one document, and final-tab
-  replacement.
+- ✅ Review gate: launch, new windows, tabs, both split directions, independent
+  views of one document, and final-tab replacement manually exercised.
 
 ### Checkpoint 4: Target-preserving product commands
 
