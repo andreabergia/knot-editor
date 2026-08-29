@@ -1,6 +1,6 @@
 # First Product Slice: Dogfoodable Text Editing
 
-Status: in progress — checkpoint 4 complete.
+Status: in progress — checkpoint 5 implementation complete; review gate pending.
 
 This slice makes Knot usable for editing its own source on macOS. It evolves
 the validated prototype in place and introduces the real workbench ownership
@@ -143,15 +143,15 @@ application-owned document model rather than introducing transitional APIs.
 
 ### Checkpoint 5: New and Open
 
-- Complete zero-or-one-path launch behavior, missing-file destination
+- ✅ Complete zero-or-one-path launch behavior, missing-file destination
   association, workspace-folder opening, New, and interactive Open.
-- Use native dialogs and normalize platform paths only at the local-provider
+- ✅ Use native dialogs and normalize platform paths only at the local-provider
   and macOS boundaries.
-- Open files independently of workspace containment and deduplicate them
+- ✅ Open files independently of workspace containment and deduplicate them
   application-wide.
-- Cover success, cancellation, decode and open failures, stale completions,
+- ✅ Cover success, cancellation, decode and open failures, stale completions,
   and resource deduplication.
-- Review gate: manually exercise launch with no path, an existing file, a
+- 🟨 Review gate: manually exercise launch with no path, an existing file, a
   missing file, and a folder, plus New and Open through all applicable command
   entry points.
 
@@ -270,8 +270,8 @@ application-owned document model rather than introducing transitional APIs.
   captured window. Quit coordinates application-owned documents across
   windows. Reject destroyed targets rather than falling back to current focus.
 - 🟨 Every current invocation returns the existing structured command outcome
-  asynchronously. Keeping future dialog, confirmation, and persistence
-  handlers pending until their work settles remains with their owning
+  asynchronously. Open now remains pending through native selection and
+  loading; confirmation and persistence handlers remain with their owning
   checkpoints.
 
 ### 4. Make documents and resources user-facing
@@ -279,12 +279,13 @@ application-owned document model rather than introducing transitional APIs.
 - ✅ Represent untitled, destination-associated-but-uncreated, persisted, and
   generated documents explicitly. Dirty state must account for never-saved
   documents rather than relying only on revision comparison.
-- ⬜ Deduplicate open files application-wide by normalized resource URI and
+- ✅ Deduplicate open files application-wide by normalized resource URI and
   focus an existing view or create another view according to the invoking
   command.
-- ⬜ Add the registered document and window commands to the native macOS menu.
-- ⬜ Use native Open and Save dialogs. A selected folder becomes a window
-  workspace; a selected file becomes a document regardless of workspace.
+- ✅ Add the registered document and window commands to the native macOS menu.
+- 🟨 Use native Open and Save dialogs. Open is complete: a selected folder
+  becomes a window workspace and a selected file becomes a document regardless
+  of workspace. Save dialogs remain in checkpoint 6.
 - ⬜ Bind an untitled or destination-associated document to its normalized URI
   only after the relevant create/save operation succeeds.
 

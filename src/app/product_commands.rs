@@ -217,6 +217,22 @@ impl ProductCommandDispatcher {
         let admitted = self.catalog.resolve(command.name.as_ref()) == Ok(CommandTargetKind::Native);
         let dispatcher = cx.entity();
         cx.defer(move |cx| {
+            if admitted
+                && command.arguments == CommandArgumentValue::Null
+                && command.name.as_ref() == OPEN_COMMAND
+            {
+                match dispatch_open_to_captured_target(&target, completion.clone(), cx) {
+                    Ok(()) => return,
+                    Err(outcome) => {
+                        completion.complete(outcome.clone());
+                        let _ = dispatcher.update(cx, |dispatcher, cx| {
+                            dispatcher.last_outcome = Some(outcome);
+                            cx.notify();
+                        });
+                        return;
+                    }
+                }
+            }
             let outcome = if !admitted {
                 CommandOutcome::Unavailable
             } else if command.arguments != CommandArgumentValue::Null {
@@ -240,10 +256,44 @@ impl ProductCommandDispatcher {
         self.last_outcome.as_ref()
     }
 
+    pub(crate) fn record_outcome(&mut self, outcome: CommandOutcome, cx: &mut Context<Self>) {
+        self.last_outcome = Some(outcome);
+        cx.notify();
+    }
+
     #[cfg(test)]
     pub(crate) fn runtime_control(&self) -> ExtensionRuntimeControl {
         self.runtime_control.clone()
     }
+}
+
+fn dispatch_open_to_captured_target(
+    target: &ProductCommandTarget,
+    completion: CommandCompletion,
+    cx: &mut App,
+) -> Result<(), CommandOutcome> {
+    if target.shell.upgrade().is_none()
+        || target.workbench.upgrade().is_none()
+        || target.focus.upgrade().is_none()
+        || !cx.windows().contains(&target.window)
+    {
+        return Err(CommandOutcome::InvalidTarget);
+    }
+    let shell = target.shell.clone();
+    let target = target.clone();
+    cx.update_window(target.window, move |_, window, cx| {
+        let Some(shell) = shell.upgrade() else {
+            return Err(CommandOutcome::InvalidTarget);
+        };
+        if window.root::<ProductShell>().flatten().as_ref() != Some(&shell) {
+            return Err(CommandOutcome::InvalidTarget);
+        }
+        shell.update(cx, |shell, cx| {
+            shell.start_open_dialog(target, completion, cx);
+        });
+        Ok(())
+    })
+    .unwrap_or(Err(CommandOutcome::InvalidTarget))
 }
 
 fn dispatch_to_captured_target(

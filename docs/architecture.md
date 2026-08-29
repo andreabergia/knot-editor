@@ -123,10 +123,15 @@ closure removes the final-view document and immediately installs a new
 untitled document and workbench; dirty final views remain pending for the
 protected-closure flow.
 
-CLI paths and macOS open events become the same normalized `file://` open
-request at the platform boundary. Until the complete asynchronous open flow is
-installed, a targeted product window associates an empty document with that
-destination; application-wide URI deduplication still applies.
+CLI paths, native Open selections, and macOS open events become the same
+normalized `file://` open request at the platform boundary. A product open
+normalizes and stats the resource asynchronously. Existing files are read and
+UTF-8-decoded before foreground state changes, missing files create a dirty
+destination-associated document, and directories install the window's optional
+workspace and tree. Later opens and destroyed captured tabs reject stale
+completions. Normalized file URIs deduplicate through the application document
+collection; a window reuses an existing tab when it already presents the
+document and otherwise creates an independent view in the captured pane.
 
 The shell-owned `CompletionProviderRegistry` assigns monotonic registration
 identities and order to lifecycle-owned, shell-wide providers. An editor
@@ -187,16 +192,19 @@ segment-aware containment. Scheme-specific providers own normalization. Only
 the local-folder provider converts between `file://` URIs and platform paths;
 generic workspace, tree, buffer, and shell state contains no `Path`.
 
-The shell owns a registry that routes each operation by URI scheme. Providers
-implement one asynchronous byte-oriented contract: normalize, enumerate
+The application owns a registry that routes each operation by URI scheme.
+Providers implement one asynchronous byte-oriented contract: normalize, enumerate
 immediate children, read, replace, and stat. The memory and local-folder
 providers implement the same Knot-owned results and structured errors. The
-local provider dispatches native I/O through a Tokio runtime; its lexical root
-is an application boundary rather than a sandbox and filesystem operations
-follow symlinks.
+local provider dispatches native I/O through a Tokio runtime and converts paths
+only at that boundary. Product use is unscoped so user-selected documents do
+not inherit workspace containment. A scoped local provider remains available
+for trusted workspace consumers and fixtures; its lexical root is an
+application boundary rather than a sandbox and filesystem operations follow
+symlinks.
 
 ```text
-Shell-owned provider registry
+Application-owned provider registry
         scheme -> provider
                 |
        WorkspaceState
@@ -213,17 +221,19 @@ Shell-owned provider registry
                     BufferModel
 ```
 
-`WorkspaceState` owns one normalized root and a monotonic generation. The
-shell normalizes and checks every target against a captured workspace before
-dispatch and revalidates the capture before applying foreground results.
+An optional window-local `WorkspaceState` owns one normalized root and a
+monotonic generation. Workspace-tree requests are checked against that root
+and revalidate the capture before applying foreground results. Document opens
+use the application provider directly and are deliberately independent of the
+workspace root.
 `WorkspaceTree` additionally versions each directory request. Enumeration is
 sorted in application code with directories before files and deterministic
 name and URI ordering. Painting and input use only its cached entries,
 loading, selection, expansion, and error state.
 
 Opening a file awaits normalization, stat, byte read, and UTF-8 decoding before
-creating or selecting any model. A later open or workspace replacement rejects
-the stale result. Saving captures entry identity, resource identity, model
+creating or selecting any model. A later open or captured-tab replacement
+rejects the stale result. Saving captures entry identity, resource identity, model
 text, revision, and workspace. A successful write advances only the captured
 persisted revision while those identities remain live, so edits racing the
 write remain dirty.
