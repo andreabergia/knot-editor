@@ -43,8 +43,14 @@ struct ApplicationFileSystems(Arc<FileSystemProviderRegistry>);
 
 impl Global for ApplicationFileSystems {}
 
-type OpenDialogFuture =
-    Pin<Box<dyn Future<Output = Result<Option<Vec<std::path::PathBuf>>, String>> + Send + 'static>>;
+#[derive(Clone)]
+enum OpenDialogOutcome {
+    Selected(std::path::PathBuf),
+    Cancelled,
+    Failed(String),
+}
+
+type OpenDialogFuture = Pin<Box<dyn Future<Output = OpenDialogOutcome> + Send + 'static>>;
 
 trait ProductOpenDialog: Send + Sync {
     fn select(&self) -> OpenDialogFuture;
@@ -258,18 +264,42 @@ impl ProductShell {
                     prompt: Some("Open".into()),
                 });
                 Box::pin(async move {
-                    selection
-                        .await
-                        .map_err(|error| error.to_string())?
-                        .map_err(|error| error.to_string())
+                    match selection.await {
+                        Ok(Ok(Some(paths))) => paths
+                            .into_iter()
+                            .next()
+                            .map(OpenDialogOutcome::Selected)
+                            .unwrap_or(OpenDialogOutcome::Cancelled),
+                        Ok(Ok(None)) => OpenDialogOutcome::Cancelled,
+                        Ok(Err(error)) => OpenDialogOutcome::Failed(error.to_string()),
+                        Err(error) => OpenDialogOutcome::Failed(error.to_string()),
+                    }
                 })
             };
         self.status = "choosing a file or folder".into();
         cx.notify();
         let task = cx.spawn(async move |this, cx| {
-            let paths = match selection.await {
-                Ok(paths) => paths,
-                Err(message) => {
+            let path = match selection.await {
+                OpenDialogOutcome::Selected(path) => path,
+                OpenDialogOutcome::Cancelled => {
+                    let delivered = completion.clone();
+                    if this
+                        .update(cx, |this, cx| {
+                            this.status = "open cancelled".into();
+                            this.finish_open_command(
+                                delivered,
+                                crate::host::protocol::CommandOutcome::Cancelled,
+                                cx,
+                            );
+                            cx.notify();
+                        })
+                        .is_err()
+                    {
+                        completion.complete(crate::host::protocol::CommandOutcome::InvalidTarget);
+                    }
+                    return;
+                }
+                OpenDialogOutcome::Failed(message) => {
                     let delivered = completion.clone();
                     if this
                         .update(cx, |this, cx| {
@@ -288,26 +318,8 @@ impl ProductShell {
                     return;
                 }
             };
-            let request = match open_request_from_dialog_paths(paths) {
-                Ok(Some(request)) => request,
-                Ok(None) => {
-                    let delivered = completion.clone();
-                    if this
-                        .update(cx, |this, cx| {
-                            this.status = "open cancelled".into();
-                            this.finish_open_command(
-                                delivered,
-                                crate::host::protocol::CommandOutcome::Cancelled,
-                                cx,
-                            );
-                            cx.notify();
-                        })
-                        .is_err()
-                    {
-                        completion.complete(crate::host::protocol::CommandOutcome::InvalidTarget);
-                    }
-                    return;
-                }
+            let request = match OpenRequest::from_path(&path, Path::new("/")) {
+                Ok(request) => request,
                 Err(message) => {
                     let delivered = completion.clone();
                     if this
@@ -1087,15 +1099,6 @@ fn resource_title(uri: &super::resource::ResourceUri) -> String {
         .unwrap_or_else(|| uri.to_string())
 }
 
-fn open_request_from_dialog_paths(
-    paths: Option<Vec<std::path::PathBuf>>,
-) -> Result<Option<OpenRequest>, String> {
-    paths
-        .and_then(|paths| paths.into_iter().next())
-        .map(|path| OpenRequest::from_path(&path, Path::new("/")))
-        .transpose()
-}
-
 fn product_filesystems() -> Arc<FileSystemProviderRegistry> {
     static FILESYSTEMS: OnceLock<Arc<FileSystemProviderRegistry>> = OnceLock::new();
     FILESYSTEMS
@@ -1353,9 +1356,9 @@ mod tests {
     use super::{
         ApplicationDocuments, ApplicationFileSystems, ApplicationOpenDialog,
         ApplicationProductCommands, ApplicationWorkbenches, DocumentCollection, Entity,
-        NEW_COMMAND, OpenDialogFuture, OpenRequest, OpenTarget, ProductCommandDispatcher,
-        ProductCommandSource, ProductOpenDialog, ProductShell, RefCell, SAVE_COMMAND,
-        SPLIT_HORIZONTAL_COMMAND, SplitDirection, Workbench, WorkbenchLayout,
+        NEW_COMMAND, OpenDialogFuture, OpenDialogOutcome, OpenRequest, OpenTarget,
+        ProductCommandDispatcher, ProductCommandSource, ProductOpenDialog, ProductShell, RefCell,
+        SAVE_COMMAND, SPLIT_HORIZONTAL_COMMAND, SplitDirection, Workbench, WorkbenchLayout,
         create_untitled_document, product_filesystems,
     };
     use crate::app::{
@@ -1423,12 +1426,12 @@ mod tests {
         }
     }
 
-    struct FixedOpenDialog(Option<Vec<std::path::PathBuf>>);
+    struct FixedOpenDialog(OpenDialogOutcome);
 
     impl ProductOpenDialog for FixedOpenDialog {
         fn select(&self) -> OpenDialogFuture {
-            let selection = self.0.clone();
-            Box::pin(async move { Ok(selection) })
+            let outcome = self.0.clone();
+            Box::pin(async move { outcome })
         }
     }
 
@@ -1888,7 +1891,9 @@ mod tests {
     #[gpui::test]
     async fn cancelling_the_native_open_selection_settles_the_command(cx: &mut TestAppContext) {
         let documents = install_globals(cx);
-        cx.set_global(ApplicationOpenDialog(Arc::new(FixedOpenDialog(None))));
+        cx.set_global(ApplicationOpenDialog(Arc::new(FixedOpenDialog(
+            OpenDialogOutcome::Cancelled,
+        ))));
         let document = cx.update(|cx| create_untitled_document(&documents, cx));
         let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
         let (shell, window_handle) = product_window(document, model, cx);
