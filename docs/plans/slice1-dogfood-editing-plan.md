@@ -1,6 +1,6 @@
 # First Product Slice: Dogfoodable Text Editing
 
-Status: in progress — checkpoint 5 implementation complete; review gate pending.
+Status: in progress — checkpoint 5 complete.
 
 This slice makes Knot usable for editing its own source on macOS. It evolves
 the validated prototype in place and introduces the real workbench ownership
@@ -141,7 +141,7 @@ application-owned document model rather than introducing transitional APIs.
   and awaited JavaScript invocation were exercised with matching targets and
   structured outcomes.
 
-### Checkpoint 5: New and Open
+### Checkpoint 5: New and Open ✅
 
 - ✅ Complete zero-or-one-path launch behavior, missing-file destination
   association, workspace-folder opening, New, and interactive Open.
@@ -151,7 +151,7 @@ application-owned document model rather than introducing transitional APIs.
   application-wide.
 - ✅ Cover success, cancellation, decode and open failures, stale completions,
   and resource deduplication.
-- 🟨 Review gate: manually exercise launch with no path, an existing file, a
+- ✅ Review gate: manually exercise launch with no path, an existing file, a
   missing file, and a folder, plus New and Open through all applicable command
   entry points.
 
