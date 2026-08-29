@@ -193,15 +193,18 @@ the local-folder provider converts between `file://` URIs and platform paths;
 generic workspace, tree, buffer, and shell state contains no `Path`.
 
 The application owns a registry that routes each operation by URI scheme.
-Providers implement one asynchronous byte-oriented contract: normalize, enumerate
-immediate children, read, replace, and stat. The memory and local-folder
-providers implement the same Knot-owned results and structured errors. The
-local provider dispatches native I/O through a Tokio runtime and converts paths
-only at that boundary. Product use is unscoped so user-selected documents do
-not inherit workspace containment. A scoped local provider remains available
-for trusted workspace consumers and fixtures; its lexical root is an
-application boundary rather than a sandbox and filesystem operations follow
-symlinks.
+Providers implement one asynchronous byte-oriented contract: normalize,
+enumerate immediate children, versioned read, no-clobber create, conditional
+replace, and stat. Versions are provider-owned opaque values. The memory and
+local-folder providers implement the same Knot-owned results and structured
+errors. Local creates and replacements write and flush a temporary sibling,
+then install it atomically; replacements preserve permissions and reject a
+version mismatch. The local provider dispatches native I/O through a Tokio
+runtime and converts paths only at that boundary. Product use is unscoped so
+user-selected documents do not inherit workspace containment. A scoped local
+provider remains available for trusted workspace consumers and fixtures; its
+lexical root is an application boundary rather than a sandbox and filesystem
+operations follow symlinks.
 
 ```text
 Application-owned provider registry
@@ -231,12 +234,17 @@ sorted in application code with directories before files and deterministic
 name and URI ordering. Painting and input use only its cached entries,
 loading, selection, expansion, and error state.
 
-Opening a file awaits normalization, stat, byte read, and UTF-8 decoding before
-creating or selecting any model. A later open or captured-tab replacement
-rejects the stale result. Saving captures entry identity, resource identity, model
-text, revision, and workspace. A successful write advances only the captured
-persisted revision while those identities remain live, so edits racing the
-write remain dirty.
+Opening a file awaits normalization, stat, versioned byte read, and UTF-8
+decoding before creating or selecting any model. A later open or captured-tab
+replacement rejects the stale result. Documents retain the observed provider
+version with their persisted revision. Save captures document, model, resource,
+text, revision, version, and a persistence generation. A successful create or
+conditional replacement commits the new version and only the captured model
+revision while the captured command tab and document state remain live, so
+edits racing the write remain dirty. Save As uses the native save panel, checks
+application-wide resource ownership, and retargets the document only after I/O
+succeeds. Conflicts offer native Reload, Save As, and Cancel choices; Reload
+also rejects edits racing its asynchronous read.
 
 ```text
 gpui Shell / registries
@@ -472,8 +480,8 @@ machinery never enter surfaces, buffers, or `core`.
 
 - Production undo history, edit grouping, and view-state restoration.
 - Configurable keymaps and command applicability policy.
-- Filesystem watching, external-change reload, atomic save, conflict handling,
-  URI deduplication, and multi-root workspaces.
+- Filesystem watching, automatic external-change notification, and multi-root
+  workspaces.
 - Production capability applicability policy.
 - Production terminal interaction and rendering.
 - Production extension scheduling, quotas, and slow-consumer policy.

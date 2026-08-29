@@ -1,6 +1,6 @@
 # First Product Slice: Dogfoodable Text Editing
 
-Status: in progress — checkpoint 5 complete.
+Status: in progress — checkpoint 6 implementation complete; review gate pending.
 
 This slice makes Knot usable for editing its own source on macOS. It evolves
 the validated prototype in place and introduces the real workbench ownership
@@ -155,16 +155,16 @@ application-owned document model rather than introducing transitional APIs.
   missing file, and a folder, plus New and Open through all applicable command
   entry points.
 
-### Checkpoint 6: Safe Save and Save As
+### Checkpoint 6: Safe Save and Save As 🟨
 
-- Add new-file creation and atomic local replacement to the provider contract.
-- Implement Save and native Save As without prematurely binding or retargeting
+- ✅ Add new-file creation and atomic local replacement to the provider contract.
+- ✅ Implement Save and native Save As without prematurely binding or retargeting
   a document.
-- Detect external-change conflicts and preserve dirty state across racing edits
+- ✅ Detect external-change conflicts and preserve dirty state across racing edits
   and stale asynchronous completions.
-- Cover atomic create and replace, overwrite selection, conflicts, races,
+- ✅ Cover atomic create and replace, overwrite selection, conflicts, races,
   failures, and document identity changes.
-- Review gate: manually exercise first save, Save As inside and outside the
+- 🟨 Review gate: manually exercise first save, Save As inside and outside the
   workspace, overwrite confirmation, a racing edit, and an external conflict.
 
 ### Checkpoint 7: Protected closure
@@ -260,19 +260,17 @@ application-owned document model rather than introducing transitional APIs.
   same operations.
 - ✅ Let the command palette discover and invoke each operation from the
   catalog without operation-specific palette code.
-- 🟨 Allow JavaScript to invoke and await the same commands through
-  `commands.invoke(...)`. All names now route and settle consistently;
-  dialog-backed Open and Save As behavior remains in checkpoints 5 and 6.
-  Explicit destination arguments remain deferred until an automation use case
-  defines their safety and semantics.
+- ✅ Allow JavaScript to invoke and await the same commands through
+  `commands.invoke(...)`. All names, including dialog-backed Open and Save As,
+  route and settle consistently. Explicit destination arguments remain
+  deferred until an automation use case defines their safety and semantics.
 - ✅ Preserve captured targets: editing and Save address the focused document,
   Split the focused pane, Close the focused tab or window, and Open the
   captured window. Quit coordinates application-owned documents across
   windows. Reject destroyed targets rather than falling back to current focus.
-- 🟨 Every current invocation returns the existing structured command outcome
-  asynchronously. Open now remains pending through native selection and
-  loading; confirmation and persistence handlers remain with their owning
-  checkpoints.
+- ✅ Every current invocation returns the existing structured command outcome
+  asynchronously. Open and Save As remain pending through native selection and
+  I/O, and conflicts remain pending through their native confirmation flow.
 
 ### 4. Make documents and resources user-facing
 
@@ -283,10 +281,10 @@ application-owned document model rather than introducing transitional APIs.
   focus an existing view or create another view according to the invoking
   command.
 - ✅ Add the registered document and window commands to the native macOS menu.
-- 🟨 Use native Open and Save dialogs. Open is complete: a selected folder
-  becomes a window workspace and a selected file becomes a document regardless
-  of workspace. Save dialogs remain in checkpoint 6.
-- ⬜ Bind an untitled or destination-associated document to its normalized URI
+- ✅ Use native Open and Save dialogs. A selected folder becomes a window
+  workspace, a selected file becomes a document regardless of workspace, and
+  Save As may select any local destination.
+- ✅ Bind an untitled or destination-associated document to its normalized URI
   only after the relevant create/save operation succeeds.
 
 ### 5. Complete ordinary editing behavior
@@ -319,16 +317,16 @@ application-owned document model rather than introducing transitional APIs.
 
 ### 7. Make persistence safe enough for daily use
 
-- ⬜ Extend the provider contract to create new files and atomically replace
+- ✅ Extend the provider contract to create new files and atomically replace
   existing local files using a temporary sibling and rename.
-- ⬜ Capture persisted file metadata sufficient to detect an external change
+- ✅ Capture persisted file metadata sufficient to detect an external change
   before replacement. Refuse a conflicting overwrite and offer Reload or Save
   As; live filesystem watching remains deferred.
-- ⬜ Preserve dirty state when an edit races an asynchronous save and reject
+- ✅ Preserve dirty state when an edit races an asynchronous save and reject
   stale completions after document, resource, or window lifecycle changes.
-- ⬜ Let native Save As overwrite confirmation govern an explicitly selected
+- ✅ Let native Save As overwrite confirmation govern an explicitly selected
   existing destination while still using the safe replacement path.
-- ⬜ Surface open, decode, create, conflict, and save failures without losing
+- ✅ Surface open, decode, create, conflict, and save failures without losing
   document text or retargeting the operation.
 
 ### 8. Close and dogfood the slice

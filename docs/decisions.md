@@ -281,9 +281,10 @@ Evidence: [capability aggregation experiment](archive/exploration/step12-capabil
   interpret `file://`; the local-folder provider alone converts between file
   URIs and platform paths.
 - An application-owned registry selects one asynchronous filesystem provider
-  by URI scheme. The byte-oriented normalize, enumerate, read, replace, and stat
-  contract is sufficient for both an in-memory hierarchy and a trusted local
-  folder without exposing provider iteration order or native errors.
+  by URI scheme. The byte-oriented normalize, enumerate, versioned read,
+  no-clobber create, conditional replace, and stat contract is sufficient for
+  both an in-memory hierarchy and a trusted local folder without exposing
+  provider iteration order, platform metadata, or native errors.
 - The product local provider is unscoped because native Open and later Save As
   select documents independently of a workspace. Workspace consumers enforce
   segment-aware containment against their own captured root; scoped local
@@ -296,23 +297,36 @@ Evidence: [capability aggregation experiment](archive/exploration/step12-capabil
   cached expansion, selection, loading, errors, and per-directory request
   generations. It sorts directories before files and names deterministically.
   The extension-owned outline `TreeView` remains a distinct semantic API.
-- Resource-backed open-buffer entries own URI and persisted revision metadata;
-  `BufferModel` remains filesystem-independent. Dirty state is derived from
-  model and persisted revisions. Generated and search buffers remain
+- Resource-backed documents own URI, persisted revision, and an opaque provider
+  version; `BufferModel` remains filesystem-independent. Dirty state is derived
+  from model and persisted revisions. Generated and search documents remain
   resource-less.
 - Resource open is asynchronous and UTF-8-only. It creates and activates a
   model only after provider operations succeed and the captured tab/open
   generation remains current. A directory installs the invoking window's
-  optional workspace instead. Save captures bytes and revision; successful
-  completion marks only that captured revision persisted if entry, model, URI, and
-  workspace identities still match.
+  optional workspace instead. Save captures bytes, revision, provider version,
+  and a document persistence generation. Successful completion marks only that
+  captured revision persisted if the document, model, state, resource, and
+  command target still match. This keeps racing edits dirty and rejects stale
+  or out-of-order completions.
+- Local create and replacement write and flush a temporary sibling before an
+  atomic install. Create never clobbers an existing destination. Replacement
+  preserves permissions and compares the version observed on open or the last
+  successful save before renaming. Native Save As supplies overwrite consent;
+  the provider still performs a conditional replacement so a later external
+  change becomes a conflict.
+- An untitled or destination-associated document gains persisted identity only
+  after I/O succeeds. Save As similarly removes the old resource mapping and
+  installs the new normalized identity only on a current completion. A selected
+  destination already owned by another open document is rejected before I/O.
+- External conflicts are explicit rather than last-writer-wins. The product
+  offers Reload, Save As, and Cancel; Reload revalidates the captured model
+  revision before replacing text. Live filesystem watching remains deferred.
 - A local workspace root is an application boundary, not a security sandbox.
   Lexical escapes are rejected, while symlinks are deliberately followed and
   may resolve outside the selected trusted folder.
-- The product still lacks watching and external-change reload, atomic writes,
-  conflict detection, save coordination, binary buffers and encoding detection,
-  save-as, and filesystem mutation operations beyond replacing an existing
-  file.
+- The product still lacks filesystem watching, binary buffers, and encoding
+  detection.
 - App startup and renderer benchmark fixture setup may use manifest-relative
   platform paths and synchronous `std::fs`; these are explicit fixture paths,
   not workspace or persistence APIs. The writable local fixture is isolated
