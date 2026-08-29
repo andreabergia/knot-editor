@@ -285,6 +285,28 @@ impl Workbench {
         Some(tab_id)
     }
 
+    pub(crate) fn replace_tab_document(
+        &mut self,
+        pane_id: PaneId,
+        tab_id: TabId,
+        document_id: DocumentId,
+        model: Entity<super::model::BufferModel>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(pane) = self.panes.iter_mut().find(|pane| pane.id == pane_id) else {
+            return false;
+        };
+        let Some(tab) = pane.tabs.iter_mut().find(|tab| tab.id == tab_id) else {
+            return false;
+        };
+        tab.document_id = document_id;
+        tab.editor = cx.new(|cx| EditorView::new(model, cx));
+        pane.active_tab = tab_id;
+        self.focused_pane = Some(pane_id);
+        self.debug_assert_invariants();
+        true
+    }
+
     /// Split the focused pane and show its active document in a fresh view.
     #[cfg_attr(not(test), allow(dead_code, reason = "focused-pane convenience API"))]
     pub(crate) fn split_focused(

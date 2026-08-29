@@ -32,6 +32,7 @@ mod editor;
 mod entry;
 mod filesystem;
 pub mod model;
+mod open;
 mod product;
 mod product_commands;
 mod resource;

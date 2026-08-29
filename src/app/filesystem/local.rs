@@ -16,7 +16,7 @@ use crate::app::resource::ResourceUri;
 /// Containment is lexical. Filesystem operations follow symlinks, including
 /// symlinks whose targets are outside the selected folder.
 pub(crate) struct LocalFileSystemProvider {
-    root: ResourceUri,
+    root: Option<ResourceUri>,
     runtime: Arc<tokio::runtime::Runtime>,
 }
 
@@ -37,19 +37,33 @@ impl LocalFileSystemProvider {
             reason: "local provider root cannot be represented as a file URI".into(),
         })?;
         let root = normalize_file_uri(ResourceUri::from_url(root_url))?;
-        Ok(Self { root, runtime })
+        Ok(Self {
+            root: Some(root),
+            runtime,
+        })
+    }
+
+    /// Creates the application-wide provider for user-selected local resources.
+    /// Workspace containment remains a workspace consumer concern.
+    pub(crate) fn unrestricted(runtime: Arc<tokio::runtime::Runtime>) -> Self {
+        Self {
+            root: None,
+            runtime,
+        }
     }
 
     pub(crate) fn root(&self) -> &ResourceUri {
-        &self.root
+        self.root
+            .as_ref()
+            .expect("an unrestricted local provider has no root")
     }
 
     fn normalize_scoped(&self, uri: ResourceUri) -> Result<ResourceUri, ResourceError> {
         let uri = normalize_file_uri(uri)?;
-        if !uri.is_within(&self.root) {
+        if self.root.as_ref().is_some_and(|root| !uri.is_within(root)) {
             return Err(ResourceError::OutsideWorkspace {
                 uri,
-                root: self.root.clone(),
+                root: self.root.clone().unwrap(),
             });
         }
         Ok(uri)
@@ -66,7 +80,7 @@ impl LocalFileSystemProvider {
 
     #[cfg(test)]
     fn path_to_uri(&self, path: &Path) -> Result<ResourceUri, ResourceError> {
-        path_to_uri(&self.root, path)
+        path_to_uri(self.root(), path)
     }
 
     fn spawn<T: Send + 'static>(
@@ -95,6 +109,14 @@ fn path_to_uri(root: &ResourceUri, path: &Path) -> Result<ResourceUri, ResourceE
         });
     }
     Ok(uri)
+}
+
+fn path_to_unrestricted_uri(path: &Path) -> Result<ResourceUri, ResourceError> {
+    let url = Url::from_file_path(path).map_err(|_| ResourceError::InvalidUri {
+        uri: path.display().to_string(),
+        reason: "platform path cannot be represented as a file URI".into(),
+    })?;
+    normalize_file_uri(ResourceUri::from_url(url))
 }
 
 impl FileSystemProvider for LocalFileSystemProvider {
@@ -138,7 +160,10 @@ impl FileSystemProvider for LocalFileSystemProvider {
                             uri: entry.path().display().to_string(),
                             reason: format!("resource name is not UTF-8: {name:?}"),
                         })?;
-                let child_uri = path_to_uri(&root, &entry.path())?;
+                let child_uri = match &root {
+                    Some(root) => path_to_uri(root, &entry.path())?,
+                    None => path_to_unrestricted_uri(&entry.path())?,
+                };
                 let child_metadata = metadata(&entry.path(), &child_uri, "stat child").await?;
                 let kind = if child_metadata.is_dir() {
                     ResourceKind::Directory

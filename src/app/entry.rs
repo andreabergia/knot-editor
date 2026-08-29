@@ -38,10 +38,15 @@ impl OpenRequest {
             .map_err(|error| error.to_string())
     }
 
+    pub(crate) fn from_uri_for_product(uri: ResourceUri) -> Self {
+        Self { uri }
+    }
+
     pub(crate) fn uri(&self) -> &ResourceUri {
         &self.uri
     }
 
+    #[cfg(test)]
     pub(crate) fn title(&self) -> String {
         self.uri
             .as_url()
