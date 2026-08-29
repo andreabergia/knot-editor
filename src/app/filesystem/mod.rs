@@ -31,6 +31,22 @@ pub(crate) enum ResourceStat {
     Directory,
 }
 
+/// Opaque provider-owned identity for one observed file version.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ResourceVersion(Vec<u8>);
+
+impl ResourceVersion {
+    pub(crate) fn new(value: impl Into<Vec<u8>>) -> Self {
+        Self(value.into())
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ResourceFile {
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) version: ResourceVersion,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ResourceError {
     InvalidUri {
@@ -48,6 +64,12 @@ pub(crate) enum ResourceError {
         scheme: String,
     },
     NotFound {
+        uri: ResourceUri,
+    },
+    AlreadyExists {
+        uri: ResourceUri,
+    },
+    Conflict {
         uri: ResourceUri,
     },
     WrongKind {
@@ -88,6 +110,8 @@ impl fmt::Display for ResourceError {
                 "a filesystem provider is already registered for {scheme:?}"
             ),
             Self::NotFound { uri } => write!(formatter, "resource not found: {uri}"),
+            Self::AlreadyExists { uri } => write!(formatter, "resource already exists: {uri}"),
+            Self::Conflict { uri } => write!(formatter, "resource changed outside Knot: {uri}"),
             Self::WrongKind {
                 uri,
                 expected,
@@ -108,8 +132,14 @@ impl std::error::Error for ResourceError {}
 pub(crate) trait FileSystemProvider: Send + Sync {
     fn normalize(&self, uri: ResourceUri) -> ProviderFuture<'_, ResourceUri>;
     fn enumerate(&self, uri: ResourceUri) -> ProviderFuture<'_, Vec<ResourceEntry>>;
-    fn read(&self, uri: ResourceUri) -> ProviderFuture<'_, Vec<u8>>;
-    fn write(&self, uri: ResourceUri, bytes: Vec<u8>) -> ProviderFuture<'_, ()>;
+    fn read(&self, uri: ResourceUri) -> ProviderFuture<'_, ResourceFile>;
+    fn create(&self, uri: ResourceUri, bytes: Vec<u8>) -> ProviderFuture<'_, ResourceVersion>;
+    fn replace(
+        &self,
+        uri: ResourceUri,
+        expected: ResourceVersion,
+        bytes: Vec<u8>,
+    ) -> ProviderFuture<'_, ResourceVersion>;
     fn stat(&self, uri: ResourceUri) -> ProviderFuture<'_, ResourceStat>;
 }
 
@@ -273,11 +303,24 @@ mod tests {
         fn enumerate(&self, _: ResourceUri) -> ProviderFuture<'_, Vec<ResourceEntry>> {
             Box::pin(async { Ok(Vec::new()) })
         }
-        fn read(&self, _: ResourceUri) -> ProviderFuture<'_, Vec<u8>> {
-            Box::pin(async { Ok(Vec::new()) })
+        fn read(&self, _: ResourceUri) -> ProviderFuture<'_, ResourceFile> {
+            Box::pin(async {
+                Ok(ResourceFile {
+                    bytes: Vec::new(),
+                    version: ResourceVersion::new([]),
+                })
+            })
         }
-        fn write(&self, _: ResourceUri, _: Vec<u8>) -> ProviderFuture<'_, ()> {
-            Box::pin(async { Ok(()) })
+        fn create(&self, _: ResourceUri, _: Vec<u8>) -> ProviderFuture<'_, ResourceVersion> {
+            Box::pin(async { Ok(ResourceVersion::new([])) })
+        }
+        fn replace(
+            &self,
+            _: ResourceUri,
+            _: ResourceVersion,
+            _: Vec<u8>,
+        ) -> ProviderFuture<'_, ResourceVersion> {
+            Box::pin(async { Ok(ResourceVersion::new([])) })
         }
         fn stat(&self, _: ResourceUri) -> ProviderFuture<'_, ResourceStat> {
             Box::pin(async { Ok(ResourceStat::Missing) })
@@ -337,9 +380,19 @@ mod tests {
             ResourceStat::Missing
         );
 
-        assert_eq!(run(provider.read(file.clone())).unwrap(), b"before");
-        run(provider.write(file.clone(), b"after".to_vec())).unwrap();
-        assert_eq!(run(provider.read(file.clone())).unwrap(), b"after");
+        let before = run(provider.read(file.clone())).unwrap();
+        assert_eq!(before.bytes, b"before");
+        let stale_version = before.version.clone();
+        let after_version =
+            run(provider.replace(file.clone(), before.version, b"after".to_vec())).unwrap();
+        let after = run(provider.read(file.clone())).unwrap();
+        assert_eq!(after.bytes, b"after");
+        assert_eq!(after.version, after_version);
+        assert!(matches!(
+            run(provider.replace(file.clone(), stale_version, b"stale".to_vec())),
+            Err(ResourceError::Conflict { uri }) if uri == file
+        ));
+        assert_eq!(run(provider.read(file.clone())).unwrap().bytes, b"after");
         assert_eq!(
             run(provider.enumerate(directory.clone())).unwrap(),
             vec![ResourceEntry {
@@ -347,6 +400,15 @@ mod tests {
                 name: "file.txt".into(),
                 kind: ResourceKind::File,
             }]
+        );
+        let created = child_uri(&directory, "created.txt").unwrap();
+        run(provider.create(created.clone(), b"created".to_vec())).unwrap();
+        assert_eq!(
+            run(provider.read(created.clone())).unwrap().bytes,
+            b"created"
+        );
+        assert!(
+            matches!(run(provider.create(created.clone(), Vec::new())), Err(ResourceError::AlreadyExists { uri }) if uri == created)
         );
 
         assert!(matches!(
@@ -370,7 +432,7 @@ mod tests {
             Err(ResourceError::NotFound { uri }) if uri == missing
         ));
         assert!(matches!(
-            run(provider.write(missing.clone(), b"new".to_vec())),
+            run(provider.replace(missing.clone(), ResourceVersion::new([]), b"new".to_vec())),
             Err(ResourceError::NotFound { uri }) if uri == missing
         ));
     }

@@ -2579,7 +2579,10 @@ impl Shell {
         self.latest_resource_error = None;
         let providers = self.filesystem_providers.clone();
         let task = cx.spawn(async move |this, cx| {
-            let result: Result<(ResourceUri, String), ResourceBufferError> = async {
+            let result: Result<
+                (ResourceUri, String, filesystem::ResourceVersion),
+                ResourceBufferError,
+            > = async {
                 let normalized = providers.normalize(uri).await?;
                 Self::validate_workspace_target(&workspace, &normalized)?;
                 let provider = providers.provider(&normalized)?;
@@ -2597,12 +2600,13 @@ impl Shell {
                         return Err(ResourceError::NotFound { uri: normalized }.into());
                     }
                 }
-                let bytes = provider.read(normalized.clone()).await?;
-                let text =
-                    String::from_utf8(bytes).map_err(|_| ResourceBufferError::InvalidUtf8 {
+                let file = provider.read(normalized.clone()).await?;
+                let text = String::from_utf8(file.bytes).map_err(|_| {
+                    ResourceBufferError::InvalidUtf8 {
                         uri: normalized.clone(),
-                    })?;
-                Ok((normalized, text))
+                    }
+                })?;
+                Ok((normalized, text, file.version))
             }
             .await;
 
@@ -2613,7 +2617,7 @@ impl Shell {
                     return;
                 }
                 match result {
-                    Ok((uri, text)) => {
+                    Ok((uri, text, version)) => {
                         let title = uri
                             .as_url()
                             .path_segments()
@@ -2624,7 +2628,7 @@ impl Shell {
                             .to_owned();
                         let model = cx.new(|_| BufferModel::from_text(text));
                         let id = Self::document_collection(cx).update(cx, |documents, _| {
-                            documents.create_persisted(title, model, uri.clone(), 0)
+                            documents.create_persisted(title, model, uri.clone(), 0, version)
                         });
                         this.select_document(id, cx);
                         this.resource_status = format!("opened {uri}").into();
@@ -2644,20 +2648,24 @@ impl Shell {
     }
 
     fn save_selected_resource(&mut self, cx: &mut Context<Self>) {
-        let documents = Self::documents(cx);
-        let Some(document) = documents.get(self.selected_document) else {
-            return;
-        };
-        let Some(uri) = document.resource_uri() else {
+        let Some((id, model, title, uri, expected_version)) = Self::documents(cx)
+            .get(self.selected_document)
+            .and_then(|document| {
+                Some((
+                    document.id(),
+                    document.model().clone(),
+                    document.title().clone(),
+                    document.resource_uri()?.clone(),
+                    document.state().persisted_version()?.clone(),
+                ))
+            })
+        else {
             self.resource_status = "buffer is not resource-backed".into();
             self.latest_resource_error = Some("generated buffers cannot be saved".into());
             cx.notify();
             return;
         };
         let workspace = self.workspace.snapshot();
-        let id = document.id();
-        let model = document.model().clone();
-        let uri = uri.clone();
         if let Err(error) = Self::validate_workspace_target(&workspace, &uri) {
             self.resource_status = "save failed".into();
             self.latest_resource_error = Some(error.to_string().into());
@@ -2665,6 +2673,11 @@ impl Shell {
             return;
         }
         let (text, revision) = model.read_with(cx, |model, _| (model.text(), model.revision()));
+        let Some(capture) = Self::document_collection(cx)
+            .update(cx, |documents, _| documents.begin_persistence(id, &model))
+        else {
+            return;
+        };
         let providers = self.filesystem_providers.clone();
         self.resource_status = format!("saving {uri}").into();
         self.latest_resource_error = None;
@@ -2673,7 +2686,9 @@ impl Shell {
                 let normalized = providers.normalize(uri.clone()).await?;
                 Self::validate_workspace_target(&workspace, &normalized)?;
                 let provider = providers.provider(&normalized)?;
-                provider.write(normalized, text.into_bytes()).await
+                provider
+                    .replace(normalized, expected_version, text.into_bytes())
+                    .await
             }
             .await;
             let _ = this.update(cx, |this, cx| {
@@ -2681,15 +2696,23 @@ impl Shell {
                     return;
                 }
                 match result {
-                    Ok(())
+                    Ok(version) => {
                         if Self::document_collection(cx).update(cx, |documents, _| {
-                            documents.mark_persisted(id, &model, &uri, revision)
-                        }) =>
-                    {
-                        this.resource_status = format!("saved {uri} at revision {revision}").into();
-                        this.latest_resource_error = None;
+                            documents.finish_persistence(
+                                id,
+                                &model,
+                                &capture,
+                                title,
+                                uri.clone(),
+                                version,
+                                revision,
+                            )
+                        }) {
+                            this.resource_status =
+                                format!("saved {uri} at revision {revision}").into();
+                            this.latest_resource_error = None;
+                        }
                     }
-                    Ok(()) => {}
                     Err(error) => {
                         this.resource_status = "save failed".into();
                         this.latest_resource_error = Some(error.to_string().into());
@@ -4240,7 +4263,7 @@ mod tests {
             }
             let provider =
                 cx.read(|cx| shell.read(cx).filesystem_providers.provider(&uri).unwrap());
-            assert_eq!(provider.read(uri).await.unwrap(), expected.as_bytes());
+            assert_eq!(provider.read(uri).await.unwrap().bytes, expected.as_bytes());
         }
 
         let (uri, model, captured_text, captured_revision) = shell.update(cx, |shell, cx| {
@@ -4272,7 +4295,10 @@ mod tests {
         }
 
         let provider = cx.read(|cx| shell.read(cx).filesystem_providers.provider(&uri).unwrap());
-        assert_eq!(provider.read(uri).await.unwrap(), captured_text.as_bytes());
+        assert_eq!(
+            provider.read(uri).await.unwrap().bytes,
+            captured_text.as_bytes()
+        );
         cx.read(|cx| {
             let shell = shell.read(cx);
             let document = shell.selected_document(cx).unwrap();

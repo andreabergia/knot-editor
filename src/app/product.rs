@@ -12,9 +12,12 @@ use gpui::{prelude::FluentBuilder, *};
 
 use super::{
     CommandCompletion, CommandPalette, CommandPaletteEntry, CommandPaletteEvent,
-    documents::{ApplicationDocuments, DocumentCollection, DocumentId},
+    documents::{ApplicationDocuments, DocumentCollection, DocumentId, DocumentState},
     entry::OpenRequest,
-    filesystem::{FileSystemProviderRegistry, LocalFileSystemProvider},
+    filesystem::{
+        FileSystemProviderRegistry, LocalFileSystemProvider, ResourceError, ResourceKind,
+        ResourceStat, ResourceVersion,
+    },
     model::BufferModel,
     open::{OpenResource, enumerate_directory, load_resource},
     product_commands::{
@@ -59,6 +62,23 @@ trait ProductOpenDialog: Send + Sync {
 struct ApplicationOpenDialog(Arc<dyn ProductOpenDialog>);
 
 impl Global for ApplicationOpenDialog {}
+
+#[derive(Clone)]
+enum SaveDialogOutcome {
+    Selected(super::resource::ResourceUri),
+    Cancelled,
+    Failed(String),
+}
+
+type SaveDialogFuture = Pin<Box<dyn Future<Output = SaveDialogOutcome> + Send + 'static>>;
+
+trait ProductSaveDialog: Send + Sync {
+    fn select(&self, suggested_name: SharedString) -> SaveDialogFuture;
+}
+
+struct ApplicationSaveDialog(Arc<dyn ProductSaveDialog>);
+
+impl Global for ApplicationSaveDialog {}
 
 impl ApplicationWorkbenches {
     fn register(&self, workbench: &Entity<Workbench>) {
@@ -245,6 +265,463 @@ impl ProductShell {
         Self::command_dispatcher(cx).update(cx, |dispatcher, cx| {
             dispatcher.record_outcome(outcome, cx);
         });
+    }
+
+    fn finish_save_command(
+        &mut self,
+        completion: CommandCompletion,
+        outcome: crate::host::protocol::CommandOutcome,
+        cx: &mut Context<Self>,
+    ) {
+        completion.complete(outcome.clone());
+        Self::command_dispatcher(cx).update(cx, |dispatcher, cx| {
+            dispatcher.record_outcome(outcome, cx);
+        });
+    }
+
+    fn target_is_live(&self, target: &ProductCommandTarget, cx: &App) -> bool {
+        target.workbench.upgrade() == Some(self.workbench.clone())
+            && self
+                .workbench
+                .read(cx)
+                .contains_tab(target.pane, target.tab, target.document)
+    }
+
+    pub(crate) fn start_save_command(
+        &mut self,
+        save_as: bool,
+        target: ProductCommandTarget,
+        completion: CommandCompletion,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.target_is_live(&target, cx) {
+            self.finish_save_command(
+                completion,
+                crate::host::protocol::CommandOutcome::InvalidTarget,
+                cx,
+            );
+            return;
+        }
+        let documents = Self::documents(cx);
+        let Some(document) = documents.read(cx).get(target.document) else {
+            self.finish_save_command(
+                completion,
+                crate::host::protocol::CommandOutcome::InvalidTarget,
+                cx,
+            );
+            return;
+        };
+        if matches!(document.state(), DocumentState::Generated) {
+            let message = "generated documents cannot be saved".to_owned();
+            self.status = message.clone().into();
+            self.finish_save_command(
+                completion,
+                crate::host::protocol::CommandOutcome::HandlerFailure { message },
+                cx,
+            );
+            cx.notify();
+            return;
+        }
+        if save_as || matches!(document.state(), DocumentState::Untitled { .. }) {
+            self.start_save_dialog(target, completion, cx);
+        } else {
+            let uri = document.resource_uri().unwrap().clone();
+            self.start_save_to_uri(target, uri, false, completion, cx);
+        }
+    }
+
+    fn start_save_dialog(
+        &mut self,
+        target: ProductCommandTarget,
+        completion: CommandCompletion,
+        cx: &mut Context<Self>,
+    ) {
+        let suggested_name = Self::documents(cx)
+            .read(cx)
+            .get(target.document)
+            .map(|document| document.title().clone())
+            .unwrap_or_else(|| "Untitled".into());
+        let selection = if let Some(dialog) = cx.try_global::<ApplicationSaveDialog>() {
+            dialog.0.select(suggested_name)
+        } else {
+            let directory =
+                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/"));
+            let selection = cx.prompt_for_new_path(&directory, Some(&suggested_name));
+            Box::pin(async move {
+                match selection.await {
+                    Ok(Ok(Some(path))) => match OpenRequest::from_path(&path, Path::new("/")) {
+                        Ok(request) => SaveDialogOutcome::Selected(request.uri().clone()),
+                        Err(message) => SaveDialogOutcome::Failed(message),
+                    },
+                    Ok(Ok(None)) => SaveDialogOutcome::Cancelled,
+                    Ok(Err(error)) => SaveDialogOutcome::Failed(error.to_string()),
+                    Err(error) => SaveDialogOutcome::Failed(error.to_string()),
+                }
+            }) as SaveDialogFuture
+        };
+        self.status = "choosing a save destination".into();
+        cx.notify();
+        let task = cx.spawn(async move |this, cx| {
+            let outcome = selection.await;
+            let fallback = completion.clone();
+            if this
+                .update(cx, |this, cx| match outcome {
+                    SaveDialogOutcome::Selected(uri) => {
+                        this.start_save_to_uri(target, uri, true, completion, cx);
+                    }
+                    SaveDialogOutcome::Cancelled => {
+                        this.status = "save cancelled".into();
+                        this.finish_save_command(
+                            completion,
+                            crate::host::protocol::CommandOutcome::Cancelled,
+                            cx,
+                        );
+                        cx.notify();
+                    }
+                    SaveDialogOutcome::Failed(message) => {
+                        this.status = format!("save failed: {message}").into();
+                        this.finish_save_command(
+                            completion,
+                            crate::host::protocol::CommandOutcome::HandlerFailure { message },
+                            cx,
+                        );
+                        cx.notify();
+                    }
+                })
+                .is_err()
+            {
+                fallback.complete(crate::host::protocol::CommandOutcome::InvalidTarget);
+            }
+        });
+        self.tasks.push(task);
+    }
+
+    fn start_save_to_uri(
+        &mut self,
+        target: ProductCommandTarget,
+        uri: super::resource::ResourceUri,
+        explicit_overwrite: bool,
+        completion: CommandCompletion,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.target_is_live(&target, cx) {
+            self.finish_save_command(
+                completion,
+                crate::host::protocol::CommandOutcome::InvalidTarget,
+                cx,
+            );
+            return;
+        }
+        let documents = Self::documents(cx);
+        let (model, title, state) = {
+            let documents = documents.read(cx);
+            let Some(document) = documents.get(target.document) else {
+                self.finish_save_command(
+                    completion,
+                    crate::host::protocol::CommandOutcome::InvalidTarget,
+                    cx,
+                );
+                return;
+            };
+            (
+                document.model().clone(),
+                resource_title(&uri),
+                document.state().clone(),
+            )
+        };
+        if documents
+            .read(cx)
+            .document_for_resource(&uri)
+            .is_some_and(|document| document != target.document)
+        {
+            let message = format!("another open document already owns {uri}");
+            self.status = format!("save failed: {message}").into();
+            self.finish_save_command(
+                completion,
+                crate::host::protocol::CommandOutcome::HandlerFailure { message },
+                cx,
+            );
+            cx.notify();
+            return;
+        }
+        let (text, revision) = model.read_with(cx, |model, _| (model.text(), model.revision()));
+        let Some(capture) = documents.update(cx, |documents, _| {
+            documents.begin_persistence(target.document, &model)
+        }) else {
+            self.finish_save_command(
+                completion,
+                crate::host::protocol::CommandOutcome::InvalidTarget,
+                cx,
+            );
+            return;
+        };
+        self.status = format!("saving {uri}").into();
+        cx.notify();
+        let providers = Self::filesystems(cx);
+        let task = cx.spawn(async move |this, cx| {
+            let result: Result<(super::resource::ResourceUri, ResourceVersion), ResourceError> =
+                async {
+                    let uri = providers.normalize(uri).await?;
+                    let provider = providers.provider(&uri)?;
+                    let version = if explicit_overwrite {
+                        match provider.stat(uri.clone()).await? {
+                            ResourceStat::Missing => {
+                                provider.create(uri.clone(), text.into_bytes()).await?
+                            }
+                            ResourceStat::File => {
+                                let existing = provider.read(uri.clone()).await?;
+                                provider
+                                    .replace(uri.clone(), existing.version, text.into_bytes())
+                                    .await?
+                            }
+                            ResourceStat::Directory => {
+                                return Err(ResourceError::WrongKind {
+                                    uri,
+                                    expected: ResourceKind::File,
+                                    actual: ResourceKind::Directory,
+                                });
+                            }
+                        }
+                    } else {
+                        match state {
+                            DocumentState::Destination { .. } => {
+                                provider.create(uri.clone(), text.into_bytes()).await?
+                            }
+                            DocumentState::Persisted { version, .. } => {
+                                provider
+                                    .replace(uri.clone(), version, text.into_bytes())
+                                    .await?
+                            }
+                            DocumentState::Untitled { .. } | DocumentState::Generated => {
+                                return Err(ResourceError::InvalidUri {
+                                    uri: uri.to_string(),
+                                    reason: "document has no direct save destination".into(),
+                                });
+                            }
+                        }
+                    };
+                    Ok((uri, version))
+                }
+                .await;
+            let fallback = completion.clone();
+            if this
+                .update(cx, |this, cx| match result {
+                    Ok((uri, version)) if this.target_is_live(&target, cx) => {
+                        let committed = Self::documents(cx).update(cx, |documents, _| {
+                            documents.finish_persistence(
+                                target.document,
+                                &model,
+                                &capture,
+                                title,
+                                uri.clone(),
+                                version,
+                                revision,
+                            )
+                        });
+                        let outcome = if committed {
+                            this.status = format!("saved {uri}").into();
+                            crate::host::protocol::CommandOutcome::Completed
+                        } else {
+                            this.status = "save completion became stale".into();
+                            crate::host::protocol::CommandOutcome::InvalidTarget
+                        };
+                        this.finish_save_command(completion, outcome, cx);
+                        cx.notify();
+                    }
+                    Ok(_) => {
+                        this.finish_save_command(
+                            completion,
+                            crate::host::protocol::CommandOutcome::InvalidTarget,
+                            cx,
+                        );
+                    }
+                    Err(ResourceError::Conflict { uri }) => {
+                        this.prompt_for_save_conflict(target, uri, completion, cx);
+                    }
+                    Err(ResourceError::AlreadyExists { uri }) => {
+                        this.prompt_for_save_conflict(target, uri, completion, cx);
+                    }
+                    Err(error) => {
+                        let message = error.to_string();
+                        this.status = format!("save failed: {message}").into();
+                        this.finish_save_command(
+                            completion,
+                            crate::host::protocol::CommandOutcome::HandlerFailure { message },
+                            cx,
+                        );
+                        cx.notify();
+                    }
+                })
+                .is_err()
+            {
+                fallback.complete(crate::host::protocol::CommandOutcome::InvalidTarget);
+            }
+        });
+        self.tasks.push(task);
+    }
+
+    fn prompt_for_save_conflict(
+        &mut self,
+        target: ProductCommandTarget,
+        uri: super::resource::ResourceUri,
+        completion: CommandCompletion,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.target_is_live(&target, cx) {
+            self.finish_save_command(
+                completion,
+                crate::host::protocol::CommandOutcome::InvalidTarget,
+                cx,
+            );
+            return;
+        }
+        let prompt = cx.update_window(target.window, |_, window, cx| {
+            window.prompt(
+                PromptLevel::Warning,
+                "The file changed outside Knot",
+                Some(
+                    "Reload the external version, choose another destination, or cancel the save.",
+                ),
+                &[
+                    PromptButton::new("Reload"),
+                    PromptButton::new("Save As…"),
+                    PromptButton::cancel("Cancel"),
+                ],
+                cx,
+            )
+        });
+        let Ok(prompt) = prompt else {
+            self.finish_save_command(
+                completion,
+                crate::host::protocol::CommandOutcome::InvalidTarget,
+                cx,
+            );
+            return;
+        };
+        self.status = format!("save conflict at {uri}").into();
+        cx.notify();
+        let task = cx.spawn(async move |this, cx| {
+            let answer = prompt.await.unwrap_or(2);
+            let fallback = completion.clone();
+            if this
+                .update(cx, |this, cx| match answer {
+                    0 => this.start_conflict_reload(target, uri, completion, cx),
+                    1 => this.start_save_dialog(target, completion, cx),
+                    _ => {
+                        this.status = "save conflict cancelled".into();
+                        this.finish_save_command(
+                            completion,
+                            crate::host::protocol::CommandOutcome::Cancelled,
+                            cx,
+                        );
+                        cx.notify();
+                    }
+                })
+                .is_err()
+            {
+                fallback.complete(crate::host::protocol::CommandOutcome::InvalidTarget);
+            }
+        });
+        self.tasks.push(task);
+    }
+
+    fn start_conflict_reload(
+        &mut self,
+        target: ProductCommandTarget,
+        uri: super::resource::ResourceUri,
+        completion: CommandCompletion,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.target_is_live(&target, cx) {
+            self.finish_save_command(
+                completion,
+                crate::host::protocol::CommandOutcome::InvalidTarget,
+                cx,
+            );
+            return;
+        }
+        let documents = Self::documents(cx);
+        let Some((model, title)) = documents
+            .read(cx)
+            .get(target.document)
+            .map(|document| (document.model().clone(), document.title().clone()))
+        else {
+            self.finish_save_command(
+                completion,
+                crate::host::protocol::CommandOutcome::InvalidTarget,
+                cx,
+            );
+            return;
+        };
+        let revision = model.read(cx).revision();
+        let Some(capture) = documents.update(cx, |documents, _| {
+            documents.begin_persistence(target.document, &model)
+        }) else {
+            self.finish_save_command(
+                completion,
+                crate::host::protocol::CommandOutcome::InvalidTarget,
+                cx,
+            );
+            return;
+        };
+        self.status = format!("reloading {uri}").into();
+        cx.notify();
+        let providers = Self::filesystems(cx);
+        let task = cx.spawn(async move |this, cx| {
+            let result = load_resource(providers, uri.clone()).await;
+            let fallback = completion.clone();
+            if this
+                .update(cx, |this, cx| {
+                    let outcome = match result {
+                        Ok(OpenResource::File { uri, text, version })
+                            if this.target_is_live(&target, cx)
+                                && model.read(cx).revision() == revision =>
+                        {
+                            let replaced = model.update(cx, |model, _| {
+                                let len = model.text().len();
+                                model.replace(0..len, &text)
+                            });
+                            match replaced {
+                                Ok(_) => {
+                                    let loaded_revision = model.read(cx).revision();
+                                    if Self::documents(cx).update(cx, |documents, _| {
+                                        documents.finish_persistence(
+                                            target.document,
+                                            &model,
+                                            &capture,
+                                            title,
+                                            uri.clone(),
+                                            version,
+                                            loaded_revision,
+                                        )
+                                    }) {
+                                        this.status = format!("reloaded {uri}").into();
+                                        crate::host::protocol::CommandOutcome::Completed
+                                    } else {
+                                        crate::host::protocol::CommandOutcome::InvalidTarget
+                                    }
+                                }
+                                Err(error) => {
+                                    crate::host::protocol::CommandOutcome::HandlerFailure {
+                                        message: format!("{error:?}"),
+                                    }
+                                }
+                            }
+                        }
+                        Ok(_) => crate::host::protocol::CommandOutcome::InvalidTarget,
+                        Err(error) => crate::host::protocol::CommandOutcome::HandlerFailure {
+                            message: error.to_string(),
+                        },
+                    };
+                    this.finish_save_command(completion, outcome, cx);
+                    cx.notify();
+                })
+                .is_err()
+            {
+                fallback.complete(crate::host::protocol::CommandOutcome::InvalidTarget);
+            }
+        });
+        self.tasks.push(task);
     }
 
     pub(crate) fn start_open_dialog(
@@ -442,7 +919,7 @@ impl ProductShell {
                 cx.notify();
                 CommandOutcome::Completed
             }
-            Ok(OpenResource::File { uri, text }) => {
+            Ok(OpenResource::File { uri, text, version }) => {
                 let documents = Self::documents(cx);
                 let document =
                     if let Some(document) = documents.read(cx).document_for_resource(&uri) {
@@ -450,7 +927,13 @@ impl ProductShell {
                     } else {
                         let model = cx.new(|_| BufferModel::from_text(text));
                         documents.update(cx, |documents, _| {
-                            documents.create_persisted(resource_title(&uri), model, uri.clone(), 0)
+                            documents.create_persisted(
+                                resource_title(&uri),
+                                model,
+                                uri.clone(),
+                                0,
+                                version,
+                            )
                         })
                     };
                 self.present_open_document(document, target, replace_target, cx);
@@ -822,10 +1305,8 @@ impl ProductShell {
                 cx.quit();
                 CommandOutcome::Completed
             }
-            OPEN_COMMAND
-            | SAVE_COMMAND
-            | SAVE_AS_COMMAND
-            | UNDO_COMMAND
+            OPEN_COMMAND | SAVE_COMMAND | SAVE_AS_COMMAND => CommandOutcome::Unavailable,
+            UNDO_COMMAND
             | REDO_COMMAND
             | CUT_COMMAND
             | COPY_COMMAND
@@ -1355,15 +1836,16 @@ mod tests {
 
     use super::{
         ApplicationDocuments, ApplicationFileSystems, ApplicationOpenDialog,
-        ApplicationProductCommands, ApplicationWorkbenches, DocumentCollection, Entity,
-        NEW_COMMAND, OpenDialogFuture, OpenDialogOutcome, OpenRequest, OpenTarget,
-        ProductCommandDispatcher, ProductCommandSource, ProductOpenDialog, ProductShell, RefCell,
-        SAVE_COMMAND, SPLIT_HORIZONTAL_COMMAND, SplitDirection, Workbench, WorkbenchLayout,
-        create_untitled_document, product_filesystems,
+        ApplicationProductCommands, ApplicationSaveDialog, ApplicationWorkbenches, BufferModel,
+        DocumentCollection, Entity, NEW_COMMAND, OpenDialogFuture, OpenDialogOutcome, OpenRequest,
+        OpenTarget, ProductCommandDispatcher, ProductCommandSource, ProductOpenDialog,
+        ProductSaveDialog, ProductShell, RefCell, SAVE_AS_COMMAND, SAVE_COMMAND,
+        SPLIT_HORIZONTAL_COMMAND, SaveDialogFuture, SaveDialogOutcome, SplitDirection,
+        UNDO_COMMAND, Workbench, WorkbenchLayout, create_untitled_document, product_filesystems,
     };
     use crate::app::{
         documents::DocumentState,
-        filesystem::{FileSystemProviderRegistry, MemoryFileSystemProvider},
+        filesystem::{FileSystemProvider, FileSystemProviderRegistry, MemoryFileSystemProvider},
         resource::ResourceUri,
     };
 
@@ -1392,6 +1874,13 @@ mod tests {
     }
 
     fn memory_filesystems() -> Arc<FileSystemProviderRegistry> {
+        memory_filesystems_with_provider().0
+    }
+
+    fn memory_filesystems_with_provider() -> (
+        Arc<FileSystemProviderRegistry>,
+        Arc<MemoryFileSystemProvider>,
+    ) {
         let root = ResourceUri::parse("mem://product/").unwrap();
         let provider = Arc::new(MemoryFileSystemProvider::new(root).unwrap());
         provider
@@ -1410,8 +1899,8 @@ mod tests {
             .seed_directory(ResourceUri::parse("mem://product/src").unwrap())
             .unwrap();
         let mut providers = FileSystemProviderRegistry::new();
-        providers.register("mem", provider).unwrap();
-        Arc::new(providers)
+        providers.register("mem", provider.clone()).unwrap();
+        (Arc::new(providers), provider)
     }
 
     fn current_open_target(shell: &Entity<ProductShell>, cx: &gpui::App) -> OpenTarget {
@@ -1430,6 +1919,15 @@ mod tests {
 
     impl ProductOpenDialog for FixedOpenDialog {
         fn select(&self) -> OpenDialogFuture {
+            let outcome = self.0.clone();
+            Box::pin(async move { outcome })
+        }
+    }
+
+    struct FixedSaveDialog(SaveDialogOutcome);
+
+    impl ProductSaveDialog for FixedSaveDialog {
+        fn select(&self, _: gpui::SharedString) -> SaveDialogFuture {
             let outcome = self.0.clone();
             Box::pin(async move { outcome })
         }
@@ -1710,7 +2208,7 @@ mod tests {
         let execution = dispatcher.update(cx, |dispatcher, cx| {
             dispatcher.dispatch(
                 Command {
-                    name: SAVE_COMMAND.into(),
+                    name: UNDO_COMMAND.into(),
                     arguments: CommandArgumentValue::Null,
                 },
                 target,
@@ -1924,6 +2422,341 @@ mod tests {
             CommandOutcome::Cancelled
         );
         cx.read(|cx| assert_eq!(documents.read(cx).documents().count(), 1));
+    }
+
+    #[gpui::test]
+    async fn save_creates_a_destination_before_binding_it_as_persisted(cx: &mut TestAppContext) {
+        let documents = install_globals(cx);
+        let (filesystems, provider) = memory_filesystems_with_provider();
+        cx.set_global(ApplicationFileSystems(filesystems));
+        let uri = ResourceUri::parse("mem://product/created.txt").unwrap();
+        let model = cx.new(|_| BufferModel::from_text("created text"));
+        let document = documents.update(cx, |documents, _| {
+            documents.create_destination("created.txt", model.clone(), uri.clone())
+        });
+        let (shell, window_handle) = product_window(document, model, cx);
+        let target = cx
+            .update_window(window_handle, |_, window, cx| {
+                shell.update(cx, |shell, cx| {
+                    shell.focus_active_editor(window, cx);
+                    shell.capture_command_target(window, cx).unwrap()
+                })
+            })
+            .unwrap();
+        let execution = cx.update(|cx| {
+            let dispatcher = cx.global::<ApplicationProductCommands>().0.clone();
+            dispatcher.update(cx, |dispatcher, cx| {
+                dispatcher.dispatch(
+                    Command {
+                        name: SAVE_COMMAND.into(),
+                        arguments: CommandArgumentValue::Null,
+                    },
+                    target,
+                    cx,
+                )
+            })
+        });
+
+        assert_eq!(
+            execution.completion.await.unwrap(),
+            CommandOutcome::Completed
+        );
+        assert_eq!(
+            provider.read(uri.clone()).await.unwrap().bytes,
+            b"created text"
+        );
+        cx.read(|cx| {
+            let document = documents.read(cx).get(document).unwrap();
+            assert_eq!(document.resource_uri(), Some(&uri));
+            assert!(matches!(document.state(), DocumentState::Persisted { .. }));
+            assert!(!document.is_dirty(cx));
+        });
+    }
+
+    #[gpui::test]
+    async fn edit_racing_save_keeps_the_newer_revision_dirty(cx: &mut TestAppContext) {
+        let documents = install_globals(cx);
+        let (filesystems, provider) = memory_filesystems_with_provider();
+        cx.set_global(ApplicationFileSystems(filesystems));
+        let uri = ResourceUri::parse("mem://product/notes.txt").unwrap();
+        let opened = provider.read(uri.clone()).await.unwrap();
+        let model = cx.new(|_| BufferModel::from_text("loaded text"));
+        let document = documents.update(cx, |documents, _| {
+            documents.create_persisted("notes.txt", model.clone(), uri.clone(), 0, opened.version)
+        });
+        model.update(cx, |model, _| {
+            let len = model.text().len();
+            model.replace(0..len, "captured text").unwrap();
+        });
+        let captured_revision = model.read_with(cx, |model, _| model.revision());
+        let (shell, window_handle) = product_window(document, model.clone(), cx);
+        let (completion, receiver) = super::CommandCompletion::new();
+        cx.update_window(window_handle, |_, window, cx| {
+            let target = shell.update(cx, |shell, cx| {
+                shell.focus_active_editor(window, cx);
+                shell.capture_command_target(window, cx).unwrap()
+            });
+            shell.update(cx, |shell, cx| {
+                shell.start_save_command(false, target, completion, cx)
+            });
+            model.update(cx, |model, _| {
+                let len = model.text().len();
+                model.replace(0..len, "newer text").unwrap();
+            });
+        })
+        .unwrap();
+
+        assert_eq!(receiver.await.unwrap(), CommandOutcome::Completed);
+        assert_eq!(provider.read(uri).await.unwrap().bytes, b"captured text");
+        cx.read(|cx| {
+            let document = documents.read(cx).get(document).unwrap();
+            assert_eq!(
+                document.state().persisted_revision(),
+                Some(captured_revision)
+            );
+            assert!(document.is_dirty(cx));
+        });
+    }
+
+    #[gpui::test]
+    async fn save_completion_rejects_a_closed_captured_tab(cx: &mut TestAppContext) {
+        let documents = install_globals(cx);
+        let (filesystems, provider) = memory_filesystems_with_provider();
+        cx.set_global(ApplicationFileSystems(filesystems));
+        let uri = ResourceUri::parse("mem://product/notes.txt").unwrap();
+        let opened = provider.read(uri.clone()).await.unwrap();
+        let model = cx.new(|_| BufferModel::from_text("loaded text"));
+        let document = documents.update(cx, |documents, _| {
+            documents.create_persisted("notes.txt", model.clone(), uri.clone(), 0, opened.version)
+        });
+        model.update(cx, |model, _| model.replace(0..0, "changed ").unwrap());
+        let (shell, window_handle) = product_window(document, model.clone(), cx);
+        let (completion, receiver) = super::CommandCompletion::new();
+        cx.update_window(window_handle, |_, window, cx| {
+            shell.update(cx, |shell, cx| {
+                assert!(shell.split_pane(
+                    shell.workbench.read(cx).focused_pane_id().unwrap(),
+                    SplitDirection::Horizontal,
+                    window,
+                    cx,
+                ));
+            });
+            let target = shell.update(cx, |shell, cx| {
+                shell.capture_command_target(window, cx).unwrap()
+            });
+            shell.update(cx, |shell, cx| {
+                shell.start_save_command(false, target.clone(), completion, cx);
+                assert_eq!(
+                    shell.close_tab(target.pane, target.tab, target.document, window, cx),
+                    CommandOutcome::Completed
+                );
+            });
+        })
+        .unwrap();
+
+        assert_eq!(receiver.await.unwrap(), CommandOutcome::InvalidTarget);
+        cx.read(|cx| {
+            let document = documents.read(cx).get(document).unwrap();
+            assert_eq!(document.state().persisted_revision(), Some(0));
+            assert!(document.is_dirty(cx));
+        });
+    }
+
+    #[gpui::test]
+    async fn save_as_overwrites_the_selected_file_and_retargets_only_after_success(
+        cx: &mut TestAppContext,
+    ) {
+        let documents = install_globals(cx);
+        let (filesystems, provider) = memory_filesystems_with_provider();
+        cx.set_global(ApplicationFileSystems(filesystems));
+        let uri = ResourceUri::parse("mem://product/notes.txt").unwrap();
+        cx.set_global(ApplicationSaveDialog(Arc::new(FixedSaveDialog(
+            SaveDialogOutcome::Selected(uri.clone()),
+        ))));
+        let model = cx.new(|_| BufferModel::from_text("replacement"));
+        let document = cx.update(|cx| {
+            documents.update(cx, |documents, cx| {
+                documents.create_untitled("Untitled", model.clone(), cx)
+            })
+        });
+        let (shell, window_handle) = product_window(document, model, cx);
+        let target = cx
+            .update_window(window_handle, |_, window, cx| {
+                shell.update(cx, |shell, cx| {
+                    shell.focus_active_editor(window, cx);
+                    shell.capture_command_target(window, cx).unwrap()
+                })
+            })
+            .unwrap();
+        let execution = cx.update(|cx| {
+            let dispatcher = cx.global::<ApplicationProductCommands>().0.clone();
+            dispatcher.update(cx, |dispatcher, cx| {
+                dispatcher.dispatch(
+                    Command {
+                        name: SAVE_AS_COMMAND.into(),
+                        arguments: CommandArgumentValue::Null,
+                    },
+                    target,
+                    cx,
+                )
+            })
+        });
+
+        assert_eq!(
+            execution.completion.await.unwrap(),
+            CommandOutcome::Completed
+        );
+        assert_eq!(
+            provider.read(uri.clone()).await.unwrap().bytes,
+            b"replacement"
+        );
+        cx.read(|cx| {
+            let document = documents.read(cx).get(document).unwrap();
+            assert_eq!(document.resource_uri(), Some(&uri));
+            assert_eq!(document.title(), "notes.txt");
+        });
+    }
+
+    #[gpui::test]
+    async fn save_as_cancellation_preserves_untitled_identity(cx: &mut TestAppContext) {
+        let documents = install_globals(cx);
+        cx.set_global(ApplicationSaveDialog(Arc::new(FixedSaveDialog(
+            SaveDialogOutcome::Cancelled,
+        ))));
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        let (shell, window_handle) = product_window(document, model, cx);
+        let target = cx
+            .update_window(window_handle, |_, window, cx| {
+                shell.update(cx, |shell, cx| {
+                    shell.focus_active_editor(window, cx);
+                    shell.capture_command_target(window, cx).unwrap()
+                })
+            })
+            .unwrap();
+        let execution = cx.update(|cx| {
+            let dispatcher = cx.global::<ApplicationProductCommands>().0.clone();
+            dispatcher.update(cx, |dispatcher, cx| {
+                dispatcher.dispatch(
+                    Command {
+                        name: SAVE_AS_COMMAND.into(),
+                        arguments: CommandArgumentValue::Null,
+                    },
+                    target,
+                    cx,
+                )
+            })
+        });
+
+        assert_eq!(
+            execution.completion.await.unwrap(),
+            CommandOutcome::Cancelled
+        );
+        cx.read(|cx| {
+            assert!(matches!(
+                documents.read(cx).get(document).unwrap().state(),
+                DocumentState::Untitled { .. }
+            ));
+        });
+    }
+
+    #[gpui::test]
+    async fn save_as_failure_preserves_text_and_document_identity(cx: &mut TestAppContext) {
+        let documents = install_globals(cx);
+        cx.set_global(ApplicationFileSystems(memory_filesystems()));
+        cx.set_global(ApplicationSaveDialog(Arc::new(FixedSaveDialog(
+            SaveDialogOutcome::Selected(ResourceUri::parse("mem://product/src").unwrap()),
+        ))));
+        let model = cx.new(|_| BufferModel::from_text("unsaved text"));
+        let document = cx.update(|cx| {
+            documents.update(cx, |documents, cx| {
+                documents.create_untitled("Untitled", model.clone(), cx)
+            })
+        });
+        let (shell, window_handle) = product_window(document, model.clone(), cx);
+        let target = cx
+            .update_window(window_handle, |_, window, cx| {
+                shell.update(cx, |shell, cx| {
+                    shell.focus_active_editor(window, cx);
+                    shell.capture_command_target(window, cx).unwrap()
+                })
+            })
+            .unwrap();
+        let execution = cx.update(|cx| {
+            let dispatcher = cx.global::<ApplicationProductCommands>().0.clone();
+            dispatcher.update(cx, |dispatcher, cx| {
+                dispatcher.dispatch(
+                    Command {
+                        name: SAVE_AS_COMMAND.into(),
+                        arguments: CommandArgumentValue::Null,
+                    },
+                    target,
+                    cx,
+                )
+            })
+        });
+
+        assert!(matches!(
+            execution.completion.await.unwrap(),
+            CommandOutcome::HandlerFailure { .. }
+        ));
+        cx.read(|cx| {
+            let document = documents.read(cx).get(document).unwrap();
+            assert!(matches!(document.state(), DocumentState::Untitled { .. }));
+            assert_eq!(document.model(), &model);
+            assert_eq!(model.read(cx).text(), "unsaved text");
+        });
+    }
+
+    #[gpui::test]
+    async fn external_save_conflict_offers_reload_and_installs_the_external_version(
+        cx: &mut TestAppContext,
+    ) {
+        let documents = install_globals(cx);
+        let (filesystems, provider) = memory_filesystems_with_provider();
+        cx.set_global(ApplicationFileSystems(filesystems));
+        let uri = ResourceUri::parse("mem://product/notes.txt").unwrap();
+        let opened = provider.read(uri.clone()).await.unwrap();
+        let model = cx.new(|_| BufferModel::from_text("loaded text"));
+        let document = documents.update(cx, |documents, _| {
+            documents.create_persisted("notes.txt", model.clone(), uri.clone(), 0, opened.version)
+        });
+        model.update(cx, |model, _| model.replace(0..0, "local ").unwrap());
+        provider.seed_file(uri.clone(), b"external text").unwrap();
+        let (shell, window_handle) = product_window(document, model.clone(), cx);
+        let target = cx
+            .update_window(window_handle, |_, window, cx| {
+                shell.update(cx, |shell, cx| {
+                    shell.focus_active_editor(window, cx);
+                    shell.capture_command_target(window, cx).unwrap()
+                })
+            })
+            .unwrap();
+        let execution = cx.update(|cx| {
+            let dispatcher = cx.global::<ApplicationProductCommands>().0.clone();
+            dispatcher.update(cx, |dispatcher, cx| {
+                dispatcher.dispatch(
+                    Command {
+                        name: SAVE_COMMAND.into(),
+                        arguments: CommandArgumentValue::Null,
+                    },
+                    target,
+                    cx,
+                )
+            })
+        });
+        cx.run_until_parked();
+        assert!(cx.has_pending_prompt());
+        cx.simulate_prompt_answer("Reload");
+
+        assert_eq!(
+            execution.completion.await.unwrap(),
+            CommandOutcome::Completed
+        );
+        cx.read(|cx| {
+            assert_eq!(model.read(cx).text(), "external text");
+            assert!(!documents.read(cx).get(document).unwrap().is_dirty(cx));
+        });
     }
 
     #[gpui::test]

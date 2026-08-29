@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use gpui::{App, Entity, Global, SharedString};
 
+use super::filesystem::ResourceVersion;
 use super::model::BufferModel;
 use super::resource::ResourceUri;
 use super::search_results::SearchResultsController;
@@ -44,6 +45,7 @@ pub(crate) enum DocumentState {
     Persisted {
         uri: ResourceUri,
         persisted_revision: u64,
+        version: ResourceVersion,
     },
     /// Application-produced text with no persistence identity.
     ///
@@ -71,6 +73,19 @@ impl DocumentState {
             _ => None,
         }
     }
+
+    pub(crate) fn persisted_version(&self) -> Option<&ResourceVersion> {
+        match self {
+            Self::Persisted { version, .. } => Some(version),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PersistenceCapture {
+    generation: u64,
+    state: DocumentState,
 }
 
 pub(crate) struct Document {
@@ -83,6 +98,7 @@ pub(crate) struct Document {
         reason = "retained with the generated document as its semantic companion"
     )]
     search_results: Option<SearchResultsController>,
+    persistence_generation: u64,
 }
 
 impl Document {
@@ -172,6 +188,7 @@ impl DocumentCollection {
         model: Entity<BufferModel>,
         uri: ResourceUri,
         persisted_revision: u64,
+        version: ResourceVersion,
     ) -> DocumentId {
         self.insert_resource(
             title,
@@ -179,6 +196,7 @@ impl DocumentCollection {
             DocumentState::Persisted {
                 uri,
                 persisted_revision,
+                version,
             },
         )
     }
@@ -227,56 +245,66 @@ impl DocumentCollection {
         true
     }
 
-    /// Record exactly the revision whose bytes were successfully persisted.
-    ///
-    /// The model may have advanced while the write was pending. The captured
-    /// revision still becomes the persisted revision, leaving a racing edit dirty.
-    pub(crate) fn mark_persisted(
+    pub(crate) fn begin_persistence(
         &mut self,
         id: DocumentId,
         model: &Entity<BufferModel>,
-        uri: &ResourceUri,
-        revision: u64,
-    ) -> bool {
+    ) -> Option<PersistenceCapture> {
         let Some(document) = self.documents.iter_mut().find(|document| document.id == id) else {
-            return false;
+            return None;
         };
-        if &document.model != model || document.resource_uri() != Some(uri) {
-            return false;
+        if &document.model != model || matches!(document.state, DocumentState::Generated) {
+            return None;
         }
-        document.state = DocumentState::Persisted {
-            uri: uri.clone(),
-            persisted_revision: revision,
-        };
-        true
+        document.persistence_generation = document
+            .persistence_generation
+            .checked_add(1)
+            .expect("document persistence generation overflowed");
+        Some(PersistenceCapture {
+            generation: document.persistence_generation,
+            state: document.state.clone(),
+        })
     }
 
-    /// Bind an untitled document after its first successful persistence.
-    #[allow(
-        dead_code,
-        reason = "used after first persistence of an untitled document"
-    )]
-    pub(crate) fn bind_persisted(
+    /// Commit exactly the bytes and revision captured before asynchronous I/O.
+    ///
+    /// The document may have acquired newer edits, which remain dirty. Identity
+    /// changes and later persistence attempts invalidate this completion.
+    pub(crate) fn finish_persistence(
         &mut self,
         id: DocumentId,
         model: &Entity<BufferModel>,
+        capture: &PersistenceCapture,
         title: impl Into<SharedString>,
         uri: ResourceUri,
+        version: ResourceVersion,
         revision: u64,
     ) -> bool {
-        if self.resources.contains_key(&uri) {
+        if self
+            .resources
+            .get(&uri)
+            .is_some_and(|existing| *existing != id)
+        {
             return false;
         }
         let Some(document) = self.documents.iter_mut().find(|document| document.id == id) else {
             return false;
         };
-        if &document.model != model || !matches!(document.state, DocumentState::Untitled { .. }) {
+        if &document.model != model
+            || document.persistence_generation != capture.generation
+            || document.state != capture.state
+            || matches!(document.state, DocumentState::Generated)
+        {
             return false;
+        }
+        if let Some(old_uri) = document.resource_uri() {
+            self.resources.remove(old_uri);
         }
         document.title = title.into();
         document.state = DocumentState::Persisted {
             uri: uri.clone(),
             persisted_revision: revision,
+            version,
         };
         self.resources.insert(uri, id);
         true
@@ -318,6 +346,7 @@ impl DocumentCollection {
             model,
             state,
             search_results,
+            persistence_generation: 0,
         });
         id
     }
@@ -333,6 +362,10 @@ mod tests {
     use gpui::{AppContext, TestAppContext};
 
     use super::*;
+
+    fn version(value: u8) -> ResourceVersion {
+        ResourceVersion::new([value])
+    }
 
     #[gpui::test]
     fn application_global_owns_the_document_collection(cx: &mut TestAppContext) {
@@ -376,8 +409,13 @@ mod tests {
             cx.update(|cx| documents.create_untitled("Untitled", untitled.clone(), cx));
         let destination_id =
             documents.create_destination("new.txt", destination.clone(), destination_uri.clone());
-        let persisted_id =
-            documents.create_persisted("saved.txt", persisted.clone(), persisted_uri.clone(), 0);
+        let persisted_id = documents.create_persisted(
+            "saved.txt",
+            persisted.clone(),
+            persisted_uri.clone(),
+            0,
+            version(1),
+        );
         let generated_id = documents.create_generated("Generated", generated);
 
         assert!(matches!(
@@ -393,7 +431,18 @@ mod tests {
         assert!(cx.read(|cx| documents.get(untitled_id).unwrap().is_dirty(cx)));
         assert!(cx.read(|cx| documents.get(persisted_id).unwrap().is_dirty(cx)));
 
-        assert!(documents.mark_persisted(destination_id, &destination, &destination_uri, 0));
+        let capture = documents
+            .begin_persistence(destination_id, &destination)
+            .unwrap();
+        assert!(documents.finish_persistence(
+            destination_id,
+            &destination,
+            &capture,
+            "new.txt",
+            destination_uri.clone(),
+            version(2),
+            0,
+        ));
         assert!(matches!(
             documents.get(destination_id).unwrap().state(),
             DocumentState::Persisted { .. }
@@ -401,11 +450,14 @@ mod tests {
         assert!(!cx.read(|cx| documents.get(destination_id).unwrap().is_dirty(cx)));
 
         let untitled_revision = untitled.read_with(cx, |model, _| model.revision());
-        assert!(documents.bind_persisted(
+        let capture = documents.begin_persistence(untitled_id, &untitled).unwrap();
+        assert!(documents.finish_persistence(
             untitled_id,
             &untitled,
+            &capture,
             "untitled.txt",
             untitled_uri.clone(),
+            version(3),
             untitled_revision,
         ));
         let document = documents.get(untitled_id).unwrap();
@@ -424,7 +476,8 @@ mod tests {
         let mut documents = DocumentCollection::new();
 
         let first = documents.create_destination("notes.txt", first_model.clone(), uri.clone());
-        let duplicate = documents.create_persisted("notes.txt", duplicate_model, uri.clone(), 0);
+        let duplicate =
+            documents.create_persisted("notes.txt", duplicate_model, uri.clone(), 0, version(1));
 
         assert_eq!(first, duplicate);
         assert_eq!(documents.documents().count(), 1);
@@ -434,7 +487,18 @@ mod tests {
 
         let untitled =
             cx.update(|cx| documents.create_untitled("Untitled", untitled_model.clone(), cx));
-        assert!(!documents.bind_persisted(untitled, &untitled_model, "notes.txt", uri.clone(), 0));
+        let capture = documents
+            .begin_persistence(untitled, &untitled_model)
+            .unwrap();
+        assert!(!documents.finish_persistence(
+            untitled,
+            &untitled_model,
+            &capture,
+            "notes.txt",
+            uri.clone(),
+            version(2),
+            0,
+        ));
         assert!(matches!(
             documents.get(untitled).unwrap().state(),
             DocumentState::Untitled { .. }
@@ -447,6 +511,7 @@ mod tests {
             cx.new(|_| BufferModel::from_text("reopened")),
             uri,
             0,
+            version(3),
         );
         assert_ne!(reopened, first);
     }
@@ -454,15 +519,32 @@ mod tests {
     #[gpui::test]
     fn stale_persistence_completion_cannot_change_document_state(cx: &mut TestAppContext) {
         let uri = ResourceUri::parse("mem://workspace/notes.txt").unwrap();
-        let other_uri = ResourceUri::parse("mem://workspace/other.txt").unwrap();
         let model = cx.new(|_| BufferModel::from_text("notes"));
         let other_model = cx.new(|_| BufferModel::from_text("other"));
         let mut documents = DocumentCollection::new();
-        let id = documents.create_persisted("notes.txt", model.clone(), uri.clone(), 0);
+        let id = documents.create_persisted("notes.txt", model.clone(), uri.clone(), 0, version(1));
 
-        assert!(!documents.mark_persisted(id, &other_model, &uri, 1));
-        assert!(!documents.mark_persisted(id, &model, &other_uri, 1));
-        assert!(!documents.mark_persisted(DocumentId(u64::MAX), &model, &uri, 1));
+        assert!(documents.begin_persistence(id, &other_model).is_none());
+        let stale = documents.begin_persistence(id, &model).unwrap();
+        let current = documents.begin_persistence(id, &model).unwrap();
+        assert!(!documents.finish_persistence(
+            id,
+            &model,
+            &stale,
+            "notes.txt",
+            uri.clone(),
+            version(2),
+            1,
+        ));
+        assert!(!documents.finish_persistence(
+            DocumentId(u64::MAX),
+            &model,
+            &current,
+            "notes.txt",
+            uri.clone(),
+            version(2),
+            1,
+        ));
         assert_eq!(
             documents.get(id).unwrap().state().persisted_revision(),
             Some(0)
@@ -470,17 +552,50 @@ mod tests {
     }
 
     #[gpui::test]
+    fn save_as_retargets_resource_identity_only_on_a_current_completion(cx: &mut TestAppContext) {
+        let old_uri = ResourceUri::parse("mem://workspace/old.txt").unwrap();
+        let new_uri = ResourceUri::parse("mem://workspace/new.txt").unwrap();
+        let model = cx.new(|_| BufferModel::from_text("notes"));
+        let mut documents = DocumentCollection::new();
+        let id =
+            documents.create_persisted("old.txt", model.clone(), old_uri.clone(), 0, version(1));
+        let capture = documents.begin_persistence(id, &model).unwrap();
+
+        assert!(documents.finish_persistence(
+            id,
+            &model,
+            &capture,
+            "new.txt",
+            new_uri.clone(),
+            version(2),
+            0,
+        ));
+        assert_eq!(documents.document_for_resource(&old_uri), None);
+        assert_eq!(documents.document_for_resource(&new_uri), Some(id));
+        assert_eq!(documents.get(id).unwrap().title(), "new.txt");
+    }
+
+    #[gpui::test]
     fn edit_racing_save_keeps_persisted_document_dirty(cx: &mut TestAppContext) {
         let uri = ResourceUri::parse("mem://workspace/notes.txt").unwrap();
         let model = cx.new(|_| BufferModel::from_text("notes"));
         let mut documents = DocumentCollection::new();
-        let id = documents.create_persisted("notes.txt", model.clone(), uri.clone(), 0);
+        let id = documents.create_persisted("notes.txt", model.clone(), uri.clone(), 0, version(1));
 
         model.update(cx, |model, _| model.replace(0..0, "first ").unwrap());
         let captured_revision = model.read_with(cx, |model, _| model.revision());
         model.update(cx, |model, _| model.replace(0..0, "second ").unwrap());
 
-        assert!(documents.mark_persisted(id, &model, &uri, captured_revision));
+        let capture = documents.begin_persistence(id, &model).unwrap();
+        assert!(documents.finish_persistence(
+            id,
+            &model,
+            &capture,
+            "notes.txt",
+            uri.clone(),
+            version(2),
+            captured_revision,
+        ));
         let document = documents.get(id).unwrap();
         assert_eq!(
             document.state().persisted_revision(),

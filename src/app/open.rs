@@ -5,6 +5,7 @@ use std::sync::Arc;
 use super::{
     filesystem::{
         FileSystemProviderRegistry, ResourceEntry, ResourceError, ResourceKind, ResourceStat,
+        ResourceVersion,
     },
     resource::ResourceUri,
 };
@@ -12,7 +13,11 @@ use super::{
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum OpenResource {
     Missing(ResourceUri),
-    File { uri: ResourceUri, text: String },
+    File {
+        uri: ResourceUri,
+        text: String,
+        version: ResourceVersion,
+    },
     Directory(ResourceUri),
 }
 
@@ -47,10 +52,14 @@ pub(crate) async fn load_resource(
         ResourceStat::Missing => Ok(OpenResource::Missing(uri)),
         ResourceStat::Directory => Ok(OpenResource::Directory(uri)),
         ResourceStat::File => {
-            let bytes = provider.read(uri.clone()).await?;
-            let text = String::from_utf8(bytes)
+            let file = provider.read(uri.clone()).await?;
+            let text = String::from_utf8(file.bytes)
                 .map_err(|_| OpenResourceError::InvalidUtf8 { uri: uri.clone() })?;
-            Ok(OpenResource::File { uri, text })
+            Ok(OpenResource::File {
+                uri,
+                text,
+                version: file.version,
+            })
         }
     }
 }
@@ -112,6 +121,15 @@ mod tests {
             OpenResource::File {
                 uri: ResourceUri::parse("mem://open/notes.txt").unwrap(),
                 text: "hello".into(),
+                version: match pollster::block_on(
+                    providers
+                        .provider(&ResourceUri::parse("mem://open/notes.txt").unwrap())
+                        .unwrap()
+                        .read(ResourceUri::parse("mem://open/notes.txt").unwrap()),
+                ) {
+                    Ok(file) => file.version,
+                    Err(error) => panic!("read failed: {error}"),
+                },
             }
         );
         assert_eq!(

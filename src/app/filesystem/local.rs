@@ -1,4 +1,5 @@
 use std::{
+    io::Write,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -6,8 +7,8 @@ use std::{
 use url::Url;
 
 use super::{
-    FileSystemProvider, ProviderFuture, ResourceEntry, ResourceError, ResourceKind, ResourceStat,
-    validate_and_normalize_uri,
+    FileSystemProvider, ProviderFuture, ResourceEntry, ResourceError, ResourceFile, ResourceKind,
+    ResourceStat, ResourceVersion, validate_and_normalize_uri,
 };
 use crate::app::resource::ResourceUri;
 
@@ -18,6 +19,7 @@ use crate::app::resource::ResourceUri;
 pub(crate) struct LocalFileSystemProvider {
     root: Option<ResourceUri>,
     runtime: Arc<tokio::runtime::Runtime>,
+    mutation_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl LocalFileSystemProvider {
@@ -40,6 +42,7 @@ impl LocalFileSystemProvider {
         Ok(Self {
             root: Some(root),
             runtime,
+            mutation_lock: Arc::new(tokio::sync::Mutex::new(())),
         })
     }
 
@@ -49,6 +52,7 @@ impl LocalFileSystemProvider {
         Self {
             root: None,
             runtime,
+            mutation_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
@@ -185,7 +189,7 @@ impl FileSystemProvider for LocalFileSystemProvider {
         })
     }
 
-    fn read(&self, uri: ResourceUri) -> ProviderFuture<'_, Vec<u8>> {
+    fn read(&self, uri: ResourceUri) -> ProviderFuture<'_, ResourceFile> {
         let uri = match self.normalize_scoped(uri) {
             Ok(uri) => uri,
             Err(error) => return Box::pin(async move { Err(error) }),
@@ -195,21 +199,30 @@ impl FileSystemProvider for LocalFileSystemProvider {
             Err(error) => return Box::pin(async move { Err(error) }),
         };
         self.spawn("read task", async move {
-            let metadata = metadata(&path, &uri, "stat file").await?;
-            if !metadata.is_file() {
+            let initial_metadata = metadata(&path, &uri, "stat file").await?;
+            if !initial_metadata.is_file() {
                 return Err(ResourceError::WrongKind {
                     uri,
                     expected: ResourceKind::File,
                     actual: ResourceKind::Directory,
                 });
             }
-            tokio::fs::read(path)
+            let before = resource_version(&initial_metadata)?;
+            let bytes = tokio::fs::read(&path)
                 .await
-                .map_err(|error| map_io("read", &uri, error))
+                .map_err(|error| map_io("read", &uri, error))?;
+            let after = resource_version(&metadata(&path, &uri, "stat file").await?)?;
+            if before != after {
+                return Err(ResourceError::Conflict { uri });
+            }
+            Ok(ResourceFile {
+                bytes,
+                version: after,
+            })
         })
     }
 
-    fn write(&self, uri: ResourceUri, bytes: Vec<u8>) -> ProviderFuture<'_, ()> {
+    fn create(&self, uri: ResourceUri, bytes: Vec<u8>) -> ProviderFuture<'_, ResourceVersion> {
         let uri = match self.normalize_scoped(uri) {
             Ok(uri) => uri,
             Err(error) => return Box::pin(async move { Err(error) }),
@@ -218,18 +231,44 @@ impl FileSystemProvider for LocalFileSystemProvider {
             Ok(path) => path,
             Err(error) => return Box::pin(async move { Err(error) }),
         };
-        self.spawn("write task", async move {
-            let metadata = metadata(&path, &uri, "stat file").await?;
-            if !metadata.is_file() {
+        let mutation_lock = self.mutation_lock.clone();
+        self.spawn("create task", async move {
+            let _guard = mutation_lock.lock().await;
+            atomic_create(&path, &uri, bytes)?;
+            resource_version(&metadata(&path, &uri, "stat created file").await?)
+        })
+    }
+
+    fn replace(
+        &self,
+        uri: ResourceUri,
+        expected: ResourceVersion,
+        bytes: Vec<u8>,
+    ) -> ProviderFuture<'_, ResourceVersion> {
+        let uri = match self.normalize_scoped(uri) {
+            Ok(uri) => uri,
+            Err(error) => return Box::pin(async move { Err(error) }),
+        };
+        let path = match self.uri_to_path(&uri) {
+            Ok(path) => path,
+            Err(error) => return Box::pin(async move { Err(error) }),
+        };
+        let mutation_lock = self.mutation_lock.clone();
+        self.spawn("replace task", async move {
+            let _guard = mutation_lock.lock().await;
+            let current = metadata(&path, &uri, "stat file").await?;
+            if !current.is_file() {
                 return Err(ResourceError::WrongKind {
                     uri,
                     expected: ResourceKind::File,
                     actual: ResourceKind::Directory,
                 });
             }
-            tokio::fs::write(path, bytes)
-                .await
-                .map_err(|error| map_io("write", &uri, error))
+            if resource_version(&current)? != expected {
+                return Err(ResourceError::Conflict { uri });
+            }
+            atomic_replace(&path, &uri, &expected, &current, bytes)?;
+            resource_version(&metadata(&path, &uri, "stat replaced file").await?)
         })
     }
 
@@ -257,6 +296,86 @@ impl FileSystemProvider for LocalFileSystemProvider {
             }
         })
     }
+}
+
+fn resource_version(metadata: &std::fs::Metadata) -> Result<ResourceVersion, ResourceError> {
+    let modified = metadata
+        .modified()
+        .map_err(|error| ResourceError::io("read file metadata", error))?
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|error| ResourceError::io("read file metadata", error))?;
+    let mut bytes = Vec::with_capacity(20);
+    bytes.extend_from_slice(&metadata.len().to_le_bytes());
+    bytes.extend_from_slice(&modified.as_secs().to_le_bytes());
+    bytes.extend_from_slice(&modified.subsec_nanos().to_le_bytes());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        bytes.extend_from_slice(&metadata.dev().to_le_bytes());
+        bytes.extend_from_slice(&metadata.ino().to_le_bytes());
+    }
+    Ok(ResourceVersion::new(bytes))
+}
+
+fn temporary_file(
+    path: &Path,
+    uri: &ResourceUri,
+) -> Result<tempfile::NamedTempFile, ResourceError> {
+    let parent = path.parent().ok_or_else(|| ResourceError::InvalidUri {
+        uri: uri.to_string(),
+        reason: "file destination has no parent directory".into(),
+    })?;
+    tempfile::Builder::new()
+        .prefix(".knot-save-")
+        .tempfile_in(parent)
+        .map_err(|error| map_io("create temporary sibling", uri, error))
+}
+
+fn write_temporary(
+    temporary: &mut tempfile::NamedTempFile,
+    uri: &ResourceUri,
+    bytes: Vec<u8>,
+) -> Result<(), ResourceError> {
+    temporary
+        .write_all(&bytes)
+        .and_then(|_| temporary.as_file().sync_all())
+        .map_err(|error| map_io("write temporary sibling", uri, error))
+}
+
+fn atomic_create(path: &Path, uri: &ResourceUri, bytes: Vec<u8>) -> Result<(), ResourceError> {
+    let mut temporary = temporary_file(path, uri)?;
+    write_temporary(&mut temporary, uri, bytes)?;
+    temporary.persist_noclobber(path).map_err(|error| {
+        if error.error.kind() == std::io::ErrorKind::AlreadyExists {
+            ResourceError::AlreadyExists { uri: uri.clone() }
+        } else {
+            map_io("install new file", uri, error.error)
+        }
+    })?;
+    Ok(())
+}
+
+fn atomic_replace(
+    path: &Path,
+    uri: &ResourceUri,
+    expected: &ResourceVersion,
+    current: &std::fs::Metadata,
+    bytes: Vec<u8>,
+) -> Result<(), ResourceError> {
+    let mut temporary = temporary_file(path, uri)?;
+    temporary
+        .as_file()
+        .set_permissions(current.permissions())
+        .map_err(|error| map_io("preserve file permissions", uri, error))?;
+    write_temporary(&mut temporary, uri, bytes)?;
+    let latest = std::fs::metadata(path).map_err(|error| map_io("stat file", uri, error))?;
+    if resource_version(&latest)? != *expected {
+        return Err(ResourceError::Conflict { uri: uri.clone() });
+    }
+    temporary
+        .persist(path)
+        .map_err(|error| map_io("replace file", uri, error.error))?;
+    Ok(())
 }
 
 pub(crate) fn normalize_file_uri(uri: ResourceUri) -> Result<ResourceUri, ResourceError> {
@@ -307,7 +426,7 @@ mod tests {
     }
 
     #[test]
-    fn local_folder_supports_normalize_enumerate_read_write_and_stat() {
+    fn local_folder_supports_normalize_enumerate_read_replace_and_stat() {
         let temporary = tempfile::tempdir().unwrap();
         fs::create_dir(temporary.path().join("src")).unwrap();
         fs::write(temporary.path().join("src/lib.rs"), b"old").unwrap();
@@ -321,8 +440,9 @@ mod tests {
             run(provider.stat(file.clone())).unwrap(),
             ResourceStat::File
         );
-        assert_eq!(run(provider.read(file.clone())).unwrap(), b"old");
-        run(provider.write(file.clone(), b"new".to_vec())).unwrap();
+        let old = run(provider.read(file.clone())).unwrap();
+        assert_eq!(old.bytes, b"old");
+        run(provider.replace(file.clone(), old.version, b"new".to_vec())).unwrap();
         assert_eq!(
             fs::read(temporary.path().join("src/lib.rs")).unwrap(),
             b"new"
@@ -362,6 +482,6 @@ mod tests {
         symlink(outside.path().join("target"), root.path().join("link")).unwrap();
         let provider = LocalFileSystemProvider::new(root.path(), io_runtime()).unwrap();
         let link = provider.path_to_uri(&root.path().join("link")).unwrap();
-        assert_eq!(run(provider.read(link)).unwrap(), b"outside");
+        assert_eq!(run(provider.read(link)).unwrap().bytes, b"outside");
     }
 }

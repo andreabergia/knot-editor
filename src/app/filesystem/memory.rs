@@ -1,8 +1,14 @@
-use std::{collections::BTreeMap, sync::RwLock};
+use std::{
+    collections::BTreeMap,
+    sync::{
+        RwLock,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 
 use super::{
-    FileSystemProvider, ProviderFuture, ResourceEntry, ResourceError, ResourceKind, ResourceStat,
-    child_uri, validate_and_normalize_uri,
+    FileSystemProvider, ProviderFuture, ResourceEntry, ResourceError, ResourceFile, ResourceKind,
+    ResourceStat, ResourceVersion, child_uri, validate_and_normalize_uri,
 };
 use crate::app::resource::ResourceUri;
 
@@ -12,13 +18,14 @@ struct MemoryDirectory {
 }
 
 enum MemoryNode {
-    File(Vec<u8>),
+    File(ResourceFile),
     Directory(MemoryDirectory),
 }
 
 pub(crate) struct MemoryFileSystemProvider {
     root: ResourceUri,
     hierarchy: RwLock<MemoryDirectory>,
+    next_version: AtomicU64,
 }
 
 impl MemoryFileSystemProvider {
@@ -33,6 +40,7 @@ impl MemoryFileSystemProvider {
         Ok(Self {
             root,
             hierarchy: RwLock::new(MemoryDirectory::default()),
+            next_version: AtomicU64::new(1),
         })
     }
 
@@ -81,8 +89,19 @@ impl MemoryFileSystemProvider {
         }
         directory
             .children
-            .insert(name, MemoryNode::File(bytes.into()));
+            .insert(name, MemoryNode::File(self.file(bytes.into())));
         Ok(())
+    }
+
+    fn file(&self, bytes: Vec<u8>) -> ResourceFile {
+        ResourceFile {
+            bytes,
+            version: ResourceVersion::new(
+                self.next_version
+                    .fetch_add(1, Ordering::Relaxed)
+                    .to_le_bytes(),
+            ),
+        }
     }
 
     fn normalize_scoped(&self, uri: ResourceUri) -> Result<ResourceUri, ResourceError> {
@@ -137,7 +156,7 @@ impl FileSystemProvider for MemoryFileSystemProvider {
         })
     }
 
-    fn read(&self, uri: ResourceUri) -> ProviderFuture<'_, Vec<u8>> {
+    fn read(&self, uri: ResourceUri) -> ProviderFuture<'_, ResourceFile> {
         Box::pin(async move {
             let uri = self.normalize_scoped(uri)?;
             let path = relative_segments(&self.root, &uri);
@@ -146,7 +165,7 @@ impl FileSystemProvider for MemoryFileSystemProvider {
                 .read()
                 .map_err(|error| ResourceError::io("lock memory provider", error))?;
             match find_node(&hierarchy, &path) {
-                Some(MemoryNode::File(bytes)) => Ok(bytes.clone()),
+                Some(MemoryNode::File(file)) => Ok(file.clone()),
                 Some(MemoryNode::Directory(_)) => Err(ResourceError::WrongKind {
                     uri,
                     expected: ResourceKind::File,
@@ -162,7 +181,38 @@ impl FileSystemProvider for MemoryFileSystemProvider {
         })
     }
 
-    fn write(&self, uri: ResourceUri, bytes: Vec<u8>) -> ProviderFuture<'_, ()> {
+    fn create(&self, uri: ResourceUri, bytes: Vec<u8>) -> ProviderFuture<'_, ResourceVersion> {
+        Box::pin(async move {
+            let uri = self.normalize_scoped(uri)?;
+            let mut path = relative_segments(&self.root, &uri);
+            let Some(name) = path.pop() else {
+                return Err(ResourceError::WrongKind {
+                    uri,
+                    expected: ResourceKind::File,
+                    actual: ResourceKind::Directory,
+                });
+            };
+            let mut hierarchy = self
+                .hierarchy
+                .write()
+                .map_err(|error| ResourceError::io("lock memory provider", error))?;
+            let directory = directory_mut(&mut hierarchy, &path, &uri)?;
+            if directory.children.contains_key(&name) {
+                return Err(ResourceError::AlreadyExists { uri });
+            }
+            let file = self.file(bytes);
+            let version = file.version.clone();
+            directory.children.insert(name, MemoryNode::File(file));
+            Ok(version)
+        })
+    }
+
+    fn replace(
+        &self,
+        uri: ResourceUri,
+        expected: ResourceVersion,
+        bytes: Vec<u8>,
+    ) -> ProviderFuture<'_, ResourceVersion> {
         Box::pin(async move {
             let uri = self.normalize_scoped(uri)?;
             let path = relative_segments(&self.root, &uri);
@@ -171,16 +221,12 @@ impl FileSystemProvider for MemoryFileSystemProvider {
                 .write()
                 .map_err(|error| ResourceError::io("lock memory provider", error))?;
             match find_node_mut(&mut hierarchy, &path) {
-                Some(MemoryNode::File(contents)) => {
-                    *contents = bytes;
-                    Ok(())
+                Some(MemoryNode::File(file)) if file.version == expected => {
+                    *file = self.file(bytes);
+                    Ok(file.version.clone())
                 }
+                Some(MemoryNode::File(_)) => Err(ResourceError::Conflict { uri }),
                 Some(MemoryNode::Directory(_)) => Err(ResourceError::WrongKind {
-                    uri,
-                    expected: ResourceKind::File,
-                    actual: ResourceKind::Directory,
-                }),
-                None if path.is_empty() => Err(ResourceError::WrongKind {
                     uri,
                     expected: ResourceKind::File,
                     actual: ResourceKind::Directory,
@@ -337,9 +383,10 @@ mod tests {
             run(provider.stat(file.clone())).unwrap(),
             ResourceStat::File
         );
-        assert_eq!(run(provider.read(file.clone())).unwrap(), b"old");
-        run(provider.write(file.clone(), b"new".to_vec())).unwrap();
-        assert_eq!(run(provider.read(file.clone())).unwrap(), b"new");
+        let old = run(provider.read(file.clone())).unwrap();
+        assert_eq!(old.bytes, b"old");
+        run(provider.replace(file.clone(), old.version, b"new".to_vec())).unwrap();
+        assert_eq!(run(provider.read(file.clone())).unwrap().bytes, b"new");
         assert_eq!(
             run(provider.enumerate(directory)).unwrap(),
             vec![ResourceEntry {
