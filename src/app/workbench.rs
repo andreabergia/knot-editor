@@ -34,6 +34,13 @@ impl TabId {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct WorkbenchTabSnapshot {
+    pub(crate) pane_id: PaneId,
+    pub(crate) tab_id: TabId,
+    pub(crate) document_id: DocumentId,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SplitDirection {
     Horizontal,
     Vertical,
@@ -229,6 +236,28 @@ impl Workbench {
 
     pub(crate) fn focused_pane(&self) -> Option<&Pane> {
         self.focused_pane.and_then(|id| self.pane(id))
+    }
+
+    /// Capture tab identities in layout pane order and then tab order.
+    pub(crate) fn tab_snapshots(&self) -> Vec<WorkbenchTabSnapshot> {
+        let mut pane_ids = Vec::new();
+        if let Some(layout) = &self.layout {
+            layout.pane_ids(&mut pane_ids);
+        }
+        pane_ids
+            .into_iter()
+            .flat_map(|pane_id| {
+                self.pane(pane_id)
+                    .expect("layout pane must belong to the workbench")
+                    .tabs
+                    .iter()
+                    .map(move |tab| WorkbenchTabSnapshot {
+                        pane_id,
+                        tab_id: tab.id,
+                        document_id: tab.document_id,
+                    })
+            })
+            .collect()
     }
 
     pub(crate) fn focus_pane(&mut self, pane_id: PaneId) -> bool {
@@ -502,6 +531,60 @@ mod tests {
             assert!(workbench.activate_tab(pane_id, first_tab));
             assert_eq!(workbench.focused_pane().unwrap().active_tab_id(), first_tab);
             assert!(!workbench.activate_tab(PaneId(u64::MAX), first_tab));
+        });
+    }
+
+    #[gpui::test]
+    fn tab_snapshots_follow_layout_and_tab_order(cx: &mut TestAppContext) {
+        let first_model = cx.new(|_| BufferModel::from_text("first"));
+        let second_model = cx.new(|_| BufferModel::from_text("second"));
+        let third_model = cx.new(|_| BufferModel::from_text("third"));
+        let mut documents = DocumentCollection::new();
+        let first_document = cx.update(|cx| documents.create_untitled("First", first_model, cx));
+        let second_document = cx.update(|cx| documents.create_untitled("Second", second_model, cx));
+        let third_document = cx.update(|cx| documents.create_untitled("Third", third_model, cx));
+        let workbench = cx.new(|cx| Workbench::new(documents.get(first_document).unwrap(), cx));
+
+        workbench.update(cx, |workbench, cx| {
+            let first_pane = workbench.focused_pane_id().unwrap();
+            let first_tab = workbench.focused_pane().unwrap().active_tab_id();
+            let second_tab = workbench
+                .open_tab(first_pane, documents.get(second_document).unwrap(), cx)
+                .unwrap();
+            assert!(workbench.activate_tab(first_pane, first_tab));
+            let preceding_pane = workbench
+                .split_focused(SplitDirection::Vertical, SplitPlacement::Before, cx)
+                .unwrap();
+            let preceding_first_tab = workbench.focused_pane().unwrap().active_tab_id();
+            let preceding_second_tab = workbench
+                .open_tab(preceding_pane, documents.get(third_document).unwrap(), cx)
+                .unwrap();
+
+            assert_eq!(
+                workbench.tab_snapshots(),
+                vec![
+                    WorkbenchTabSnapshot {
+                        pane_id: preceding_pane,
+                        tab_id: preceding_first_tab,
+                        document_id: first_document,
+                    },
+                    WorkbenchTabSnapshot {
+                        pane_id: preceding_pane,
+                        tab_id: preceding_second_tab,
+                        document_id: third_document,
+                    },
+                    WorkbenchTabSnapshot {
+                        pane_id: first_pane,
+                        tab_id: first_tab,
+                        document_id: first_document,
+                    },
+                    WorkbenchTabSnapshot {
+                        pane_id: first_pane,
+                        tab_id: second_tab,
+                        document_id: second_document,
+                    },
+                ]
+            );
         });
     }
 
