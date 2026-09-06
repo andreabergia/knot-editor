@@ -116,6 +116,18 @@ document closure but does not remove the application-owned document itself.
 This keeps window-local presentation mutation separate from application-level
 document and confirmation coordination.
 
+Protected closure is application-coordinated across tab, window, and quit
+scopes. It snapshots exact view identities, determines which dirty documents
+would lose their final application-wide view, deduplicates them, and presents
+native Save / Don't Save / Cancel alerts serially. Save reuses the ordinary
+captured persistence path. View and window mutation is deferred until every
+decision succeeds, then the snapshot and approved document revisions are
+revalidated before one scope transition is applied. Cancellation, persistence
+failure, racing edits, stale views, and concurrent closure attempts leave the
+presentation intact. Native window-close requests are vetoed until this flow
+authorizes programmatic removal; Quit enters the same flow before asking gpui
+to terminate.
+
 Each native product window renders one workbench recursively as tabbed panes
 and horizontal or vertical splits. A shell-wide weak workbench registry counts
 document views across windows without owning window lifetime. Clean final-tab

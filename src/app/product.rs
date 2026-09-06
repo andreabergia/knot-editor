@@ -2,6 +2,7 @@
 
 use std::{
     cell::RefCell,
+    collections::{HashMap, HashSet},
     future::Future,
     path::Path,
     pin::Pin,
@@ -41,6 +42,56 @@ use super::{
 struct ApplicationWorkbenches(RefCell<Vec<WeakEntity<Workbench>>>);
 
 impl Global for ApplicationWorkbenches {}
+
+struct ApplicationProtectedClosure(RefCell<bool>);
+
+impl Global for ApplicationProtectedClosure {}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(crate) enum ProtectedCloseKind {
+    Tab,
+    Window,
+    Quit,
+}
+
+#[derive(Clone)]
+struct ProtectedCloseRequest {
+    kind: ProtectedCloseKind,
+    origin: ProductCommandTarget,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+struct ProtectedViewKey {
+    window: AnyWindowHandle,
+    pane: PaneId,
+    tab: TabId,
+    document: DocumentId,
+}
+
+#[derive(Clone)]
+struct ProtectedView {
+    key: ProtectedViewKey,
+    target: ProductCommandTarget,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CloseApprovalKind {
+    Saved,
+    Discarded,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct CloseApproval {
+    document: DocumentId,
+    revision: u64,
+    kind: CloseApprovalKind,
+}
+
+struct ProtectedClosePlan {
+    request: ProtectedCloseRequest,
+    scope: Vec<ProtectedViewKey>,
+    prompts: Vec<(DocumentId, ProductCommandTarget)>,
+}
 
 struct ApplicationFileSystems(Arc<FileSystemProviderRegistry>);
 
@@ -167,6 +218,28 @@ impl ProductShell {
         })
     }
 
+    fn window_close_target(
+        &mut self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Option<ProductCommandTarget> {
+        if let Some(target) = self.capture_command_target(window, cx) {
+            return Some(target);
+        }
+        let workbench = self.workbench.read(cx);
+        let pane = workbench.panes().first()?;
+        let tab = pane.tabs().first()?;
+        Some(ProductCommandTarget {
+            window: window.window_handle(),
+            shell: cx.entity().downgrade(),
+            workbench: self.workbench.downgrade(),
+            pane: pane.id(),
+            tab: tab.id(),
+            document: tab.document_id(),
+            focus: tab.editor().focus_handle(cx).downgrade(),
+        })
+    }
+
     fn dispatch_command(
         &mut self,
         command: crate::host::protocol::Command,
@@ -245,6 +318,133 @@ impl ProductShell {
 
     fn filesystems(cx: &App) -> Arc<FileSystemProviderRegistry> {
         cx.global::<ApplicationFileSystems>().0.clone()
+    }
+
+    fn protected_closure_is_active(cx: &App) -> bool {
+        *cx.global::<ApplicationProtectedClosure>().0.borrow()
+    }
+
+    fn set_protected_closure_active(active: bool, cx: &App) {
+        *cx.global::<ApplicationProtectedClosure>().0.borrow_mut() = active;
+    }
+
+    fn collect_product_views(cx: &mut App) -> Vec<ProtectedView> {
+        let mut views = Vec::new();
+        for window_handle in cx.windows() {
+            let window_views = cx
+                .update_window(window_handle, |_, window, cx| {
+                    let shell = window.root::<ProductShell>().flatten()?;
+                    let workbench = shell.read(cx).workbench.clone();
+                    let snapshots = workbench.read(cx).tab_snapshots();
+                    Some(
+                        snapshots
+                            .into_iter()
+                            .filter_map(|snapshot| {
+                                let editor = {
+                                    let workbench = workbench.read(cx);
+                                    workbench
+                                        .pane(snapshot.pane_id)
+                                        .and_then(|pane| {
+                                            pane.tabs()
+                                                .iter()
+                                                .find(|tab| tab.id() == snapshot.tab_id)
+                                        })?
+                                        .editor()
+                                        .clone()
+                                };
+                                Some(ProtectedView {
+                                    key: ProtectedViewKey {
+                                        window: window_handle,
+                                        pane: snapshot.pane_id,
+                                        tab: snapshot.tab_id,
+                                        document: snapshot.document_id,
+                                    },
+                                    target: ProductCommandTarget {
+                                        window: window_handle,
+                                        shell: shell.downgrade(),
+                                        workbench: workbench.downgrade(),
+                                        pane: snapshot.pane_id,
+                                        tab: snapshot.tab_id,
+                                        document: snapshot.document_id,
+                                        focus: editor.focus_handle(cx).downgrade(),
+                                    },
+                                })
+                            })
+                            .collect::<Vec<_>>(),
+                    )
+                })
+                .ok()
+                .flatten()
+                .unwrap_or_default();
+            views.extend(window_views);
+        }
+        views
+    }
+
+    fn build_protected_close_plan(
+        request: ProtectedCloseRequest,
+        cx: &mut App,
+    ) -> Result<ProtectedClosePlan, crate::host::protocol::CommandOutcome> {
+        use crate::host::protocol::CommandOutcome;
+
+        let views = Self::collect_product_views(cx);
+        let origin_key = ProtectedViewKey {
+            window: request.origin.window,
+            pane: request.origin.pane,
+            tab: request.origin.tab,
+            document: request.origin.document,
+        };
+        if !views.iter().any(|view| view.key == origin_key) {
+            return Err(CommandOutcome::InvalidTarget);
+        }
+        let scoped = views
+            .iter()
+            .filter(|view| match request.kind {
+                ProtectedCloseKind::Tab => view.key == origin_key,
+                ProtectedCloseKind::Window => view.key.window == request.origin.window,
+                ProtectedCloseKind::Quit => true,
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let scope = scoped.iter().map(|view| view.key).collect::<Vec<_>>();
+        let total_counts = views.iter().fold(HashMap::new(), |mut counts, view| {
+            *counts.entry(view.key.document).or_insert(0usize) += 1;
+            counts
+        });
+        let scoped_counts = scoped.iter().fold(HashMap::new(), |mut counts, view| {
+            *counts.entry(view.key.document).or_insert(0usize) += 1;
+            counts
+        });
+        let documents = Self::documents(cx);
+        let mut prompted = HashSet::new();
+        let mut prompts = Vec::new();
+        for view in &scoped {
+            let document = view.key.document;
+            let loses_final_view = request.kind == ProtectedCloseKind::Quit
+                || scoped_counts.get(&document) == total_counts.get(&document);
+            if loses_final_view
+                && prompted.insert(document)
+                && documents
+                    .read(cx)
+                    .get(document)
+                    .is_some_and(|document| document.is_dirty(cx))
+            {
+                prompts.push((document, view.target.clone()));
+            }
+        }
+        if request.kind == ProtectedCloseKind::Quit
+            && documents
+                .read(cx)
+                .documents()
+                .any(|document| document.is_dirty(cx) && !prompted.contains(&document.id()))
+        {
+            return Err(CommandOutcome::InvalidTarget);
+        }
+        Ok(ProtectedClosePlan {
+            request,
+            scope,
+            prompts,
+        })
     }
 
     fn next_open_generation(&mut self) -> u64 {
@@ -1189,6 +1389,338 @@ impl ProductShell {
         self.close_tab(pane, tab, document, window, cx);
     }
 
+    pub(crate) fn begin_protected_close(
+        kind: ProtectedCloseKind,
+        origin: ProductCommandTarget,
+        completion: Option<CommandCompletion>,
+        cx: &mut App,
+    ) {
+        use crate::host::protocol::CommandOutcome;
+
+        if Self::protected_closure_is_active(cx) {
+            Self::finish_protected_close_completion(completion, CommandOutcome::Unavailable, cx);
+            return;
+        }
+        let plan =
+            match Self::build_protected_close_plan(ProtectedCloseRequest { kind, origin }, cx) {
+                Ok(plan) => plan,
+                Err(outcome) => {
+                    Self::finish_protected_close_completion(completion, outcome, cx);
+                    return;
+                }
+            };
+        let Some(shell) = plan.request.origin.shell.upgrade() else {
+            Self::finish_protected_close_completion(completion, CommandOutcome::InvalidTarget, cx);
+            return;
+        };
+        Self::set_protected_closure_active(true, cx);
+        shell.update(cx, |shell, cx| {
+            shell.start_protected_close_plan(plan, completion, cx);
+        });
+    }
+
+    fn start_protected_close_plan(
+        &mut self,
+        plan: ProtectedClosePlan,
+        completion: Option<CommandCompletion>,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::host::protocol::CommandOutcome;
+
+        cx.spawn(async move |this, cx| {
+            let mut approvals = Vec::new();
+            let mut outcome = CommandOutcome::Completed;
+            for (document, target) in &plan.prompts {
+                let prompt = cx.update(|cx| {
+                    let documents = Self::documents(cx);
+                    let Some(document_state) = documents.read(cx).get(*document) else {
+                        return Err(CommandOutcome::InvalidTarget);
+                    };
+                    if !document_state.is_dirty(cx) {
+                        return Ok(None);
+                    }
+                    let title = document_state.title().clone();
+                    let prompted_revision = document_state.model().read(cx).revision();
+                    cx.update_window(target.window, |_, window, cx| {
+                        Ok(Some((
+                            window.prompt(
+                                PromptLevel::Warning,
+                                &format!("Do you want to save the changes to “{title}”?"),
+                                Some("Your changes will be lost if you don't save them."),
+                                &[
+                                    PromptButton::new("Save"),
+                                    PromptButton::new("Don't Save"),
+                                    PromptButton::cancel("Cancel"),
+                                ],
+                                cx,
+                            ),
+                            prompted_revision,
+                        )))
+                    })
+                    .unwrap_or(Err(CommandOutcome::InvalidTarget))
+                });
+                let (prompt, prompted_revision) = match prompt {
+                    Ok(Ok(Some(prompt))) => prompt,
+                    Ok(Ok(None)) => continue,
+                    Ok(Err(error)) => {
+                        outcome = error;
+                        break;
+                    }
+                    Err(_) => {
+                        outcome = CommandOutcome::InvalidTarget;
+                        break;
+                    }
+                };
+                match prompt.await.unwrap_or(2) {
+                    0 => {
+                        let save = cx.update(|cx| {
+                            let Some(shell) = target.shell.upgrade() else {
+                                return Err(CommandOutcome::InvalidTarget);
+                            };
+                            let (save_completion, receiver) = CommandCompletion::new();
+                            let result = cx.update_window(target.window, |_, window, cx| {
+                                if window.root::<ProductShell>().flatten().as_ref() != Some(&shell)
+                                {
+                                    return Err(CommandOutcome::InvalidTarget);
+                                }
+                                shell.update(cx, |shell, cx| {
+                                    shell.start_save_command(
+                                        false,
+                                        target.clone(),
+                                        save_completion,
+                                        cx,
+                                    );
+                                });
+                                Ok(receiver)
+                            });
+                            result.unwrap_or(Err(CommandOutcome::InvalidTarget))
+                        });
+                        let save_outcome = match save {
+                            Ok(Ok(receiver)) => receiver.await.unwrap_or(CommandOutcome::Cancelled),
+                            Ok(Err(error)) => error,
+                            Err(_) => CommandOutcome::InvalidTarget,
+                        };
+                        if save_outcome != CommandOutcome::Completed {
+                            outcome = save_outcome;
+                            break;
+                        }
+                        let approval = cx.update(|cx| {
+                            let documents = Self::documents(cx);
+                            let Some(document_state) = documents.read(cx).get(*document) else {
+                                return Err(CommandOutcome::InvalidTarget);
+                            };
+                            if document_state.is_dirty(cx) {
+                                return Err(CommandOutcome::HandlerFailure {
+                                    message: "document changed while it was being saved".into(),
+                                });
+                            }
+                            Ok(CloseApproval {
+                                document: *document,
+                                revision: document_state.model().read(cx).revision(),
+                                kind: CloseApprovalKind::Saved,
+                            })
+                        });
+                        match approval {
+                            Ok(Ok(approval)) => approvals.push(approval),
+                            Ok(Err(error)) => {
+                                outcome = error;
+                                break;
+                            }
+                            Err(_) => {
+                                outcome = CommandOutcome::InvalidTarget;
+                                break;
+                            }
+                        }
+                    }
+                    1 => {
+                        let approval = cx.update(|cx| {
+                            let documents = Self::documents(cx);
+                            let Some(document_state) = documents.read(cx).get(*document) else {
+                                return Err(CommandOutcome::InvalidTarget);
+                            };
+                            if document_state.model().read(cx).revision() != prompted_revision {
+                                return Err(CommandOutcome::InvalidTarget);
+                            }
+                            Ok(CloseApproval {
+                                document: *document,
+                                revision: prompted_revision,
+                                kind: CloseApprovalKind::Discarded,
+                            })
+                        });
+                        match approval {
+                            Ok(Ok(approval)) => approvals.push(approval),
+                            Ok(Err(error)) => {
+                                outcome = error;
+                                break;
+                            }
+                            Err(_) => {
+                                outcome = CommandOutcome::InvalidTarget;
+                                break;
+                            }
+                        }
+                    }
+                    _ => {
+                        outcome = CommandOutcome::Cancelled;
+                        break;
+                    }
+                }
+            }
+            let current_views = if outcome == CommandOutcome::Completed {
+                cx.update(Self::collect_product_views).ok()
+            } else {
+                None
+            };
+            let fallback = completion.clone();
+            if this
+                .update(cx, |this, cx| {
+                    if outcome == CommandOutcome::Completed {
+                        outcome = match current_views {
+                            Some(ref views) => {
+                                this.commit_protected_close(&plan, &approvals, views, cx)
+                            }
+                            None => CommandOutcome::InvalidTarget,
+                        };
+                    }
+                    Self::set_protected_closure_active(false, cx);
+                    this.finish_protected_close(completion, outcome, cx);
+                })
+                .is_err()
+            {
+                let _ = cx.update(|cx| {
+                    Self::set_protected_closure_active(false, cx);
+                    Self::finish_protected_close_completion(
+                        fallback,
+                        CommandOutcome::InvalidTarget,
+                        cx,
+                    );
+                });
+            }
+        })
+        .detach();
+    }
+
+    fn finish_protected_close(
+        &mut self,
+        completion: Option<CommandCompletion>,
+        outcome: crate::host::protocol::CommandOutcome,
+        cx: &mut Context<Self>,
+    ) {
+        Self::finish_protected_close_completion(completion, outcome, cx);
+    }
+
+    fn finish_protected_close_completion(
+        completion: Option<CommandCompletion>,
+        outcome: crate::host::protocol::CommandOutcome,
+        cx: &mut App,
+    ) {
+        let Some(completion) = completion else {
+            return;
+        };
+        completion.complete(outcome.clone());
+        Self::command_dispatcher(cx).update(cx, |dispatcher, cx| {
+            dispatcher.record_outcome(outcome, cx);
+        });
+    }
+
+    fn commit_protected_close(
+        &mut self,
+        plan: &ProtectedClosePlan,
+        approvals: &[CloseApproval],
+        views: &[ProtectedView],
+        cx: &mut Context<Self>,
+    ) -> crate::host::protocol::CommandOutcome {
+        use crate::host::protocol::CommandOutcome;
+
+        let current_scope = views
+            .iter()
+            .filter(|view| match plan.request.kind {
+                ProtectedCloseKind::Tab => {
+                    view.key.window == plan.request.origin.window
+                        && view.key.pane == plan.request.origin.pane
+                        && view.key.tab == plan.request.origin.tab
+                        && view.key.document == plan.request.origin.document
+                }
+                ProtectedCloseKind::Window => view.key.window == plan.request.origin.window,
+                ProtectedCloseKind::Quit => true,
+            })
+            .map(|view| view.key)
+            .collect::<Vec<_>>();
+        if current_scope.len() != plan.scope.len()
+            || current_scope
+                .iter()
+                .any(|key| !plan.scope.iter().any(|planned| planned == key))
+        {
+            return CommandOutcome::InvalidTarget;
+        }
+        let documents = Self::documents(cx);
+        for approval in approvals {
+            let Some(document) = documents.read(cx).get(approval.document) else {
+                return CommandOutcome::InvalidTarget;
+            };
+            if document.model().read(cx).revision() != approval.revision
+                || (approval.kind == CloseApprovalKind::Saved && document.is_dirty(cx))
+            {
+                return CommandOutcome::InvalidTarget;
+            }
+        }
+        let total_counts = views.iter().fold(HashMap::new(), |mut counts, view| {
+            *counts.entry(view.key.document).or_insert(0usize) += 1;
+            counts
+        });
+        let scoped_counts = current_scope
+            .iter()
+            .fold(HashMap::new(), |mut counts, view| {
+                *counts.entry(view.document).or_insert(0usize) += 1;
+                counts
+            });
+        for document in documents.read(cx).documents() {
+            let loses_final_view = plan.request.kind == ProtectedCloseKind::Quit
+                || scoped_counts.get(&document.id()) == total_counts.get(&document.id());
+            if loses_final_view && document.is_dirty(cx) {
+                let approved = approvals.iter().any(|approval| {
+                    approval.document == document.id()
+                        && approval.kind == CloseApprovalKind::Discarded
+                });
+                if !approved {
+                    return CommandOutcome::InvalidTarget;
+                }
+            }
+        }
+
+        match plan.request.kind {
+            ProtectedCloseKind::Tab => self.close_tab_after_approval(
+                plan.request.origin.window,
+                plan.request.origin.pane,
+                plan.request.origin.tab,
+                plan.request.origin.document,
+                cx,
+            ),
+            ProtectedCloseKind::Window => {
+                let final_documents = scoped_counts
+                    .iter()
+                    .filter(|(document, count)| total_counts.get(document) == Some(count))
+                    .map(|(document, _)| *document)
+                    .collect::<Vec<_>>();
+                documents.update(cx, |documents, _| {
+                    for document in final_documents {
+                        documents.remove(document);
+                    }
+                });
+                match cx.update_window(plan.request.origin.window, |_, window, _| {
+                    window.remove_window();
+                }) {
+                    Ok(()) => CommandOutcome::Completed,
+                    Err(_) => CommandOutcome::InvalidTarget,
+                }
+            }
+            ProtectedCloseKind::Quit => {
+                cx.quit();
+                CommandOutcome::Completed
+            }
+        }
+    }
+
+    #[cfg(test)]
     fn close_tab(
         &mut self,
         pane: PaneId,
@@ -1248,6 +1780,80 @@ impl ProductShell {
         CommandOutcome::Completed
     }
 
+    fn close_tab_after_approval(
+        &mut self,
+        window_handle: AnyWindowHandle,
+        pane: PaneId,
+        tab: TabId,
+        document: DocumentId,
+        cx: &mut Context<Self>,
+    ) -> crate::host::protocol::CommandOutcome {
+        use crate::app::workbench::CloseConfirmation;
+        use crate::host::protocol::CommandOutcome;
+
+        if !self.workbench.read(cx).contains_tab(pane, tab, document) {
+            return CommandOutcome::InvalidTarget;
+        }
+        let open_view_count = cx
+            .global::<ApplicationWorkbenches>()
+            .view_count(document, cx);
+        let documents = Self::documents(cx);
+        let document_is_dirty = documents
+            .read(cx)
+            .get(document)
+            .is_some_and(|document| document.is_dirty(cx));
+        let outcome = self.workbench.update(cx, |workbench, _| {
+            workbench.request_close_tab_with_state(
+                pane,
+                tab,
+                document,
+                document_is_dirty,
+                open_view_count,
+            )
+        });
+        let transition = match outcome {
+            Some(CloseRequestOutcome::Closed(transition)) => transition,
+            Some(CloseRequestOutcome::Pending(pending)) => self
+                .workbench
+                .update(cx, |workbench, _| {
+                    workbench.resolve_pending_close(
+                        pending,
+                        CloseConfirmation::Close,
+                        open_view_count,
+                    )
+                })
+                .unwrap(),
+            None => return CommandOutcome::InvalidTarget,
+        };
+        if transition.document == DocumentCloseDisposition::CloseRequested {
+            documents.update(cx, |documents, _| {
+                documents.remove(document);
+            });
+        }
+        if transition.workbench_is_empty() {
+            let replacement = create_untitled_document(&documents, cx);
+            let model = documents.read(cx).get(replacement).unwrap().model().clone();
+            let workbench = cx.new(|cx| Workbench::new_for_document(replacement, model, cx));
+            cx.global::<ApplicationWorkbenches>().register(&workbench);
+            self.workbench = workbench;
+            self.status = "created replacement untitled document".into();
+        } else {
+            self.status = "closed tab".into();
+        }
+        let editor = self
+            .workbench
+            .read(cx)
+            .focused_pane()
+            .map(|pane| pane.active_tab().editor().clone());
+        if let Some(editor) = editor {
+            let _ = cx.update_window(window_handle, move |_, window, cx| {
+                editor.focus_handle(cx).focus(window);
+            });
+        }
+        cx.notify();
+        CommandOutcome::Completed
+    }
+
     fn focus_active_editor(&self, window: &mut Window, cx: &App) {
         if let Some(editor) = self
             .workbench
@@ -1282,9 +1888,7 @@ impl ProductShell {
                 .new_document_in_pane(target.pane, window, cx)
                 .then_some(CommandOutcome::Completed)
                 .unwrap_or(CommandOutcome::InvalidTarget),
-            CLOSE_TAB_COMMAND => {
-                self.close_tab(target.pane, target.tab, target.document, window, cx)
-            }
+            CLOSE_TAB_COMMAND => CommandOutcome::Unavailable,
             SPLIT_HORIZONTAL_COMMAND => self
                 .split_pane(target.pane, SplitDirection::Horizontal, window, cx)
                 .then_some(CommandOutcome::Completed)
@@ -1293,18 +1897,12 @@ impl ProductShell {
                 .split_pane(target.pane, SplitDirection::Vertical, window, cx)
                 .then_some(CommandOutcome::Completed)
                 .unwrap_or(CommandOutcome::InvalidTarget),
-            CLOSE_WINDOW_COMMAND => {
-                window.remove_window();
-                CommandOutcome::Completed
-            }
+            CLOSE_WINDOW_COMMAND => CommandOutcome::Unavailable,
             NEW_WINDOW_COMMAND => {
                 open_product_window(None, cx);
                 CommandOutcome::Completed
             }
-            QUIT_COMMAND => {
-                cx.quit();
-                CommandOutcome::Completed
-            }
+            QUIT_COMMAND => CommandOutcome::Unavailable,
             OPEN_COMMAND | SAVE_COMMAND | SAVE_AS_COMMAND => CommandOutcome::Unavailable,
             UNDO_COMMAND
             | REDO_COMMAND
@@ -1604,6 +2202,22 @@ fn product_filesystems() -> Arc<FileSystemProviderRegistry> {
         .clone()
 }
 
+fn install_protected_window_close(shell: &Entity<ProductShell>, window: &Window, cx: &App) {
+    let shell = shell.downgrade();
+    window.on_window_should_close(cx, move |window, cx| {
+        let Some(shell) = shell.upgrade() else {
+            return true;
+        };
+        let target = shell.update(cx, |shell, cx| shell.window_close_target(window, cx));
+        if let Some(target) = target {
+            cx.defer(move |cx| {
+                ProductShell::begin_protected_close(ProtectedCloseKind::Window, target, None, cx);
+            });
+        }
+        false
+    });
+}
+
 pub(crate) fn open_product_window(request: Option<OpenRequest>, cx: &mut App) {
     let documents = cx.global::<ApplicationDocuments>().0.clone();
     let document = create_untitled_document(&documents, cx);
@@ -1619,6 +2233,7 @@ pub(crate) fn open_product_window(request: Option<OpenRequest>, cx: &mut App) {
             let workbench = cx.new(|cx| Workbench::new_for_document(document, model, cx));
             cx.global::<ApplicationWorkbenches>().register(&workbench);
             let shell = cx.new(|_| ProductShell::new(workbench));
+            install_protected_window_close(&shell, window, cx);
             shell.read(cx).focus_active_editor(window, cx);
             if let Some(request) = request {
                 let pane = shell.read(cx).workbench.read(cx).focused_pane().unwrap();
@@ -1656,6 +2271,7 @@ pub(crate) fn run(initial_request: Option<OpenRequest>) {
         let documents = cx.new(|_| DocumentCollection::new());
         cx.set_global(ApplicationDocuments(documents));
         cx.set_global(ApplicationWorkbenches(RefCell::new(Vec::new())));
+        cx.set_global(ApplicationProtectedClosure(RefCell::new(false)));
         cx.set_global(ApplicationFileSystems(product_filesystems()));
         let commands = cx.new(ProductCommandDispatcher::new);
         cx.set_global(ApplicationProductCommands(commands));
@@ -1836,12 +2452,14 @@ mod tests {
 
     use super::{
         ApplicationDocuments, ApplicationFileSystems, ApplicationOpenDialog,
-        ApplicationProductCommands, ApplicationSaveDialog, ApplicationWorkbenches, BufferModel,
+        ApplicationProductCommands, ApplicationProtectedClosure, ApplicationSaveDialog,
+        ApplicationWorkbenches, BufferModel, CLOSE_TAB_COMMAND, CLOSE_WINDOW_COMMAND,
         DocumentCollection, Entity, NEW_COMMAND, OpenDialogFuture, OpenDialogOutcome, OpenRequest,
         OpenTarget, ProductCommandDispatcher, ProductCommandSource, ProductOpenDialog,
-        ProductSaveDialog, ProductShell, RefCell, SAVE_AS_COMMAND, SAVE_COMMAND,
+        ProductSaveDialog, ProductShell, QUIT_COMMAND, RefCell, SAVE_AS_COMMAND, SAVE_COMMAND,
         SPLIT_HORIZONTAL_COMMAND, SaveDialogFuture, SaveDialogOutcome, SplitDirection,
-        UNDO_COMMAND, Workbench, WorkbenchLayout, create_untitled_document, product_filesystems,
+        UNDO_COMMAND, Workbench, WorkbenchLayout, create_untitled_document,
+        install_protected_window_close, product_filesystems,
     };
     use crate::app::{
         documents::DocumentState,
@@ -1853,6 +2471,7 @@ mod tests {
         let documents = cx.new(|_| DocumentCollection::new());
         cx.set_global(ApplicationDocuments(documents.clone()));
         cx.set_global(ApplicationWorkbenches(RefCell::new(Vec::new())));
+        cx.set_global(ApplicationProtectedClosure(RefCell::new(false)));
         cx.set_global(ApplicationFileSystems(product_filesystems()));
         let commands = cx.new(ProductCommandDispatcher::new);
         cx.set_global(ApplicationProductCommands(commands));
@@ -1870,6 +2489,10 @@ mod tests {
             ProductShell::new(workbench)
         });
         let window = *cx.windows().last().unwrap();
+        cx.update_window(window, |_, native_window, cx| {
+            install_protected_window_close(&shell, native_window, cx);
+        })
+        .unwrap();
         (shell, window)
     }
 
@@ -1913,6 +2536,35 @@ mod tests {
             tab: tab.id(),
             document: tab.document_id(),
         }
+    }
+
+    fn dispatch_product_command(
+        shell: &Entity<ProductShell>,
+        window_handle: gpui::AnyWindowHandle,
+        name: &'static str,
+        cx: &mut TestAppContext,
+    ) -> super::super::CommandExecution {
+        let target = cx
+            .update_window(window_handle, |_, window, cx| {
+                shell.update(cx, |shell, cx| {
+                    shell.focus_active_editor(window, cx);
+                    shell.capture_command_target(window, cx).unwrap()
+                })
+            })
+            .unwrap();
+        cx.update(|cx| {
+            let dispatcher = cx.global::<ApplicationProductCommands>().0.clone();
+            dispatcher.update(cx, |dispatcher, cx| {
+                dispatcher.dispatch(
+                    Command {
+                        name: name.into(),
+                        arguments: CommandArgumentValue::Null,
+                    },
+                    target,
+                    cx,
+                )
+            })
+        })
     }
 
     struct FixedOpenDialog(OpenDialogOutcome);
@@ -2383,6 +3035,403 @@ mod tests {
             registry.register(&first);
             registry.register(&second);
             assert_eq!(registry.view_count(document, cx), 2);
+        });
+    }
+
+    #[gpui::test]
+    async fn dirty_final_tab_close_cancel_preserves_the_document_and_view(cx: &mut TestAppContext) {
+        let documents = install_globals(cx);
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        model.update(cx, |model, _| model.replace(0..0, "unsaved").unwrap());
+        let (shell, window) = product_window(document, model, cx);
+
+        let execution = dispatch_product_command(&shell, window, CLOSE_TAB_COMMAND, cx);
+        cx.run_until_parked();
+        assert!(cx.has_pending_prompt());
+        cx.simulate_prompt_answer("Cancel");
+
+        assert_eq!(
+            execution.completion.await.unwrap(),
+            CommandOutcome::Cancelled
+        );
+        cx.read(|cx| {
+            assert!(documents.read(cx).get(document).is_some());
+            assert_eq!(shell.read(cx).workbench.read(cx).view_count(document), 1);
+        });
+    }
+
+    #[gpui::test]
+    async fn discarding_a_dirty_final_tab_closes_it_and_installs_a_replacement(
+        cx: &mut TestAppContext,
+    ) {
+        let documents = install_globals(cx);
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        model.update(cx, |model, _| model.replace(0..0, "unsaved").unwrap());
+        let (shell, window) = product_window(document, model, cx);
+
+        let execution = dispatch_product_command(&shell, window, CLOSE_TAB_COMMAND, cx);
+        cx.run_until_parked();
+        cx.simulate_prompt_answer("Don't Save");
+
+        assert_eq!(
+            execution.completion.await.unwrap(),
+            CommandOutcome::Completed
+        );
+        cx.read(|cx| {
+            assert!(documents.read(cx).get(document).is_none());
+            let replacement = shell
+                .read(cx)
+                .workbench
+                .read(cx)
+                .focused_pane()
+                .unwrap()
+                .active_tab()
+                .document_id();
+            assert_ne!(replacement, document);
+            assert!(documents.read(cx).get(replacement).is_some());
+        });
+    }
+
+    #[gpui::test]
+    async fn saving_a_dirty_tab_uses_existing_persistence_before_closing(cx: &mut TestAppContext) {
+        let documents = install_globals(cx);
+        let (filesystems, provider) = memory_filesystems_with_provider();
+        cx.set_global(ApplicationFileSystems(filesystems));
+        let uri = ResourceUri::parse("mem://product/notes.txt").unwrap();
+        let opened = provider.read(uri.clone()).await.unwrap();
+        let model = cx.new(|_| BufferModel::from_text("loaded text"));
+        let document = documents.update(cx, |documents, _| {
+            documents.create_persisted("notes.txt", model.clone(), uri.clone(), 0, opened.version)
+        });
+        model.update(cx, |model, _| model.replace(0..0, "changed ").unwrap());
+        let (shell, window) = product_window(document, model, cx);
+
+        let execution = dispatch_product_command(&shell, window, CLOSE_TAB_COMMAND, cx);
+        cx.run_until_parked();
+        cx.simulate_prompt_answer("Save");
+
+        assert_eq!(
+            execution.completion.await.unwrap(),
+            CommandOutcome::Completed
+        );
+        assert_eq!(
+            provider.read(uri).await.unwrap().bytes,
+            b"changed loaded text"
+        );
+        cx.read(|cx| assert!(documents.read(cx).get(document).is_none()));
+    }
+
+    #[gpui::test]
+    async fn closing_one_of_multiple_views_of_a_dirty_document_does_not_prompt(
+        cx: &mut TestAppContext,
+    ) {
+        let documents = install_globals(cx);
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        model.update(cx, |model, _| model.replace(0..0, "unsaved").unwrap());
+        let (shell, window) = product_window(document, model, cx);
+        cx.update_window(window, |_, window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.split(SplitDirection::Horizontal, window, cx)
+            });
+        })
+        .unwrap();
+
+        let execution = dispatch_product_command(&shell, window, CLOSE_TAB_COMMAND, cx);
+        assert_eq!(
+            execution.completion.await.unwrap(),
+            CommandOutcome::Completed
+        );
+        assert!(!cx.has_pending_prompt());
+        cx.read(|cx| {
+            assert!(documents.read(cx).get(document).is_some());
+            assert_eq!(shell.read(cx).workbench.read(cx).view_count(document), 1);
+        });
+    }
+
+    #[gpui::test]
+    async fn window_close_prompts_once_for_a_multiply_viewed_dirty_document(
+        cx: &mut TestAppContext,
+    ) {
+        let documents = install_globals(cx);
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        model.update(cx, |model, _| model.replace(0..0, "unsaved").unwrap());
+        let (shell, window) = product_window(document, model, cx);
+        cx.update_window(window, |_, window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.split(SplitDirection::Horizontal, window, cx)
+            });
+        })
+        .unwrap();
+
+        let execution = dispatch_product_command(&shell, window, CLOSE_WINDOW_COMMAND, cx);
+        cx.run_until_parked();
+        assert!(cx.has_pending_prompt());
+        cx.simulate_prompt_answer("Don't Save");
+
+        assert_eq!(
+            execution.completion.await.unwrap(),
+            CommandOutcome::Completed
+        );
+        assert!(!cx.has_pending_prompt());
+        cx.read(|cx| {
+            assert!(!cx.windows().contains(&window));
+            assert!(documents.read(cx).get(document).is_none());
+        });
+    }
+
+    #[gpui::test]
+    async fn window_close_keeps_a_dirty_document_visible_in_another_window_without_prompting(
+        cx: &mut TestAppContext,
+    ) {
+        let documents = install_globals(cx);
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        model.update(cx, |model, _| model.replace(0..0, "unsaved").unwrap());
+        let (first_shell, first_window) = product_window(document, model.clone(), cx);
+        let (_second_shell, second_window) = product_window(document, model, cx);
+
+        let execution =
+            dispatch_product_command(&first_shell, first_window, CLOSE_WINDOW_COMMAND, cx);
+        assert_eq!(
+            execution.completion.await.unwrap(),
+            CommandOutcome::Completed
+        );
+        assert!(!cx.has_pending_prompt());
+        cx.read(|cx| {
+            assert!(!cx.windows().contains(&first_window));
+            assert!(cx.windows().contains(&second_window));
+            assert!(documents.read(cx).get(document).unwrap().is_dirty(cx));
+        });
+    }
+
+    #[gpui::test]
+    async fn quit_prompts_once_for_a_document_shared_across_windows(cx: &mut TestAppContext) {
+        let documents = install_globals(cx);
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        model.update(cx, |model, _| model.replace(0..0, "unsaved").unwrap());
+        let (first_shell, first_window) = product_window(document, model.clone(), cx);
+        let _second = product_window(document, model, cx);
+
+        let execution = dispatch_product_command(&first_shell, first_window, QUIT_COMMAND, cx);
+        cx.run_until_parked();
+        assert!(cx.has_pending_prompt());
+        cx.simulate_prompt_answer("Don't Save");
+
+        assert_eq!(
+            execution.completion.await.unwrap(),
+            CommandOutcome::Completed
+        );
+        assert!(!cx.has_pending_prompt());
+    }
+
+    #[gpui::test]
+    async fn later_window_close_cancellation_preserves_every_tab(cx: &mut TestAppContext) {
+        let documents = install_globals(cx);
+        let first = cx.update(|cx| create_untitled_document(&documents, cx));
+        let first_model = cx.read(|cx| documents.read(cx).get(first).unwrap().model().clone());
+        first_model.update(cx, |model, _| model.replace(0..0, "first").unwrap());
+        let second_model = cx.new(|_| BufferModel::from_text("second"));
+        let second = cx.update(|cx| {
+            documents.update(cx, |documents, cx| {
+                documents.create_untitled("Second", second_model.clone(), cx)
+            })
+        });
+        second_model.update(cx, |model, _| model.replace(0..0, "changed ").unwrap());
+        let (shell, window) = product_window(first, first_model, cx);
+        shell.update(cx, |shell, cx| {
+            let pane = shell.workbench.read(cx).focused_pane_id().unwrap();
+            shell.workbench.update(cx, |workbench, cx| {
+                workbench
+                    .open_tab_for_document(pane, second, second_model, cx)
+                    .unwrap();
+            });
+        });
+
+        let execution = dispatch_product_command(&shell, window, CLOSE_WINDOW_COMMAND, cx);
+        cx.run_until_parked();
+        cx.simulate_prompt_answer("Don't Save");
+        cx.run_until_parked();
+        assert!(cx.has_pending_prompt());
+        cx.simulate_prompt_answer("Cancel");
+
+        assert_eq!(
+            execution.completion.await.unwrap(),
+            CommandOutcome::Cancelled
+        );
+        cx.read(|cx| {
+            assert!(cx.windows().contains(&window));
+            assert_eq!(shell.read(cx).workbench.read(cx).tab_snapshots().len(), 2);
+            assert!(documents.read(cx).get(first).is_some());
+            assert!(documents.read(cx).get(second).is_some());
+        });
+    }
+
+    #[gpui::test]
+    async fn close_save_failure_preserves_the_dirty_tab(cx: &mut TestAppContext) {
+        let documents = install_globals(cx);
+        cx.set_global(ApplicationFileSystems(memory_filesystems()));
+        cx.set_global(ApplicationSaveDialog(Arc::new(FixedSaveDialog(
+            SaveDialogOutcome::Selected(ResourceUri::parse("mem://product/src").unwrap()),
+        ))));
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        model.update(cx, |model, _| model.replace(0..0, "unsaved").unwrap());
+        let (shell, window) = product_window(document, model, cx);
+
+        let execution = dispatch_product_command(&shell, window, CLOSE_TAB_COMMAND, cx);
+        cx.run_until_parked();
+        cx.simulate_prompt_answer("Save");
+
+        assert!(matches!(
+            execution.completion.await.unwrap(),
+            CommandOutcome::HandlerFailure { .. }
+        ));
+        cx.read(|cx| {
+            assert!(documents.read(cx).get(document).unwrap().is_dirty(cx));
+            assert_eq!(shell.read(cx).workbench.read(cx).view_count(document), 1);
+        });
+    }
+
+    #[gpui::test]
+    async fn edit_while_discard_prompt_is_open_rejects_the_close(cx: &mut TestAppContext) {
+        let documents = install_globals(cx);
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        model.update(cx, |model, _| model.replace(0..0, "first edit").unwrap());
+        let (shell, window) = product_window(document, model.clone(), cx);
+
+        let execution = dispatch_product_command(&shell, window, CLOSE_TAB_COMMAND, cx);
+        cx.run_until_parked();
+        assert!(cx.has_pending_prompt());
+        model.update(cx, |model, _| model.replace(0..0, "racing edit ").unwrap());
+        cx.simulate_prompt_answer("Don't Save");
+
+        assert_eq!(
+            execution.completion.await.unwrap(),
+            CommandOutcome::InvalidTarget
+        );
+        cx.read(|cx| {
+            assert!(documents.read(cx).get(document).unwrap().is_dirty(cx));
+            assert_eq!(shell.read(cx).workbench.read(cx).view_count(document), 1);
+        });
+    }
+
+    #[gpui::test]
+    async fn scope_change_while_prompting_rejects_window_close(cx: &mut TestAppContext) {
+        let documents = install_globals(cx);
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        model.update(cx, |model, _| model.replace(0..0, "unsaved").unwrap());
+        let (shell, window) = product_window(document, model, cx);
+        let execution = dispatch_product_command(&shell, window, CLOSE_WINDOW_COMMAND, cx);
+        cx.run_until_parked();
+        assert!(cx.has_pending_prompt());
+
+        let added = cx.update(|cx| create_untitled_document(&documents, cx));
+        let added_model = cx.read(|cx| documents.read(cx).get(added).unwrap().model().clone());
+        shell.update(cx, |shell, cx| {
+            let pane = shell.workbench.read(cx).focused_pane_id().unwrap();
+            shell.workbench.update(cx, |workbench, cx| {
+                workbench
+                    .open_tab_for_document(pane, added, added_model, cx)
+                    .unwrap();
+            });
+        });
+        cx.simulate_prompt_answer("Don't Save");
+
+        assert_eq!(
+            execution.completion.await.unwrap(),
+            CommandOutcome::InvalidTarget
+        );
+        cx.read(|cx| {
+            assert!(cx.windows().contains(&window));
+            assert_eq!(shell.read(cx).workbench.read(cx).tab_snapshots().len(), 2);
+            assert!(documents.read(cx).get(document).is_some());
+            assert!(documents.read(cx).get(added).is_some());
+        });
+    }
+
+    #[gpui::test]
+    async fn concurrent_close_is_rejected_without_a_second_prompt(cx: &mut TestAppContext) {
+        let documents = install_globals(cx);
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        model.update(cx, |model, _| model.replace(0..0, "unsaved").unwrap());
+        let (shell, window) = product_window(document, model, cx);
+        let target = cx
+            .update_window(window, |_, window, cx| {
+                shell.update(cx, |shell, cx| {
+                    shell.focus_active_editor(window, cx);
+                    shell.capture_command_target(window, cx).unwrap()
+                })
+            })
+            .unwrap();
+        let dispatcher = cx.read(|cx| cx.global::<ApplicationProductCommands>().0.clone());
+        let first = dispatcher.update(cx, |dispatcher, cx| {
+            dispatcher.dispatch(
+                Command {
+                    name: CLOSE_TAB_COMMAND.into(),
+                    arguments: CommandArgumentValue::Null,
+                },
+                target.clone(),
+                cx,
+            )
+        });
+        cx.run_until_parked();
+        assert!(cx.has_pending_prompt());
+        let second = dispatcher.update(cx, |dispatcher, cx| {
+            dispatcher.dispatch(
+                Command {
+                    name: CLOSE_TAB_COMMAND.into(),
+                    arguments: CommandArgumentValue::Null,
+                },
+                target,
+                cx,
+            )
+        });
+
+        assert_eq!(
+            second.completion.await.unwrap(),
+            CommandOutcome::Unavailable
+        );
+        assert!(cx.has_pending_prompt());
+        cx.simulate_prompt_answer("Cancel");
+        assert_eq!(first.completion.await.unwrap(), CommandOutcome::Cancelled);
+        cx.read(|cx| assert_eq!(shell.read(cx).workbench.read(cx).view_count(document), 1));
+    }
+
+    #[gpui::test]
+    async fn native_window_close_is_vetoed_until_protected_closure_finishes(
+        cx: &mut TestAppContext,
+    ) {
+        let documents = install_globals(cx);
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        model.update(cx, |model, _| model.replace(0..0, "unsaved").unwrap());
+        let (shell, window_cx) = cx.add_window_view(|_, cx| {
+            let workbench = cx.new(|cx| Workbench::new_for_document(document, model, cx));
+            cx.global::<ApplicationWorkbenches>().register(&workbench);
+            ProductShell::new(workbench)
+        });
+        window_cx.update(|window, cx| {
+            install_protected_window_close(&shell, window, cx);
+            shell.read(cx).focus_active_editor(window, cx);
+        });
+
+        assert!(!window_cx.simulate_close());
+        window_cx.run_until_parked();
+        assert!(window_cx.has_pending_prompt());
+        window_cx.simulate_prompt_answer("Don't Save");
+        window_cx.run_until_parked();
+
+        window_cx.read(|cx| {
+            assert!(cx.windows().is_empty());
+            assert!(documents.read(cx).get(document).is_none());
         });
     }
 

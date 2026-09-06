@@ -228,6 +228,14 @@ impl ProductCommandDispatcher {
                     SAVE_AS_COMMAND => {
                         dispatch_save_to_captured_target(&target, true, completion.clone(), cx)
                     }
+                    CLOSE_TAB_COMMAND | CLOSE_WINDOW_COMMAND | QUIT_COMMAND => {
+                        dispatch_close_to_captured_target(
+                            &target,
+                            command.name.as_ref(),
+                            completion.clone(),
+                            cx,
+                        )
+                    }
                     _ => Err(CommandOutcome::Unavailable),
                 };
                 match asynchronous {
@@ -334,6 +342,41 @@ fn dispatch_save_to_captured_target(
         Ok(())
     })
     .unwrap_or(Err(CommandOutcome::InvalidTarget))
+}
+
+fn dispatch_close_to_captured_target(
+    target: &ProductCommandTarget,
+    command: &str,
+    completion: CommandCompletion,
+    cx: &mut App,
+) -> Result<(), CommandOutcome> {
+    if target.shell.upgrade().is_none()
+        || target.workbench.upgrade().is_none()
+        || target.focus.upgrade().is_none()
+        || !cx.windows().contains(&target.window)
+    {
+        return Err(CommandOutcome::InvalidTarget);
+    }
+    let kind = match command {
+        CLOSE_TAB_COMMAND => super::product::ProtectedCloseKind::Tab,
+        CLOSE_WINDOW_COMMAND => super::product::ProtectedCloseKind::Window,
+        QUIT_COMMAND => super::product::ProtectedCloseKind::Quit,
+        _ => return Err(CommandOutcome::Unavailable),
+    };
+    let Some(shell) = target.shell.upgrade() else {
+        return Err(CommandOutcome::InvalidTarget);
+    };
+    let target = target.clone();
+    let valid = cx
+        .update_window(target.window, |_, window, _| {
+            window.root::<ProductShell>().flatten().as_ref() == Some(&shell)
+        })
+        .unwrap_or(false);
+    if !valid {
+        return Err(CommandOutcome::InvalidTarget);
+    }
+    ProductShell::begin_protected_close(kind, target, Some(completion), cx);
+    Ok(())
 }
 
 fn dispatch_to_captured_target(

@@ -189,6 +189,14 @@ Evidence: [command and keymap experiment](archive/exploration/step11-command-key
   document. Completion rechecks those identities and the current view count,
   preventing delayed confirmation from closing a replacement tab or
   incorrectly closing a document that acquired another view.
+- Tab, window, and application closure use one serialized application-level
+  coordinator. It deduplicates dirty documents within the requested scope and
+  delays presentation mutation until all native Save / Don't Save / Cancel
+  decisions and any requested persistence complete.
+- Closure approvals bind to the captured view set and document revision.
+  Cancellation, save failure, a racing edit, or a stale scope preserves the
+  layout. Native window closure is vetoed until coordination succeeds, and
+  application termination is requested only after quit coordination succeeds.
 - Tab dragging, arbitrary docking, and layout persistence remain outside the
   workbench model.
 

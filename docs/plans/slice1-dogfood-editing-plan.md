@@ -1,6 +1,6 @@
 # First Product Slice: Dogfoodable Text Editing
 
-Status: in progress — checkpoint 6 implementation complete; review gate pending.
+Status: in progress — checkpoint 7 implementation complete; review gate pending.
 
 This slice makes Knot usable for editing its own source on macOS. It evolves
 the validated prototype in place and introduces the real workbench ownership
@@ -167,14 +167,14 @@ application-owned document model rather than introducing transitional APIs.
 - ✅ Review gate: manually exercise first save, Save As inside and outside the
   workspace, overwrite confirmation, a racing edit, and an external conflict.
 
-### Checkpoint 7: Protected closure
+### Checkpoint 7: Protected closure 🟨
 
-- Coordinate close-tab, close-window, and quit against application-owned dirty
+- ✅ Coordinate close-tab, close-window, and quit against application-owned dirty
   documents using native Save / Don't Save / Cancel alerts.
-- Prompt at most once for a document visible through multiple views or windows
+- ✅ Prompt at most once for a document visible through multiple views or windows
   and preserve state on cancellation or failure.
-- Cover tab, window, document, and application lifecycle combinations.
-- Review gate: manually exercise all three closure scopes with clean, dirty,
+- ✅ Cover tab, window, document, and application lifecycle combinations.
+- ⬜ Review gate: manually exercise all three closure scopes with clean, dirty,
   multiply viewed, cancelled, saved, and discarded documents.
 
 ### Checkpoint 8: Ordinary editor interaction
@@ -244,7 +244,7 @@ application-owned document model rather than introducing transitional APIs.
   cursor, selection, and scroll state separate.
 - ✅ Support creating and closing windows, tabs, and horizontal or vertical
   splits with standard native commands and shortcuts.
-- ⬜ Define last-view and last-tab behavior, including dirty confirmation and
+- ✅ Define last-view and last-tab behavior, including dirty confirmation and
   creation of the replacement untitled buffer.
 - ✅ Keep tab dragging, arbitrary docking, and layout persistence out of this
   slice.
@@ -331,7 +331,7 @@ application-owned document model rather than introducing transitional APIs.
 
 ### 8. Close and dogfood the slice
 
-- ⬜ Protect dirty documents when closing a tab, closing a window, or quitting;
+- ✅ Protect dirty documents when closing a tab, closing a window, or quitting;
   do not prompt twice for a document visible in multiple places.
 - ⬜ Add thorough tests for document/view lifetime, URI deduplication, untitled
   state, undo grouping, save races, atomic create/replace, conflict rejection,
