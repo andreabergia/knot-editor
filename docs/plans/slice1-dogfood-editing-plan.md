@@ -164,7 +164,7 @@ application-owned document model rather than introducing transitional APIs.
   and stale asynchronous completions.
 - ✅ Cover atomic create and replace, overwrite selection, conflicts, races,
   failures, and document identity changes.
-- 🟨 Review gate: manually exercise first save, Save As inside and outside the
+- ✅ Review gate: manually exercise first save, Save As inside and outside the
   workspace, overwrite confirmation, a racing edit, and an external conflict.
 
 ### Checkpoint 7: Protected closure
