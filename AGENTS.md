@@ -4,7 +4,9 @@ Knot is a modern text editor, inspired in philosophy by Emacs, but built with
 modern technologies and paradigms. It is implemented in Rust.
 
 Use @docs/architecture.md for current boundaries and @docs/decisions.md for
-validated choices. Read @docs/design.md only when product vision is relevant,
+validated choices and rationale. Load the linked @docs/architecture subsystem
+references only when the task needs their runtime flows or behavioral constraints.
+Read @docs/design.md only when product vision is relevant,
 and @docs/product-slices.md only for product sequencing. Active execution plans
 live under @docs/plans. Load archived exploration plans and benchmark evidence
 only when the task depends on them.
@@ -23,8 +25,10 @@ lower boundary.
 - Whenever implementing a plan or design document, always keep the plan
 updated. Use ✅ and other emoji to mark executed steps.
 - Keep @docs/architecture.md up-to-date when a change alters architectural
-  boundaries, ownership, dependency direction, or a major runtime flow. Keep
-  implementation details and API contracts in the code.
+  boundaries, ownership, or dependency direction. Update the relevant
+  @docs/architecture subsystem reference when runtime flows or behavioral
+  constraints change. Keep rationale in @docs/decisions.md and implementation
+  details and API contracts in the code.
 - Code comments and module documentation must describe the current design and
   behavior only. Do not record migrations, previous locations, roadmap phases,
   or implementation history in code; Git history is the source for that.

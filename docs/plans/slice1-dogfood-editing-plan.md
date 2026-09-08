@@ -345,8 +345,11 @@ application-owned document model rather than introducing transitional APIs.
 - ⬜ Invoke the slice's registered semantic commands through their applicable
   menu or keybinding, the command palette, and JavaScript, confirming that all
   paths preserve the same target and outcome.
-- ⬜ Update `architecture.md` and `decisions.md` for the document, workbench,
-  history, and persistence boundaries validated by the finished slice.
+- ✅ Split architecture documentation into a short overview, focused subsystem
+  references, and a rationale-only decisions document; update reading guidance.
+- ⬜ Update `architecture.md`, the relevant `architecture/` references, and
+  `decisions.md` for the document, workbench, history, and persistence boundaries
+  validated by the finished slice.
 - ⬜ Mark this plan as completed with its result and move any newly deferred
 work to [`deferred.md`](../deferred.md).
 - ⬜ Run `cargo fmt` once after the Rust work, then run focused checks and the
