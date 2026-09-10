@@ -174,7 +174,7 @@ application-owned document model rather than introducing transitional APIs.
 - ✅ Prompt at most once for a document visible through multiple views or windows
   and preserve state on cancellation or failure.
 - ✅ Cover tab, window, document, and application lifecycle combinations.
-- ⬜ Review gate: manually exercise all three closure scopes with clean, dirty,
+- ✅ Review gate: manually exercise all three closure scopes with clean, dirty,
   multiply viewed, cancelled, saved, and discarded documents.
 
 ### Checkpoint 8: Ordinary editor interaction
