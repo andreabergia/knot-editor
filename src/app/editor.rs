@@ -5,7 +5,10 @@
 //! Views independently own scrolling, selection, completion, and IME preedit.
 
 use gpui::{prelude::*, *};
-use std::ops::Range;
+use std::{
+    ops::Range,
+    sync::atomic::{AtomicU64, Ordering},
+};
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::core::anchored_range::AnchoredRangeId;
@@ -22,8 +25,11 @@ use super::{
         CompactCompletionSurface, CompletionController, CompletionProviderRegistration,
         CompletionSurface, CompletionSurfaceKind, ListCompletionSurface,
     },
+    history::{EditGroupKind, EditGrouping},
     model::{BufferModel, ContributionSource, ResolvedEditorContribution},
 };
+
+static NEXT_HISTORY_CONTEXT: AtomicU64 = AtomicU64::new(1);
 
 /// Owned, frame-stable copy of one styled segment of one line.
 /// Mirrors `knot::view::fixture`'s borrowed `Segment`/`SegSpec` but holds
@@ -145,6 +151,7 @@ pub struct EditorView {
     /// `unmark_text`. The element paints an underline over this span.
     marked_range_utf16: Option<Range<usize>>,
     focus: FocusHandle,
+    history_context: u64,
     completion: Option<CompletionController>,
     completion_surface: Option<Box<dyn CompletionSurface>>,
     completion_tasks: Vec<(CompletionProviderRegistrationId, Task<()>)>,
@@ -153,6 +160,7 @@ pub struct EditorView {
     paint_count: u64,
     _model_subscription: Subscription,
     _release_subscription: Subscription,
+    _focus_subscription: Option<Subscription>,
 }
 
 impl EditorView {
@@ -228,6 +236,7 @@ impl EditorView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.break_history_group(cx);
         self.marked_range_utf16 = None;
         self.preferred_x = None;
         let anchor = self.from_flat_byte(range.start_byte_offset);
@@ -411,6 +420,7 @@ impl EditorView {
             selection_reversed: false,
             marked_range_utf16: None,
             focus: cx.focus_handle(),
+            history_context: NEXT_HISTORY_CONTEXT.fetch_add(1, Ordering::Relaxed),
             completion: None,
             completion_surface: None,
             completion_tasks: Vec::new(),
@@ -419,6 +429,7 @@ impl EditorView {
             paint_count: 0,
             _model_subscription: model_subscription,
             _release_subscription: release_subscription,
+            _focus_subscription: None,
         }
     }
 
@@ -480,6 +491,10 @@ impl EditorView {
         self.clamp_scroll();
         self.sync_view_position(cx);
         cx.notify();
+    }
+
+    pub(crate) fn break_history_group(&self, cx: &mut Context<Self>) {
+        self.model.update(cx, |model, _| model.break_history_group());
     }
 
     fn restore_view_position(&mut self, range: Range<usize>) {
@@ -620,6 +635,34 @@ impl EditorView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        if command == "editor.undo" || command == "editor.redo" {
+            self.marked_range_utf16 = None;
+            self.preferred_x = None;
+            let replay = self.model.update(cx, |model, cx| {
+                let changed = if command == "editor.undo" {
+                    model.undo()
+                } else {
+                    model.redo()
+                }
+                .unwrap_or(false);
+                if changed {
+                    cx.notify();
+                }
+                changed.then(|| {
+                    (
+                        model.text(),
+                        model.resolved_contributions(),
+                        model.resolve_view_position(self.position_range),
+                    )
+                })
+            });
+            if let Some((text, contributions, position)) = replay {
+                self.rebuild_projection(&text, contributions, position);
+                self.sync_view_position(cx);
+                cx.notify();
+            }
+            return true;
+        }
         if matches!(command, "editor.copy" | "editor.cut") {
             self.marked_range_utf16 = None;
             if command == "editor.cut" && !self.model.read(cx).is_editable() {
@@ -631,18 +674,19 @@ impl EditorView {
                     .to_owned();
                 cx.write_to_clipboard(ClipboardItem::new_string(text));
                 if command == "editor.cut" {
-                    self.replace_text_in_range(None, "", window, cx);
+                    self.replace_text_with_grouping(None, "", None, window, cx);
                 }
             }
             return true;
         }
         if command == "editor.paste" {
             if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-                self.replace_text_in_range(None, &text, window, cx);
+                self.replace_text_with_grouping(None, &text, None, window, cx);
             }
             return true;
         }
         if command == "editor.select-all" {
+            self.break_history_group(cx);
             self.marked_range_utf16 = None;
             self.anchor_line = 0;
             self.anchor_col = 0;
@@ -654,13 +698,14 @@ impl EditorView {
             return true;
         }
         if matches!(command, "editor.insert-newline" | "editor.insert-tab") {
-            self.replace_text_in_range(
+            self.replace_text_with_grouping(
                 None,
                 if command.ends_with("newline") {
                     "\n"
                 } else {
                     "\t"
                 },
+                None,
                 window,
                 cx,
             );
@@ -668,7 +713,7 @@ impl EditorView {
         }
         if matches!(command, "editor.delete-backward" | "editor.delete-forward") {
             if self.has_selection || self.marked_range_utf16.is_some() {
-                self.replace_text_in_range(None, "", window, cx);
+                self.replace_text_with_grouping(None, "", None, window, cx);
             } else {
                 let doc = self.flat_doc();
                 let caret = self.to_flat_byte(self.cursor_line, self.cursor_col);
@@ -691,11 +736,16 @@ impl EditorView {
                     )
                 };
                 if start != end {
-                    self.replace_text_in_range(
+                    self.replace_text_with_grouping(
                         Some(
                             self.byte_col_to_utf16(&doc, start)..self.byte_col_to_utf16(&doc, end),
                         ),
                         "",
+                        Some(if command.ends_with("backward") {
+                            EditGroupKind::DeleteBackward
+                        } else {
+                            EditGroupKind::DeleteForward
+                        }),
                         window,
                         cx,
                     );
@@ -710,6 +760,7 @@ impl EditorView {
         } else {
             return false;
         };
+        self.break_history_group(cx);
         self.marked_range_utf16 = None;
         let last = self.lines.len() - 1;
         let forward = matches!(
@@ -838,6 +889,7 @@ impl EditorView {
     /// caret (extending the selection); without shift, any selection is
     /// cleared and the caret jumps to the click.
     fn on_mouse_down(&mut self, ev: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        self.break_history_group(cx);
         self.drag_anchor = None;
         self.marked_range_utf16 = None;
         let (line, col) = self.hit_test(ev.position, window);
@@ -1076,11 +1128,31 @@ impl EditorView {
 
     /// Commit a replacement to the authoritative model. Its notification
     /// refreshes the derived line/segment projection.
-    fn splice(&mut self, byte_start: usize, byte_end: usize, text: &str, cx: &mut Context<Self>) {
+    fn splice(
+        &mut self,
+        byte_start: usize,
+        byte_end: usize,
+        text: &str,
+        grouping: Option<EditGroupKind>,
+        cx: &mut Context<Self>,
+    ) {
         self.dismiss_completion();
         let model = self.model.clone();
         model.update(cx, |model, cx| {
-            if model.replace(byte_start..byte_end, text).unwrap_or(false) {
+            let changed = if let Some(kind) = grouping {
+                model.replace_grouped(
+                    byte_start..byte_end,
+                    text,
+                    EditGrouping {
+                        context: self.history_context,
+                        kind,
+                    },
+                )
+            } else {
+                model.replace(byte_start..byte_end, text)
+            }
+            .unwrap_or(false);
+            if changed {
                 cx.notify();
             }
         });
@@ -1310,6 +1382,35 @@ fn default_projection(text: &str) -> (Vec<String>, Vec<Vec<Seg>>) {
     (lines, segs)
 }
 
+impl EditorView {
+    fn replace_text_with_grouping(
+        &mut self,
+        range: Option<Range<usize>>,
+        text: &str,
+        grouping: Option<EditGroupKind>,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.model.read(cx).is_editable() {
+            return;
+        }
+        self.preferred_x = None;
+        let text: String = text.replace("\r\n", "\n").replace('\r', "\n");
+        let (byte_start, byte_end) = self.resolve_replacement_range(range);
+        self.splice(byte_start, byte_end, &text, grouping, cx);
+        self.marked_range_utf16 = None;
+
+        let doc = self.flat_doc();
+        let insert_end_byte = byte_start + text.len();
+        let insert_end_utf16 = self.byte_col_to_utf16(&doc, insert_end_byte.min(doc.len()));
+        let (line, col) = self.from_flat_utf16(insert_end_utf16);
+        self.cursor_line = line;
+        self.cursor_col = col;
+        self.has_selection = false;
+        self.finish_position_change(cx);
+    }
+}
+
 impl Focusable for EditorView {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus.clone()
@@ -1395,26 +1496,7 @@ impl EntityInputHandler for EditorView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.model.read(cx).is_editable() {
-            return;
-        }
-        self.preferred_x = None;
-        // Normalize line endings: macOS may send \r for Enter in some
-        // keyboard layouts; our line model uses \n.
-        let text: String = text.replace("\r\n", "\n").replace('\r', "\n");
-        let (byte_start, byte_end) = self.resolve_replacement_range(range);
-        self.splice(byte_start, byte_end, &text, cx);
-        self.marked_range_utf16 = None;
-
-        // Caret → end of inserted text.
-        let doc = self.flat_doc();
-        let insert_end_byte = byte_start + text.len();
-        let insert_end_utf16 = self.byte_col_to_utf16(&doc, insert_end_byte.min(doc.len()));
-        let (line, col) = self.from_flat_utf16(insert_end_utf16);
-        self.cursor_line = line;
-        self.cursor_col = col;
-        self.has_selection = false;
-        self.finish_position_change(cx);
+        self.replace_text_with_grouping(range, text, Some(EditGroupKind::Typing), _window, cx);
     }
 
     /// Replace text at the given range (or current selection / marked range
@@ -1441,7 +1523,13 @@ impl EntityInputHandler for EditorView {
         let doc = self.flat_doc();
         let marked_start_utf16 = self.byte_col_to_utf16(&doc, byte_start);
 
-        self.splice(byte_start, byte_end, new_text, cx);
+        self.splice(
+            byte_start,
+            byte_end,
+            new_text,
+            Some(EditGroupKind::Typing),
+            cx,
+        );
 
         // Marked range = [marked_start, marked_start + utf16_len(new_text)).
         let marked_utf16_len: usize = new_text.chars().map(|c| c.len_utf16()).sum();
@@ -1530,6 +1618,12 @@ impl EntityInputHandler for EditorView {
 
 impl Render for EditorView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self._focus_subscription.is_none() {
+            let focus = self.focus.clone();
+            self._focus_subscription = Some(cx.on_blur(&focus, window, |this, _, cx| {
+                this.break_history_group(cx);
+            }));
+        }
         let entity = cx.entity();
         let mut key_context = KeyContext::default();
         key_context.add(EDITOR_KEY_CONTEXT);
@@ -2548,10 +2642,53 @@ mod tests {
                 view.replace_text_in_range(None, "日本語", window, cx);
                 assert_eq!(view.flat_doc(), "a👩‍💻日本語");
                 assert_eq!(view.marked_range_utf16, None);
+                view.execute_editing_command("editor.undo", window, cx);
+                assert_eq!(view.flat_doc(), "a👩‍💻");
+                view.execute_editing_command("editor.redo", window, cx);
+                assert_eq!(view.flat_doc(), "a👩‍💻日本語");
                 view.execute_editing_command("editor.select-all", window, cx);
                 view.replace_text_in_range(None, "one\r\ntwo\rthree", window, cx);
                 assert_eq!(view.flat_doc(), "one\ntwo\nthree");
             })
+        });
+    }
+
+    #[gpui::test]
+    fn typing_deletion_and_interaction_boundaries_form_practical_undo_steps(
+        cx: &mut TestAppContext,
+    ) {
+        let model = cx.new(|_| BufferModel::from_text(""));
+        let (editor, cx) = cx.add_window_view(|_, cx| EditorView::new(model.clone(), cx));
+        cx.update(|window, cx| {
+            editor.update(cx, |view, cx| {
+                view.replace_text_in_range(None, "a", window, cx);
+                view.replace_text_in_range(None, "β", window, cx);
+                view.replace_text_in_range(None, "c", window, cx);
+                view.execute_editing_command("editor.undo", window, cx);
+                assert_eq!(view.flat_doc(), "");
+                view.execute_editing_command("editor.redo", window, cx);
+                assert_eq!(view.flat_doc(), "aβc");
+
+                view.execute_editing_command("editor.move-document-end", window, cx);
+                view.execute_editing_command("editor.delete-backward", window, cx);
+                view.execute_editing_command("editor.delete-backward", window, cx);
+                assert_eq!(view.flat_doc(), "a");
+                view.execute_editing_command("editor.undo", window, cx);
+                assert_eq!(view.flat_doc(), "aβc");
+
+                view.execute_editing_command("editor.move-document-end", window, cx);
+                view.execute_editing_command("editor.move-left", window, cx);
+                view.replace_text_in_range(None, "X", window, cx);
+                assert_eq!(view.flat_doc(), "aβXc");
+                view.execute_editing_command("editor.undo", window, cx);
+                assert_eq!(view.flat_doc(), "aβc");
+
+                cx.write_to_clipboard(gpui::ClipboardItem::new_string(" pasted".into()));
+                view.execute_editing_command("editor.paste", window, cx);
+                assert_eq!(view.flat_doc(), "aβ pastedc");
+                view.execute_editing_command("editor.undo", window, cx);
+                assert_eq!(view.flat_doc(), "aβc");
+            });
         });
     }
 
