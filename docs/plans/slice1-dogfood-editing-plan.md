@@ -1,6 +1,6 @@
 # First Product Slice: Dogfoodable Text Editing
 
-Status: in progress — checkpoint 7 implementation complete; review gate pending.
+Status: in progress — checkpoint 8 implementation complete; review gate pending.
 
 This slice makes Knot usable for editing its own source on macOS. It evolves
 the validated prototype in place and introduces the real workbench ownership
@@ -177,15 +177,15 @@ application-owned document model rather than introducing transitional APIs.
 - ✅ Review gate: manually exercise all three closure scopes with clean, dirty,
   multiply viewed, cancelled, saved, and discarded documents.
 
-### Checkpoint 8: Ordinary editor interaction
+### Checkpoint 8: Ordinary editor interaction ✅
 
-- Complete keyboard movement and selection variants, mouse placement and
+- ✅ Complete keyboard movement and selection variants, mouse placement and
   selection, scrolling, caret visibility, and native clipboard integration.
-- Verify insertion, multiline deletion, newline, grapheme, Unicode, and IME
+- ✅ Verify insertion, multiline deletion, newline, grapheme, Unicode, and IME
   behavior through the product shell.
-- Add focused model and view tests plus UI coverage for behavior that depends
+- ✅ Add focused model and view tests plus UI coverage for behavior that depends
   on native input protocols.
-- Review gate: edit representative Rust and Markdown files using keyboard,
+- ⬜ Review gate: edit representative Rust and Markdown files using keyboard,
   mouse, clipboard, Unicode, and IME input.
 
 ### Checkpoint 9: Undo and redo
@@ -289,14 +289,14 @@ application-owned document model rather than introducing transitional APIs.
 
 ### 5. Complete ordinary editing behavior
 
-- ⬜ Verify insertion, multiline deletion, newline handling, grapheme-aware
+- ✅ Verify insertion, multiline deletion, newline handling, grapheme-aware
   cursor movement, and selection against ordinary source files.
-- ⬜ Add standard character, word, line, page, and document movement and their
+- ✅ Add standard character, word, line, page, and document movement and their
   selection-extending variants.
-- ⬜ Support mouse placement and selection, vertical and horizontal scrolling,
+- ✅ Support mouse placement and selection, vertical and horizontal scrolling,
   and keeping the caret visible.
-- ⬜ Integrate native clipboard Cut, Copy, Paste, and Select All commands.
-- ⬜ Preserve working IME and Unicode behavior through the product shell.
+- ✅ Integrate native clipboard Cut, Copy, Paste, and Select All commands.
+- ✅ Preserve working IME and Unicode behavior through the product shell.
 - ⬜ Add current-file Find with a focused query field, visible match state,
   match highlighting, and next/previous navigation that follows buffer edits.
   Use the VS Code macOS defaults: `cmd-f`, `enter`, and `shift-enter`.

@@ -54,6 +54,12 @@ operation, and a closed or replaced target completes as invalid. Commands
 whose behavior belongs to a later product checkpoint remain discoverable and
 complete as unavailable.
 
+Ordinary product editing uses this same captured-view path: character, word,
+line, page, and document movement and selection, newline and tab insertion,
+deletion, and native clipboard operations are registered editor commands.
+Text supplied by the platform and IME composition enter the view's input
+handler; pointer selection and scrolling remain view input protocols.
+
 One shell runs one root invocation tree at a time. Additional roots remain in
 FIFO order until the active root and its attached descendants settle. A
 handler-originated invocation is attached as one child of its active parent

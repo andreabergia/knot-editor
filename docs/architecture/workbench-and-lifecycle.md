@@ -12,6 +12,19 @@ presentation state. Completion request state and merged semantic candidates
 belong to the controller; the replaceable list and compact surfaces own only
 selection, layout, and rendering.
 
+Editor commands mutate the captured tab's view. Cursor and selection use
+grapheme boundaries, vertical navigation retains a shaped horizontal position,
+and page movement uses the pane's viewport. Each view owns both scroll axes;
+editing and navigation reveal its caret, while wheel scrolling can move away
+from it. Text, selections, caret, mouse hit-testing, and IME candidate bounds
+share the same text shaping and horizontal offset.
+
+Native clipboard operations use the selected source text. Tab expansion is a
+rendering projection and never changes buffer bytes. Platform text input and
+IME ranges are UTF-16; the view converts them to UTF-8 model edits and refreshes
+its projection synchronously before resolving the resulting caret. Model
+notifications then update the other views through their persistent positions.
+
 ## Workbench and protected closure
 
 `Workbench` is the window-local editor layout model. It owns a binary split

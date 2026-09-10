@@ -85,6 +85,11 @@ native views retain rendering and input ownership so JavaScript cannot block
 painting. A general declarative widget tree is not planned; a WebView remains a
 possible escape hatch if a concrete arbitrary-UI need appears.
 
+Keep horizontal movement and deletion on grapheme boundaries, word navigation
+on Unicode word boundaries, and vertical movement on a remembered shaped x
+coordinate. Byte columns remain storage coordinates; they cannot preserve the
+visual column across ASCII, combining text, CJK, and emoji lines.
+
 Reference: [semantic ui](architecture/semantic-ui.md).
 
 ## Workbench layout and view lifetime
