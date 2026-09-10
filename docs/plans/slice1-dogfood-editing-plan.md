@@ -1,6 +1,6 @@
 # First Product Slice: Dogfoodable Text Editing
 
-Status: in progress — checkpoint 8 implementation complete; review gate pending.
+Status: in progress — checkpoint 8 complete.
 
 This slice makes Knot usable for editing its own source on macOS. It evolves
 the validated prototype in place and introduces the real workbench ownership
@@ -185,7 +185,7 @@ application-owned document model rather than introducing transitional APIs.
   behavior through the product shell.
 - ✅ Add focused model and view tests plus UI coverage for behavior that depends
   on native input protocols.
-- ⬜ Review gate: edit representative Rust and Markdown files using keyboard,
+- ✅ Review gate: edit representative Rust and Markdown files using keyboard,
   mouse, clipboard, Unicode, and IME input.
 
 ### Checkpoint 9: Undo and redo
