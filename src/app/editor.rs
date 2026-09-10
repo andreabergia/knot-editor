@@ -591,8 +591,8 @@ impl EditorView {
             "right" => "right",
             "up" => "up",
             "down" => "down",
-            "home" => "document-start",
-            "end" => "document-end",
+            "home" => "line-start",
+            "end" => "line-end",
             "pageup" => "page-up",
             "pagedown" => "page-down",
             key if !modifiers.platform && !modifiers.control && !modifiers.alt => {

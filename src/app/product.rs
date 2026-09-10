@@ -2997,17 +2997,26 @@ mod tests {
         cx.run_until_parked();
         cx.read(|cx| assert_eq!(model.read(cx).text(), "\t"));
         cx.simulate_input(window_handle, "café👩‍💻");
+        cx.simulate_keystrokes(window_handle, "enter");
+        cx.simulate_input(window_handle, "tail");
+        cx.simulate_keystrokes(window_handle, "home");
+        cx.simulate_input(window_handle, ">");
+        cx.simulate_keystrokes(window_handle, "end");
+        cx.simulate_input(window_handle, "<");
+        cx.simulate_keystrokes(window_handle, "shift-home cmd-c");
+        cx.run_until_parked();
+        cx.update(|cx| assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), ">tail<"));
         cx.simulate_keystrokes(window_handle, "cmd-a cmd-c");
         cx.run_until_parked();
         cx.update(|cx| {
             assert_eq!(
                 cx.read_from_clipboard().unwrap().text().unwrap(),
-                "\tcafé👩‍💻"
+                "\tcafé👩‍💻\n>tail<"
             )
         });
         cx.simulate_keystrokes(window_handle, "cmd-x cmd-v");
         cx.run_until_parked();
-        cx.read(|cx| assert_eq!(model.read(cx).text(), "\tcafé👩‍💻"));
+        cx.read(|cx| assert_eq!(model.read(cx).text(), "\tcafé👩‍💻\n>tail<"));
     }
 
     #[gpui::test]
