@@ -2470,9 +2470,9 @@ mod tests {
         ApplicationWorkbenches, BufferModel, CLOSE_TAB_COMMAND, CLOSE_WINDOW_COMMAND,
         DocumentCollection, Entity, NEW_COMMAND, OpenDialogFuture, OpenDialogOutcome, OpenRequest,
         OpenTarget, ProductCommandDispatcher, ProductCommandSource, ProductOpenDialog,
-        ProductSaveDialog, ProductShell, QUIT_COMMAND, REDO_COMMAND, RefCell, SAVE_AS_COMMAND, SAVE_COMMAND,
-        SPLIT_HORIZONTAL_COMMAND, SaveDialogFuture, SaveDialogOutcome, SplitDirection,
-        UNDO_COMMAND, Workbench, WorkbenchLayout, create_untitled_document,
+        ProductSaveDialog, ProductShell, QUIT_COMMAND, REDO_COMMAND, RefCell, SAVE_AS_COMMAND,
+        SAVE_COMMAND, SPLIT_HORIZONTAL_COMMAND, SaveDialogFuture, SaveDialogOutcome,
+        SplitDirection, UNDO_COMMAND, Workbench, WorkbenchLayout, create_untitled_document,
         install_protected_window_close, product_filesystems,
     };
     use crate::app::{
@@ -3085,10 +3085,19 @@ mod tests {
             )
         });
 
-        assert_eq!(execution.completion.await.unwrap(), CommandOutcome::Completed);
+        assert_eq!(
+            execution.completion.await.unwrap(),
+            CommandOutcome::Completed
+        );
         cx.read(|cx| {
             assert_eq!(
-                documents.read(cx).get(document).unwrap().model().read(cx).text(),
+                documents
+                    .read(cx)
+                    .get(document)
+                    .unwrap()
+                    .model()
+                    .read(cx)
+                    .text(),
                 ""
             );
         });
@@ -3102,13 +3111,174 @@ mod tests {
                 cx,
             )
         });
-        assert_eq!(execution.completion.await.unwrap(), CommandOutcome::Completed);
+        assert_eq!(
+            execution.completion.await.unwrap(),
+            CommandOutcome::Completed
+        );
         cx.read(|cx| {
             assert_eq!(
-                documents.read(cx).get(document).unwrap().model().read(cx).text(),
+                documents
+                    .read(cx)
+                    .get(document)
+                    .unwrap()
+                    .model()
+                    .read(cx)
+                    .text(),
                 "edit"
             );
         });
+    }
+
+    #[gpui::test]
+    async fn undo_keeps_the_document_captured_before_focus_changes(cx: &mut TestAppContext) {
+        let documents = install_globals(cx);
+        let first_document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let first_model = cx.read(|cx| {
+            documents
+                .read(cx)
+                .get(first_document)
+                .unwrap()
+                .model()
+                .clone()
+        });
+        let (shell, window_handle) = product_window(first_document, first_model.clone(), cx);
+        cx.update_window(window_handle, |_, window, cx| {
+            shell.update(cx, |shell, cx| shell.new_tab(window, cx));
+        })
+        .unwrap();
+
+        let (pane, first_tab, second_tab, second_document, second_model) = cx.read(|cx| {
+            let workbench = shell.read(cx).workbench.read(cx);
+            let pane = workbench.focused_pane().unwrap();
+            let first = &pane.tabs()[0];
+            let second = &pane.tabs()[1];
+            let second_model = documents
+                .read(cx)
+                .get(second.document_id())
+                .unwrap()
+                .model()
+                .clone();
+            (
+                pane.id(),
+                first.id(),
+                second.id(),
+                second.document_id(),
+                second_model,
+            )
+        });
+        first_model.update(cx, |model, _| model.replace(0..0, "first").unwrap());
+        second_model.update(cx, |model, _| model.replace(0..0, "second").unwrap());
+
+        let target = cx
+            .update_window(window_handle, |_, window, cx| {
+                shell.update(cx, |shell, cx| {
+                    shell.activate_tab(pane, first_tab, window, cx);
+                    shell.capture_command_target(window, cx).unwrap()
+                })
+            })
+            .unwrap();
+        let dispatcher = cx.read(|cx| cx.global::<ApplicationProductCommands>().0.clone());
+        let execution = dispatcher.update(cx, |dispatcher, cx| {
+            dispatcher.dispatch(
+                Command {
+                    name: UNDO_COMMAND.into(),
+                    arguments: CommandArgumentValue::Null,
+                },
+                target,
+                cx,
+            )
+        });
+        cx.update_window(window_handle, |_, window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.activate_tab(pane, second_tab, window, cx)
+            });
+        })
+        .unwrap();
+
+        assert_eq!(
+            execution.completion.await.unwrap(),
+            CommandOutcome::Completed
+        );
+        cx.read(|cx| {
+            assert_eq!(first_model.read(cx).text(), "");
+            assert_eq!(second_model.read(cx).text(), "second");
+            assert_eq!(
+                shell
+                    .read(cx)
+                    .workbench
+                    .read(cx)
+                    .focused_pane()
+                    .unwrap()
+                    .active_tab()
+                    .document_id(),
+                second_document
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn focus_transfer_and_distinct_views_break_typing_groups(cx: &mut TestAppContext) {
+        let documents = install_globals(cx);
+        cx.update(super::bind_product_keys);
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        let (shell, window_handle) = product_window(document, model.clone(), cx);
+        cx.update_window(window_handle, |_, window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.split(SplitDirection::Horizontal, window, cx)
+            });
+        })
+        .unwrap();
+        cx.refresh().unwrap();
+        cx.run_until_parked();
+        let (first, second) = cx.read(|cx| {
+            let workbench = shell.read(cx).workbench.read(cx);
+            (
+                workbench.panes()[0].active_tab().editor().clone(),
+                workbench.panes()[1].active_tab().editor().clone(),
+            )
+        });
+        cx.update_window(window_handle, |_, window, cx| {
+            first.focus_handle(cx).focus(window)
+        })
+        .unwrap();
+        cx.refresh().unwrap();
+        cx.simulate_input(window_handle, "a");
+        cx.update_window(window_handle, |_, window, cx| {
+            second.focus_handle(cx).focus(window);
+        })
+        .unwrap();
+        cx.refresh().unwrap();
+        cx.run_until_parked();
+        cx.update_window(window_handle, |_, window, cx| {
+            first.focus_handle(cx).focus(window);
+        })
+        .unwrap();
+        cx.refresh().unwrap();
+        cx.run_until_parked();
+        cx.simulate_input(window_handle, "b");
+        cx.refresh().unwrap();
+        cx.simulate_keystrokes(window_handle, "cmd-z");
+        cx.run_until_parked();
+        cx.read(|cx| assert_eq!(model.read(cx).text(), "a"));
+
+        cx.simulate_keystrokes(window_handle, "cmd-shift-z");
+        cx.run_until_parked();
+        cx.update_window(window_handle, |_, window, cx| {
+            second.focus_handle(cx).focus(window)
+        })
+        .unwrap();
+        cx.refresh().unwrap();
+        cx.run_until_parked();
+        cx.simulate_input(window_handle, "X");
+        cx.update_window(window_handle, |_, window, cx| {
+            first.focus_handle(cx).focus(window)
+        })
+        .unwrap();
+        cx.refresh().unwrap();
+        cx.simulate_keystrokes(window_handle, "cmd-z");
+        cx.run_until_parked();
+        cx.read(|cx| assert_eq!(model.read(cx).text(), "ab"));
     }
 
     #[gpui::test]

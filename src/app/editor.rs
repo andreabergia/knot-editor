@@ -152,6 +152,7 @@ pub struct EditorView {
     marked_range_utf16: Option<Range<usize>>,
     focus: FocusHandle,
     history_context: u64,
+    history_was_focused: bool,
     completion: Option<CompletionController>,
     completion_surface: Option<Box<dyn CompletionSurface>>,
     completion_tasks: Vec<(CompletionProviderRegistrationId, Task<()>)>,
@@ -160,7 +161,6 @@ pub struct EditorView {
     paint_count: u64,
     _model_subscription: Subscription,
     _release_subscription: Subscription,
-    _focus_subscription: Option<Subscription>,
 }
 
 impl EditorView {
@@ -421,6 +421,7 @@ impl EditorView {
             marked_range_utf16: None,
             focus: cx.focus_handle(),
             history_context: NEXT_HISTORY_CONTEXT.fetch_add(1, Ordering::Relaxed),
+            history_was_focused: false,
             completion: None,
             completion_surface: None,
             completion_tasks: Vec::new(),
@@ -429,7 +430,6 @@ impl EditorView {
             paint_count: 0,
             _model_subscription: model_subscription,
             _release_subscription: release_subscription,
-            _focus_subscription: None,
         }
     }
 
@@ -494,7 +494,8 @@ impl EditorView {
     }
 
     pub(crate) fn break_history_group(&self, cx: &mut Context<Self>) {
-        self.model.update(cx, |model, _| model.break_history_group());
+        self.model
+            .update(cx, |model, _| model.break_history_group());
     }
 
     fn restore_view_position(&mut self, range: Range<usize>) {
@@ -1480,6 +1481,7 @@ impl EntityInputHandler for EditorView {
     /// Commit the preedit marking without changing its text or selection.
     fn unmark_text(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         if self.marked_range_utf16.take().is_some() {
+            self.break_history_group(cx);
             cx.notify();
         }
     }
@@ -1496,7 +1498,12 @@ impl EntityInputHandler for EditorView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.replace_text_with_grouping(range, text, Some(EditGroupKind::Typing), _window, cx);
+        let grouping = if self.marked_range_utf16.is_some() {
+            EditGroupKind::Composition
+        } else {
+            EditGroupKind::Typing
+        };
+        self.replace_text_with_grouping(range, text, Some(grouping), _window, cx);
     }
 
     /// Replace text at the given range (or current selection / marked range
@@ -1527,7 +1534,7 @@ impl EntityInputHandler for EditorView {
             byte_start,
             byte_end,
             new_text,
-            Some(EditGroupKind::Typing),
+            Some(EditGroupKind::Composition),
             cx,
         );
 
@@ -1618,11 +1625,10 @@ impl EntityInputHandler for EditorView {
 
 impl Render for EditorView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if self._focus_subscription.is_none() {
-            let focus = self.focus.clone();
-            self._focus_subscription = Some(cx.on_blur(&focus, window, |this, _, cx| {
-                this.break_history_group(cx);
-            }));
+        let focused = self.focus.is_focused(window);
+        if focused != self.history_was_focused {
+            self.break_history_group(cx);
+            self.history_was_focused = focused;
         }
         let entity = cx.entity();
         let mut key_context = KeyContext::default();

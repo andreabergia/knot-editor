@@ -245,15 +245,6 @@ impl ProductCommandDispatcher {
         let admitted = self.catalog.resolve(command.name.as_ref()) == Ok(CommandTargetKind::Native);
         let dispatcher = cx.entity();
         cx.defer(move |cx| {
-            if admitted
-                && command.arguments == CommandArgumentValue::Null
-                && !matches!(
-                    command.name.as_ref(),
-                    "editor.delete-backward" | "editor.delete-forward"
-                )
-            {
-                break_captured_history_group(&target, cx);
-            }
             if admitted && command.arguments == CommandArgumentValue::Null {
                 let asynchronous = match command.name.as_ref() {
                     OPEN_COMMAND => {
@@ -358,6 +349,7 @@ fn dispatch_open_to_captured_target(
         if window.root::<ProductShell>().flatten().as_ref() != Some(&shell) {
             return Err(CommandOutcome::InvalidTarget);
         }
+        break_captured_history_group(&target, cx);
         shell.update(cx, |shell, cx| {
             shell.start_open_dialog(target, completion, cx);
         });
@@ -388,6 +380,7 @@ fn dispatch_save_to_captured_target(
         if window.root::<ProductShell>().flatten().as_ref() != Some(&shell) {
             return Err(CommandOutcome::InvalidTarget);
         }
+        break_captured_history_group(&target, cx);
         shell.update(cx, |shell, cx| {
             shell.start_save_command(save_as, target, completion, cx);
         });
@@ -427,6 +420,7 @@ fn dispatch_close_to_captured_target(
     if !valid {
         return Err(CommandOutcome::InvalidTarget);
     }
+    break_captured_history_group(&target, cx);
     ProductShell::begin_protected_close(kind, target, Some(completion), cx);
     Ok(())
 }
@@ -451,6 +445,12 @@ fn dispatch_to_captured_target(
         };
         if window.root::<ProductShell>().flatten().as_ref() != Some(&shell) {
             return CommandOutcome::InvalidTarget;
+        }
+        if !matches!(
+            command.name.as_ref(),
+            "editor.delete-backward" | "editor.delete-forward"
+        ) {
+            break_captured_history_group(&target, cx);
         }
         shell.update(cx, |shell, cx| {
             shell.execute_product_command(command.name.as_ref(), &target, window, cx)

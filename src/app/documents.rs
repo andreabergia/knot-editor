@@ -30,8 +30,8 @@ impl DocumentId {
 pub(crate) enum DocumentState {
     /// A user document with no destination yet.
     ///
-    /// It is clean at creation and becomes dirty when its model advances past
-    /// `clean_revision`.
+    /// It is clean at creation and dirty whenever its current content state no
+    /// longer matches the state recorded at `clean_revision`.
     Untitled { clean_revision: u64 },
     /// A user document associated with a destination that does not exist yet.
     ///
@@ -40,8 +40,8 @@ pub(crate) enum DocumentState {
     Destination { uri: ResourceUri },
     /// A user document whose contents have been persisted to a resource.
     ///
-    /// Edits are dirty while the model revision differs from
-    /// `persisted_revision`.
+    /// Edits are dirty while the model's current content state differs from the
+    /// state recorded at `persisted_revision`.
     Persisted {
         uri: ResourceUri,
         persisted_revision: u64,
@@ -125,12 +125,15 @@ impl Document {
     pub(crate) fn is_dirty(&self, cx: &App) -> bool {
         match self.state {
             DocumentState::Untitled { clean_revision } => {
-                self.model.read(cx).revision() != clean_revision
+                !self.model.read(cx).content_matches_revision(clean_revision)
             }
             DocumentState::Destination { .. } => true,
             DocumentState::Persisted {
                 persisted_revision, ..
-            } => self.model.read(cx).revision() != persisted_revision,
+            } => !self
+                .model
+                .read(cx)
+                .content_matches_revision(persisted_revision),
             DocumentState::Generated => false,
         }
     }
@@ -431,6 +434,15 @@ mod tests {
         assert!(cx.read(|cx| documents.get(untitled_id).unwrap().is_dirty(cx)));
         assert!(cx.read(|cx| documents.get(persisted_id).unwrap().is_dirty(cx)));
 
+        untitled.update(cx, |model, _| model.undo().unwrap());
+        persisted.update(cx, |model, _| model.undo().unwrap());
+        assert!(!cx.read(|cx| documents.get(untitled_id).unwrap().is_dirty(cx)));
+        assert!(!cx.read(|cx| documents.get(persisted_id).unwrap().is_dirty(cx)));
+        untitled.update(cx, |model, _| model.redo().unwrap());
+        persisted.update(cx, |model, _| model.redo().unwrap());
+        assert!(cx.read(|cx| documents.get(untitled_id).unwrap().is_dirty(cx)));
+        assert!(cx.read(|cx| documents.get(persisted_id).unwrap().is_dirty(cx)));
+
         let capture = documents
             .begin_persistence(destination_id, &destination)
             .unwrap();
@@ -602,5 +614,7 @@ mod tests {
             Some(captured_revision)
         );
         assert!(cx.read(|cx| document.is_dirty(cx)));
+        model.update(cx, |model, _| model.undo().unwrap());
+        assert!(!cx.read(|cx| document.is_dirty(cx)));
     }
 }

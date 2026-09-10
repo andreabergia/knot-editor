@@ -101,6 +101,9 @@ pub struct BufferModel {
     anchored_ranges: AnchoredRangeStore,
     contributions: ContributionRegistry,
     revision: u64,
+    content_state: u64,
+    next_content_state: u64,
+    revision_content_states: Vec<u64>,
     open: bool,
     pending_changes: VecDeque<CommittedBufferChange>,
     snapshot_cache: RefCell<Option<CachedSnapshot>>,
@@ -137,6 +140,9 @@ impl BufferModel {
             anchored_ranges: AnchoredRangeStore::new(),
             contributions: ContributionRegistry::new(),
             revision: 0,
+            content_state: 0,
+            next_content_state: 1,
+            revision_content_states: vec![0],
             open: true,
             pending_changes: VecDeque::new(),
             snapshot_cache: RefCell::new(None),
@@ -150,6 +156,13 @@ impl BufferModel {
 
     pub fn revision(&self) -> u64 {
         self.revision
+    }
+
+    pub(crate) fn content_matches_revision(&self, revision: u64) -> bool {
+        usize::try_from(revision)
+            .ok()
+            .and_then(|revision| self.revision_content_states.get(revision))
+            .is_some_and(|state| *state == self.content_state)
     }
 
     pub fn is_open(&self) -> bool {
@@ -482,8 +495,15 @@ impl BufferModel {
         if !changed {
             return Ok(false);
         }
-        self.history
-            .apply_batch(&mut self.buffer, validated.into_iter());
+        let before_state = self.content_state;
+        let after_state = self.allocate_content_state();
+        self.history.apply_batch(
+            &mut self.buffer,
+            validated.into_iter(),
+            before_state,
+            after_state,
+        );
+        self.content_state = after_state;
         self.stabilize_anchored_ranges();
         let before_revision = self.revision;
         self.advance_revision();
@@ -518,8 +538,18 @@ impl BufferModel {
             },
             text: text.into(),
         };
-        self.history
-            .apply_replace(&mut self.buffer, range, text, None, Instant::now());
+        let before_state = self.content_state;
+        let after_state = self.allocate_content_state();
+        self.history.apply_replace(
+            &mut self.buffer,
+            range,
+            text,
+            None,
+            Instant::now(),
+            before_state,
+            after_state,
+        );
+        self.content_state = after_state;
         self.stabilize_anchored_ranges();
         let before_revision = self.revision;
         self.advance_revision();
@@ -551,13 +581,18 @@ impl BufferModel {
             },
             text: text.into(),
         };
+        let before_state = self.content_state;
+        let after_state = self.allocate_content_state();
         self.history.apply_replace(
             &mut self.buffer,
             range,
             text,
             Some(grouping),
             Instant::now(),
+            before_state,
+            after_state,
         );
+        self.content_state = after_state;
         self.stabilize_anchored_ranges();
         let before_revision = self.revision;
         self.advance_revision();
@@ -587,14 +622,15 @@ impl BufferModel {
             return Err(BufferAccessError::ReadOnly);
         }
         let before = self.text();
-        let changed = if undo {
+        let state = if undo {
             self.history.undo(&mut self.buffer)
         } else {
             self.history.redo(&mut self.buffer)
         };
-        if !changed {
+        let Some(state) = state else {
             return Ok(false);
-        }
+        };
+        self.content_state = state;
         self.stabilize_anchored_ranges();
         let after = self.text();
         let edit = replacement_between(&before, &after);
@@ -618,6 +654,16 @@ impl BufferModel {
             .revision
             .checked_add(1)
             .expect("public buffer revision overflowed");
+        self.revision_content_states.push(self.content_state);
+    }
+
+    fn allocate_content_state(&mut self) -> u64 {
+        let state = self.next_content_state;
+        self.next_content_state = self
+            .next_content_state
+            .checked_add(1)
+            .expect("buffer content identity space exhausted");
+        state
     }
 
     fn close(&mut self) {
@@ -1123,12 +1169,15 @@ mod tests {
         assert_eq!(model.text(), "aβtail");
         assert_eq!(model.resolve_view_position(tail), Some(3..7));
         assert_eq!(model.revision(), 2);
+        assert!(!model.content_matches_revision(1));
+        assert!(model.content_matches_revision(2));
         model.pending_changes.clear();
 
         assert!(model.undo().unwrap());
         assert_eq!(model.text(), "tail");
         assert_eq!(model.resolve_view_position(tail), Some(0..4));
         assert_eq!(model.revision(), 3);
+        assert!(model.content_matches_revision(0));
         assert_eq!(
             model.take_pending_change(),
             Some(CommittedBufferChange {
@@ -1148,6 +1197,7 @@ mod tests {
         assert_eq!(model.text(), "aβtail");
         assert_eq!(model.resolve_view_position(tail), Some(3..7));
         assert_eq!(model.revision(), 4);
+        assert!(model.content_matches_revision(2));
         assert_eq!(
             model.take_pending_change().unwrap().edits,
             vec![TextEdit {
