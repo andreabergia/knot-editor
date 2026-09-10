@@ -15,11 +15,13 @@ transport-handle registry.
 
 A document explicitly records whether it is untitled,
 destination-associated-but-uncreated, persisted, or generated. Untitled dirty
-state compares the model revision with its initial clean revision; a
-destination-associated document is dirty until persistence succeeds; a
-persisted document compares against its last successfully persisted revision;
-and generated documents are never persistable. URI and persistence state
-never enter `BufferModel` or `core`.
+state compares the model's current content identity with the identity recorded
+at its initial clean revision; a destination-associated document is dirty until
+persistence succeeds; a persisted document compares against the content
+identity at its last successfully persisted revision; and generated documents
+are never persistable. This lets undo return to a clean content state while
+public model revisions remain monotonic. URI and provider state never enter
+`BufferModel` or `core`.
 
 ## Opening resources
 

@@ -56,7 +56,11 @@ complete as unavailable.
 
 Ordinary product editing uses this same captured-view path: character, word,
 line, page, and document movement and selection, newline and tab insertion,
-deletion, and native clipboard operations are registered editor commands.
+deletion, undo and redo, and native clipboard operations are registered editor
+commands. Undo and redo resolve through the captured editor to its shared
+document model; switching focus cannot retarget them. Explicit commands end an
+active typing group, while repeated directional deletion commands retain their
+group until another interaction boundary.
 Text supplied by the platform and IME composition enter the view's input
 handler; pointer selection and scrolling remain view input protocols.
 

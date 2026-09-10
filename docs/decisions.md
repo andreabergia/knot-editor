@@ -44,6 +44,17 @@ Use ordinary buffer mutations for undo and redo so reversal follows the same
 edit-log and anchor-stabilization path as forward editing. The reversible edit
 primitive is separate from history management, grouping, and view restoration.
 
+Keep session-local linear history in the document's shared `BufferModel`, not
+in an editor view. This makes edits and history common to every view of a
+document while view identity remains an input to grouping. Group only adjacent
+typing and same-direction deletion within a short interaction interval; focus,
+movement, paste, and explicit commands are predictable boundaries. Persistent
+or branching history and view-state restoration remain deferred until their
+recovery or navigation value justifies their additional state model.
+Track content-state identity separately from the monotonic public revision so
+undo can return a document to its initial or persisted clean state without
+weakening revision-based conflict and notification ordering.
+
 Reference: [core and buffers](architecture/core-and-buffers.md).
 
 ## Extension runtime

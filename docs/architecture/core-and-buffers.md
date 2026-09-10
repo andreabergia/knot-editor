@@ -35,6 +35,7 @@ Each `BufferModel` owns:
 - one `TextBuffer`;
 - an application-level editable or read-only access policy;
 - one shared `AnchoredRangeStore`;
+- one session-local linear undo and redo history;
 - source-owned semantic editor contributions;
 - open/closed lifecycle and public revision;
 - at most one immutable UTF-16 snapshot cache entry.
@@ -75,6 +76,17 @@ contributions, and closure. `core::TextBuffer` remains unconditionally mutable.
   order. They preserve the normal edit-log and anchored-range paths rather than
   restoring internal piece identities.
 - Transactions bind to one buffer instance and edit sequence. Out-of-band
-  mutation and invalid state transitions are programmer errors.
-- History trees, grouping, persistence, and view-state restoration remain
-  deferred.
+  mutation and invalid state transitions are programmer errors. The history
+  manager may re-stamp a transaction after an adjacent entry restores the exact
+  preceding text state, while retaining the buffer-identity check.
+- `BufferModel` stores undo and redo entries as `EditTransaction`s. Replay is a
+  normal public model commit: it stabilizes anchors, advances the revision,
+  invalidates snapshots, and publishes a coherent text edit before its caller
+  notifies observing views. A separate content identity follows history replay so
+  documents can recognize a return to a saved state without making public
+  revisions non-monotonic.
+- Typing and directional deletion group by originating editor interaction and
+  a short elapsed-time boundary. Cursor or selection movement, focus transfer,
+  paste, other explicit commands, and a change of editor or edit kind end the
+  current group. A forward edit after undo clears redo.
+- History trees, persistence, and view-state restoration remain deferred.

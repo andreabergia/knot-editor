@@ -1,6 +1,6 @@
 # First Product Slice: Dogfoodable Text Editing
 
-Status: in progress — checkpoint 8 complete.
+Status: in progress — checkpoint 9 implementation complete; review gate pending.
 
 This slice makes Knot usable for editing its own source on macOS. It evolves
 the validated prototype in place and introduces the real workbench ownership
@@ -188,15 +188,15 @@ application-owned document model rather than introducing transitional APIs.
 - ✅ Review gate: edit representative Rust and Markdown files using keyboard,
   mouse, clipboard, Unicode, and IME input.
 
-### Checkpoint 9: Undo and redo
+### Checkpoint 9: Undo and redo 🟨
 
-- Add per-document history using ordinary `EditTransaction` mutation paths and
+- ✅ Add per-document history using ordinary `EditTransaction` mutation paths and
   practical typing and deletion grouping.
-- Break groups at the defined interaction boundaries, clear redo after
+- ✅ Break groups at the defined interaction boundaries, clear redo after
   divergent edits, and keep history independent across documents and views.
-- Route Undo and Redo through the shared command path and cover history,
+- ✅ Route Undo and Redo through the shared command path and cover history,
   grouping, anchors, notifications, and routing.
-- Review gate: manually exercise grouped typing and deletion, paste, divergent
+- ⬜ Review gate: manually exercise grouped typing and deletion, paste, divergent
   edits, and document or view switching.
 
 ### Checkpoint 10: Current-file Find
@@ -305,14 +305,14 @@ application-owned document model rather than introducing transitional APIs.
 
 ### 6. Add usable undo and redo
 
-- ⬜ Build per-document undo history from ordinary `EditTransaction` edits so
+- ✅ Build per-document undo history from ordinary `EditTransaction` edits so
   undo and redo retain the normal model notification and anchor paths.
-- ⬜ Group consecutive typing and deletion into practical undo steps. Break
+- ✅ Group consecutive typing and deletion into practical undo steps. Break
   groups on cursor or selection movement, paste, explicit commands, focus
   transfer, and elapsed interaction boundaries where needed.
-- ⬜ Route Undo and Redo through native menus, standard shortcuts, and the
+- ✅ Route Undo and Redo through native menus, standard shortcuts, and the
   focused editor command path.
-- ⬜ Clear redo after a divergent edit and preserve independent history across
+- ✅ Clear redo after a divergent edit and preserve independent history across
   document and view switches.
 
 ### 7. Make persistence safe enough for daily use
