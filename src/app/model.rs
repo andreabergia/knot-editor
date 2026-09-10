@@ -5,6 +5,7 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     ops::Range,
     sync::Arc,
+    time::Instant,
 };
 
 use gpui::{AppContext, Entity, WeakEntity};
@@ -20,6 +21,8 @@ use crate::{
         SnapshotText,
     },
 };
+
+use super::history::{EditGrouping, EditHistory};
 
 /// The producer whose complete contribution set is stored in this buffer.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -101,6 +104,7 @@ pub struct BufferModel {
     open: bool,
     pending_changes: VecDeque<CommittedBufferChange>,
     snapshot_cache: RefCell<Option<CachedSnapshot>>,
+    history: EditHistory,
 }
 
 #[derive(Clone)]
@@ -136,6 +140,7 @@ impl BufferModel {
             open: true,
             pending_changes: VecDeque::new(),
             snapshot_cache: RefCell::new(None),
+            history: EditHistory::default(),
         }
     }
 
@@ -477,9 +482,8 @@ impl BufferModel {
         if !changed {
             return Ok(false);
         }
-        for (range, text) in validated.into_iter().rev() {
-            self.buffer.replace(range, text);
-        }
+        self.history
+            .apply_batch(&mut self.buffer, validated.into_iter());
         self.stabilize_anchored_ranges();
         let before_revision = self.revision;
         self.advance_revision();
@@ -514,8 +518,86 @@ impl BufferModel {
             },
             text: text.into(),
         };
-        self.buffer.replace(range, text);
+        self.history
+            .apply_replace(&mut self.buffer, range, text, None, Instant::now());
         self.stabilize_anchored_ranges();
+        let before_revision = self.revision;
+        self.advance_revision();
+        self.pending_changes.push_back(CommittedBufferChange {
+            before_revision,
+            revision: self.revision,
+            edits: vec![edit],
+        });
+        Ok(true)
+    }
+
+    pub(crate) fn replace_grouped(
+        &mut self,
+        range: Range<usize>,
+        text: &str,
+        grouping: EditGrouping,
+    ) -> Result<bool, BufferAccessError> {
+        assert!(self.open, "cannot edit a closed buffer");
+        if self.access_policy == BufferAccessPolicy::ReadOnly {
+            return Err(BufferAccessError::ReadOnly);
+        }
+        if range.is_empty() && text.is_empty() {
+            return Ok(false);
+        }
+        let edit = crate::host::protocol::TextEdit {
+            range: ByteRange {
+                start_byte_offset: range.start,
+                end_byte_offset: range.end,
+            },
+            text: text.into(),
+        };
+        self.history.apply_replace(
+            &mut self.buffer,
+            range,
+            text,
+            Some(grouping),
+            Instant::now(),
+        );
+        self.stabilize_anchored_ranges();
+        let before_revision = self.revision;
+        self.advance_revision();
+        self.pending_changes.push_back(CommittedBufferChange {
+            before_revision,
+            revision: self.revision,
+            edits: vec![edit],
+        });
+        Ok(true)
+    }
+
+    pub(crate) fn break_history_group(&mut self) {
+        self.history.break_group();
+    }
+
+    pub(crate) fn undo(&mut self) -> Result<bool, BufferAccessError> {
+        self.replay_history(true)
+    }
+
+    pub(crate) fn redo(&mut self) -> Result<bool, BufferAccessError> {
+        self.replay_history(false)
+    }
+
+    fn replay_history(&mut self, undo: bool) -> Result<bool, BufferAccessError> {
+        assert!(self.open, "cannot edit a closed buffer");
+        if self.access_policy == BufferAccessPolicy::ReadOnly {
+            return Err(BufferAccessError::ReadOnly);
+        }
+        let before = self.text();
+        let changed = if undo {
+            self.history.undo(&mut self.buffer)
+        } else {
+            self.history.redo(&mut self.buffer)
+        };
+        if !changed {
+            return Ok(false);
+        }
+        self.stabilize_anchored_ranges();
+        let after = self.text();
+        let edit = replacement_between(&before, &after);
         let before_revision = self.revision;
         self.advance_revision();
         self.pending_changes.push_back(CommittedBufferChange {
@@ -547,6 +629,31 @@ impl BufferModel {
     #[cfg(test)]
     fn edit_seq(&self) -> usize {
         self.buffer.edit_seq()
+    }
+}
+
+fn replacement_between(before: &str, after: &str) -> crate::host::protocol::TextEdit {
+    let prefix = before
+        .char_indices()
+        .zip(after.char_indices())
+        .take_while(|((_, left), (_, right))| left == right)
+        .last()
+        .map_or(0, |((index, ch), _)| index + ch.len_utf8());
+    let before_tail = &before[prefix..];
+    let after_tail = &after[prefix..];
+    let suffix = before_tail
+        .chars()
+        .rev()
+        .zip(after_tail.chars().rev())
+        .take_while(|(left, right)| left == right)
+        .map(|(ch, _)| ch.len_utf8())
+        .sum::<usize>();
+    crate::host::protocol::TextEdit {
+        range: ByteRange {
+            start_byte_offset: prefix,
+            end_byte_offset: before.len() - suffix,
+        },
+        text: after[prefix..after.len() - suffix].into(),
     }
 }
 
@@ -1000,6 +1107,74 @@ mod tests {
 
         assert!(!model.replace(0..0, "").unwrap());
         assert_eq!(model.revision(), 1);
+    }
+
+    #[test]
+    fn grouped_history_replays_through_revisions_notifications_and_anchors() {
+        let mut model = BufferModel::from_text("tail");
+        let tail = model.add_view_position(0..4);
+        let grouping = EditGrouping {
+            context: 7,
+            kind: super::super::history::EditGroupKind::Typing,
+        };
+
+        assert!(model.replace_grouped(0..0, "a", grouping).unwrap());
+        assert!(model.replace_grouped(1..1, "β", grouping).unwrap());
+        assert_eq!(model.text(), "aβtail");
+        assert_eq!(model.resolve_view_position(tail), Some(3..7));
+        assert_eq!(model.revision(), 2);
+        model.pending_changes.clear();
+
+        assert!(model.undo().unwrap());
+        assert_eq!(model.text(), "tail");
+        assert_eq!(model.resolve_view_position(tail), Some(0..4));
+        assert_eq!(model.revision(), 3);
+        assert_eq!(
+            model.take_pending_change(),
+            Some(CommittedBufferChange {
+                before_revision: 2,
+                revision: 3,
+                edits: vec![TextEdit {
+                    range: ByteRange {
+                        start_byte_offset: 0,
+                        end_byte_offset: 3,
+                    },
+                    text: "".into(),
+                }],
+            })
+        );
+
+        assert!(model.redo().unwrap());
+        assert_eq!(model.text(), "aβtail");
+        assert_eq!(model.resolve_view_position(tail), Some(3..7));
+        assert_eq!(model.revision(), 4);
+        assert_eq!(
+            model.take_pending_change().unwrap().edits,
+            vec![TextEdit {
+                range: ByteRange {
+                    start_byte_offset: 0,
+                    end_byte_offset: 0,
+                },
+                text: "aβ".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn histories_are_independent_and_divergent_edits_clear_redo() {
+        let mut first = BufferModel::from_text("one");
+        let mut second = BufferModel::from_text("two");
+        first.replace(3..3, "!").unwrap();
+        second.replace(3..3, "?").unwrap();
+
+        assert!(first.undo().unwrap());
+        assert_eq!(first.text(), "one");
+        assert_eq!(second.text(), "two?");
+        first.replace(3..3, ".").unwrap();
+        assert!(!first.redo().unwrap());
+        assert_eq!(first.text(), "one.");
+        assert!(second.undo().unwrap());
+        assert_eq!(second.text(), "two");
     }
 
     #[test]

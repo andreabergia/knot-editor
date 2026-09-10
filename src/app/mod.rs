@@ -31,6 +31,7 @@ mod documents;
 mod editor;
 mod entry;
 mod filesystem;
+mod history;
 pub mod model;
 mod open;
 mod product;

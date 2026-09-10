@@ -130,6 +130,22 @@ impl EditTransaction {
         });
     }
 
+    /// Re-stamp the edit-log checkpoint after an adjacent history entry has
+    /// restored the exact text state expected by this transaction.
+    ///
+    /// History owns the ordering proof; the transaction still rejects a
+    /// different buffer instance.
+    pub(crate) fn prepare_for_history_replay(&mut self, buffer: &TextBuffer) {
+        if let Some(checkpoint) = self.checkpoint {
+            assert_eq!(
+                buffer.instance_id(),
+                checkpoint.buffer_id,
+                "EditTransaction history replay requires the original TextBuffer instance"
+            );
+            self.checkpoint(buffer);
+        }
+    }
+
     /// Insert `text` at byte offset `at` in `buffer` and record the primitive.
     /// An empty `text` is a no-op and is not recorded.
     pub fn insert(&mut self, buffer: &mut TextBuffer, at: usize, text: &str) {
