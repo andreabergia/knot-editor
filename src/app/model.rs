@@ -1003,6 +1003,48 @@ mod tests {
     }
 
     #[test]
+    fn multiline_unicode_replacement_preserves_other_view_positions_and_commit_text() {
+        let prefix = "fn main() {\n    ";
+        let selected = "let café = \"👨‍👩‍👧‍👦\";\n    println!(\"中\");";
+        let suffix = "\n}\n";
+        let mut model = BufferModel::from_text(format!("{prefix}{selected}{suffix}"));
+        let start = prefix.len();
+        let end = start + selected.len();
+        let following_view = model.add_view_position(end..end + suffix.len());
+        let replacement = "// e\u{301} and 日本語\n    return;";
+
+        assert!(model.replace(start..end, replacement).unwrap());
+        assert_eq!(model.text(), format!("{prefix}{replacement}{suffix}"));
+        let new_end = start + replacement.len();
+        assert_eq!(
+            model.resolve_view_position(following_view),
+            Some(new_end..new_end + suffix.len())
+        );
+        let change = model.take_pending_change().unwrap();
+        assert_eq!((change.before_revision, change.revision), (0, 1));
+        assert_eq!(change.edits.len(), 1);
+        assert_eq!(change.edits[0].range.start_byte_offset, start);
+        assert_eq!(change.edits[0].range.end_byte_offset, end);
+        assert_eq!(change.edits[0].text, replacement);
+        assert!(model.take_pending_change().is_none());
+    }
+
+    #[test]
+    fn deleting_all_text_and_typing_again_keeps_persistent_view_positions_valid() {
+        let mut model = BufferModel::from_text("# Notes\n\n你好 😀\n");
+        let position = model.add_view_position(2..model.text().len());
+        assert!(model.replace(0..model.text().len(), "").unwrap());
+        assert_eq!(model.resolve_view_position(position), Some(0..0));
+        assert!(model.replace(0..0, "新しい\n").unwrap());
+        let position = model.resolve_view_position(position).unwrap();
+        let text = model.text();
+        assert!(position.start <= position.end && position.end <= text.len());
+        assert!(text.is_char_boundary(position.start));
+        assert!(text.is_char_boundary(position.end));
+        assert_eq!(model.revision(), 2);
+    }
+
+    #[test]
     fn read_only_models_reject_local_and_extension_text_edits() {
         let mut model = BufferModel::from_read_only_text("generated text");
         let extension_edit = TextEdit {
