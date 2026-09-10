@@ -245,6 +245,15 @@ impl ProductCommandDispatcher {
         let admitted = self.catalog.resolve(command.name.as_ref()) == Ok(CommandTargetKind::Native);
         let dispatcher = cx.entity();
         cx.defer(move |cx| {
+            if admitted
+                && command.arguments == CommandArgumentValue::Null
+                && !matches!(
+                    command.name.as_ref(),
+                    "editor.delete-backward" | "editor.delete-forward"
+                )
+            {
+                break_captured_history_group(&target, cx);
+            }
             if admitted && command.arguments == CommandArgumentValue::Null {
                 let asynchronous = match command.name.as_ref() {
                     OPEN_COMMAND => {
@@ -310,6 +319,21 @@ impl ProductCommandDispatcher {
     #[cfg(test)]
     pub(crate) fn runtime_control(&self) -> ExtensionRuntimeControl {
         self.runtime_control.clone()
+    }
+}
+
+fn break_captured_history_group(target: &ProductCommandTarget, cx: &mut App) {
+    let Some(workbench) = target.workbench.upgrade() else {
+        return;
+    };
+    let model = workbench
+        .read(cx)
+        .pane(target.pane)
+        .and_then(|pane| pane.tabs().iter().find(|tab| tab.id() == target.tab))
+        .filter(|tab| tab.document_id() == target.document)
+        .map(|tab| tab.editor().read(cx).model().clone());
+    if let Some(model) = model {
+        model.update(cx, |model, _| model.break_history_group());
     }
 }
 

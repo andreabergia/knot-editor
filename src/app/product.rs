@@ -1918,11 +1918,7 @@ impl ProductShell {
             }
             QUIT_COMMAND => CommandOutcome::Unavailable,
             OPEN_COMMAND | SAVE_COMMAND | SAVE_AS_COMMAND => CommandOutcome::Unavailable,
-            UNDO_COMMAND
-            | REDO_COMMAND
-            | FIND_COMMAND
-            | FIND_NEXT_COMMAND
-            | FIND_PREVIOUS_COMMAND => {
+            FIND_COMMAND | FIND_NEXT_COMMAND | FIND_PREVIOUS_COMMAND => {
                 self.status = "command is not implemented yet".into();
                 cx.notify();
                 CommandOutcome::Unavailable
@@ -2474,7 +2470,7 @@ mod tests {
         ApplicationWorkbenches, BufferModel, CLOSE_TAB_COMMAND, CLOSE_WINDOW_COMMAND,
         DocumentCollection, Entity, NEW_COMMAND, OpenDialogFuture, OpenDialogOutcome, OpenRequest,
         OpenTarget, ProductCommandDispatcher, ProductCommandSource, ProductOpenDialog,
-        ProductSaveDialog, ProductShell, QUIT_COMMAND, RefCell, SAVE_AS_COMMAND, SAVE_COMMAND,
+        ProductSaveDialog, ProductShell, QUIT_COMMAND, REDO_COMMAND, RefCell, SAVE_AS_COMMAND, SAVE_COMMAND,
         SPLIT_HORIZONTAL_COMMAND, SaveDialogFuture, SaveDialogOutcome, SplitDirection,
         UNDO_COMMAND, Workbench, WorkbenchLayout, create_untitled_document,
         install_protected_window_close, product_filesystems,
@@ -3060,11 +3056,15 @@ mod tests {
     }
 
     #[gpui::test]
-    async fn registered_but_deferred_commands_complete_as_unavailable(cx: &mut TestAppContext) {
+    async fn undo_command_routes_to_the_captured_editor(cx: &mut TestAppContext) {
         let documents = install_globals(cx);
         let document = cx.update(|cx| create_untitled_document(&documents, cx));
         let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
         let (shell, window_handle) = product_window(document, model, cx);
+        cx.update(|cx| {
+            let model = documents.read(cx).get(document).unwrap().model().clone();
+            model.update(cx, |model, _| model.replace(0..0, "edit").unwrap());
+        });
         let (target, dispatcher) = cx
             .update_window(window_handle, |_, window, cx| {
                 shell.read(cx).focus_active_editor(window, cx);
@@ -3080,15 +3080,35 @@ mod tests {
                     name: UNDO_COMMAND.into(),
                     arguments: CommandArgumentValue::Null,
                 },
-                target,
+                target.clone(),
                 cx,
             )
         });
 
-        assert_eq!(
-            execution.completion.await.unwrap(),
-            CommandOutcome::Unavailable
-        );
+        assert_eq!(execution.completion.await.unwrap(), CommandOutcome::Completed);
+        cx.read(|cx| {
+            assert_eq!(
+                documents.read(cx).get(document).unwrap().model().read(cx).text(),
+                ""
+            );
+        });
+        let execution = dispatcher.update(cx, |dispatcher, cx| {
+            dispatcher.dispatch(
+                Command {
+                    name: REDO_COMMAND.into(),
+                    arguments: CommandArgumentValue::Null,
+                },
+                target,
+                cx,
+            )
+        });
+        assert_eq!(execution.completion.await.unwrap(), CommandOutcome::Completed);
+        cx.read(|cx| {
+            assert_eq!(
+                documents.read(cx).get(document).unwrap().model().read(cx).text(),
+                "edit"
+            );
+        });
     }
 
     #[gpui::test]
