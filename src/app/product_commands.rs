@@ -35,7 +35,35 @@ pub(crate) const FIND_COMMAND: &str = "editor.find";
 pub(crate) const FIND_NEXT_COMMAND: &str = "editor.find-next";
 pub(crate) const FIND_PREVIOUS_COMMAND: &str = "editor.find-previous";
 
-const PRODUCT_COMMANDS: [(&str, &str); 19] = [
+const PRODUCT_COMMANDS: &[(&str, &str)] = &[
+    ("editor.move-left", "Move left"),
+    ("editor.move-right", "Move right"),
+    ("editor.move-up", "Move up"),
+    ("editor.move-down", "Move down"),
+    ("editor.move-word-left", "Move to previous word"),
+    ("editor.move-word-right", "Move to next word"),
+    ("editor.move-line-start", "Move to line start"),
+    ("editor.move-line-end", "Move to line end"),
+    ("editor.move-page-up", "Move up one page"),
+    ("editor.move-page-down", "Move down one page"),
+    ("editor.move-document-start", "Move to document start"),
+    ("editor.move-document-end", "Move to document end"),
+    ("editor.select-left", "Select left"),
+    ("editor.select-right", "Select right"),
+    ("editor.select-up", "Select up"),
+    ("editor.select-down", "Select down"),
+    ("editor.select-word-left", "Select to previous word"),
+    ("editor.select-word-right", "Select to next word"),
+    ("editor.select-line-start", "Select to line start"),
+    ("editor.select-line-end", "Select to line end"),
+    ("editor.select-page-up", "Select up one page"),
+    ("editor.select-page-down", "Select down one page"),
+    ("editor.select-document-start", "Select to document start"),
+    ("editor.select-document-end", "Select to document end"),
+    ("editor.insert-newline", "Insert Newline"),
+    ("editor.insert-tab", "Insert Tab"),
+    ("editor.delete-backward", "Delete Backward"),
+    ("editor.delete-forward", "Delete Forward"),
     (NEW_COMMAND, "New Document"),
     (OPEN_COMMAND, "Open…"),
     (SAVE_COMMAND, "Save"),
@@ -109,7 +137,7 @@ pub(crate) struct ProductCommandDispatcher {
 impl ProductCommandDispatcher {
     pub(crate) fn new(cx: &mut Context<Self>) -> Self {
         let mut catalog = CommandCatalog::new();
-        for (name, title) in PRODUCT_COMMANDS {
+        for &(name, title) in PRODUCT_COMMANDS {
             catalog
                 .register_native(name.into(), title.into())
                 .expect("product command names are unique");
@@ -426,5 +454,53 @@ fn capture_active_product_target(cx: &mut App) -> Option<ProductCommandTarget> {
 
 #[cfg(test)]
 pub(crate) fn product_command_names() -> impl Iterator<Item = &'static str> {
-    PRODUCT_COMMANDS.into_iter().map(|(name, _)| name)
+    PRODUCT_COMMANDS.iter().map(|(name, _)| *name)
+}
+
+/// Editing bindings share the captured product command path.
+pub(crate) fn bind_editing_keys(cx: &mut App) {
+    cx.bind_keys(
+        [
+            ("left", "editor.move-left"),
+            ("shift-left", "editor.select-left"),
+            ("right", "editor.move-right"),
+            ("shift-right", "editor.select-right"),
+            ("up", "editor.move-up"),
+            ("shift-up", "editor.select-up"),
+            ("down", "editor.move-down"),
+            ("shift-down", "editor.select-down"),
+            ("alt-left", "editor.move-word-left"),
+            ("shift-alt-left", "editor.select-word-left"),
+            ("alt-right", "editor.move-word-right"),
+            ("shift-alt-right", "editor.select-word-right"),
+            ("cmd-left", "editor.move-line-start"),
+            ("shift-cmd-left", "editor.select-line-start"),
+            ("cmd-right", "editor.move-line-end"),
+            ("shift-cmd-right", "editor.select-line-end"),
+            ("home", "editor.move-document-start"),
+            ("shift-home", "editor.select-document-start"),
+            ("end", "editor.move-document-end"),
+            ("shift-end", "editor.select-document-end"),
+            ("pageup", "editor.move-page-up"),
+            ("shift-pageup", "editor.select-page-up"),
+            ("pagedown", "editor.move-page-down"),
+            ("shift-pagedown", "editor.select-page-down"),
+            ("cmd-up", "editor.move-document-start"),
+            ("shift-cmd-up", "editor.select-document-start"),
+            ("cmd-down", "editor.move-document-end"),
+            ("shift-cmd-down", "editor.select-document-end"),
+            ("enter", "editor.insert-newline"),
+            ("tab", "editor.insert-tab"),
+            ("backspace", "editor.delete-backward"),
+            ("delete", "editor.delete-forward"),
+        ]
+        .into_iter()
+        .map(|(key, command)| {
+            KeyBinding::new(
+                key,
+                ProductCommandSource::new(command),
+                Some("product > editor"),
+            )
+        }),
+    );
 }

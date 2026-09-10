@@ -1883,6 +1883,20 @@ impl ProductShell {
             return CommandOutcome::InvalidTarget;
         }
 
+        let editor = self
+            .workbench
+            .read(cx)
+            .pane(target.pane)
+            .and_then(|pane| pane.tabs().iter().find(|tab| tab.id() == target.tab))
+            .map(|tab| tab.editor().clone());
+        if let Some(editor) = editor {
+            if editor.update(cx, |editor, cx| {
+                editor.execute_editing_command(name, window, cx)
+            }) {
+                return CommandOutcome::Completed;
+            }
+        }
+
         match name {
             NEW_COMMAND => self
                 .new_document_in_pane(target.pane, window, cx)
@@ -1906,10 +1920,6 @@ impl ProductShell {
             OPEN_COMMAND | SAVE_COMMAND | SAVE_AS_COMMAND => CommandOutcome::Unavailable,
             UNDO_COMMAND
             | REDO_COMMAND
-            | CUT_COMMAND
-            | COPY_COMMAND
-            | PASTE_COMMAND
-            | SELECT_ALL_COMMAND
             | FIND_COMMAND
             | FIND_NEXT_COMMAND
             | FIND_PREVIOUS_COMMAND => {
@@ -2275,109 +2285,7 @@ pub(crate) fn run(initial_request: Option<OpenRequest>) {
         cx.set_global(ApplicationFileSystems(product_filesystems()));
         let commands = cx.new(ProductCommandDispatcher::new);
         cx.set_global(ApplicationProductCommands(commands));
-        cx.bind_keys([
-            KeyBinding::new(
-                "cmd-n",
-                ProductCommandSource::new(NEW_COMMAND),
-                Some("product"),
-            ),
-            KeyBinding::new(
-                "cmd-t",
-                ProductCommandSource::new(NEW_COMMAND),
-                Some("product"),
-            ),
-            KeyBinding::new(
-                "cmd-shift-n",
-                ProductCommandSource::new(NEW_WINDOW_COMMAND),
-                Some("product"),
-            ),
-            KeyBinding::new(
-                "cmd-o",
-                ProductCommandSource::new(OPEN_COMMAND),
-                Some("product"),
-            ),
-            KeyBinding::new(
-                "cmd-s",
-                ProductCommandSource::new(SAVE_COMMAND),
-                Some("product"),
-            ),
-            KeyBinding::new(
-                "cmd-shift-s",
-                ProductCommandSource::new(SAVE_AS_COMMAND),
-                Some("product"),
-            ),
-            KeyBinding::new(
-                "cmd-w",
-                ProductCommandSource::new(CLOSE_TAB_COMMAND),
-                Some("product"),
-            ),
-            KeyBinding::new(
-                "cmd-shift-w",
-                ProductCommandSource::new(CLOSE_WINDOW_COMMAND),
-                Some("product"),
-            ),
-            KeyBinding::new(
-                "cmd-k right",
-                ProductCommandSource::new(SPLIT_HORIZONTAL_COMMAND),
-                Some("product"),
-            ),
-            KeyBinding::new(
-                "cmd-k down",
-                ProductCommandSource::new(SPLIT_VERTICAL_COMMAND),
-                Some("product"),
-            ),
-            KeyBinding::new("cmd-shift-p", ShowProductCommandPalette, Some("product")),
-            KeyBinding::new(
-                "cmd-z",
-                ProductCommandSource::new(UNDO_COMMAND),
-                Some("product"),
-            ),
-            KeyBinding::new(
-                "cmd-shift-z",
-                ProductCommandSource::new(REDO_COMMAND),
-                Some("product"),
-            ),
-            KeyBinding::new(
-                "cmd-x",
-                ProductCommandSource::new(CUT_COMMAND),
-                Some("product"),
-            ),
-            KeyBinding::new(
-                "cmd-c",
-                ProductCommandSource::new(COPY_COMMAND),
-                Some("product"),
-            ),
-            KeyBinding::new(
-                "cmd-v",
-                ProductCommandSource::new(PASTE_COMMAND),
-                Some("product"),
-            ),
-            KeyBinding::new(
-                "cmd-a",
-                ProductCommandSource::new(SELECT_ALL_COMMAND),
-                Some("product"),
-            ),
-            KeyBinding::new(
-                "cmd-f",
-                ProductCommandSource::new(FIND_COMMAND),
-                Some("product"),
-            ),
-            KeyBinding::new(
-                "cmd-g",
-                ProductCommandSource::new(FIND_NEXT_COMMAND),
-                Some("product"),
-            ),
-            KeyBinding::new(
-                "cmd-shift-g",
-                ProductCommandSource::new(FIND_PREVIOUS_COMMAND),
-                Some("product"),
-            ),
-            KeyBinding::new(
-                "cmd-q",
-                ProductCommandSource::new(QUIT_COMMAND),
-                Some("product"),
-            ),
-        ]);
+        bind_product_keys(cx);
         cx.set_menus(vec![
             Menu {
                 name: "Knot".into(),
@@ -2442,11 +2350,121 @@ pub(crate) fn run(initial_request: Option<OpenRequest>) {
     });
 }
 
+fn bind_product_keys(cx: &mut App) {
+    super::product_commands::bind_editing_keys(cx);
+    cx.bind_keys([
+        KeyBinding::new(
+            "cmd-n",
+            ProductCommandSource::new(NEW_COMMAND),
+            Some("product"),
+        ),
+        KeyBinding::new(
+            "cmd-t",
+            ProductCommandSource::new(NEW_COMMAND),
+            Some("product"),
+        ),
+        KeyBinding::new(
+            "cmd-shift-n",
+            ProductCommandSource::new(NEW_WINDOW_COMMAND),
+            Some("product"),
+        ),
+        KeyBinding::new(
+            "cmd-o",
+            ProductCommandSource::new(OPEN_COMMAND),
+            Some("product"),
+        ),
+        KeyBinding::new(
+            "cmd-s",
+            ProductCommandSource::new(SAVE_COMMAND),
+            Some("product"),
+        ),
+        KeyBinding::new(
+            "cmd-shift-s",
+            ProductCommandSource::new(SAVE_AS_COMMAND),
+            Some("product"),
+        ),
+        KeyBinding::new(
+            "cmd-w",
+            ProductCommandSource::new(CLOSE_TAB_COMMAND),
+            Some("product"),
+        ),
+        KeyBinding::new(
+            "cmd-shift-w",
+            ProductCommandSource::new(CLOSE_WINDOW_COMMAND),
+            Some("product"),
+        ),
+        KeyBinding::new(
+            "cmd-k right",
+            ProductCommandSource::new(SPLIT_HORIZONTAL_COMMAND),
+            Some("product"),
+        ),
+        KeyBinding::new(
+            "cmd-k down",
+            ProductCommandSource::new(SPLIT_VERTICAL_COMMAND),
+            Some("product"),
+        ),
+        KeyBinding::new("cmd-shift-p", ShowProductCommandPalette, Some("product")),
+        KeyBinding::new(
+            "cmd-z",
+            ProductCommandSource::new(UNDO_COMMAND),
+            Some("product"),
+        ),
+        KeyBinding::new(
+            "cmd-shift-z",
+            ProductCommandSource::new(REDO_COMMAND),
+            Some("product"),
+        ),
+        KeyBinding::new(
+            "cmd-x",
+            ProductCommandSource::new(CUT_COMMAND),
+            Some("product"),
+        ),
+        KeyBinding::new(
+            "cmd-c",
+            ProductCommandSource::new(COPY_COMMAND),
+            Some("product"),
+        ),
+        KeyBinding::new(
+            "cmd-v",
+            ProductCommandSource::new(PASTE_COMMAND),
+            Some("product"),
+        ),
+        KeyBinding::new(
+            "cmd-a",
+            ProductCommandSource::new(SELECT_ALL_COMMAND),
+            Some("product"),
+        ),
+        KeyBinding::new(
+            "cmd-f",
+            ProductCommandSource::new(FIND_COMMAND),
+            Some("product"),
+        ),
+        KeyBinding::new(
+            "cmd-g",
+            ProductCommandSource::new(FIND_NEXT_COMMAND),
+            Some("product"),
+        ),
+        KeyBinding::new(
+            "cmd-shift-g",
+            ProductCommandSource::new(FIND_PREVIOUS_COMMAND),
+            Some("product"),
+        ),
+        KeyBinding::new(
+            "cmd-q",
+            ProductCommandSource::new(QUIT_COMMAND),
+            Some("product"),
+        ),
+    ]);
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
-    use gpui::{AppContext, Focusable, KeyBinding, TestAppContext};
+    use gpui::{
+        AppContext, Focusable, KeyBinding, Modifiers, MouseButton, TestAppContext,
+        VisualTestContext, point, px,
+    };
 
     use crate::host::protocol::{Command, CommandArgumentValue, CommandOutcome};
 
@@ -2839,6 +2857,196 @@ mod tests {
                     .len(),
                 2
             );
+        });
+    }
+
+    #[gpui::test]
+    async fn editing_commands_keep_the_captured_view_and_native_clipboard(cx: &mut TestAppContext) {
+        let documents = install_globals(cx);
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        let (shell, window_handle) = product_window(document, model.clone(), cx);
+        let (target, dispatcher) = cx
+            .update_window(window_handle, |_, window, cx| {
+                shell.read(cx).focus_active_editor(window, cx);
+                let target = shell.update(cx, |shell, cx| {
+                    shell.capture_command_target(window, cx).unwrap()
+                });
+                cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                    "fn café() {\n    👩‍💻\n}\n".into(),
+                ));
+                shell.update(cx, |shell, cx| shell.new_tab(window, cx));
+                (target, cx.global::<ApplicationProductCommands>().0.clone())
+            })
+            .unwrap();
+        for command in [
+            super::PASTE_COMMAND,
+            super::SELECT_ALL_COMMAND,
+            super::COPY_COMMAND,
+        ] {
+            let execution = dispatcher.update(cx, |dispatcher, cx| {
+                dispatcher.dispatch(
+                    Command {
+                        name: command.into(),
+                        arguments: CommandArgumentValue::Null,
+                    },
+                    target.clone(),
+                    cx,
+                )
+            });
+            assert_eq!(
+                execution.completion.await.unwrap(),
+                CommandOutcome::Completed
+            );
+        }
+        cx.read(|cx| {
+            assert_eq!(model.read(cx).text(), "fn café() {\n    👩‍💻\n}\n");
+            let active = shell
+                .read(cx)
+                .workbench
+                .read(cx)
+                .focused_pane()
+                .unwrap()
+                .active_tab()
+                .editor();
+            assert_eq!(active.read(cx).model().read(cx).text(), "");
+        });
+        let execution = dispatcher.update(cx, |dispatcher, cx| {
+            dispatcher.dispatch(
+                Command {
+                    name: super::CUT_COMMAND.into(),
+                    arguments: CommandArgumentValue::Null,
+                },
+                target,
+                cx,
+            )
+        });
+        assert_eq!(
+            execution.completion.await.unwrap(),
+            CommandOutcome::Completed
+        );
+        cx.update(|cx| {
+            assert_eq!(model.read(cx).text(), "");
+            assert_eq!(
+                cx.read_from_clipboard().unwrap().text().unwrap(),
+                "fn café() {\n    👩‍💻\n}\n"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn product_editor_accepts_utf16_composition_and_grapheme_deletion(cx: &mut TestAppContext) {
+        use gpui::EntityInputHandler;
+        let documents = install_globals(cx);
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        let (shell, window_handle) = product_window(document, model.clone(), cx);
+        cx.update_window(window_handle, |_, window, cx| {
+            shell.read(cx).focus_active_editor(window, cx);
+            let editor = shell
+                .read(cx)
+                .workbench
+                .read(cx)
+                .focused_pane()
+                .unwrap()
+                .active_tab()
+                .editor()
+                .clone();
+            editor.update(cx, |editor, cx| {
+                editor.replace_text_in_range(None, "# Notes\n👩‍💻 é ", window, cx);
+                let start = "# Notes\n👩‍💻 é ".encode_utf16().count();
+                editor.replace_and_mark_text_in_range(None, "に", Some(1..1), window, cx);
+                assert_eq!(editor.marked_text_range(window, cx), Some(start..start + 1));
+                editor.replace_and_mark_text_in_range(None, "日本", Some(2..2), window, cx);
+                assert_eq!(editor.marked_text_range(window, cx), Some(start..start + 2));
+                editor.replace_text_in_range(None, "日本語", window, cx);
+                assert_eq!(editor.marked_text_range(window, cx), None);
+                assert!(editor.execute_editing_command("editor.move-document-start", window, cx));
+                assert!(editor.execute_editing_command("editor.move-down", window, cx));
+                assert!(editor.execute_editing_command("editor.delete-forward", window, cx));
+            });
+        })
+        .unwrap();
+        cx.read(|cx| assert_eq!(model.read(cx).text(), "# Notes\n é 日本語"));
+    }
+
+    #[gpui::test]
+    fn editing_keybindings_use_semantic_commands(cx: &mut TestAppContext) {
+        let documents = install_globals(cx);
+        cx.update(super::bind_product_keys);
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        let (shell, window_handle) = product_window(document, model.clone(), cx);
+        cx.update_window(window_handle, |_, window, cx| {
+            shell.read(cx).focus_active_editor(window, cx)
+        })
+        .unwrap();
+        cx.simulate_keystrokes(window_handle, "enter");
+        cx.run_until_parked();
+        cx.read(|cx| {
+            assert_eq!(model.read(cx).text(), "\n");
+            assert_eq!(
+                cx.global::<ApplicationProductCommands>()
+                    .0
+                    .read(cx)
+                    .last_outcome(),
+                Some(&CommandOutcome::Completed)
+            );
+        });
+        cx.simulate_keystrokes(window_handle, "shift-up backspace tab");
+        cx.run_until_parked();
+        cx.read(|cx| assert_eq!(model.read(cx).text(), "\t"));
+        cx.simulate_input(window_handle, "café👩‍💻");
+        cx.simulate_keystrokes(window_handle, "cmd-a cmd-c");
+        cx.run_until_parked();
+        cx.update(|cx| {
+            assert_eq!(
+                cx.read_from_clipboard().unwrap().text().unwrap(),
+                "\tcafé👩‍💻"
+            )
+        });
+        cx.simulate_keystrokes(window_handle, "cmd-x cmd-v");
+        cx.run_until_parked();
+        cx.read(|cx| assert_eq!(model.read(cx).text(), "\tcafé👩‍💻"));
+    }
+
+    #[gpui::test]
+    fn product_editor_captures_mouse_selection_outside_its_pane(cx: &mut TestAppContext) {
+        let documents = install_globals(cx);
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let text = "first line\nsecond line";
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        model.update(cx, |model, _| {
+            model.replace(0..0, text).unwrap();
+        });
+        let (shell, window_handle) = product_window(document, model, cx);
+        cx.refresh().unwrap();
+        cx.run_until_parked();
+
+        let editor = cx.read(|cx| {
+            shell
+                .read(cx)
+                .workbench
+                .read(cx)
+                .focused_pane()
+                .unwrap()
+                .active_tab()
+                .editor()
+                .clone()
+        });
+        let bounds = cx.read(|cx| editor.read(cx).interaction_bounds());
+        let start = point(bounds.origin.x + px(1.), bounds.origin.y + px(5.));
+        let outside = point(
+            bounds.origin.x + bounds.size.width + px(20.),
+            bounds.origin.y + bounds.size.height + px(20.),
+        );
+        let mut window_cx = VisualTestContext::from_window(window_handle, cx);
+        window_cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+        window_cx.simulate_mouse_move(outside, MouseButton::Left, Modifiers::default());
+        window_cx.simulate_mouse_up(outside, MouseButton::Left, Modifiers::default());
+
+        window_cx.read(|cx| {
+            assert_eq!(editor.read(cx).selected_byte_range(), Some(0..text.len()));
         });
     }
 
