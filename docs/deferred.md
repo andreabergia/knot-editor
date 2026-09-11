@@ -12,9 +12,15 @@ the item is removed from this register.
 
 ## Editing and workbench
 
+- **D031 — Current-file Find**
+  - Deferred: Safe ordinary editing and workbench behavior can be dogfooded
+    without a search UI.
+  - Reconsider: Daily editing identifies literal in-file search as a recurring
+    need; define focused query, live matching, edit-following navigation, and
+    macOS bindings together in a selected slice.
+
 - **D001 — Replace and advanced Find modes**
-  - Deferred: Literal current-file Find is sufficient for the first editing
-    session.
+  - Deferred: These modes depend on a selected current-file Find design.
   - Reconsider: Daily use identifies required replacement, regular-expression,
     case, or whole-word behavior.
 

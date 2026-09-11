@@ -8,8 +8,7 @@ model before polishing editor behavior around a temporary single-view shell.
 
 The slice is successful when Knot can be used safely for an ordinary editing
 session involving existing and new UTF-8 files, multiple windows, tabs, and
-splits, including Find within the current file. Syntax highlighting is not
-required.
+splits. Syntax highlighting is not required.
 
 ## Product constraints
 
@@ -129,7 +128,7 @@ application-owned document model rather than introducing transitional APIs.
 
 ### Checkpoint 4: Target-preserving product commands ✅
 
-- ✅ Register the slice's document, window, editing, and Find command names in the
+- ✅ Register the slice's document, window, and editing command names in the
   native catalog, implementing the commands whose underlying behavior exists.
 - ✅ Route native menus, fixed keybindings, the palette, and JavaScript through
   the shared dispatcher with captured product targets and asynchronous
@@ -199,17 +198,7 @@ application-owned document model rather than introducing transitional APIs.
 - ✅ Review gate: manually exercise grouped typing and deletion, paste, divergent
   edits, and document or view switching.
 
-### Checkpoint 10: Current-file Find
-
-- Add the focused query field, live match state and highlighting, and
-  next/previous navigation that follows buffer edits.
-- Register and route Find operations with the required macOS bindings.
-- Cover matching, navigation, edits, focus, target preservation, and command
-  entry paths.
-- Review gate: manually search and edit a file with zero, one, and multiple
-  matches using the query field and keyboard navigation.
-
-### Checkpoint 11: Regression and dogfood closure
+### Checkpoint 10: Regression and dogfood closure
 
 - Fill remaining coverage gaps across model, lifecycle, command, persistence,
   integration, and native UI paths.
@@ -253,8 +242,7 @@ application-owned document model rather than introducing transitional APIs.
 
 - ✅ Register New, Open, Save, Save As, Close Tab, Close Window, New Window,
   Quit, Split Horizontal, Split Vertical, Undo, Redo, Cut, Copy, Paste, and
-  Select All as native `CommandCatalog` entries. Register Find and its
-  next/previous navigation operations through the same path.
+  Select All as native `CommandCatalog` entries.
 - ✅ Route native menus and keybindings through the command dispatcher. Do not
   retain direct menu-to-shell or keybinding-to-shell implementations of the
   same operations.
@@ -297,10 +285,7 @@ application-owned document model rather than introducing transitional APIs.
   and keeping the caret visible.
 - ✅ Integrate native clipboard Cut, Copy, Paste, and Select All commands.
 - ✅ Preserve working IME and Unicode behavior through the product shell.
-- ⬜ Add current-file Find with a focused query field, visible match state,
-  match highlighting, and next/previous navigation that follows buffer edits.
-  Use the VS Code macOS defaults: `cmd-f`, `enter`, and `shift-enter`.
-- ⬜ Keep plain text as the only required presentation; Replace, regular
+- ⬜ Keep plain text as the only required presentation; Find, Replace, regular
   expressions, and syntax highlighting are deferred.
 
 ### 6. Add usable undo and redo
@@ -360,7 +345,7 @@ work to [`deferred.md`](../deferred.md).
 
 ## Explicit exclusions
 
-The slice does not require Replace, regular-expression search, syntax
+The slice does not require Find, Replace, regular-expression search, syntax
 highlighting, configurable keymaps, layout restoration, tab dragging, live
 filesystem watching, Linux support, or production extension scheduling. These
 and other known future concerns are tracked in [deferred.md](../deferred.md).
