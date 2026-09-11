@@ -458,6 +458,76 @@ mod tests {
     }
 
     #[test]
+    fn atomic_create_does_not_clobber_or_leave_a_temporary_sibling() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("existing.txt");
+        fs::write(&path, b"existing").unwrap();
+        let provider = LocalFileSystemProvider::new(temporary.path(), io_runtime()).unwrap();
+        let file = provider.path_to_uri(&path).unwrap();
+
+        assert!(matches!(
+            run(provider.create(file.clone(), b"replacement".to_vec())),
+            Err(ResourceError::AlreadyExists { uri }) if uri == file
+        ));
+        assert_eq!(fs::read(&path).unwrap(), b"existing");
+        assert_eq!(
+            fs::read_dir(temporary.path())
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name())
+                .collect::<Vec<_>>(),
+            vec![std::ffi::OsString::from("existing.txt")]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_replace_preserves_permissions() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("executable.sh");
+        fs::write(&path, b"old").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o751)).unwrap();
+        let provider = LocalFileSystemProvider::new(temporary.path(), io_runtime()).unwrap();
+        let file = provider.path_to_uri(&path).unwrap();
+        let before = run(provider.read(file.clone())).unwrap();
+
+        run(provider.replace(file, before.version, b"new".to_vec())).unwrap();
+
+        assert_eq!(fs::read(&path).unwrap(), b"new");
+        assert_eq!(fs::metadata(path).unwrap().mode() & 0o777, 0o751);
+    }
+
+    #[test]
+    fn rejected_atomic_replace_preserves_content_and_cleans_up_its_temporary_sibling() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("document.txt");
+        fs::write(&path, b"external").unwrap();
+        let provider = LocalFileSystemProvider::new(temporary.path(), io_runtime()).unwrap();
+        let file = provider.path_to_uri(&path).unwrap();
+        let metadata = fs::metadata(&path).unwrap();
+
+        assert!(matches!(
+            atomic_replace(
+                &path,
+                &file,
+                &ResourceVersion::new(b"stale"),
+                &metadata,
+                b"replacement".to_vec(),
+            ),
+            Err(ResourceError::Conflict { uri }) if uri == file
+        ));
+        assert_eq!(fs::read(&path).unwrap(), b"external");
+        assert_eq!(
+            fs::read_dir(temporary.path())
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name())
+                .collect::<Vec<_>>(),
+            vec![std::ffi::OsString::from("document.txt")]
+        );
+    }
+
+    #[test]
     fn rejects_outside_and_wrong_kind_operations() {
         let temporary = tempfile::tempdir().unwrap();
         let provider = LocalFileSystemProvider::new(temporary.path(), io_runtime()).unwrap();

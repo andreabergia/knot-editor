@@ -1,6 +1,6 @@
 # First Product Slice: Dogfoodable Text Editing
 
-Status: in progress — checkpoint 9 approved; checkpoint 10 pending.
+Status: in progress — checkpoint 9 approved; checkpoint 10 regression hardening in progress.
 
 This slice makes Knot usable for editing its own source on macOS. It evolves
 the validated prototype in place and introduces the real workbench ownership
@@ -198,10 +198,12 @@ application-owned document model rather than introducing transitional APIs.
 - ✅ Review gate: manually exercise grouped typing and deletion, paste, divergent
   edits, and document or view switching.
 
-### Checkpoint 10: Regression and dogfood closure
+### Checkpoint 10: Regression and dogfood closure 🟨
 
-- Fill remaining coverage gaps across model, lifecycle, command, persistence,
+- 🟨 Fill remaining coverage gaps across model, lifecycle, command, persistence,
   integration, and native UI paths.
+  - ✅ Cover local atomic create failure cleanup and content preservation, plus
+    replacement permission preservation and conflict cleanup.
 - Complete the two-window dogfood session and all cross-entry-point command
   checks described in section 8.
 - Update architecture and decisions, record the slice result, move newly
