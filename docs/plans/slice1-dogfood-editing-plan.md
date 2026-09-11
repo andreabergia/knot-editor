@@ -202,9 +202,20 @@ application-owned document model rather than introducing transitional APIs.
 
 - 🟨 Fill remaining coverage gaps across model, lifecycle, command, persistence,
   integration, and native UI paths.
+  - ✅ Cover document/view lifetime, URI deduplication, untitled state, undo
+    grouping, save races, and representative target-preserving routing through
+    keybindings, the palette, and JavaScript.
   - ✅ Cover local atomic create failure cleanup and content preservation, plus
     replacement permission preservation and conflict cleanup.
   - ✅ Cover Reload, Save As, and Cancel outcomes for external-change conflicts.
+  - ⬜ Reject an external-conflict Reload when a newer edit races its read.
+  - ⬜ Reject protected closure when a newer edit races its Save, preserving the
+    document and every captured view.
+  - ⬜ Cover multi-document Quit with serial mixed decisions and rollback after
+    a later cancellation or save failure.
+  - ⬜ Complete native UI coverage through the manual dogfood and exhaustive
+    cross-entry-point checks below; these interaction contracts are not
+    established by lower-level tests.
 - Complete the two-window dogfood session and all cross-entry-point command
   checks described in section 8.
 - Update architecture and decisions, record the slice result, move newly
@@ -321,10 +332,10 @@ application-owned document model rather than introducing transitional APIs.
 
 - ✅ Protect dirty documents when closing a tab, closing a window, or quitting;
   do not prompt twice for a document visible in multiple places.
-- ⬜ Add thorough tests for document/view lifetime, URI deduplication, untitled
+- 🟨 Add thorough tests for document/view lifetime, URI deduplication, untitled
   state, undo grouping, save races, atomic create/replace, conflict rejection,
-  and command routing. Cover native UI behavior where model and integration
-  tests cannot establish the interaction contract.
+  and command routing. The remaining automated and native UI cases are tracked
+  explicitly under Checkpoint 10 above.
 - ⬜ Use Knot to create a new file and edit several existing files in this
   repository across two windows and a split, including two views of one
   buffer.
