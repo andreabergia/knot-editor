@@ -25,7 +25,7 @@ use super::{
         CompactCompletionSurface, CompletionController, CompletionProviderRegistration,
         CompletionSurface, CompletionSurfaceKind, ListCompletionSurface,
     },
-    history::{EditGroupKind, EditGrouping},
+    history::{EditGroupKind, EditGrouping, HistoryViewChange, HistoryViewState},
     model::{BufferModel, ContributionSource, ResolvedEditorContribution},
 };
 
@@ -153,6 +153,7 @@ pub struct EditorView {
     focus: FocusHandle,
     history_context: u64,
     history_was_focused: bool,
+    last_history_restore_generation: u64,
     completion: Option<CompletionController>,
     completion_surface: Option<Box<dyn CompletionSurface>>,
     completion_tasks: Vec<(CompletionProviderRegistrationId, Task<()>)>,
@@ -385,6 +386,9 @@ impl EditorView {
                 model.resolved_contributions(),
                 model.resolve_view_position(this.position_range),
             );
+            if let Some(restore) = model.history_view_restore() {
+                this.apply_history_view_restore(restore.generation, &restore.state);
+            }
             this.sync_view_position(cx);
             cx.notify();
         });
@@ -422,6 +426,7 @@ impl EditorView {
             focus: cx.focus_handle(),
             history_context: NEXT_HISTORY_CONTEXT.fetch_add(1, Ordering::Relaxed),
             history_was_focused: false,
+            last_history_restore_generation: 0,
             completion: None,
             completion_surface: None,
             completion_tasks: Vec::new(),
@@ -513,6 +518,37 @@ impl EditorView {
             (self.cursor_line, self.cursor_col) = end;
             self.has_selection = false;
         }
+        self.clamp_scroll();
+    }
+
+    fn history_view_state(&self) -> HistoryViewState {
+        let caret = self.to_flat_byte(self.cursor_line, self.cursor_col);
+        let anchor = if self.has_selection {
+            self.to_flat_byte(self.anchor_line, self.anchor_col)
+        } else {
+            caret
+        };
+        HistoryViewState {
+            context: self.history_context,
+            anchor,
+            caret,
+        }
+    }
+
+    fn apply_history_view_restore(&mut self, generation: u64, state: &HistoryViewState) {
+        if generation <= self.last_history_restore_generation {
+            return;
+        }
+        self.last_history_restore_generation = generation;
+        if state.context != self.history_context {
+            return;
+        }
+        (self.anchor_line, self.anchor_col) = self.from_flat_byte(state.anchor);
+        (self.cursor_line, self.cursor_col) = self.from_flat_byte(state.caret);
+        self.has_selection = state.anchor != state.caret;
+        self.selection_reversed = state.caret < state.anchor;
+        self.reveal_caret = true;
+        self.ensure_cursor_visible(self.viewport_h);
         self.clamp_scroll();
     }
 
@@ -654,11 +690,15 @@ impl EditorView {
                         model.text(),
                         model.resolved_contributions(),
                         model.resolve_view_position(self.position_range),
+                        model.history_view_restore().cloned(),
                     )
                 })
             });
-            if let Some((text, contributions, position)) = replay {
+            if let Some((text, contributions, position, restore)) = replay {
                 self.rebuild_projection(&text, contributions, position);
+                if let Some(restore) = restore {
+                    self.apply_history_view_restore(restore.generation, &restore.state);
+                }
                 self.sync_view_position(cx);
                 cx.notify();
             }
@@ -1135,22 +1175,24 @@ impl EditorView {
         byte_end: usize,
         text: &str,
         grouping: Option<EditGroupKind>,
+        view: HistoryViewChange,
         cx: &mut Context<Self>,
     ) {
         self.dismiss_completion();
         let model = self.model.clone();
         model.update(cx, |model, cx| {
             let changed = if let Some(kind) = grouping {
-                model.replace_grouped(
+                model.replace_grouped_from_view(
                     byte_start..byte_end,
                     text,
                     EditGrouping {
                         context: self.history_context,
                         kind,
                     },
+                    view,
                 )
             } else {
-                model.replace(byte_start..byte_end, text)
+                model.replace_from_view(byte_start..byte_end, text, view)
             }
             .unwrap_or(false);
             if changed {
@@ -1398,7 +1440,21 @@ impl EditorView {
         self.preferred_x = None;
         let text: String = text.replace("\r\n", "\n").replace('\r', "\n");
         let (byte_start, byte_end) = self.resolve_replacement_range(range);
-        self.splice(byte_start, byte_end, &text, grouping, cx);
+        let before = self.history_view_state();
+        let after_offset = byte_start + text.len();
+        let after = HistoryViewState {
+            context: self.history_context,
+            anchor: after_offset,
+            caret: after_offset,
+        };
+        self.splice(
+            byte_start,
+            byte_end,
+            &text,
+            grouping,
+            HistoryViewChange { before, after },
+            cx,
+        );
         self.marked_range_utf16 = None;
 
         let doc = self.flat_doc();
@@ -1530,23 +1586,34 @@ impl EntityInputHandler for EditorView {
         let doc = self.flat_doc();
         let marked_start_utf16 = self.byte_col_to_utf16(&doc, byte_start);
 
+        let marked_utf16_len: usize = new_text.chars().map(char::len_utf16).sum();
+        let (sel_start_rel, sel_end_rel) = match new_selected_range.clone() {
+            Some(r) => (r.start, r.end),
+            None => (marked_utf16_len, marked_utf16_len),
+        };
+        let anchor = byte_start + self.utf16_to_byte_col(new_text, sel_start_rel);
+        let caret = byte_start + self.utf16_to_byte_col(new_text, sel_end_rel);
+
         self.splice(
             byte_start,
             byte_end,
             new_text,
             Some(EditGroupKind::Composition),
+            HistoryViewChange {
+                before: self.history_view_state(),
+                after: HistoryViewState {
+                    context: self.history_context,
+                    anchor,
+                    caret,
+                },
+            },
             cx,
         );
 
         // Marked range = [marked_start, marked_start + utf16_len(new_text)).
-        let marked_utf16_len: usize = new_text.chars().map(|c| c.len_utf16()).sum();
         self.marked_range_utf16 = Some(marked_start_utf16..marked_start_utf16 + marked_utf16_len);
 
         // Caret + anchor from new_selected_range (relative to marked start).
-        let (sel_start_rel, sel_end_rel) = match new_selected_range {
-            Some(r) => (r.start, r.end),
-            None => (marked_utf16_len, marked_utf16_len),
-        };
         let anchor_utf16 = marked_start_utf16 + sel_start_rel.min(marked_utf16_len);
         let caret_utf16 = marked_start_utf16 + sel_end_rel.min(marked_utf16_len);
         let (al, ac) = self.from_flat_utf16(anchor_utf16);
@@ -2695,6 +2762,116 @@ mod tests {
                 view.execute_editing_command("editor.undo", window, cx);
                 assert_eq!(view.flat_doc(), "aβc");
             });
+        });
+    }
+
+    #[gpui::test]
+    fn undo_and_redo_restore_the_originating_views_grouped_selection(cx: &mut TestAppContext) {
+        let model = cx.new(|_| BufferModel::from_text("abcdef"));
+        let (other, cx) = cx.add_window_view(|_, cx| EditorView::new(model.clone(), cx));
+        let origin = cx.new(|cx| EditorView::new(model.clone(), cx));
+
+        cx.update(|window, cx| {
+            origin.update(cx, |view, cx| {
+                view.anchor_col = 4;
+                view.cursor_col = 1;
+                view.has_selection = true;
+                view.sync_view_position(cx);
+                view.replace_text_in_range(None, "X", window, cx);
+                view.replace_text_in_range(None, "Y", window, cx);
+            });
+            other.update(cx, |view, cx| {
+                view.cursor_col = 5;
+                view.sync_view_position(cx);
+                view.execute_editing_command("editor.undo", window, cx);
+            });
+        });
+        cx.run_until_parked();
+
+        cx.read(|cx| {
+            let origin = origin.read(cx);
+            let other = other.read(cx);
+            assert_eq!(origin.flat_doc(), "abcdef");
+            assert_eq!((origin.anchor_col, origin.cursor_col), (4, 1));
+            assert!(origin.has_selection);
+            assert!(origin.selection_reversed);
+            assert!(!other.has_selection);
+            assert_ne!((other.cursor_line, other.cursor_col), (0, 1));
+        });
+
+        cx.update(|window, cx| {
+            other.update(cx, |view, cx| {
+                view.execute_editing_command("editor.redo", window, cx);
+            });
+        });
+        cx.run_until_parked();
+
+        cx.read(|cx| {
+            let origin = origin.read(cx);
+            assert_eq!(origin.flat_doc(), "aXYef");
+            assert_eq!((origin.cursor_line, origin.cursor_col), (0, 3));
+            assert!(!origin.has_selection);
+        });
+    }
+
+    #[gpui::test]
+    fn replay_ignores_view_state_for_an_originating_view_that_was_dropped(cx: &mut TestAppContext) {
+        let model = cx.new(|_| BufferModel::from_text("text"));
+        let (survivor, cx) = cx.add_window_view(|_, cx| EditorView::new(model.clone(), cx));
+        let origin = cx.new(|cx| EditorView::new(model.clone(), cx));
+
+        cx.update(|window, cx| {
+            origin.update(cx, |view, cx| {
+                view.execute_editing_command("editor.move-document-end", window, cx);
+                view.replace_text_in_range(None, "!", window, cx);
+            });
+        });
+        drop(origin);
+        cx.run_until_parked();
+
+        cx.update(|window, cx| {
+            survivor.update(cx, |view, cx| {
+                view.execute_editing_command("editor.undo", window, cx);
+            });
+        });
+        cx.run_until_parked();
+
+        cx.read(|cx| {
+            let survivor = survivor.read(cx);
+            assert_eq!(survivor.flat_doc(), "text");
+            assert_eq!((survivor.cursor_line, survivor.cursor_col), (0, 0));
+        });
+    }
+
+    #[gpui::test]
+    fn a_newer_edit_invalidates_an_unobserved_history_view_restore(cx: &mut TestAppContext) {
+        let model = cx.new(|_| BufferModel::from_text("abcdef"));
+        let (other, cx) = cx.add_window_view(|_, cx| EditorView::new(model.clone(), cx));
+        let origin = cx.new(|cx| EditorView::new(model.clone(), cx));
+
+        cx.update(|window, cx| {
+            origin.update(cx, |view, cx| {
+                view.anchor_col = 4;
+                view.cursor_col = 1;
+                view.has_selection = true;
+                view.sync_view_position(cx);
+                view.replace_text_in_range(None, "X", window, cx);
+            });
+            other.update(cx, |view, cx| {
+                view.execute_editing_command("editor.undo", window, cx);
+            });
+            model.update(cx, |model, cx| {
+                assert!(model.replace(0..0, "z").unwrap());
+                cx.notify();
+            });
+        });
+        cx.run_until_parked();
+
+        cx.read(|cx| {
+            let origin = origin.read(cx);
+            assert_eq!(origin.flat_doc(), "zabcdef");
+            assert_eq!((origin.cursor_line, origin.cursor_col), (0, 5));
+            assert!(!origin.has_selection);
         });
     }
 

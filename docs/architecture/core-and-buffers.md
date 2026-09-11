@@ -89,4 +89,11 @@ contributions, and closure. `core::TextBuffer` remains unconditionally mutable.
   a short elapsed-time boundary. Cursor or selection movement, focus transfer,
   paste, other explicit commands, and a change of editor or edit kind end the
   current group. A forward edit after undo clears redo.
-- History trees, persistence, and view-state restoration remain deferred.
+- An editor-originated history entry records byte-offset caret and selection
+  snapshots for that view. Undo restores the group's initial snapshot and redo
+  its final snapshot in the originating view, even when replay is invoked from
+  another view. Other views retain their independently anchored positions, and
+  history does not retain view entities after closure. Restoration is revision
+  gated so a newer edit supersedes an unobserved replay snapshot.
+- History trees, history persistence, and persistent view-state restoration
+  across restarts remain deferred.

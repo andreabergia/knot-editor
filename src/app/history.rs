@@ -23,11 +23,31 @@ pub(crate) struct EditGrouping {
     pub kind: EditGroupKind,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct HistoryViewState {
+    pub context: u64,
+    pub anchor: usize,
+    pub caret: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct HistoryViewChange {
+    pub before: HistoryViewState,
+    pub after: HistoryViewState,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct HistoryReplay {
+    pub content_state: u64,
+    pub view_state: Option<HistoryViewState>,
+}
+
 struct HistoryEntry {
     transaction: EditTransaction,
     group: Option<GroupState>,
     before_state: u64,
     after_state: u64,
+    view: Option<HistoryViewChange>,
 }
 
 #[derive(Clone, Debug)]
@@ -54,6 +74,7 @@ impl EditHistory {
         now: Instant,
         before_state: u64,
         after_state: u64,
+        view: Option<HistoryViewChange>,
     ) {
         self.redo.clear();
         if let Some(grouping) = grouping
@@ -67,6 +88,11 @@ impl EditHistory {
             entry.transaction.replace(buffer, range.clone(), text);
             entry.group.as_mut().unwrap().advance(&range, text, now);
             entry.after_state = after_state;
+            match (&mut entry.view, view) {
+                (Some(entry_view), Some(view)) => entry_view.after = view.after,
+                (None, None) => {}
+                _ => entry.view = None,
+            }
             return;
         }
 
@@ -78,6 +104,7 @@ impl EditHistory {
             group: grouping.map(|grouping| GroupState::new(grouping, &range, text, now)),
             before_state,
             after_state,
+            view,
         });
     }
 
@@ -99,6 +126,7 @@ impl EditHistory {
             group: None,
             before_state,
             after_state,
+            view: None,
         });
     }
 
@@ -108,30 +136,36 @@ impl EditHistory {
         }
     }
 
-    pub(crate) fn undo(&mut self, buffer: &mut TextBuffer) -> Option<u64> {
+    pub(crate) fn undo(&mut self, buffer: &mut TextBuffer) -> Option<HistoryReplay> {
         let Some(mut entry) = self.undo.pop() else {
             return None;
         };
         entry.group = None;
         entry.transaction.prepare_for_history_replay(buffer);
         entry.transaction.undo(buffer);
-        let state = entry.before_state;
+        let replay = HistoryReplay {
+            content_state: entry.before_state,
+            view_state: entry.view.as_ref().map(|view| view.before.clone()),
+        };
         self.redo.push(entry);
         self.break_group();
-        Some(state)
+        Some(replay)
     }
 
-    pub(crate) fn redo(&mut self, buffer: &mut TextBuffer) -> Option<u64> {
+    pub(crate) fn redo(&mut self, buffer: &mut TextBuffer) -> Option<HistoryReplay> {
         let Some(mut entry) = self.redo.pop() else {
             return None;
         };
         entry.transaction.prepare_for_history_replay(buffer);
         entry.transaction.redo(buffer);
-        let state = entry.after_state;
+        let replay = HistoryReplay {
+            content_state: entry.after_state,
+            view_state: entry.view.as_ref().map(|view| view.after.clone()),
+        };
         entry.group = None;
         self.undo.push(entry);
         self.break_group();
-        Some(state)
+        Some(replay)
     }
 }
 
@@ -212,6 +246,7 @@ mod tests {
                 now,
                 0,
                 1,
+                None,
             );
         }
         assert!(history.undo(&mut buffer).is_some());
@@ -228,6 +263,7 @@ mod tests {
                 now,
                 1,
                 2,
+                None,
             );
         }
         assert!(history.undo(&mut buffer).is_some());
@@ -242,6 +278,7 @@ mod tests {
                 now,
                 1,
                 2,
+                None,
             );
         }
         assert!(history.undo(&mut buffer).is_some());
@@ -261,6 +298,7 @@ mod tests {
             now,
             0,
             1,
+            None,
         );
         history.break_group();
         history.apply_replace(
@@ -271,6 +309,7 @@ mod tests {
             now,
             1,
             2,
+            None,
         );
         assert!(history.undo(&mut buffer).is_some());
         assert_eq!(buffer.read_range(0..buffer.len()), "a");
@@ -282,6 +321,7 @@ mod tests {
             now,
             1,
             3,
+            None,
         );
         assert!(history.redo(&mut buffer).is_none());
         assert!(history.undo(&mut buffer).is_some());
@@ -301,6 +341,7 @@ mod tests {
             now,
             0,
             1,
+            None,
         );
         history.apply_replace(
             &mut buffer,
@@ -310,6 +351,7 @@ mod tests {
             now,
             1,
             2,
+            None,
         );
         history.apply_replace(
             &mut buffer,
@@ -319,6 +361,7 @@ mod tests {
             now + GROUPING_TIMEOUT + Duration::from_millis(1),
             2,
             3,
+            None,
         );
         assert!(history.undo(&mut buffer).is_some());
         assert_eq!(buffer.read_range(0..buffer.len()), "ab");
@@ -334,7 +377,7 @@ mod tests {
         let mut buffer = TextBuffer::from_text("");
         let mut history = EditHistory::default();
         let composition = Some(grouping(1, EditGroupKind::Composition));
-        history.apply_replace(&mut buffer, 0..0, "に", composition, now, 0, 1);
+        history.apply_replace(&mut buffer, 0..0, "に", composition, now, 0, 1, None);
         history.apply_replace(
             &mut buffer,
             0.."に".len(),
@@ -343,9 +386,66 @@ mod tests {
             now + GROUPING_TIMEOUT + Duration::from_secs(5),
             1,
             2,
+            None,
         );
 
-        assert_eq!(history.undo(&mut buffer), Some(0));
+        assert_eq!(history.undo(&mut buffer).unwrap().content_state, 0);
         assert_eq!(buffer.read_range(0..buffer.len()), "");
+    }
+
+    #[test]
+    fn grouped_history_retains_the_first_before_and_last_after_view_state() {
+        let now = Instant::now();
+        let mut buffer = TextBuffer::from_text("abcd");
+        let mut history = EditHistory::default();
+        let first = HistoryViewChange {
+            before: HistoryViewState {
+                context: 7,
+                anchor: 3,
+                caret: 1,
+            },
+            after: HistoryViewState {
+                context: 7,
+                anchor: 2,
+                caret: 2,
+            },
+        };
+        history.apply_replace(
+            &mut buffer,
+            1..3,
+            "x",
+            Some(grouping(7, EditGroupKind::Typing)),
+            now,
+            0,
+            1,
+            Some(first.clone()),
+        );
+        let last = HistoryViewChange {
+            before: first.after,
+            after: HistoryViewState {
+                context: 7,
+                anchor: 3,
+                caret: 3,
+            },
+        };
+        history.apply_replace(
+            &mut buffer,
+            2..2,
+            "y",
+            Some(grouping(7, EditGroupKind::Typing)),
+            now,
+            1,
+            2,
+            Some(last.clone()),
+        );
+
+        assert_eq!(
+            history.undo(&mut buffer).unwrap().view_state,
+            Some(first.before)
+        );
+        assert_eq!(
+            history.redo(&mut buffer).unwrap().view_state,
+            Some(last.after)
+        );
     }
 }

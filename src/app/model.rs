@@ -22,7 +22,7 @@ use crate::{
     },
 };
 
-use super::history::{EditGrouping, EditHistory};
+use super::history::{EditGrouping, EditHistory, HistoryViewChange, HistoryViewState};
 
 /// The producer whose complete contribution set is stored in this buffer.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -108,6 +108,15 @@ pub struct BufferModel {
     pending_changes: VecDeque<CommittedBufferChange>,
     snapshot_cache: RefCell<Option<CachedSnapshot>>,
     history: EditHistory,
+    history_replay_generation: u64,
+    history_view_restore: Option<HistoryViewRestore>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct HistoryViewRestore {
+    pub generation: u64,
+    revision: u64,
+    pub state: HistoryViewState,
 }
 
 #[derive(Clone)]
@@ -147,6 +156,8 @@ impl BufferModel {
             pending_changes: VecDeque::new(),
             snapshot_cache: RefCell::new(None),
             history: EditHistory::default(),
+            history_replay_generation: 0,
+            history_view_restore: None,
         }
     }
 
@@ -524,48 +535,24 @@ impl BufferModel {
         range: Range<usize>,
         text: &str,
     ) -> Result<bool, BufferAccessError> {
-        assert!(self.open, "cannot edit a closed buffer");
-        if self.access_policy == BufferAccessPolicy::ReadOnly {
-            return Err(BufferAccessError::ReadOnly);
-        }
-        if range.is_empty() && text.is_empty() {
-            return Ok(false);
-        }
-        let edit = crate::host::protocol::TextEdit {
-            range: ByteRange {
-                start_byte_offset: range.start,
-                end_byte_offset: range.end,
-            },
-            text: text.into(),
-        };
-        let before_state = self.content_state;
-        let after_state = self.allocate_content_state();
-        self.history.apply_replace(
-            &mut self.buffer,
-            range,
-            text,
-            None,
-            Instant::now(),
-            before_state,
-            after_state,
-        );
-        self.content_state = after_state;
-        self.stabilize_anchored_ranges();
-        let before_revision = self.revision;
-        self.advance_revision();
-        self.pending_changes.push_back(CommittedBufferChange {
-            before_revision,
-            revision: self.revision,
-            edits: vec![edit],
-        });
-        Ok(true)
+        self.replace_recorded(range, text, None, None)
     }
 
-    pub(crate) fn replace_grouped(
+    pub(crate) fn replace_from_view(
         &mut self,
         range: Range<usize>,
         text: &str,
-        grouping: EditGrouping,
+        view: HistoryViewChange,
+    ) -> Result<bool, BufferAccessError> {
+        self.replace_recorded(range, text, None, Some(view))
+    }
+
+    fn replace_recorded(
+        &mut self,
+        range: Range<usize>,
+        text: &str,
+        grouping: Option<EditGrouping>,
+        view: Option<HistoryViewChange>,
     ) -> Result<bool, BufferAccessError> {
         assert!(self.open, "cannot edit a closed buffer");
         if self.access_policy == BufferAccessPolicy::ReadOnly {
@@ -587,10 +574,11 @@ impl BufferModel {
             &mut self.buffer,
             range,
             text,
-            Some(grouping),
+            grouping,
             Instant::now(),
             before_state,
             after_state,
+            view,
         );
         self.content_state = after_state;
         self.stabilize_anchored_ranges();
@@ -602,6 +590,26 @@ impl BufferModel {
             edits: vec![edit],
         });
         Ok(true)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn replace_grouped(
+        &mut self,
+        range: Range<usize>,
+        text: &str,
+        grouping: EditGrouping,
+    ) -> Result<bool, BufferAccessError> {
+        self.replace_recorded(range, text, Some(grouping), None)
+    }
+
+    pub(crate) fn replace_grouped_from_view(
+        &mut self,
+        range: Range<usize>,
+        text: &str,
+        grouping: EditGrouping,
+        view: HistoryViewChange,
+    ) -> Result<bool, BufferAccessError> {
+        self.replace_recorded(range, text, Some(grouping), Some(view))
     }
 
     pub(crate) fn break_history_group(&mut self) {
@@ -630,18 +638,36 @@ impl BufferModel {
         let Some(state) = state else {
             return Ok(false);
         };
-        self.content_state = state;
+        self.content_state = state.content_state;
+        let view_state = state.view_state;
         self.stabilize_anchored_ranges();
         let after = self.text();
         let edit = replacement_between(&before, &after);
         let before_revision = self.revision;
         self.advance_revision();
+        if let Some(view_state) = view_state {
+            self.history_replay_generation = self
+                .history_replay_generation
+                .checked_add(1)
+                .expect("history replay generation overflowed");
+            self.history_view_restore = Some(HistoryViewRestore {
+                generation: self.history_replay_generation,
+                revision: self.revision,
+                state: view_state,
+            });
+        }
         self.pending_changes.push_back(CommittedBufferChange {
             before_revision,
             revision: self.revision,
             edits: vec![edit],
         });
         Ok(true)
+    }
+
+    pub(crate) fn history_view_restore(&self) -> Option<&HistoryViewRestore> {
+        self.history_view_restore
+            .as_ref()
+            .filter(|restore| restore.revision == self.revision)
     }
 
     pub(crate) fn take_pending_change(&mut self) -> Option<CommittedBufferChange> {

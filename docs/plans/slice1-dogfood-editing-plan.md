@@ -327,7 +327,7 @@ application-owned document model rather than introducing transitional APIs.
   buffer.
 - ⬜ Exercise undo/redo, Save As outside the workspace, an external-change
   conflict, tab/window closure, and application quit during that session.
-- ⬜ Restore the initiating editor view's caret and selection when undoing or
+- ✅ Restore the initiating editor view's caret and selection when undoing or
   redoing, including grouped edits and invocation from another view of the same
   document, so navigation feels consistent with established editors.
 - ⬜ Invoke the slice's registered semantic commands through their applicable

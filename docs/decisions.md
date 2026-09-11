@@ -46,11 +46,17 @@ primitive is separate from history management, grouping, and view restoration.
 
 Keep session-local linear history in the document's shared `BufferModel`, not
 in an editor view. This makes edits and history common to every view of a
-document while view identity remains an input to grouping. Group only adjacent
-typing and same-direction deletion within a short interaction interval; focus,
-movement, paste, and explicit commands are predictable boundaries. Persistent
-or branching history and view-state restoration remain deferred until their
-recovery or navigation value justifies their additional state model.
+document while view identity remains an input to grouping and replay. Group
+only adjacent typing and same-direction deletion within a short interaction
+interval; focus, movement, paste, and explicit commands are predictable
+boundaries. Store the originating view's caret and selection as plain byte
+offsets on each entry: replay returns to the entry's exact content state, so
+persistent anchors would add lifetime complexity without improving stability.
+The model publishes the snapshot by view identity rather than retaining a view
+entity, allowing another view to invoke replay without moving itself or keeping
+a closed origin alive. Persistent or branching history and persistent
+view-state recovery remain deferred until their recovery value justifies the
+additional state model.
 Track content-state identity separately from the monotonic public revision so
 undo can return a document to its initial or persisted clean state without
 weakening revision-based conflict and notification ordering.
