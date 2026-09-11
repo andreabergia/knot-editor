@@ -204,6 +204,7 @@ application-owned document model rather than introducing transitional APIs.
   integration, and native UI paths.
   - ✅ Cover local atomic create failure cleanup and content preservation, plus
     replacement permission preservation and conflict cleanup.
+  - ✅ Cover Reload, Save As, and Cancel outcomes for external-change conflicts.
 - Complete the two-window dogfood session and all cross-entry-point command
   checks described in section 8.
 - Update architecture and decisions, record the slice result, move newly

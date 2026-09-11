@@ -4216,6 +4216,141 @@ mod tests {
     }
 
     #[gpui::test]
+    async fn cancelling_an_external_save_conflict_preserves_the_dirty_document(
+        cx: &mut TestAppContext,
+    ) {
+        let documents = install_globals(cx);
+        let (filesystems, provider) = memory_filesystems_with_provider();
+        cx.set_global(ApplicationFileSystems(filesystems));
+        let uri = ResourceUri::parse("mem://product/notes.txt").unwrap();
+        let opened = provider.read(uri.clone()).await.unwrap();
+        let model = cx.new(|_| BufferModel::from_text("loaded text"));
+        let document = documents.update(cx, |documents, _| {
+            documents.create_persisted("notes.txt", model.clone(), uri.clone(), 0, opened.version)
+        });
+        model.update(cx, |model, _| model.replace(0..0, "local ").unwrap());
+        provider.seed_file(uri.clone(), b"external text").unwrap();
+        let (shell, window_handle) = product_window(document, model.clone(), cx);
+        let target = cx
+            .update_window(window_handle, |_, window, cx| {
+                shell.update(cx, |shell, cx| {
+                    shell.focus_active_editor(window, cx);
+                    shell.capture_command_target(window, cx).unwrap()
+                })
+            })
+            .unwrap();
+        let execution = cx.update(|cx| {
+            let dispatcher = cx.global::<ApplicationProductCommands>().0.clone();
+            dispatcher.update(cx, |dispatcher, cx| {
+                dispatcher.dispatch(
+                    Command {
+                        name: SAVE_COMMAND.into(),
+                        arguments: CommandArgumentValue::Null,
+                    },
+                    target,
+                    cx,
+                )
+            })
+        });
+        cx.run_until_parked();
+        assert!(cx.has_pending_prompt());
+        cx.simulate_prompt_answer("Cancel");
+
+        assert_eq!(
+            execution.completion.await.unwrap(),
+            CommandOutcome::Cancelled
+        );
+        assert_eq!(
+            provider.read(uri.clone()).await.unwrap().bytes,
+            b"external text"
+        );
+        cx.read(|cx| {
+            let document = documents.read(cx).get(document).unwrap();
+            assert_eq!(model.read(cx).text(), "local loaded text");
+            assert_eq!(document.resource_uri(), Some(&uri));
+            assert!(document.is_dirty(cx));
+        });
+    }
+
+    #[gpui::test]
+    async fn save_as_after_an_external_conflict_retargets_only_after_saving(
+        cx: &mut TestAppContext,
+    ) {
+        let documents = install_globals(cx);
+        let (filesystems, provider) = memory_filesystems_with_provider();
+        cx.set_global(ApplicationFileSystems(filesystems));
+        let original_uri = ResourceUri::parse("mem://product/notes.txt").unwrap();
+        let alternate_uri = ResourceUri::parse("mem://product/recovered.txt").unwrap();
+        cx.set_global(ApplicationSaveDialog(Arc::new(FixedSaveDialog(
+            SaveDialogOutcome::Selected(alternate_uri.clone()),
+        ))));
+        let opened = provider.read(original_uri.clone()).await.unwrap();
+        let model = cx.new(|_| BufferModel::from_text("loaded text"));
+        let document = documents.update(cx, |documents, _| {
+            documents.create_persisted(
+                "notes.txt",
+                model.clone(),
+                original_uri.clone(),
+                0,
+                opened.version,
+            )
+        });
+        model.update(cx, |model, _| model.replace(0..0, "local ").unwrap());
+        provider
+            .seed_file(original_uri.clone(), b"external text")
+            .unwrap();
+        let (shell, window_handle) = product_window(document, model.clone(), cx);
+        let target = cx
+            .update_window(window_handle, |_, window, cx| {
+                shell.update(cx, |shell, cx| {
+                    shell.focus_active_editor(window, cx);
+                    shell.capture_command_target(window, cx).unwrap()
+                })
+            })
+            .unwrap();
+        let execution = cx.update(|cx| {
+            let dispatcher = cx.global::<ApplicationProductCommands>().0.clone();
+            dispatcher.update(cx, |dispatcher, cx| {
+                dispatcher.dispatch(
+                    Command {
+                        name: SAVE_COMMAND.into(),
+                        arguments: CommandArgumentValue::Null,
+                    },
+                    target,
+                    cx,
+                )
+            })
+        });
+        cx.run_until_parked();
+        assert!(cx.has_pending_prompt());
+        cx.read(|cx| {
+            let document = documents.read(cx).get(document).unwrap();
+            assert_eq!(document.resource_uri(), Some(&original_uri));
+            assert!(document.is_dirty(cx));
+        });
+        cx.simulate_prompt_answer("Save As…");
+
+        assert_eq!(
+            execution.completion.await.unwrap(),
+            CommandOutcome::Completed
+        );
+        assert_eq!(
+            provider.read(original_uri).await.unwrap().bytes,
+            b"external text"
+        );
+        assert_eq!(
+            provider.read(alternate_uri.clone()).await.unwrap().bytes,
+            b"local loaded text"
+        );
+        cx.read(|cx| {
+            let document = documents.read(cx).get(document).unwrap();
+            assert_eq!(document.resource_uri(), Some(&alternate_uri));
+            assert_eq!(document.title(), "recovered.txt");
+            assert!(!document.is_dirty(cx));
+        });
+    }
+
+    #[gpui::test]
     async fn file_and_missing_file_open_replace_the_launch_placeholder(cx: &mut TestAppContext) {
         let documents = install_globals(cx);
         cx.set_global(ApplicationFileSystems(memory_filesystems()));
