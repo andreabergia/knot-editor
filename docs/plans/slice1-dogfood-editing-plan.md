@@ -1,6 +1,6 @@
 # First Product Slice: Dogfoodable Text Editing
 
-Status: in progress — checkpoint 9 implementation complete; review gate pending.
+Status: in progress — checkpoint 9 approved; checkpoint 10 pending.
 
 This slice makes Knot usable for editing its own source on macOS. It evolves
 the validated prototype in place and introduces the real workbench ownership
@@ -188,7 +188,7 @@ application-owned document model rather than introducing transitional APIs.
 - ✅ Review gate: edit representative Rust and Markdown files using keyboard,
   mouse, clipboard, Unicode, and IME input.
 
-### Checkpoint 9: Undo and redo 🟨
+### Checkpoint 9: Undo and redo ✅
 
 - ✅ Add per-document history using ordinary `EditTransaction` mutation paths and
   practical typing and deletion grouping.
@@ -196,8 +196,12 @@ application-owned document model rather than introducing transitional APIs.
   divergent edits, and keep history independent across documents and views.
 - ✅ Route Undo and Redo through the shared command path and cover history,
   grouping, anchors, notifications, and routing.
-- ⬜ Review gate: manually exercise grouped typing and deletion, paste, divergent
+- ✅ Review gate: manually exercise grouped typing and deletion, paste, divergent
   edits, and document or view switching.
+- ⚠️ Review note: undo restores buffer content correctly, but caret and selection
+  restoration can feel inconsistent with IntelliJ because history stores buffer
+  transactions rather than the initiating view's caret and selection state.
+  Revisit this interaction before considering undo presentation polished.
 
 ### Checkpoint 10: Current-file Find
 
