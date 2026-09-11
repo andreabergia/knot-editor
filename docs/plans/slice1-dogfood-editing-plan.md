@@ -211,7 +211,7 @@ application-owned document model rather than introducing transitional APIs.
   - ✅ Reject an external-conflict Reload when a newer edit races its read.
   - ✅ Reject protected closure when a newer edit races its Save, preserving the
     document and every captured view.
-  - ⬜ Cover multi-document Quit with serial mixed decisions and rollback after
+  - ✅ Cover multi-document Quit with serial mixed decisions and rollback after
     a later cancellation or save failure.
   - ⬜ Complete native UI coverage through the manual dogfood and exhaustive
     cross-entry-point checks below; these interaction contracts are not

@@ -2562,6 +2562,35 @@ mod tests {
         (shell, window)
     }
 
+    fn two_dirty_untitled_documents_in_one_window(
+        documents: &Entity<DocumentCollection>,
+        cx: &mut TestAppContext,
+    ) -> (
+        super::DocumentId,
+        super::DocumentId,
+        Entity<ProductShell>,
+        gpui::AnyWindowHandle,
+    ) {
+        let first = cx.update(|cx| create_untitled_document(documents, cx));
+        let first_model = cx.read(|cx| documents.read(cx).get(first).unwrap().model().clone());
+        first_model.update(cx, |model, _| model.replace(0..0, "first").unwrap());
+        let second_model = cx.new(|_| BufferModel::from_text("second"));
+        let second = documents.update(cx, |documents, cx| {
+            documents.create_untitled("Second", second_model.clone(), cx)
+        });
+        second_model.update(cx, |model, _| model.replace(0..0, "changed ").unwrap());
+        let (shell, window) = product_window(first, first_model, cx);
+        shell.update(cx, |shell, cx| {
+            let pane = shell.workbench.read(cx).focused_pane_id().unwrap();
+            shell.workbench.update(cx, |workbench, cx| {
+                workbench
+                    .open_tab_for_document(pane, second, second_model, cx)
+                    .unwrap();
+            });
+        });
+        (first, second, shell, window)
+    }
+
     fn memory_filesystems() -> Arc<FileSystemProviderRegistry> {
         memory_filesystems_with_provider().0
     }
@@ -3744,6 +3773,114 @@ mod tests {
             CommandOutcome::Completed
         );
         assert!(!cx.has_pending_prompt());
+    }
+
+    #[gpui::test]
+    async fn multi_document_quit_applies_serial_save_and_discard_decisions(
+        cx: &mut TestAppContext,
+    ) {
+        let documents = install_globals(cx);
+        let (filesystems, provider) = memory_filesystems_with_provider();
+        cx.set_global(ApplicationFileSystems(filesystems));
+        let uri = ResourceUri::parse("mem://product/notes.txt").unwrap();
+        let opened = provider.read(uri.clone()).await.unwrap();
+        let first_model = cx.new(|_| BufferModel::from_text("loaded text"));
+        let first = documents.update(cx, |documents, _| {
+            documents.create_persisted(
+                "notes.txt",
+                first_model.clone(),
+                uri.clone(),
+                0,
+                opened.version,
+            )
+        });
+        first_model.update(cx, |model, _| model.replace(0..0, "saved ").unwrap());
+        let second_model = cx.new(|_| BufferModel::from_text("second"));
+        let second = documents.update(cx, |documents, cx| {
+            documents.create_untitled("Second", second_model.clone(), cx)
+        });
+        second_model.update(cx, |model, _| model.replace(0..0, "discarded ").unwrap());
+        let (shell, window) = product_window(first, first_model, cx);
+        shell.update(cx, |shell, cx| {
+            let pane = shell.workbench.read(cx).focused_pane_id().unwrap();
+            shell.workbench.update(cx, |workbench, cx| {
+                workbench
+                    .open_tab_for_document(pane, second, second_model, cx)
+                    .unwrap();
+            });
+        });
+
+        let execution = dispatch_product_command(&shell, window, QUIT_COMMAND, cx);
+        cx.run_until_parked();
+        assert!(cx.has_pending_prompt());
+        cx.simulate_prompt_answer("Save");
+        cx.run_until_parked();
+        assert!(cx.has_pending_prompt());
+        cx.simulate_prompt_answer("Don't Save");
+
+        assert_eq!(
+            execution.completion.await.unwrap(),
+            CommandOutcome::Completed
+        );
+        assert_eq!(
+            provider.read(uri).await.unwrap().bytes,
+            b"saved loaded text"
+        );
+        assert!(!cx.has_pending_prompt());
+    }
+
+    #[gpui::test]
+    async fn later_quit_cancellation_preserves_every_document_and_view(cx: &mut TestAppContext) {
+        let documents = install_globals(cx);
+        let (first, second, shell, window) =
+            two_dirty_untitled_documents_in_one_window(&documents, cx);
+
+        let execution = dispatch_product_command(&shell, window, QUIT_COMMAND, cx);
+        cx.run_until_parked();
+        cx.simulate_prompt_answer("Don't Save");
+        cx.run_until_parked();
+        assert!(cx.has_pending_prompt());
+        cx.simulate_prompt_answer("Cancel");
+
+        assert_eq!(
+            execution.completion.await.unwrap(),
+            CommandOutcome::Cancelled
+        );
+        cx.read(|cx| {
+            assert!(cx.windows().contains(&window));
+            assert_eq!(shell.read(cx).workbench.read(cx).tab_snapshots().len(), 2);
+            assert!(documents.read(cx).get(first).unwrap().is_dirty(cx));
+            assert!(documents.read(cx).get(second).unwrap().is_dirty(cx));
+        });
+    }
+
+    #[gpui::test]
+    async fn later_quit_save_failure_preserves_every_document_and_view(cx: &mut TestAppContext) {
+        let documents = install_globals(cx);
+        cx.set_global(ApplicationFileSystems(memory_filesystems()));
+        cx.set_global(ApplicationSaveDialog(Arc::new(FixedSaveDialog(
+            SaveDialogOutcome::Selected(ResourceUri::parse("mem://product/src").unwrap()),
+        ))));
+        let (first, second, shell, window) =
+            two_dirty_untitled_documents_in_one_window(&documents, cx);
+
+        let execution = dispatch_product_command(&shell, window, QUIT_COMMAND, cx);
+        cx.run_until_parked();
+        cx.simulate_prompt_answer("Don't Save");
+        cx.run_until_parked();
+        assert!(cx.has_pending_prompt());
+        cx.simulate_prompt_answer("Save");
+
+        assert!(matches!(
+            execution.completion.await.unwrap(),
+            CommandOutcome::HandlerFailure { .. }
+        ));
+        cx.read(|cx| {
+            assert!(cx.windows().contains(&window));
+            assert_eq!(shell.read(cx).workbench.read(cx).tab_snapshots().len(), 2);
+            assert!(documents.read(cx).get(first).unwrap().is_dirty(cx));
+            assert!(documents.read(cx).get(second).unwrap().is_dirty(cx));
+        });
     }
 
     #[gpui::test]
