@@ -2484,12 +2484,13 @@ mod tests {
         resource::ResourceUri,
     };
 
-    struct GatedReadFileSystemProvider {
+    struct GatedFileSystemProvider {
         inner: Arc<MemoryFileSystemProvider>,
         read_release: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
+        replace_release: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
     }
 
-    impl FileSystemProvider for GatedReadFileSystemProvider {
+    impl FileSystemProvider for GatedFileSystemProvider {
         fn normalize(&self, uri: ResourceUri) -> ProviderFuture<'_, ResourceUri> {
             self.inner.normalize(uri)
         }
@@ -2518,7 +2519,13 @@ mod tests {
             expected: ResourceVersion,
             bytes: Vec<u8>,
         ) -> ProviderFuture<'_, ResourceVersion> {
-            self.inner.replace(uri, expected, bytes)
+            let release = self.replace_release.lock().unwrap().take();
+            Box::pin(async move {
+                if let Some(release) = release {
+                    let _ = release.await;
+                }
+                self.inner.replace(uri, expected, bytes).await
+            })
         }
 
         fn stat(&self, uri: ResourceUri) -> ProviderFuture<'_, ResourceStat> {
@@ -3576,6 +3583,64 @@ mod tests {
     }
 
     #[gpui::test]
+    async fn edit_racing_protected_close_save_preserves_the_document_and_every_view(
+        cx: &mut TestAppContext,
+    ) {
+        let documents = install_globals(cx);
+        let root = ResourceUri::parse("mem://product/").unwrap();
+        let provider = Arc::new(MemoryFileSystemProvider::new(root).unwrap());
+        let uri = ResourceUri::parse("mem://product/notes.txt").unwrap();
+        provider.seed_file(uri.clone(), b"loaded text").unwrap();
+        let opened = provider.read(uri.clone()).await.unwrap();
+        let (replace_release, gated_replace) = tokio::sync::oneshot::channel();
+        let gated_provider = Arc::new(GatedFileSystemProvider {
+            inner: provider.clone(),
+            read_release: Mutex::new(None),
+            replace_release: Mutex::new(Some(gated_replace)),
+        });
+        let mut filesystems = FileSystemProviderRegistry::new();
+        filesystems.register("mem", gated_provider).unwrap();
+        cx.set_global(ApplicationFileSystems(Arc::new(filesystems)));
+
+        let model = cx.new(|_| BufferModel::from_text("loaded text"));
+        let document = documents.update(cx, |documents, _| {
+            documents.create_persisted("notes.txt", model.clone(), uri.clone(), 0, opened.version)
+        });
+        model.update(cx, |model, _| model.replace(0..0, "captured ").unwrap());
+        let (shell, window) = product_window(document, model.clone(), cx);
+        cx.update_window(window, |_, window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.split(SplitDirection::Horizontal, window, cx)
+            });
+        })
+        .unwrap();
+
+        let execution = dispatch_product_command(&shell, window, CLOSE_WINDOW_COMMAND, cx);
+        cx.run_until_parked();
+        assert!(cx.has_pending_prompt());
+        cx.simulate_prompt_answer("Save");
+        cx.run_until_parked();
+
+        model.update(cx, |model, _| model.replace(0..0, "newer ").unwrap());
+        replace_release.send(()).unwrap();
+
+        assert!(matches!(
+            execution.completion.await.unwrap(),
+            CommandOutcome::HandlerFailure { .. }
+        ));
+        assert_eq!(
+            provider.read(uri.clone()).await.unwrap().bytes,
+            b"captured loaded text"
+        );
+        cx.read(|cx| {
+            assert!(cx.windows().contains(&window));
+            assert_eq!(model.read(cx).text(), "newer captured loaded text");
+            assert!(documents.read(cx).get(document).unwrap().is_dirty(cx));
+            assert_eq!(shell.read(cx).workbench.read(cx).view_count(document), 2);
+        });
+    }
+
+    #[gpui::test]
     async fn closing_one_of_multiple_views_of_a_dirty_document_does_not_prompt(
         cx: &mut TestAppContext,
     ) {
@@ -4270,9 +4335,10 @@ mod tests {
         let opened = provider.read(uri.clone()).await.unwrap();
         provider.seed_file(uri.clone(), b"external text").unwrap();
         let (read_release, gated_read) = tokio::sync::oneshot::channel();
-        let gated_provider = Arc::new(GatedReadFileSystemProvider {
+        let gated_provider = Arc::new(GatedFileSystemProvider {
             inner: provider.clone(),
             read_release: Mutex::new(Some(gated_read)),
+            replace_release: Mutex::new(None),
         });
         let mut filesystems = FileSystemProviderRegistry::new();
         filesystems.register("mem", gated_provider).unwrap();

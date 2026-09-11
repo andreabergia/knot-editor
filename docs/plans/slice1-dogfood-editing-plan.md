@@ -209,7 +209,7 @@ application-owned document model rather than introducing transitional APIs.
     replacement permission preservation and conflict cleanup.
   - ✅ Cover Reload, Save As, and Cancel outcomes for external-change conflicts.
   - ✅ Reject an external-conflict Reload when a newer edit races its read.
-  - ⬜ Reject protected closure when a newer edit races its Save, preserving the
+  - ✅ Reject protected closure when a newer edit races its Save, preserving the
     document and every captured view.
   - ⬜ Cover multi-document Quit with serial mixed decisions and rollback after
     a later cancellation or save failure.
