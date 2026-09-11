@@ -208,7 +208,7 @@ application-owned document model rather than introducing transitional APIs.
   - ✅ Cover local atomic create failure cleanup and content preservation, plus
     replacement permission preservation and conflict cleanup.
   - ✅ Cover Reload, Save As, and Cancel outcomes for external-change conflicts.
-  - ⬜ Reject an external-conflict Reload when a newer edit races its read.
+  - ✅ Reject an external-conflict Reload when a newer edit races its read.
   - ⬜ Reject protected closure when a newer edit races its Save, preserving the
     document and every captured view.
   - ⬜ Cover multi-document Quit with serial mixed decisions and rollback after

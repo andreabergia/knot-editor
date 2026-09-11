@@ -2455,7 +2455,7 @@ fn bind_product_keys(cx: &mut App) {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     use gpui::{
         AppContext, Focusable, KeyBinding, Modifiers, MouseButton, TestAppContext,
@@ -2477,9 +2477,54 @@ mod tests {
     };
     use crate::app::{
         documents::DocumentState,
-        filesystem::{FileSystemProvider, FileSystemProviderRegistry, MemoryFileSystemProvider},
+        filesystem::{
+            FileSystemProvider, FileSystemProviderRegistry, MemoryFileSystemProvider,
+            ProviderFuture, ResourceEntry, ResourceFile, ResourceStat, ResourceVersion,
+        },
         resource::ResourceUri,
     };
+
+    struct GatedReadFileSystemProvider {
+        inner: Arc<MemoryFileSystemProvider>,
+        read_release: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
+    }
+
+    impl FileSystemProvider for GatedReadFileSystemProvider {
+        fn normalize(&self, uri: ResourceUri) -> ProviderFuture<'_, ResourceUri> {
+            self.inner.normalize(uri)
+        }
+
+        fn enumerate(&self, uri: ResourceUri) -> ProviderFuture<'_, Vec<ResourceEntry>> {
+            self.inner.enumerate(uri)
+        }
+
+        fn read(&self, uri: ResourceUri) -> ProviderFuture<'_, ResourceFile> {
+            let release = self.read_release.lock().unwrap().take();
+            Box::pin(async move {
+                if let Some(release) = release {
+                    let _ = release.await;
+                }
+                self.inner.read(uri).await
+            })
+        }
+
+        fn create(&self, uri: ResourceUri, bytes: Vec<u8>) -> ProviderFuture<'_, ResourceVersion> {
+            self.inner.create(uri, bytes)
+        }
+
+        fn replace(
+            &self,
+            uri: ResourceUri,
+            expected: ResourceVersion,
+            bytes: Vec<u8>,
+        ) -> ProviderFuture<'_, ResourceVersion> {
+            self.inner.replace(uri, expected, bytes)
+        }
+
+        fn stat(&self, uri: ResourceUri) -> ProviderFuture<'_, ResourceStat> {
+            self.inner.stat(uri)
+        }
+    }
 
     fn install_globals(cx: &mut TestAppContext) -> Entity<DocumentCollection> {
         let documents = cx.new(|_| DocumentCollection::new());
@@ -4212,6 +4257,56 @@ mod tests {
         cx.read(|cx| {
             assert_eq!(model.read(cx).text(), "external text");
             assert!(!documents.read(cx).get(document).unwrap().is_dirty(cx));
+        });
+    }
+
+    #[gpui::test]
+    async fn external_conflict_reload_rejects_an_edit_racing_its_read(cx: &mut TestAppContext) {
+        let documents = install_globals(cx);
+        let root = ResourceUri::parse("mem://product/").unwrap();
+        let provider = Arc::new(MemoryFileSystemProvider::new(root).unwrap());
+        let uri = ResourceUri::parse("mem://product/notes.txt").unwrap();
+        provider.seed_file(uri.clone(), b"loaded text").unwrap();
+        let opened = provider.read(uri.clone()).await.unwrap();
+        provider.seed_file(uri.clone(), b"external text").unwrap();
+        let (read_release, gated_read) = tokio::sync::oneshot::channel();
+        let gated_provider = Arc::new(GatedReadFileSystemProvider {
+            inner: provider.clone(),
+            read_release: Mutex::new(Some(gated_read)),
+        });
+        let mut filesystems = FileSystemProviderRegistry::new();
+        filesystems.register("mem", gated_provider).unwrap();
+        cx.set_global(ApplicationFileSystems(Arc::new(filesystems)));
+
+        let model = cx.new(|_| BufferModel::from_text("loaded text"));
+        let document = documents.update(cx, |documents, _| {
+            documents.create_persisted("notes.txt", model.clone(), uri.clone(), 0, opened.version)
+        });
+        model.update(cx, |model, _| model.replace(0..0, "local ").unwrap());
+        let (shell, window_handle) = product_window(document, model.clone(), cx);
+        let execution = dispatch_product_command(&shell, window_handle, SAVE_COMMAND, cx);
+        cx.run_until_parked();
+        assert!(cx.has_pending_prompt());
+        cx.simulate_prompt_answer("Reload");
+        cx.run_until_parked();
+
+        model.update(cx, |model, _| model.replace(0..0, "newer ").unwrap());
+        read_release.send(()).unwrap();
+
+        assert_eq!(
+            execution.completion.await.unwrap(),
+            CommandOutcome::InvalidTarget
+        );
+        assert_eq!(
+            provider.read(uri.clone()).await.unwrap().bytes,
+            b"external text"
+        );
+        cx.read(|cx| {
+            let document = documents.read(cx).get(document).unwrap();
+            assert_eq!(model.read(cx).text(), "newer local loaded text");
+            assert_eq!(document.resource_uri(), Some(&uri));
+            assert_eq!(document.state().persisted_revision(), Some(0));
+            assert!(document.is_dirty(cx));
         });
     }
 
