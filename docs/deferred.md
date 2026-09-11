@@ -71,9 +71,10 @@ the item is removed from this register.
   - Deferred: The URI boundary is validated with local and memory providers.
   - Reconsider: A specific remote workflow is selected.
 
-- **D012 — Persistent undo, history trees, and view-state restoration**
+- **D012 — Persistent undo, history trees, and persistent view-state restoration**
   - Deferred: Session-local linear undo is sufficient for dogfooding.
-  - Reconsider: Users need recovery across restarts or branching history.
+  - Reconsider: Users need history or view-state recovery across restarts, or
+    branching history.
 
 - **D013 — Piece-table compaction and edit-log reclamation**
   - Deferred: Prototype storage is append-only and no real workload has shown

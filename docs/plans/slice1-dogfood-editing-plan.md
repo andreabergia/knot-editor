@@ -198,10 +198,6 @@ application-owned document model rather than introducing transitional APIs.
   grouping, anchors, notifications, and routing.
 - ✅ Review gate: manually exercise grouped typing and deletion, paste, divergent
   edits, and document or view switching.
-- ⚠️ Review note: undo restores buffer content correctly, but caret and selection
-  restoration can feel inconsistent with IntelliJ because history stores buffer
-  transactions rather than the initiating view's caret and selection state.
-  Revisit this interaction before considering undo presentation polished.
 
 ### Checkpoint 10: Current-file Find
 
@@ -346,6 +342,9 @@ application-owned document model rather than introducing transitional APIs.
   buffer.
 - ⬜ Exercise undo/redo, Save As outside the workspace, an external-change
   conflict, tab/window closure, and application quit during that session.
+- ⬜ Restore the initiating editor view's caret and selection when undoing or
+  redoing, including grouped edits and invocation from another view of the same
+  document, so navigation feels consistent with established editors.
 - ⬜ Invoke the slice's registered semantic commands through their applicable
   menu or keybinding, the command palette, and JavaScript, confirming that all
   paths preserve the same target and outcome.
