@@ -64,15 +64,17 @@ group until another interaction boundary.
 Text supplied by the platform and IME composition enter the view's input
 handler; pointer selection and scrolling remain view input protocols.
 
-One shell runs one root invocation tree at a time. Additional roots remain in
-FIFO order until the active root and its attached descendants settle. A
-handler-originated invocation is attached as one child of its active parent
-and inherits the parent's captured window, workspace, focus, and optional
-buffer. Native children use the same gpui focus route. Cross-extension
-children run on their owning runtime while the caller remains suspended;
-unrelated roots cannot enter that gap. A second unfinished child from the same
-parent is rejected, so this remains command composition rather than a task
-graph.
+The extension-capable fixture shell runs one root invocation tree at a time.
+Additional roots remain in FIFO order until the active root and its attached
+descendants settle. A handler-originated invocation is attached as one child
+of its active parent and inherits the parent's captured window, workspace,
+focus, and optional buffer. Native children use the same gpui focus route.
+Cross-extension children run on their owning runtime while the caller remains
+suspended; unrelated roots cannot enter that gap. A second unfinished child
+from the same parent is rejected, so this remains command composition rather
+than a task graph. The product dispatcher admits independent captured commands;
+its V8 bridge awaits their ordinary structured outcomes but does not expose
+nested command-tree composition.
 
 The command palette keeps the weak focus target captured before the palette
 takes visible focus. Palette controls target the palette, while confirmation

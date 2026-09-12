@@ -12,13 +12,13 @@ splits. Syntax highlighting is not required.
 
 ## Product constraints
 
-- ⬜ Use native macOS windows, menus, file dialogs, and save/discard alerts.
-- ⬜ Allow documents to exist independently of a workspace. Open, Save As, and
+- ✅ Use native macOS windows, menus, file dialogs, and save/discard alerts.
+- ✅ Allow documents to exist independently of a workspace. Open, Save As, and
   future drag-and-drop flows may target any local file the user selects.
-- ⬜ Keep workspace containment as a workspace-tree rule, not a document
+- ✅ Keep workspace containment as a workspace-tree rule, not a document
   persistence rule.
-- ⬜ Make windows, tabbed panes, and splits part of the initial product UI.
-- ⬜ Let each tab own an independent editor view. Multiple tabs, panes, or
+- ✅ Make windows, tabbed panes, and splits part of the initial product UI.
+- ✅ Let each tab own an independent editor view. Multiple tabs, panes, or
   windows may present the same buffer with independent cursor, selection, and
   scroll state.
 - ✅ Implement user-facing semantic operations as registered native commands.
@@ -26,9 +26,9 @@ splits. Syntax highlighting is not required.
   target-preserving dispatcher rather than call separate shell or view methods.
   Raw text input, IME, pointer gestures, scrolling, and focus changes remain
   input protocols rather than commands.
-- ⬜ Retain validated prototype code when it fits these behaviors; change
+- ✅ Retain validated prototype code when it fits these behaviors; change
   boundaries only where this slice supplies a concrete counterexample.
-- ⬜ Treat every durable path introduced or hardened by this slice as product
+- ✅ Treat every durable path introduced or hardened by this slice as product
   code. Add automated regression coverage at the model, command, integration,
   or UI boundary appropriate to the behavior.
 
@@ -154,7 +154,7 @@ application-owned document model rather than introducing transitional APIs.
   missing file, and a folder, plus New and Open through all applicable command
   entry points.
 
-### Checkpoint 6: Safe Save and Save As 🟨
+### Checkpoint 6: Safe Save and Save As ✅
 
 - ✅ Add new-file creation and atomic local replacement to the provider contract.
 - ✅ Implement Save and native Save As without prematurely binding or retargeting
@@ -166,7 +166,7 @@ application-owned document model rather than introducing transitional APIs.
 - ✅ Review gate: manually exercise first save, Save As inside and outside the
   workspace, overwrite confirmation, a racing edit, and an external conflict.
 
-### Checkpoint 7: Protected closure 🟨
+### Checkpoint 7: Protected closure ✅
 
 - ✅ Coordinate close-tab, close-window, and quit against application-owned dirty
   documents using native Save / Don't Save / Cancel alerts.
@@ -299,7 +299,7 @@ application-owned document model rather than introducing transitional APIs.
   and keeping the caret visible.
 - ✅ Integrate native clipboard Cut, Copy, Paste, and Select All commands.
 - ✅ Preserve working IME and Unicode behavior through the product shell.
-- ⬜ Keep plain text as the only required presentation; Find, Replace, regular
+- ✅ Keep plain text as the only required presentation; Find, Replace, regular
   expressions, and syntax highlighting are deferred.
 
 ### 6. Add usable undo and redo
@@ -353,9 +353,12 @@ application-owned document model rather than introducing transitional APIs.
   representative target-preserving adapter regression tests.
 - ✅ Split architecture documentation into a short overview, focused subsystem
   references, and a rationale-only decisions document; update reading guidance.
-- ⬜ Update `architecture.md`, the relevant `architecture/` references, and
+- ✅ Update `architecture.md`, the relevant `architecture/` references, and
   `decisions.md` for the document, workbench, history, and persistence boundaries
   validated by the finished slice.
+  These documents were maintained incrementally at their checkpoints; the final
+  audit clarified the fixture-only command-composition boundary and required no
+  new decision.
 - ⬜ Mark this plan as completed with its result and move any newly deferred
 work to [`deferred.md`](../deferred.md).
 - ⬜ Run `cargo fmt` once after the Rust work, then run focused checks and the
