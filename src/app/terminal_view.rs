@@ -17,7 +17,7 @@ use alacritty_terminal::{
 };
 use gpui::*;
 
-use super::{CommandAction, CommandSurfaceKind, DIAGNOSTIC_COMMAND, TERMINAL_KEY_CONTEXT};
+use super::TERMINAL_KEY_CONTEXT;
 
 const INITIAL_COLUMNS: usize = 80;
 const INITIAL_LINES: usize = 11;
@@ -361,30 +361,6 @@ impl TerminalView {
             cx.notify();
         }
     }
-
-    fn on_command_action(
-        &mut self,
-        action: &CommandAction,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if !self.handle_native_command(action, window, cx) {
-            cx.propagate();
-        }
-    }
-
-    fn handle_native_command(
-        &mut self,
-        action: &CommandAction,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        if action.command.name.as_ref() != DIAGNOSTIC_COMMAND {
-            return false;
-        }
-        action.record_diagnostic(CommandSurfaceKind::Terminal, cx);
-        true
-    }
 }
 
 impl Drop for TerminalView {
@@ -458,7 +434,6 @@ impl Render for TerminalView {
                     .min_h_0()
                     .track_focus(&self.focus)
                     .key_context(TERMINAL_KEY_CONTEXT)
-                    .on_action(cx.listener(Self::on_command_action))
                     .on_key_down(cx.listener(Self::on_key_down))
                     .child(TerminalElement { entity }),
             )

@@ -66,14 +66,16 @@ Reference: [core and buffers](architecture/core-and-buffers.md).
 ## Extension runtime
 
 Use JavaScript on V8, with Knot-owned protocols insulating the editor from
-`deno_core` prototype machinery. Thread-affine runtimes currently require one
-persistent thread per extension; a bounded pool of movable `rusty_v8` isolates
-is the production target, not an implemented scheduler.
+runtime machinery. The Deno prototype and its thread-per-extension runtime have
+been removed. The host now depends directly on V8 152 and owns process
+initialization; a bounded pool of movable shared isolates is the selected
+production design and is not implemented yet.
 
 Serial callbacks within an extension simplify ownership; independent runtimes
-can progress in parallel. Forced interruption is fatal to that extension so
-cleanup has a definite lifecycle boundary. Immutable shared UTF-16 snapshots
-serve V8 without exposing mutable storage or changing the UTF-8 core.
+will progress through the bounded pool. Forced interruption is fatal to that
+extension so cleanup has a definite lifecycle boundary. Immutable shared
+UTF-16 snapshots serve V8 without exposing mutable storage or changing the
+UTF-8 core.
 
 Reference: [extension host](architecture/extension-host.md). Evidence: [v8 runtime](archive/exploration/step7-v8-runtime.md).
 

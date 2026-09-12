@@ -9,7 +9,7 @@ use crate::host::protocol::{
     TreeCollapsibleState, TreeIcon, TreeItem, TreeProviderRegistrationId,
 };
 
-use super::{CommandAction, CommandSurfaceKind, DIAGNOSTIC_COMMAND, TREE_KEY_CONTEXT};
+use super::TREE_KEY_CONTEXT;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct TreeProviderIdentity {
@@ -394,30 +394,6 @@ impl TreeView {
             None => "",
         }
     }
-
-    fn on_command_action(
-        &mut self,
-        action: &CommandAction,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if !self.handle_native_command(action, window, cx) {
-            cx.propagate();
-        }
-    }
-
-    fn handle_native_command(
-        &mut self,
-        action: &CommandAction,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        if action.command.name.as_ref() != DIAGNOSTIC_COMMAND {
-            return false;
-        }
-        action.record_diagnostic(CommandSurfaceKind::Tree, cx);
-        true
-    }
 }
 
 impl EventEmitter<TreeViewEvent> for TreeView {}
@@ -489,7 +465,6 @@ impl Render for TreeView {
         .track_scroll(self.scroll.clone())
         .track_focus(&self.focus)
         .key_context(TREE_KEY_CONTEXT)
-        .on_action(cx.listener(Self::on_command_action))
         .on_key_down(cx.listener(Self::on_key_down))
     }
 }

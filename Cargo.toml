@@ -8,8 +8,6 @@ alacritty_terminal = { version = "0.26", default-features = false }
 anyhow = "1"
 bytemuck = { version = "1", features = ["derive"] }
 cosmic-text = "0.19"
-deno_core = "0.408"
-deno_error = "0.7"
 gpui = { version = "0.2", default-features = false, features = ["font-kit", "windows-manifest"] }
 pollster = "0.4"
 percent-encoding = "2"
@@ -20,6 +18,7 @@ tokio = { version = "1.53", features = ["fs", "rt-multi-thread", "sync", "time"]
 tempfile = "3"
 unicode-segmentation = "1"
 url = "2"
+v8 = "152.2"
 wgpu = "29"
 winit = "0.30"
 

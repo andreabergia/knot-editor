@@ -1,6 +1,6 @@
 # D017: Production V8 Isolate Pool and Scheduling
 
-Status: planned.
+Status: in progress; Task 1 implemented, awaiting review.
 
 This slice replaces the prototype `deno_core` runtime with a direct
 `rusty_v8` host and runs persistent extension isolates on a bounded worker
@@ -77,21 +77,53 @@ The test commands below are minimum focused checks. Each task must also run any
 nearby tests affected by its actual changes. Run `cargo fmt` once at the end of
 each goal that changes Rust, immediately before the final tests and commits.
 
+## Protocol restoration ledger
+
+The removed prototype validated behavior that later D017 tasks must restore on
+Knot-owned boundaries:
+
+- Task 3: persistent globals and explicit microtasks across turns; scoped
+  exception and rejection reports without poisoning an isolate; fatal forced
+  termination, heap failure, unload-before-disposal, neighbor isolation, and
+  retained external UTF-16 ownership.
+- Task 4: static fixture modules, invalid and private specifier rejection, the
+  public `knot:editor` facade without Deno globals, and stable JavaScript error
+  names for host failures.
+- Task 5: lifecycle-scoped unique request identities; extension, lifecycle,
+  and request validation; exact-once pending settlement; asynchronous typed
+  responses; explicit command arguments and outcomes; same-extension nested
+  command ordering; cancellation of suspended handlers; and registration
+  disposal. The product bridge additionally awaited the native dispatcher's
+  ordinary outcome, rejected nested product invocations as unavailable, and
+  reported missing targets or unsupported operations explicitly.
+- Task 6: revisioned buffer snapshots and edits; serial ordered change events
+  that survive listener failure; lossless finite slow-subscriber bursts with
+  depth and lag measurements; tree registration, invalidation, generation, and
+  recoverable callback failure; completion registration, revision, generation,
+  and failure; contribution replacement/disposal; cross-extension progress;
+  and shared external UTF-16 lifetime.
+
+The protocol retained during the rebuild includes opaque extension, lifecycle,
+request, registration, invocation, subscription, and buffer identities; typed
+operations and responses; UTF-8 byte ranges and revisioned edits; structured
+command routing and outcomes; tree and completion generations; semantic
+contribution tokens; and stable host-error wire names.
+
 ## Task 1: Replace the prototype runtime boundary
 
-- ⬜ Record the current protocol behaviors that later tasks must restore, then
+- ✅ Record the current protocol behaviors that later tasks must restore, then
   remove the thread-per-extension runtime implementation and implementation-
   coupled tests without weakening `host::protocol` coverage.
-- ⬜ Split the monolithic host into boundaries for protocol, scheduler, V8
+- ✅ Split the monolithic host into boundaries for protocol, scheduler, V8
   engine/bindings, lifecycle, and benchmarks. These may initially be skeletal;
   avoid a compatibility trait or parallel old/new runtime implementation.
-- ⬜ Remove the product command dispatcher's fixture runtime and wake loop until
+- ✅ Remove the product command dispatcher's fixture runtime and wake loop until
   the pooled integration is ready. Product-native command behavior must remain
   intact.
-- ⬜ Replace `deno_core` and `deno_error` with a direct V8 152 dependency,
+- ✅ Replace `deno_core` and `deno_error` with a direct V8 152 dependency,
   initialize the V8 platform before creating any threads that can enter an
   isolate, and remove all Deno types and macros from the source tree.
-- ⬜ Keep the package, binaries, and remaining tests compiling.
+- ✅ Keep the package, binaries, and remaining tests compiling.
 
 Automated checks:
 

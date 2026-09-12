@@ -1,9 +1,8 @@
 //! Typed messages exchanged between extension runtimes and the editor host.
 //!
 //! These types intentionally carry only Knot concepts. They form the transport
-//! boundary that a future extension thread will use to ask the foreground
-//! editor to access a buffer; neither side needs to expose a V8, Deno, gpui,
-//! or Rust editor-model object to JavaScript.
+//! boundary that extension isolates use to ask the foreground editor to access
+//! native state; neither side exposes V8, gpui, or Rust editor-model objects.
 
 use std::{borrow::Borrow, collections::BTreeMap, fmt, sync::Arc};
 
@@ -547,8 +546,10 @@ pub enum HostRequestError {
 #[cfg(test)]
 mod tests {
     use super::{
-        BufferHandle, Command, CommandArgumentValue, ExtensionId, ExtensionLifecycleId,
-        HostOperation, HostRequest, HostResponse, HostResponseValue, RequestId,
+        BufferHandle, ByteRange, Command, CommandArgumentValue, CommandInvocationId,
+        CommandInvokeDispatch, CommandOutcome, CommandRegistrationId, ExtensionId,
+        ExtensionLifecycleId, HostOperation, HostRequest, HostRequestError, HostResponse,
+        HostResponseValue, RequestId, TextEdit,
     };
 
     #[test]
@@ -606,5 +607,53 @@ mod tests {
         assert_eq!(response.extension, request.extension);
         assert_eq!(response.lifecycle, request.lifecycle);
         assert_eq!(response.id, request.id);
+    }
+
+    #[test]
+    fn command_routing_and_outcomes_keep_their_wire_contract() {
+        let dispatch = CommandInvokeDispatch::Inline {
+            invocation: CommandInvocationId::new(13),
+            registration: CommandRegistrationId::new(21),
+        };
+        assert_eq!(
+            serde_json::to_value(dispatch).unwrap(),
+            serde_json::json!({
+                "kind": "inline",
+                "invocation": 13,
+                "registration": 21,
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(CommandOutcome::InvalidArgument {
+                message: "expected string".into(),
+            })
+            .unwrap(),
+            serde_json::json!({
+                "kind": "invalidArgument",
+                "message": "expected string",
+            })
+        );
+    }
+
+    #[test]
+    fn edits_and_host_errors_keep_their_wire_contract() {
+        let edit = TextEdit {
+            range: ByteRange {
+                start_byte_offset: 2,
+                end_byte_offset: 5,
+            },
+            text: "λ".into(),
+        };
+        assert_eq!(
+            serde_json::to_value(edit).unwrap(),
+            serde_json::json!({
+                "range": { "startByteOffset": 2, "endByteOffset": 5 },
+                "text": "λ",
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(HostRequestError::RevisionConflict).unwrap(),
+            serde_json::json!("RevisionConflict")
+        );
     }
 }

@@ -6,6 +6,7 @@ mod local;
 mod memory;
 
 pub(crate) use local::{LocalFileSystemProvider, normalize_file_uri};
+#[cfg(test)]
 pub(crate) use memory::MemoryFileSystemProvider;
 
 pub(crate) type ProviderFuture<'a, T> =

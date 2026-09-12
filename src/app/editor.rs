@@ -13,14 +13,12 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use crate::core::anchored_range::AnchoredRangeId;
 use crate::host::protocol::{
-    BufferHandle, ByteRange, CommandOutcome, CompletionProviderRegistrationId, CompletionRequest,
+    BufferHandle, ByteRange, CompletionProviderRegistrationId, CompletionRequest,
     CompletionResponse, DecorationToken, EditorContribution, GutterToken, TextEdit,
 };
 
 use super::{
-    CommandAction, CommandSurfaceKind, CompletionAccept, CompletionDismiss, CompletionNext,
-    CompletionPrevious, DIAGNOSTIC_COMMAND, EDITOR_KEY_CONTEXT, SHOW_COMPLETIONS_COMMAND,
-    SWAP_COMPLETION_SURFACE_COMMAND,
+    CompletionAccept, CompletionDismiss, CompletionNext, CompletionPrevious, EDITOR_KEY_CONTEXT,
     completion::{
         CompactCompletionSurface, CompletionController, CompletionProviderRegistration,
         CompletionSurface, CompletionSurfaceKind, ListCompletionSurface,
@@ -1716,7 +1714,6 @@ impl Render for EditorView {
             // listeners below actually receive keystrokes.
             .track_focus(&self.focus)
             .key_context(key_context)
-            .on_action(cx.listener(Self::on_command_action))
             .on_action(cx.listener(Self::completion_previous))
             .on_action(cx.listener(Self::completion_next))
             .on_action(cx.listener(Self::completion_accept))
@@ -1770,41 +1767,6 @@ impl Render for EditorView {
 }
 
 impl EditorView {
-    fn on_command_action(
-        &mut self,
-        action: &CommandAction,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if !self.handle_native_command(action, window, cx) {
-            cx.propagate();
-        }
-    }
-
-    fn handle_native_command(
-        &mut self,
-        action: &CommandAction,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        match action.command.name.as_ref() {
-            DIAGNOSTIC_COMMAND => {
-                action.record_diagnostic(CommandSurfaceKind::Editor, cx);
-                true
-            }
-            SHOW_COMPLETIONS_COMMAND => {
-                action.show_completions(cx.entity(), cx);
-                true
-            }
-            SWAP_COMPLETION_SURFACE_COMMAND => {
-                self.swap_completion_surface(cx);
-                action.complete_native(CommandOutcome::Completed, cx);
-                true
-            }
-            _ => false,
-        }
-    }
-
     pub(crate) fn start_completion(
         &mut self,
         buffer: BufferHandle,

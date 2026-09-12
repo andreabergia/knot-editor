@@ -25,10 +25,9 @@ gpui application and views        extension runtimes
   view layer.
 
 The default `knot` binary runs the product application through `app::run`.
-`knot --fixture [name]` retains the integrated prototype shell as an explicit
-exploration entry point; other binaries exercise focused prototype benchmarks.
-Subsystem references distinguish implemented product and fixture behavior from
-validated production directions.
+During the D017 host rebuild, `knot --fixture [name]` reports that extension
+fixtures are unavailable and opens the product shell. Focused host benchmark
+entry points remain present but contain no pooled workloads yet.
 
 ## Ownership
 
