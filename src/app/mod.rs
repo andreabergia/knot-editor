@@ -8,23 +8,71 @@ use gpui::*;
 use crate::host::protocol::BufferHandle;
 use crate::host::protocol::CommandOutcome;
 
+#[allow(
+    dead_code,
+    reason = "retained application boundary during the pooled extension-host rebuild"
+)]
 mod command_palette;
+#[allow(
+    dead_code,
+    reason = "retained for the pooled extension host integration"
+)]
 mod completion;
+#[allow(
+    dead_code,
+    reason = "retained application boundary during the pooled extension-host rebuild"
+)]
 mod documents;
+#[allow(
+    dead_code,
+    reason = "retained application boundary during the pooled extension-host rebuild"
+)]
 mod editor;
 mod entry;
+#[allow(
+    dead_code,
+    reason = "retained application boundary during the pooled extension-host rebuild"
+)]
 mod filesystem;
 mod history;
+#[allow(
+    dead_code,
+    reason = "retained application boundary during the pooled extension-host rebuild"
+)]
 pub mod model;
 mod open;
 mod product;
 mod product_commands;
+#[allow(
+    dead_code,
+    reason = "retained application boundary during the pooled extension-host rebuild"
+)]
 mod resource;
+#[allow(
+    dead_code,
+    reason = "retained for the pooled extension host integration"
+)]
 mod search_results;
+#[allow(
+    dead_code,
+    reason = "retained for the pooled extension host integration"
+)]
 mod terminal_view;
+#[allow(
+    dead_code,
+    reason = "retained for the pooled extension host integration"
+)]
 mod tree_view;
 mod workbench;
+#[allow(
+    dead_code,
+    reason = "retained application boundary during the pooled extension-host rebuild"
+)]
 mod workspace;
+#[allow(
+    dead_code,
+    reason = "retained application boundary during the pooled extension-host rebuild"
+)]
 mod workspace_tree;
 
 use command_palette::{CommandPalette, CommandPaletteEntry, CommandPaletteEvent};
@@ -41,7 +89,9 @@ actions!(
 
 const DEFAULT_FIXTURE_NAME: &str = "rust_sample";
 const EDITOR_KEY_CONTEXT: &str = "editor";
+#[allow(dead_code, reason = "retained with the dormant extension tree view")]
 const TREE_KEY_CONTEXT: &str = "tree";
+#[allow(dead_code, reason = "retained with the dormant fixture terminal")]
 const TERMINAL_KEY_CONTEXT: &str = "terminal";
 const PALETTE_KEY_CONTEXT: &str = "palette";
 

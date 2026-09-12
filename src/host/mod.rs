@@ -7,5 +7,9 @@
 pub mod bench;
 pub mod engine;
 pub mod lifecycle;
+#[allow(
+    dead_code,
+    reason = "protocol consumers return in later D017 checkpoints"
+)]
 pub mod protocol;
 pub mod scheduler;

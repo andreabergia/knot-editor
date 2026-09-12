@@ -123,7 +123,8 @@ contribution tokens; and stable host-error wire names.
 - ✅ Replace `deno_core` and `deno_error` with a direct V8 152 dependency,
   initialize the V8 platform before creating any threads that can enter an
   isolate, and remove all Deno types and macros from the source tree.
-- ✅ Keep the package, binaries, and remaining tests compiling.
+- ✅ Keep the package, binaries, and remaining tests compiling without
+  project-owned warnings.
 
 Automated checks:
 
