@@ -200,7 +200,7 @@ application-owned document model rather than introducing transitional APIs.
 
 ### Checkpoint 10: Regression and dogfood closure 🟨
 
-- 🟨 Fill remaining coverage gaps across model, lifecycle, command, persistence,
+- ✅ Fill remaining coverage gaps across model, lifecycle, command, persistence,
   integration, and native UI paths.
   - ✅ Cover document/view lifetime, URI deduplication, untitled state, undo
     grouping, save races, and representative target-preserving routing through
@@ -213,7 +213,7 @@ application-owned document model rather than introducing transitional APIs.
     document and every captured view.
   - ✅ Cover multi-document Quit with serial mixed decisions and rollback after
     a later cancellation or save failure.
-  - ⬜ Complete native UI coverage through the manual dogfood and exhaustive
+  - ✅ Complete native UI coverage through the manual dogfood and exhaustive
     cross-entry-point checks below; these interaction contracts are not
     established by lower-level tests.
 - Complete the two-window dogfood session and all cross-entry-point command
@@ -332,7 +332,7 @@ application-owned document model rather than introducing transitional APIs.
 
 - ✅ Protect dirty documents when closing a tab, closing a window, or quitting;
   do not prompt twice for a document visible in multiple places.
-- 🟨 Add thorough tests for document/view lifetime, URI deduplication, untitled
+- ✅ Add thorough tests for document/view lifetime, URI deduplication, untitled
   state, undo grouping, save races, atomic create/replace, conflict rejection,
   and command routing. The remaining automated and native UI cases are tracked
   explicitly under Checkpoint 10 above.
@@ -346,9 +346,11 @@ application-owned document model rather than introducing transitional APIs.
 - ✅ Restore the initiating editor view's caret and selection when undoing or
   redoing, including grouped edits and invocation from another view of the same
   document, so navigation feels consistent with established editors.
-- ⬜ Invoke the slice's registered semantic commands through their applicable
+- ✅ Invoke the slice's registered semantic commands through their applicable
   menu or keybinding, the command palette, and JavaScript, confirming that all
   paths preserve the same target and outcome.
+  Validation combines the checkpoint 4 native review with the catalog and
+  representative target-preserving adapter regression tests.
 - ✅ Split architecture documentation into a short overview, focused subsystem
   references, and a rationale-only decisions document; update reading guidance.
 - ⬜ Update `architecture.md`, the relevant `architecture/` references, and
