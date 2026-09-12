@@ -1,6 +1,6 @@
 # First Product Slice: Dogfoodable Text Editing
 
-Status: in progress — checkpoint 9 approved; checkpoint 10 regression hardening in progress.
+Status: completed — 2026-09-12.
 
 This slice makes Knot usable for editing its own source on macOS. It evolves
 the validated prototype in place and introduces the real workbench ownership
@@ -198,7 +198,7 @@ application-owned document model rather than introducing transitional APIs.
 - ✅ Review gate: manually exercise grouped typing and deletion, paste, divergent
   edits, and document or view switching.
 
-### Checkpoint 10: Regression and dogfood closure 🟨
+### Checkpoint 10: Regression and dogfood closure ✅
 
 - ✅ Fill remaining coverage gaps across model, lifecycle, command, persistence,
   integration, and native UI paths.
@@ -359,10 +359,21 @@ application-owned document model rather than introducing transitional APIs.
   These documents were maintained incrementally at their checkpoints; the final
   audit clarified the fixture-only command-composition boundary and required no
   new decision.
-- ⬜ Mark this plan as completed with its result and move any newly deferred
-work to [`deferred.md`](../deferred.md).
-- ⬜ Run `cargo fmt` once after the Rust work, then run focused checks and the
+- ✅ Mark this plan as completed with its result and move any newly deferred
+  work to [`deferred.md`](../deferred.md). No newly deferred work emerged during
+  final regression and dogfood closure.
+- ✅ Run `cargo fmt` once after the Rust work, then run focused checks and the
   full test suite.
+
+## Result
+
+Completed on 2026-09-12. Knot now supports the slice's ordinary UTF-8 editing
+journey through native macOS windows, tabs, splits, application-owned documents,
+safe local persistence, protected closure, shared per-document undo history,
+and target-preserving semantic commands. Manual validation accumulated across
+the checkpoint review gates, and final regression closure passed all 48 focused
+product tests and the full 329-test suite. Deferred scope remains recorded in
+[`deferred.md`](../deferred.md).
 
 ## Explicit exclusions
 
