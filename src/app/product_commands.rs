@@ -1,15 +1,8 @@
 //! Application-owned command discovery and dispatch for product windows.
 
 use gpui::*;
-use std::time::Duration;
 
-#[cfg(test)]
-use crate::host::ExtensionRuntimeControl;
-use crate::host::protocol::{
-    Command, CommandArgumentValue, CommandInvokeDispatch, CommandOutcome, ExtensionId,
-    HostOperation, HostRequestError, HostResponse, HostResponseValue,
-};
-use crate::host::{ExtensionRuntimeThread, V8Host};
+use crate::host::protocol::{Command, CommandArgumentValue, CommandOutcome};
 
 use super::model::{CommandCatalog, CommandDefinition, CommandTargetKind};
 use super::product::ProductShell;
@@ -127,15 +120,10 @@ pub(crate) struct ProductCommandDispatcher {
     catalog: CommandCatalog,
     next_invocation: u64,
     last_outcome: Option<CommandOutcome>,
-    #[cfg(test)]
-    runtime_control: ExtensionRuntimeControl,
-    _runtime_thread: ExtensionRuntimeThread,
-    _runtime_bridge: Task<()>,
-    _runtime_wake: Task<()>,
 }
 
 impl ProductCommandDispatcher {
-    pub(crate) fn new(cx: &mut Context<Self>) -> Self {
+    pub(crate) fn new(_cx: &mut Context<Self>) -> Self {
         let mut catalog = CommandCatalog::new();
         for &(name, title) in PRODUCT_COMMANDS {
             catalog
@@ -143,81 +131,10 @@ impl ProductCommandDispatcher {
                 .expect("product command names are unique");
         }
 
-        let runtime = V8Host::new()
-            .spawn_extension(ExtensionId::new(1))
-            .into_parts();
-        #[cfg(test)]
-        let runtime_control = runtime.control.clone();
-        let response_control = runtime.control.clone();
-        let mut requests = runtime.requests;
-        let runtime_bridge = cx.spawn(async move |this, cx| {
-            while let Some(request) = requests.receive().await {
-                let extension = request.extension;
-                let lifecycle = request.lifecycle;
-                let id = request.id;
-                let result = match request.operation {
-                    HostOperation::InvokeCommand { command } if request.invocation.is_none() => {
-                        let execution = cx
-                            .update(|cx| {
-                                let dispatcher = this.upgrade()?;
-                                let target = capture_active_product_target(cx)?;
-                                Some(dispatcher.update(cx, |dispatcher, cx| {
-                                    dispatcher.dispatch(command, target, cx)
-                                }))
-                            })
-                            .ok()
-                            .flatten();
-                        let outcome = match execution {
-                            Some(execution) => execution
-                                .completion
-                                .await
-                                .unwrap_or(CommandOutcome::Cancelled),
-                            None => CommandOutcome::InvalidTarget,
-                        };
-                        Ok(HostResponseValue::CommandInvoked {
-                            dispatch: CommandInvokeDispatch::Outcome { outcome },
-                        })
-                    }
-                    HostOperation::InvokeCommand { .. } => Ok(HostResponseValue::CommandInvoked {
-                        dispatch: CommandInvokeDispatch::Outcome {
-                            outcome: CommandOutcome::Unavailable,
-                        },
-                    }),
-                    _ => Err(HostRequestError::UnsupportedOperation),
-                };
-                if response_control
-                    .respond(HostResponse {
-                        extension,
-                        lifecycle,
-                        id,
-                        result,
-                    })
-                    .is_err()
-                {
-                    break;
-                }
-            }
-        });
-        let runtime_wake = cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor()
-                    .timer(Duration::from_millis(50))
-                    .await;
-                if this.upgrade().is_none() {
-                    break;
-                }
-            }
-        });
-
         Self {
             catalog,
             next_invocation: 1,
             last_outcome: None,
-            #[cfg(test)]
-            runtime_control,
-            _runtime_thread: runtime.thread,
-            _runtime_bridge: runtime_bridge,
-            _runtime_wake: runtime_wake,
         }
     }
 
@@ -305,11 +222,6 @@ impl ProductCommandDispatcher {
     pub(crate) fn record_outcome(&mut self, outcome: CommandOutcome, cx: &mut Context<Self>) {
         self.last_outcome = Some(outcome);
         cx.notify();
-    }
-
-    #[cfg(test)]
-    pub(crate) fn runtime_control(&self) -> ExtensionRuntimeControl {
-        self.runtime_control.clone()
     }
 }
 
@@ -457,23 +369,6 @@ fn dispatch_to_captured_target(
         })
     })
     .unwrap_or(CommandOutcome::InvalidTarget)
-}
-
-fn capture_active_product_target(cx: &mut App) -> Option<ProductCommandTarget> {
-    let windows = cx.window_stack().unwrap_or_else(|| cx.windows());
-    for window_handle in windows {
-        let target = cx
-            .update_window(window_handle, |_, window, cx| {
-                let shell = window.root::<ProductShell>().flatten()?;
-                shell.update(cx, |shell, cx| shell.capture_command_target(window, cx))
-            })
-            .ok()
-            .flatten();
-        if target.is_some() {
-            return target;
-        }
-    }
-    None
 }
 
 #[cfg(test)]

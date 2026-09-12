@@ -2890,54 +2890,6 @@ mod tests {
     }
 
     #[gpui::test]
-    async fn javascript_awaits_the_same_product_command_outcome(cx: &mut TestAppContext) {
-        let documents = install_globals(cx);
-        let document = cx.update(|cx| create_untitled_document(&documents, cx));
-        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
-        let (shell, window_handle) = product_window(document, model, cx);
-        cx.update_window(window_handle, |_, window, cx| {
-            shell.read(cx).focus_active_editor(window, cx)
-        })
-        .unwrap();
-        let runtime = cx.read(|cx| {
-            cx.global::<ApplicationProductCommands>()
-                .0
-                .read(cx)
-                .runtime_control()
-        });
-
-        runtime
-            .execute_fixture_module(
-                "file:///fixtures/product-command.js",
-                format!(
-                    r#"
-                        import {{ commands }} from "knot:editor";
-                        const outcome = await commands.invoke("{NEW_COMMAND}", null);
-                        if (outcome.kind !== "completed") {{
-                          throw new Error(`unexpected outcome: ${{outcome.kind}}`);
-                        }}
-                    "#
-                ),
-            )
-            .await
-            .unwrap();
-
-        cx.read(|cx| {
-            assert_eq!(
-                shell
-                    .read(cx)
-                    .workbench
-                    .read(cx)
-                    .focused_pane()
-                    .unwrap()
-                    .tabs()
-                    .len(),
-                2
-            );
-        });
-    }
-
-    #[gpui::test]
     async fn editing_commands_keep_the_captured_view_and_native_clipboard(cx: &mut TestAppContext) {
         let documents = install_globals(cx);
         let document = cx.update(|cx| create_untitled_document(&documents, cx));
