@@ -102,11 +102,6 @@ the item is removed from this register.
 
 ## Extensions and automation
 
-- **D017 — Production V8 isolate pool and scheduling**
-  - Deferred: Persistent thread-affine prototype runtimes validated the API
-    boundary, not production resource policy.
-  - Reconsider: The first production extension slice is selected.
-
 - **D018 — Extension packaging, dependencies, resolution, and load order**
   - Deferred: No installable extension product exists yet.
   - Reconsider: Extensions must be distributed rather than embedded as
