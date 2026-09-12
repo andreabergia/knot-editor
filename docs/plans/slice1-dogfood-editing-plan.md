@@ -336,11 +336,13 @@ application-owned document model rather than introducing transitional APIs.
   state, undo grouping, save races, atomic create/replace, conflict rejection,
   and command routing. The remaining automated and native UI cases are tracked
   explicitly under Checkpoint 10 above.
-- ⬜ Use Knot to create a new file and edit several existing files in this
+- ✅ Use Knot to create a new file and edit several existing files in this
   repository across two windows and a split, including two views of one
   buffer.
-- ⬜ Exercise undo/redo, Save As outside the workspace, an external-change
+- ✅ Exercise undo/redo, Save As outside the workspace, an external-change
   conflict, tab/window closure, and application quit during that session.
+  Manual validation was accumulated through the checkpoint review gates rather
+  than repeated as one final session.
 - ✅ Restore the initiating editor view's caret and selection when undoing or
   redoing, including grouped edits and invocation from another view of the same
   document, so navigation feels consistent with established editors.
