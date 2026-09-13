@@ -1,6 +1,6 @@
 # D017: Production V8 Isolate Pool and Scheduling
 
-Status: in progress; Tasks 1-3 implemented, Task 3 awaiting review.
+Status: in progress; Tasks 1-4 implemented, Task 4 awaiting review.
 
 This slice replaces the prototype `deno_core` runtime with a direct
 `rusty_v8` host and runs persistent extension isolates on a bounded worker
@@ -193,16 +193,16 @@ Manual review gate:
 
 ## Task 4: Rebuild fixture modules and the JavaScript facade
 
-- ⬜ Implement the minimum direct-V8 module pipeline: compile, instantiate,
+- ✅ Implement the minimum direct-V8 module pipeline: compile, instantiate,
   resolve from the static fixture module set, evaluate, and report synchronous
   or rejected-promise failures.
-- ⬜ Recreate the private bootstrap and public `knot:editor` facade without
+- ✅ Recreate the private bootstrap and public `knot:editor` facade without
   `Deno.core`, generated ops, or Deno globals.
-- ⬜ Install private native callbacks explicitly and expose only the semantic
+- ✅ Install private native callbacks explicitly and expose only the semantic
   public API to extension code.
-- ⬜ Keep imports restricted to the embedded fixture graph and reject access to
+- ✅ Keep imports restricted to the embedded fixture graph and reject access to
   private bootstrap modules.
-- ⬜ Restore script and fixture-module probes on top of scheduler turns.
+- ✅ Restore script and fixture-module probes on top of scheduler turns.
 
 Automated checks:
 

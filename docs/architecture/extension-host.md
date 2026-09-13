@@ -22,9 +22,8 @@ Each loaded lifecycle has one authoritative state, one FIFO root queue, and at
 most one active logical command tree. A cloneable handle admits lifecycles,
 queues roots, wakes continuations, and requests stop; the pool owner shuts down
 and joins its workers. The engine composes this scheduler with one persistent
-runtime capsule per loaded lifecycle. The module loader, JavaScript facade,
-product bridge, and `--fixture` runtime experience remain unavailable until
-later D017 tasks.
+runtime capsule per loaded lifecycle. The product bridge and `--fixture`
+runtime experience remain unavailable until later D017 tasks.
 
 V8 process initialization is idempotent and owned by `engine`. It must happen
 before creating scheduler workers, because every thread that may lock a shared
@@ -39,6 +38,17 @@ explicit microtask checkpoint, converts any exception or unhandled rejection
 to a Knot-owned report, and leaves all scopes before releasing the locker.
 Synchronous exceptions and unhandled rejections fail only that turn. Forced
 termination and heap-limit termination are fatal to the lifecycle.
+
+Fixture modules run as scheduler root turns. Each capsule owns an immutable
+in-memory source graph and persistent compiled-module cache. Static imports use
+URL resolution and can reach only sources already embedded in that graph;
+bare, missing, and private-bootstrap imports fail resolution. The engine
+eagerly evaluates a private `knot:bootstrap` module and the public
+`knot:editor` facade when it creates the capsule. Bootstrap captures the native
+request callback and removes its temporary global before extension work can
+run, leaving only the semantic `editor`, `commands`, and `workbench` exports.
+Native requests currently reject as unsupported; typed yielding requests and
+promise resumption return in the next D017 checkpoint.
 
 Unload first marks the scheduler lifecycle stopping and terminates any running
 JavaScript through a thread-safe control handle. Disposal waits for the running
