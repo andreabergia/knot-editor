@@ -1,6 +1,6 @@
 # D017: Production V8 Isolate Pool and Scheduling
 
-Status: in progress; Task 1 implemented, awaiting review.
+Status: in progress; Tasks 1-2 implemented, Task 2 awaiting review.
 
 This slice replaces the prototype `deno_core` runtime with a direct
 `rusty_v8` host and runs persistent extension isolates on a bounded worker
@@ -141,16 +141,16 @@ Manual review gate:
 
 ## Task 2: Implement the scheduler state machine
 
-- ⬜ Define extension lifecycle and scheduling states independently of V8
+- ✅ Define extension lifecycle and scheduling states independently of V8
   mechanics: loading, idle, queued, running, awaiting host work, stopping, and
   terminal failure.
-- ⬜ Implement admission, per-extension root queues, continuation wakeups,
+- ✅ Implement admission, per-extension root queues, continuation wakeups,
   ready-queue deduplication, FIFO selection, turn completion, and shutdown.
-- ⬜ Distinguish unrelated root work from continuations belonging to the active
+- ✅ Distinguish unrelated root work from continuations belonging to the active
   logical command tree.
-- ⬜ Add configurable pool sizing with the selected production default and a
+- ✅ Add configurable pool sizing with the selected production default and a
   deterministic single-worker test configuration.
-- ⬜ Cover state transitions, ordering, exact-once completion, stale lifecycle
+- ✅ Cover state transitions, ordering, exact-once completion, stale lifecycle
   rejection, and shutdown using scheduler-level tests without V8 timing.
 
 Automated checks:

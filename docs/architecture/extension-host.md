@@ -17,14 +17,17 @@ Part of the [architecture](../architecture.md). Design rationale is recorded in
 - `lifecycle` owns extension lifetime and teardown state.
 - `bench` owns host benchmark entry points.
 
-Only the protocol and process initialization boundaries are implemented now.
-The thread-per-extension Deno prototype and its application bridge have been
-removed; extension loading and the `--fixture` runtime experience remain
-unavailable until the pooled host is integrated.
+The scheduler owns a V8-independent state machine and a fixed worker pool.
+Each loaded lifecycle has one authoritative state, one FIFO root queue, and at
+most one active logical command tree. A cloneable handle admits lifecycles,
+queues roots, wakes continuations, and requests stop; the pool owner shuts down
+and joins its workers. The engine integration, extension loading, and the
+`--fixture` runtime experience remain unavailable until later D017 tasks.
 
 V8 process initialization is idempotent and owned by `engine`. It must happen
 before creating scheduler workers, because every thread that may lock a shared
-isolate must be created after initialization.
+isolate must be created after initialization. Pool construction requires an
+engine-issued permit that proves this ordering.
 
 ```text
 extension JavaScript (under reconstruction)
@@ -49,3 +52,21 @@ Buffer ranges and edits remain UTF-8 byte based. Snapshot storage retains the
 immutable UTF-16 representation needed by the future direct-V8 binding without
 changing the UTF-8 core. Detailed behaviors to restore are recorded in D017's
 protocol restoration ledger.
+
+## Scheduler flow
+
+A newly admitted lifecycle starts in `Loading`. Successful loading moves it to
+`Idle`, or to `Queued` when roots arrived during loading. `Queued` is also the
+ready-queue deduplication bit. A worker takes one FIFO turn and changes the
+lifecycle to `Running`; its result completes the active root, tail-queues one
+continuation turn, yields in `AwaitingHostWork`, or fails that lifecycle.
+
+Unrelated roots remain behind the active command tree. A continuation must
+name that tree and may wake an awaiting lifecycle; a response that races with
+the running turn is retained and queued when the turn yields. Stop and shutdown
+cancel queued work immediately, signal cooperative cancellation to a running
+turn, and settle it when the turn returns. Stop completion marks when a lifetime
+can be replaced. Root and continuation completion senders are consumed on
+settlement so accepted work completes exactly once. Extension and lifecycle
+identity plus per-turn identity reject stale work and late or duplicate turn
+results.
