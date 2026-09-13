@@ -3,11 +3,7 @@
 use std::{
     collections::{HashMap, VecDeque},
     num::NonZeroUsize,
-    sync::{
-        Arc, Condvar, Mutex,
-        atomic::{AtomicBool, Ordering},
-        mpsc,
-    },
+    sync::{Arc, Condvar, Mutex, mpsc},
     thread::JoinHandle,
 };
 
@@ -15,18 +11,6 @@ use super::{
     lifecycle::{ExtensionKey, ExtensionState, Failure},
     protocol::{ExtensionId, ExtensionLifecycleId},
 };
-
-/// Proof that process-wide engine initialization preceded worker creation.
-#[derive(Clone, Copy, Debug)]
-pub struct WorkerThreadPermit {
-    _private: (),
-}
-
-impl WorkerThreadPermit {
-    pub(crate) const fn new() -> Self {
-        Self { _private: () }
-    }
-}
 
 /// Fixed worker count for one scheduler pool lifetime.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -86,26 +70,7 @@ pub struct Turn<W> {
     pub root: RootId,
     pub id: TurnId,
     pub kind: TurnKind,
-    pub cancellation: CancellationToken,
     pub work: W,
-}
-
-/// Cooperative cancellation signal shared with the active turn executor.
-#[derive(Clone, Debug)]
-pub struct CancellationToken(Arc<AtomicBool>);
-
-impl CancellationToken {
-    fn new() -> Self {
-        Self(Arc::new(AtomicBool::new(false)))
-    }
-
-    pub fn is_cancelled(&self) -> bool {
-        self.0.load(Ordering::Acquire)
-    }
-
-    fn cancel(&self) {
-        self.0.store(true, Ordering::Release);
-    }
 }
 
 /// The scheduler-relevant result of executing one turn.
@@ -121,15 +86,6 @@ pub enum TurnOutcome {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CompletionOutcome {
     Completed,
-    Cancelled,
-    Failed(Failure),
-}
-
-/// Final disposition delivered exactly once for each accepted continuation.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum ContinuationOutcome {
-    Applied,
-    Discarded,
     Cancelled,
     Failed(Failure),
 }
@@ -165,10 +121,10 @@ impl std::fmt::Display for SchedulerError {
 
 impl std::error::Error for SchedulerError {}
 
-struct CompletionSlot<T>(Option<mpsc::Sender<T>>);
+struct CompletionSlot(Option<mpsc::Sender<CompletionOutcome>>);
 
-impl<T> CompletionSlot<T> {
-    fn settle(&mut self, outcome: T) {
+impl CompletionSlot {
+    fn settle(&mut self, outcome: CompletionOutcome) {
         if let Some(sender) = self.0.take() {
             let _ = sender.send(outcome);
         }
@@ -178,25 +134,13 @@ impl<T> CompletionSlot<T> {
 struct Root<W> {
     id: RootId,
     work: W,
-    completion: CompletionSlot<CompletionOutcome>,
-    cancellation: CancellationToken,
-}
-
-struct Continuation<W> {
-    work: W,
-    completion: CompletionSlot<ContinuationOutcome>,
+    completion: CompletionSlot,
 }
 
 struct ActiveRoot<W> {
     id: RootId,
-    completion: CompletionSlot<CompletionOutcome>,
-    cancellation: CancellationToken,
-    continuations: VecDeque<Continuation<W>>,
-}
-
-struct RunningTurn {
-    id: TurnId,
-    continuation: Option<CompletionSlot<ContinuationOutcome>>,
+    completion: CompletionSlot,
+    continuations: VecDeque<W>,
 }
 
 struct Extension<W> {
@@ -204,8 +148,7 @@ struct Extension<W> {
     state: ExtensionState,
     roots: VecDeque<Root<W>>,
     active: Option<ActiveRoot<W>>,
-    running: Option<RunningTurn>,
-    stop_waiters: Vec<mpsc::Sender<()>>,
+    running: Option<TurnId>,
 }
 
 /// Deterministic scheduling policy used by the worker pool.
@@ -257,7 +200,6 @@ impl<W> StateMachine<W> {
                 roots: VecDeque::new(),
                 active: None,
                 running: None,
-                stop_waiters: Vec::new(),
             },
         );
         Ok(())
@@ -303,7 +245,6 @@ impl<W> StateMachine<W> {
             id,
             work,
             completion: CompletionSlot(Some(sender)),
-            cancellation: CancellationToken::new(),
         });
         if extension.state == ExtensionState::Idle {
             self.make_ready(key);
@@ -316,7 +257,7 @@ impl<W> StateMachine<W> {
         key: ExtensionKey,
         root: RootId,
         work: W,
-    ) -> Result<mpsc::Receiver<ContinuationOutcome>, SchedulerError> {
+    ) -> Result<(), SchedulerError> {
         if self.shutting_down {
             return Err(SchedulerError::ShuttingDown);
         }
@@ -338,15 +279,11 @@ impl<W> StateMachine<W> {
                 received: root,
             });
         }
-        let (sender, receiver) = mpsc::channel();
-        active.continuations.push_back(Continuation {
-            work,
-            completion: CompletionSlot(Some(sender)),
-        });
+        active.continuations.push_back(work);
         if extension.state == ExtensionState::AwaitingHostWork {
             self.make_ready(key);
         }
-        Ok(receiver)
+        Ok(())
     }
 
     pub fn next_turn(&mut self) -> Option<Turn<W>> {
@@ -355,39 +292,29 @@ impl<W> StateMachine<W> {
             if extension.key != key || extension.state != ExtensionState::Queued {
                 continue;
             }
-            let (root, kind, cancellation, work, continuation) =
-                if let Some(active) = extension.active.as_mut() {
-                    let continuation = active.continuations.pop_front()?;
-                    (
-                        active.id,
-                        TurnKind::Continuation,
-                        active.cancellation.clone(),
-                        continuation.work,
-                        Some(continuation.completion),
-                    )
-                } else {
-                    let pending = extension.roots.pop_front()?;
-                    let root = pending.id;
-                    let work = pending.work;
-                    let cancellation = pending.cancellation;
-                    extension.active = Some(ActiveRoot {
-                        id: root,
-                        completion: pending.completion,
-                        cancellation: cancellation.clone(),
-                        continuations: VecDeque::new(),
-                    });
-                    (root, TurnKind::Root, cancellation, work, None)
-                };
+            let (root, kind, work) = if let Some(active) = extension.active.as_mut() {
+                let work = active.continuations.pop_front()?;
+                (active.id, TurnKind::Continuation, work)
+            } else {
+                let pending = extension.roots.pop_front()?;
+                let root = pending.id;
+                let work = pending.work;
+                extension.active = Some(ActiveRoot {
+                    id: root,
+                    completion: pending.completion,
+                    continuations: VecDeque::new(),
+                });
+                (root, TurnKind::Root, work)
+            };
             let id = TurnId(self.next_turn);
             self.next_turn += 1;
             extension.state = ExtensionState::Running;
-            extension.running = Some(RunningTurn { id, continuation });
+            extension.running = Some(id);
             return Some(Turn {
                 key,
                 root,
                 id,
                 kind,
-                cancellation,
                 work,
             });
         }
@@ -404,32 +331,20 @@ impl<W> StateMachine<W> {
         let Some(running) = extension.running.take() else {
             return Err(SchedulerError::DuplicateOrStaleTurn(turn));
         };
-        if running.id != turn {
+        if running != turn {
             extension.running = Some(running);
             return Err(SchedulerError::DuplicateOrStaleTurn(turn));
         }
         if extension.state == ExtensionState::Stopping {
-            settle_continuation(running.continuation, ContinuationOutcome::Cancelled);
             self.settle_active(key, CompletionOutcome::Cancelled);
-            self.finish_stopping(key);
             return Ok(());
         }
         if extension.state != ExtensionState::Running {
             return Err(SchedulerError::NotRunning);
         }
 
-        let continuation_failure = match &outcome {
-            TurnOutcome::Fatal(failure) => Some(failure.clone()),
-            _ => None,
-        };
-        settle_continuation(
-            running.continuation,
-            continuation_failure.map_or(ContinuationOutcome::Applied, ContinuationOutcome::Failed),
-        );
-
         match outcome {
             TurnOutcome::Completed => {
-                self.settle_queued_continuations(key, ContinuationOutcome::Discarded);
                 self.settle_active(key, CompletionOutcome::Completed);
                 if self.extension(key)?.roots.is_empty() {
                     self.extension_mut(key)?.state = ExtensionState::Idle;
@@ -466,27 +381,20 @@ impl<W> StateMachine<W> {
         Ok(())
     }
 
-    pub fn stop(&mut self, key: ExtensionKey) -> Result<mpsc::Receiver<()>, SchedulerError> {
+    pub fn stop(&mut self, key: ExtensionKey) -> Result<(), SchedulerError> {
         self.extension(key)?;
         self.remove_ready(key);
-        let (sender, receiver) = mpsc::channel();
         let extension = self.extension_mut(key)?;
         let was_running = extension.running.is_some();
         extension.state = ExtensionState::Stopping;
-        extension.stop_waiters.push(sender);
         settle_roots(&mut extension.roots, CompletionOutcome::Cancelled);
-        if let Some(active) = extension.active.as_mut() {
-            active.cancellation.cancel();
-            settle_continuations(&mut active.continuations, ContinuationOutcome::Cancelled);
-        }
         if !was_running {
             if let Some(active) = extension.active.as_mut() {
                 active.completion.settle(CompletionOutcome::Cancelled);
             }
             extension.active = None;
-            notify_stopped(extension);
         }
-        Ok(receiver)
+        Ok(())
     }
 
     pub fn shutdown(&mut self) {
@@ -499,16 +407,11 @@ impl<W> StateMachine<W> {
             let was_running = extension.running.is_some();
             extension.state = ExtensionState::Stopping;
             settle_roots(&mut extension.roots, CompletionOutcome::Cancelled);
-            if let Some(active) = extension.active.as_mut() {
-                active.cancellation.cancel();
-                settle_continuations(&mut active.continuations, ContinuationOutcome::Cancelled);
-            }
             if !was_running {
                 if let Some(active) = extension.active.as_mut() {
                     active.completion.settle(CompletionOutcome::Cancelled);
                 }
                 extension.active = None;
-                notify_stopped(extension);
             }
         }
     }
@@ -573,34 +476,11 @@ impl<W> StateMachine<W> {
         }
     }
 
-    fn settle_queued_continuations(&mut self, key: ExtensionKey, outcome: ContinuationOutcome) {
-        if let Some(active) = self
-            .extensions
-            .get_mut(&key.extension)
-            .and_then(|extension| extension.active.as_mut())
-        {
-            settle_continuations(&mut active.continuations, outcome);
-        }
-    }
-
-    fn finish_stopping(&mut self, key: ExtensionKey) {
-        let extension = self
-            .extensions
-            .get_mut(&key.extension)
-            .expect("admitted extension");
-        notify_stopped(extension);
-    }
-
     fn fail(&mut self, key: ExtensionKey, failure: Failure) -> Result<(), SchedulerError> {
         self.remove_ready(key);
         let extension = self.extension_mut(key)?;
         extension.running = None;
         if let Some(active) = extension.active.as_mut() {
-            active.cancellation.cancel();
-            settle_continuations(
-                &mut active.continuations,
-                ContinuationOutcome::Failed(failure.clone()),
-            );
             active
                 .completion
                 .settle(CompletionOutcome::Failed(failure.clone()));
@@ -617,35 +497,9 @@ impl<W> StateMachine<W> {
 
 fn settle_roots<W>(roots: &mut VecDeque<Root<W>>, outcome: CompletionOutcome) {
     for root in roots.iter_mut() {
-        root.cancellation.cancel();
         root.completion.settle(outcome.clone());
     }
     roots.clear();
-}
-
-fn settle_continuation(
-    continuation: Option<CompletionSlot<ContinuationOutcome>>,
-    outcome: ContinuationOutcome,
-) {
-    if let Some(mut continuation) = continuation {
-        continuation.settle(outcome);
-    }
-}
-
-fn settle_continuations<W>(
-    continuations: &mut VecDeque<Continuation<W>>,
-    outcome: ContinuationOutcome,
-) {
-    for continuation in continuations.iter_mut() {
-        continuation.completion.settle(outcome.clone());
-    }
-    continuations.clear();
-}
-
-fn notify_stopped<W>(extension: &mut Extension<W>) {
-    for waiter in extension.stop_waiters.drain(..) {
-        let _ = waiter.send(());
-    }
 }
 
 struct Shared<W> {
@@ -701,7 +555,7 @@ impl<W> SchedulerHandle<W> {
         key: ExtensionKey,
         root: RootId,
         work: W,
-    ) -> Result<mpsc::Receiver<ContinuationOutcome>, SchedulerError> {
+    ) -> Result<(), SchedulerError> {
         let result = self
             .shared
             .state
@@ -712,7 +566,7 @@ impl<W> SchedulerHandle<W> {
         result
     }
 
-    pub fn stop(&self, key: ExtensionKey) -> Result<mpsc::Receiver<()>, SchedulerError> {
+    pub fn stop(&self, key: ExtensionKey) -> Result<(), SchedulerError> {
         self.shared.state.lock().unwrap().stop(key)
     }
 
@@ -732,7 +586,6 @@ pub struct SchedulerPool<W> {
 
 impl<W: Send + 'static> SchedulerPool<W> {
     pub fn new(
-        _permit: WorkerThreadPermit,
         config: PoolConfig,
         executor: impl Fn(Turn<W>) -> TurnOutcome + Send + Sync + 'static,
     ) -> Self {
@@ -946,9 +799,6 @@ mod tests {
         let (_, active) = scheduler.enqueue_root(key, "active").unwrap();
         let (_, queued) = scheduler.enqueue_root(key, "queued").unwrap();
         let turn = scheduler.next_turn().unwrap();
-        let continuation = scheduler
-            .enqueue_continuation(key, turn.root, "continuation")
-            .unwrap();
         let failure = Failure::new("boom");
         scheduler
             .finish_turn(key, turn.id, TurnOutcome::Fatal(failure.clone()))
@@ -958,10 +808,6 @@ mod tests {
             CompletionOutcome::Failed(failure.clone())
         );
         assert_eq!(queued.recv().unwrap(), CompletionOutcome::Failed(failure));
-        assert!(matches!(
-            continuation.recv().unwrap(),
-            ContinuationOutcome::Failed(failure) if failure.message() == "boom"
-        ));
         assert!(active.try_recv().is_err());
         assert!(queued.try_recv().is_err());
     }
@@ -976,12 +822,8 @@ mod tests {
         let (_, queued) = scheduler.enqueue_root(first, "queued").unwrap();
         let (_, other) = scheduler.enqueue_root(second, "other").unwrap();
         let turn = scheduler.next_turn().unwrap();
-        let continuation = scheduler
-            .enqueue_continuation(first, turn.root, "continuation")
-            .unwrap();
         scheduler.stop(first).unwrap();
         assert_eq!(queued.recv().unwrap(), CompletionOutcome::Cancelled);
-        assert_eq!(continuation.recv().unwrap(), ContinuationOutcome::Cancelled);
         assert!(running.try_recv().is_err());
         scheduler
             .finish_turn(first, turn.id, TurnOutcome::Completed)
@@ -1065,8 +907,8 @@ mod tests {
         scheduler
             .finish_turn(key, turn.id, TurnOutcome::AwaitingHostWork)
             .unwrap();
-        let first = scheduler.enqueue_continuation(key, root, "first").unwrap();
-        let second = scheduler.enqueue_continuation(key, root, "second").unwrap();
+        scheduler.enqueue_continuation(key, root, "first").unwrap();
+        scheduler.enqueue_continuation(key, root, "second").unwrap();
 
         let turn = scheduler.next_turn().unwrap();
         assert_eq!(turn.work, "first");
@@ -1074,44 +916,20 @@ mod tests {
         scheduler
             .finish_turn(key, turn.id, TurnOutcome::ReadyForContinuation)
             .unwrap();
-        assert_eq!(first.recv().unwrap(), ContinuationOutcome::Applied);
         assert_eq!(scheduler.next_turn().unwrap().work, "second");
-        assert_eq!(second.try_recv(), Err(mpsc::TryRecvError::Empty));
     }
 
     #[test]
-    fn continuation_racing_with_root_completion_is_settled_as_discarded() {
-        let (mut scheduler, key) = admitted();
-        let (root, root_completion) = scheduler.enqueue_root(key, "root").unwrap();
-        let turn = scheduler.next_turn().unwrap();
-        let continuation = scheduler
-            .enqueue_continuation(key, root, "late response")
-            .unwrap();
-
-        scheduler
-            .finish_turn(key, turn.id, TurnOutcome::Completed)
-            .unwrap();
-        assert_eq!(continuation.recv().unwrap(), ContinuationOutcome::Discarded);
-        assert_eq!(
-            root_completion.recv().unwrap(),
-            CompletionOutcome::Completed
-        );
-    }
-
-    #[test]
-    fn stop_running_signals_cancellation_and_lifecycle_retirement() {
+    fn stopped_running_lifecycle_can_be_replaced_after_its_turn_returns() {
         let (mut scheduler, old) = admitted();
         let (_, completion) = scheduler.enqueue_root(old, "root").unwrap();
         let turn = scheduler.next_turn().unwrap();
-        let cancellation = turn.cancellation.clone();
-        let stopped = scheduler.stop(old).unwrap();
+        scheduler.stop(old).unwrap();
 
-        assert!(cancellation.is_cancelled());
-        assert_eq!(stopped.try_recv(), Err(mpsc::TryRecvError::Empty));
+        assert_eq!(scheduler.state(old), Ok(&ExtensionState::Stopping));
         scheduler
             .finish_turn(old, turn.id, TurnOutcome::Completed)
             .unwrap();
-        stopped.recv().unwrap();
         assert_eq!(completion.recv().unwrap(), CompletionOutcome::Cancelled);
 
         let replacement = key(1, 2);
@@ -1147,11 +965,7 @@ mod tests {
 
     #[test]
     fn one_worker_serializes_independent_extensions() {
-        let pool = SchedulerPool::new(
-            super::super::engine::initialize(),
-            PoolConfig::single_worker(),
-            blocking_executor,
-        );
+        let pool = SchedulerPool::new(PoolConfig::single_worker(), blocking_executor);
         assert_eq!(pool.worker_count(), 1);
         let handle = pool.handle();
         let first = key(1, 1);
@@ -1185,11 +999,7 @@ mod tests {
     #[test]
     fn two_workers_run_independent_extensions_concurrently() {
         let config = PoolConfig::new(NonZeroUsize::new(2).unwrap());
-        let pool = SchedulerPool::new(
-            super::super::engine::initialize(),
-            config,
-            blocking_executor,
-        );
+        let pool = SchedulerPool::new(config, blocking_executor);
         assert_eq!(pool.worker_count(), 2);
         let handle = pool.handle();
         let first = key(1, 1);
@@ -1220,7 +1030,6 @@ mod tests {
     #[test]
     fn two_workers_never_run_one_extension_concurrently() {
         let pool = SchedulerPool::new(
-            super::super::engine::initialize(),
             PoolConfig::new(NonZeroUsize::new(2).unwrap()),
             |turn: Turn<BlockingWork>| {
                 let outcome = if turn.work.label == "root" {
@@ -1242,7 +1051,7 @@ mod tests {
         let (root, completed) = handle.enqueue_root(key, root_work).unwrap();
         assert_eq!(starts.recv_timeout(Duration::from_secs(2)).unwrap(), "root");
         let (continuation_work, release_continuation) = blocking_work("continuation", &started);
-        let applied = handle
+        handle
             .enqueue_continuation(key, root, continuation_work)
             .unwrap();
 
@@ -1253,46 +1062,16 @@ mod tests {
             "continuation"
         );
         release_continuation.send(()).unwrap();
-        assert_eq!(applied.recv().unwrap(), ContinuationOutcome::Applied);
         assert_eq!(completed.recv().unwrap(), CompletionOutcome::Completed);
         pool.shutdown();
     }
 
     #[test]
-    fn pool_shutdown_cancels_a_cooperative_running_turn_and_joins() {
-        let (started, starts) = mpsc::channel();
-        let pool = SchedulerPool::new(
-            super::super::engine::initialize(),
-            PoolConfig::single_worker(),
-            move |turn: Turn<&'static str>| {
-                started.send(()).unwrap();
-                while !turn.cancellation.is_cancelled() {
-                    std::thread::yield_now();
-                }
-                TurnOutcome::Completed
-            },
-        );
-        let handle = pool.handle();
-        let key = key(1, 1);
-        handle.admit(key).unwrap();
-        handle.finish_loading(key, Ok(())).unwrap();
-        let (_, completion) = handle.enqueue_root(key, "root").unwrap();
-        starts.recv_timeout(Duration::from_secs(2)).unwrap();
-
-        pool.shutdown();
-        assert_eq!(completion.recv().unwrap(), CompletionOutcome::Cancelled);
-    }
-
-    #[test]
     fn executor_panic_fails_only_its_extension() {
-        let pool = SchedulerPool::new(
-            super::super::engine::initialize(),
-            PoolConfig::single_worker(),
-            |turn: Turn<&'static str>| {
-                assert_ne!(turn.work, "panic");
-                TurnOutcome::Completed
-            },
-        );
+        let pool = SchedulerPool::new(PoolConfig::single_worker(), |turn: Turn<&'static str>| {
+            assert_ne!(turn.work, "panic");
+            TurnOutcome::Completed
+        });
         let handle = pool.handle();
         let failed_key = key(1, 1);
         let neighbor = key(2, 1);

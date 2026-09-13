@@ -26,8 +26,8 @@ and joins its workers. The engine integration, extension loading, and the
 
 V8 process initialization is idempotent and owned by `engine`. It must happen
 before creating scheduler workers, because every thread that may lock a shared
-isolate must be created after initialization. Pool construction requires an
-engine-issued permit that proves this ordering.
+isolate must be created after initialization. The host composition point must
+initialize the engine before constructing a pool whose executor enters V8.
 
 ```text
 extension JavaScript (under reconstruction)
@@ -64,9 +64,7 @@ continuation turn, yields in `AwaitingHostWork`, or fails that lifecycle.
 Unrelated roots remain behind the active command tree. A continuation must
 name that tree and may wake an awaiting lifecycle; a response that races with
 the running turn is retained and queued when the turn yields. Stop and shutdown
-cancel queued work immediately, signal cooperative cancellation to a running
-turn, and settle it when the turn returns. Stop completion marks when a lifetime
-can be replaced. Root and continuation completion senders are consumed on
-settlement so accepted work completes exactly once. Extension and lifecycle
-identity plus per-turn identity reject stale work and late or duplicate turn
-results.
+cancel queued work immediately and settle a running root when its outstanding
+turn returns. Root completion senders are consumed on settlement so accepted
+root work completes exactly once. Extension and lifecycle identity plus
+per-turn identity reject stale work and late or duplicate turn results.
