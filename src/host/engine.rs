@@ -14,6 +14,8 @@ use std::{
     thread::ThreadId,
 };
 
+use url::Url;
+
 #[cfg(test)]
 use std::sync::atomic::AtomicBool;
 
@@ -29,6 +31,108 @@ const ACTIVE: u8 = 0;
 const TERMINATED: u8 = 1;
 const HEAP_LIMIT_EXCEEDED: u8 = 2;
 const DISPOSED: u8 = 3;
+const PRIVATE_BOOTSTRAP_SPECIFIER: &str = "knot:bootstrap";
+const PUBLIC_FACADE_SPECIFIER: &str = "knot:editor";
+const NATIVE_BINDINGS_GLOBAL: &str = "__knotNativeBindings";
+
+const PRIVATE_BOOTSTRAP_SOURCE: &str = r#"
+const nativeBindings = globalThis.__knotNativeBindings;
+delete globalThis.__knotNativeBindings;
+
+const hostErrorNames = Object.freeze({
+  UnsupportedOperation: "UnsupportedOperationError",
+  BufferClosed: "BufferClosedError",
+  InvalidRange: "RangeError",
+  InvalidEditBatch: "InvalidEditBatchError",
+  RevisionConflict: "RevisionConflictError",
+  ContributionSetNotFound: "ContributionSetNotFoundError",
+  TreeViewNotFound: "TreeViewNotFoundError",
+  TreeProviderInUse: "TreeProviderInUseError",
+  TreeProviderNotFound: "TreeProviderNotFoundError",
+  CompletionProviderNotFound: "CompletionProviderNotFoundError",
+  CommandNameInUse: "CommandNameInUseError",
+  CommandNotFound: "CommandNotFoundError",
+  Cancelled: "AbortError",
+});
+
+function hostError(error) {
+  const exception = new Error(error);
+  exception.name = hostErrorNames[error] ?? "KnotHostError";
+  throw exception;
+}
+
+async function request(operation, ...arguments_) {
+  try {
+    return await nativeBindings.request(operation, ...arguments_);
+  } catch (error) {
+    hostError(String(error));
+  }
+}
+
+export async function activeBuffer() {
+  return await request("activeBuffer");
+}
+
+export async function registerCommand(name, handler) {
+  if (typeof name !== "string" || typeof handler !== "function") {
+    throw new TypeError("commands.register requires a name and handler");
+  }
+  return await request("registerCommand", name, handler);
+}
+
+export async function invokeCommand(name, commandArguments) {
+  if (typeof name !== "string") {
+    throw new TypeError("commands.invoke requires a command name");
+  }
+  return await request("invokeCommand", name, commandArguments);
+}
+
+export function invalidCommandArguments(message) {
+  const error = new Error(String(message));
+  error.name = "InvalidCommandArgumentsError";
+  throw error;
+}
+
+export async function registerTreeDataProvider(viewId, provider) {
+  if (typeof viewId !== "string" || typeof provider?.getChildren !== "function") {
+    throw new TypeError("workbench.registerTreeDataProvider requires a view ID and getChildren provider");
+  }
+  return await request("registerTreeDataProvider", viewId, provider);
+}
+
+export async function registerCompletionProvider(label, provider) {
+  if (typeof label !== "string" || typeof provider?.provideCompletions !== "function") {
+    throw new TypeError("editor.registerCompletionProvider requires a label and provideCompletions provider");
+  }
+  return await request("registerCompletionProvider", label, provider);
+}
+"#;
+
+const PUBLIC_FACADE_SOURCE: &str = r#"
+import {
+  activeBuffer,
+  invalidCommandArguments,
+  invokeCommand,
+  registerCommand,
+  registerCompletionProvider,
+  registerTreeDataProvider,
+} from "knot:bootstrap";
+
+export const editor = Object.freeze({
+  activeBuffer,
+  registerCompletionProvider,
+});
+
+export const commands = Object.freeze({
+  invalidArguments: invalidCommandArguments,
+  invoke: invokeCommand,
+  register: registerCommand,
+});
+
+export const workbench = Object.freeze({
+  registerTreeDataProvider,
+});
+"#;
 
 /// Initializes V8 before any extension worker thread is created.
 pub(crate) fn initialize() {
@@ -61,6 +165,8 @@ impl Default for IsolateConfig {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RuntimeErrorKind {
     Compilation,
+    InvalidModuleSpecifier,
+    ModuleResolution,
     Exception,
     Rejection,
     Terminated,
@@ -185,10 +291,49 @@ pub(crate) struct ExecutionReport {
 #[derive(Default)]
 struct RuntimeLocalState {
     rejections: Mutex<Vec<RejectionReport>>,
+    modules: Mutex<FixtureModuleRegistry>,
+    #[cfg(test)]
+    host_error: Mutex<Option<String>>,
     #[cfg(test)]
     barrier: Mutex<Option<Arc<TestGate>>>,
     #[cfg(test)]
     entered: Mutex<Option<mpsc::Sender<()>>>,
+}
+
+struct FixtureModuleRegistry {
+    sources: HashMap<String, Arc<str>>,
+    modules: Vec<CompiledModule>,
+    resolutions: Vec<ModuleResolution>,
+}
+
+impl Default for FixtureModuleRegistry {
+    fn default() -> Self {
+        Self {
+            sources: HashMap::from([
+                (
+                    PRIVATE_BOOTSTRAP_SPECIFIER.to_owned(),
+                    Arc::from(PRIVATE_BOOTSTRAP_SOURCE),
+                ),
+                (
+                    PUBLIC_FACADE_SPECIFIER.to_owned(),
+                    Arc::from(PUBLIC_FACADE_SOURCE),
+                ),
+            ]),
+            modules: Vec::new(),
+            resolutions: Vec::new(),
+        }
+    }
+}
+
+struct CompiledModule {
+    specifier: String,
+    module: v8::Global<v8::Module>,
+}
+
+struct ModuleResolution {
+    referrer: v8::Global<v8::Module>,
+    request: String,
+    resolved: String,
 }
 
 #[cfg(test)]
@@ -272,9 +417,21 @@ impl RuntimeCapsule {
         );
         let context = {
             let scope = pin!(v8::HandleScope::new(&mut isolate));
-            let scope = scope.init();
+            let mut scope = scope.init();
             let context = v8::Context::new(&scope, Default::default());
-            v8::Global::new(&scope, context)
+            let context_handle = v8::Global::new(&scope, context);
+            let scope = &mut v8::ContextScope::new(&mut scope, context);
+            initialize_extension_context(scope, &local_state).map(|()| context_handle)
+        };
+        let context = match context {
+            Ok(context) => context,
+            Err(error) => {
+                clear_module_registry(&local_state);
+                isolate.remove_near_heap_limit_callback(near_heap_limit_callback, 0);
+                let _ = isolate.remove_slot::<Arc<RuntimeLocalState>>();
+                drop(isolate);
+                return Err(error);
+            }
         };
         // SAFETY: the context, callback data, and isolate slot above contain
         // only owned Send state. No scoped handles or references survive.
@@ -283,6 +440,7 @@ impl RuntimeCapsule {
             Err(error) => {
                 let message = format!("V8 isolate could not become shared: {error}");
                 let mut isolate = error.into_isolate();
+                clear_module_registry(&local_state);
                 isolate.remove_near_heap_limit_callback(near_heap_limit_callback, 0);
                 let _ = isolate.remove_slot::<Arc<RuntimeLocalState>>();
                 drop(context);
@@ -405,6 +563,39 @@ impl RuntimeCapsule {
         })
     }
 
+    pub(crate) fn execute_fixture_module(
+        &self,
+        specifier: &str,
+        source: &str,
+    ) -> Result<ExecutionReport, RuntimeError> {
+        let specifier = validate_root_module_specifier(specifier)?;
+        if self.status.load(Ordering::Acquire) != ACTIVE {
+            return Err(self.status_error());
+        }
+        let data = self.data.lock().unwrap();
+        let data = data.as_ref().ok_or_else(RuntimeError::disposed)?;
+        self.local_state.rejections.lock().unwrap().clear();
+        let mut locker = data.isolate.lock();
+        let scope = pin!(v8::HandleScope::new(&mut *locker));
+        let mut scope = scope.init();
+        let context = v8::Local::new(&scope, &data.context);
+        let scope = &mut v8::ContextScope::new(&mut scope, context);
+        let result = evaluate_fixture_module(
+            scope,
+            &self.local_state,
+            &specifier,
+            Some(Arc::from(source)),
+            false,
+        );
+        if self.status.load(Ordering::Acquire) != ACTIVE {
+            return Err(self.status_error());
+        }
+        result.map(|value| ExecutionReport {
+            value: value.into(),
+            worker: std::thread::current().id(),
+        })
+    }
+
     pub(crate) fn hold_external_utf16(
         &self,
         global_name: &str,
@@ -463,6 +654,7 @@ impl RuntimeCapsule {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .clear();
+            clear_module_registry(&self.local_state);
             let _ = locker.remove_slot::<Arc<RuntimeLocalState>>();
             drop(data.context);
         }
@@ -528,6 +720,11 @@ impl RuntimeCapsule {
             .global(scope)
             .set(scope, name.into(), function.into());
     }
+
+    #[cfg(test)]
+    fn set_test_host_error(&self, error: impl Into<String>) {
+        *self.local_state.host_error.lock().unwrap() = Some(error.into());
+    }
 }
 
 impl Drop for RuntimeCapsule {
@@ -557,9 +754,19 @@ impl TerminationHandle {
 
 struct EngineTurn {
     capsule: Arc<RuntimeCapsule>,
-    source_name: Arc<str>,
-    source: Arc<str>,
+    work: EngineWork,
     result: mpsc::Sender<Result<ExecutionReport, RuntimeError>>,
+}
+
+enum EngineWork {
+    Script {
+        source_name: Arc<str>,
+        source: Arc<str>,
+    },
+    FixtureModule {
+        specifier: Arc<str>,
+        source: Arc<str>,
+    },
 }
 
 /// Completion side of one scheduled JavaScript turn.
@@ -665,8 +872,37 @@ impl RuntimePool {
                 key,
                 EngineTurn {
                     capsule,
-                    source_name: source_name.into(),
-                    source: source.into(),
+                    work: EngineWork::Script {
+                        source_name: source_name.into(),
+                        source: source.into(),
+                    },
+                    result: result_sender,
+                },
+            )?;
+        Ok(RuntimeExecution { result, completion })
+    }
+
+    pub(crate) fn execute_fixture_module(
+        &self,
+        key: ExtensionKey,
+        specifier: impl Into<Arc<str>>,
+        source: impl Into<Arc<str>>,
+    ) -> Result<RuntimeExecution, RuntimePoolError> {
+        let capsule = self.capsule(key)?;
+        let (result_sender, result) = mpsc::channel();
+        let (_, completion) = self
+            .scheduler
+            .as_ref()
+            .expect("runtime pool is active")
+            .handle()
+            .enqueue_root(
+                key,
+                EngineTurn {
+                    capsule,
+                    work: EngineWork::FixtureModule {
+                        specifier: specifier.into(),
+                        source: source.into(),
+                    },
                     result: result_sender,
                 },
             )?;
@@ -745,13 +981,360 @@ impl Drop for RuntimePool {
     }
 }
 
+fn initialize_extension_context(
+    scope: &mut v8::PinScope<'_, '_>,
+    state: &Arc<RuntimeLocalState>,
+) -> Result<(), RuntimeError> {
+    let bindings_name =
+        v8::String::new(scope, NATIVE_BINDINGS_GLOBAL).ok_or_else(RuntimeError::disposed)?;
+    let bindings = v8::Object::new(scope);
+    let request_name = v8::String::new(scope, "request").ok_or_else(RuntimeError::disposed)?;
+    let request = v8::Function::new(scope, unavailable_host_request_callback)
+        .ok_or_else(RuntimeError::disposed)?;
+    if bindings.set(scope, request_name.into(), request.into()) != Some(true)
+        || scope.get_current_context().global(scope).set(
+            scope,
+            bindings_name.into(),
+            bindings.into(),
+        ) != Some(true)
+    {
+        return Err(RuntimeError::fatal(
+            RuntimeErrorKind::Engine,
+            "could not install private native bindings",
+        ));
+    }
+
+    evaluate_fixture_module(scope, state, PUBLIC_FACADE_SPECIFIER, None, true).map(|_| ())
+}
+
+fn validate_root_module_specifier(specifier: &str) -> Result<String, RuntimeError> {
+    let parsed = Url::parse(specifier).map_err(|_| RuntimeError {
+        kind: RuntimeErrorKind::InvalidModuleSpecifier,
+        message: format!("invalid fixture module specifier: {specifier}").into(),
+        source: Some(specifier.into()),
+        line: None,
+        column: None,
+        stack: None,
+    })?;
+    let canonical = parsed.to_string();
+    if canonical == PRIVATE_BOOTSTRAP_SPECIFIER || canonical == PUBLIC_FACADE_SPECIFIER {
+        return Err(RuntimeError {
+            kind: RuntimeErrorKind::InvalidModuleSpecifier,
+            message: format!("fixture module specifier is reserved: {canonical}").into(),
+            source: Some(canonical.into()),
+            line: None,
+            column: None,
+            stack: None,
+        });
+    }
+    Ok(canonical)
+}
+
+fn evaluate_fixture_module(
+    scope: &mut v8::PinScope<'_, '_>,
+    state: &Arc<RuntimeLocalState>,
+    specifier: &str,
+    source: Option<Arc<str>>,
+    internal: bool,
+) -> Result<String, RuntimeError> {
+    if !internal && specifier == PRIVATE_BOOTSTRAP_SPECIFIER {
+        return Err(module_resolution_error(
+            specifier,
+            "Knot private bootstrap bindings are not importable by extensions",
+        ));
+    }
+    if let Some(source) = source {
+        let mut modules = state.modules.lock().unwrap();
+        if let Some(existing) = modules.sources.get(specifier) {
+            if existing.as_ref() != source.as_ref() {
+                return Err(module_resolution_error(
+                    specifier,
+                    "fixture module source cannot change after registration",
+                ));
+            }
+        } else {
+            modules.sources.insert(specifier.to_owned(), source);
+        }
+    }
+
+    v8::tc_scope!(let try_catch, scope);
+    let (module_count, resolution_count) = {
+        let modules = state.modules.lock().unwrap();
+        (modules.modules.len(), modules.resolutions.len())
+    };
+    let compiled = {
+        let mut modules = state.modules.lock().unwrap();
+        compile_module_graph(try_catch, &mut modules, specifier)
+    };
+    let compiled = match compiled {
+        Ok(compiled) => compiled,
+        Err(kind) => {
+            let error = runtime_error_from_try_catch(try_catch, kind, specifier);
+            rollback_module_graph(state, module_count, resolution_count);
+            return Err(error);
+        }
+    };
+    let module = v8::Local::new(try_catch, &compiled);
+    match module.instantiate_module(try_catch, resolve_module_callback) {
+        Some(true) => {}
+        Some(false) | None => {
+            let error = runtime_error_from_try_catch(
+                try_catch,
+                RuntimeErrorKind::ModuleResolution,
+                specifier,
+            );
+            rollback_module_graph(state, module_count, resolution_count);
+            return Err(error);
+        }
+    }
+    let Some(value) = module.evaluate(try_catch) else {
+        return Err(runtime_error_from_try_catch(
+            try_catch,
+            RuntimeErrorKind::Exception,
+            specifier,
+        ));
+    };
+    let Ok(promise) = v8::Local::<v8::Promise>::try_from(value) else {
+        return Err(RuntimeError::fatal(
+            RuntimeErrorKind::Engine,
+            "V8 module evaluation did not return a promise",
+        ));
+    };
+    promise.mark_as_handled();
+    try_catch.perform_microtask_checkpoint();
+    match promise.state() {
+        v8::PromiseState::Fulfilled => {
+            let value = promise.result(try_catch).to_rust_string_lossy(try_catch);
+            let mut rejections = state.rejections.lock().unwrap();
+            if let Some(rejection) = rejections.first() {
+                let error = RuntimeError {
+                    kind: RuntimeErrorKind::Rejection,
+                    message: rejection.message.clone().into(),
+                    source: rejection.source.clone().map(Into::into),
+                    line: rejection.line,
+                    column: rejection.column,
+                    stack: rejection.stack.clone().map(Into::into),
+                };
+                rejections.clear();
+                Err(error)
+            } else {
+                Ok(value)
+            }
+        }
+        v8::PromiseState::Rejected => {
+            let rejection = promise.result(try_catch);
+            let message = v8::Exception::create_message(try_catch, rejection);
+            let error = RuntimeError {
+                kind: RuntimeErrorKind::Rejection,
+                message: message
+                    .get(try_catch)
+                    .to_rust_string_lossy(try_catch)
+                    .into(),
+                source: message
+                    .get_script_resource_name(try_catch)
+                    .and_then(|value| value.to_string(try_catch))
+                    .map(|value| value.to_rust_string_lossy(try_catch).into())
+                    .or_else(|| Some(specifier.into())),
+                line: message
+                    .get_line_number(try_catch)
+                    .and_then(|line| u32::try_from(line).ok()),
+                column: one_based_coordinate(message.get_start_column()),
+                stack: None,
+            };
+            state.rejections.lock().unwrap().clear();
+            Err(error)
+        }
+        v8::PromiseState::Pending => Err(RuntimeError {
+            kind: RuntimeErrorKind::Rejection,
+            message: "fixture module evaluation remained pending without host work".into(),
+            source: Some(specifier.into()),
+            line: None,
+            column: None,
+            stack: None,
+        }),
+    }
+}
+
+fn rollback_module_graph(state: &RuntimeLocalState, modules: usize, resolutions: usize) {
+    let mut registry = state.modules.lock().unwrap();
+    registry.resolutions.truncate(resolutions);
+    registry.modules.truncate(modules);
+}
+
+fn clear_module_registry(state: &RuntimeLocalState) {
+    let mut registry = state
+        .modules
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    registry.resolutions.clear();
+    registry.modules.clear();
+    registry.sources.clear();
+}
+
+fn compile_module_graph(
+    scope: &mut v8::PinScope<'_, '_>,
+    registry: &mut FixtureModuleRegistry,
+    specifier: &str,
+) -> Result<v8::Global<v8::Module>, RuntimeErrorKind> {
+    if let Some(record) = registry
+        .modules
+        .iter()
+        .find(|record| record.specifier == specifier)
+    {
+        return Ok(record.module.clone());
+    }
+    let Some(source) = registry.sources.get(specifier).cloned() else {
+        throw_module_error(
+            scope,
+            &format!("Knot fixture module not found: {specifier}"),
+        );
+        return Err(RuntimeErrorKind::ModuleResolution);
+    };
+    let source_text = v8::String::new(scope, &source).ok_or(RuntimeErrorKind::Engine)?;
+    let resource_name = v8::String::new(scope, specifier).ok_or(RuntimeErrorKind::Engine)?;
+    let origin = v8::ScriptOrigin::new(
+        scope,
+        resource_name.into(),
+        0,
+        0,
+        false,
+        0,
+        None,
+        false,
+        false,
+        true,
+        None,
+    );
+    let mut source = v8::script_compiler::Source::new(source_text, Some(&origin));
+    let module = v8::script_compiler::compile_module(scope, &mut source)
+        .ok_or(RuntimeErrorKind::Compilation)?;
+    let global = v8::Global::new(scope, module);
+    registry.modules.push(CompiledModule {
+        specifier: specifier.to_owned(),
+        module: global.clone(),
+    });
+
+    let requests = module.get_module_requests();
+    for index in 0..requests.length() {
+        let request = requests.get(scope, index).ok_or(RuntimeErrorKind::Engine)?;
+        let request = v8::Local::<v8::ModuleRequest>::try_from(request)
+            .map_err(|_| RuntimeErrorKind::Engine)?;
+        let request = request.get_specifier().to_rust_string_lossy(scope);
+        let resolved = match resolve_fixture_specifier(&request, specifier) {
+            Ok(resolved) => resolved,
+            Err(message) => {
+                throw_module_error(scope, &message);
+                return Err(RuntimeErrorKind::ModuleResolution);
+            }
+        };
+        registry.resolutions.push(ModuleResolution {
+            referrer: global.clone(),
+            request,
+            resolved: resolved.clone(),
+        });
+        compile_module_graph(scope, registry, &resolved)?;
+    }
+    Ok(global)
+}
+
+fn resolve_fixture_specifier(request: &str, referrer: &str) -> Result<String, String> {
+    if request == PRIVATE_BOOTSTRAP_SPECIFIER && referrer != PUBLIC_FACADE_SPECIFIER {
+        return Err("Knot private bootstrap bindings are not importable by extensions".into());
+    }
+    if request == PRIVATE_BOOTSTRAP_SPECIFIER || request == PUBLIC_FACADE_SPECIFIER {
+        return Ok(request.to_owned());
+    }
+    if let Ok(absolute) = Url::parse(request) {
+        return Ok(absolute.to_string());
+    }
+    if !request.starts_with("./") && !request.starts_with("../") && !request.starts_with('/') {
+        return Err(format!("invalid fixture module specifier: {request}"));
+    }
+    Url::parse(referrer)
+        .and_then(|base| base.join(request))
+        .map(|url| url.to_string())
+        .map_err(|_| format!("invalid fixture module specifier: {request}"))
+}
+
+fn module_resolution_error(source: &str, message: &str) -> RuntimeError {
+    RuntimeError {
+        kind: RuntimeErrorKind::ModuleResolution,
+        message: message.into(),
+        source: Some(source.into()),
+        line: None,
+        column: None,
+        stack: None,
+    }
+}
+
+fn throw_module_error(scope: &mut v8::PinScope<'_, '_>, message: &str) {
+    if let Some(message) = v8::String::new(scope, message) {
+        let exception = v8::Exception::type_error(scope, message);
+        scope.throw_exception(exception);
+    }
+}
+
+fn resolve_module_callback<'s>(
+    context: v8::Local<'s, v8::Context>,
+    specifier: v8::Local<'s, v8::String>,
+    _import_attributes: v8::Local<'s, v8::FixedArray>,
+    referrer: v8::Local<'s, v8::Module>,
+) -> Option<v8::Local<'s, v8::Module>> {
+    v8::callback_scope!(unsafe scope, context);
+    let state = scope.get_slot::<Arc<RuntimeLocalState>>()?.clone();
+    let request = specifier.to_rust_string_lossy(scope);
+    let registry = state.modules.lock().ok()?;
+    let resolution = registry.resolutions.iter().find(|resolution| {
+        resolution.request == request && v8::Local::new(scope, &resolution.referrer) == referrer
+    });
+    let Some(resolution) = resolution else {
+        throw_module_error(
+            scope,
+            &format!("unresolved fixture module import: {request}"),
+        );
+        return None;
+    };
+    registry
+        .modules
+        .iter()
+        .find(|record| record.specifier == resolution.resolved)
+        .map(|record| v8::Local::new(scope, &record.module))
+}
+
+fn unavailable_host_request_callback(
+    scope: &mut v8::PinnedRef<'_, v8::HandleScope>,
+    _arguments: v8::FunctionCallbackArguments,
+    mut result: v8::ReturnValue,
+) {
+    #[cfg(test)]
+    let configured_error = scope
+        .get_slot::<Arc<RuntimeLocalState>>()
+        .and_then(|state| state.host_error.lock().ok()?.take());
+    #[cfg(test)]
+    let error = configured_error
+        .as_deref()
+        .unwrap_or("UnsupportedOperation");
+    #[cfg(not(test))]
+    let error = "UnsupportedOperation";
+    let message = v8::String::new(scope, error).unwrap();
+    let resolver = v8::PromiseResolver::new(scope).unwrap();
+    resolver.reject(scope, message.into());
+    result.set(resolver.get_promise(scope).into());
+}
+
 fn execute_engine_turn(
     turn: Turn<EngineTurn>,
     runtimes: &Mutex<HashMap<ExtensionId, Arc<RuntimeCapsule>>>,
 ) -> TurnOutcome {
     let work = turn.work;
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        work.capsule.execute(&work.source_name, &work.source)
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match &work.work {
+        EngineWork::Script {
+            source_name,
+            source,
+        } => work.capsule.execute(source_name, source),
+        EngineWork::FixtureModule { specifier, source } => {
+            work.capsule.execute_fixture_module(specifier, source)
+        }
     }))
     .unwrap_or_else(|_| {
         Err(RuntimeError::fatal(
@@ -942,7 +1525,7 @@ mod tests {
         time::{Duration, Instant},
     };
 
-    use crate::host::protocol::{ExtensionId, ExtensionLifecycleId};
+    use crate::host::protocol::{ExtensionId, ExtensionLifecycleId, HostRequestError};
 
     fn key(extension: u64) -> ExtensionKey {
         ExtensionKey::new(ExtensionId::new(extension), ExtensionLifecycleId::new(1))
@@ -965,6 +1548,278 @@ mod tests {
             .unwrap();
         let report = capsule.execute("second.js", "count").unwrap();
         assert_eq!(&*report.value, "42");
+    }
+
+    #[test]
+    fn scheduled_fixture_modules_resolve_static_imports_and_preserve_state() {
+        let pool = RuntimePool::new(PoolConfig::single_worker());
+        let runtime = key(1);
+        pool.load(runtime, IsolateConfig::default()).unwrap();
+
+        pool.execute_fixture_module(
+            runtime,
+            "file:///fixtures/counter.js",
+            "export let count = 0; export function increment() { count++; }",
+        )
+        .unwrap()
+        .wait()
+        .unwrap();
+        pool.execute_fixture_module(
+            runtime,
+            "file:///fixtures/first.js",
+            r#"
+                import { count, increment } from "./counter.js";
+                increment();
+                globalThis.firstModuleCount = count;
+            "#,
+        )
+        .unwrap()
+        .wait()
+        .unwrap();
+        pool.execute_fixture_module(
+            runtime,
+            "file:///fixtures/second.js",
+            r#"
+                import { count, increment } from "./counter.js";
+                increment();
+                globalThis.secondModuleCount = count;
+            "#,
+        )
+        .unwrap()
+        .wait()
+        .unwrap();
+
+        assert_eq!(
+            &*pool
+                .execute(
+                    runtime,
+                    "verify.js",
+                    "`${firstModuleCount}:${secondModuleCount}`"
+                )
+                .unwrap()
+                .wait()
+                .unwrap()
+                .value,
+            "1:2"
+        );
+        pool.shutdown();
+    }
+
+    #[test]
+    fn public_facade_is_semantic_and_private_bindings_are_hidden() {
+        let pool = RuntimePool::new(PoolConfig::single_worker());
+        let runtime = key(1);
+        pool.load(runtime, IsolateConfig::default()).unwrap();
+        pool.execute_fixture_module(
+            runtime,
+            "file:///fixtures/facade.js",
+            r#"
+                import { editor, commands, workbench } from "knot:editor";
+                if (typeof Deno !== "undefined") throw new Error("Deno is exposed");
+                if (typeof globalThis.__knotNativeBindings !== "undefined") {
+                    throw new Error("private native bindings are exposed");
+                }
+                if (!Object.isFrozen(editor) || !Object.isFrozen(commands) || !Object.isFrozen(workbench)) {
+                    throw new Error("facade objects are mutable");
+                }
+                if (typeof editor.activeBuffer !== "function"
+                    || typeof editor.registerCompletionProvider !== "function"
+                    || typeof commands.invalidArguments !== "function"
+                    || typeof commands.invoke !== "function"
+                    || typeof commands.register !== "function"
+                    || typeof workbench.registerTreeDataProvider !== "function") {
+                    throw new Error("facade shape is incomplete");
+                }
+            "#,
+        )
+        .unwrap()
+        .wait()
+        .unwrap();
+
+        let unsupported = pool
+            .execute_fixture_module(
+                runtime,
+                "file:///fixtures/unsupported.js",
+                r#"
+                    import { editor } from "knot:editor";
+                    await editor.activeBuffer();
+                "#,
+            )
+            .unwrap()
+            .wait()
+            .unwrap_err();
+        assert_eq!(unsupported.kind(), RuntimeErrorKind::Rejection);
+        assert!(unsupported.message().contains("UnsupportedOperationError"));
+        pool.shutdown();
+    }
+
+    #[test]
+    fn facade_maps_every_host_error_to_a_stable_javascript_name() {
+        let capsule = RuntimeCapsule::new(key(1), IsolateConfig::default()).unwrap();
+        let cases = [
+            (
+                HostRequestError::UnsupportedOperation,
+                "UnsupportedOperationError",
+            ),
+            (HostRequestError::BufferClosed, "BufferClosedError"),
+            (HostRequestError::InvalidRange, "RangeError"),
+            (HostRequestError::InvalidEditBatch, "InvalidEditBatchError"),
+            (HostRequestError::RevisionConflict, "RevisionConflictError"),
+            (
+                HostRequestError::ContributionSetNotFound,
+                "ContributionSetNotFoundError",
+            ),
+            (HostRequestError::TreeViewNotFound, "TreeViewNotFoundError"),
+            (
+                HostRequestError::TreeProviderInUse,
+                "TreeProviderInUseError",
+            ),
+            (
+                HostRequestError::TreeProviderNotFound,
+                "TreeProviderNotFoundError",
+            ),
+            (
+                HostRequestError::CompletionProviderNotFound,
+                "CompletionProviderNotFoundError",
+            ),
+            (HostRequestError::CommandNameInUse, "CommandNameInUseError"),
+            (HostRequestError::CommandNotFound, "CommandNotFoundError"),
+            (HostRequestError::Cancelled, "AbortError"),
+        ];
+        for (index, (error, expected_name)) in cases.into_iter().enumerate() {
+            let wire_name = serde_json::to_value(error)
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_owned();
+            capsule.set_test_host_error(wire_name);
+            let report = capsule
+                .execute_fixture_module(
+                    &format!("file:///fixtures/host-error-{index}.js"),
+                    r#"
+                        import { editor } from "knot:editor";
+                        try {
+                            await editor.activeBuffer();
+                        } catch (error) {
+                            globalThis.hostErrorName = error.name;
+                        }
+                    "#,
+                )
+                .unwrap();
+            assert_eq!(&*report.value, "undefined");
+            assert_eq!(
+                &*capsule
+                    .execute("host-error-name.js", "hostErrorName")
+                    .unwrap()
+                    .value,
+                expected_name
+            );
+        }
+
+        capsule.set_test_host_error("FutureHostFailure");
+        capsule
+            .execute_fixture_module(
+                "file:///fixtures/unknown-host-error.js",
+                r#"
+                    import { editor } from "knot:editor";
+                    try { await editor.activeBuffer(); }
+                    catch (error) { globalThis.hostErrorName = error.name; }
+                "#,
+            )
+            .unwrap();
+        assert_eq!(
+            &*capsule
+                .execute("unknown-host-error-name.js", "hostErrorName")
+                .unwrap()
+                .value,
+            "KnotHostError"
+        );
+
+        capsule
+            .execute_fixture_module(
+                "file:///fixtures/invalid-arguments.js",
+                r#"
+                    import { commands } from "knot:editor";
+                    try { commands.invalidArguments("expected"); }
+                    catch (error) { globalThis.hostErrorName = error.name; }
+                "#,
+            )
+            .unwrap();
+        assert_eq!(
+            &*capsule
+                .execute("invalid-arguments-name.js", "hostErrorName")
+                .unwrap()
+                .value,
+            "InvalidCommandArgumentsError"
+        );
+    }
+
+    #[test]
+    fn fixture_module_failures_are_scoped_and_classified() {
+        let capsule = RuntimeCapsule::new(key(1), IsolateConfig::default()).unwrap();
+
+        let invalid = capsule.execute_fixture_module("not a URL", "").unwrap_err();
+        assert_eq!(invalid.kind(), RuntimeErrorKind::InvalidModuleSpecifier);
+
+        let invalid_import = capsule
+            .execute_fixture_module(
+                "file:///fixtures/invalid-import.js",
+                "import 'bare-specifier';",
+            )
+            .unwrap_err();
+        assert_eq!(invalid_import.kind(), RuntimeErrorKind::ModuleResolution);
+        assert!(
+            invalid_import
+                .message()
+                .contains("invalid fixture module specifier")
+        );
+
+        let missing = capsule
+            .execute_fixture_module(
+                "file:///fixtures/missing-import.js",
+                "import './missing.js';",
+            )
+            .unwrap_err();
+        assert_eq!(missing.kind(), RuntimeErrorKind::ModuleResolution);
+        assert!(missing.message().contains("fixture module not found"));
+
+        let private = capsule
+            .execute_fixture_module(
+                "file:///fixtures/private-import.js",
+                "import { activeBuffer } from 'knot:bootstrap'; void activeBuffer;",
+            )
+            .unwrap_err();
+        assert_eq!(private.kind(), RuntimeErrorKind::ModuleResolution);
+        assert!(private.message().contains("not importable by extensions"));
+
+        let syntax = capsule
+            .execute_fixture_module("file:///fixtures/syntax.js", "export const = 1;")
+            .unwrap_err();
+        assert_eq!(syntax.kind(), RuntimeErrorKind::Compilation);
+        assert_eq!(syntax.source(), Some("file:///fixtures/syntax.js"));
+
+        let thrown = capsule
+            .execute_fixture_module(
+                "file:///fixtures/thrown.js",
+                "throw new Error('expected module throw');",
+            )
+            .unwrap_err();
+        assert_eq!(thrown.kind(), RuntimeErrorKind::Rejection);
+        assert!(thrown.message().contains("expected module throw"));
+
+        let rejected = capsule
+            .execute_fixture_module(
+                "file:///fixtures/rejected.js",
+                "await Promise.reject(new Error('expected module rejection'));",
+            )
+            .unwrap_err();
+        assert_eq!(rejected.kind(), RuntimeErrorKind::Rejection);
+        assert!(rejected.message().contains("expected module rejection"));
+
+        assert_eq!(
+            &*capsule.execute("recover.js", "6 * 7").unwrap().value,
+            "42"
+        );
     }
 
     #[test]
