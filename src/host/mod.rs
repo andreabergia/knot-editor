@@ -5,6 +5,10 @@
 //! is the typed boundary shared with the application.
 
 pub mod bench;
+#[allow(
+    dead_code,
+    reason = "the pooled engine is connected to the product bridge in later D017 checkpoints"
+)]
 pub mod engine;
 pub mod lifecycle;
 #[allow(
