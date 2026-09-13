@@ -21,13 +21,31 @@ The scheduler owns a V8-independent state machine and a fixed worker pool.
 Each loaded lifecycle has one authoritative state, one FIFO root queue, and at
 most one active logical command tree. A cloneable handle admits lifecycles,
 queues roots, wakes continuations, and requests stop; the pool owner shuts down
-and joins its workers. The engine integration, extension loading, and the
-`--fixture` runtime experience remain unavailable until later D017 tasks.
+and joins its workers. The engine composes this scheduler with one persistent
+runtime capsule per loaded lifecycle. The module loader, JavaScript facade,
+product bridge, and `--fixture` runtime experience remain unavailable until
+later D017 tasks.
 
 V8 process initialization is idempotent and owned by `engine`. It must happen
 before creating scheduler workers, because every thread that may lock a shared
 isolate must be created after initialization. The host composition point must
 initialize the engine before constructing a pool whose executor enters V8.
+
+Each runtime capsule owns a `SharedIsolate`, persistent context, lifecycle
+identity, explicit microtask state, heap-limit state, and only thread-safe
+embedder data. A worker holds the capsule's locker only for one JavaScript turn:
+it enters the persistent context, compiles and executes the script, drains the
+explicit microtask checkpoint, converts any exception or unhandled rejection
+to a Knot-owned report, and leaves all scopes before releasing the locker.
+Synchronous exceptions and unhandled rejections fail only that turn. Forced
+termination and heap-limit termination are fatal to the lifecycle.
+
+Unload first marks the scheduler lifecycle stopping and terminates any running
+JavaScript through a thread-safe control handle. Disposal waits for the running
+locker to leave, then releases persistent handles and callback state while
+locked before dropping the shared isolate. Immutable external UTF-16 strings
+transfer one `Arc` reference to V8 and release it on garbage collection or
+isolate disposal, including when disposal happens on a pool worker.
 
 ```text
 extension JavaScript (under reconstruction)

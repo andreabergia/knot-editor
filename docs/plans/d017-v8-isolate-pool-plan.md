@@ -1,6 +1,6 @@
 # D017: Production V8 Isolate Pool and Scheduling
 
-Status: in progress; Tasks 1-2 implemented, Task 2 awaiting review.
+Status: in progress; Tasks 1-3 implemented, Task 3 awaiting review.
 
 This slice replaces the prototype `deno_core` runtime with a direct
 `rusty_v8` host and runs persistent extension isolates on a bounded worker
@@ -166,16 +166,16 @@ Manual review gate:
 
 ## Task 3: Establish movable persistent V8 isolates
 
-- ⬜ Add an extension runtime capsule containing `SharedIsolate`, persistent
+- ✅ Add an extension runtime capsule containing `SharedIsolate`, persistent
   context handles, extension identity, and V8-local state required across
   turns.
-- ⬜ Create, lock, enter, execute, leave, move, re-enter, and dispose an isolate
+- ✅ Create, lock, enter, execute, leave, move, re-enter, and dispose an isolate
   through supported `rusty_v8` APIs.
-- ⬜ Add explicit microtask policy and scoped exception reporting with stable
+- ✅ Add explicit microtask policy and scoped exception reporting with stable
   Knot-owned runtime errors.
-- ⬜ Attach the existing thread-safe termination path and configurable heap
+- ✅ Attach the existing thread-safe termination path and configurable heap
   limit without exposing V8 types outside `host`.
-- ⬜ Prove persistent globals survive turns executed by different workers and
+- ✅ Prove persistent globals survive turns executed by different workers and
   that independent isolates can execute concurrently.
 
 Automated checks:

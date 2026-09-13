@@ -67,9 +67,10 @@ Reference: [core and buffers](architecture/core-and-buffers.md).
 
 Use JavaScript on V8, with Knot-owned protocols insulating the editor from
 runtime machinery. The Deno prototype and its thread-per-extension runtime have
-been removed. The host now depends directly on V8 152 and owns process
-initialization; a bounded pool of movable shared isolates is the selected
-production design and is not implemented yet.
+been removed. The host now depends directly on V8 152, owns process
+initialization, and runs persistent shared isolates through a bounded worker
+pool. Each turn enters the isolate under a V8 locker and drains explicit
+microtasks before yielding it.
 
 Serial callbacks within an extension simplify ownership; independent runtimes
 will progress through the bounded pool. Forced interruption is fatal to that
