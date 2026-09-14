@@ -8,7 +8,7 @@ use std::{
     ptr,
     sync::{
         Arc, Mutex, Once,
-        atomic::{AtomicU8, Ordering},
+        atomic::{AtomicU8, AtomicU64, Ordering},
         mpsc,
     },
     thread::ThreadId,
@@ -21,8 +21,13 @@ use std::sync::atomic::AtomicBool;
 
 use super::{
     lifecycle::{ExtensionKey, Failure},
-    protocol::ExtensionId,
-    scheduler::{CompletionOutcome, PoolConfig, SchedulerError, SchedulerPool, Turn, TurnOutcome},
+    protocol::{
+        ExtensionId, HostOperation, HostRequest, HostResponse, HostResponseValue, RequestId,
+    },
+    scheduler::{
+        CompletionOutcome, PoolConfig, RootId, SchedulerError, SchedulerHandle, SchedulerPool,
+        Turn, TurnOutcome,
+    },
 };
 
 static V8_INITIALIZATION: Once = Once::new();
@@ -149,6 +154,20 @@ pub(crate) enum RuntimePoolError {
     Runtime(RuntimeError),
 }
 
+/// A host response that cannot address one live pending request.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum RuntimeResponseError {
+    Scheduler(SchedulerError),
+    WrongExtension,
+    UnknownRequest,
+}
+
+impl From<SchedulerError> for RuntimeResponseError {
+    fn from(error: SchedulerError) -> Self {
+        Self::Scheduler(error)
+    }
+}
+
 impl From<SchedulerError> for RuntimePoolError {
     fn from(error: SchedulerError) -> Self {
         Self::Scheduler(error)
@@ -191,8 +210,13 @@ pub(crate) struct ExecutionReport {
     pub(crate) worker: ThreadId,
 }
 
-#[derive(Default)]
 struct RuntimeLocalState {
+    key: ExtensionKey,
+    next_request: AtomicU64,
+    request_sender: Mutex<Option<mpsc::Sender<HostRequest>>>,
+    current_root: Mutex<Option<RootId>>,
+    pending: Mutex<HashMap<RequestId, PendingRequest>>,
+    active: Mutex<Option<ActiveExecution>>,
     rejections: Mutex<Vec<RejectionReport>>,
     modules: Mutex<FixtureModuleRegistry>,
     #[cfg(test)]
@@ -201,6 +225,51 @@ struct RuntimeLocalState {
     barrier: Mutex<Option<Arc<TestGate>>>,
     #[cfg(test)]
     entered: Mutex<Option<mpsc::Sender<()>>>,
+}
+
+impl RuntimeLocalState {
+    fn new(key: ExtensionKey) -> Self {
+        Self {
+            key,
+            next_request: AtomicU64::new(1),
+            request_sender: Mutex::new(None),
+            current_root: Mutex::new(None),
+            pending: Mutex::new(HashMap::new()),
+            active: Mutex::new(None),
+            rejections: Mutex::new(Vec::new()),
+            modules: Mutex::new(FixtureModuleRegistry::default()),
+            #[cfg(test)]
+            host_error: Mutex::new(None),
+            #[cfg(test)]
+            barrier: Mutex::new(None),
+            #[cfg(test)]
+            entered: Mutex::new(None),
+        }
+    }
+}
+
+struct PendingRequest {
+    root: RootId,
+    operation: HostOperationKind,
+    resolver: v8::Global<v8::PromiseResolver>,
+    response_queued: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum HostOperationKind {
+    ActiveBuffer,
+}
+
+struct ActiveExecution {
+    root: RootId,
+    promise: v8::Global<v8::Promise>,
+    source: Arc<str>,
+    result: Option<mpsc::Sender<Result<ExecutionReport, RuntimeError>>>,
+}
+
+enum RootEvaluation {
+    Script { source: Arc<str> },
+    Module { source: Arc<str> },
 }
 
 struct FixtureModuleRegistry {
@@ -303,7 +372,7 @@ impl RuntimeCapsule {
     pub(crate) fn new(key: ExtensionKey, config: IsolateConfig) -> Result<Self, RuntimeError> {
         initialize();
         let status = Arc::new(AtomicU8::new(ACTIVE));
-        let local_state = Arc::new(RuntimeLocalState::default());
+        let local_state = Arc::new(RuntimeLocalState::new(key));
         let mut isolate =
             v8::Isolate::new(v8::CreateParams::default().heap_limits(0, config.heap_limit_bytes));
         isolate.set_microtasks_policy(v8::MicrotasksPolicy::Explicit);
@@ -369,6 +438,7 @@ impl RuntimeCapsule {
         TerminationHandle {
             isolate: self.heap_state.isolate.clone(),
             status: Arc::clone(&self.status),
+            wake: None,
         }
     }
 
@@ -499,6 +569,357 @@ impl RuntimeCapsule {
         })
     }
 
+    fn start_script_turn(
+        &self,
+        root: RootId,
+        source_name: Arc<str>,
+        source: Arc<str>,
+        result: mpsc::Sender<Result<ExecutionReport, RuntimeError>>,
+    ) -> TurnOutcome {
+        self.run_root_turn(root, source_name, result, RootEvaluation::Script { source })
+    }
+
+    fn start_module_turn(
+        &self,
+        root: RootId,
+        specifier: Arc<str>,
+        source: Arc<str>,
+        result: mpsc::Sender<Result<ExecutionReport, RuntimeError>>,
+    ) -> TurnOutcome {
+        let canonical = match validate_root_module_specifier(&specifier) {
+            Ok(specifier) => Arc::<str>::from(specifier),
+            Err(error) => {
+                let _ = result.send(Err(error));
+                return TurnOutcome::Completed;
+            }
+        };
+        self.run_root_turn(root, canonical, result, RootEvaluation::Module { source })
+    }
+
+    fn run_root_turn(
+        &self,
+        root: RootId,
+        source: Arc<str>,
+        result: mpsc::Sender<Result<ExecutionReport, RuntimeError>>,
+        evaluation: RootEvaluation,
+    ) -> TurnOutcome {
+        if self.status.load(Ordering::Acquire) != ACTIVE {
+            let error = self.status_error();
+            let _ = result.send(Err(error.clone()));
+            return fatal_or_completed(&error);
+        }
+        let data = self.data.lock().unwrap();
+        let Some(data) = data.as_ref() else {
+            let error = RuntimeError::disposed();
+            let _ = result.send(Err(error.clone()));
+            return TurnOutcome::Fatal(Failure::new(error.to_string()));
+        };
+        self.local_state.rejections.lock().unwrap().clear();
+        *self.local_state.current_root.lock().unwrap() = Some(root);
+        let mut locker = data.isolate.lock();
+        let scope = pin!(v8::HandleScope::new(&mut *locker));
+        let mut scope = scope.init();
+        let context = v8::Local::new(&scope, &data.context);
+        let scope = &mut v8::ContextScope::new(&mut scope, context);
+        v8::tc_scope!(let try_catch, scope);
+        let evaluated = match evaluation {
+            RootEvaluation::Script {
+                source: script_source,
+            } => {
+                let name = v8::String::new(try_catch, &source).ok_or_else(RuntimeError::disposed);
+                let source_text =
+                    v8::String::new(try_catch, &script_source).ok_or_else(RuntimeError::disposed);
+                name.and_then(|name| {
+                    source_text.and_then(|source_text| {
+                        let origin = v8::ScriptOrigin::new(
+                            try_catch,
+                            name.into(),
+                            0,
+                            0,
+                            false,
+                            0,
+                            None,
+                            false,
+                            false,
+                            false,
+                            None,
+                        );
+                        let script = v8::Script::compile(try_catch, source_text, Some(&origin))
+                            .ok_or_else(|| {
+                                runtime_error_from_try_catch(
+                                    try_catch,
+                                    RuntimeErrorKind::Compilation,
+                                    &source,
+                                )
+                            })?;
+                        script
+                            .run(try_catch)
+                            .ok_or_else(|| self.execution_error(try_catch, &source))
+                    })
+                })
+            }
+            RootEvaluation::Module {
+                source: module_source,
+            } => (|| {
+                {
+                    let mut modules = self.local_state.modules.lock().unwrap();
+                    if let Some(existing) = modules.sources.get(source.as_ref()) {
+                        if existing.as_ref() != module_source.as_ref() {
+                            return Err(module_resolution_error(
+                                &source,
+                                "fixture module source cannot change after registration",
+                            ));
+                        }
+                    } else {
+                        modules.sources.insert(source.to_string(), module_source);
+                    }
+                }
+                let (module_count, resolution_count) = {
+                    let modules = self.local_state.modules.lock().unwrap();
+                    (modules.modules.len(), modules.resolutions.len())
+                };
+                let compiled = {
+                    let mut modules = self.local_state.modules.lock().unwrap();
+                    compile_module_graph(try_catch, &mut modules, &source)
+                };
+                let compiled = match compiled {
+                    Ok(compiled) => compiled,
+                    Err(kind) => {
+                        let error = runtime_error_from_try_catch(try_catch, kind, &source);
+                        rollback_module_graph(&self.local_state, module_count, resolution_count);
+                        return Err(error);
+                    }
+                };
+                let module = v8::Local::new(try_catch, &compiled);
+                if module.instantiate_module(try_catch, resolve_module_callback) != Some(true) {
+                    let error = runtime_error_from_try_catch(
+                        try_catch,
+                        RuntimeErrorKind::ModuleResolution,
+                        &source,
+                    );
+                    rollback_module_graph(&self.local_state, module_count, resolution_count);
+                    return Err(error);
+                }
+                module.evaluate(try_catch).ok_or_else(|| {
+                    runtime_error_from_try_catch(try_catch, RuntimeErrorKind::Exception, &source)
+                })
+            })(),
+        };
+        let value = match evaluated {
+            Ok(value) => value,
+            Err(error) => {
+                *self.local_state.current_root.lock().unwrap() = None;
+                let _ = result.send(Err(error.clone()));
+                self.reject_pending_for_root(try_catch, root);
+                return fatal_or_completed(&error);
+            }
+        };
+        let promise = if let Ok(promise) = v8::Local::<v8::Promise>::try_from(value) {
+            promise
+        } else {
+            let resolver = v8::PromiseResolver::new(try_catch).expect("V8 resolver allocation");
+            resolver.resolve(try_catch, value);
+            resolver.get_promise(try_catch)
+        };
+        promise.mark_as_handled();
+        *self.local_state.active.lock().unwrap() = Some(ActiveExecution {
+            root,
+            promise: v8::Global::new(try_catch, promise),
+            source,
+            result: Some(result),
+        });
+        try_catch.perform_microtask_checkpoint();
+        *self.local_state.current_root.lock().unwrap() = None;
+        self.inspect_active(try_catch, root)
+    }
+
+    fn resume_response_turn(&self, root: RootId, response: HostResponse) -> TurnOutcome {
+        let data = self.data.lock().unwrap();
+        let Some(data) = data.as_ref() else {
+            return TurnOutcome::Fatal(Failure::new("extension isolate is disposed"));
+        };
+        *self.local_state.current_root.lock().unwrap() = Some(root);
+        let mut locker = data.isolate.lock();
+        let scope = pin!(v8::HandleScope::new(&mut *locker));
+        let mut scope = scope.init();
+        let context = v8::Local::new(&scope, &data.context);
+        let scope = &mut v8::ContextScope::new(&mut scope, context);
+        let pending = self
+            .local_state
+            .pending
+            .lock()
+            .unwrap()
+            .remove(&response.id);
+        let Some(pending) = pending else {
+            *self.local_state.current_root.lock().unwrap() = None;
+            return TurnOutcome::Fatal(Failure::new("host response lost its pending request"));
+        };
+        let resolver = v8::Local::new(scope, &pending.resolver);
+        match response.result {
+            Ok(value) => match host_response_to_v8(scope, pending.operation, value) {
+                Ok(value) => {
+                    resolver.resolve(scope, value);
+                }
+                Err(error) => {
+                    let value = v8::String::new(scope, error).unwrap();
+                    resolver.reject(scope, value.into());
+                }
+            },
+            Err(error) => {
+                let wire = serde_json::to_value(error)
+                    .ok()
+                    .and_then(|value| value.as_str().map(str::to_owned))
+                    .unwrap_or_else(|| "UnsupportedOperation".to_owned());
+                let value = v8::String::new(scope, &wire).unwrap();
+                resolver.reject(scope, value.into());
+            }
+        }
+        scope.perform_microtask_checkpoint();
+        *self.local_state.current_root.lock().unwrap() = None;
+        self.inspect_active(scope, root)
+    }
+
+    fn finish_termination_turn(&self, root: RootId) -> TurnOutcome {
+        let data = self.data.lock().unwrap();
+        let Some(data) = data.as_ref() else {
+            return TurnOutcome::Fatal(Failure::new("extension isolate is disposed"));
+        };
+        let mut locker = data.isolate.lock();
+        let scope = pin!(v8::HandleScope::new(&mut *locker));
+        let mut scope = scope.init();
+        let context = v8::Local::new(&scope, &data.context);
+        let scope = &mut v8::ContextScope::new(&mut scope, context);
+        self.inspect_active(scope, root)
+    }
+
+    fn inspect_active(&self, scope: &mut v8::PinScope<'_, '_>, root: RootId) -> TurnOutcome {
+        if self.status.load(Ordering::Acquire) != ACTIVE {
+            let error = self.status_error();
+            self.reject_pending_for_root(scope, root);
+            self.fail_active(error.clone());
+            return TurnOutcome::Fatal(Failure::new(error.to_string()));
+        }
+        let mut active = self.local_state.active.lock().unwrap();
+        let Some(execution) = active.as_mut() else {
+            return TurnOutcome::Fatal(Failure::new("extension root execution is missing"));
+        };
+        if execution.root != root {
+            return TurnOutcome::Fatal(Failure::new("extension root execution identity changed"));
+        }
+        let promise = v8::Local::new(scope, &execution.promise);
+        let pending = self
+            .local_state
+            .pending
+            .lock()
+            .unwrap()
+            .values()
+            .any(|pending| pending.root == root);
+        match promise.state() {
+            v8::PromiseState::Pending => TurnOutcome::AwaitingHostWork,
+            v8::PromiseState::Fulfilled if pending => TurnOutcome::AwaitingHostWork,
+            v8::PromiseState::Fulfilled => {
+                let value = promise.result(scope).to_rust_string_lossy(scope);
+                if let Some(sender) = execution.result.take() {
+                    let result = self
+                        .take_unhandled_rejection(&execution.source)
+                        .map_or_else(
+                            || {
+                                Ok(ExecutionReport {
+                                    value: value.into(),
+                                    worker: std::thread::current().id(),
+                                })
+                            },
+                            Err,
+                        );
+                    let _ = sender.send(result);
+                }
+                *active = None;
+                TurnOutcome::Completed
+            }
+            v8::PromiseState::Rejected => {
+                let value = promise.result(scope);
+                let message = v8::Exception::create_message(scope, value);
+                let error = RuntimeError {
+                    kind: RuntimeErrorKind::Rejection,
+                    message: message.get(scope).to_rust_string_lossy(scope).into(),
+                    source: message
+                        .get_script_resource_name(scope)
+                        .and_then(|value| value.to_string(scope))
+                        .map(|value| value.to_rust_string_lossy(scope).into())
+                        .or_else(|| Some(Arc::clone(&execution.source))),
+                    line: message
+                        .get_line_number(scope)
+                        .and_then(|line| u32::try_from(line).ok()),
+                    column: one_based_coordinate(message.get_start_column()),
+                    stack: None,
+                };
+                if let Some(sender) = execution.result.take() {
+                    let _ = sender.send(Err(error));
+                }
+                drop(active);
+                self.reject_pending_for_root(scope, root);
+                *self.local_state.active.lock().unwrap() = None;
+                TurnOutcome::Completed
+            }
+        }
+    }
+
+    fn reject_pending_for_root(&self, scope: &mut v8::PinScope<'_, '_>, root: RootId) {
+        let pending = {
+            let mut requests = self.local_state.pending.lock().unwrap();
+            let ids: Vec<_> = requests
+                .iter()
+                .filter_map(|(id, pending)| (pending.root == root).then_some(*id))
+                .collect();
+            ids.into_iter()
+                .filter_map(|id| requests.remove(&id))
+                .collect::<Vec<_>>()
+        };
+        for pending in pending {
+            let resolver = v8::Local::new(scope, &pending.resolver);
+            let cancelled = v8::String::new(scope, "Cancelled").unwrap();
+            resolver.reject(scope, cancelled.into());
+        }
+        scope.perform_microtask_checkpoint();
+    }
+
+    fn take_unhandled_rejection(&self, fallback_source: &str) -> Option<RuntimeError> {
+        let mut rejections = {
+            let mut queued = self.local_state.rejections.lock().unwrap();
+            std::mem::take(&mut *queued)
+        };
+        if rejections.is_empty() {
+            return None;
+        }
+        let rejection = rejections.remove(0);
+        let mut message = rejection.message;
+        for additional in &rejections {
+            message.push('\n');
+            message.push_str(&additional.message);
+        }
+        Some(RuntimeError {
+            kind: RuntimeErrorKind::Rejection,
+            message: message.into(),
+            source: rejection
+                .source
+                .or_else(|| Some(fallback_source.to_owned()))
+                .map(Into::into),
+            line: rejection.line,
+            column: rejection.column,
+            stack: rejection.stack.map(Into::into),
+        })
+    }
+
+    fn fail_active(&self, error: RuntimeError) {
+        if let Some(mut active) = self.local_state.active.lock().unwrap().take()
+            && let Some(result) = active.result.take()
+        {
+            let _ = result.send(Err(error));
+        }
+        self.local_state.pending.lock().unwrap().clear();
+        *self.local_state.current_root.lock().unwrap() = None;
+    }
+
     pub(crate) fn hold_external_utf16(
         &self,
         global_name: &str,
@@ -533,6 +954,13 @@ impl RuntimeCapsule {
     }
 
     pub(crate) fn dispose(&self) {
+        self.dispose_with_error(RuntimeError::fatal(
+            RuntimeErrorKind::Cancelled,
+            "extension JavaScript execution was cancelled",
+        ));
+    }
+
+    fn dispose_with_error(&self, error: RuntimeError) {
         if self.status.load(Ordering::Acquire) == DISPOSED {
             return;
         }
@@ -551,6 +979,20 @@ impl RuntimeCapsule {
         self.status.store(DISPOSED, Ordering::Release);
         {
             let mut locker = data.isolate.lock();
+            {
+                let scope = pin!(v8::HandleScope::new(&mut *locker));
+                let mut scope = scope.init();
+                let context = v8::Local::new(&scope, &data.context);
+                let scope = &mut v8::ContextScope::new(&mut scope, context);
+                let pending = std::mem::take(&mut *self.local_state.pending.lock().unwrap());
+                for pending in pending.into_values() {
+                    let resolver = v8::Local::new(scope, &pending.resolver);
+                    let cancelled = v8::String::new(scope, "Cancelled").unwrap();
+                    resolver.reject(scope, cancelled.into());
+                }
+                scope.perform_microtask_checkpoint();
+            }
+            self.fail_active(error);
             locker.remove_near_heap_limit_callback(near_heap_limit_callback, 0);
             self.local_state
                 .rejections
@@ -640,6 +1082,13 @@ impl Drop for RuntimeCapsule {
 pub(crate) struct TerminationHandle {
     isolate: v8::IsolateHandle,
     status: Arc<AtomicU8>,
+    wake: Option<TerminationWake>,
+}
+
+struct TerminationWake {
+    key: ExtensionKey,
+    capsule: Arc<RuntimeCapsule>,
+    scheduler: SchedulerHandle<EngineTurn>,
 }
 
 impl TerminationHandle {
@@ -651,25 +1100,49 @@ impl TerminationHandle {
         {
             return false;
         }
-        self.isolate.terminate_execution()
+        let terminated = self.isolate.terminate_execution();
+        if terminated
+            && let Some(wake) = &self.wake
+            && let Some(root) = wake
+                .capsule
+                .local_state
+                .active
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(|active| active.root)
+        {
+            let _ = wake.scheduler.enqueue_continuation(
+                wake.key,
+                root,
+                EngineTurn {
+                    capsule: Arc::clone(&wake.capsule),
+                    work: EngineWork::Termination,
+                },
+            );
+        }
+        terminated
     }
 }
 
 struct EngineTurn {
     capsule: Arc<RuntimeCapsule>,
     work: EngineWork,
-    result: mpsc::Sender<Result<ExecutionReport, RuntimeError>>,
 }
 
 enum EngineWork {
     Script {
         source_name: Arc<str>,
         source: Arc<str>,
+        result: mpsc::Sender<Result<ExecutionReport, RuntimeError>>,
     },
     FixtureModule {
         specifier: Arc<str>,
         source: Arc<str>,
+        result: mpsc::Sender<Result<ExecutionReport, RuntimeError>>,
     },
+    HostResponse(HostResponse),
+    Termination,
 }
 
 /// Completion side of one scheduled JavaScript turn.
@@ -706,20 +1179,28 @@ impl RuntimeExecution {
 /// Engine-owned composition of persistent capsules and the bounded scheduler.
 pub(crate) struct RuntimePool {
     scheduler: Option<SchedulerPool<EngineTurn>>,
+    scheduler_handle: SchedulerHandle<EngineTurn>,
     runtimes: Arc<Mutex<HashMap<ExtensionId, Arc<RuntimeCapsule>>>>,
+    requests: Mutex<mpsc::Receiver<HostRequest>>,
+    request_sender: mpsc::Sender<HostRequest>,
 }
 
 impl RuntimePool {
     pub(crate) fn new(config: PoolConfig) -> Self {
         initialize();
         let runtimes = Arc::new(Mutex::new(HashMap::new()));
+        let (request_sender, requests) = mpsc::channel();
         let executor_runtimes = Arc::clone(&runtimes);
         let scheduler = SchedulerPool::new(config, move |turn| {
             execute_engine_turn(turn, &executor_runtimes)
         });
+        let scheduler_handle = scheduler.handle();
         Self {
             scheduler: Some(scheduler),
+            scheduler_handle,
             runtimes,
+            requests: Mutex::new(requests),
+            request_sender,
         }
     }
 
@@ -732,7 +1213,11 @@ impl RuntimePool {
         let handle = scheduler.handle();
         handle.admit(key)?;
         let capsule = match RuntimeCapsule::new(key, config) {
-            Ok(capsule) => Arc::new(capsule),
+            Ok(capsule) => {
+                *capsule.local_state.request_sender.lock().unwrap() =
+                    Some(self.request_sender.clone());
+                Arc::new(capsule)
+            }
             Err(error) => {
                 let _ = handle.finish_loading(key, Err(Failure::new(error.to_string())));
                 return Err(error.into());
@@ -778,8 +1263,8 @@ impl RuntimePool {
                     work: EngineWork::Script {
                         source_name: source_name.into(),
                         source: source.into(),
+                        result: result_sender,
                     },
-                    result: result_sender,
                 },
             )?;
         Ok(RuntimeExecution { result, completion })
@@ -805,18 +1290,81 @@ impl RuntimePool {
                     work: EngineWork::FixtureModule {
                         specifier: specifier.into(),
                         source: source.into(),
+                        result: result_sender,
                     },
-                    result: result_sender,
                 },
             )?;
         Ok(RuntimeExecution { result, completion })
+    }
+
+    pub(crate) fn receive_request(&self) -> Option<HostRequest> {
+        self.requests.lock().unwrap().recv().ok()
+    }
+
+    #[cfg(test)]
+    fn receive_request_timeout(&self, timeout: std::time::Duration) -> Option<HostRequest> {
+        self.requests.lock().unwrap().recv_timeout(timeout).ok()
+    }
+
+    pub(crate) fn respond(&self, response: HostResponse) -> Result<(), RuntimeResponseError> {
+        let request_id = response.id;
+        let capsule = {
+            let runtimes = self.runtimes.lock().unwrap();
+            let Some(capsule) = runtimes.get(&response.extension) else {
+                return Err(RuntimeResponseError::WrongExtension);
+            };
+            if capsule.key().lifecycle != response.lifecycle {
+                return Err(RuntimeResponseError::WrongExtension);
+            }
+            Arc::clone(capsule)
+        };
+        let root = {
+            let mut pending = capsule.local_state.pending.lock().unwrap();
+            let Some(pending) = pending.get_mut(&request_id) else {
+                return Err(RuntimeResponseError::UnknownRequest);
+            };
+            if pending.response_queued {
+                return Err(RuntimeResponseError::UnknownRequest);
+            }
+            pending.response_queued = true;
+            pending.root
+        };
+        if let Err(error) = self.scheduler_handle.enqueue_continuation(
+            capsule.key(),
+            root,
+            EngineTurn {
+                capsule: Arc::clone(&capsule),
+                work: EngineWork::HostResponse(response),
+            },
+        ) {
+            if let Some(pending) = capsule
+                .local_state
+                .pending
+                .lock()
+                .unwrap()
+                .get_mut(&request_id)
+            {
+                pending.response_queued = false;
+            }
+            return Err(error.into());
+        }
+        Ok(())
     }
 
     pub(crate) fn termination_handle(
         &self,
         key: ExtensionKey,
     ) -> Result<TerminationHandle, RuntimePoolError> {
-        Ok(self.capsule(key)?.termination_handle())
+        let capsule = self.capsule(key)?;
+        Ok(TerminationHandle {
+            isolate: capsule.heap_state.isolate.clone(),
+            status: Arc::clone(&capsule.status),
+            wake: Some(TerminationWake {
+                key,
+                capsule,
+                scheduler: self.scheduler_handle.clone(),
+            }),
+        })
     }
 
     pub(crate) fn unload(&self, key: ExtensionKey) -> Result<(), RuntimePoolError> {
@@ -892,8 +1440,8 @@ fn initialize_extension_context(
         v8::String::new(scope, NATIVE_BINDINGS_GLOBAL).ok_or_else(RuntimeError::disposed)?;
     let bindings = v8::Object::new(scope);
     let request_name = v8::String::new(scope, "request").ok_or_else(RuntimeError::disposed)?;
-    let request = v8::Function::new(scope, unavailable_host_request_callback)
-        .ok_or_else(RuntimeError::disposed)?;
+    let request =
+        v8::Function::new(scope, host_request_callback).ok_or_else(RuntimeError::disposed)?;
     if bindings.set(scope, request_name.into(), request.into()) != Some(true)
         || scope.get_current_context().global(scope).set(
             scope,
@@ -1204,68 +1752,174 @@ fn resolve_module_callback<'s>(
         .map(|record| v8::Local::new(scope, &record.module))
 }
 
-fn unavailable_host_request_callback(
+fn host_request_callback(
     scope: &mut v8::PinnedRef<'_, v8::HandleScope>,
-    _arguments: v8::FunctionCallbackArguments,
+    arguments: v8::FunctionCallbackArguments,
     mut result: v8::ReturnValue,
 ) {
     #[cfg(test)]
     let configured_error = scope
         .get_slot::<Arc<RuntimeLocalState>>()
         .and_then(|state| state.host_error.lock().ok()?.take());
-    #[cfg(test)]
-    let error = configured_error
-        .as_deref()
-        .unwrap_or("UnsupportedOperation");
     #[cfg(not(test))]
-    let error = "UnsupportedOperation";
-    let message = v8::String::new(scope, error).unwrap();
+    let configured_error: Option<String> = None;
     let resolver = v8::PromiseResolver::new(scope).unwrap();
-    resolver.reject(scope, message.into());
+    if let Some(error) = configured_error {
+        let message = v8::String::new(scope, &error).unwrap();
+        resolver.reject(scope, message.into());
+        result.set(resolver.get_promise(scope).into());
+        return;
+    }
+    let Some(state) = scope.get_slot::<Arc<RuntimeLocalState>>().cloned() else {
+        let message = v8::String::new(scope, "UnsupportedOperation").unwrap();
+        resolver.reject(scope, message.into());
+        result.set(resolver.get_promise(scope).into());
+        return;
+    };
+    let parsed = parse_host_operation(scope, &arguments);
+    let sender = state.request_sender.lock().unwrap().clone();
+    let root = *state.current_root.lock().unwrap();
+    let (operation, kind) = match parsed {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            let message = v8::String::new(scope, error).unwrap();
+            resolver.reject(scope, message.into());
+            result.set(resolver.get_promise(scope).into());
+            return;
+        }
+    };
+    let (Some(sender), Some(root)) = (sender, root) else {
+        let message = v8::String::new(scope, "UnsupportedOperation").unwrap();
+        resolver.reject(scope, message.into());
+        result.set(resolver.get_promise(scope).into());
+        return;
+    };
+    let Ok(request_value) =
+        state
+            .next_request
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
+                next.checked_add(1)
+            })
+    else {
+        let message = v8::String::new(scope, "UnsupportedOperation").unwrap();
+        resolver.reject(scope, message.into());
+        result.set(resolver.get_promise(scope).into());
+        return;
+    };
+    let id = RequestId::new(request_value);
+    state.pending.lock().unwrap().insert(
+        id,
+        PendingRequest {
+            root,
+            operation: kind,
+            resolver: v8::Global::new(scope, resolver),
+            response_queued: false,
+        },
+    );
+    if sender
+        .send(HostRequest {
+            extension: state.key.extension,
+            lifecycle: state.key.lifecycle,
+            id,
+            invocation: None,
+            operation,
+        })
+        .is_err()
+    {
+        state.pending.lock().unwrap().remove(&id);
+        let message = v8::String::new(scope, "Cancelled").unwrap();
+        resolver.reject(scope, message.into());
+    }
     result.set(resolver.get_promise(scope).into());
+}
+
+fn parse_host_operation(
+    scope: &mut v8::PinnedRef<'_, v8::HandleScope>,
+    arguments: &v8::FunctionCallbackArguments,
+) -> Result<(HostOperation, HostOperationKind), &'static str> {
+    let operation = arguments
+        .get(0)
+        .to_string(scope)
+        .ok_or("UnsupportedOperation")?
+        .to_rust_string_lossy(scope);
+    match operation.as_str() {
+        "activeBuffer" => Ok((HostOperation::ActiveBuffer, HostOperationKind::ActiveBuffer)),
+        _ => Err("UnsupportedOperation"),
+    }
+}
+
+fn host_response_to_v8<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    operation: HostOperationKind,
+    response: HostResponseValue,
+) -> Result<v8::Local<'s, v8::Value>, &'static str> {
+    match (operation, response) {
+        (HostOperationKind::ActiveBuffer, HostResponseValue::ActiveBuffer(None)) => {
+            Ok(v8::null(scope).into())
+        }
+        (HostOperationKind::ActiveBuffer, HostResponseValue::ActiveBuffer(Some(buffer))) => {
+            Ok(v8::Number::new(scope, buffer.value() as f64).into())
+        }
+        _ => Err("UnsupportedOperation"),
+    }
+}
+
+fn fatal_or_completed(error: &RuntimeError) -> TurnOutcome {
+    if error.is_fatal() {
+        TurnOutcome::Fatal(Failure::new(error.to_string()))
+    } else {
+        TurnOutcome::Completed
+    }
 }
 
 fn execute_engine_turn(
     turn: Turn<EngineTurn>,
     runtimes: &Mutex<HashMap<ExtensionId, Arc<RuntimeCapsule>>>,
 ) -> TurnOutcome {
+    let key = turn.key;
+    let root = turn.root;
     let work = turn.work;
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match &work.work {
+    let capsule = Arc::clone(&work.capsule);
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match work.work {
         EngineWork::Script {
             source_name,
             source,
-        } => work.capsule.execute(source_name, source),
-        EngineWork::FixtureModule { specifier, source } => {
-            work.capsule.execute_fixture_module(specifier, source)
-        }
+            result,
+        } => capsule.start_script_turn(root, source_name, source, result),
+        EngineWork::FixtureModule {
+            specifier,
+            source,
+            result,
+        } => capsule.start_module_turn(root, specifier, source, result),
+        EngineWork::HostResponse(response) => capsule.resume_response_turn(root, response),
+        EngineWork::Termination => capsule.finish_termination_turn(root),
     }))
     .unwrap_or_else(|_| {
-        Err(RuntimeError::fatal(
-            RuntimeErrorKind::Engine,
+        TurnOutcome::Fatal(Failure::new(
             "extension engine panicked while executing a turn",
         ))
     });
-    let outcome = match &result {
-        Ok(_) => TurnOutcome::Completed,
-        Err(error) if error.is_fatal() => {
+    match &outcome {
+        TurnOutcome::Fatal(failure) => {
             {
                 let mut runtimes = runtimes.lock().unwrap();
                 if runtimes
-                    .get(&work.capsule.key().extension)
-                    .is_some_and(|capsule| capsule.key() == work.capsule.key())
+                    .get(&key.extension)
+                    .is_some_and(|current| current.key() == key)
                 {
-                    runtimes.remove(&work.capsule.key().extension);
+                    runtimes.remove(&key.extension);
                 }
             }
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                work.capsule.dispose();
+                capsule.dispose_with_error(RuntimeError::fatal(
+                    RuntimeErrorKind::LifecycleFailed,
+                    failure.message().to_owned(),
+                ));
             }));
-            TurnOutcome::Fatal(Failure::new(error.to_string()))
+            outcome
         }
-        Err(_) => TurnOutcome::Completed,
-    };
-    let _ = work.result.send(result);
-    outcome
+        _ => outcome,
+    }
 }
 
 extern "C" fn near_heap_limit_callback(
@@ -1428,10 +2082,26 @@ mod tests {
         time::{Duration, Instant},
     };
 
-    use crate::host::protocol::{ExtensionId, ExtensionLifecycleId, HostRequestError};
+    use crate::host::lifecycle::ExtensionState;
+    use crate::host::protocol::{
+        BufferHandle, ExtensionId, ExtensionLifecycleId, HostRequestError, HostResponse,
+        HostResponseValue, RequestId,
+    };
 
     fn key(extension: u64) -> ExtensionKey {
         ExtensionKey::new(ExtensionId::new(extension), ExtensionLifecycleId::new(1))
+    }
+
+    fn wait_for_state(pool: &RuntimePool, key: ExtensionKey, expected: ExtensionState) {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let state = pool.scheduler_handle.state(key).unwrap();
+            if state == expected {
+                return;
+            }
+            assert!(Instant::now() < deadline, "state remained {state:?}");
+            std::thread::yield_now();
+        }
     }
 
     #[test]
@@ -1548,11 +2218,476 @@ mod tests {
                     await editor.activeBuffer();
                 "#,
             )
-            .unwrap()
-            .wait()
-            .unwrap_err();
+            .unwrap();
+        let request = pool.receive_request().unwrap();
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: request.id,
+            result: Err(HostRequestError::UnsupportedOperation),
+        })
+        .unwrap();
+        let unsupported = unsupported.wait().unwrap_err();
         assert_eq!(unsupported.kind(), RuntimeErrorKind::Rejection);
         assert!(unsupported.message().contains("UnsupportedOperationError"));
+        pool.shutdown();
+    }
+
+    #[test]
+    fn host_response_resumes_a_pending_root_and_drains_microtasks() {
+        let pool = RuntimePool::new(PoolConfig::single_worker());
+        let runtime = key(1);
+        pool.load(runtime, IsolateConfig::default()).unwrap();
+        let execution = pool
+            .execute_fixture_module(
+                runtime,
+                "file:///fixtures/request.js",
+                r#"
+                    import { editor } from "knot:editor";
+                    const buffer = await editor.activeBuffer();
+                    await Promise.resolve();
+                    globalThis.responseValue = buffer;
+                "#,
+            )
+            .unwrap();
+        let request = pool.receive_request().unwrap();
+        assert_eq!(request.extension, runtime.extension);
+        assert_eq!(request.lifecycle, runtime.lifecycle);
+        assert_eq!(request.id, RequestId::new(1));
+        assert_eq!(request.operation, HostOperation::ActiveBuffer);
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: request.id,
+            result: Ok(HostResponseValue::ActiveBuffer(Some(BufferHandle::new(9)))),
+        })
+        .unwrap();
+        execution.wait().unwrap();
+        assert_eq!(
+            &*pool
+                .execute(runtime, "verify-response.js", "responseValue")
+                .unwrap()
+                .wait()
+                .unwrap()
+                .value,
+            "9"
+        );
+        pool.shutdown();
+    }
+
+    #[test]
+    fn host_error_response_rejects_the_request_and_propagates_from_the_root() {
+        let pool = RuntimePool::new(PoolConfig::single_worker());
+        let runtime = key(1);
+        pool.load(runtime, IsolateConfig::default()).unwrap();
+        let execution = pool
+            .execute_fixture_module(
+                runtime,
+                "file:///fixtures/request-error.js",
+                "import { editor } from 'knot:editor'; await editor.activeBuffer();",
+            )
+            .unwrap();
+        let request = pool.receive_request().unwrap();
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: request.id,
+            result: Err(HostRequestError::RevisionConflict),
+        })
+        .unwrap();
+        let error = execution.wait().unwrap_err();
+        assert_eq!(error.kind(), RuntimeErrorKind::Rejection);
+        assert!(error.message().contains("RevisionConflictError"));
+        assert_eq!(error.source(), Some(PRIVATE_BOOTSTRAP_SPECIFIER));
+        assert_eq!(
+            &*pool
+                .execute(runtime, "recover-after-host-error.js", "6 * 7")
+                .unwrap()
+                .wait()
+                .unwrap()
+                .value,
+            "42"
+        );
+        pool.shutdown();
+    }
+
+    #[test]
+    fn multiple_host_requests_settle_out_of_order_exactly_once() {
+        let pool = RuntimePool::new(PoolConfig::single_worker());
+        let runtime = key(1);
+        pool.load(runtime, IsolateConfig::default()).unwrap();
+        let execution = pool
+            .execute_fixture_module(
+                runtime,
+                "file:///fixtures/concurrent-requests.js",
+                r#"
+                    import { editor } from "knot:editor";
+                    const [first, second] = await Promise.all([
+                      editor.activeBuffer(),
+                      editor.activeBuffer(),
+                    ]);
+                    globalThis.responses = `${first}:${second}`;
+                "#,
+            )
+            .unwrap();
+        let first = pool.receive_request().unwrap();
+        let second = pool.receive_request().unwrap();
+        assert_eq!(first.id, RequestId::new(1));
+        assert_eq!(second.id, RequestId::new(2));
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: second.id,
+            result: Ok(HostResponseValue::ActiveBuffer(Some(BufferHandle::new(2)))),
+        })
+        .unwrap();
+        assert_eq!(
+            pool.respond(HostResponse {
+                extension: runtime.extension,
+                lifecycle: runtime.lifecycle,
+                id: second.id,
+                result: Ok(HostResponseValue::ActiveBuffer(None)),
+            }),
+            Err(RuntimeResponseError::UnknownRequest)
+        );
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: first.id,
+            result: Ok(HostResponseValue::ActiveBuffer(Some(BufferHandle::new(1)))),
+        })
+        .unwrap();
+        execution.wait().unwrap();
+        assert_eq!(
+            &*pool
+                .execute(runtime, "verify-order.js", "responses")
+                .unwrap()
+                .wait()
+                .unwrap()
+                .value,
+            "1:2"
+        );
+        assert_eq!(
+            pool.respond(HostResponse {
+                extension: runtime.extension,
+                lifecycle: runtime.lifecycle,
+                id: first.id,
+                result: Ok(HostResponseValue::ActiveBuffer(None)),
+            }),
+            Err(RuntimeResponseError::UnknownRequest)
+        );
+        pool.shutdown();
+    }
+
+    #[test]
+    fn root_rejection_rejects_and_removes_sibling_request_resolvers() {
+        let pool = RuntimePool::new(PoolConfig::single_worker());
+        let runtime = key(1);
+        pool.load(runtime, IsolateConfig::default()).unwrap();
+        let execution = pool
+            .execute_fixture_module(
+                runtime,
+                "file:///fixtures/rejected-siblings.js",
+                r#"
+                    import { editor } from "knot:editor";
+                    await Promise.all([editor.activeBuffer(), editor.activeBuffer()]);
+                "#,
+            )
+            .unwrap();
+        let first = pool.receive_request().unwrap();
+        let second = pool.receive_request().unwrap();
+        wait_for_state(&pool, runtime, ExtensionState::AwaitingHostWork);
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: first.id,
+            result: Err(HostRequestError::BufferClosed),
+        })
+        .unwrap();
+        let error = execution.wait().unwrap_err();
+        assert_eq!(error.kind(), RuntimeErrorKind::Rejection);
+        assert!(error.message().contains("BufferClosedError"));
+        assert_eq!(
+            pool.respond(HostResponse {
+                extension: runtime.extension,
+                lifecycle: runtime.lifecycle,
+                id: second.id,
+                result: Ok(HostResponseValue::ActiveBuffer(None)),
+            }),
+            Err(RuntimeResponseError::UnknownRequest)
+        );
+        pool.shutdown();
+    }
+
+    #[test]
+    fn response_identity_is_validated_without_consuming_the_request() {
+        let pool = RuntimePool::new(PoolConfig::single_worker());
+        let runtime = key(1);
+        pool.load(runtime, IsolateConfig::default()).unwrap();
+        let execution = pool
+            .execute_fixture_module(
+                runtime,
+                "file:///fixtures/identity.js",
+                "import { editor } from 'knot:editor'; await editor.activeBuffer();",
+            )
+            .unwrap();
+        let request = pool.receive_request().unwrap();
+        for response in [
+            HostResponse {
+                extension: ExtensionId::new(99),
+                lifecycle: runtime.lifecycle,
+                id: request.id,
+                result: Ok(HostResponseValue::ActiveBuffer(None)),
+            },
+            HostResponse {
+                extension: runtime.extension,
+                lifecycle: ExtensionLifecycleId::new(99),
+                id: request.id,
+                result: Ok(HostResponseValue::ActiveBuffer(None)),
+            },
+            HostResponse {
+                extension: runtime.extension,
+                lifecycle: runtime.lifecycle,
+                id: RequestId::new(99),
+                result: Ok(HostResponseValue::ActiveBuffer(None)),
+            },
+        ] {
+            assert!(pool.respond(response).is_err());
+        }
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: request.id,
+            result: Ok(HostResponseValue::ActiveBuffer(None)),
+        })
+        .unwrap();
+        execution.wait().unwrap();
+        pool.shutdown();
+    }
+
+    #[test]
+    fn single_worker_progresses_while_another_extension_awaits_host_work() {
+        let pool = RuntimePool::new(PoolConfig::single_worker());
+        let waiting = key(1);
+        let neighbor = key(2);
+        pool.load(waiting, IsolateConfig::default()).unwrap();
+        pool.load(neighbor, IsolateConfig::default()).unwrap();
+        let delayed = pool
+            .execute_fixture_module(
+                waiting,
+                "file:///fixtures/delayed.js",
+                "import { editor } from 'knot:editor'; await editor.activeBuffer();",
+            )
+            .unwrap();
+        let request = pool.receive_request().unwrap();
+        assert_eq!(
+            &*pool
+                .execute(neighbor, "neighbor.js", "6 * 7")
+                .unwrap()
+                .wait()
+                .unwrap()
+                .value,
+            "42"
+        );
+        pool.respond(HostResponse {
+            extension: waiting.extension,
+            lifecycle: waiting.lifecycle,
+            id: request.id,
+            result: Ok(HostResponseValue::ActiveBuffer(None)),
+        })
+        .unwrap();
+        delayed.wait().unwrap();
+        pool.shutdown();
+    }
+
+    #[test]
+    fn sequential_host_requests_keep_the_root_active_until_the_last_response() {
+        let pool = RuntimePool::new(PoolConfig::single_worker());
+        let runtime = key(1);
+        pool.load(runtime, IsolateConfig::default()).unwrap();
+        let execution = pool
+            .execute_fixture_module(
+                runtime,
+                "file:///fixtures/sequential.js",
+                r#"
+                    import { editor } from "knot:editor";
+                    await Promise.resolve();
+                    await editor.activeBuffer();
+                    globalThis.firstResponse = true;
+                    await editor.activeBuffer();
+                    globalThis.secondResponse = true;
+                "#,
+            )
+            .unwrap();
+        let first = pool.receive_request().unwrap();
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: first.id,
+            result: Ok(HostResponseValue::ActiveBuffer(None)),
+        })
+        .unwrap();
+        let second = pool.receive_request().unwrap();
+        assert_eq!(second.id, RequestId::new(2));
+        wait_for_state(&pool, runtime, ExtensionState::AwaitingHostWork);
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: second.id,
+            result: Ok(HostResponseValue::ActiveBuffer(None)),
+        })
+        .unwrap();
+        execution.wait().unwrap();
+        assert_eq!(
+            &*pool
+                .execute(
+                    runtime,
+                    "verify-sequential.js",
+                    "`${firstResponse}:${secondResponse}`"
+                )
+                .unwrap()
+                .wait()
+                .unwrap()
+                .value,
+            "true:true"
+        );
+        pool.shutdown();
+    }
+
+    #[test]
+    fn mismatched_typed_response_rejects_the_javascript_request() {
+        let pool = RuntimePool::new(PoolConfig::single_worker());
+        let runtime = key(1);
+        pool.load(runtime, IsolateConfig::default()).unwrap();
+        let execution = pool
+            .execute_fixture_module(
+                runtime,
+                "file:///fixtures/mismatched-response.js",
+                "import { editor } from 'knot:editor'; await editor.activeBuffer();",
+            )
+            .unwrap();
+        let request = pool.receive_request().unwrap();
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: request.id,
+            result: Ok(HostResponseValue::EditorContributionsDisposed),
+        })
+        .unwrap();
+        let error = execution.wait().unwrap_err();
+        assert_eq!(error.kind(), RuntimeErrorKind::Rejection);
+        assert!(error.message().contains("UnsupportedOperationError"));
+        pool.shutdown();
+    }
+
+    #[test]
+    fn unload_settles_waiting_execution_and_rejects_stale_responses() {
+        let pool = RuntimePool::new(PoolConfig::single_worker());
+        let first = key(1);
+        pool.load(first, IsolateConfig::default()).unwrap();
+        let execution = pool
+            .execute_fixture_module(
+                first,
+                "file:///fixtures/unload-pending.js",
+                r#"
+                    import { editor } from "knot:editor";
+                    await Promise.all([editor.activeBuffer(), editor.activeBuffer()]);
+                "#,
+            )
+            .unwrap();
+        let first_request = pool.receive_request().unwrap();
+        let _second_request = pool.receive_request().unwrap();
+        wait_for_state(&pool, first, ExtensionState::AwaitingHostWork);
+        pool.unload(first).unwrap();
+        let error = execution.wait().unwrap_err();
+        assert_eq!(error.kind(), RuntimeErrorKind::Cancelled);
+        assert_eq!(
+            pool.respond(HostResponse {
+                extension: first.extension,
+                lifecycle: first.lifecycle,
+                id: first_request.id,
+                result: Ok(HostResponseValue::ActiveBuffer(None)),
+            }),
+            Err(RuntimeResponseError::WrongExtension)
+        );
+
+        let replacement = ExtensionKey::new(first.extension, ExtensionLifecycleId::new(2));
+        pool.load(replacement, IsolateConfig::default()).unwrap();
+        let replacement_execution = pool
+            .execute_fixture_module(
+                replacement,
+                "file:///fixtures/replacement.js",
+                "import { editor } from 'knot:editor'; await editor.activeBuffer();",
+            )
+            .unwrap();
+        let replacement_request = pool.receive_request().unwrap();
+        assert_eq!(replacement_request.id, RequestId::new(1));
+        assert_eq!(
+            pool.respond(HostResponse {
+                extension: first.extension,
+                lifecycle: first.lifecycle,
+                id: replacement_request.id,
+                result: Ok(HostResponseValue::ActiveBuffer(None)),
+            }),
+            Err(RuntimeResponseError::WrongExtension)
+        );
+        pool.respond(HostResponse {
+            extension: replacement.extension,
+            lifecycle: replacement.lifecycle,
+            id: replacement_request.id,
+            result: Ok(HostResponseValue::ActiveBuffer(None)),
+        })
+        .unwrap();
+        replacement_execution.wait().unwrap();
+        pool.shutdown();
+    }
+
+    #[test]
+    fn shutdown_and_forced_termination_settle_pending_executions() {
+        let pool = RuntimePool::new(PoolConfig::single_worker());
+        let runtime = key(1);
+        pool.load(runtime, IsolateConfig::default()).unwrap();
+        let execution = pool
+            .execute_fixture_module(
+                runtime,
+                "file:///fixtures/shutdown-pending.js",
+                "import { editor } from 'knot:editor'; await editor.activeBuffer();",
+            )
+            .unwrap();
+        pool.receive_request().unwrap();
+        wait_for_state(&pool, runtime, ExtensionState::AwaitingHostWork);
+        pool.shutdown();
+        assert_eq!(
+            execution.wait().unwrap_err().kind(),
+            RuntimeErrorKind::Cancelled
+        );
+
+        let pool = RuntimePool::new(PoolConfig::single_worker());
+        let runtime = key(2);
+        pool.load(runtime, IsolateConfig::default()).unwrap();
+        let execution = pool
+            .execute_fixture_module(
+                runtime,
+                "file:///fixtures/terminated-pending.js",
+                "import { editor } from 'knot:editor'; await editor.activeBuffer();",
+            )
+            .unwrap();
+        let request = pool.receive_request().unwrap();
+        wait_for_state(&pool, runtime, ExtensionState::AwaitingHostWork);
+        assert!(pool.termination_handle(runtime).unwrap().terminate());
+        assert_eq!(
+            execution.wait().unwrap_err().kind(),
+            RuntimeErrorKind::Terminated
+        );
+        assert_eq!(
+            pool.respond(HostResponse {
+                extension: runtime.extension,
+                lifecycle: runtime.lifecycle,
+                id: request.id,
+                result: Ok(HostResponseValue::ActiveBuffer(None)),
+            }),
+            Err(RuntimeResponseError::WrongExtension)
+        );
         pool.shutdown();
     }
 
