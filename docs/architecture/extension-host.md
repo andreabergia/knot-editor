@@ -47,8 +47,19 @@ eagerly evaluates a private `knot:bootstrap` module and the public
 `knot:editor` facade when it creates the capsule. Bootstrap captures the native
 request callback and removes its temporary global before extension work can
 run, leaving only the semantic `editor`, `commands`, and `workbench` exports.
-Native requests currently reject as unsupported; typed yielding requests and
-promise resumption return in the next D017 checkpoint.
+The facade's active-buffer probe crosses a pool-owned typed request inbox. Its
+native callback allocates a lifecycle-scoped request identity, retains only a
+persistent V8 promise resolver, and returns the promise without waiting on the
+worker. Buffer values beyond the opaque active-buffer handle remain for the
+next D017 checkpoint.
+
+The engine retains the root script or module promise independently from its
+host-request promises. A pending root with no runnable JavaScript yields its
+worker in `AwaitingHostWork`. A validated response is queued against that
+root, settles the persistent resolver inside a later locked isolate turn, and
+drains microtasks before the root is inspected again. Multiple requests may be
+pending and may settle out of order; unrelated roots remain queued until the
+active root and its detached native requests have all settled.
 
 Unload first marks the scheduler lifecycle stopping and terminates any running
 JavaScript through a thread-safe control handle. Disposal waits for the running
@@ -96,3 +107,11 @@ cancel queued work immediately and settle a running root when its outstanding
 turn returns. Root completion senders are consumed on settlement so accepted
 root work completes exactly once. Extension and lifecycle identity plus
 per-turn identity reject stale work and late or duplicate turn results.
+Response admission additionally validates extension, lifecycle, and request
+identity and reserves the request before scheduling, so duplicate responses
+cannot enqueue twice. Unload, fatal failure, forced termination, and pool
+shutdown reject retained resolvers under the isolate locker and settle the
+native root completion exactly once before disposal.
+The pool-issued termination handle also queues a continuation for an awaiting
+root, so forced termination does not depend on a later host response to wake a
+parked lifecycle.

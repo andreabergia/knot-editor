@@ -1,6 +1,6 @@
 # D017: Production V8 Isolate Pool and Scheduling
 
-Status: in progress; Tasks 1-4 implemented, Task 4 awaiting review.
+Status: in progress; Tasks 1-5 implemented, Task 5 awaiting review.
 
 This slice replaces the prototype `deno_core` runtime with a direct
 `rusty_v8` host and runs persistent extension isolates on a bounded worker
@@ -90,18 +90,20 @@ Knot-owned boundaries:
   public `knot:editor` facade without Deno globals, and stable JavaScript error
   names for host failures.
 - Task 5: lifecycle-scoped unique request identities; extension, lifecycle,
-  and request validation; exact-once pending settlement; asynchronous typed
-  responses; explicit command arguments and outcomes; same-extension nested
+  and request validation; exact-once pending settlement; and asynchronous typed
+  responses.
+- Task 6: revisioned buffer snapshots and edits; serial ordered change events
+  that survive listener failure; lossless finite slow-subscriber bursts with
+  depth and lag measurements; contribution replacement/disposal; and shared
+  external UTF-16 lifetime.
+- Task 7: explicit command arguments and outcomes; same-extension nested
   command ordering; cancellation of suspended handlers; and registration
   disposal. The product bridge additionally awaited the native dispatcher's
   ordinary outcome, rejected nested product invocations as unavailable, and
   reported missing targets or unsupported operations explicitly.
-- Task 6: revisioned buffer snapshots and edits; serial ordered change events
-  that survive listener failure; lossless finite slow-subscriber bursts with
-  depth and lag measurements; tree registration, invalidation, generation, and
-  recoverable callback failure; completion registration, revision, generation,
-  and failure; contribution replacement/disposal; cross-extension progress;
-  and shared external UTF-16 lifetime.
+- Task 8: tree registration, invalidation, generation, and recoverable callback
+  failure; completion registration, revision, generation, and failure; and
+  cross-extension progress.
 
 The protocol retained during the rebuild includes opaque extension, lifecycle,
 request, registration, invocation, subscription, and buffer identities; typed
@@ -218,18 +220,18 @@ Manual review gate:
 
 ## Task 5: Implement yielding host requests and promise resumption
 
-- ⬜ Bind native JavaScript calls that allocate a Knot request identity, create
+- ✅ Bind native JavaScript calls that allocate a Knot request identity, create
   and retain a V8 promise resolver, and emit a typed `HostRequest`.
-- ⬜ Store pending resolvers by request identity without retaining scoped V8
+- ✅ Store pending resolvers by request identity without retaining scoped V8
   handles or Rust references across turns.
-- ⬜ Route `HostResponse` back through the scheduler, validate extension and
+- ✅ Route `HostResponse` back through the scheduler, validate extension and
   lifecycle identity, settle its resolver inside a later isolate turn, and
   drain resulting microtasks.
-- ⬜ Track the root promise independently from host-request promises so a
+- ✅ Track the root promise independently from host-request promises so a
   callback completes only when its logical work settles.
-- ⬜ Yield workers whenever no JavaScript continuation is runnable, including
+- ✅ Yield workers whenever no JavaScript continuation is runnable, including
   multiple concurrent host requests from one callback.
-- ⬜ Settle or reject every pending promise and native completion during unload,
+- ✅ Settle or reject every pending promise and native completion during unload,
   failure, termination, and pool shutdown.
 
 Automated checks:
