@@ -31,6 +31,11 @@ mod editor;
 mod entry;
 #[allow(
     dead_code,
+    reason = "retained for the pooled extension host integration"
+)]
+mod extension_buffers;
+#[allow(
+    dead_code,
     reason = "retained application boundary during the pooled extension-host rebuild"
 )]
 mod filesystem;
