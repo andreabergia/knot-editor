@@ -2936,50 +2936,54 @@ mod tests {
     }
 
     #[test]
-    fn external_utf16_snapshot_response_is_released_on_unload() {
+    fn external_utf16_snapshot_storage_is_shared_and_released_on_unload() {
         let pool = RuntimePool::new(PoolConfig::single_worker());
-        let runtime = key(41);
-        pool.load(runtime, IsolateConfig::default()).unwrap();
-        let execution = pool
-            .execute_fixture_module(
-                runtime,
-                "file:///fixtures/external.js",
-                r#"
-            import { editor } from "knot:editor";
-            const buffer = await editor.activeBuffer();
-            globalThis.heldSnapshot = await buffer.snapshot();
-        "#,
-            )
-            .unwrap();
-        let active = pool.receive_request().unwrap();
-        pool.respond(HostResponse {
-            extension: runtime.extension,
-            lifecycle: runtime.lifecycle,
-            id: active.id,
-            result: Ok(HostResponseValue::ActiveBuffer(Some(BufferHandle::new(1)))),
-        })
-        .unwrap();
-        let request = pool.receive_request().unwrap();
+        let runtimes = [key(41), key(42)];
         let text: Arc<[u16]> = "héllo".encode_utf16().collect::<Vec<_>>().into();
         let weak = Arc::downgrade(&text);
-        pool.respond(HostResponse {
-            extension: runtime.extension,
-            lifecycle: runtime.lifecycle,
-            id: request.id,
-            result: Ok(HostResponseValue::Snapshot(TextSnapshot {
-                text: SnapshotText::Utf16(Arc::clone(&text)),
-                range: ByteRange {
-                    start_byte_offset: 0,
-                    end_byte_offset: 6,
-                },
-                revision: 0,
-            })),
-        })
-        .unwrap();
-        execution.wait().unwrap();
+        for runtime in runtimes {
+            pool.load(runtime, IsolateConfig::default()).unwrap();
+            let execution = pool
+                .execute_fixture_module(
+                    runtime,
+                    format!("file:///fixtures/external-{}.js", runtime.extension.value()),
+                    r#"
+                        import { editor } from "knot:editor";
+                        const buffer = await editor.activeBuffer();
+                        globalThis.heldSnapshot = await buffer.snapshot();
+                    "#,
+                )
+                .unwrap();
+            let active = pool.receive_request().unwrap();
+            pool.respond(HostResponse {
+                extension: runtime.extension,
+                lifecycle: runtime.lifecycle,
+                id: active.id,
+                result: Ok(HostResponseValue::ActiveBuffer(Some(BufferHandle::new(1)))),
+            })
+            .unwrap();
+            let request = pool.receive_request().unwrap();
+            pool.respond(HostResponse {
+                extension: runtime.extension,
+                lifecycle: runtime.lifecycle,
+                id: request.id,
+                result: Ok(HostResponseValue::Snapshot(TextSnapshot {
+                    text: SnapshotText::Utf16(Arc::clone(&text)),
+                    range: ByteRange {
+                        start_byte_offset: 0,
+                        end_byte_offset: 6,
+                    },
+                    revision: 0,
+                })),
+            })
+            .unwrap();
+            execution.wait().unwrap();
+        }
         drop(text);
+        assert_eq!(weak.strong_count(), 2);
+        pool.unload(runtimes[0]).unwrap();
         assert_eq!(weak.strong_count(), 1);
-        pool.unload(runtime).unwrap();
+        pool.unload(runtimes[1]).unwrap();
         assert_eq!(weak.strong_count(), 0);
         pool.shutdown();
     }
@@ -3163,6 +3167,53 @@ mod tests {
         .unwrap()
         .wait()
         .unwrap();
+        pool.shutdown();
+    }
+
+    #[test]
+    fn unloading_a_buffer_listener_awaiting_host_work_rejects_its_late_response() {
+        let pool = RuntimePool::new(PoolConfig::single_worker());
+        let runtime = key(49);
+        let subscription = BufferSubscriptionId::new(12);
+        pool.load(runtime, IsolateConfig::default()).unwrap();
+        pool.execute(
+            runtime,
+            "unload-listener.js",
+            "globalThis.listener = async () => { await editorApi.activeBuffer(); };",
+        )
+        .unwrap()
+        .wait()
+        .unwrap();
+        install_buffer_listener(
+            &pool,
+            runtime,
+            subscription,
+            "file:///fixtures/unload-listener.js",
+        );
+        pool.dispatch_buffer_change(
+            runtime,
+            subscription,
+            BufferChange {
+                buffer: BufferHandle::new(3),
+                before_revision: 0,
+                revision: 1,
+                edits: vec![],
+            },
+        )
+        .unwrap();
+        let request = pool.receive_request().unwrap();
+        wait_for_state(&pool, runtime, ExtensionState::AwaitingHostWork);
+
+        pool.unload(runtime).unwrap();
+        assert_eq!(
+            pool.respond(HostResponse {
+                extension: runtime.extension,
+                lifecycle: runtime.lifecycle,
+                id: request.id,
+                result: Ok(HostResponseValue::ActiveBuffer(None)),
+            }),
+            Err(RuntimeResponseError::WrongExtension)
+        );
         pool.shutdown();
     }
 
