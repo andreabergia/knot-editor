@@ -12,6 +12,7 @@ use std::{
         mpsc,
     },
     thread::ThreadId,
+    time::{Duration, Instant},
 };
 
 use url::Url;
@@ -22,7 +23,9 @@ use std::sync::atomic::AtomicBool;
 use super::{
     lifecycle::{ExtensionKey, Failure},
     protocol::{
-        ExtensionId, HostOperation, HostRequest, HostResponse, HostResponseValue, RequestId,
+        BufferChange, BufferHandle, BufferSubscriptionId, ByteRange, DecorationToken,
+        EditorContribution, ExtensionId, GutterToken, HostOperation, HostRequest, HostResponse,
+        HostResponseValue, RequestId, SnapshotText, TextEdit, TextSnapshot,
     },
     scheduler::{
         CompletionOutcome, PoolConfig, RootId, SchedulerError, SchedulerHandle, SchedulerPool,
@@ -219,6 +222,7 @@ struct RuntimeLocalState {
     active: Mutex<Option<ActiveExecution>>,
     rejections: Mutex<Vec<RejectionReport>>,
     modules: Mutex<FixtureModuleRegistry>,
+    buffer_changes: Mutex<BufferChangeQueueState>,
     #[cfg(test)]
     host_error: Mutex<Option<String>>,
     #[cfg(test)]
@@ -238,6 +242,7 @@ impl RuntimeLocalState {
             active: Mutex::new(None),
             rejections: Mutex::new(Vec::new()),
             modules: Mutex::new(FixtureModuleRegistry::default()),
+            buffer_changes: Mutex::new(BufferChangeQueueState::default()),
             #[cfg(test)]
             host_error: Mutex::new(None),
             #[cfg(test)]
@@ -245,6 +250,30 @@ impl RuntimeLocalState {
             #[cfg(test)]
             entered: Mutex::new(None),
         }
+    }
+
+    fn buffer_change_enqueued(&self) {
+        let mut state = self.buffer_changes.lock().unwrap();
+        state.queued += 1;
+        state.metrics.max_depth = state.metrics.max_depth.max(state.queued);
+    }
+
+    fn buffer_change_discarded(&self) {
+        let mut state = self.buffer_changes.lock().unwrap();
+        state.queued = state.queued.saturating_sub(1);
+    }
+
+    fn buffer_change_started(&self, enqueued_at: Instant) {
+        let mut state = self.buffer_changes.lock().unwrap();
+        state.queued = state.queued.saturating_sub(1);
+        state.metrics.max_enqueue_to_start_lag = state
+            .metrics
+            .max_enqueue_to_start_lag
+            .max(enqueued_at.elapsed());
+    }
+
+    fn buffer_change_queue_metrics(&self) -> BufferChangeQueueMetrics {
+        self.buffer_changes.lock().unwrap().metrics
     }
 }
 
@@ -258,6 +287,12 @@ struct PendingRequest {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum HostOperationKind {
     ActiveBuffer,
+    Snapshot,
+    ApplyEdits,
+    SubscribeBufferChanges,
+    UnsubscribeBufferChanges,
+    ReplaceEditorContributions,
+    DisposeEditorContributions,
 }
 
 struct ActiveExecution {
@@ -265,6 +300,19 @@ struct ActiveExecution {
     promise: v8::Global<v8::Promise>,
     source: Arc<str>,
     result: Option<mpsc::Sender<Result<ExecutionReport, RuntimeError>>>,
+}
+
+/// Observed buffer-change callback pressure for one extension lifetime.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct BufferChangeQueueMetrics {
+    pub(crate) max_depth: usize,
+    pub(crate) max_enqueue_to_start_lag: Duration,
+}
+
+#[derive(Default)]
+struct BufferChangeQueueState {
+    metrics: BufferChangeQueueMetrics,
+    queued: usize,
 }
 
 enum RootEvaluation {
@@ -596,6 +644,70 @@ impl RuntimeCapsule {
         self.run_root_turn(root, canonical, result, RootEvaluation::Module { source })
     }
 
+    fn start_buffer_change_turn(
+        &self,
+        root: RootId,
+        subscription: BufferSubscriptionId,
+        change: BufferChange,
+        enqueued_at: Instant,
+    ) -> TurnOutcome {
+        self.local_state.buffer_change_started(enqueued_at);
+        if self.status.load(Ordering::Acquire) != ACTIVE {
+            return fatal_or_completed(&self.status_error());
+        }
+        let data = self.data.lock().unwrap();
+        let Some(data) = data.as_ref() else {
+            return TurnOutcome::Fatal(Failure::new("extension isolate is disposed"));
+        };
+        self.local_state.rejections.lock().unwrap().clear();
+        *self.local_state.current_root.lock().unwrap() = Some(root);
+        let mut locker = data.isolate.lock();
+        let scope = pin!(v8::HandleScope::new(&mut *locker));
+        let mut scope = scope.init();
+        let context = v8::Local::new(&scope, &data.context);
+        let scope = &mut v8::ContextScope::new(&mut scope, context);
+        v8::tc_scope!(let try_catch, scope);
+        let evaluation = (|| {
+            let name = v8::String::new(try_catch, "__knotDispatchBufferChange")?;
+            let function = context.global(try_catch).get(try_catch, name.into())?;
+            let function = v8::Local::<v8::Function>::try_from(function).ok()?;
+            let subscription = v8::Number::new(try_catch, subscription.value() as f64);
+            let change = buffer_change_to_v8(try_catch, change).ok()?;
+            function.call(
+                try_catch,
+                v8::undefined(try_catch).into(),
+                &[subscription.into(), change],
+            )
+        })();
+        let Some(value) = evaluation else {
+            let error = self.execution_error(try_catch, "knot:buffer-change");
+            *self.local_state.current_root.lock().unwrap() = None;
+            if !error.is_fatal() {
+                eprintln!("[knot] buffer-change listener failed: {error}");
+                try_catch.reset();
+                self.reject_pending_for_root(try_catch, root);
+            }
+            return fatal_or_completed(&error);
+        };
+        let promise = if let Ok(promise) = v8::Local::<v8::Promise>::try_from(value) {
+            promise
+        } else {
+            let resolver = v8::PromiseResolver::new(try_catch).expect("V8 resolver allocation");
+            resolver.resolve(try_catch, value);
+            resolver.get_promise(try_catch)
+        };
+        promise.mark_as_handled();
+        *self.local_state.active.lock().unwrap() = Some(ActiveExecution {
+            root,
+            promise: v8::Global::new(try_catch, promise),
+            source: "knot:buffer-change".into(),
+            result: None,
+        });
+        try_catch.perform_microtask_checkpoint();
+        *self.local_state.current_root.lock().unwrap() = None;
+        self.inspect_active(try_catch, root)
+    }
+
     fn run_root_turn(
         &self,
         root: RootId,
@@ -819,19 +931,20 @@ impl RuntimeCapsule {
             v8::PromiseState::Fulfilled if pending => TurnOutcome::AwaitingHostWork,
             v8::PromiseState::Fulfilled => {
                 let value = promise.result(scope).to_rust_string_lossy(scope);
+                let rejection = self.take_unhandled_rejection(&execution.source);
                 if let Some(sender) = execution.result.take() {
-                    let result = self
-                        .take_unhandled_rejection(&execution.source)
-                        .map_or_else(
-                            || {
-                                Ok(ExecutionReport {
-                                    value: value.into(),
-                                    worker: std::thread::current().id(),
-                                })
-                            },
-                            Err,
-                        );
+                    let result = rejection.map_or_else(
+                        || {
+                            Ok(ExecutionReport {
+                                value: value.into(),
+                                worker: std::thread::current().id(),
+                            })
+                        },
+                        Err,
+                    );
                     let _ = sender.send(result);
+                } else if let Some(error) = rejection {
+                    eprintln!("[knot] buffer-change listener failed: {error}");
                 }
                 *active = None;
                 TurnOutcome::Completed
@@ -855,6 +968,8 @@ impl RuntimeCapsule {
                 };
                 if let Some(sender) = execution.result.take() {
                     let _ = sender.send(Err(error));
+                } else {
+                    eprintln!("[knot] buffer-change listener failed: {error}");
                 }
                 drop(active);
                 self.reject_pending_for_root(scope, root);
@@ -1142,6 +1257,11 @@ enum EngineWork {
         result: mpsc::Sender<Result<ExecutionReport, RuntimeError>>,
     },
     HostResponse(HostResponse),
+    BufferChange {
+        subscription: BufferSubscriptionId,
+        change: BufferChange,
+        enqueued_at: Instant,
+    },
     Termination,
 }
 
@@ -1349,6 +1469,39 @@ impl RuntimePool {
             return Err(error.into());
         }
         Ok(())
+    }
+
+    pub(crate) fn dispatch_buffer_change(
+        &self,
+        key: ExtensionKey,
+        subscription: BufferSubscriptionId,
+        change: BufferChange,
+    ) -> Result<(), RuntimePoolError> {
+        let capsule = self.capsule(key)?;
+        capsule.local_state.buffer_change_enqueued();
+        let result = self.scheduler_handle.enqueue_root(
+            key,
+            EngineTurn {
+                capsule: Arc::clone(&capsule),
+                work: EngineWork::BufferChange {
+                    subscription,
+                    change,
+                    enqueued_at: Instant::now(),
+                },
+            },
+        );
+        if let Err(error) = result {
+            capsule.local_state.buffer_change_discarded();
+            return Err(error.into());
+        }
+        Ok(())
+    }
+
+    pub(crate) fn buffer_change_queue_metrics(
+        &self,
+        key: ExtensionKey,
+    ) -> Result<BufferChangeQueueMetrics, RuntimePoolError> {
+        Ok(self.capsule(key)?.local_state.buffer_change_queue_metrics())
     }
 
     pub(crate) fn termination_handle(
@@ -1752,9 +1905,9 @@ fn resolve_module_callback<'s>(
         .map(|record| v8::Local::new(scope, &record.module))
 }
 
-fn host_request_callback(
-    scope: &mut v8::PinnedRef<'_, v8::HandleScope>,
-    arguments: v8::FunctionCallbackArguments,
+fn host_request_callback<'s, 'i>(
+    scope: &mut v8::PinnedRef<'s, v8::HandleScope<'i>>,
+    arguments: v8::FunctionCallbackArguments<'s>,
     mut result: v8::ReturnValue,
 ) {
     #[cfg(test)]
@@ -1833,9 +1986,9 @@ fn host_request_callback(
     result.set(resolver.get_promise(scope).into());
 }
 
-fn parse_host_operation(
-    scope: &mut v8::PinnedRef<'_, v8::HandleScope>,
-    arguments: &v8::FunctionCallbackArguments,
+fn parse_host_operation<'s, 'i>(
+    scope: &mut v8::PinnedRef<'s, v8::HandleScope<'i>>,
+    arguments: &v8::FunctionCallbackArguments<'s>,
 ) -> Result<(HostOperation, HostOperationKind), &'static str> {
     let operation = arguments
         .get(0)
@@ -1844,8 +1997,201 @@ fn parse_host_operation(
         .to_rust_string_lossy(scope);
     match operation.as_str() {
         "activeBuffer" => Ok((HostOperation::ActiveBuffer, HostOperationKind::ActiveBuffer)),
+        "snapshot" => Ok((
+            HostOperation::Snapshot {
+                buffer: BufferHandle::new(argument_u64(scope, arguments, 1)?),
+                range: optional_byte_range(scope, arguments.get(2))?,
+            },
+            HostOperationKind::Snapshot,
+        )),
+        "applyEdits" => Ok((
+            HostOperation::ApplyEdits {
+                buffer: BufferHandle::new(argument_u64(scope, arguments, 1)?),
+                edits: text_edits(scope, arguments.get(2))?,
+                if_revision: value_u64(scope, arguments.get(3), "InvalidEditBatch")?,
+            },
+            HostOperationKind::ApplyEdits,
+        )),
+        "subscribeBufferChanges" => Ok((
+            HostOperation::SubscribeBufferChanges {
+                buffer: BufferHandle::new(argument_u64(scope, arguments, 1)?),
+            },
+            HostOperationKind::SubscribeBufferChanges,
+        )),
+        "unsubscribeBufferChanges" => Ok((
+            HostOperation::UnsubscribeBufferChanges {
+                subscription: BufferSubscriptionId::new(argument_u64(scope, arguments, 1)?),
+            },
+            HostOperationKind::UnsubscribeBufferChanges,
+        )),
+        "replaceEditorContributions" => Ok((
+            HostOperation::ReplaceEditorContributions {
+                buffer: BufferHandle::new(argument_u64(scope, arguments, 1)?),
+                contributions: editor_contributions(scope, arguments.get(2))?,
+                if_revision: value_u64(scope, arguments.get(3), "UnsupportedOperation")?,
+            },
+            HostOperationKind::ReplaceEditorContributions,
+        )),
+        "disposeEditorContributions" => Ok((
+            HostOperation::DisposeEditorContributions {
+                buffer: BufferHandle::new(argument_u64(scope, arguments, 1)?),
+            },
+            HostOperationKind::DisposeEditorContributions,
+        )),
         _ => Err("UnsupportedOperation"),
     }
+}
+
+fn argument_u64(
+    scope: &mut v8::PinnedRef<'_, v8::HandleScope>,
+    arguments: &v8::FunctionCallbackArguments,
+    index: i32,
+) -> Result<u64, &'static str> {
+    value_u64(scope, arguments.get(index), "UnsupportedOperation")
+}
+
+fn value_u64(
+    scope: &mut v8::PinnedRef<'_, v8::HandleScope>,
+    value: v8::Local<'_, v8::Value>,
+    error: &'static str,
+) -> Result<u64, &'static str> {
+    let number = value.number_value(scope).ok_or(error)?;
+    if !number.is_finite()
+        || number < 0.0
+        || number.fract() != 0.0
+        || number > 9_007_199_254_740_991.0
+    {
+        return Err(error);
+    }
+    Ok(number as u64)
+}
+
+fn value_usize(
+    scope: &mut v8::PinnedRef<'_, v8::HandleScope>,
+    value: v8::Local<'_, v8::Value>,
+    error: &'static str,
+) -> Result<usize, &'static str> {
+    usize::try_from(value_u64(scope, value, error)?).map_err(|_| error)
+}
+
+fn property<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    name: &str,
+    error: &'static str,
+) -> Result<v8::Local<'s, v8::Value>, &'static str> {
+    let key = v8::String::new(scope, name).ok_or(error)?;
+    object.get(scope, key.into()).ok_or(error)
+}
+
+fn required_string(
+    scope: &mut v8::PinnedRef<'_, v8::HandleScope>,
+    value: v8::Local<'_, v8::Value>,
+    error: &'static str,
+) -> Result<String, &'static str> {
+    if !value.is_string() {
+        return Err(error);
+    }
+    Ok(value.to_rust_string_lossy(scope))
+}
+
+fn optional_string(
+    scope: &mut v8::PinnedRef<'_, v8::HandleScope>,
+    value: v8::Local<'_, v8::Value>,
+    error: &'static str,
+) -> Result<Option<String>, &'static str> {
+    if value.is_null_or_undefined() {
+        Ok(None)
+    } else {
+        required_string(scope, value, error).map(Some)
+    }
+}
+
+fn optional_byte_range<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Value>,
+) -> Result<Option<ByteRange>, &'static str> {
+    if value.is_null_or_undefined() {
+        return Ok(None);
+    }
+    byte_range(scope, value).map(Some)
+}
+
+fn byte_range<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Value>,
+) -> Result<ByteRange, &'static str> {
+    let object = v8::Local::<v8::Object>::try_from(value).map_err(|_| "InvalidRange")?;
+    let start = property(scope, object, "startByteOffset", "InvalidRange")?;
+    let start_byte_offset = value_usize(scope, start, "InvalidRange")?;
+    let end = property(scope, object, "endByteOffset", "InvalidRange")?;
+    let end_byte_offset = value_usize(scope, end, "InvalidRange")?;
+    Ok(ByteRange {
+        start_byte_offset,
+        end_byte_offset,
+    })
+}
+
+fn text_edits(
+    scope: &mut v8::PinnedRef<'_, v8::HandleScope>,
+    value: v8::Local<'_, v8::Value>,
+) -> Result<Vec<TextEdit>, &'static str> {
+    let array = v8::Local::<v8::Array>::try_from(value).map_err(|_| "InvalidEditBatch")?;
+    let mut edits = Vec::with_capacity(array.length() as usize);
+    for index in 0..array.length() {
+        let value = array.get_index(scope, index).ok_or("InvalidEditBatch")?;
+        let object = v8::Local::<v8::Object>::try_from(value).map_err(|_| "InvalidEditBatch")?;
+        let range = property(scope, object, "range", "InvalidEditBatch")?;
+        let range = byte_range(scope, range).map_err(|_| "InvalidEditBatch")?;
+        let text = property(scope, object, "text", "InvalidEditBatch")?;
+        edits.push(TextEdit {
+            range,
+            text: required_string(scope, text, "InvalidEditBatch")?,
+        });
+    }
+    Ok(edits)
+}
+
+fn editor_contributions(
+    scope: &mut v8::PinnedRef<'_, v8::HandleScope>,
+    value: v8::Local<'_, v8::Value>,
+) -> Result<Vec<EditorContribution>, &'static str> {
+    let error = "UnsupportedOperation";
+    let array = v8::Local::<v8::Array>::try_from(value).map_err(|_| error)?;
+    let mut contributions = Vec::with_capacity(array.length() as usize);
+    for index in 0..array.length() {
+        let value = array.get_index(scope, index).ok_or(error)?;
+        let object = v8::Local::<v8::Object>::try_from(value).map_err(|_| error)?;
+        let range_value = property(scope, object, "range", error)?;
+        let range = byte_range(scope, range_value)?;
+        let decoration_value = property(scope, object, "decoration", error)?;
+        let decoration = optional_string(scope, decoration_value, error)?
+            .map(|value| match value.as_str() {
+                "info" => Ok(DecorationToken::Info),
+                "warning" => Ok(DecorationToken::Warning),
+                "error" => Ok(DecorationToken::Error),
+                _ => Err(error),
+            })
+            .transpose()?;
+        let gutter_value = property(scope, object, "gutter", error)?;
+        let gutter = optional_string(scope, gutter_value, error)?
+            .map(|value| match value.as_str() {
+                "info" => Ok(GutterToken::Info),
+                "warning" => Ok(GutterToken::Warning),
+                "error" => Ok(GutterToken::Error),
+                _ => Err(error),
+            })
+            .transpose()?;
+        let command_value = property(scope, object, "command", error)?;
+        let command = optional_string(scope, command_value, error)?;
+        contributions.push(EditorContribution {
+            range,
+            decoration,
+            gutter,
+            command,
+        });
+    }
+    Ok(contributions)
 }
 
 fn host_response_to_v8<'s>(
@@ -1860,6 +2206,153 @@ fn host_response_to_v8<'s>(
         (HostOperationKind::ActiveBuffer, HostResponseValue::ActiveBuffer(Some(buffer))) => {
             Ok(v8::Number::new(scope, buffer.value() as f64).into())
         }
+        (HostOperationKind::Snapshot, HostResponseValue::Snapshot(snapshot)) => {
+            snapshot_to_v8(scope, snapshot)
+        }
+        (HostOperationKind::ApplyEdits, HostResponseValue::AppliedEdits { revision }) => {
+            Ok(v8::Number::new(scope, revision as f64).into())
+        }
+        (
+            HostOperationKind::SubscribeBufferChanges,
+            HostResponseValue::BufferChangesSubscribed { subscription },
+        ) => Ok(v8::Number::new(scope, subscription.value() as f64).into()),
+        (
+            HostOperationKind::UnsubscribeBufferChanges,
+            HostResponseValue::BufferChangesUnsubscribed { .. },
+        )
+        | (
+            HostOperationKind::ReplaceEditorContributions,
+            HostResponseValue::EditorContributionsReplaced,
+        )
+        | (
+            HostOperationKind::DisposeEditorContributions,
+            HostResponseValue::EditorContributionsDisposed,
+        ) => Ok(v8::undefined(scope).into()),
+        _ => Err("UnsupportedOperation"),
+    }
+}
+
+fn snapshot_to_v8<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    snapshot: TextSnapshot,
+) -> Result<v8::Local<'s, v8::Value>, &'static str> {
+    let value = v8::Object::new(scope);
+    let text = snapshot_text_to_v8(scope, snapshot.text)?;
+    set_property(scope, value, "text", text.into())?;
+
+    let range = v8::Object::new(scope);
+    set_property(
+        scope,
+        range,
+        "startByteOffset",
+        v8::Number::new(scope, snapshot.range.start_byte_offset as f64).into(),
+    )?;
+    set_property(
+        scope,
+        range,
+        "endByteOffset",
+        v8::Number::new(scope, snapshot.range.end_byte_offset as f64).into(),
+    )?;
+    set_property(scope, value, "range", range.into())?;
+    set_property(
+        scope,
+        value,
+        "revision",
+        v8::Number::new(scope, snapshot.revision as f64).into(),
+    )?;
+    Ok(value.into())
+}
+
+fn buffer_change_to_v8<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    change: BufferChange,
+) -> Result<v8::Local<'s, v8::Value>, &'static str> {
+    let value = v8::Object::new(scope);
+    set_property(
+        scope,
+        value,
+        "beforeRevision",
+        v8::Number::new(scope, change.before_revision as f64).into(),
+    )?;
+    set_property(
+        scope,
+        value,
+        "revision",
+        v8::Number::new(scope, change.revision as f64).into(),
+    )?;
+    let edits = v8::Array::new(
+        scope,
+        i32::try_from(change.edits.len()).map_err(|_| "InvalidEditBatch")?,
+    );
+    for (index, edit) in change.edits.into_iter().enumerate() {
+        let item = v8::Object::new(scope);
+        let range = v8::Object::new(scope);
+        set_property(
+            scope,
+            range,
+            "startByteOffset",
+            v8::Number::new(scope, edit.range.start_byte_offset as f64).into(),
+        )?;
+        set_property(
+            scope,
+            range,
+            "endByteOffset",
+            v8::Number::new(scope, edit.range.end_byte_offset as f64).into(),
+        )?;
+        set_property(scope, item, "range", range.into())?;
+        let text = v8::String::new(scope, &edit.text).ok_or("InvalidEditBatch")?;
+        set_property(scope, item, "text", text.into())?;
+        if edits.set_index(
+            scope,
+            u32::try_from(index).map_err(|_| "InvalidEditBatch")?,
+            item.into(),
+        ) != Some(true)
+        {
+            return Err("InvalidEditBatch");
+        }
+    }
+    set_property(scope, value, "edits", edits.into())?;
+    Ok(value.into())
+}
+
+fn snapshot_text_to_v8<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    text: SnapshotText,
+) -> Result<v8::Local<'s, v8::String>, &'static str> {
+    match text {
+        SnapshotText::Utf8(text) => v8::String::new(scope, &text).ok_or("UnsupportedOperation"),
+        SnapshotText::Utf16(text) if text.is_empty() => Ok(v8::String::empty(scope)),
+        SnapshotText::Utf16(text) => {
+            let length = text.len();
+            let raw = Arc::into_raw(text);
+            let buffer = raw.cast::<u16>() as *mut u16;
+            // SAFETY: `raw` transfers one Arc strong reference to V8. The
+            // callback reconstructs that exact slice using V8's retained
+            // length. If V8 rejects externalization, we reclaim it below.
+            match unsafe {
+                v8::String::new_external_twobyte_raw(scope, buffer, length, drop_external_utf16)
+            } {
+                Some(value) => Ok(value),
+                None => {
+                    // SAFETY: V8 did not accept ownership, so `raw` is still
+                    // the unique transferred Arc reference.
+                    drop(unsafe { Arc::<[u16]>::from_raw(raw) });
+                    Err("UnsupportedOperation")
+                }
+            }
+        }
+    }
+}
+
+fn set_property<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    name: &str,
+    value: v8::Local<'s, v8::Value>,
+) -> Result<(), &'static str> {
+    let key = v8::String::new(scope, name).ok_or("UnsupportedOperation")?;
+    match object.set(scope, key.into(), value) {
+        Some(true) => Ok(()),
         _ => Err("UnsupportedOperation"),
     }
 }
@@ -1892,6 +2385,11 @@ fn execute_engine_turn(
             result,
         } => capsule.start_module_turn(root, specifier, source, result),
         EngineWork::HostResponse(response) => capsule.resume_response_turn(root, response),
+        EngineWork::BufferChange {
+            subscription,
+            change,
+            enqueued_at,
+        } => capsule.start_buffer_change_turn(root, subscription, change, enqueued_at),
         EngineWork::Termination => capsule.finish_termination_turn(root),
     }))
     .unwrap_or_else(|_| {
@@ -2104,6 +2602,50 @@ mod tests {
         }
     }
 
+    fn install_buffer_listener(
+        pool: &RuntimePool,
+        runtime: ExtensionKey,
+        subscription: BufferSubscriptionId,
+        module: &str,
+    ) {
+        let execution = pool
+            .execute_fixture_module(
+                runtime,
+                module,
+                r#"
+                import { editor } from "knot:editor";
+                const buffer = await editor.activeBuffer();
+                globalThis.editorApi = editor;
+                globalThis.events = [];
+                await buffer.onDidChange(globalThis.listener);
+            "#,
+            )
+            .unwrap();
+        let active = pool.receive_request().unwrap();
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: active.id,
+            result: Ok(HostResponseValue::ActiveBuffer(Some(BufferHandle::new(3)))),
+        })
+        .unwrap();
+        let subscribe = pool.receive_request().unwrap();
+        assert_eq!(
+            subscribe.operation,
+            HostOperation::SubscribeBufferChanges {
+                buffer: BufferHandle::new(3)
+            }
+        );
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: subscribe.id,
+            result: Ok(HostResponseValue::BufferChangesSubscribed { subscription }),
+        })
+        .unwrap();
+        execution.wait().unwrap();
+    }
+
     #[test]
     fn process_initialization_is_idempotent() {
         initialize();
@@ -2234,6 +2776,423 @@ mod tests {
     }
 
     #[test]
+    fn buffer_requests_and_typed_responses_round_trip() {
+        let pool = RuntimePool::new(PoolConfig::single_worker());
+        let runtime = key(40);
+        pool.load(runtime, IsolateConfig::default()).unwrap();
+        let execution = pool
+            .execute_fixture_module(
+                runtime,
+                "file:///fixtures/buffers.js",
+                r#"
+                    import { editor } from "knot:editor";
+                    const buffer = await editor.activeBuffer();
+                    globalThis.snapshot = await buffer.snapshot({ startByteOffset: 1, endByteOffset: 7 });
+                    globalThis.edit = await buffer.applyEdits([{
+                      range: { startByteOffset: 2, endByteOffset: 5 }, text: "λ",
+                    }], { ifRevision: 7 });
+                    await buffer.contributions.replace([{
+                      range: { startByteOffset: 0, endByteOffset: 2 },
+                      decoration: "warning", gutter: "error", command: "fixture.command",
+                    }], { ifRevision: 8 });
+                    const disposable = await buffer.onDidChange(() => {});
+                    disposable.dispose();
+                    await buffer.contributions.dispose();
+                "#,
+            )
+            .unwrap();
+
+        let active = pool.receive_request().unwrap();
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: active.id,
+            result: Ok(HostResponseValue::ActiveBuffer(Some(BufferHandle::new(3)))),
+        })
+        .unwrap();
+
+        let request = pool.receive_request().unwrap();
+        assert_eq!(
+            request.operation,
+            HostOperation::Snapshot {
+                buffer: BufferHandle::new(3),
+                range: Some(ByteRange {
+                    start_byte_offset: 1,
+                    end_byte_offset: 7
+                }),
+            }
+        );
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: request.id,
+            result: Ok(HostResponseValue::Snapshot(TextSnapshot {
+                text: SnapshotText::from_utf8("é中z"),
+                range: ByteRange {
+                    start_byte_offset: 1,
+                    end_byte_offset: 7,
+                },
+                revision: 7,
+            })),
+        })
+        .unwrap();
+
+        let request = pool.receive_request().unwrap();
+        assert_eq!(
+            request.operation,
+            HostOperation::ApplyEdits {
+                buffer: BufferHandle::new(3),
+                edits: vec![TextEdit {
+                    range: ByteRange {
+                        start_byte_offset: 2,
+                        end_byte_offset: 5
+                    },
+                    text: "λ".into(),
+                }],
+                if_revision: 7,
+            }
+        );
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: request.id,
+            result: Ok(HostResponseValue::AppliedEdits { revision: 8 }),
+        })
+        .unwrap();
+
+        let request = pool.receive_request().unwrap();
+        assert_eq!(
+            request.operation,
+            HostOperation::ReplaceEditorContributions {
+                buffer: BufferHandle::new(3),
+                contributions: vec![EditorContribution {
+                    range: ByteRange {
+                        start_byte_offset: 0,
+                        end_byte_offset: 2
+                    },
+                    decoration: Some(DecorationToken::Warning),
+                    gutter: Some(GutterToken::Error),
+                    command: Some("fixture.command".into()),
+                }],
+                if_revision: 8,
+            }
+        );
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: request.id,
+            result: Ok(HostResponseValue::EditorContributionsReplaced),
+        })
+        .unwrap();
+
+        let request = pool.receive_request().unwrap();
+        assert_eq!(
+            request.operation,
+            HostOperation::SubscribeBufferChanges {
+                buffer: BufferHandle::new(3)
+            }
+        );
+        let subscription = BufferSubscriptionId::new(12);
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: request.id,
+            result: Ok(HostResponseValue::BufferChangesSubscribed { subscription }),
+        })
+        .unwrap();
+        let request = pool.receive_request().unwrap();
+        assert_eq!(
+            request.operation,
+            HostOperation::UnsubscribeBufferChanges { subscription }
+        );
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: request.id,
+            result: Ok(HostResponseValue::BufferChangesUnsubscribed { subscription }),
+        })
+        .unwrap();
+        let request = pool.receive_request().unwrap();
+        assert_eq!(
+            request.operation,
+            HostOperation::DisposeEditorContributions {
+                buffer: BufferHandle::new(3)
+            }
+        );
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: request.id,
+            result: Ok(HostResponseValue::EditorContributionsDisposed),
+        })
+        .unwrap();
+        execution.wait().unwrap();
+        pool.execute(runtime, "verify-buffers.js", r#"
+            if (snapshot.text !== "é中z" || snapshot.revision !== 7) throw new Error("snapshot");
+            if (snapshot.byteOffsetAtUtf16(1) !== 2 || snapshot.utf16OffsetAtByte(5) !== 2) throw new Error("unicode");
+            if (edit.revision !== 8) throw new Error("edit");
+        "#).unwrap().wait().unwrap();
+        pool.shutdown();
+    }
+
+    #[test]
+    fn external_utf16_snapshot_response_is_released_on_unload() {
+        let pool = RuntimePool::new(PoolConfig::single_worker());
+        let runtime = key(41);
+        pool.load(runtime, IsolateConfig::default()).unwrap();
+        let execution = pool
+            .execute_fixture_module(
+                runtime,
+                "file:///fixtures/external.js",
+                r#"
+            import { editor } from "knot:editor";
+            const buffer = await editor.activeBuffer();
+            globalThis.heldSnapshot = await buffer.snapshot();
+        "#,
+            )
+            .unwrap();
+        let active = pool.receive_request().unwrap();
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: active.id,
+            result: Ok(HostResponseValue::ActiveBuffer(Some(BufferHandle::new(1)))),
+        })
+        .unwrap();
+        let request = pool.receive_request().unwrap();
+        let text: Arc<[u16]> = "héllo".encode_utf16().collect::<Vec<_>>().into();
+        let weak = Arc::downgrade(&text);
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: request.id,
+            result: Ok(HostResponseValue::Snapshot(TextSnapshot {
+                text: SnapshotText::Utf16(Arc::clone(&text)),
+                range: ByteRange {
+                    start_byte_offset: 0,
+                    end_byte_offset: 6,
+                },
+                revision: 0,
+            })),
+        })
+        .unwrap();
+        execution.wait().unwrap();
+        drop(text);
+        assert_eq!(weak.strong_count(), 1);
+        pool.unload(runtime).unwrap();
+        assert_eq!(weak.strong_count(), 0);
+        pool.shutdown();
+    }
+
+    #[test]
+    fn buffer_change_callbacks_are_serial_and_survive_listener_failure() {
+        let pool = RuntimePool::new(PoolConfig::single_worker());
+        let runtime = key(44);
+        let subscription = BufferSubscriptionId::new(9);
+        pool.load(runtime, IsolateConfig::default()).unwrap();
+        pool.execute(
+            runtime,
+            "listener.js",
+            r#"
+            globalThis.listener = async (event) => {
+              events.push(event.revision);
+              if (event.revision === 1) throw new Error("expected listener failure");
+            };
+        "#,
+        )
+        .unwrap()
+        .wait()
+        .unwrap();
+        install_buffer_listener(&pool, runtime, subscription, "file:///fixtures/listener.js");
+        for revision in 1..=2 {
+            pool.dispatch_buffer_change(
+                runtime,
+                subscription,
+                BufferChange {
+                    buffer: BufferHandle::new(3),
+                    before_revision: revision - 1,
+                    revision,
+                    edits: vec![TextEdit {
+                        range: ByteRange {
+                            start_byte_offset: 0,
+                            end_byte_offset: 0,
+                        },
+                        text: revision.to_string(),
+                    }],
+                },
+            )
+            .unwrap();
+        }
+        pool.execute(
+            runtime,
+            "verify-events.js",
+            r#"
+            if (events.join(",") !== "1,2") throw new Error("events reordered");
+        "#,
+        )
+        .unwrap()
+        .wait()
+        .unwrap();
+        let metrics = pool.buffer_change_queue_metrics(runtime).unwrap();
+        assert!(metrics.max_depth >= 1);
+        assert!(metrics.max_enqueue_to_start_lag > Duration::ZERO);
+        pool.shutdown();
+    }
+
+    #[test]
+    fn finite_slow_buffer_change_burst_is_lossless_and_measured() {
+        let pool = RuntimePool::new(PoolConfig::single_worker());
+        let runtime = key(45);
+        let subscription = BufferSubscriptionId::new(10);
+        pool.load(runtime, IsolateConfig::default()).unwrap();
+        pool.execute(
+            runtime,
+            "slow-listener.js",
+            r#"
+            globalThis.listener = (event) => {
+              const end = Date.now() + 30;
+              while (Date.now() < end) {}
+              events.push(event.revision);
+            };
+        "#,
+        )
+        .unwrap()
+        .wait()
+        .unwrap();
+        install_buffer_listener(
+            &pool,
+            runtime,
+            subscription,
+            "file:///fixtures/slow-listener.js",
+        );
+        for revision in 1..=8 {
+            pool.dispatch_buffer_change(
+                runtime,
+                subscription,
+                BufferChange {
+                    buffer: BufferHandle::new(3),
+                    before_revision: revision - 1,
+                    revision,
+                    edits: vec![],
+                },
+            )
+            .unwrap();
+        }
+        pool.execute(
+            runtime,
+            "verify-burst.js",
+            r#"
+            if (events.join(",") !== "1,2,3,4,5,6,7,8") throw new Error("events lost");
+        "#,
+        )
+        .unwrap()
+        .wait()
+        .unwrap();
+        let metrics = pool.buffer_change_queue_metrics(runtime).unwrap();
+        assert!(metrics.max_depth >= 4, "metrics: {metrics:?}");
+        assert!(
+            metrics.max_enqueue_to_start_lag >= Duration::from_millis(50),
+            "metrics: {metrics:?}"
+        );
+        pool.shutdown();
+    }
+
+    #[test]
+    fn awaiting_buffer_listener_yields_single_worker_to_another_extension() {
+        let pool = RuntimePool::new(PoolConfig::single_worker());
+        let waiting = key(46);
+        let neighbor = key(47);
+        let subscription = BufferSubscriptionId::new(11);
+        pool.load(waiting, IsolateConfig::default()).unwrap();
+        pool.load(neighbor, IsolateConfig::default()).unwrap();
+        pool.execute(
+            waiting,
+            "async-listener.js",
+            r#"
+            globalThis.listener = async (event) => {
+              await editorApi.activeBuffer();
+              events.push(event.revision);
+            };
+        "#,
+        )
+        .unwrap()
+        .wait()
+        .unwrap();
+        install_buffer_listener(
+            &pool,
+            waiting,
+            subscription,
+            "file:///fixtures/async-listener.js",
+        );
+        pool.dispatch_buffer_change(
+            waiting,
+            subscription,
+            BufferChange {
+                buffer: BufferHandle::new(3),
+                before_revision: 0,
+                revision: 1,
+                edits: vec![],
+            },
+        )
+        .unwrap();
+        let request = pool.receive_request().unwrap();
+        wait_for_state(&pool, waiting, ExtensionState::AwaitingHostWork);
+        assert_eq!(
+            &*pool
+                .execute(neighbor, "neighbor.js", "6 * 7")
+                .unwrap()
+                .wait()
+                .unwrap()
+                .value,
+            "42"
+        );
+        pool.respond(HostResponse {
+            extension: waiting.extension,
+            lifecycle: waiting.lifecycle,
+            id: request.id,
+            result: Ok(HostResponseValue::ActiveBuffer(Some(BufferHandle::new(3)))),
+        })
+        .unwrap();
+        pool.execute(
+            waiting,
+            "verify-async-event.js",
+            r#"
+            if (events.join(",") !== "1") throw new Error("listener did not resume");
+        "#,
+        )
+        .unwrap()
+        .wait()
+        .unwrap();
+        pool.shutdown();
+    }
+
+    #[test]
+    fn stale_lifecycle_cannot_dispatch_a_buffer_change() {
+        let pool = RuntimePool::new(PoolConfig::single_worker());
+        let stale = key(48);
+        pool.load(stale, IsolateConfig::default()).unwrap();
+        pool.unload(stale).unwrap();
+        let replacement = ExtensionKey::new(stale.extension, ExtensionLifecycleId::new(2));
+        pool.load(replacement, IsolateConfig::default()).unwrap();
+        assert!(matches!(
+            pool.dispatch_buffer_change(
+                stale,
+                BufferSubscriptionId::new(1),
+                BufferChange {
+                    buffer: BufferHandle::new(1),
+                    before_revision: 0,
+                    revision: 1,
+                    edits: vec![],
+                },
+            ),
+            Err(RuntimePoolError::Scheduler(
+                SchedulerError::StaleLifecycle { .. }
+            ))
+        ));
+        pool.shutdown();
+    }
+
+    #[test]
     fn host_response_resumes_a_pending_root_and_drains_microtasks() {
         let pool = RuntimePool::new(PoolConfig::single_worker());
         let runtime = key(1);
@@ -2246,7 +3205,7 @@ mod tests {
                     import { editor } from "knot:editor";
                     const buffer = await editor.activeBuffer();
                     await Promise.resolve();
-                    globalThis.responseValue = buffer;
+                    globalThis.responseValue = buffer !== null;
                 "#,
             )
             .unwrap();
@@ -2270,7 +3229,7 @@ mod tests {
                 .wait()
                 .unwrap()
                 .value,
-            "9"
+            "true"
         );
         pool.shutdown();
     }
@@ -2326,7 +3285,7 @@ mod tests {
                       editor.activeBuffer(),
                       editor.activeBuffer(),
                     ]);
-                    globalThis.responses = `${first}:${second}`;
+                    globalThis.responsesAreDistinct = first !== second;
                 "#,
             )
             .unwrap();
@@ -2360,12 +3319,12 @@ mod tests {
         execution.wait().unwrap();
         assert_eq!(
             &*pool
-                .execute(runtime, "verify-order.js", "responses")
+                .execute(runtime, "verify-order.js", "responsesAreDistinct")
                 .unwrap()
                 .wait()
                 .unwrap()
                 .value,
-            "1:2"
+            "true"
         );
         assert_eq!(
             pool.respond(HostResponse {
