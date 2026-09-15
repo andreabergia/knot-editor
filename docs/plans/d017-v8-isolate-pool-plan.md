@@ -1,6 +1,6 @@
 # D017: Production V8 Isolate Pool and Scheduling
 
-Status: in progress; Tasks 1-5 implemented, Task 5 awaiting review.
+Status: in progress; Tasks 1-6 implemented, Task 6 awaiting review.
 
 This slice replaces the prototype `deno_core` runtime with a direct
 `rusty_v8` host and runs persistent extension isolates on a bounded worker
@@ -250,15 +250,15 @@ Manual review gate:
 
 ## Task 6: Restore buffers, edits, and contributions
 
-- ⬜ Reimplement conversion between JavaScript values and the typed buffer,
+- ✅ Reimplement conversion between JavaScript values and the typed buffer,
   range, edit, contribution, response, and error structures.
-- ⬜ Restore active-buffer lookup, revisioned snapshots, batched edits,
+- ✅ Restore active-buffer lookup, revisioned snapshots, batched edits,
   subscriptions, unsubscription, and contribution replacement/disposal.
-- ⬜ Restore immutable external UTF-16 strings with ownership retained until V8
+- ✅ Restore immutable external UTF-16 strings with ownership retained until V8
   releases them; keep the UTF-8 core and scoped byte/UTF-16 adapters unchanged.
-- ⬜ Dispatch ordered buffer-change callbacks as extension root work and retain
+- ✅ Dispatch ordered buffer-change callbacks as extension root work and retain
   the existing queue measurements without adding D019 policy.
-- ⬜ Revalidate cancellation immediately before foreground mutation and reject
+- ✅ Revalidate cancellation immediately before foreground mutation and reject
   late or stale edits.
 
 Automated checks:

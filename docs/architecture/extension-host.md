@@ -47,11 +47,13 @@ eagerly evaluates a private `knot:bootstrap` module and the public
 `knot:editor` facade when it creates the capsule. Bootstrap captures the native
 request callback and removes its temporary global before extension work can
 run, leaving only the semantic `editor`, `commands`, and `workbench` exports.
-The facade's active-buffer probe crosses a pool-owned typed request inbox. Its
-native callback allocates a lifecycle-scoped request identity, retains only a
+The facade's buffer API crosses a pool-owned typed request inbox. Its native
+callback allocates a lifecycle-scoped request identity, retains only a
 persistent V8 promise resolver, and returns the promise without waiting on the
-worker. Buffer values beyond the opaque active-buffer handle remain for the
-next D017 checkpoint.
+worker. Cached JavaScript buffer proxies expose revisioned snapshots, batched
+edits, change subscriptions, and one replaceable contribution set. The engine
+converts these values directly at the V8 boundary; immutable UTF-16 snapshot
+storage is externalized with one `Arc` reference retained until V8 releases it.
 
 The engine retains the root script or module promise independently from its
 host-request promises. A pending root with no runnable JavaScript yields its
@@ -115,3 +117,15 @@ native root completion exactly once before disposal.
 The pool-issued termination handle also queues a continuation for an awaiting
 root, so forced termination does not depend on a later host response to wake a
 parked lifecycle.
+
+Buffer-change notifications enter the scheduler as unrelated FIFO roots. Each
+callback may yield for host work without holding a worker, and a rejected
+listener completes only that callback so later notifications still run. The
+runtime records maximum queued callback depth and enqueue-to-start lag as
+evidence; it does not cap, drop, coalesce, or delay notifications as policy.
+
+The foreground buffer bridge owns active-buffer lookup, lifecycle-scoped
+subscriptions, revision validation, model mutation, contribution ownership,
+and change fan-out. It revalidates cancellation inside the foreground update
+immediately before mutation. Product ownership of the pool and transport loop
+remains for the later integration checkpoint.
