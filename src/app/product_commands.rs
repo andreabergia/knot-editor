@@ -2,7 +2,11 @@
 
 use gpui::*;
 
-use crate::host::protocol::{Command, CommandArgumentValue, CommandOutcome};
+use crate::host::protocol::{
+    Command, CommandArgumentValue, CommandInvokeDispatch, CommandOutcome, ExtensionId,
+    ExtensionLifecycleId, HostOperation, HostRequest, HostRequestError, HostResponse,
+    HostResponseValue, RequestId,
+};
 
 use super::model::{CommandCatalog, CommandDefinition, CommandTargetKind};
 use super::product::ProductShell;
@@ -122,6 +126,45 @@ pub(crate) struct ProductCommandDispatcher {
     last_outcome: Option<CommandOutcome>,
 }
 
+#[allow(
+    dead_code,
+    reason = "the product transport loop connects this adapter in D017 task 9"
+)]
+pub(crate) enum ProductCommandHostResponse {
+    Ready(HostResponse),
+    Awaiting {
+        extension: ExtensionId,
+        lifecycle: ExtensionLifecycleId,
+        request: RequestId,
+        completion: tokio::sync::oneshot::Receiver<CommandOutcome>,
+    },
+}
+
+#[allow(
+    dead_code,
+    reason = "the product transport loop connects this adapter in D017 task 9"
+)]
+impl ProductCommandHostResponse {
+    pub(crate) async fn resolve(self) -> HostResponse {
+        match self {
+            Self::Ready(response) => response,
+            Self::Awaiting {
+                extension,
+                lifecycle,
+                request,
+                completion,
+            } => command_host_response(
+                extension,
+                lifecycle,
+                request,
+                Ok(CommandInvokeDispatch::Outcome {
+                    outcome: completion.await.unwrap_or(CommandOutcome::Cancelled),
+                }),
+            ),
+        }
+    }
+}
+
 impl ProductCommandDispatcher {
     pub(crate) fn new(_cx: &mut Context<Self>) -> Self {
         let mut catalog = CommandCatalog::new();
@@ -214,6 +257,61 @@ impl ProductCommandDispatcher {
         execution
     }
 
+    /// Route one product-facing extension request without owning its transport.
+    ///
+    /// Task 9 connects this response to the application-owned runtime pool.
+    #[allow(
+        dead_code,
+        reason = "the product transport loop connects this adapter in D017 task 9"
+    )]
+    pub(crate) fn dispatch_host_request(
+        &mut self,
+        request: HostRequest,
+        target: Option<ProductCommandTarget>,
+        cx: &mut Context<Self>,
+    ) -> ProductCommandHostResponse {
+        let extension = request.extension;
+        let lifecycle = request.lifecycle;
+        let id = request.id;
+        match request.operation {
+            HostOperation::InvokeCommand { command } if request.invocation.is_none() => {
+                let Some(target) = target else {
+                    return ProductCommandHostResponse::Ready(command_host_response(
+                        extension,
+                        lifecycle,
+                        id,
+                        Ok(CommandInvokeDispatch::Outcome {
+                            outcome: CommandOutcome::InvalidTarget,
+                        }),
+                    ));
+                };
+                let execution = self.dispatch(command, target, cx);
+                ProductCommandHostResponse::Awaiting {
+                    extension,
+                    lifecycle,
+                    request: id,
+                    completion: execution.completion,
+                }
+            }
+            HostOperation::InvokeCommand { .. } => {
+                ProductCommandHostResponse::Ready(command_host_response(
+                    extension,
+                    lifecycle,
+                    id,
+                    Ok(CommandInvokeDispatch::Outcome {
+                        outcome: CommandOutcome::Unavailable,
+                    }),
+                ))
+            }
+            _ => ProductCommandHostResponse::Ready(HostResponse {
+                extension,
+                lifecycle,
+                id,
+                result: Err(HostRequestError::UnsupportedOperation),
+            }),
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn last_outcome(&self) -> Option<&CommandOutcome> {
         self.last_outcome.as_ref()
@@ -222,6 +320,24 @@ impl ProductCommandDispatcher {
     pub(crate) fn record_outcome(&mut self, outcome: CommandOutcome, cx: &mut Context<Self>) {
         self.last_outcome = Some(outcome);
         cx.notify();
+    }
+}
+
+#[allow(
+    dead_code,
+    reason = "the product transport loop connects this adapter in D017 task 9"
+)]
+fn command_host_response(
+    extension: ExtensionId,
+    lifecycle: ExtensionLifecycleId,
+    id: RequestId,
+    dispatch: Result<CommandInvokeDispatch, HostRequestError>,
+) -> HostResponse {
+    HostResponse {
+        extension,
+        lifecycle,
+        id,
+        result: dispatch.map(|dispatch| HostResponseValue::CommandInvoked { dispatch }),
     }
 }
 

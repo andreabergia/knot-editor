@@ -2462,7 +2462,11 @@ mod tests {
         VisualTestContext, point, px,
     };
 
-    use crate::host::protocol::{Command, CommandArgumentValue, CommandOutcome};
+    use crate::host::protocol::{
+        Command, CommandArgumentValue, CommandInvocationId, CommandInvokeDispatch, CommandOutcome,
+        ExtensionId, ExtensionLifecycleId, HostOperation, HostRequest, HostRequestError,
+        HostResponseValue, RequestId,
+    };
 
     use super::{
         ApplicationDocuments, ApplicationFileSystems, ApplicationOpenDialog,
@@ -2696,6 +2700,129 @@ mod tests {
             expected.sort();
             assert_eq!(actual, expected);
         });
+    }
+
+    #[gpui::test]
+    async fn product_host_requests_await_outcomes_and_reject_invalid_routes(
+        cx: &mut TestAppContext,
+    ) {
+        let documents = install_globals(cx);
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        let (shell, window_handle) = product_window(document, model, cx);
+        let target = cx
+            .update_window(window_handle, |_, window, cx| {
+                shell.update(cx, |shell, cx| {
+                    shell.focus_active_editor(window, cx);
+                    shell.capture_command_target(window, cx).unwrap()
+                })
+            })
+            .unwrap();
+        let extension = ExtensionId::new(91);
+        let lifecycle = ExtensionLifecycleId::new(7);
+        let request = |id, invocation, operation| HostRequest {
+            extension,
+            lifecycle,
+            id: RequestId::new(id),
+            invocation,
+            operation,
+        };
+
+        let pending = cx.update(|cx| {
+            let dispatcher = cx.global::<ApplicationProductCommands>().0.clone();
+            dispatcher.update(cx, |dispatcher, cx| {
+                dispatcher.dispatch_host_request(
+                    request(
+                        1,
+                        None,
+                        HostOperation::InvokeCommand {
+                            command: Command {
+                                name: NEW_COMMAND.into(),
+                                arguments: CommandArgumentValue::Null,
+                            },
+                        },
+                    ),
+                    Some(target.clone()),
+                    cx,
+                )
+            })
+        });
+        cx.run_until_parked();
+        assert!(matches!(
+            pending.resolve().await.result,
+            Ok(HostResponseValue::CommandInvoked {
+                dispatch: CommandInvokeDispatch::Outcome {
+                    outcome: CommandOutcome::Completed
+                }
+            })
+        ));
+
+        for (route, expected) in [
+            (
+                request(
+                    2,
+                    Some(CommandInvocationId::new(1)),
+                    HostOperation::InvokeCommand {
+                        command: Command {
+                            name: NEW_COMMAND.into(),
+                            arguments: CommandArgumentValue::Null,
+                        },
+                    },
+                ),
+                CommandOutcome::Unavailable,
+            ),
+            (
+                request(
+                    3,
+                    None,
+                    HostOperation::InvokeCommand {
+                        command: Command {
+                            name: NEW_COMMAND.into(),
+                            arguments: CommandArgumentValue::Null,
+                        },
+                    },
+                ),
+                CommandOutcome::InvalidTarget,
+            ),
+        ] {
+            let response = cx
+                .update(|cx| {
+                    let dispatcher = cx.global::<ApplicationProductCommands>().0.clone();
+                    dispatcher.update(cx, |dispatcher, cx| {
+                        dispatcher.dispatch_host_request(
+                            route,
+                            (expected != CommandOutcome::InvalidTarget).then(|| target.clone()),
+                            cx,
+                        )
+                    })
+                })
+                .resolve()
+                .await;
+            assert!(matches!(
+                response.result,
+                Ok(HostResponseValue::CommandInvoked {
+                    dispatch: CommandInvokeDispatch::Outcome { outcome }
+                }) if outcome == expected
+            ));
+        }
+
+        let unsupported = cx
+            .update(|cx| {
+                let dispatcher = cx.global::<ApplicationProductCommands>().0.clone();
+                dispatcher.update(cx, |dispatcher, cx| {
+                    dispatcher.dispatch_host_request(
+                        request(4, None, HostOperation::ActiveBuffer),
+                        Some(target),
+                        cx,
+                    )
+                })
+            })
+            .resolve()
+            .await;
+        assert_eq!(
+            unsupported.result,
+            Err(HostRequestError::UnsupportedOperation)
+        );
     }
 
     #[gpui::test]

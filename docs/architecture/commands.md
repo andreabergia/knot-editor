@@ -63,7 +63,9 @@ serial root trees, captured buffers, structured outcomes, cancellation, and
 nested composition. Same-lifecycle children execute inline in their parent's
 scheduler root; native and cross-lifecycle children await an explicit
 foreground outcome. Product ownership of the pool and transport loop remains
-for D017's final integration checkpoint.
+for D017's final integration checkpoint. The product-facing request adapter
+already awaits the ordinary dispatcher outcome, reports a missing captured
+target as invalid, and rejects nested product requests as unavailable.
 
 The command palette keeps the weak focus target captured before the palette
 takes visible focus. Palette controls target the palette, while confirmation
