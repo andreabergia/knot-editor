@@ -1,7 +1,7 @@
 //! V8 process initialization and engine-owned isolate state.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     ffi::c_void,
     fmt,
     pin::pin,
@@ -23,9 +23,11 @@ use std::sync::atomic::AtomicBool;
 use super::{
     lifecycle::{ExtensionKey, Failure},
     protocol::{
-        BufferChange, BufferHandle, BufferSubscriptionId, ByteRange, DecorationToken,
-        EditorContribution, ExtensionId, GutterToken, HostOperation, HostRequest, HostResponse,
-        HostResponseValue, RequestId, SnapshotText, TextEdit, TextSnapshot,
+        BufferChange, BufferHandle, BufferSubscriptionId, ByteRange, Command, CommandArgumentValue,
+        CommandInvocation, CommandInvocationId, CommandInvokeDispatch, CommandOutcome,
+        CommandRegistrationId, DecorationToken, EditorContribution, ExtensionId, GutterToken,
+        HostOperation, HostRequest, HostResponse, HostResponseValue, RequestId, SnapshotText,
+        TextEdit, TextSnapshot,
     },
     scheduler::{
         CompletionOutcome, PoolConfig, RootId, SchedulerError, SchedulerHandle, SchedulerPool,
@@ -223,6 +225,7 @@ struct RuntimeLocalState {
     rejections: Mutex<Vec<RejectionReport>>,
     modules: Mutex<FixtureModuleRegistry>,
     buffer_changes: Mutex<BufferChangeQueueState>,
+    cancelled_commands: Mutex<HashSet<CommandInvocationId>>,
     #[cfg(test)]
     host_error: Mutex<Option<String>>,
     #[cfg(test)]
@@ -243,6 +246,7 @@ impl RuntimeLocalState {
             rejections: Mutex::new(Vec::new()),
             modules: Mutex::new(FixtureModuleRegistry::default()),
             buffer_changes: Mutex::new(BufferChangeQueueState::default()),
+            cancelled_commands: Mutex::new(HashSet::new()),
             #[cfg(test)]
             host_error: Mutex::new(None),
             #[cfg(test)]
@@ -279,6 +283,7 @@ impl RuntimeLocalState {
 
 struct PendingRequest {
     root: RootId,
+    invocation: Option<CommandInvocationId>,
     operation: HostOperationKind,
     resolver: v8::Global<v8::PromiseResolver>,
     response_queued: bool,
@@ -293,13 +298,23 @@ enum HostOperationKind {
     UnsubscribeBufferChanges,
     ReplaceEditorContributions,
     DisposeEditorContributions,
+    RegisterCommand,
+    UnregisterCommand,
+    InvokeCommand,
+    CompleteInlineCommand,
 }
 
 struct ActiveExecution {
     root: RootId,
     promise: v8::Global<v8::Promise>,
     source: Arc<str>,
-    result: Option<mpsc::Sender<Result<ExecutionReport, RuntimeError>>>,
+    completion: ActiveCompletion,
+}
+
+enum ActiveCompletion {
+    Report(mpsc::Sender<Result<ExecutionReport, RuntimeError>>),
+    Command(mpsc::Sender<Result<CommandOutcome, RuntimeError>>),
+    Detached(&'static str),
 }
 
 /// Observed buffer-change callback pressure for one extension lifetime.
@@ -701,11 +716,128 @@ impl RuntimeCapsule {
             root,
             promise: v8::Global::new(try_catch, promise),
             source: "knot:buffer-change".into(),
-            result: None,
+            completion: ActiveCompletion::Detached("buffer-change listener"),
         });
         try_catch.perform_microtask_checkpoint();
         *self.local_state.current_root.lock().unwrap() = None;
         self.inspect_active(try_catch, root)
+    }
+
+    fn start_command_turn(
+        &self,
+        root: RootId,
+        invocation: CommandInvocation,
+        active_buffer: Option<BufferHandle>,
+        result: mpsc::Sender<Result<CommandOutcome, RuntimeError>>,
+    ) -> TurnOutcome {
+        if self
+            .local_state
+            .cancelled_commands
+            .lock()
+            .unwrap()
+            .remove(&invocation.id)
+        {
+            let _ = result.send(Ok(CommandOutcome::Cancelled));
+            return TurnOutcome::Completed;
+        }
+        if self.status.load(Ordering::Acquire) != ACTIVE {
+            let error = self.status_error();
+            let _ = result.send(Err(error.clone()));
+            return fatal_or_completed(&error);
+        }
+        let data = self.data.lock().unwrap();
+        let Some(data) = data.as_ref() else {
+            let error = RuntimeError::disposed();
+            let _ = result.send(Err(error.clone()));
+            return TurnOutcome::Fatal(Failure::new(error.to_string()));
+        };
+        self.local_state.rejections.lock().unwrap().clear();
+        *self.local_state.current_root.lock().unwrap() = Some(root);
+        let mut locker = data.isolate.lock();
+        let scope = pin!(v8::HandleScope::new(&mut *locker));
+        let mut scope = scope.init();
+        let context = v8::Local::new(&scope, &data.context);
+        let scope = &mut v8::ContextScope::new(&mut scope, context);
+        v8::tc_scope!(let try_catch, scope);
+        let evaluated = (|| {
+            let name = v8::String::new(try_catch, "__knotInvokeCommand")?;
+            let function = context.global(try_catch).get(try_catch, name.into())?;
+            let function = v8::Local::<v8::Function>::try_from(function).ok()?;
+            let active_buffer = active_buffer.map_or_else(
+                || v8::null(try_catch).into(),
+                |buffer| v8::Number::new(try_catch, buffer.value() as f64).into(),
+            );
+            let arguments = command_argument_to_v8(try_catch, &invocation.arguments).ok()?;
+            function.call(
+                try_catch,
+                v8::undefined(try_catch).into(),
+                &[
+                    v8::Number::new(try_catch, invocation.id.value() as f64).into(),
+                    v8::Number::new(try_catch, invocation.registration.value() as f64).into(),
+                    active_buffer,
+                    arguments,
+                ],
+            )
+        })();
+        let Some(value) = evaluated else {
+            let error = self.execution_error(try_catch, "knot:command");
+            *self.local_state.current_root.lock().unwrap() = None;
+            let _ = result.send(Err(error.clone()));
+            if !error.is_fatal() {
+                try_catch.reset();
+                self.reject_pending_for_root(try_catch, root);
+            }
+            return fatal_or_completed(&error);
+        };
+        let promise = if let Ok(promise) = v8::Local::<v8::Promise>::try_from(value) {
+            promise
+        } else {
+            let resolver = v8::PromiseResolver::new(try_catch).expect("V8 resolver allocation");
+            resolver.resolve(try_catch, value);
+            resolver.get_promise(try_catch)
+        };
+        promise.mark_as_handled();
+        *self.local_state.active.lock().unwrap() = Some(ActiveExecution {
+            root,
+            promise: v8::Global::new(try_catch, promise),
+            source: "knot:command".into(),
+            completion: ActiveCompletion::Command(result),
+        });
+        try_catch.perform_microtask_checkpoint();
+        *self.local_state.current_root.lock().unwrap() = None;
+        self.inspect_active(try_catch, root)
+    }
+
+    fn cancel_command_turn(&self, root: RootId, invocation: CommandInvocationId) -> TurnOutcome {
+        self.local_state
+            .cancelled_commands
+            .lock()
+            .unwrap()
+            .remove(&invocation);
+        let data = self.data.lock().unwrap();
+        let Some(data) = data.as_ref() else {
+            return TurnOutcome::Fatal(Failure::new("extension isolate is disposed"));
+        };
+        *self.local_state.current_root.lock().unwrap() = Some(root);
+        let mut locker = data.isolate.lock();
+        let scope = pin!(v8::HandleScope::new(&mut *locker));
+        let mut scope = scope.init();
+        let context = v8::Local::new(&scope, &data.context);
+        let scope = &mut v8::ContextScope::new(&mut scope, context);
+        let name = v8::String::new(scope, "__knotCancelCommand").unwrap();
+        if let Some(function) = context.global(scope).get(scope, name.into())
+            && let Ok(function) = v8::Local::<v8::Function>::try_from(function)
+        {
+            function.call(
+                scope,
+                v8::undefined(scope).into(),
+                &[v8::Number::new(scope, invocation.value() as f64).into()],
+            );
+        }
+        self.reject_pending_for_command(scope, root);
+        scope.perform_microtask_checkpoint();
+        *self.local_state.current_root.lock().unwrap() = None;
+        self.inspect_active(scope, root)
     }
 
     fn run_root_turn(
@@ -838,7 +970,7 @@ impl RuntimeCapsule {
             root,
             promise: v8::Global::new(try_catch, promise),
             source,
-            result: Some(result),
+            completion: ActiveCompletion::Report(result),
         });
         try_catch.perform_microtask_checkpoint();
         *self.local_state.current_root.lock().unwrap() = None;
@@ -930,23 +1062,34 @@ impl RuntimeCapsule {
             v8::PromiseState::Pending => TurnOutcome::AwaitingHostWork,
             v8::PromiseState::Fulfilled if pending => TurnOutcome::AwaitingHostWork,
             v8::PromiseState::Fulfilled => {
-                let value = promise.result(scope).to_rust_string_lossy(scope);
+                let value = promise.result(scope);
+                let execution = active.take().expect("active execution was inspected");
                 let rejection = self.take_unhandled_rejection(&execution.source);
-                if let Some(sender) = execution.result.take() {
-                    let result = rejection.map_or_else(
-                        || {
-                            Ok(ExecutionReport {
-                                value: value.into(),
-                                worker: std::thread::current().id(),
-                            })
-                        },
-                        Err,
-                    );
-                    let _ = sender.send(result);
-                } else if let Some(error) = rejection {
-                    eprintln!("[knot] buffer-change listener failed: {error}");
+                match execution.completion {
+                    ActiveCompletion::Report(sender) => {
+                        let text = value.to_rust_string_lossy(scope);
+                        let result = rejection.map_or_else(
+                            || {
+                                Ok(ExecutionReport {
+                                    value: text.into(),
+                                    worker: std::thread::current().id(),
+                                })
+                            },
+                            Err,
+                        );
+                        let _ = sender.send(result);
+                    }
+                    ActiveCompletion::Command(sender) => {
+                        let result =
+                            rejection.map_or_else(|| command_outcome_from_v8(scope, value), Err);
+                        let _ = sender.send(result);
+                    }
+                    ActiveCompletion::Detached(label) => {
+                        if let Some(error) = rejection {
+                            eprintln!("[knot] {label} failed: {error}");
+                        }
+                    }
                 }
-                *active = None;
                 TurnOutcome::Completed
             }
             v8::PromiseState::Rejected => {
@@ -966,14 +1109,22 @@ impl RuntimeCapsule {
                     column: one_based_coordinate(message.get_start_column()),
                     stack: None,
                 };
-                if let Some(sender) = execution.result.take() {
-                    let _ = sender.send(Err(error));
-                } else {
-                    eprintln!("[knot] buffer-change listener failed: {error}");
+                let execution = active.take().expect("active execution was inspected");
+                match execution.completion {
+                    ActiveCompletion::Report(sender) => {
+                        let _ = sender.send(Err(error));
+                    }
+                    ActiveCompletion::Command(sender) => {
+                        let _ = sender.send(Ok(CommandOutcome::HandlerFailure {
+                            message: error.to_string(),
+                        }));
+                    }
+                    ActiveCompletion::Detached(label) => {
+                        eprintln!("[knot] {label} failed: {error}");
+                    }
                 }
                 drop(active);
                 self.reject_pending_for_root(scope, root);
-                *self.local_state.active.lock().unwrap() = None;
                 TurnOutcome::Completed
             }
         }
@@ -985,6 +1136,27 @@ impl RuntimeCapsule {
             let ids: Vec<_> = requests
                 .iter()
                 .filter_map(|(id, pending)| (pending.root == root).then_some(*id))
+                .collect();
+            ids.into_iter()
+                .filter_map(|id| requests.remove(&id))
+                .collect::<Vec<_>>()
+        };
+        for pending in pending {
+            let resolver = v8::Local::new(scope, &pending.resolver);
+            let cancelled = v8::String::new(scope, "Cancelled").unwrap();
+            resolver.reject(scope, cancelled.into());
+        }
+        scope.perform_microtask_checkpoint();
+    }
+
+    fn reject_pending_for_command(&self, scope: &mut v8::PinScope<'_, '_>, root: RootId) {
+        let pending = {
+            let mut requests = self.local_state.pending.lock().unwrap();
+            let ids: Vec<_> = requests
+                .iter()
+                .filter_map(|(id, pending)| {
+                    (pending.root == root && pending.invocation.is_some()).then_some(*id)
+                })
                 .collect();
             ids.into_iter()
                 .filter_map(|id| requests.remove(&id))
@@ -1026,10 +1198,16 @@ impl RuntimeCapsule {
     }
 
     fn fail_active(&self, error: RuntimeError) {
-        if let Some(mut active) = self.local_state.active.lock().unwrap().take()
-            && let Some(result) = active.result.take()
-        {
-            let _ = result.send(Err(error));
+        if let Some(active) = self.local_state.active.lock().unwrap().take() {
+            match active.completion {
+                ActiveCompletion::Report(result) => {
+                    let _ = result.send(Err(error));
+                }
+                ActiveCompletion::Command(result) => {
+                    let _ = result.send(Err(error));
+                }
+                ActiveCompletion::Detached(_) => {}
+            }
         }
         self.local_state.pending.lock().unwrap().clear();
         *self.local_state.current_root.lock().unwrap() = None;
@@ -1262,6 +1440,12 @@ enum EngineWork {
         change: BufferChange,
         enqueued_at: Instant,
     },
+    CommandInvocation {
+        invocation: CommandInvocation,
+        active_buffer: Option<BufferHandle>,
+        result: mpsc::Sender<Result<CommandOutcome, RuntimeError>>,
+    },
+    CancelCommand(CommandInvocationId),
     Termination,
 }
 
@@ -1290,6 +1474,34 @@ impl RuntimeExecution {
                 Ok(CompletionOutcome::Completed) | Err(_) => Err(RuntimeError::fatal(
                     RuntimeErrorKind::Engine,
                     "extension worker closed without an execution result",
+                )),
+            },
+        }
+    }
+}
+
+/// Completion side of one scheduled extension command handler.
+pub(crate) struct RuntimeCommandExecution {
+    result: mpsc::Receiver<Result<CommandOutcome, RuntimeError>>,
+    completion: mpsc::Receiver<CompletionOutcome>,
+}
+
+impl RuntimeCommandExecution {
+    pub(crate) fn wait(self) -> Result<CommandOutcome, RuntimeError> {
+        match self.result.recv() {
+            Ok(result) => {
+                let _ = self.completion.recv();
+                result
+            }
+            Err(_) => match self.completion.recv() {
+                Ok(CompletionOutcome::Cancelled) => Ok(CommandOutcome::Cancelled),
+                Ok(CompletionOutcome::Failed(failure)) => Err(RuntimeError::fatal(
+                    RuntimeErrorKind::LifecycleFailed,
+                    failure.message().to_owned(),
+                )),
+                Ok(CompletionOutcome::Completed) | Err(_) => Err(RuntimeError::fatal(
+                    RuntimeErrorKind::Engine,
+                    "extension worker closed without a command outcome",
                 )),
             },
         }
@@ -1415,6 +1627,69 @@ impl RuntimePool {
                 },
             )?;
         Ok(RuntimeExecution { result, completion })
+    }
+
+    pub(crate) fn invoke_command(
+        &self,
+        key: ExtensionKey,
+        invocation: CommandInvocation,
+        active_buffer: Option<BufferHandle>,
+    ) -> Result<RuntimeCommandExecution, RuntimePoolError> {
+        if invocation.extension != key.extension || invocation.lifecycle != key.lifecycle {
+            return Err(SchedulerError::StaleLifecycle {
+                current: key.lifecycle,
+                received: invocation.lifecycle,
+            }
+            .into());
+        }
+        let capsule = self.capsule(key)?;
+        let (result_sender, result) = mpsc::channel();
+        let (_, completion) = self.scheduler_handle.enqueue_root(
+            key,
+            EngineTurn {
+                capsule,
+                work: EngineWork::CommandInvocation {
+                    invocation,
+                    active_buffer,
+                    result: result_sender,
+                },
+            },
+        )?;
+        Ok(RuntimeCommandExecution { result, completion })
+    }
+
+    pub(crate) fn cancel_command(
+        &self,
+        key: ExtensionKey,
+        invocation: CommandInvocationId,
+    ) -> Result<(), RuntimePoolError> {
+        let capsule = self.capsule(key)?;
+        capsule
+            .local_state
+            .cancelled_commands
+            .lock()
+            .unwrap()
+            .insert(invocation);
+        let root = capsule
+            .local_state
+            .active
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|active| {
+                matches!(&active.completion, ActiveCompletion::Command(_)).then_some(active.root)
+            });
+        if let Some(root) = root {
+            self.scheduler_handle.enqueue_continuation(
+                key,
+                root,
+                EngineTurn {
+                    capsule,
+                    work: EngineWork::CancelCommand(invocation),
+                },
+            )?;
+        }
+        Ok(())
     }
 
     pub(crate) fn receive_request(&self) -> Option<HostRequest> {
@@ -1929,6 +2204,15 @@ fn host_request_callback<'s, 'i>(
         result.set(resolver.get_promise(scope).into());
         return;
     };
+    let invocation = match optional_u64(scope, arguments.get(0), "UnsupportedOperation") {
+        Ok(value) => value.map(CommandInvocationId::new),
+        Err(error) => {
+            let message = v8::String::new(scope, error).unwrap();
+            resolver.reject(scope, message.into());
+            result.set(resolver.get_promise(scope).into());
+            return;
+        }
+    };
     let parsed = parse_host_operation(scope, &arguments);
     let sender = state.request_sender.lock().unwrap().clone();
     let root = *state.current_root.lock().unwrap();
@@ -1964,6 +2248,7 @@ fn host_request_callback<'s, 'i>(
         id,
         PendingRequest {
             root,
+            invocation,
             operation: kind,
             resolver: v8::Global::new(scope, resolver),
             response_queued: false,
@@ -1974,7 +2259,7 @@ fn host_request_callback<'s, 'i>(
             extension: state.key.extension,
             lifecycle: state.key.lifecycle,
             id,
-            invocation: None,
+            invocation,
             operation,
         })
         .is_err()
@@ -1991,7 +2276,7 @@ fn parse_host_operation<'s, 'i>(
     arguments: &v8::FunctionCallbackArguments<'s>,
 ) -> Result<(HostOperation, HostOperationKind), &'static str> {
     let operation = arguments
-        .get(0)
+        .get(1)
         .to_string(scope)
         .ok_or("UnsupportedOperation")?
         .to_rust_string_lossy(scope);
@@ -1999,46 +2284,88 @@ fn parse_host_operation<'s, 'i>(
         "activeBuffer" => Ok((HostOperation::ActiveBuffer, HostOperationKind::ActiveBuffer)),
         "snapshot" => Ok((
             HostOperation::Snapshot {
-                buffer: BufferHandle::new(argument_u64(scope, arguments, 1)?),
-                range: optional_byte_range(scope, arguments.get(2))?,
+                buffer: BufferHandle::new(argument_u64(scope, arguments, 2)?),
+                range: optional_byte_range(scope, arguments.get(3))?,
             },
             HostOperationKind::Snapshot,
         )),
         "applyEdits" => Ok((
             HostOperation::ApplyEdits {
-                buffer: BufferHandle::new(argument_u64(scope, arguments, 1)?),
-                edits: text_edits(scope, arguments.get(2))?,
-                if_revision: value_u64(scope, arguments.get(3), "InvalidEditBatch")?,
+                buffer: BufferHandle::new(argument_u64(scope, arguments, 2)?),
+                edits: text_edits(scope, arguments.get(3))?,
+                if_revision: value_u64(scope, arguments.get(4), "InvalidEditBatch")?,
             },
             HostOperationKind::ApplyEdits,
         )),
         "subscribeBufferChanges" => Ok((
             HostOperation::SubscribeBufferChanges {
-                buffer: BufferHandle::new(argument_u64(scope, arguments, 1)?),
+                buffer: BufferHandle::new(argument_u64(scope, arguments, 2)?),
             },
             HostOperationKind::SubscribeBufferChanges,
         )),
         "unsubscribeBufferChanges" => Ok((
             HostOperation::UnsubscribeBufferChanges {
-                subscription: BufferSubscriptionId::new(argument_u64(scope, arguments, 1)?),
+                subscription: BufferSubscriptionId::new(argument_u64(scope, arguments, 2)?),
             },
             HostOperationKind::UnsubscribeBufferChanges,
         )),
         "replaceEditorContributions" => Ok((
             HostOperation::ReplaceEditorContributions {
-                buffer: BufferHandle::new(argument_u64(scope, arguments, 1)?),
-                contributions: editor_contributions(scope, arguments.get(2))?,
-                if_revision: value_u64(scope, arguments.get(3), "UnsupportedOperation")?,
+                buffer: BufferHandle::new(argument_u64(scope, arguments, 2)?),
+                contributions: editor_contributions(scope, arguments.get(3))?,
+                if_revision: value_u64(scope, arguments.get(4), "UnsupportedOperation")?,
             },
             HostOperationKind::ReplaceEditorContributions,
         )),
         "disposeEditorContributions" => Ok((
             HostOperation::DisposeEditorContributions {
-                buffer: BufferHandle::new(argument_u64(scope, arguments, 1)?),
+                buffer: BufferHandle::new(argument_u64(scope, arguments, 2)?),
             },
             HostOperationKind::DisposeEditorContributions,
         )),
+        "registerCommand" => Ok((
+            HostOperation::RegisterCommand {
+                name: required_string(scope, arguments.get(2), "UnsupportedOperation")?.into(),
+                title: required_string(scope, arguments.get(3), "UnsupportedOperation")?,
+            },
+            HostOperationKind::RegisterCommand,
+        )),
+        "unregisterCommand" => Ok((
+            HostOperation::UnregisterCommand {
+                registration: CommandRegistrationId::new(argument_u64(scope, arguments, 2)?),
+            },
+            HostOperationKind::UnregisterCommand,
+        )),
+        "invokeCommand" => Ok((
+            HostOperation::InvokeCommand {
+                command: Command {
+                    name: required_string(scope, arguments.get(2), "UnsupportedOperation")?.into(),
+                    arguments: command_argument_from_v8(scope, arguments.get(3))?,
+                },
+            },
+            HostOperationKind::InvokeCommand,
+        )),
+        "completeInlineCommand" => Ok((
+            HostOperation::CompleteInlineCommand {
+                invocation: CommandInvocationId::new(argument_u64(scope, arguments, 2)?),
+                outcome: command_outcome_from_v8(scope, arguments.get(3))
+                    .map_err(|_| "UnsupportedOperation")?,
+            },
+            HostOperationKind::CompleteInlineCommand,
+        )),
         _ => Err("UnsupportedOperation"),
+    }
+}
+
+fn optional_u64(
+    scope: &mut v8::PinnedRef<'_, v8::HandleScope>,
+    value: v8::Local<'_, v8::Value>,
+    error: &'static str,
+) -> Result<Option<u64>, &'static str> {
+    if value.is_null_or_undefined() {
+        Ok(None)
+    } else {
+        value_u64(scope, value, error).map(Some)
     }
 }
 
@@ -2194,6 +2521,64 @@ fn editor_contributions(
     Ok(contributions)
 }
 
+fn command_argument_from_v8(
+    scope: &mut v8::PinScope<'_, '_>,
+    value: v8::Local<'_, v8::Value>,
+) -> Result<CommandArgumentValue, &'static str> {
+    let json = v8::json::stringify(scope, value).ok_or("UnsupportedOperation")?;
+    serde_json::from_str(&json.to_rust_string_lossy(scope)).map_err(|_| "UnsupportedOperation")
+}
+
+fn command_argument_to_v8<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: &CommandArgumentValue,
+) -> Result<v8::Local<'s, v8::Value>, &'static str> {
+    if !command_argument_is_finite(value) {
+        return Err("UnsupportedOperation");
+    }
+    let json = serde_json::to_string(value).map_err(|_| "UnsupportedOperation")?;
+    let json = v8::String::new(scope, &json).ok_or("UnsupportedOperation")?;
+    v8::json::parse(scope, json).ok_or("UnsupportedOperation")
+}
+
+fn command_argument_is_finite(value: &CommandArgumentValue) -> bool {
+    match value {
+        CommandArgumentValue::Number(value) => value.is_finite(),
+        CommandArgumentValue::Array(values) => values.iter().all(command_argument_is_finite),
+        CommandArgumentValue::Object(values) => values.values().all(command_argument_is_finite),
+        CommandArgumentValue::Null
+        | CommandArgumentValue::Boolean(_)
+        | CommandArgumentValue::String(_) => true,
+    }
+}
+
+fn command_outcome_from_v8(
+    scope: &mut v8::PinScope<'_, '_>,
+    value: v8::Local<'_, v8::Value>,
+) -> Result<CommandOutcome, RuntimeError> {
+    let json = v8::json::stringify(scope, value).ok_or_else(|| {
+        RuntimeError::fatal(
+            RuntimeErrorKind::Engine,
+            "invalid command outcome from JavaScript",
+        )
+    })?;
+    serde_json::from_str(&json.to_rust_string_lossy(scope)).map_err(|error| {
+        RuntimeError::fatal(
+            RuntimeErrorKind::Engine,
+            format!("invalid command outcome from JavaScript: {error}"),
+        )
+    })
+}
+
+fn command_dispatch_to_v8<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    dispatch: &CommandInvokeDispatch,
+) -> Result<v8::Local<'s, v8::Value>, &'static str> {
+    let json = serde_json::to_string(dispatch).map_err(|_| "UnsupportedOperation")?;
+    let json = v8::String::new(scope, &json).ok_or("UnsupportedOperation")?;
+    v8::json::parse(scope, json).ok_or("UnsupportedOperation")
+}
+
 fn host_response_to_v8<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     operation: HostOperationKind,
@@ -2228,6 +2613,18 @@ fn host_response_to_v8<'s>(
             HostOperationKind::DisposeEditorContributions,
             HostResponseValue::EditorContributionsDisposed,
         ) => Ok(v8::undefined(scope).into()),
+        (
+            HostOperationKind::RegisterCommand,
+            HostResponseValue::CommandRegistered { registration },
+        ) => Ok(v8::Number::new(scope, registration.value() as f64).into()),
+        (HostOperationKind::UnregisterCommand, HostResponseValue::CommandUnregistered { .. })
+        | (
+            HostOperationKind::CompleteInlineCommand,
+            HostResponseValue::InlineCommandCompleted { .. },
+        ) => Ok(v8::undefined(scope).into()),
+        (HostOperationKind::InvokeCommand, HostResponseValue::CommandInvoked { dispatch }) => {
+            command_dispatch_to_v8(scope, &dispatch)
+        }
         _ => Err("UnsupportedOperation"),
     }
 }
@@ -2390,6 +2787,12 @@ fn execute_engine_turn(
             change,
             enqueued_at,
         } => capsule.start_buffer_change_turn(root, subscription, change, enqueued_at),
+        EngineWork::CommandInvocation {
+            invocation,
+            active_buffer,
+            result,
+        } => capsule.start_command_turn(root, invocation, active_buffer, result),
+        EngineWork::CancelCommand(invocation) => capsule.cancel_command_turn(root, invocation),
         EngineWork::Termination => capsule.finish_termination_turn(root),
     }))
     .unwrap_or_else(|_| {
@@ -2573,7 +2976,7 @@ fn test_entered_callback(
 mod tests {
     use super::*;
     use std::{
-        collections::HashSet,
+        collections::{BTreeMap, HashSet},
         num::NonZeroUsize,
         process::Command,
         sync::mpsc,
@@ -4139,6 +4542,640 @@ mod tests {
         assert_ne!(first_report.worker, second_report.worker);
         assert_eq!((&*first_report.value, &*second_report.value), ("1", "2"));
         assert!(!barrier.timed_out.load(Ordering::Acquire));
+        pool.shutdown();
+    }
+
+    #[test]
+    fn command_registration_delivers_arguments_and_captured_buffer() {
+        let pool = RuntimePool::new(PoolConfig::single_worker());
+        let runtime = key(51);
+        pool.load(runtime, IsolateConfig::default()).unwrap();
+        let registration = CommandRegistrationId::new(81);
+        let setup = pool
+            .execute_fixture_module(
+                runtime,
+                "file:///fixtures/command-registration.js",
+                r#"
+                    import { commands } from "knot:editor";
+                    globalThis.commandRegistration = await commands.register(
+                      "knot.fixture.arguments",
+                      async (context) => {
+                        globalThis.commandArguments = context.arguments;
+                        globalThis.commandSnapshot = await context.buffer.snapshot();
+                      },
+                    );
+                "#,
+            )
+            .unwrap();
+        let request = pool
+            .receive_request_timeout(Duration::from_secs(1))
+            .unwrap();
+        assert_eq!(request.invocation, None);
+        assert_eq!(
+            request.operation,
+            HostOperation::RegisterCommand {
+                name: "knot.fixture.arguments".into(),
+                title: "knot.fixture.arguments".into(),
+            }
+        );
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: request.id,
+            result: Ok(HostResponseValue::CommandRegistered { registration }),
+        })
+        .unwrap();
+        setup.wait().unwrap();
+
+        let arguments = CommandArgumentValue::Object(BTreeMap::from([
+            ("enabled".into(), CommandArgumentValue::Boolean(true)),
+            (
+                "values".into(),
+                CommandArgumentValue::Array(vec![
+                    CommandArgumentValue::Null,
+                    CommandArgumentValue::Number(3.5),
+                    CommandArgumentValue::String("lambda-λ".into()),
+                ]),
+            ),
+        ]));
+        let invocation = CommandInvocationId::new(901);
+        let execution = pool
+            .invoke_command(
+                runtime,
+                CommandInvocation {
+                    id: invocation,
+                    registration,
+                    extension: runtime.extension,
+                    lifecycle: runtime.lifecycle,
+                    arguments,
+                },
+                Some(BufferHandle::new(17)),
+            )
+            .unwrap();
+        let snapshot = pool
+            .receive_request_timeout(Duration::from_secs(1))
+            .unwrap();
+        assert_eq!(snapshot.invocation, Some(invocation));
+        assert_eq!(
+            snapshot.operation,
+            HostOperation::Snapshot {
+                buffer: BufferHandle::new(17),
+                range: None,
+            }
+        );
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: snapshot.id,
+            result: Ok(HostResponseValue::Snapshot(TextSnapshot {
+                text: SnapshotText::from_utf8("captured"),
+                range: ByteRange {
+                    start_byte_offset: 0,
+                    end_byte_offset: 8,
+                },
+                revision: 4,
+            })),
+        })
+        .unwrap();
+        assert_eq!(execution.wait().unwrap(), CommandOutcome::Completed);
+        pool.execute(
+            runtime,
+            "verify-command-registration.js",
+            r#"
+                if (!globalThis.commandArguments.enabled
+                    || globalThis.commandArguments.values[1] !== 3.5
+                    || globalThis.commandArguments.values[2] !== "lambda-λ") {
+                  throw new Error("command arguments were not preserved");
+                }
+                if (globalThis.commandSnapshot.text !== "captured"
+                    || globalThis.commandSnapshot.revision !== 4) {
+                  throw new Error("captured buffer was not used");
+                }
+            "#,
+        )
+        .unwrap()
+        .wait()
+        .unwrap();
+        pool.shutdown();
+    }
+
+    #[test]
+    fn command_registration_errors_are_stable_and_disposal_removes_the_handler() {
+        let pool = RuntimePool::new(PoolConfig::single_worker());
+        let runtime = key(52);
+        pool.load(runtime, IsolateConfig::default()).unwrap();
+
+        let duplicate = pool
+            .execute_fixture_module(
+                runtime,
+                "file:///fixtures/duplicate-command.js",
+                r#"
+                    import { commands } from "knot:editor";
+                    await commands.register("editor.copy", () => {});
+                "#,
+            )
+            .unwrap();
+        let request = pool
+            .receive_request_timeout(Duration::from_secs(1))
+            .unwrap();
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: request.id,
+            result: Err(HostRequestError::CommandNameInUse),
+        })
+        .unwrap();
+        let error = duplicate.wait().unwrap_err();
+        assert_eq!(error.kind(), RuntimeErrorKind::Rejection);
+        assert!(error.message().contains("CommandNameInUseError"), "{error}");
+
+        let registration = CommandRegistrationId::new(82);
+        let setup = pool
+            .execute_fixture_module(
+                runtime,
+                "file:///fixtures/disposable-command.js",
+                r#"
+                    import { commands } from "knot:editor";
+                    globalThis.disposableCommand = await commands.register(
+                      "knot.fixture.disposable",
+                      () => { globalThis.disposedHandlerRan = true; },
+                    );
+                "#,
+            )
+            .unwrap();
+        let request = pool
+            .receive_request_timeout(Duration::from_secs(1))
+            .unwrap();
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: request.id,
+            result: Ok(HostResponseValue::CommandRegistered { registration }),
+        })
+        .unwrap();
+        setup.wait().unwrap();
+
+        let disposal = pool
+            .execute(
+                runtime,
+                "dispose-command.js",
+                "globalThis.disposableCommand.dispose()",
+            )
+            .unwrap();
+        let request = pool
+            .receive_request_timeout(Duration::from_secs(1))
+            .unwrap();
+        assert_eq!(
+            request.operation,
+            HostOperation::UnregisterCommand { registration }
+        );
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: request.id,
+            result: Ok(HostResponseValue::CommandUnregistered { registration }),
+        })
+        .unwrap();
+        disposal.wait().unwrap();
+
+        let outcome = pool
+            .invoke_command(
+                runtime,
+                CommandInvocation {
+                    id: CommandInvocationId::new(902),
+                    registration,
+                    extension: runtime.extension,
+                    lifecycle: runtime.lifecycle,
+                    arguments: CommandArgumentValue::Null,
+                },
+                None,
+            )
+            .unwrap()
+            .wait()
+            .unwrap();
+        assert!(matches!(outcome, CommandOutcome::HandlerFailure { .. }));
+        pool.execute(
+            runtime,
+            "verify-disposed-command.js",
+            "if (globalThis.disposedHandlerRan) throw new Error('disposed handler ran')",
+        )
+        .unwrap()
+        .wait()
+        .unwrap();
+        pool.shutdown();
+    }
+
+    #[test]
+    fn command_same_runtime_nesting_preserves_order_and_frame_attribution() {
+        let pool = RuntimePool::new(PoolConfig::single_worker());
+        let runtime = key(53);
+        pool.load(runtime, IsolateConfig::default()).unwrap();
+        let outer_registration = CommandRegistrationId::new(83);
+        let inner_registration = CommandRegistrationId::new(84);
+        let setup = pool
+            .execute_fixture_module(
+                runtime,
+                "file:///fixtures/nested-commands.js",
+                r#"
+                    import { commands, editor } from "knot:editor";
+                    globalThis.commandEvents = [];
+                    await commands.register("knot.fixture.outer", async () => {
+                      globalThis.commandEvents.push("outer-before");
+                      const outcome = await commands.invoke("knot.fixture.inner", null);
+                      globalThis.commandEvents.push(`inner-${outcome.kind}`);
+                      await editor.activeBuffer();
+                      globalThis.commandEvents.push("outer-after");
+                    });
+                    await commands.register("knot.fixture.inner", async (context) => {
+                      globalThis.commandEvents.push("inner-before");
+                      await context.buffer.snapshot();
+                      globalThis.commandEvents.push("inner-after");
+                    });
+                "#,
+            )
+            .unwrap();
+        for registration in [outer_registration, inner_registration] {
+            let request = pool
+                .receive_request_timeout(Duration::from_secs(1))
+                .unwrap();
+            pool.respond(HostResponse {
+                extension: runtime.extension,
+                lifecycle: runtime.lifecycle,
+                id: request.id,
+                result: Ok(HostResponseValue::CommandRegistered { registration }),
+            })
+            .unwrap();
+        }
+        setup.wait().unwrap();
+
+        let outer = CommandInvocationId::new(903);
+        let inner = CommandInvocationId::new(904);
+        let execution = pool
+            .invoke_command(
+                runtime,
+                CommandInvocation {
+                    id: outer,
+                    registration: outer_registration,
+                    extension: runtime.extension,
+                    lifecycle: runtime.lifecycle,
+                    arguments: CommandArgumentValue::Null,
+                },
+                Some(BufferHandle::new(23)),
+            )
+            .unwrap();
+        let invoke = pool
+            .receive_request_timeout(Duration::from_secs(1))
+            .unwrap();
+        assert_eq!(invoke.invocation, Some(outer));
+        assert!(matches!(
+            invoke.operation,
+            HostOperation::InvokeCommand { .. }
+        ));
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: invoke.id,
+            result: Ok(HostResponseValue::CommandInvoked {
+                dispatch: CommandInvokeDispatch::Inline {
+                    invocation: inner,
+                    registration: inner_registration,
+                },
+            }),
+        })
+        .unwrap();
+
+        let snapshot = pool
+            .receive_request_timeout(Duration::from_secs(1))
+            .unwrap();
+        assert_eq!(snapshot.invocation, Some(inner));
+        assert_eq!(
+            snapshot.operation,
+            HostOperation::Snapshot {
+                buffer: BufferHandle::new(23),
+                range: None,
+            }
+        );
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: snapshot.id,
+            result: Ok(HostResponseValue::Snapshot(TextSnapshot {
+                text: SnapshotText::from_utf8("nested"),
+                range: ByteRange {
+                    start_byte_offset: 0,
+                    end_byte_offset: 6,
+                },
+                revision: 1,
+            })),
+        })
+        .unwrap();
+
+        let completion = pool
+            .receive_request_timeout(Duration::from_secs(1))
+            .unwrap();
+        assert_eq!(completion.invocation, Some(inner));
+        assert_eq!(
+            completion.operation,
+            HostOperation::CompleteInlineCommand {
+                invocation: inner,
+                outcome: CommandOutcome::Completed,
+            }
+        );
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: completion.id,
+            result: Ok(HostResponseValue::InlineCommandCompleted { invocation: inner }),
+        })
+        .unwrap();
+
+        let active = pool
+            .receive_request_timeout(Duration::from_secs(1))
+            .unwrap();
+        assert_eq!(active.invocation, Some(outer));
+        assert_eq!(active.operation, HostOperation::ActiveBuffer);
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: active.id,
+            result: Ok(HostResponseValue::ActiveBuffer(Some(BufferHandle::new(23)))),
+        })
+        .unwrap();
+        assert_eq!(execution.wait().unwrap(), CommandOutcome::Completed);
+        assert_eq!(
+            &*pool
+                .execute(
+                    runtime,
+                    "nested-order.js",
+                    "globalThis.commandEvents.join(',')"
+                )
+                .unwrap()
+                .wait()
+                .unwrap()
+                .value,
+            "outer-before,inner-before,inner-after,inner-completed,outer-after"
+        );
+        pool.shutdown();
+    }
+
+    #[test]
+    fn command_cancellation_rejects_suspended_host_work_and_prevents_late_resume() {
+        let pool = RuntimePool::new(PoolConfig::single_worker());
+        let runtime = key(54);
+        pool.load(runtime, IsolateConfig::default()).unwrap();
+        let registration = CommandRegistrationId::new(85);
+        let setup = pool
+            .execute_fixture_module(
+                runtime,
+                "file:///fixtures/cancelled-command.js",
+                r#"
+                    import { commands } from "knot:editor";
+                    await commands.register("knot.fixture.cancelled", async (context) => {
+                      await context.buffer.snapshot();
+                      globalThis.cancelledCommandResumed = true;
+                    });
+                "#,
+            )
+            .unwrap();
+        let request = pool
+            .receive_request_timeout(Duration::from_secs(1))
+            .unwrap();
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: request.id,
+            result: Ok(HostResponseValue::CommandRegistered { registration }),
+        })
+        .unwrap();
+        setup.wait().unwrap();
+
+        let invocation = CommandInvocationId::new(905);
+        let execution = pool
+            .invoke_command(
+                runtime,
+                CommandInvocation {
+                    id: invocation,
+                    registration,
+                    extension: runtime.extension,
+                    lifecycle: runtime.lifecycle,
+                    arguments: CommandArgumentValue::Null,
+                },
+                Some(BufferHandle::new(29)),
+            )
+            .unwrap();
+        let suspended = pool
+            .receive_request_timeout(Duration::from_secs(1))
+            .unwrap();
+        assert_eq!(suspended.invocation, Some(invocation));
+        pool.cancel_command(runtime, invocation).unwrap();
+        assert_eq!(execution.wait().unwrap(), CommandOutcome::Cancelled);
+        assert_eq!(
+            pool.respond(HostResponse {
+                extension: runtime.extension,
+                lifecycle: runtime.lifecycle,
+                id: suspended.id,
+                result: Ok(HostResponseValue::Snapshot(TextSnapshot {
+                    text: SnapshotText::from_utf8("late"),
+                    range: ByteRange {
+                        start_byte_offset: 0,
+                        end_byte_offset: 4,
+                    },
+                    revision: 1,
+                })),
+            }),
+            Err(RuntimeResponseError::UnknownRequest)
+        );
+        pool.execute(
+            runtime,
+            "verify-command-cancellation.js",
+            "if (globalThis.cancelledCommandResumed) throw new Error('cancelled command resumed')",
+        )
+        .unwrap()
+        .wait()
+        .unwrap();
+        pool.shutdown();
+    }
+
+    #[test]
+    fn command_handlers_classify_invalid_arguments_and_failures() {
+        let pool = RuntimePool::new(PoolConfig::single_worker());
+        let runtime = key(55);
+        pool.load(runtime, IsolateConfig::default()).unwrap();
+        let invalid_registration = CommandRegistrationId::new(86);
+        let failing_registration = CommandRegistrationId::new(87);
+        let setup = pool
+            .execute_fixture_module(
+                runtime,
+                "file:///fixtures/command-failures.js",
+                r#"
+                    import { commands } from "knot:editor";
+                    await commands.register("knot.fixture.invalid", () => {
+                      commands.invalidArguments("expected object argument");
+                    });
+                    await commands.register("knot.fixture.failure", () => {
+                      throw new Error("expected handler failure");
+                    });
+                "#,
+            )
+            .unwrap();
+        for registration in [invalid_registration, failing_registration] {
+            let request = pool
+                .receive_request_timeout(Duration::from_secs(1))
+                .unwrap();
+            pool.respond(HostResponse {
+                extension: runtime.extension,
+                lifecycle: runtime.lifecycle,
+                id: request.id,
+                result: Ok(HostResponseValue::CommandRegistered { registration }),
+            })
+            .unwrap();
+        }
+        setup.wait().unwrap();
+
+        let invalid = pool
+            .invoke_command(
+                runtime,
+                CommandInvocation {
+                    id: CommandInvocationId::new(906),
+                    registration: invalid_registration,
+                    extension: runtime.extension,
+                    lifecycle: runtime.lifecycle,
+                    arguments: CommandArgumentValue::String("wrong".into()),
+                },
+                None,
+            )
+            .unwrap()
+            .wait()
+            .unwrap();
+        assert!(matches!(
+            invalid,
+            CommandOutcome::InvalidArgument { ref message }
+                if message.contains("expected object argument")
+        ));
+
+        let failure = pool
+            .invoke_command(
+                runtime,
+                CommandInvocation {
+                    id: CommandInvocationId::new(907),
+                    registration: failing_registration,
+                    extension: runtime.extension,
+                    lifecycle: runtime.lifecycle,
+                    arguments: CommandArgumentValue::Null,
+                },
+                None,
+            )
+            .unwrap()
+            .wait()
+            .unwrap();
+        assert!(matches!(
+            failure,
+            CommandOutcome::HandlerFailure { ref message }
+                if message.contains("expected handler failure")
+        ));
+        pool.shutdown();
+    }
+
+    #[test]
+    fn command_arguments_reject_non_json_values_before_dispatch() {
+        let pool = RuntimePool::new(PoolConfig::single_worker());
+        let runtime = key(58);
+        pool.load(runtime, IsolateConfig::default()).unwrap();
+        pool.execute_fixture_module(
+            runtime,
+            "file:///fixtures/invalid-command-arguments.js",
+            r#"
+                import { commands } from "knot:editor";
+                const cyclic = {};
+                cyclic.self = cyclic;
+                for (const value of [NaN, () => {}, cyclic]) {
+                  let rejected = false;
+                  try {
+                    await commands.invoke("knot.fixture.missing", value);
+                  } catch (error) {
+                    rejected = error instanceof TypeError;
+                  }
+                  if (!rejected) throw new Error("invalid command arguments were accepted");
+                }
+            "#,
+        )
+        .unwrap()
+        .wait()
+        .unwrap();
+        assert!(
+            pool.receive_request_timeout(Duration::from_millis(20))
+                .is_none()
+        );
+        pool.shutdown();
+    }
+
+    #[test]
+    fn command_forced_termination_is_fatal_and_does_not_poison_a_neighbor() {
+        let pool = RuntimePool::new(PoolConfig::new(NonZeroUsize::new(2).unwrap()));
+        let runaway = key(56);
+        let neighbor = key(57);
+        pool.load(runaway, IsolateConfig::default()).unwrap();
+        pool.load(neighbor, IsolateConfig::default()).unwrap();
+        let registration = CommandRegistrationId::new(88);
+        let setup = pool
+            .execute_fixture_module(
+                runaway,
+                "file:///fixtures/runaway-command.js",
+                r#"
+                    import { commands } from "knot:editor";
+                    await commands.register("knot.fixture.runaway", () => {
+                      __knotTestEntered();
+                      while (true) {}
+                    });
+                "#,
+            )
+            .unwrap();
+        let request = pool
+            .receive_request_timeout(Duration::from_secs(1))
+            .unwrap();
+        pool.respond(HostResponse {
+            extension: runaway.extension,
+            lifecycle: runaway.lifecycle,
+            id: request.id,
+            result: Ok(HostResponseValue::CommandRegistered { registration }),
+        })
+        .unwrap();
+        setup.wait().unwrap();
+
+        let (entered_sender, entered) = mpsc::channel();
+        pool.capsule(runaway)
+            .unwrap()
+            .install_test_entered_signal(entered_sender);
+        let termination = pool.termination_handle(runaway).unwrap();
+        let execution = pool
+            .invoke_command(
+                runaway,
+                CommandInvocation {
+                    id: CommandInvocationId::new(908),
+                    registration,
+                    extension: runaway.extension,
+                    lifecycle: runaway.lifecycle,
+                    arguments: CommandArgumentValue::Null,
+                },
+                None,
+            )
+            .unwrap();
+        entered.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(termination.terminate());
+        assert_eq!(
+            execution.wait().unwrap_err().kind(),
+            RuntimeErrorKind::Terminated
+        );
+        assert_eq!(
+            &*pool
+                .execute(neighbor, "neighbor-after-command.js", "6 * 7")
+                .unwrap()
+                .wait()
+                .unwrap()
+                .value,
+            "42"
+        );
+        assert!(pool.execute(runaway, "late-command.js", "1").is_err());
         pool.shutdown();
     }
 
