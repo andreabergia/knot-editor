@@ -55,6 +55,12 @@ edits, change subscriptions, and one replaceable contribution set. The engine
 converts these values directly at the V8 boundary; immutable UTF-16 snapshot
 storage is externalized with one `Arc` reference retained until V8 releases it.
 
+Command handlers remain persistent JavaScript functions keyed by opaque
+foreground-issued registrations. Native-to-extension invocation enters as
+scheduler root work with explicit JSON-compatible arguments and its captured
+buffer. Handler outcomes cross back as Knot-owned structured results rather
+than V8 values.
+
 The engine retains the root script or module promise independently from its
 host-request promises. A pending root with no runnable JavaScript yields its
 worker in `AwaitingHostWork`. A validated response is queued against that
@@ -123,6 +129,16 @@ callback may yield for host work without holding a worker, and a rejected
 listener completes only that callback so later notifications still run. The
 runtime records maximum queued callback depth and enqueue-to-start lag as
 evidence; it does not cap, drop, coalesce, or delay notifications as policy.
+
+The foreground command bridge owns the lifecycle-scoped catalog and one serial
+invocation tree. It captures the active buffer on the root, inherits it through
+children, returns same-lifecycle children to JavaScript as inline
+continuations, and defers cross-lifecycle or native outcomes until their work
+settles. Each parent has at most one unfinished child, and ancestry cycles are
+rejected as unavailable. Cancellation marks the tree, wakes a suspended
+isolate turn, aborts its JavaScript signal, rejects its pending host requests,
+and rejects late responses. Forced V8 interruption remains fatal only to the
+affected lifecycle.
 
 The foreground buffer bridge owns active-buffer lookup, lifecycle-scoped
 subscriptions, revision validation, model mutation, contribution ownership,

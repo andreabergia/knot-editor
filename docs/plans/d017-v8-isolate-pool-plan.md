@@ -1,6 +1,6 @@
 # D017: Production V8 Isolate Pool and Scheduling
 
-Status: in progress; Tasks 1-6 implemented, Task 6 awaiting review.
+Status: in progress; Tasks 1-7 implemented, Task 7 awaiting review.
 
 This slice replaces the prototype `deno_core` runtime with a direct
 `rusty_v8` host and runs persistent extension isolates on a bounded worker
@@ -276,15 +276,15 @@ Manual review gate:
 
 ## Task 7: Restore commands and nested composition
 
-- ⬜ Restore command registration, unregistration, invocation, structured
+- ✅ Restore command registration, unregistration, invocation, structured
   outcomes, argument validation, and handler error classification.
-- ⬜ Model an invoked extension handler as a root command frame and preserve its
+- ✅ Model an invoked extension handler as a root command frame and preserve its
   captured active-buffer target and invocation ancestry across yields.
-- ⬜ Admit awaited same-extension command invocation as a nested continuation
+- ✅ Admit awaited same-extension command invocation as a nested continuation
   of the active tree rather than an unrelated queued root.
-- ⬜ Keep one unfinished child per parent, reject ancestry cycles, and ensure
+- ✅ Keep one unfinished child per parent, reject ancestry cycles, and ensure
   unrelated callbacks wait until the active root tree settles.
-- ⬜ Restore explicit command cancellation and fatal forced interruption with
+- ✅ Restore explicit command cancellation and fatal forced interruption with
   exact lifecycle cleanup.
 
 Automated checks:

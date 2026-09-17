@@ -58,9 +58,12 @@ group until another interaction boundary.
 Text supplied by the platform and IME composition enter the view's input
 handler; pointer selection and scrolling remain view input protocols.
 
-The extension-capable fixture dispatcher and product V8 bridge are unavailable
-while D017 rebuilds runtime integration. Their serial root-tree and nested
-composition contracts remain recorded in the D017 restoration ledger.
+The foreground extension command bridge and pooled V8 command runtime preserve
+serial root trees, captured buffers, structured outcomes, cancellation, and
+nested composition. Same-lifecycle children execute inline in their parent's
+scheduler root; native and cross-lifecycle children await an explicit
+foreground outcome. Product ownership of the pool and transport loop remains
+for D017's final integration checkpoint.
 
 The command palette keeps the weak focus target captured before the palette
 takes visible focus. Palette controls target the palette, while confirmation
