@@ -61,6 +61,13 @@ scheduler root work with explicit JSON-compatible arguments and its captured
 buffer. Handler outcomes cross back as Knot-owned structured results rather
 than V8 values.
 
+Tree and completion providers remain persistent JavaScript objects keyed by
+opaque foreground-issued registrations. Native child and completion requests
+enter as unrelated scheduler roots and return only typed semantic data with
+their registration, generation, and revision identities preserved. Callback
+throws and invalid results become recoverable per-request provider failures;
+they do not fail the extension lifecycle.
+
 The engine retains the root script or module promise independently from its
 host-request promises. A pending root with no runnable JavaScript yields its
 worker in `AwaitingHostWork`. A validated response is queued against that
@@ -130,6 +137,15 @@ listener completes only that callback so later notifications still run. The
 runtime records maximum queued callback depth and enqueue-to-start lag as
 evidence; it does not cap, drop, coalesce, or delay notifications as policy.
 
+Semantic provider callbacks use the same unrelated-root queue. A provider call
+therefore waits behind an active command, buffer listener, or provider call,
+while an asynchronous provider that awaits host work releases its worker.
+Dropping the native receiver cancels a queued call before entry or wakes an
+active call to release its persistent promise and pending host resolvers.
+Unregistration removes the JavaScript provider synchronously, and unload or
+pool shutdown settles outstanding native callback completions during the
+ordinary lifecycle teardown.
+
 The foreground command bridge owns the lifecycle-scoped catalog and one serial
 invocation tree. It captures the active buffer on the root, inherits it through
 children, returns same-lifecycle children to JavaScript as inline
@@ -145,3 +161,11 @@ subscriptions, revision validation, model mutation, contribution ownership,
 and change fan-out. It revalidates cancellation inside the foreground update
 immediately before mutation. Product ownership of the pool and transport loop
 remains for the later integration checkpoint.
+
+The foreground semantic bridge owns lifecycle admission, tree registration
+routing, and the shell-wide completion registry. Native tree views and
+view-owned completion controllers remain authoritative for parent,
+registration, generation, buffer-revision, and lifecycle validation, so late
+or stale provider results are ignored without involving V8. Product wiring of
+their events to the application-owned pool remains for the later integration
+checkpoint.

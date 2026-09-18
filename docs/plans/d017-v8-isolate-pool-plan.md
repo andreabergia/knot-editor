@@ -1,6 +1,6 @@
 # D017: Production V8 Isolate Pool and Scheduling
 
-Status: in progress; Tasks 1-7 implemented, Task 7 awaiting review.
+Status: in progress; Tasks 1-8 implemented, Task 8 awaiting review.
 
 This slice replaces the prototype `deno_core` runtime with a direct
 `rusty_v8` host and runs persistent extension isolates on a bounded worker
@@ -303,13 +303,13 @@ Manual review gate:
 
 ## Task 8: Restore semantic provider callbacks
 
-- ⬜ Restore tree-provider registration, invalidation, unregistration, child
+- ✅ Restore tree-provider registration, invalidation, unregistration, child
   requests, generation propagation, and recoverable provider errors.
-- ⬜ Restore completion-provider registration, unregistration, requests,
+- ✅ Restore completion-provider registration, unregistration, requests,
   revision/generation propagation, and recoverable provider errors.
-- ⬜ Queue provider calls as unrelated roots and preserve serial callback
+- ✅ Queue provider calls as unrelated roots and preserve serial callback
   semantics when commands or other providers are active.
-- ⬜ Ensure dropped native requests, provider removal, extension unload, and
+- ✅ Ensure dropped native requests, provider removal, extension unload, and
   stale results settle cleanly without retaining isolate state.
 
 Automated checks:
