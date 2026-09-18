@@ -49,6 +49,8 @@ function request(operation, ...arguments_) {
 const buffers = new Map();
 const commandHandlers = new Map();
 const bufferChangeListeners = new Map();
+const treeProviders = new Map();
+const completionProviders = new Map();
 const activeCommandFrames = [];
 const snapshotTables = new WeakMap();
 
@@ -338,12 +340,77 @@ export async function registerTreeDataProvider(viewId, provider) {
   if (typeof viewId !== "string" || typeof provider?.getChildren !== "function") {
     throw new TypeError("workbench.registerTreeDataProvider requires a view ID and getChildren provider");
   }
-  return await request("registerTreeDataProvider", viewId, provider);
+  const registration = await request("registerTreeDataProvider", viewId);
+  treeProviders.set(registration, provider);
+  let disposed = false;
+  return Object.freeze({
+    invalidate(parentId) {
+      if (disposed) return;
+      void request("invalidateTreeDataProvider", registration, parentId ?? null);
+    },
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      treeProviders.delete(registration);
+      void request("unregisterTreeDataProvider", registration);
+    },
+  });
 }
+
+globalThis.__knotRequestTreeChildren = async (registration, parentId, generation) => {
+  const provider = treeProviders.get(registration);
+  if (!provider) {
+    return { error: "tree data provider is disposed" };
+  }
+  try {
+    return { items: Array.from(await provider.getChildren(parentId)) };
+  } catch (error) {
+    return { error: String(error?.stack ?? error) };
+  }
+};
 
 export async function registerCompletionProvider(label, provider) {
   if (typeof label !== "string" || typeof provider?.provideCompletions !== "function") {
     throw new TypeError("editor.registerCompletionProvider requires a label and provideCompletions provider");
   }
-  return await request("registerCompletionProvider", label, provider);
+  const registration = await request("registerCompletionProvider", label);
+  completionProviders.set(registration, provider);
+  let disposed = false;
+  return Object.freeze({
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      completionProviders.delete(registration);
+      void request("unregisterCompletionProvider", registration);
+    },
+  });
 }
+
+globalThis.__knotRequestCompletions = async (
+  registration,
+  handle,
+  revision,
+  cursorByteOffset,
+  prefix,
+  generation,
+) => {
+  const provider = completionProviders.get(registration);
+  if (!provider) {
+    return { error: "completion provider is disposed" };
+  }
+  try {
+    const provided = await provider.provideCompletions(Object.freeze({
+      buffer: bufferFor(handle), revision, cursorByteOffset, prefix, generation,
+    }));
+    return {
+      items: Array.from(provided, (item) => {
+        if (typeof item?.label !== "string" || typeof item?.insertText !== "string") {
+          throw new TypeError("completion items require string label and insertText properties");
+        }
+        return Object.freeze({ label: item.label, insertText: item.insertText });
+      }),
+    };
+  } catch (error) {
+    return { error: String(error?.stack ?? error) };
+  }
+};

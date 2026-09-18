@@ -8,7 +8,7 @@ use std::{
     ptr,
     sync::{
         Arc, Mutex, Once,
-        atomic::{AtomicU8, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
         mpsc,
     },
     thread::ThreadId,
@@ -17,17 +17,16 @@ use std::{
 
 use url::Url;
 
-#[cfg(test)]
-use std::sync::atomic::AtomicBool;
-
 use super::{
     lifecycle::{ExtensionKey, Failure},
     protocol::{
         BufferChange, BufferHandle, BufferSubscriptionId, ByteRange, Command, CommandArgumentValue,
         CommandInvocation, CommandInvocationId, CommandInvokeDispatch, CommandOutcome,
-        CommandRegistrationId, DecorationToken, EditorContribution, ExtensionId, GutterToken,
-        HostOperation, HostRequest, HostResponse, HostResponseValue, RequestId, SnapshotText,
-        TextEdit, TextSnapshot,
+        CommandRegistrationId, CompletionProviderError, CompletionProviderRegistrationId,
+        CompletionRequest, CompletionResponse, CompletionResultItem, DecorationToken,
+        EditorContribution, ExtensionId, GutterToken, HostOperation, HostRequest, HostResponse,
+        HostResponseValue, RequestId, SnapshotText, TextEdit, TextSnapshot, TreeChildrenRequest,
+        TreeChildrenResponse, TreeItem, TreeProviderError, TreeProviderRegistrationId,
     },
     scheduler::{
         CompletionOutcome, PoolConfig, RootId, SchedulerError, SchedulerHandle, SchedulerPool,
@@ -302,6 +301,11 @@ enum HostOperationKind {
     UnregisterCommand,
     InvokeCommand,
     CompleteInlineCommand,
+    RegisterTreeProvider,
+    InvalidateTreeProvider,
+    UnregisterTreeProvider,
+    RegisterCompletionProvider,
+    UnregisterCompletionProvider,
 }
 
 struct ActiveExecution {
@@ -314,6 +318,16 @@ struct ActiveExecution {
 enum ActiveCompletion {
     Report(mpsc::Sender<Result<ExecutionReport, RuntimeError>>),
     Command(mpsc::Sender<Result<CommandOutcome, RuntimeError>>),
+    Tree {
+        request: TreeChildrenRequest,
+        result: mpsc::Sender<Result<TreeChildrenResponse, RuntimeError>>,
+        completed: Arc<AtomicBool>,
+    },
+    Completion {
+        request: CompletionRequest,
+        result: mpsc::Sender<Result<CompletionResponse, RuntimeError>>,
+        completed: Arc<AtomicBool>,
+    },
     Detached(&'static str),
 }
 
@@ -333,6 +347,73 @@ struct BufferChangeQueueState {
 enum RootEvaluation {
     Script { source: Arc<str> },
     Module { source: Arc<str> },
+}
+
+enum ProviderCall {
+    Tree {
+        request: TreeChildrenRequest,
+        result: mpsc::Sender<Result<TreeChildrenResponse, RuntimeError>>,
+        cancelled: Arc<AtomicBool>,
+        completed: Arc<AtomicBool>,
+    },
+    Completion {
+        request: CompletionRequest,
+        result: mpsc::Sender<Result<CompletionResponse, RuntimeError>>,
+        cancelled: Arc<AtomicBool>,
+        completed: Arc<AtomicBool>,
+    },
+}
+
+impl ProviderCall {
+    fn cancelled(&self) -> bool {
+        match self {
+            Self::Tree { cancelled, .. } | Self::Completion { cancelled, .. } => {
+                cancelled.load(Ordering::Acquire)
+            }
+        }
+    }
+
+    fn complete_with_error(self, error: RuntimeError) {
+        match self {
+            Self::Tree {
+                result, completed, ..
+            } => {
+                completed.store(true, Ordering::Release);
+                let _ = result.send(Err(error));
+            }
+            Self::Completion {
+                result, completed, ..
+            } => {
+                completed.store(true, Ordering::Release);
+                let _ = result.send(Err(error));
+            }
+        }
+    }
+
+    fn into_active_completion(self) -> ActiveCompletion {
+        match self {
+            Self::Tree {
+                request,
+                result,
+                completed,
+                ..
+            } => ActiveCompletion::Tree {
+                request,
+                result,
+                completed,
+            },
+            Self::Completion {
+                request,
+                result,
+                completed,
+                ..
+            } => ActiveCompletion::Completion {
+                request,
+                result,
+                completed,
+            },
+        }
+    }
 }
 
 struct FixtureModuleRegistry {
@@ -808,6 +889,157 @@ impl RuntimeCapsule {
         self.inspect_active(try_catch, root)
     }
 
+    fn start_provider_turn(&self, root: RootId, call: ProviderCall) -> TurnOutcome {
+        if call.cancelled() {
+            call.complete_with_error(RuntimeError::fatal(
+                RuntimeErrorKind::Cancelled,
+                "semantic provider request was dropped",
+            ));
+            return TurnOutcome::Completed;
+        }
+        if self.status.load(Ordering::Acquire) != ACTIVE {
+            let error = self.status_error();
+            call.complete_with_error(error.clone());
+            return fatal_or_completed(&error);
+        }
+        let data = self.data.lock().unwrap();
+        let Some(data) = data.as_ref() else {
+            let error = RuntimeError::disposed();
+            call.complete_with_error(error.clone());
+            return TurnOutcome::Fatal(Failure::new(error.to_string()));
+        };
+        self.local_state.rejections.lock().unwrap().clear();
+        *self.local_state.current_root.lock().unwrap() = Some(root);
+        let mut locker = data.isolate.lock();
+        let scope = pin!(v8::HandleScope::new(&mut *locker));
+        let mut scope = scope.init();
+        let context = v8::Local::new(&scope, &data.context);
+        let scope = &mut v8::ContextScope::new(&mut scope, context);
+        v8::tc_scope!(let try_catch, scope);
+        let (source, evaluated) = match &call {
+            ProviderCall::Tree { request, .. } => {
+                let source = "knot:tree-provider";
+                let value = (|| {
+                    let name = v8::String::new(try_catch, "__knotRequestTreeChildren")?;
+                    let function = context.global(try_catch).get(try_catch, name.into())?;
+                    let function = v8::Local::<v8::Function>::try_from(function).ok()?;
+                    let parent = request.parent_id.as_ref().map_or_else(
+                        || Some(v8::null(try_catch).into()),
+                        |parent| v8::String::new(try_catch, parent).map(Into::into),
+                    )?;
+                    function.call(
+                        try_catch,
+                        v8::undefined(try_catch).into(),
+                        &[
+                            v8::Number::new(try_catch, request.registration.value() as f64).into(),
+                            parent,
+                            v8::Number::new(try_catch, request.generation as f64).into(),
+                        ],
+                    )
+                })();
+                (source, value)
+            }
+            ProviderCall::Completion { request, .. } => {
+                let source = "knot:completion-provider";
+                let value = (|| {
+                    let name = v8::String::new(try_catch, "__knotRequestCompletions")?;
+                    let function = context.global(try_catch).get(try_catch, name.into())?;
+                    let function = v8::Local::<v8::Function>::try_from(function).ok()?;
+                    let prefix = v8::String::new(try_catch, &request.prefix)?;
+                    function.call(
+                        try_catch,
+                        v8::undefined(try_catch).into(),
+                        &[
+                            v8::Number::new(try_catch, request.registration.value() as f64).into(),
+                            v8::Number::new(try_catch, request.buffer.value() as f64).into(),
+                            v8::Number::new(try_catch, request.revision as f64).into(),
+                            v8::Number::new(try_catch, request.cursor_byte_offset as f64).into(),
+                            prefix.into(),
+                            v8::Number::new(try_catch, request.generation as f64).into(),
+                        ],
+                    )
+                })();
+                (source, value)
+            }
+        };
+        let Some(value) = evaluated else {
+            let error = self.execution_error(try_catch, source);
+            *self.local_state.current_root.lock().unwrap() = None;
+            call.complete_with_error(error.clone());
+            if !error.is_fatal() {
+                try_catch.reset();
+                self.reject_pending_for_root(try_catch, root);
+            }
+            return fatal_or_completed(&error);
+        };
+        let promise = if let Ok(promise) = v8::Local::<v8::Promise>::try_from(value) {
+            promise
+        } else {
+            let resolver = v8::PromiseResolver::new(try_catch).expect("V8 resolver allocation");
+            resolver.resolve(try_catch, value);
+            resolver.get_promise(try_catch)
+        };
+        promise.mark_as_handled();
+        *self.local_state.active.lock().unwrap() = Some(ActiveExecution {
+            root,
+            promise: v8::Global::new(try_catch, promise),
+            source: source.into(),
+            completion: call.into_active_completion(),
+        });
+        try_catch.perform_microtask_checkpoint();
+        *self.local_state.current_root.lock().unwrap() = None;
+        self.inspect_active(try_catch, root)
+    }
+
+    fn cancel_provider_turn(&self, root: RootId) -> TurnOutcome {
+        let data = self.data.lock().unwrap();
+        let Some(data) = data.as_ref() else {
+            return TurnOutcome::Fatal(Failure::new("extension isolate is disposed"));
+        };
+        let mut locker = data.isolate.lock();
+        let scope = pin!(v8::HandleScope::new(&mut *locker));
+        let mut scope = scope.init();
+        let context = v8::Local::new(&scope, &data.context);
+        let scope = &mut v8::ContextScope::new(&mut scope, context);
+        self.reject_pending_for_root(scope, root);
+        let active = self.local_state.active.lock().unwrap().take();
+        let Some(active) = active else {
+            return TurnOutcome::Completed;
+        };
+        if active.root != root {
+            *self.local_state.active.lock().unwrap() = Some(active);
+            return TurnOutcome::Fatal(Failure::new("extension root execution identity changed"));
+        }
+        let error = RuntimeError::fatal(
+            RuntimeErrorKind::Cancelled,
+            "semantic provider request was dropped",
+        );
+        match active.completion {
+            ActiveCompletion::Tree {
+                result, completed, ..
+            } => {
+                completed.store(true, Ordering::Release);
+                let _ = result.send(Err(error));
+            }
+            ActiveCompletion::Completion {
+                result, completed, ..
+            } => {
+                completed.store(true, Ordering::Release);
+                let _ = result.send(Err(error));
+            }
+            completion => {
+                *self.local_state.active.lock().unwrap() = Some(ActiveExecution {
+                    completion,
+                    ..active
+                });
+                return TurnOutcome::Fatal(Failure::new(
+                    "provider cancellation addressed a non-provider root",
+                ));
+            }
+        }
+        TurnOutcome::Completed
+    }
+
     fn cancel_command_turn(&self, root: RootId, invocation: CommandInvocationId) -> TurnOutcome {
         self.local_state
             .cancelled_commands
@@ -1084,6 +1316,44 @@ impl RuntimeCapsule {
                             rejection.map_or_else(|| command_outcome_from_v8(scope, value), Err);
                         let _ = sender.send(result);
                     }
+                    ActiveCompletion::Tree {
+                        request,
+                        result,
+                        completed,
+                    } => {
+                        let response = match rejection {
+                            None => tree_response_from_v8(scope, request, value),
+                            Some(error) => TreeChildrenResponse {
+                                registration: request.registration,
+                                parent_id: request.parent_id,
+                                generation: request.generation,
+                                result: Err(TreeProviderError {
+                                    message: error.to_string(),
+                                }),
+                            },
+                        };
+                        completed.store(true, Ordering::Release);
+                        let _ = result.send(Ok(response));
+                    }
+                    ActiveCompletion::Completion {
+                        request,
+                        result,
+                        completed,
+                    } => {
+                        let response = rejection.map_or_else(
+                            || completion_response_from_v8(scope, request.clone(), value),
+                            |error| CompletionResponse {
+                                registration: request.registration,
+                                revision: request.revision,
+                                generation: request.generation,
+                                result: Err(CompletionProviderError {
+                                    message: error.to_string(),
+                                }),
+                            },
+                        );
+                        completed.store(true, Ordering::Release);
+                        let _ = result.send(Ok(response));
+                    }
                     ActiveCompletion::Detached(label) => {
                         if let Some(error) = rejection {
                             eprintln!("[knot] {label} failed: {error}");
@@ -1117,6 +1387,36 @@ impl RuntimeCapsule {
                     ActiveCompletion::Command(sender) => {
                         let _ = sender.send(Ok(CommandOutcome::HandlerFailure {
                             message: error.to_string(),
+                        }));
+                    }
+                    ActiveCompletion::Tree {
+                        request,
+                        result,
+                        completed,
+                    } => {
+                        completed.store(true, Ordering::Release);
+                        let _ = result.send(Ok(TreeChildrenResponse {
+                            registration: request.registration,
+                            parent_id: request.parent_id,
+                            generation: request.generation,
+                            result: Err(TreeProviderError {
+                                message: error.to_string(),
+                            }),
+                        }));
+                    }
+                    ActiveCompletion::Completion {
+                        request,
+                        result,
+                        completed,
+                    } => {
+                        completed.store(true, Ordering::Release);
+                        let _ = result.send(Ok(CompletionResponse {
+                            registration: request.registration,
+                            revision: request.revision,
+                            generation: request.generation,
+                            result: Err(CompletionProviderError {
+                                message: error.to_string(),
+                            }),
                         }));
                     }
                     ActiveCompletion::Detached(label) => {
@@ -1204,6 +1504,18 @@ impl RuntimeCapsule {
                     let _ = result.send(Err(error));
                 }
                 ActiveCompletion::Command(result) => {
+                    let _ = result.send(Err(error));
+                }
+                ActiveCompletion::Tree {
+                    result, completed, ..
+                } => {
+                    completed.store(true, Ordering::Release);
+                    let _ = result.send(Err(error));
+                }
+                ActiveCompletion::Completion {
+                    result, completed, ..
+                } => {
+                    completed.store(true, Ordering::Release);
                     let _ = result.send(Err(error));
                 }
                 ActiveCompletion::Detached(_) => {}
@@ -1446,6 +1758,8 @@ enum EngineWork {
         result: mpsc::Sender<Result<CommandOutcome, RuntimeError>>,
     },
     CancelCommand(CommandInvocationId),
+    Provider(ProviderCall),
+    CancelProvider,
     Termination,
 }
 
@@ -1505,6 +1819,69 @@ impl RuntimeCommandExecution {
                 )),
             },
         }
+    }
+}
+
+/// Completion side of one native-to-extension semantic provider callback.
+pub(crate) struct RuntimeProviderExecution<T> {
+    result: mpsc::Receiver<Result<T, RuntimeError>>,
+    completion: mpsc::Receiver<CompletionOutcome>,
+    cancellation: Option<ProviderCancellation>,
+}
+
+struct ProviderCancellation {
+    key: ExtensionKey,
+    root: RootId,
+    capsule: Arc<RuntimeCapsule>,
+    scheduler: SchedulerHandle<EngineTurn>,
+    cancelled: Arc<AtomicBool>,
+    completed: Arc<AtomicBool>,
+}
+
+impl<T> RuntimeProviderExecution<T> {
+    pub(crate) fn wait(mut self) -> Result<T, RuntimeError> {
+        let result = match self.result.recv() {
+            Ok(result) => {
+                let _ = self.completion.recv();
+                result
+            }
+            Err(_) => match self.completion.recv() {
+                Ok(CompletionOutcome::Cancelled) => Err(RuntimeError::fatal(
+                    RuntimeErrorKind::Cancelled,
+                    "semantic provider request was cancelled",
+                )),
+                Ok(CompletionOutcome::Failed(failure)) => Err(RuntimeError::fatal(
+                    RuntimeErrorKind::LifecycleFailed,
+                    failure.message().to_owned(),
+                )),
+                Ok(CompletionOutcome::Completed) | Err(_) => Err(RuntimeError::fatal(
+                    RuntimeErrorKind::Engine,
+                    "extension worker closed without a provider response",
+                )),
+            },
+        };
+        self.cancellation = None;
+        result
+    }
+}
+
+impl<T> Drop for RuntimeProviderExecution<T> {
+    fn drop(&mut self) {
+        let Some(cancellation) = self.cancellation.take() else {
+            return;
+        };
+        if cancellation.completed.load(Ordering::Acquire) {
+            return;
+        }
+        cancellation.cancelled.store(true, Ordering::Release);
+        let _ = cancellation.scheduler.enqueue_continuation(
+            cancellation.key,
+            cancellation.root,
+            EngineTurn {
+                capsule: cancellation.capsule,
+                work: EngineWork::CancelProvider,
+            },
+        );
     }
 }
 
@@ -1656,6 +2033,76 @@ impl RuntimePool {
             },
         )?;
         Ok(RuntimeCommandExecution { result, completion })
+    }
+
+    pub(crate) fn request_tree_children(
+        &self,
+        key: ExtensionKey,
+        request: TreeChildrenRequest,
+    ) -> Result<RuntimeProviderExecution<TreeChildrenResponse>, RuntimePoolError> {
+        let capsule = self.capsule(key)?;
+        let (result_sender, result) = mpsc::channel();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let completed = Arc::new(AtomicBool::new(false));
+        let (root, completion) = self.scheduler_handle.enqueue_root(
+            key,
+            EngineTurn {
+                capsule: Arc::clone(&capsule),
+                work: EngineWork::Provider(ProviderCall::Tree {
+                    request,
+                    result: result_sender,
+                    cancelled: Arc::clone(&cancelled),
+                    completed: Arc::clone(&completed),
+                }),
+            },
+        )?;
+        Ok(RuntimeProviderExecution {
+            result,
+            completion,
+            cancellation: Some(ProviderCancellation {
+                key,
+                root,
+                capsule,
+                scheduler: self.scheduler_handle.clone(),
+                cancelled,
+                completed,
+            }),
+        })
+    }
+
+    pub(crate) fn request_completions(
+        &self,
+        key: ExtensionKey,
+        request: CompletionRequest,
+    ) -> Result<RuntimeProviderExecution<CompletionResponse>, RuntimePoolError> {
+        let capsule = self.capsule(key)?;
+        let (result_sender, result) = mpsc::channel();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let completed = Arc::new(AtomicBool::new(false));
+        let (root, completion) = self.scheduler_handle.enqueue_root(
+            key,
+            EngineTurn {
+                capsule: Arc::clone(&capsule),
+                work: EngineWork::Provider(ProviderCall::Completion {
+                    request,
+                    result: result_sender,
+                    cancelled: Arc::clone(&cancelled),
+                    completed: Arc::clone(&completed),
+                }),
+            },
+        )?;
+        Ok(RuntimeProviderExecution {
+            result,
+            completion,
+            cancellation: Some(ProviderCancellation {
+                key,
+                root,
+                capsule,
+                scheduler: self.scheduler_handle.clone(),
+                cancelled,
+                completed,
+            }),
+        })
     }
 
     pub(crate) fn cancel_command(
@@ -2353,6 +2800,39 @@ fn parse_host_operation<'s, 'i>(
             },
             HostOperationKind::CompleteInlineCommand,
         )),
+        "registerTreeDataProvider" => Ok((
+            HostOperation::RegisterTreeProvider {
+                view_id: required_string(scope, arguments.get(2), "UnsupportedOperation")?,
+            },
+            HostOperationKind::RegisterTreeProvider,
+        )),
+        "invalidateTreeDataProvider" => Ok((
+            HostOperation::InvalidateTreeProvider {
+                registration: TreeProviderRegistrationId::new(argument_u64(scope, arguments, 2)?),
+                parent_id: optional_string(scope, arguments.get(3), "UnsupportedOperation")?,
+            },
+            HostOperationKind::InvalidateTreeProvider,
+        )),
+        "unregisterTreeDataProvider" => Ok((
+            HostOperation::UnregisterTreeProvider {
+                registration: TreeProviderRegistrationId::new(argument_u64(scope, arguments, 2)?),
+            },
+            HostOperationKind::UnregisterTreeProvider,
+        )),
+        "registerCompletionProvider" => Ok((
+            HostOperation::RegisterCompletionProvider {
+                label: required_string(scope, arguments.get(2), "UnsupportedOperation")?,
+            },
+            HostOperationKind::RegisterCompletionProvider,
+        )),
+        "unregisterCompletionProvider" => Ok((
+            HostOperation::UnregisterCompletionProvider {
+                registration: CompletionProviderRegistrationId::new(argument_u64(
+                    scope, arguments, 2,
+                )?),
+            },
+            HostOperationKind::UnregisterCompletionProvider,
+        )),
         _ => Err("UnsupportedOperation"),
     }
 }
@@ -2570,6 +3050,53 @@ fn command_outcome_from_v8(
     })
 }
 
+fn provider_items_from_v8<T: serde::de::DeserializeOwned>(
+    scope: &mut v8::PinScope<'_, '_>,
+    value: v8::Local<'_, v8::Value>,
+) -> Result<Vec<T>, String> {
+    let json = v8::json::stringify(scope, value)
+        .ok_or_else(|| "semantic provider returned a non-serializable result".to_owned())?;
+    let value: serde_json::Value = serde_json::from_str(&json.to_rust_string_lossy(scope))
+        .map_err(|error| format!("invalid semantic provider result: {error}"))?;
+    if let Some(error) = value.get("error").and_then(serde_json::Value::as_str) {
+        return Err(error.to_owned());
+    }
+    let items = value
+        .get("items")
+        .cloned()
+        .ok_or_else(|| "semantic provider result is missing items".to_owned())?;
+    serde_json::from_value(items)
+        .map_err(|error| format!("invalid semantic provider items: {error}"))
+}
+
+fn tree_response_from_v8(
+    scope: &mut v8::PinScope<'_, '_>,
+    request: TreeChildrenRequest,
+    value: v8::Local<'_, v8::Value>,
+) -> TreeChildrenResponse {
+    TreeChildrenResponse {
+        registration: request.registration,
+        parent_id: request.parent_id,
+        generation: request.generation,
+        result: provider_items_from_v8::<TreeItem>(scope, value)
+            .map_err(|message| TreeProviderError { message }),
+    }
+}
+
+fn completion_response_from_v8(
+    scope: &mut v8::PinScope<'_, '_>,
+    request: CompletionRequest,
+    value: v8::Local<'_, v8::Value>,
+) -> CompletionResponse {
+    CompletionResponse {
+        registration: request.registration,
+        revision: request.revision,
+        generation: request.generation,
+        result: provider_items_from_v8::<CompletionResultItem>(scope, value)
+            .map_err(|message| CompletionProviderError { message }),
+    }
+}
+
 fn command_dispatch_to_v8<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     dispatch: &CommandInvokeDispatch,
@@ -2625,6 +3152,23 @@ fn host_response_to_v8<'s>(
         (HostOperationKind::InvokeCommand, HostResponseValue::CommandInvoked { dispatch }) => {
             command_dispatch_to_v8(scope, &dispatch)
         }
+        (
+            HostOperationKind::RegisterTreeProvider,
+            HostResponseValue::TreeProviderRegistered { registration },
+        ) => Ok(v8::Number::new(scope, registration.value() as f64).into()),
+        (HostOperationKind::InvalidateTreeProvider, HostResponseValue::TreeProviderInvalidated)
+        | (
+            HostOperationKind::UnregisterTreeProvider,
+            HostResponseValue::TreeProviderUnregistered { .. },
+        )
+        | (
+            HostOperationKind::UnregisterCompletionProvider,
+            HostResponseValue::CompletionProviderUnregistered { .. },
+        ) => Ok(v8::undefined(scope).into()),
+        (
+            HostOperationKind::RegisterCompletionProvider,
+            HostResponseValue::CompletionProviderRegistered { registration },
+        ) => Ok(v8::Number::new(scope, registration.value() as f64).into()),
         _ => Err("UnsupportedOperation"),
     }
 }
@@ -2793,6 +3337,8 @@ fn execute_engine_turn(
             result,
         } => capsule.start_command_turn(root, invocation, active_buffer, result),
         EngineWork::CancelCommand(invocation) => capsule.cancel_command_turn(root, invocation),
+        EngineWork::Provider(call) => capsule.start_provider_turn(root, call),
+        EngineWork::CancelProvider => capsule.cancel_provider_turn(root),
         EngineWork::Termination => capsule.finish_termination_turn(root),
     }))
     .unwrap_or_else(|_| {
@@ -4542,6 +5088,482 @@ mod tests {
         assert_ne!(first_report.worker, second_report.worker);
         assert_eq!((&*first_report.value, &*second_report.value), ("1", "2"));
         assert!(!barrier.timed_out.load(Ordering::Acquire));
+        pool.shutdown();
+    }
+
+    fn install_semantic_providers(
+        pool: &RuntimePool,
+        runtime: ExtensionKey,
+        tree_registration: TreeProviderRegistrationId,
+        completion_registration: CompletionProviderRegistrationId,
+    ) {
+        let setup = pool
+            .execute_fixture_module(
+                runtime,
+                "file:///fixtures/semantic-providers.js",
+                r#"
+                    import { editor, workbench } from "knot:editor";
+                    globalThis.providerEvents = [];
+                    globalThis.treeProvider = await workbench.registerTreeDataProvider(
+                      "outline",
+                      {
+                        async getChildren(parentId) {
+                          globalThis.providerEvents.push(`tree-${parentId ?? "root"}-start`);
+                          if (parentId === "await") await editor.activeBuffer();
+                          if (parentId === "failure") throw new Error("expected tree failure");
+                          globalThis.providerEvents.push(`tree-${parentId ?? "root"}-end`);
+                          return [{
+                            id: parentId === null ? "root" : `${parentId}.child`,
+                            label: "Tree item",
+                            description: "fixture",
+                            icon: "symbol",
+                            collapsibleState: parentId === null ? "expanded" : "none",
+                          }];
+                        },
+                      },
+                    );
+                    globalThis.completionProvider = await editor.registerCompletionProvider(
+                      "fixture",
+                      {
+                        async provideCompletions(context) {
+                          globalThis.providerEvents.push(`completion-${context.prefix}`);
+                          if (context.prefix === "await") await editor.activeBuffer();
+                          if (context.prefix === "failure") {
+                            throw new Error("expected completion failure");
+                          }
+                          return [{ label: `${context.prefix}Item`, insertText: "inserted" }];
+                        },
+                      },
+                    );
+                "#,
+            )
+            .unwrap();
+        let tree = pool
+            .receive_request_timeout(Duration::from_secs(1))
+            .unwrap();
+        assert_eq!(
+            tree.operation,
+            HostOperation::RegisterTreeProvider {
+                view_id: "outline".into()
+            }
+        );
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: tree.id,
+            result: Ok(HostResponseValue::TreeProviderRegistered {
+                registration: tree_registration,
+            }),
+        })
+        .unwrap();
+        let completion = pool
+            .receive_request_timeout(Duration::from_secs(1))
+            .unwrap();
+        assert_eq!(
+            completion.operation,
+            HostOperation::RegisterCompletionProvider {
+                label: "fixture".into()
+            }
+        );
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: completion.id,
+            result: Ok(HostResponseValue::CompletionProviderRegistered {
+                registration: completion_registration,
+            }),
+        })
+        .unwrap();
+        setup.wait().unwrap();
+    }
+
+    #[test]
+    fn semantic_provider_callbacks_preserve_typed_generations_and_recover_from_failures() {
+        let pool = RuntimePool::new(PoolConfig::single_worker());
+        let runtime = key(61);
+        let tree_registration = TreeProviderRegistrationId::new(91);
+        let completion_registration = CompletionProviderRegistrationId::new(92);
+        pool.load(runtime, IsolateConfig::default()).unwrap();
+        install_semantic_providers(&pool, runtime, tree_registration, completion_registration);
+
+        let tree = pool
+            .request_tree_children(
+                runtime,
+                TreeChildrenRequest {
+                    registration: tree_registration,
+                    parent_id: None,
+                    generation: 8,
+                },
+            )
+            .unwrap()
+            .wait()
+            .unwrap();
+        assert_eq!(tree.registration, tree_registration);
+        assert_eq!(tree.generation, 8);
+        let item = &tree.result.unwrap()[0];
+        assert_eq!(item.id, "root");
+        assert_eq!(item.icon, Some(crate::host::protocol::TreeIcon::Symbol));
+        assert_eq!(
+            item.collapsible_state,
+            crate::host::protocol::TreeCollapsibleState::Expanded
+        );
+
+        let tree_failure = pool
+            .request_tree_children(
+                runtime,
+                TreeChildrenRequest {
+                    registration: tree_registration,
+                    parent_id: Some("failure".into()),
+                    generation: 9,
+                },
+            )
+            .unwrap()
+            .wait()
+            .unwrap();
+        assert!(
+            tree_failure
+                .result
+                .unwrap_err()
+                .message
+                .contains("expected tree failure")
+        );
+
+        let completion = pool
+            .request_completions(
+                runtime,
+                CompletionRequest {
+                    registration: completion_registration,
+                    buffer: BufferHandle::new(3),
+                    revision: 11,
+                    cursor_byte_offset: 4,
+                    prefix: "pre".into(),
+                    generation: 12,
+                },
+            )
+            .unwrap()
+            .wait()
+            .unwrap();
+        assert_eq!(completion.registration, completion_registration);
+        assert_eq!(completion.revision, 11);
+        assert_eq!(completion.generation, 12);
+        assert_eq!(completion.result.unwrap()[0].label, "preItem");
+
+        let completion_failure = pool
+            .request_completions(
+                runtime,
+                CompletionRequest {
+                    registration: completion_registration,
+                    buffer: BufferHandle::new(3),
+                    revision: 13,
+                    cursor_byte_offset: 7,
+                    prefix: "failure".into(),
+                    generation: 14,
+                },
+            )
+            .unwrap()
+            .wait()
+            .unwrap();
+        assert!(
+            completion_failure
+                .result
+                .unwrap_err()
+                .message
+                .contains("expected completion failure")
+        );
+
+        let invalidate = pool
+            .execute(
+                runtime,
+                "invalidate-tree.js",
+                "globalThis.treeProvider.invalidate('root')",
+            )
+            .unwrap();
+        let request = pool
+            .receive_request_timeout(Duration::from_secs(1))
+            .unwrap();
+        assert_eq!(
+            request.operation,
+            HostOperation::InvalidateTreeProvider {
+                registration: tree_registration,
+                parent_id: Some("root".into()),
+            }
+        );
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: request.id,
+            result: Ok(HostResponseValue::TreeProviderInvalidated),
+        })
+        .unwrap();
+        invalidate.wait().unwrap();
+        pool.shutdown();
+    }
+
+    #[test]
+    fn provider_roots_queue_serially_and_a_waiting_callback_releases_the_worker() {
+        let pool = RuntimePool::new(PoolConfig::single_worker());
+        let runtime = key(62);
+        let neighbor = key(63);
+        let tree_registration = TreeProviderRegistrationId::new(93);
+        let completion_registration = CompletionProviderRegistrationId::new(94);
+        pool.load(runtime, IsolateConfig::default()).unwrap();
+        pool.load(neighbor, IsolateConfig::default()).unwrap();
+        install_semantic_providers(&pool, runtime, tree_registration, completion_registration);
+
+        let tree = pool
+            .request_tree_children(
+                runtime,
+                TreeChildrenRequest {
+                    registration: tree_registration,
+                    parent_id: Some("await".into()),
+                    generation: 1,
+                },
+            )
+            .unwrap();
+        let suspended = pool
+            .receive_request_timeout(Duration::from_secs(1))
+            .unwrap();
+        assert_eq!(suspended.operation, HostOperation::ActiveBuffer);
+        let completion = pool
+            .request_completions(
+                runtime,
+                CompletionRequest {
+                    registration: completion_registration,
+                    buffer: BufferHandle::new(4),
+                    revision: 2,
+                    cursor_byte_offset: 3,
+                    prefix: "queued".into(),
+                    generation: 2,
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            &*pool
+                .execute(neighbor, "neighbor.js", "6 * 7")
+                .unwrap()
+                .wait()
+                .unwrap()
+                .value,
+            "42"
+        );
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: suspended.id,
+            result: Ok(HostResponseValue::ActiveBuffer(None)),
+        })
+        .unwrap();
+        tree.wait().unwrap();
+        completion.wait().unwrap();
+        assert_eq!(
+            &*pool
+                .execute(
+                    runtime,
+                    "provider-order.js",
+                    "globalThis.providerEvents.join(',')"
+                )
+                .unwrap()
+                .wait()
+                .unwrap()
+                .value,
+            "tree-await-start,tree-await-end,completion-queued"
+        );
+        pool.shutdown();
+    }
+
+    #[test]
+    fn dropped_removed_and_unloaded_provider_requests_release_runtime_state() {
+        let pool = RuntimePool::new(PoolConfig::single_worker());
+        let runtime = key(64);
+        let tree_registration = TreeProviderRegistrationId::new(95);
+        let completion_registration = CompletionProviderRegistrationId::new(96);
+        pool.load(runtime, IsolateConfig::default()).unwrap();
+        install_semantic_providers(&pool, runtime, tree_registration, completion_registration);
+
+        let blocker = pool
+            .request_tree_children(
+                runtime,
+                TreeChildrenRequest {
+                    registration: tree_registration,
+                    parent_id: Some("await".into()),
+                    generation: 2,
+                },
+            )
+            .unwrap();
+        let blocker_request = pool
+            .receive_request_timeout(Duration::from_secs(1))
+            .unwrap();
+        let queued = pool
+            .request_completions(
+                runtime,
+                CompletionRequest {
+                    registration: completion_registration,
+                    buffer: BufferHandle::new(1),
+                    revision: 1,
+                    cursor_byte_offset: 0,
+                    prefix: "queued-drop".into(),
+                    generation: 3,
+                },
+            )
+            .unwrap();
+        drop(queued);
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: blocker_request.id,
+            result: Ok(HostResponseValue::ActiveBuffer(None)),
+        })
+        .unwrap();
+        blocker.wait().unwrap();
+        wait_for_state(&pool, runtime, ExtensionState::Idle);
+        assert!(
+            !pool
+                .execute(
+                    runtime,
+                    "queued-provider-cancelled.js",
+                    "globalThis.providerEvents.join(',')",
+                )
+                .unwrap()
+                .wait()
+                .unwrap()
+                .value
+                .contains("completion-queued-drop")
+        );
+
+        let dropped = pool
+            .request_tree_children(
+                runtime,
+                TreeChildrenRequest {
+                    registration: tree_registration,
+                    parent_id: Some("await".into()),
+                    generation: 4,
+                },
+            )
+            .unwrap();
+        let pending = pool
+            .receive_request_timeout(Duration::from_secs(1))
+            .unwrap();
+        drop(dropped);
+        wait_for_state(&pool, runtime, ExtensionState::Idle);
+        assert_eq!(
+            pool.respond(HostResponse {
+                extension: runtime.extension,
+                lifecycle: runtime.lifecycle,
+                id: pending.id,
+                result: Ok(HostResponseValue::ActiveBuffer(None)),
+            }),
+            Err(RuntimeResponseError::UnknownRequest)
+        );
+
+        let disposal = pool
+            .execute(
+                runtime,
+                "dispose-providers.js",
+                "globalThis.treeProvider.dispose(); globalThis.completionProvider.dispose()",
+            )
+            .unwrap();
+        for expected in [
+            HostOperation::UnregisterTreeProvider {
+                registration: tree_registration,
+            },
+            HostOperation::UnregisterCompletionProvider {
+                registration: completion_registration,
+            },
+        ] {
+            let request = pool
+                .receive_request_timeout(Duration::from_secs(1))
+                .unwrap();
+            assert_eq!(request.operation, expected);
+            let result = match request.operation {
+                HostOperation::UnregisterTreeProvider { registration } => {
+                    HostResponseValue::TreeProviderUnregistered { registration }
+                }
+                HostOperation::UnregisterCompletionProvider { registration } => {
+                    HostResponseValue::CompletionProviderUnregistered { registration }
+                }
+                _ => unreachable!(),
+            };
+            pool.respond(HostResponse {
+                extension: runtime.extension,
+                lifecycle: runtime.lifecycle,
+                id: request.id,
+                result: Ok(result),
+            })
+            .unwrap();
+        }
+        disposal.wait().unwrap();
+        let removed = pool
+            .request_tree_children(
+                runtime,
+                TreeChildrenRequest {
+                    registration: tree_registration,
+                    parent_id: None,
+                    generation: 5,
+                },
+            )
+            .unwrap()
+            .wait()
+            .unwrap();
+        assert!(removed.result.unwrap_err().message.contains("disposed"));
+
+        let removed_completion = pool
+            .request_completions(
+                runtime,
+                CompletionRequest {
+                    registration: completion_registration,
+                    buffer: BufferHandle::new(1),
+                    revision: 1,
+                    cursor_byte_offset: 0,
+                    prefix: "removed".into(),
+                    generation: 6,
+                },
+            )
+            .unwrap()
+            .wait()
+            .unwrap();
+        assert!(
+            removed_completion
+                .result
+                .unwrap_err()
+                .message
+                .contains("disposed")
+        );
+
+        let unload_runtime = key(65);
+        let unload_tree = TreeProviderRegistrationId::new(97);
+        let unload_completion = CompletionProviderRegistrationId::new(98);
+        pool.load(unload_runtime, IsolateConfig::default()).unwrap();
+        install_semantic_providers(&pool, unload_runtime, unload_tree, unload_completion);
+        let pending_unload = pool
+            .request_completions(
+                unload_runtime,
+                CompletionRequest {
+                    registration: unload_completion,
+                    buffer: BufferHandle::new(1),
+                    revision: 1,
+                    cursor_byte_offset: 0,
+                    prefix: "await".into(),
+                    generation: 7,
+                },
+            )
+            .unwrap();
+        let unload_request = pool
+            .receive_request_timeout(Duration::from_secs(1))
+            .unwrap();
+        pool.unload(unload_runtime).unwrap();
+        assert_eq!(
+            pending_unload.wait().unwrap_err().kind(),
+            RuntimeErrorKind::Cancelled
+        );
+        assert_eq!(
+            pool.respond(HostResponse {
+                extension: unload_runtime.extension,
+                lifecycle: unload_runtime.lifecycle,
+                id: unload_request.id,
+                result: Ok(HostResponseValue::ActiveBuffer(None)),
+            }),
+            Err(RuntimeResponseError::WrongExtension)
+        );
         pool.shutdown();
     }
 
