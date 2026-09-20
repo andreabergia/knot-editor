@@ -1,4 +1,4 @@
-//! Knot editor prototype library.
+//! Knot editor library.
 
 pub mod app;
 pub mod core;

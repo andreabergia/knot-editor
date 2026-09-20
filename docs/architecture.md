@@ -25,8 +25,8 @@ gpui application and views        extension runtimes
   view layer.
 
 The default `knot` binary runs the product application through `app::run`.
-During the D017 host rebuild, `knot --fixture [name]` reports that extension
-fixtures are unavailable and opens the product shell. Focused host benchmark
+`knot --fixture [name]` opens the same product shell with two static diagnostic
+extensions loaded through its application-owned pool. Focused host benchmark
 entry points remain present but contain no pooled workloads yet.
 
 ## Ownership

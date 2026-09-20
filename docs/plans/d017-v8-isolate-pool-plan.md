@@ -1,6 +1,6 @@
 # D017: Production V8 Isolate Pool and Scheduling
 
-Status: in progress; Tasks 1-8 implemented, Task 8 awaiting review.
+Status: in progress; Tasks 1-9 implemented, Task 9 awaiting review.
 
 This slice replaces the prototype `deno_core` runtime with a direct
 `rusty_v8` host and runs persistent extension isolates on a bounded worker
@@ -326,16 +326,16 @@ Manual review gate:
 
 ## Task 9: Complete lifecycle and pool integration
 
-- ⬜ Expose final non-V8 host controls, request inboxes, completions, watchdogs,
+- ✅ Expose final non-V8 host controls, request inboxes, completions, watchdogs,
   and shutdown ownership shaped for pooled runtimes rather than OS threads.
-- ⬜ Integrate one application-owned pool into the product host without periodic
+- ✅ Integrate one application-owned pool into the product host without periodic
   wake loops or one thread owner per extension.
-- ⬜ Make startup failure, ordinary unload, cancellation, isolate termination,
+- ✅ Make startup failure, ordinary unload, cancellation, isolate termination,
   heap-limit failure, worker panic, and whole-pool shutdown converge on one
   exact-once teardown path.
-- ⬜ Remove all obsolete prototype controls, thread handles, comments, tests,
+- ✅ Remove all obsolete prototype controls, thread handles, comments, tests,
   and naming.
-- ⬜ Add observability sufficient to report worker count, extension states,
+- ✅ Add observability sufficient to report worker count, extension states,
   queue depth, turn counts, movements, and enqueue-to-start lag in tests and
   diagnostics without defining D019 policy.
 

@@ -72,6 +72,11 @@ initialization, and runs persistent shared isolates through a bounded worker
 pool. Each turn enters the isolate under a V8 locker and drains explicit
 microtasks before yielding it.
 
+Own one pool at the application boundary and deliver requests and terminal
+lifecycle events through an awaitable inbox. This keeps foreground mutation on
+gpui, avoids periodic wake loops and per-extension transport threads, and gives
+runtime and foreground resources one exact-once teardown signal.
+
 Serial callbacks within an extension simplify ownership; independent runtimes
 will progress through the bounded pool. Forced interruption is fatal to that
 extension so cleanup has a definite lifecycle boundary. Immutable shared

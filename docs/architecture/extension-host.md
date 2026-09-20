@@ -6,7 +6,7 @@ Part of the [architecture](../architecture.md). Design rationale is recorded in
 
 ## Current boundaries
 
-`host` owns five explicit boundaries:
+`host` owns six explicit boundaries:
 
 - `protocol` contains Knot-owned transport identities, requests, responses,
   contribution data, and errors. It depends on neither gpui nor concrete core
@@ -15,6 +15,8 @@ Part of the [architecture](../architecture.md). Design rationale is recorded in
 - `engine` owns direct `v8` initialization, isolates, contexts, bindings, and
   all V8 types.
 - `lifecycle` owns extension lifetime and teardown state.
+- `pool` exposes the V8-free application control, event-inbox, completion,
+  watchdog, diagnostics, and shutdown surface.
 - `bench` owns host benchmark entry points.
 
 The scheduler owns a V8-independent state machine and a fixed worker pool.
@@ -22,8 +24,10 @@ Each loaded lifecycle has one authoritative state, one FIFO root queue, and at
 most one active logical command tree. A cloneable handle admits lifecycles,
 queues roots, wakes continuations, and requests stop; the pool owner shuts down
 and joins its workers. The engine composes this scheduler with one persistent
-runtime capsule per loaded lifecycle. The product bridge and `--fixture`
-runtime experience remain unavailable until later D017 tasks.
+runtime capsule per loaded lifecycle. One application-global
+`ProductExtensionHost` owns the pool, foreground protocol bridges, and an
+awaitable event-inbox task. The `--fixture` path loads two static diagnostic
+lifecycles through that same product composition; it is not a separate runtime.
 
 V8 process initialization is idempotent and owned by `engine`. It must happen
 before creating scheduler workers, because every thread that may lock a shared
@@ -77,20 +81,25 @@ pending and may settle out of order; unrelated roots remain queued until the
 active root and its detached native requests have all settled.
 
 Unload first marks the scheduler lifecycle stopping and terminates any running
-JavaScript through a thread-safe control handle. Disposal waits for the running
-locker to leave, then releases persistent handles and callback state while
-locked before dropping the shared isolate. Immutable external UTF-16 strings
-transfer one `Arc` reference to V8 and release it on garbage collection or
-isolate disposal, including when disposal happens on a pool worker.
+JavaScript through a thread-safe control handle. Startup rollback, unload,
+fatal termination, heap failure, caught worker panic, and pool shutdown all
+remove and dispose a capsule through one exact-once lifecycle finalizer. The
+finalizer emits a terminal lifecycle event so the foreground removes command,
+buffer, tree, completion, subscription, and contribution ownership once.
+Disposal waits for the running locker to leave, then releases persistent
+handles and callback state while locked before dropping the shared isolate.
+Immutable external UTF-16 strings transfer one `Arc` reference to V8 and
+release it on garbage collection or isolate disposal, including when disposal
+happens on a pool worker.
 
 ```text
-extension JavaScript (under reconstruction)
+extension JavaScript
         |
 host engine + bounded scheduler
         |
 Knot-owned typed protocol
         |
-gpui foreground bridge (under reconstruction)
+application-owned gpui foreground bridge
         |
 application registries and models
 ```
@@ -114,6 +123,11 @@ A newly admitted lifecycle starts in `Loading`. Successful loading moves it to
 ready-queue deduplication bit. A worker takes one FIFO turn and changes the
 lifecycle to `Running`; its result completes the active root, tail-queues one
 continuation turn, yields in `AwaitingHostWork`, or fails that lifecycle.
+
+Scheduler diagnostics are read-only evidence: they report configured worker
+count, lifecycle states, current and maximum queue depths, turn counts, worker
+movements, and maximum enqueue-to-start lag. They do not trigger quotas,
+timeouts, dropping, coalescing, or backpressure.
 
 Unrelated roots remain behind the active command tree. A continuation must
 name that tree and may wake an awaiting lifecycle; a response that races with
@@ -150,22 +164,23 @@ The foreground command bridge owns the lifecycle-scoped catalog and one serial
 invocation tree. It captures the active buffer on the root, inherits it through
 children, returns same-lifecycle children to JavaScript as inline
 continuations, and defers cross-lifecycle or native outcomes until their work
-settles. Each parent has at most one unfinished child, and ancestry cycles are
-rejected as unavailable. Cancellation marks the tree, wakes a suspended
-isolate turn, aborts its JavaScript signal, rejects its pending host requests,
-and rejects late responses. Forced V8 interruption remains fatal only to the
-affected lifecycle.
+settles. The product catalog mirrors lifecycle registrations for palette and
+keybinding discovery, while the application bridge retains the captured native
+target for the whole root tree. Each parent has at most one unfinished child,
+and ancestry cycles are rejected as unavailable. Cancellation marks the tree,
+wakes a suspended isolate turn, aborts its JavaScript signal, rejects its
+pending host requests, and rejects late responses. Forced V8 interruption
+remains fatal only to the affected lifecycle.
 
 The foreground buffer bridge owns active-buffer lookup, lifecycle-scoped
 subscriptions, revision validation, model mutation, contribution ownership,
 and change fan-out. It revalidates cancellation inside the foreground update
-immediately before mutation. Product ownership of the pool and transport loop
-remains for the later integration checkpoint.
+immediately before mutation. Model observers route committed changes back to
+the pool without a periodic wake loop.
 
 The foreground semantic bridge owns lifecycle admission, tree registration
-routing, and the shell-wide completion registry. Native tree views and
-view-owned completion controllers remain authoritative for parent,
+routing, and the shell-wide completion registry. Native tree invalidations and
+view-owned completion sessions dispatch awaitable provider calls through the
+application pool. Those native owners remain authoritative for parent,
 registration, generation, buffer-revision, and lifecycle validation, so late
-or stale provider results are ignored without involving V8. Product wiring of
-their events to the application-owned pool remains for the later integration
-checkpoint.
+or stale provider results are ignored without involving V8.

@@ -56,15 +56,11 @@
 //! the new piece is spliced in directly, no zero-length halves created.
 //! Adjacent pieces are never coalesced.
 //!
-//! ## UTF-8 boundary policy — TEMPORARY
+//! ## UTF-8 boundary policy
 //!
-//! The plan defers grapheme clusters to step 7 and operates at byte
-//! granularity (D3). For the moment, all edit offsets and inserted-text
-//! boundaries are debug-asserted to land on UTF-8 char boundaries, and
-//! `read_range` is required to span char-aligned ranges. This is the
-//! easiest enforcement for the prototype. TODO: revisit once step 5 / step 7
-//! clarifies how non-char-aligned positions (e.g. caret inside a grapheme)
-//! should be represented; the choice may need a documented policy in D3.
+//! Buffer edits and reads use byte offsets which must land on UTF-8 scalar
+//! boundaries. Grapheme-aware caret movement and deletion remain presentation
+//! policy above the byte-native core.
 
 use std::ops::Range;
 use std::sync::atomic::{AtomicU64, Ordering};

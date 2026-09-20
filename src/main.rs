@@ -1,4 +1,4 @@
-//! Knot editor prototype.
+//! Knot editor.
 
 fn main() {
     knot::app::run();
