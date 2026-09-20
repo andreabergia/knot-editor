@@ -7,13 +7,10 @@
 pub mod bench;
 #[allow(
     dead_code,
-    reason = "the pooled engine is connected to the product bridge in later D017 checkpoints"
+    reason = "low-level V8 probes validate the engine beneath the product-facing pool"
 )]
 pub mod engine;
 pub mod lifecycle;
-#[allow(
-    dead_code,
-    reason = "protocol consumers return in later D017 checkpoints"
-)]
+pub(crate) mod pool;
 pub mod protocol;
 pub mod scheduler;

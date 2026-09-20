@@ -5,6 +5,7 @@ use std::{
     num::NonZeroUsize,
     sync::{Arc, Condvar, Mutex, mpsc},
     thread::JoinHandle,
+    time::{Duration, Instant},
 };
 
 use super::{
@@ -90,6 +91,32 @@ pub enum CompletionOutcome {
     Failed(Failure),
 }
 
+/// Point-in-time scheduler diagnostics for one extension lifetime.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExtensionDiagnostics {
+    pub key: ExtensionKey,
+    pub state: ExtensionState,
+    pub queue_depth: usize,
+    pub max_queue_depth: usize,
+    pub turn_count: u64,
+    pub worker_movements: u64,
+    pub max_enqueue_to_start_lag: Duration,
+}
+
+/// Point-in-time diagnostics for one bounded scheduler pool.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SchedulerDiagnostics {
+    pub worker_count: usize,
+    pub ready_queue_depth: usize,
+    pub queue_depth: usize,
+    pub max_queue_depth: usize,
+    pub turn_count: u64,
+    pub worker_movements: u64,
+    pub max_enqueue_to_start_lag: Duration,
+    pub shutting_down: bool,
+    pub extensions: Vec<ExtensionDiagnostics>,
+}
+
 /// Errors returned before work is accepted or a state transition is applied.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SchedulerError {
@@ -133,14 +160,19 @@ impl CompletionSlot {
 
 struct Root<W> {
     id: RootId,
-    work: W,
+    work: QueuedWork<W>,
     completion: CompletionSlot,
+}
+
+struct QueuedWork<W> {
+    work: W,
+    enqueued_at: Instant,
 }
 
 struct ActiveRoot<W> {
     id: RootId,
     completion: CompletionSlot,
-    continuations: VecDeque<W>,
+    continuations: VecDeque<QueuedWork<W>>,
 }
 
 struct Extension<W> {
@@ -149,6 +181,11 @@ struct Extension<W> {
     roots: VecDeque<Root<W>>,
     active: Option<ActiveRoot<W>>,
     running: Option<TurnId>,
+    max_queue_depth: usize,
+    turn_count: u64,
+    last_worker: Option<usize>,
+    worker_movements: u64,
+    max_enqueue_to_start_lag: Duration,
 }
 
 /// Deterministic scheduling policy used by the worker pool.
@@ -161,6 +198,10 @@ pub struct StateMachine<W> {
     next_root: u64,
     next_turn: u64,
     shutting_down: bool,
+    max_queue_depth: usize,
+    turn_count: u64,
+    worker_movements: u64,
+    max_enqueue_to_start_lag: Duration,
 }
 
 impl<W> Default for StateMachine<W> {
@@ -171,6 +212,10 @@ impl<W> Default for StateMachine<W> {
             next_root: 1,
             next_turn: 1,
             shutting_down: false,
+            max_queue_depth: 0,
+            turn_count: 0,
+            worker_movements: 0,
+            max_enqueue_to_start_lag: Duration::ZERO,
         }
     }
 }
@@ -200,6 +245,11 @@ impl<W> StateMachine<W> {
                 roots: VecDeque::new(),
                 active: None,
                 running: None,
+                max_queue_depth: 0,
+                turn_count: 0,
+                last_worker: None,
+                worker_movements: 0,
+                max_enqueue_to_start_lag: Duration::ZERO,
             },
         );
         Ok(())
@@ -233,20 +283,27 @@ impl<W> StateMachine<W> {
         let id = RootId::new(self.next_root);
         self.next_root += 1;
         let (sender, receiver) = mpsc::channel();
-        let extension = self.extension_mut(key)?;
-        match &extension.state {
-            ExtensionState::Stopping => return Err(SchedulerError::Stopping),
-            ExtensionState::Failed(failure) => {
-                return Err(SchedulerError::Failed(failure.clone()));
+        let was_idle = {
+            let extension = self.extension_mut(key)?;
+            match &extension.state {
+                ExtensionState::Stopping => return Err(SchedulerError::Stopping),
+                ExtensionState::Failed(failure) => {
+                    return Err(SchedulerError::Failed(failure.clone()));
+                }
+                _ => {}
             }
-            _ => {}
-        }
-        extension.roots.push_back(Root {
-            id,
-            work,
-            completion: CompletionSlot(Some(sender)),
-        });
-        if extension.state == ExtensionState::Idle {
+            extension.roots.push_back(Root {
+                id,
+                work: QueuedWork {
+                    work,
+                    enqueued_at: Instant::now(),
+                },
+                completion: CompletionSlot(Some(sender)),
+            });
+            extension.state == ExtensionState::Idle
+        };
+        self.record_queue_depth(key);
+        if was_idle {
             self.make_ready(key);
         }
         Ok((id, receiver))
@@ -261,38 +318,49 @@ impl<W> StateMachine<W> {
         if self.shutting_down {
             return Err(SchedulerError::ShuttingDown);
         }
-        let extension = self.extension_mut(key)?;
-        match &extension.state {
-            ExtensionState::Stopping => return Err(SchedulerError::Stopping),
-            ExtensionState::Failed(failure) => {
-                return Err(SchedulerError::Failed(failure.clone()));
+        let was_awaiting = {
+            let extension = self.extension_mut(key)?;
+            match &extension.state {
+                ExtensionState::Stopping => return Err(SchedulerError::Stopping),
+                ExtensionState::Failed(failure) => {
+                    return Err(SchedulerError::Failed(failure.clone()));
+                }
+                _ => {}
             }
-            _ => {}
-        }
-        let active = extension
-            .active
-            .as_mut()
-            .ok_or(SchedulerError::NoActiveRoot)?;
-        if active.id != root {
-            return Err(SchedulerError::WrongRoot {
-                active: active.id,
-                received: root,
+            let active = extension
+                .active
+                .as_mut()
+                .ok_or(SchedulerError::NoActiveRoot)?;
+            if active.id != root {
+                return Err(SchedulerError::WrongRoot {
+                    active: active.id,
+                    received: root,
+                });
+            }
+            active.continuations.push_back(QueuedWork {
+                work,
+                enqueued_at: Instant::now(),
             });
-        }
-        active.continuations.push_back(work);
-        if extension.state == ExtensionState::AwaitingHostWork {
+            extension.state == ExtensionState::AwaitingHostWork
+        };
+        self.record_queue_depth(key);
+        if was_awaiting {
             self.make_ready(key);
         }
         Ok(())
     }
 
     pub fn next_turn(&mut self) -> Option<Turn<W>> {
+        self.next_turn_on_worker(0)
+    }
+
+    fn next_turn_on_worker(&mut self, worker: usize) -> Option<Turn<W>> {
         while let Some(key) = self.ready.pop_front() {
             let extension = self.extensions.get_mut(&key.extension)?;
             if extension.key != key || extension.state != ExtensionState::Queued {
                 continue;
             }
-            let (root, kind, work) = if let Some(active) = extension.active.as_mut() {
+            let (root, kind, queued) = if let Some(active) = extension.active.as_mut() {
                 let work = active.continuations.pop_front()?;
                 (active.id, TurnKind::Continuation, work)
             } else {
@@ -306,6 +374,19 @@ impl<W> StateMachine<W> {
                 });
                 (root, TurnKind::Root, work)
             };
+            let lag = queued.enqueued_at.elapsed();
+            extension.max_enqueue_to_start_lag = extension.max_enqueue_to_start_lag.max(lag);
+            extension.turn_count += 1;
+            if extension
+                .last_worker
+                .is_some_and(|previous| previous != worker)
+            {
+                extension.worker_movements += 1;
+                self.worker_movements += 1;
+            }
+            extension.last_worker = Some(worker);
+            self.turn_count += 1;
+            self.max_enqueue_to_start_lag = self.max_enqueue_to_start_lag.max(lag);
             let id = TurnId(self.next_turn);
             self.next_turn += 1;
             extension.state = ExtensionState::Running;
@@ -315,7 +396,7 @@ impl<W> StateMachine<W> {
                 root,
                 id,
                 kind,
-                work,
+                work: queued.work,
             });
         }
         None
@@ -424,6 +505,52 @@ impl<W> StateMachine<W> {
         self.shutting_down
     }
 
+    fn diagnostics(&self, worker_count: usize) -> SchedulerDiagnostics {
+        let mut extensions = self
+            .extensions
+            .values()
+            .map(|extension| ExtensionDiagnostics {
+                key: extension.key,
+                state: extension.state.clone(),
+                queue_depth: extension.queue_depth(),
+                max_queue_depth: extension.max_queue_depth,
+                turn_count: extension.turn_count,
+                worker_movements: extension.worker_movements,
+                max_enqueue_to_start_lag: extension.max_enqueue_to_start_lag,
+            })
+            .collect::<Vec<_>>();
+        extensions.sort_by_key(|extension| extension.key.extension.value());
+        SchedulerDiagnostics {
+            worker_count,
+            ready_queue_depth: self.ready.len(),
+            queue_depth: self.queue_depth(),
+            max_queue_depth: self.max_queue_depth,
+            turn_count: self.turn_count,
+            worker_movements: self.worker_movements,
+            max_enqueue_to_start_lag: self.max_enqueue_to_start_lag,
+            shutting_down: self.shutting_down,
+            extensions,
+        }
+    }
+
+    fn record_queue_depth(&mut self, key: ExtensionKey) {
+        let extension_depth = self
+            .extensions
+            .get(&key.extension)
+            .expect("admitted extension")
+            .queue_depth();
+        let extension = self
+            .extensions
+            .get_mut(&key.extension)
+            .expect("admitted extension");
+        extension.max_queue_depth = extension.max_queue_depth.max(extension_depth);
+        self.max_queue_depth = self.max_queue_depth.max(self.queue_depth());
+    }
+
+    fn queue_depth(&self) -> usize {
+        self.extensions.values().map(Extension::queue_depth).sum()
+    }
+
     fn extension(&self, key: ExtensionKey) -> Result<&Extension<W>, SchedulerError> {
         let Some(extension) = self.extensions.get(&key.extension) else {
             return Err(SchedulerError::UnknownExtension(key.extension));
@@ -495,6 +622,16 @@ impl<W> StateMachine<W> {
     }
 }
 
+impl<W> Extension<W> {
+    fn queue_depth(&self) -> usize {
+        self.roots.len()
+            + self
+                .active
+                .as_ref()
+                .map_or(0, |active| active.continuations.len())
+    }
+}
+
 fn settle_roots<W>(roots: &mut VecDeque<Root<W>>, outcome: CompletionOutcome) {
     for root in roots.iter_mut() {
         root.completion.settle(outcome.clone());
@@ -505,6 +642,7 @@ fn settle_roots<W>(roots: &mut VecDeque<Root<W>>, outcome: CompletionOutcome) {
 struct Shared<W> {
     state: Mutex<StateMachine<W>>,
     ready: Condvar,
+    worker_count: usize,
 }
 
 /// Cloneable admission and wakeup side of a scheduler pool.
@@ -573,6 +711,14 @@ impl<W> SchedulerHandle<W> {
     pub fn state(&self, key: ExtensionKey) -> Result<ExtensionState, SchedulerError> {
         self.shared.state.lock().unwrap().state(key).cloned()
     }
+
+    pub fn diagnostics(&self) -> SchedulerDiagnostics {
+        self.shared
+            .state
+            .lock()
+            .unwrap()
+            .diagnostics(self.shared.worker_count)
+    }
 }
 
 /// Owns a fixed set of worker threads for its entire lifetime.
@@ -592,6 +738,7 @@ impl<W: Send + 'static> SchedulerPool<W> {
         let shared = Arc::new(Shared {
             state: Mutex::new(StateMachine::default()),
             ready: Condvar::new(),
+            worker_count: config.workers().get(),
         });
         let executor = Arc::new(executor);
         let mut workers = Vec::with_capacity(config.workers().get());
@@ -600,8 +747,8 @@ impl<W: Send + 'static> SchedulerPool<W> {
             let executor = Arc::clone(&executor);
             workers.push(
                 std::thread::Builder::new()
-                    .name(format!("knot-extension-{index}"))
-                    .spawn(move || worker_loop(shared, executor))
+                    .name(format!("knot-pool-worker-{index}"))
+                    .spawn(move || worker_loop(index, shared, executor))
                     .expect("extension worker thread creation must succeed"),
             );
         }
@@ -616,7 +763,11 @@ impl<W: Send + 'static> SchedulerPool<W> {
     }
 
     pub fn worker_count(&self) -> usize {
-        self.workers.lock().unwrap().len()
+        self.handle.shared.worker_count
+    }
+
+    pub fn diagnostics(&self) -> SchedulerDiagnostics {
+        self.handle.diagnostics()
     }
 
     pub fn shutdown(self) {
@@ -648,6 +799,7 @@ impl<W> Drop for SchedulerPool<W> {
 }
 
 fn worker_loop<W: Send + 'static>(
+    worker: usize,
     shared: Arc<Shared<W>>,
     executor: Arc<impl Fn(Turn<W>) -> TurnOutcome + Send + Sync + 'static>,
 ) {
@@ -655,7 +807,7 @@ fn worker_loop<W: Send + 'static>(
         let turn = {
             let mut state = shared.state.lock().unwrap();
             loop {
-                if let Some(turn) = state.next_turn() {
+                if let Some(turn) = state.next_turn_on_worker(worker) {
                     break turn;
                 }
                 if state.is_shutting_down() {
@@ -936,6 +1088,69 @@ mod tests {
         scheduler.admit(replacement).unwrap();
     }
 
+    #[test]
+    fn diagnostics_report_queue_turn_lag_and_worker_movement() {
+        let (mut scheduler, key) = admitted();
+        scheduler.enqueue_root(key, "root").unwrap();
+        scheduler.enqueue_root(key, "queued").unwrap();
+        scheduler
+            .extensions
+            .get_mut(&key.extension)
+            .unwrap()
+            .roots
+            .front_mut()
+            .unwrap()
+            .work
+            .enqueued_at -= Duration::from_millis(10);
+
+        let queued = scheduler.diagnostics(2);
+        assert_eq!(queued.worker_count, 2);
+        assert_eq!(queued.ready_queue_depth, 1);
+        assert_eq!(queued.queue_depth, 2);
+        assert_eq!(queued.max_queue_depth, 2);
+        assert_eq!(queued.extensions[0].state, ExtensionState::Queued);
+        assert_eq!(queued.extensions[0].queue_depth, 2);
+        assert_eq!(queued.extensions[0].max_queue_depth, 2);
+
+        let root_turn = scheduler.next_turn_on_worker(0).unwrap();
+        scheduler
+            .finish_turn(key, root_turn.id, TurnOutcome::AwaitingHostWork)
+            .unwrap();
+        scheduler
+            .enqueue_continuation(key, root_turn.root, "response")
+            .unwrap();
+        scheduler
+            .extensions
+            .get_mut(&key.extension)
+            .unwrap()
+            .active
+            .as_mut()
+            .unwrap()
+            .continuations
+            .front_mut()
+            .unwrap()
+            .enqueued_at -= Duration::from_millis(10);
+        let response_turn = scheduler.next_turn_on_worker(1).unwrap();
+        scheduler
+            .finish_turn(key, response_turn.id, TurnOutcome::Completed)
+            .unwrap();
+
+        let diagnostics = scheduler.diagnostics(2);
+        assert_eq!(diagnostics.queue_depth, 1);
+        assert_eq!(diagnostics.max_queue_depth, 2);
+        assert_eq!(diagnostics.turn_count, 2);
+        assert_eq!(diagnostics.worker_movements, 1);
+        assert!(diagnostics.max_enqueue_to_start_lag >= Duration::from_millis(10));
+        assert_eq!(diagnostics.extensions.len(), 1);
+        let extension = &diagnostics.extensions[0];
+        assert_eq!(extension.state, ExtensionState::Queued);
+        assert_eq!(extension.queue_depth, 1);
+        assert_eq!(extension.max_queue_depth, 2);
+        assert_eq!(extension.turn_count, 2);
+        assert_eq!(extension.worker_movements, 1);
+        assert!(extension.max_enqueue_to_start_lag >= Duration::from_millis(10));
+    }
+
     struct BlockingWork {
         label: &'static str,
         started: mpsc::Sender<&'static str>,
@@ -1067,6 +1282,32 @@ mod tests {
     }
 
     #[test]
+    fn configured_worker_count_stays_constant_as_extensions_grow() {
+        let pool = SchedulerPool::new(
+            PoolConfig::new(NonZeroUsize::new(2).unwrap()),
+            |_: Turn<()>| TurnOutcome::Completed,
+        );
+        let handle = pool.handle();
+        for extension in 1..=32 {
+            let key = key(extension, 1);
+            handle.admit(key).unwrap();
+            handle.finish_loading(key, Ok(())).unwrap();
+        }
+
+        assert_eq!(pool.worker_count(), 2);
+        let diagnostics = pool.diagnostics();
+        assert_eq!(diagnostics.worker_count, 2);
+        assert_eq!(diagnostics.extensions.len(), 32);
+        assert!(
+            diagnostics
+                .extensions
+                .iter()
+                .all(|extension| extension.state == ExtensionState::Idle)
+        );
+        pool.shutdown();
+    }
+
+    #[test]
     fn executor_panic_fails_only_its_extension() {
         let pool = SchedulerPool::new(PoolConfig::single_worker(), |turn: Turn<&'static str>| {
             assert_ne!(turn.work, "panic");
@@ -1088,6 +1329,18 @@ mod tests {
                 if failure.message() == "turn executor panicked"
         ));
         assert_eq!(completed.recv().unwrap(), CompletionOutcome::Completed);
+        let diagnostics = pool.diagnostics();
+        assert_eq!(diagnostics.worker_count, 1);
+        assert_eq!(diagnostics.turn_count, 2);
+        assert!(matches!(
+            diagnostics
+                .extensions
+                .iter()
+                .find(|extension| extension.key == failed_key)
+                .map(|extension| &extension.state),
+            Some(ExtensionState::Failed(failure))
+                if failure.message() == "turn executor panicked"
+        ));
         pool.shutdown();
     }
 }

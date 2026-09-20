@@ -46,6 +46,9 @@ const NATIVE_BINDINGS_GLOBAL: &str = "__knotNativeBindings";
 const PRIVATE_BOOTSTRAP_SOURCE: &str = include_str!("js/bootstrap.js");
 const PUBLIC_FACADE_SOURCE: &str = include_str!("js/editor.js");
 
+type ResultSender<T> = tokio::sync::oneshot::Sender<Result<T, RuntimeError>>;
+type ResultReceiver<T> = tokio::sync::oneshot::Receiver<Result<T, RuntimeError>>;
+
 /// Initializes V8 before any extension worker thread is created.
 pub(crate) fn initialize() {
     V8_INITIALIZATION.call_once(|| {
@@ -217,7 +220,7 @@ pub(crate) struct ExecutionReport {
 struct RuntimeLocalState {
     key: ExtensionKey,
     next_request: AtomicU64,
-    request_sender: Mutex<Option<mpsc::Sender<HostRequest>>>,
+    event_sender: Mutex<Option<tokio::sync::mpsc::UnboundedSender<EngineEvent>>>,
     current_root: Mutex<Option<RootId>>,
     pending: Mutex<HashMap<RequestId, PendingRequest>>,
     active: Mutex<Option<ActiveExecution>>,
@@ -238,7 +241,7 @@ impl RuntimeLocalState {
         Self {
             key,
             next_request: AtomicU64::new(1),
-            request_sender: Mutex::new(None),
+            event_sender: Mutex::new(None),
             current_root: Mutex::new(None),
             pending: Mutex::new(HashMap::new()),
             active: Mutex::new(None),
@@ -316,16 +319,16 @@ struct ActiveExecution {
 }
 
 enum ActiveCompletion {
-    Report(mpsc::Sender<Result<ExecutionReport, RuntimeError>>),
-    Command(mpsc::Sender<Result<CommandOutcome, RuntimeError>>),
+    Report(ResultSender<ExecutionReport>),
+    Command(ResultSender<CommandOutcome>),
     Tree {
         request: TreeChildrenRequest,
-        result: mpsc::Sender<Result<TreeChildrenResponse, RuntimeError>>,
+        result: ResultSender<TreeChildrenResponse>,
         completed: Arc<AtomicBool>,
     },
     Completion {
         request: CompletionRequest,
-        result: mpsc::Sender<Result<CompletionResponse, RuntimeError>>,
+        result: ResultSender<CompletionResponse>,
         completed: Arc<AtomicBool>,
     },
     Detached(&'static str),
@@ -352,13 +355,13 @@ enum RootEvaluation {
 enum ProviderCall {
     Tree {
         request: TreeChildrenRequest,
-        result: mpsc::Sender<Result<TreeChildrenResponse, RuntimeError>>,
+        result: ResultSender<TreeChildrenResponse>,
         cancelled: Arc<AtomicBool>,
         completed: Arc<AtomicBool>,
     },
     Completion {
         request: CompletionRequest,
-        result: mpsc::Sender<Result<CompletionResponse, RuntimeError>>,
+        result: ResultSender<CompletionResponse>,
         cancelled: Arc<AtomicBool>,
         completed: Arc<AtomicBool>,
     },
@@ -718,7 +721,7 @@ impl RuntimeCapsule {
         root: RootId,
         source_name: Arc<str>,
         source: Arc<str>,
-        result: mpsc::Sender<Result<ExecutionReport, RuntimeError>>,
+        result: ResultSender<ExecutionReport>,
     ) -> TurnOutcome {
         self.run_root_turn(root, source_name, result, RootEvaluation::Script { source })
     }
@@ -728,7 +731,7 @@ impl RuntimeCapsule {
         root: RootId,
         specifier: Arc<str>,
         source: Arc<str>,
-        result: mpsc::Sender<Result<ExecutionReport, RuntimeError>>,
+        result: ResultSender<ExecutionReport>,
     ) -> TurnOutcome {
         let canonical = match validate_root_module_specifier(&specifier) {
             Ok(specifier) => Arc::<str>::from(specifier),
@@ -809,7 +812,7 @@ impl RuntimeCapsule {
         root: RootId,
         invocation: CommandInvocation,
         active_buffer: Option<BufferHandle>,
-        result: mpsc::Sender<Result<CommandOutcome, RuntimeError>>,
+        result: ResultSender<CommandOutcome>,
     ) -> TurnOutcome {
         if self
             .local_state
@@ -1076,7 +1079,7 @@ impl RuntimeCapsule {
         &self,
         root: RootId,
         source: Arc<str>,
-        result: mpsc::Sender<Result<ExecutionReport, RuntimeError>>,
+        result: ResultSender<ExecutionReport>,
         evaluation: RootEvaluation,
     ) -> TurnOutcome {
         if self.status.load(Ordering::Acquire) != ACTIVE {
@@ -1739,12 +1742,12 @@ enum EngineWork {
     Script {
         source_name: Arc<str>,
         source: Arc<str>,
-        result: mpsc::Sender<Result<ExecutionReport, RuntimeError>>,
+        result: ResultSender<ExecutionReport>,
     },
     FixtureModule {
         specifier: Arc<str>,
         source: Arc<str>,
-        result: mpsc::Sender<Result<ExecutionReport, RuntimeError>>,
+        result: ResultSender<ExecutionReport>,
     },
     HostResponse(HostResponse),
     BufferChange {
@@ -1755,23 +1758,27 @@ enum EngineWork {
     CommandInvocation {
         invocation: CommandInvocation,
         active_buffer: Option<BufferHandle>,
-        result: mpsc::Sender<Result<CommandOutcome, RuntimeError>>,
+        result: ResultSender<CommandOutcome>,
     },
     CancelCommand(CommandInvocationId),
     Provider(ProviderCall),
     CancelProvider,
     Termination,
+    #[cfg(test)]
+    Panic {
+        result: ResultSender<ExecutionReport>,
+    },
 }
 
 /// Completion side of one scheduled JavaScript turn.
 pub(crate) struct RuntimeExecution {
-    result: mpsc::Receiver<Result<ExecutionReport, RuntimeError>>,
+    result: ResultReceiver<ExecutionReport>,
     completion: mpsc::Receiver<CompletionOutcome>,
 }
 
 impl RuntimeExecution {
     pub(crate) fn wait(self) -> Result<ExecutionReport, RuntimeError> {
-        match self.result.recv() {
+        match self.result.blocking_recv() {
             Ok(result) => {
                 let _ = self.completion.recv();
                 result
@@ -1794,15 +1801,35 @@ impl RuntimeExecution {
     }
 }
 
+impl std::future::Future for RuntimeExecution {
+    type Output = Result<ExecutionReport, RuntimeError>;
+
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        context: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        std::pin::Pin::new(&mut self.result)
+            .poll(context)
+            .map(|result| {
+                result.unwrap_or_else(|_| {
+                    Err(RuntimeError::fatal(
+                        RuntimeErrorKind::Engine,
+                        "extension worker closed without an execution result",
+                    ))
+                })
+            })
+    }
+}
+
 /// Completion side of one scheduled extension command handler.
 pub(crate) struct RuntimeCommandExecution {
-    result: mpsc::Receiver<Result<CommandOutcome, RuntimeError>>,
+    result: ResultReceiver<CommandOutcome>,
     completion: mpsc::Receiver<CompletionOutcome>,
 }
 
 impl RuntimeCommandExecution {
     pub(crate) fn wait(self) -> Result<CommandOutcome, RuntimeError> {
-        match self.result.recv() {
+        match self.result.blocking_recv() {
             Ok(result) => {
                 let _ = self.completion.recv();
                 result
@@ -1822,12 +1849,34 @@ impl RuntimeCommandExecution {
     }
 }
 
+impl std::future::Future for RuntimeCommandExecution {
+    type Output = Result<CommandOutcome, RuntimeError>;
+
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        context: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        std::pin::Pin::new(&mut self.result)
+            .poll(context)
+            .map(|result| {
+                result.unwrap_or_else(|_| {
+                    Err(RuntimeError::fatal(
+                        RuntimeErrorKind::Engine,
+                        "extension worker closed without a command outcome",
+                    ))
+                })
+            })
+    }
+}
+
 /// Completion side of one native-to-extension semantic provider callback.
 pub(crate) struct RuntimeProviderExecution<T> {
-    result: mpsc::Receiver<Result<T, RuntimeError>>,
+    result: Option<ResultReceiver<T>>,
     completion: mpsc::Receiver<CompletionOutcome>,
     cancellation: Option<ProviderCancellation>,
 }
+
+impl<T> Unpin for RuntimeProviderExecution<T> {}
 
 struct ProviderCancellation {
     key: ExtensionKey,
@@ -1840,7 +1889,12 @@ struct ProviderCancellation {
 
 impl<T> RuntimeProviderExecution<T> {
     pub(crate) fn wait(mut self) -> Result<T, RuntimeError> {
-        let result = match self.result.recv() {
+        let result = match self
+            .result
+            .take()
+            .expect("provider execution owns its result")
+            .blocking_recv()
+        {
             Ok(result) => {
                 let _ = self.completion.recv();
                 result
@@ -1862,6 +1916,33 @@ impl<T> RuntimeProviderExecution<T> {
         };
         self.cancellation = None;
         result
+    }
+}
+
+impl<T> std::future::Future for RuntimeProviderExecution<T> {
+    type Output = Result<T, RuntimeError>;
+
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        context: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        let receiver = self
+            .result
+            .as_mut()
+            .expect("provider execution owns its result");
+        match std::pin::Pin::new(receiver).poll(context) {
+            std::task::Poll::Ready(result) => {
+                self.result = None;
+                self.cancellation = None;
+                std::task::Poll::Ready(result.unwrap_or_else(|_| {
+                    Err(RuntimeError::fatal(
+                        RuntimeErrorKind::Engine,
+                        "extension worker closed without a provider response",
+                    ))
+                }))
+            }
+            std::task::Poll::Pending => std::task::Poll::Pending,
+        }
     }
 }
 
@@ -1889,28 +1970,130 @@ impl<T> Drop for RuntimeProviderExecution<T> {
 pub(crate) struct RuntimePool {
     scheduler: Option<SchedulerPool<EngineTurn>>,
     scheduler_handle: SchedulerHandle<EngineTurn>,
+    finalizer: LifecycleFinalizer,
+    events: Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<EngineEvent>>>,
+}
+
+#[derive(Clone)]
+struct LifecycleFinalizer {
     runtimes: Arc<Mutex<HashMap<ExtensionId, Arc<RuntimeCapsule>>>>,
-    requests: Mutex<mpsc::Receiver<HostRequest>>,
-    request_sender: mpsc::Sender<HostRequest>,
+    events: tokio::sync::mpsc::UnboundedSender<EngineEvent>,
+}
+
+impl LifecycleFinalizer {
+    fn startup_failed(&self, key: ExtensionKey) {
+        let _ = self.events.send(EngineEvent::LifecycleEnded {
+            key,
+            reason: LifecycleEnd::StartupFailed,
+        });
+    }
+
+    fn finalize(
+        &self,
+        key: ExtensionKey,
+        reason: LifecycleEnd,
+        error: RuntimeError,
+        terminate: bool,
+    ) -> bool {
+        let capsule = {
+            let mut runtimes = self.runtimes.lock().unwrap();
+            if !runtimes
+                .get(&key.extension)
+                .is_some_and(|current| current.key() == key)
+            {
+                return false;
+            }
+            runtimes.remove(&key.extension).expect("matching lifecycle")
+        };
+        if terminate {
+            let _ = capsule.termination_handle().terminate();
+        }
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            capsule.dispose_with_error(error);
+        }));
+        let _ = self
+            .events
+            .send(EngineEvent::LifecycleEnded { key, reason });
+        true
+    }
+
+    fn capsules(&self) -> Vec<Arc<RuntimeCapsule>> {
+        self.runtimes.lock().unwrap().values().cloned().collect()
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum LifecycleEnd {
+    StartupFailed,
+    Unloaded,
+    Failed(Failure),
+    Shutdown,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum EngineEvent {
+    Request(HostRequest),
+    LifecycleEnded {
+        key: ExtensionKey,
+        reason: LifecycleEnd,
+    },
+}
+
+pub(crate) struct EngineEventInbox {
+    receiver: tokio::sync::mpsc::UnboundedReceiver<EngineEvent>,
+}
+
+impl EngineEventInbox {
+    pub(crate) async fn receive(&mut self) -> Option<EngineEvent> {
+        self.receiver.recv().await
+    }
+
+    #[cfg(test)]
+    pub(crate) fn receive_timeout(&mut self, timeout: Duration) -> Option<EngineEvent> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            match self.receiver.try_recv() {
+                Ok(event) => return Some(event),
+                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => return None,
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
+                    if Instant::now() >= deadline {
+                        return None;
+                    }
+                    std::thread::yield_now();
+                }
+            }
+        }
+    }
 }
 
 impl RuntimePool {
     pub(crate) fn new(config: PoolConfig) -> Self {
         initialize();
         let runtimes = Arc::new(Mutex::new(HashMap::new()));
-        let (request_sender, requests) = mpsc::channel();
-        let executor_runtimes = Arc::clone(&runtimes);
+        let (event_sender, events) = tokio::sync::mpsc::unbounded_channel();
+        let finalizer = LifecycleFinalizer {
+            runtimes,
+            events: event_sender,
+        };
+        let executor_finalizer = finalizer.clone();
         let scheduler = SchedulerPool::new(config, move |turn| {
-            execute_engine_turn(turn, &executor_runtimes)
+            execute_engine_turn(turn, &executor_finalizer)
         });
         let scheduler_handle = scheduler.handle();
         Self {
             scheduler: Some(scheduler),
             scheduler_handle,
-            runtimes,
-            requests: Mutex::new(requests),
-            request_sender,
+            finalizer,
+            events: Mutex::new(Some(events)),
         }
+    }
+
+    pub(crate) fn take_event_inbox(&self) -> Option<EngineEventInbox> {
+        self.events
+            .lock()
+            .unwrap()
+            .take()
+            .map(|receiver| EngineEventInbox { receiver })
     }
 
     pub(crate) fn load(
@@ -1923,30 +2106,29 @@ impl RuntimePool {
         handle.admit(key)?;
         let capsule = match RuntimeCapsule::new(key, config) {
             Ok(capsule) => {
-                *capsule.local_state.request_sender.lock().unwrap() =
-                    Some(self.request_sender.clone());
+                *capsule.local_state.event_sender.lock().unwrap() =
+                    Some(self.finalizer.events.clone());
                 Arc::new(capsule)
             }
             Err(error) => {
                 let _ = handle.finish_loading(key, Err(Failure::new(error.to_string())));
+                self.finalizer.startup_failed(key);
                 return Err(error.into());
             }
         };
-        let finish = {
-            let mut runtimes = self.runtimes.lock().unwrap();
-            runtimes.insert(key.extension, Arc::clone(&capsule));
-            let finish = handle.finish_loading(key, Ok(()));
-            if finish.is_err()
-                && runtimes
-                    .get(&key.extension)
-                    .is_some_and(|current| current.key() == key)
-            {
-                runtimes.remove(&key.extension);
-            }
-            finish
-        };
+        self.finalizer
+            .runtimes
+            .lock()
+            .unwrap()
+            .insert(key.extension, Arc::clone(&capsule));
+        let finish = handle.finish_loading(key, Ok(()));
         if let Err(error) = finish {
-            capsule.dispose();
+            self.finalizer.finalize(
+                key,
+                LifecycleEnd::StartupFailed,
+                RuntimeError::fatal(RuntimeErrorKind::Cancelled, "extension startup failed"),
+                true,
+            );
             return Err(error.into());
         }
         Ok(())
@@ -1959,7 +2141,7 @@ impl RuntimePool {
         source: impl Into<Arc<str>>,
     ) -> Result<RuntimeExecution, RuntimePoolError> {
         let capsule = self.capsule(key)?;
-        let (result_sender, result) = mpsc::channel();
+        let (result_sender, result) = tokio::sync::oneshot::channel();
         let (_, completion) = self
             .scheduler
             .as_ref()
@@ -1986,7 +2168,7 @@ impl RuntimePool {
         source: impl Into<Arc<str>>,
     ) -> Result<RuntimeExecution, RuntimePoolError> {
         let capsule = self.capsule(key)?;
-        let (result_sender, result) = mpsc::channel();
+        let (result_sender, result) = tokio::sync::oneshot::channel();
         let (_, completion) = self
             .scheduler
             .as_ref()
@@ -2006,6 +2188,25 @@ impl RuntimePool {
         Ok(RuntimeExecution { result, completion })
     }
 
+    #[cfg(test)]
+    pub(crate) fn panic_worker_turn(
+        &self,
+        key: ExtensionKey,
+    ) -> Result<RuntimeExecution, RuntimePoolError> {
+        let capsule = self.capsule(key)?;
+        let (result_sender, result) = tokio::sync::oneshot::channel();
+        let (_, completion) = self.scheduler_handle.enqueue_root(
+            key,
+            EngineTurn {
+                capsule,
+                work: EngineWork::Panic {
+                    result: result_sender,
+                },
+            },
+        )?;
+        Ok(RuntimeExecution { result, completion })
+    }
+
     pub(crate) fn invoke_command(
         &self,
         key: ExtensionKey,
@@ -2020,7 +2221,7 @@ impl RuntimePool {
             .into());
         }
         let capsule = self.capsule(key)?;
-        let (result_sender, result) = mpsc::channel();
+        let (result_sender, result) = tokio::sync::oneshot::channel();
         let (_, completion) = self.scheduler_handle.enqueue_root(
             key,
             EngineTurn {
@@ -2041,7 +2242,7 @@ impl RuntimePool {
         request: TreeChildrenRequest,
     ) -> Result<RuntimeProviderExecution<TreeChildrenResponse>, RuntimePoolError> {
         let capsule = self.capsule(key)?;
-        let (result_sender, result) = mpsc::channel();
+        let (result_sender, result) = tokio::sync::oneshot::channel();
         let cancelled = Arc::new(AtomicBool::new(false));
         let completed = Arc::new(AtomicBool::new(false));
         let (root, completion) = self.scheduler_handle.enqueue_root(
@@ -2057,7 +2258,7 @@ impl RuntimePool {
             },
         )?;
         Ok(RuntimeProviderExecution {
-            result,
+            result: Some(result),
             completion,
             cancellation: Some(ProviderCancellation {
                 key,
@@ -2076,7 +2277,7 @@ impl RuntimePool {
         request: CompletionRequest,
     ) -> Result<RuntimeProviderExecution<CompletionResponse>, RuntimePoolError> {
         let capsule = self.capsule(key)?;
-        let (result_sender, result) = mpsc::channel();
+        let (result_sender, result) = tokio::sync::oneshot::channel();
         let cancelled = Arc::new(AtomicBool::new(false));
         let completed = Arc::new(AtomicBool::new(false));
         let (root, completion) = self.scheduler_handle.enqueue_root(
@@ -2092,7 +2293,7 @@ impl RuntimePool {
             },
         )?;
         Ok(RuntimeProviderExecution {
-            result,
+            result: Some(result),
             completion,
             cancellation: Some(ProviderCancellation {
                 key,
@@ -2140,18 +2341,37 @@ impl RuntimePool {
     }
 
     pub(crate) fn receive_request(&self) -> Option<HostRequest> {
-        self.requests.lock().unwrap().recv().ok()
+        loop {
+            let event = self.events.lock().unwrap().as_mut()?.blocking_recv()?;
+            if let EngineEvent::Request(request) = event {
+                return Some(request);
+            }
+        }
     }
 
     #[cfg(test)]
     fn receive_request_timeout(&self, timeout: std::time::Duration) -> Option<HostRequest> {
-        self.requests.lock().unwrap().recv_timeout(timeout).ok()
+        let deadline = Instant::now() + timeout;
+        loop {
+            let event = self.events.lock().unwrap().as_mut()?.try_recv();
+            match event {
+                Ok(EngineEvent::Request(request)) => return Some(request),
+                Ok(EngineEvent::LifecycleEnded { .. }) => {}
+                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => return None,
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
+                    if Instant::now() >= deadline {
+                        return None;
+                    }
+                    std::thread::yield_now();
+                }
+            }
+        }
     }
 
     pub(crate) fn respond(&self, response: HostResponse) -> Result<(), RuntimeResponseError> {
         let request_id = response.id;
         let capsule = {
-            let runtimes = self.runtimes.lock().unwrap();
+            let runtimes = self.finalizer.runtimes.lock().unwrap();
             let Some(capsule) = runtimes.get(&response.extension) else {
                 return Err(RuntimeResponseError::WrongExtension);
             };
@@ -2226,6 +2446,10 @@ impl RuntimePool {
         Ok(self.capsule(key)?.local_state.buffer_change_queue_metrics())
     }
 
+    pub(crate) fn diagnostics(&self) -> super::scheduler::SchedulerDiagnostics {
+        self.scheduler_handle.diagnostics()
+    }
+
     pub(crate) fn termination_handle(
         &self,
         key: ExtensionKey,
@@ -2243,8 +2467,8 @@ impl RuntimePool {
     }
 
     pub(crate) fn unload(&self, key: ExtensionKey) -> Result<(), RuntimePoolError> {
-        let capsule = {
-            let mut runtimes = self.runtimes.lock().unwrap();
+        {
+            let runtimes = self.finalizer.runtimes.lock().unwrap();
             let Some(capsule) = runtimes.get(&key.extension) else {
                 return Err(SchedulerError::UnknownExtension(key.extension).into());
             };
@@ -2255,15 +2479,14 @@ impl RuntimePool {
                 }
                 .into());
             }
-            self.scheduler
-                .as_ref()
-                .expect("runtime pool is active")
-                .handle()
-                .stop(key)?;
-            runtimes.remove(&key.extension).unwrap()
-        };
-        let _ = capsule.termination_handle().terminate();
-        capsule.dispose();
+        }
+        self.scheduler_handle.stop(key)?;
+        self.finalizer.finalize(
+            key,
+            LifecycleEnd::Unloaded,
+            RuntimeError::fatal(RuntimeErrorKind::Cancelled, "extension unloaded"),
+            true,
+        );
         Ok(())
     }
 
@@ -2272,7 +2495,7 @@ impl RuntimePool {
     }
 
     fn capsule(&self, key: ExtensionKey) -> Result<Arc<RuntimeCapsule>, RuntimePoolError> {
-        let runtimes = self.runtimes.lock().unwrap();
+        let runtimes = self.finalizer.runtimes.lock().unwrap();
         let Some(capsule) = runtimes.get(&key.extension) else {
             return Err(SchedulerError::UnknownExtension(key.extension).into());
         };
@@ -2287,16 +2510,21 @@ impl RuntimePool {
     }
 
     fn shutdown_inner(&mut self) {
-        let capsules: Vec<_> = self.runtimes.lock().unwrap().values().cloned().collect();
+        let capsules = self.finalizer.capsules();
         for capsule in &capsules {
             let _ = capsule.termination_handle().terminate();
         }
         if let Some(scheduler) = self.scheduler.take() {
             scheduler.shutdown();
         }
-        self.runtimes.lock().unwrap().clear();
         for capsule in capsules {
-            capsule.dispose();
+            let key = capsule.key();
+            self.finalizer.finalize(
+                key,
+                LifecycleEnd::Shutdown,
+                RuntimeError::fatal(RuntimeErrorKind::Cancelled, "extension pool shut down"),
+                false,
+            );
         }
     }
 }
@@ -2661,7 +2889,7 @@ fn host_request_callback<'s, 'i>(
         }
     };
     let parsed = parse_host_operation(scope, &arguments);
-    let sender = state.request_sender.lock().unwrap().clone();
+    let sender = state.event_sender.lock().unwrap().clone();
     let root = *state.current_root.lock().unwrap();
     let (operation, kind) = match parsed {
         Ok(parsed) => parsed,
@@ -2702,13 +2930,13 @@ fn host_request_callback<'s, 'i>(
         },
     );
     if sender
-        .send(HostRequest {
+        .send(EngineEvent::Request(HostRequest {
             extension: state.key.extension,
             lifecycle: state.key.lifecycle,
             id,
             invocation,
             operation,
-        })
+        }))
         .is_err()
     {
         state.pending.lock().unwrap().remove(&id);
@@ -3306,10 +3534,7 @@ fn fatal_or_completed(error: &RuntimeError) -> TurnOutcome {
     }
 }
 
-fn execute_engine_turn(
-    turn: Turn<EngineTurn>,
-    runtimes: &Mutex<HashMap<ExtensionId, Arc<RuntimeCapsule>>>,
-) -> TurnOutcome {
+fn execute_engine_turn(turn: Turn<EngineTurn>, finalizer: &LifecycleFinalizer) -> TurnOutcome {
     let key = turn.key;
     let root = turn.root;
     let work = turn.work;
@@ -3340,6 +3565,11 @@ fn execute_engine_turn(
         EngineWork::Provider(call) => capsule.start_provider_turn(root, call),
         EngineWork::CancelProvider => capsule.cancel_provider_turn(root),
         EngineWork::Termination => capsule.finish_termination_turn(root),
+        #[cfg(test)]
+        EngineWork::Panic { result } => {
+            let _result = result;
+            panic!("injected extension worker panic")
+        }
     }))
     .unwrap_or_else(|_| {
         TurnOutcome::Fatal(Failure::new(
@@ -3348,21 +3578,15 @@ fn execute_engine_turn(
     });
     match &outcome {
         TurnOutcome::Fatal(failure) => {
-            {
-                let mut runtimes = runtimes.lock().unwrap();
-                if runtimes
-                    .get(&key.extension)
-                    .is_some_and(|current| current.key() == key)
-                {
-                    runtimes.remove(&key.extension);
-                }
-            }
-            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                capsule.dispose_with_error(RuntimeError::fatal(
+            finalizer.finalize(
+                key,
+                LifecycleEnd::Failed(failure.clone()),
+                RuntimeError::fatal(
                     RuntimeErrorKind::LifecycleFailed,
                     failure.message().to_owned(),
-                ));
-            }));
+                ),
+                false,
+            );
             outcome
         }
         _ => outcome,

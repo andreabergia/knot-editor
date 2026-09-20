@@ -498,13 +498,6 @@ impl SnapshotText {
             Self::Utf16(text) => String::from_utf16(text).expect("snapshot UTF-16 is well formed"),
         }
     }
-
-    pub(crate) fn retained_bytes(&self) -> usize {
-        match self {
-            Self::Utf8(text) => text.len(),
-            Self::Utf16(text) => size_of_val(text.as_ref()),
-        }
-    }
 }
 
 /// A snapshot of one requested UTF-8 byte range.
