@@ -12,11 +12,11 @@ use crate::host::protocol::{
     HostRequestError, HostResponse, HostResponseValue, RequestId,
 };
 
+#[cfg(test)]
+use super::model::CommandDefinition;
 use super::{
     CommandCompletion, CommandExecution,
-    model::{
-        CommandCatalog, CommandCatalogError, CommandDefinition, CommandTarget, CommandTargetKind,
-    },
+    model::{CommandCatalog, CommandCatalogError, CommandTarget, CommandTargetKind},
 };
 
 type Lifecycle = (ExtensionId, ExtensionLifecycleId);
@@ -47,14 +47,16 @@ struct InvocationNode {
     cancelled: bool,
 }
 
-/// Work for the eventual product/runtime integration to execute.
+/// Work emitted to the product-owned extension pool or native dispatcher.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum ExtensionCommandEvent {
     DispatchExtension {
+        root: CommandInvocationId,
         invocation: CommandInvocation,
         buffer: Option<BufferHandle>,
     },
     DispatchNative {
+        root: CommandInvocationId,
         invocation: CommandInvocationId,
         command: Command,
         buffer: Option<BufferHandle>,
@@ -107,6 +109,7 @@ impl ExtensionCommandBridge {
         self.catalog.register_native(name.into(), title.into())
     }
 
+    #[cfg(test)]
     pub(crate) fn definitions(&self) -> impl Iterator<Item = &CommandDefinition> {
         self.catalog.definitions()
     }
@@ -217,6 +220,7 @@ impl ExtensionCommandBridge {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn cancel(&mut self, invocation: CommandInvocationId) {
         self.cancel_subtree(invocation);
         if self
@@ -261,6 +265,18 @@ impl ExtensionCommandBridge {
 
     pub(crate) fn drain_events(&mut self) -> impl Iterator<Item = ExtensionCommandEvent> + '_ {
         self.events.drain(..)
+    }
+
+    pub(crate) fn contains_invocation(&self, invocation: CommandInvocationId) -> bool {
+        self.invocations.contains_key(&invocation)
+    }
+
+    pub(crate) fn is_cancelled(&self, invocation: Option<CommandInvocationId>) -> bool {
+        invocation.is_some_and(|invocation| {
+            self.invocations
+                .get(&invocation)
+                .is_none_or(|node| node.cancelled)
+        })
     }
 
     fn enqueue_root_for(
@@ -405,6 +421,7 @@ impl ExtensionCommandBridge {
     }
 
     fn start_invocation(&mut self, invocation: CommandInvocationId) {
+        let root = self.root_for(invocation);
         let Some(node) = self.invocations.get_mut(&invocation) else {
             return;
         };
@@ -419,6 +436,7 @@ impl ExtensionCommandBridge {
             InvocationTarget::Native => {
                 self.events
                     .push_back(ExtensionCommandEvent::DispatchNative {
+                        root,
                         invocation,
                         command: node.command.clone(),
                         buffer: node.buffer,
@@ -434,6 +452,7 @@ impl ExtensionCommandBridge {
                 }
                 self.events
                     .push_back(ExtensionCommandEvent::DispatchExtension {
+                        root,
                         invocation: CommandInvocation {
                             id: invocation,
                             registration: target.registration,
@@ -445,6 +464,14 @@ impl ExtensionCommandBridge {
                     });
             }
         }
+    }
+
+    fn root_for(&self, invocation: CommandInvocationId) -> CommandInvocationId {
+        let mut current = invocation;
+        while let Some(parent) = self.invocations.get(&current).and_then(|node| node.parent) {
+            current = parent;
+        }
+        current
     }
 
     fn cancel_subtree(&mut self, invocation: CommandInvocationId) {
@@ -678,6 +705,7 @@ mod tests {
         assert_eq!(
             bridge.drain_events().collect::<Vec<_>>(),
             vec![ExtensionCommandEvent::DispatchExtension {
+                root: first.id,
                 invocation: CommandInvocation {
                     id: first.id,
                     registration,
@@ -691,7 +719,11 @@ mod tests {
         bridge.complete(first.id, CommandOutcome::Completed);
         assert!(matches!(
             bridge.drain_events().next(),
-            Some(ExtensionCommandEvent::DispatchExtension { invocation, buffer: None })
+            Some(ExtensionCommandEvent::DispatchExtension {
+                invocation,
+                buffer: None,
+                ..
+            })
                 if invocation.id == second.id
         ));
         bridge.complete(second.id, CommandOutcome::Completed);
@@ -812,6 +844,7 @@ mod tests {
             ExtensionCommandEvent::DispatchExtension {
                 invocation,
                 buffer: captured,
+                ..
             } => {
                 assert_eq!(invocation.registration, child_registration);
                 assert_eq!(captured, buffer);

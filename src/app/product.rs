@@ -2260,7 +2260,7 @@ pub(crate) fn open_product_window(request: Option<OpenRequest>, cx: &mut App) {
     .expect("product window must open");
 }
 
-pub(crate) fn run(initial_request: Option<OpenRequest>) {
+pub(crate) fn run(initial_request: Option<OpenRequest>, fixture: Option<String>) {
     let application = Application::new();
     let (open_requests, mut incoming_requests) = tokio::sync::mpsc::unbounded_channel();
     application.on_open_urls(move |urls| {
@@ -2281,6 +2281,7 @@ pub(crate) fn run(initial_request: Option<OpenRequest>) {
         cx.set_global(ApplicationFileSystems(product_filesystems()));
         let commands = cx.new(ProductCommandDispatcher::new);
         cx.set_global(ApplicationProductCommands(commands));
+        let extension_host = super::extension_host::install(cx);
         bind_product_keys(cx);
         cx.set_menus(vec![
             Menu {
@@ -2343,6 +2344,9 @@ pub(crate) fn run(initial_request: Option<OpenRequest>) {
         })
         .detach();
         open_product_window(initial_request, cx);
+        if let Some(fixture) = fixture.as_deref() {
+            extension_host.update(cx, |host, cx| host.start_diagnostic_fixture(fixture, cx));
+        }
     });
 }
 
@@ -2823,6 +2827,72 @@ mod tests {
             unsupported.result,
             Err(HostRequestError::UnsupportedOperation)
         );
+    }
+
+    #[gpui::test]
+    fn pooled_fixture_commands_and_completions_use_the_product_target(cx: &mut TestAppContext) {
+        let documents = install_globals(cx);
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        let (shell, window) = product_window(document, model, cx);
+        let host = cx.update(|cx| {
+            let host = super::super::extension_host::install(cx);
+            host.update(cx, |host, cx| host.start_diagnostic_fixture("product", cx));
+            host
+        });
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            cx.run_until_parked();
+            let registered = cx.read(|cx| {
+                cx.global::<ApplicationProductCommands>()
+                    .0
+                    .read(cx)
+                    .definitions()
+                    .any(|definition| definition.name.as_ref() == "knot.fixture.primary")
+            });
+            if registered {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "fixture command did not enter the product catalog"
+            );
+            std::thread::yield_now();
+        }
+
+        let mut execution = dispatch_product_command(&shell, window, "knot.fixture.primary", cx);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let outcome = loop {
+            cx.run_until_parked();
+            match execution.completion.try_recv() {
+                Ok(outcome) => break outcome,
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {
+                    assert!(std::time::Instant::now() < deadline);
+                    std::thread::yield_now();
+                }
+                Err(error) => panic!("fixture command completion closed: {error}"),
+            }
+        };
+        assert_eq!(outcome, CommandOutcome::Completed);
+
+        let mut completion = dispatch_product_command(
+            &shell,
+            window,
+            super::super::product_commands::SHOW_COMPLETIONS_COMMAND,
+            cx,
+        );
+        cx.run_until_parked();
+        assert_eq!(
+            completion.completion.try_recv().unwrap(),
+            CommandOutcome::Completed
+        );
+
+        drop(host);
+        cx.update(|cx| {
+            drop(cx.remove_global::<super::super::extension_host::ApplicationExtensionHost>())
+        });
+        cx.run_until_parked();
     }
 
     #[gpui::test]

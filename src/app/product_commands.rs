@@ -3,12 +3,16 @@
 use gpui::*;
 
 use crate::host::protocol::{
-    Command, CommandArgumentValue, CommandInvokeDispatch, CommandOutcome, ExtensionId,
-    ExtensionLifecycleId, HostOperation, HostRequest, HostRequestError, HostResponse,
+    Command, CommandArgumentValue, CommandOutcome, CommandRegistrationId, ExtensionId,
+    ExtensionLifecycleId,
+};
+#[cfg(test)]
+use crate::host::protocol::{
+    CommandInvokeDispatch, HostOperation, HostRequest, HostRequestError, HostResponse,
     HostResponseValue, RequestId,
 };
 
-use super::model::{CommandCatalog, CommandDefinition, CommandTargetKind};
+use super::model::{CommandCatalog, CommandCatalogError, CommandDefinition, CommandTargetKind};
 use super::product::ProductShell;
 use super::{CommandCompletion, CommandExecution};
 
@@ -31,6 +35,7 @@ pub(crate) const SELECT_ALL_COMMAND: &str = "editor.select-all";
 pub(crate) const FIND_COMMAND: &str = "editor.find";
 pub(crate) const FIND_NEXT_COMMAND: &str = "editor.find-next";
 pub(crate) const FIND_PREVIOUS_COMMAND: &str = "editor.find-previous";
+pub(crate) const SHOW_COMPLETIONS_COMMAND: &str = "editor.show-completions";
 
 const PRODUCT_COMMANDS: &[(&str, &str)] = &[
     ("editor.move-left", "Move left"),
@@ -80,6 +85,7 @@ const PRODUCT_COMMANDS: &[(&str, &str)] = &[
     (FIND_COMMAND, "Find"),
     (FIND_NEXT_COMMAND, "Find Next"),
     (FIND_PREVIOUS_COMMAND, "Find Previous"),
+    (SHOW_COMPLETIONS_COMMAND, "Show Completions"),
 ];
 
 #[derive(Clone, PartialEq, Action)]
@@ -126,10 +132,7 @@ pub(crate) struct ProductCommandDispatcher {
     last_outcome: Option<CommandOutcome>,
 }
 
-#[allow(
-    dead_code,
-    reason = "the product transport loop connects this adapter in D017 task 9"
-)]
+#[cfg(test)]
 pub(crate) enum ProductCommandHostResponse {
     Ready(HostResponse),
     Awaiting {
@@ -140,10 +143,7 @@ pub(crate) enum ProductCommandHostResponse {
     },
 }
 
-#[allow(
-    dead_code,
-    reason = "the product transport loop connects this adapter in D017 task 9"
-)]
+#[cfg(test)]
 impl ProductCommandHostResponse {
     pub(crate) async fn resolve(self) -> HostResponse {
         match self {
@@ -185,12 +185,46 @@ impl ProductCommandDispatcher {
         self.catalog.definitions()
     }
 
+    pub(crate) fn register_extension(
+        &mut self,
+        name: crate::host::protocol::CommandName,
+        title: String,
+        extension: ExtensionId,
+        lifecycle: ExtensionLifecycleId,
+    ) -> Result<CommandRegistrationId, CommandCatalogError> {
+        self.catalog
+            .register_extension(name, title, extension, lifecycle)
+    }
+
+    pub(crate) fn unregister_extension(
+        &mut self,
+        registration: CommandRegistrationId,
+        extension: ExtensionId,
+        lifecycle: ExtensionLifecycleId,
+    ) -> Result<(), CommandCatalogError> {
+        self.catalog.unregister(registration, extension, lifecycle)
+    }
+
+    pub(crate) fn remove_extension_lifecycle(
+        &mut self,
+        extension: ExtensionId,
+        lifecycle: ExtensionLifecycleId,
+    ) {
+        self.catalog.remove_lifecycle(extension, lifecycle);
+    }
+
     pub(crate) fn dispatch(
         &mut self,
         command: Command,
         target: ProductCommandTarget,
         cx: &mut Context<Self>,
     ) -> CommandExecution {
+        if matches!(
+            self.catalog.resolve(command.name.as_ref()),
+            Ok(CommandTargetKind::Extension(_))
+        ) {
+            return super::extension_host::dispatch_product_command(command, target, cx);
+        }
         let id = crate::host::protocol::CommandInvocationId::new(self.next_invocation);
         self.next_invocation = self
             .next_invocation
@@ -206,6 +240,15 @@ impl ProductCommandDispatcher {
         let dispatcher = cx.entity();
         cx.defer(move |cx| {
             if admitted && command.arguments == CommandArgumentValue::Null {
+                if command.name.as_ref() == SHOW_COMPLETIONS_COMMAND {
+                    let outcome = super::extension_host::start_completion(target, cx);
+                    completion.complete(outcome.clone());
+                    let _ = dispatcher.update(cx, |dispatcher, cx| {
+                        dispatcher.last_outcome = Some(outcome);
+                        cx.notify();
+                    });
+                    return;
+                }
                 let asynchronous = match command.name.as_ref() {
                     OPEN_COMMAND => {
                         dispatch_open_to_captured_target(&target, completion.clone(), cx)
@@ -257,13 +300,7 @@ impl ProductCommandDispatcher {
         execution
     }
 
-    /// Route one product-facing extension request without owning its transport.
-    ///
-    /// Task 9 connects this response to the application-owned runtime pool.
-    #[allow(
-        dead_code,
-        reason = "the product transport loop connects this adapter in D017 task 9"
-    )]
+    #[cfg(test)]
     pub(crate) fn dispatch_host_request(
         &mut self,
         request: HostRequest,
@@ -323,10 +360,7 @@ impl ProductCommandDispatcher {
     }
 }
 
-#[allow(
-    dead_code,
-    reason = "the product transport loop connects this adapter in D017 task 9"
-)]
+#[cfg(test)]
 fn command_host_response(
     extension: ExtensionId,
     lifecycle: ExtensionLifecycleId,
@@ -538,4 +572,9 @@ pub(crate) fn bind_editing_keys(cx: &mut App) {
             )
         }),
     );
+    cx.bind_keys([KeyBinding::new(
+        "ctrl-space",
+        ProductCommandSource::new(SHOW_COMPLETIONS_COMMAND),
+        Some("product > editor"),
+    )]);
 }

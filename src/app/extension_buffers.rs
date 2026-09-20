@@ -26,8 +26,8 @@ pub(crate) struct BufferChangeDispatch {
 /// Foreground-owned buffer state exposed through the extension protocol.
 ///
 /// Runtime scheduling and response transport remain outside this component.
-/// The eventual product bridge can feed requests into [`Self::dispatch`] and
-/// enqueue each [`BufferChangeDispatch`] as extension root work.
+/// The product host feeds requests into [`Self::dispatch`] and enqueues each
+/// [`BufferChangeDispatch`] as extension root work.
 pub(crate) struct ExtensionBufferBridge {
     buffers: BufferRegistry,
     subscriptions: BufferSubscriptionRegistry,
@@ -59,6 +59,10 @@ impl ExtensionBufferBridge {
         self.buffers.set_active(buffer);
     }
 
+    #[allow(
+        dead_code,
+        reason = "document closure notifications do not yet expose a product buffer-removal event"
+    )]
     pub(crate) fn close_buffer(
         &mut self,
         buffer: BufferHandle,

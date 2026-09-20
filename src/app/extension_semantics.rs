@@ -4,10 +4,11 @@ use std::collections::{HashMap, HashSet};
 
 use gpui::{App, Entity};
 
+#[cfg(test)]
+use crate::host::protocol::CompletionProviderRegistrationId;
 use crate::host::protocol::{
-    CompletionProviderRegistrationId, ExtensionId, ExtensionLifecycleId, HostOperation,
-    HostRequest, HostRequestError, HostResponse, HostResponseValue, TreeChildrenResponse,
-    TreeProviderRegistrationId,
+    ExtensionId, ExtensionLifecycleId, HostOperation, HostRequest, HostRequestError, HostResponse,
+    HostResponseValue, TreeChildrenResponse, TreeProviderRegistrationId,
 };
 
 use super::{
@@ -170,6 +171,7 @@ impl ExtensionSemanticBridge {
         self.completion_providers.snapshot()
     }
 
+    #[cfg(test)]
     pub(crate) fn owns_completion_provider(
         &self,
         registration: CompletionProviderRegistrationId,

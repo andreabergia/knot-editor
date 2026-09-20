@@ -10,49 +10,34 @@ use crate::host::protocol::CommandOutcome;
 
 #[allow(
     dead_code,
-    reason = "retained application boundary during the pooled extension-host rebuild"
+    reason = "retained application boundary outside the current product surface"
 )]
 mod command_palette;
-#[allow(
-    dead_code,
-    reason = "retained for the pooled extension host integration"
-)]
 mod completion;
 #[allow(
     dead_code,
-    reason = "retained application boundary during the pooled extension-host rebuild"
+    reason = "retained application boundary outside the current product surface"
 )]
 mod documents;
 #[allow(
     dead_code,
-    reason = "retained application boundary during the pooled extension-host rebuild"
+    reason = "retained application boundary outside the current product surface"
 )]
 mod editor;
 mod entry;
-#[allow(
-    dead_code,
-    reason = "retained for the pooled extension host integration"
-)]
 mod extension_buffers;
-#[allow(
-    dead_code,
-    reason = "retained for the pooled extension host integration"
-)]
 mod extension_commands;
-#[allow(
-    dead_code,
-    reason = "retained for the pooled extension host integration"
-)]
+mod extension_host;
 mod extension_semantics;
 #[allow(
     dead_code,
-    reason = "retained application boundary during the pooled extension-host rebuild"
+    reason = "retained application boundary outside the current product surface"
 )]
 mod filesystem;
 mod history;
 #[allow(
     dead_code,
-    reason = "retained application boundary during the pooled extension-host rebuild"
+    reason = "retained application boundary outside the current product surface"
 )]
 pub mod model;
 mod open;
@@ -65,28 +50,24 @@ mod product_commands;
 mod resource;
 #[allow(
     dead_code,
-    reason = "retained for the pooled extension host integration"
+    reason = "retained native generated-text surface outside the current product shell"
 )]
 mod search_results;
 #[allow(
     dead_code,
-    reason = "retained for the pooled extension host integration"
+    reason = "retained native terminal surface outside the current product shell"
 )]
 mod terminal_view;
-#[allow(
-    dead_code,
-    reason = "retained for the pooled extension host integration"
-)]
 mod tree_view;
 mod workbench;
 #[allow(
     dead_code,
-    reason = "retained application boundary during the pooled extension-host rebuild"
+    reason = "retained application boundary outside the current product surface"
 )]
 mod workspace;
 #[allow(
     dead_code,
-    reason = "retained application boundary during the pooled extension-host rebuild"
+    reason = "retained application boundary outside the current product surface"
 )]
 mod workspace_tree;
 
@@ -178,12 +159,7 @@ pub fn run() {
         std::process::exit(2);
     });
     match launch {
-        entry::LaunchConfiguration::Product(request) => product::run(request),
-        entry::LaunchConfiguration::Fixture(fixture) => {
-            eprintln!(
-                "[knot] fixture {fixture:?} is unavailable while the extension host is rebuilt"
-            );
-            product::run(None);
-        }
+        entry::LaunchConfiguration::Product(request) => product::run(request, None),
+        entry::LaunchConfiguration::Fixture(fixture) => product::run(None, Some(fixture)),
     }
 }

@@ -944,7 +944,7 @@ impl BufferSubscriptionRegistry {
 
     #[allow(
         dead_code,
-        reason = "buffer closing is not exposed by the prototype shell yet"
+        reason = "document closure does not yet publish a buffer-registry removal event"
     )]
     pub(crate) fn remove_buffer(&mut self, buffer: BufferHandle) {
         self.subscriptions

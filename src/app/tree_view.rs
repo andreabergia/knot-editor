@@ -163,6 +163,7 @@ impl TreeView {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn is_loading(&self) -> bool {
         self.children.values().any(|state| state.loading)
     }
