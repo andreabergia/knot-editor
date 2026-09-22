@@ -1,6 +1,7 @@
 # D017: Production V8 Isolate Pool and Scheduling
 
-Status: in progress; Tasks 1-10 implemented, Task 10 awaiting review.
+Status: Tasks 1-11 implemented and automated checks passed; final manual review
+pending.
 
 This slice replaces the prototype `deno_core` runtime with a direct
 `rusty_v8` host and runs persistent extension isolates on a bounded worker
@@ -409,7 +410,7 @@ Manual review gate:
 
 ## Task 11: Close the slice
 
-- ⬜ Audit the implementation against every success criterion and scheduler
+- ✅ Audit the implementation against every success criterion and scheduler
   invariant in this plan; fill any remaining model, lifecycle, command,
   provider, transport, or integration coverage gaps.
 - ✅ Update `docs/architecture.md` and
@@ -420,10 +421,40 @@ Manual review gate:
   mobility, scheduling, and async-yield rationale.
 - ✅ Keep D018 and D019 deferred, refining their descriptions only if this work
   exposes a concrete new boundary.
-- ⬜ Record benchmark evidence and the completed result in this plan, mark it
-  completed, and remove or archive superseded fixture evidence only when it is
-  no longer useful historical context.
-- ⬜ Run `cargo fmt`, the full test suite, and the final release diagnostics.
+- ✅ Record final benchmark and test evidence in this plan. The fixture evidence
+  remains useful historical context.
+- ✅ Run `cargo fmt`, the full test suite, and the final release diagnostics.
+- ⬜ Record manual approval and mark this plan completed.
+
+Review evidence (2026-09-22, target macOS):
+
+- Audited the pool against the selected design and scheduler invariants. The
+  scheduler tests cover FIFO and per-extension serial turns, ready-queue
+  deduplication, identity rejection, exact-once settlement, fixed worker count,
+  parallel independent turns, yielding, and worker-failure isolation. Engine
+  tests cover isolate movement, persistent state, locked disposal, host promise
+  resumption, fatal isolation, and external UTF-16 ownership.
+- Closed two audit gaps: awaited queued script, command, and provider work now
+  reports its scheduler cancellation or fatal outcome; repeat product access to
+  the same buffer reuses its handle. Focused tests cover queued unload, shutdown,
+  fatal termination, and stable buffer identity. Product integration tests now
+  assert actual buffer mutation, completion results, tree output, and lifecycle
+  registration cleanup through the application-owned pool.
+- `cargo test --all-targets`: 343 library tests passed; all binary test targets
+  passed. `cargo tree -i deno_core` confirms the package is absent.
+- `cargo run --release --bin v8-bench -- --samples 2`: V8 initialization
+  8.53 ms; incremental isolate startup 9.67 ms/isolate; active-buffer host call
+  1.87 ms; ten batched edits 889 µs; 10 MiB external UTF-16 snapshot transfer
+  463 µs; fan-out, two isolates × eight events, 3.22 ms. Idle process RSS delta
+  was 4.02 MiB/isolate; slow-consumer maximum depth eight and start lag 3.12 ms.
+  The run recorded 64 turns, 15 worker movements, maximum queue wait 3.14 ms,
+  and 12 process threads with two configured pool workers. These are review
+  samples, not performance gates.
+- `cargo run --release --bin v8-bench -- --stress --workers 2`: three
+  load/unload cycles of nine extensions passed with persistent JavaScript state,
+  delayed host responses, an isolated fatal termination, and neighbor progress.
+  The configured worker count stayed at two; the run recorded 237 turns and
+  101 worker movements.
 
 Manual review gate:
 

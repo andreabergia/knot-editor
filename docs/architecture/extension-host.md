@@ -14,7 +14,8 @@ Part of the [architecture](../architecture.md). Design rationale is recorded in
 - `scheduler` owns bounded worker scheduling independently of V8 mechanics.
 - `engine` owns direct `v8` initialization, isolates, contexts, bindings, and
   all V8 types.
-- `lifecycle` owns extension lifetime and teardown state.
+- `lifecycle` defines extension identity, scheduler-visible state, and failure
+  data. The engine owns exact-once teardown.
 - `pool` exposes the V8-free application control, event-inbox, completion,
   watchdog, diagnostics, and shutdown surface.
 - `bench` owns host benchmark entry points.
@@ -125,7 +126,7 @@ ready-queue deduplication bit. A worker takes one FIFO turn and changes the
 lifecycle to `Running`; its result completes the active root, tail-queues one
 continuation turn, yields in `AwaitingHostWork`, or fails that lifecycle.
 Stop changes the lifecycle to `Stopping`; normal cleanup removes it, while a
-fatal outcome records `TerminalFailure`. The pool admits another lifecycle
+fatal outcome records `Failed`. The pool admits another lifecycle
 independently of a failed one.
 
 Scheduler diagnostics are read-only evidence: they report configured worker
