@@ -72,16 +72,29 @@ initialization, and runs persistent shared isolates through a bounded worker
 pool. Each turn enters the isolate under a V8 locker and drains explicit
 microtasks before yielding it.
 
+Size the pool to `min(available_parallelism, 4)` by default and allow an
+explicit worker count for tests and diagnostics. This fixes thread cost as
+extension count grows while still allowing independent extensions to execute
+in parallel. Moving a persistent isolate only between locked turns preserves
+its JavaScript globals and enables FIFO scheduling across workers without a
+Knot-owned unsafe mobility wrapper.
+
 Own one pool at the application boundary and deliver requests and terminal
 lifecycle events through an awaitable inbox. This keeps foreground mutation on
 gpui, avoids periodic wake loops and per-extension transport threads, and gives
 runtime and foreground resources one exact-once teardown signal.
 
 Serial callbacks within an extension simplify ownership; independent runtimes
-will progress through the bounded pool. Forced interruption is fatal to that
+progress through the bounded pool. Forced interruption is fatal to that
 extension so cleanup has a definite lifecycle boundary. Immutable shared
 UTF-16 snapshots serve V8 without exposing mutable storage or changing the
 UTF-8 core.
+Host operations retain V8 promise resolvers and yield the worker until a typed
+response makes the isolate runnable again. This keeps asynchronous native work
+from consuming pool capacity. The scheduler runs one non-preemptive JavaScript
+turn per dequeue, preserves unrelated roots in extension-local FIFO order, and
+admits same-tree continuations while a root is pending. It applies no automatic
+quotas, deadlines, event dropping, or backpressure; those policies remain D019.
 
 Reference: [extension host](architecture/extension-host.md). Evidence: [v8 runtime](archive/exploration/step7-v8-runtime.md).
 

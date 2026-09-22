@@ -1,12 +1,12 @@
 # Extension host
 
 Part of the [architecture](../architecture.md). Design rationale is recorded in
-[decisions](../decisions.md); active implementation work lives in
+[decisions](../decisions.md); validation evidence lives in
 [D017](../plans/d017-v8-isolate-pool-plan.md).
 
-## Current boundaries
+## Boundaries
 
-`host` owns six explicit boundaries:
+`host` owns six boundaries:
 
 - `protocol` contains Knot-owned transport identities, requests, responses,
   contribution data, and errors. It depends on neither gpui nor concrete core
@@ -19,7 +19,9 @@ Part of the [architecture](../architecture.md). Design rationale is recorded in
   watchdog, diagnostics, and shutdown surface.
 - `bench` owns host benchmark entry points.
 
-The scheduler owns a V8-independent state machine and a fixed worker pool.
+The scheduler owns a V8-independent state machine and a fixed worker pool of
+`min(available_parallelism, 4)` threads by default. Tests and diagnostics may
+set the worker count explicitly.
 Each loaded lifecycle has one authoritative state, one FIFO root queue, and at
 most one active logical command tree. A cloneable handle admits lifecycles,
 queues roots, wakes continuations, and requests stop; the pool owner shuts down
@@ -104,17 +106,16 @@ application-owned gpui foreground bridge
 application registries and models
 ```
 
-## Preserved boundary contracts
+## Boundary contracts
 
 Extension requests cross the application boundary only as Knot-owned semantic
 data and opaque extension, lifecycle, request, registration, invocation,
-subscription, and buffer identities. The foreground owner will revalidate
-captured identity, revision, generation, and lifecycle before mutation.
+subscription, and buffer identities. The foreground owner revalidates captured
+identity, revision, generation, and lifecycle before mutation.
 
-Buffer ranges and edits remain UTF-8 byte based. Snapshot storage retains the
-immutable UTF-16 representation needed by the future direct-V8 binding without
-changing the UTF-8 core. Detailed behaviors to restore are recorded in D017's
-protocol restoration ledger.
+Buffer ranges and edits remain UTF-8 byte based. Snapshot storage supplies an
+immutable external UTF-16 representation to V8 without changing the UTF-8
+core.
 
 ## Scheduler flow
 
@@ -123,6 +124,9 @@ A newly admitted lifecycle starts in `Loading`. Successful loading moves it to
 ready-queue deduplication bit. A worker takes one FIFO turn and changes the
 lifecycle to `Running`; its result completes the active root, tail-queues one
 continuation turn, yields in `AwaitingHostWork`, or fails that lifecycle.
+Stop changes the lifecycle to `Stopping`; normal cleanup removes it, while a
+fatal outcome records `TerminalFailure`. The pool admits another lifecycle
+independently of a failed one.
 
 Scheduler diagnostics are read-only evidence: they report configured worker
 count, lifecycle states, current and maximum queue depths, turn counts, worker

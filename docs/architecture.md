@@ -26,8 +26,8 @@ gpui application and views        extension runtimes
 
 The default `knot` binary runs the product application through `app::run`.
 `knot --fixture [name]` opens the same product shell with two static diagnostic
-extensions loaded through its application-owned pool. Focused host benchmark
-entry points remain present but contain no pooled workloads yet.
+extensions loaded through its application-owned pool. `v8-bench` measures the
+same pool and exercises multi-extension scheduling and lifecycle stress.
 
 ## Ownership
 
@@ -42,6 +42,11 @@ Views own presentation and interaction. Extension runtimes communicate through
 Knot-owned typed messages and opaque identities. Asynchronous results revalidate
 their captured target, revision or generation, and lifecycle before changing
 foreground state. Native I/O runs off the foreground thread.
+
+The application owns one extension pool. Its fixed workers enter persistent V8
+isolates for one turn at a time; awaiting host work retains JavaScript state without
+holding a worker. The host owns scheduling and runtime disposal, while the
+application owns protocol routing and foreground resource cleanup.
 
 ## Subsystem references
 

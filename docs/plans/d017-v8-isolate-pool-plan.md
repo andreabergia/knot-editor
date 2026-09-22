@@ -412,13 +412,13 @@ Manual review gate:
 - ⬜ Audit the implementation against every success criterion and scheduler
   invariant in this plan; fill any remaining model, lifecycle, command,
   provider, transport, or integration coverage gaps.
-- ⬜ Update `docs/architecture.md` and
+- ✅ Update `docs/architecture.md` and
   `docs/architecture/extension-host.md` with the implemented ownership,
   dependency direction, scheduler states, runtime flows, and behavioral
   constraints.
-- ⬜ Update `docs/decisions.md` with the validated direct-V8, pool-sizing,
+- ✅ Update `docs/decisions.md` with the validated direct-V8, pool-sizing,
   mobility, scheduling, and async-yield rationale.
-- ⬜ Keep D018 and D019 deferred, refining their descriptions only if this work
+- ✅ Keep D018 and D019 deferred, refining their descriptions only if this work
   exposes a concrete new boundary.
 - ⬜ Record benchmark evidence and the completed result in this plan, mark it
   completed, and remove or archive superseded fixture evidence only when it is
