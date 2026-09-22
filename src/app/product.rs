@@ -2834,7 +2834,7 @@ mod tests {
         let documents = install_globals(cx);
         let document = cx.update(|cx| create_untitled_document(&documents, cx));
         let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
-        let (shell, window) = product_window(document, model, cx);
+        let (shell, window) = product_window(document, model.clone(), cx);
         let host = cx.update(|cx| {
             let host = super::super::extension_host::install(cx);
             host.update(cx, |host, cx| host.start_diagnostic_fixture("product", cx));
@@ -2875,6 +2875,7 @@ mod tests {
             }
         };
         assert_eq!(outcome, CommandOutcome::Completed);
+        assert_eq!(cx.read(|cx| model.read(cx).text()), "fixture ");
 
         let mut completion = dispatch_product_command(
             &shell,
@@ -2887,6 +2888,34 @@ mod tests {
             completion.completion.try_recv().unwrap(),
             CommandOutcome::Completed
         );
+
+        let editor = cx.read(|cx| {
+            shell
+                .read(cx)
+                .workbench
+                .read(cx)
+                .focused_pane()
+                .unwrap()
+                .active_tab()
+                .editor()
+                .clone()
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            cx.run_until_parked();
+            if cx.read(|cx| {
+                editor.read(cx).completion_state().is_some_and(
+                    |(items, pending, failures, _, _)| items == 2 && pending == 0 && failures == 0,
+                )
+            }) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "fixture completion items did not reach the product editor"
+            );
+            std::thread::yield_now();
+        }
 
         drop(host);
         cx.update(|cx| {

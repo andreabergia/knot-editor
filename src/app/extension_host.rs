@@ -27,7 +27,13 @@ const PRIMARY_FIXTURE: &str = r#"
 import { commands, editor, workbench } from "knot:editor";
 
 globalThis.knotFixtureBuffer = await editor.activeBuffer();
-await commands.register("knot.fixture.primary", async () => ({ status: "handled" }));
+await commands.register("knot.fixture.primary", async ({ buffer }) => {
+  const snapshot = await buffer.snapshot();
+  await buffer.applyEdits([{
+    range: { startByteOffset: 0, endByteOffset: 0 },
+    text: "fixture ",
+  }], { ifRevision: snapshot.revision });
+});
 await editor.registerCompletionProvider("fixture-primary", {
   provideCompletions(context) {
     return [{ label: `${context.prefix}Primary`, insertText: `${context.prefix}Primary` }];
@@ -182,10 +188,6 @@ impl ProductExtensionHost {
         }
     }
 
-    #[allow(
-        dead_code,
-        reason = "extension loading is introduced before product discovery"
-    )]
     pub(crate) fn load(
         &mut self,
         key: ExtensionKey,
@@ -200,10 +202,7 @@ impl ProductExtensionHost {
         Ok(())
     }
 
-    #[allow(
-        dead_code,
-        reason = "extension unloading is introduced before product discovery"
-    )]
+    #[allow(dead_code, reason = "explicit unload is used by diagnostic clients")]
     pub(crate) fn unload(
         &mut self,
         key: ExtensionKey,
@@ -735,7 +734,11 @@ mod tests {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
         loop {
             cx.run_until_parked();
-            if cx.update(|cx| host.read(cx).semantics.completion_snapshot().len()) == 2 {
+            if cx.update(|cx| {
+                let host = host.read(cx);
+                host.semantics.completion_snapshot().len() == 2
+                    && host._fixture_tree.read(cx).lifecycle_state() == (true, 1, false, 0)
+            }) {
                 break;
             }
             assert!(
@@ -748,6 +751,10 @@ mod tests {
             let host = host.read(cx);
             assert_eq!(host.lifecycles.len(), 2);
             assert_eq!(host.semantics.completion_snapshot().len(), 2);
+            assert_eq!(
+                host._fixture_tree.read(cx).root_labels(),
+                ["Pooled fixture"]
+            );
             let definitions = host
                 .commands
                 .definitions()
@@ -755,7 +762,30 @@ mod tests {
                 .collect::<Vec<_>>();
             assert!(definitions.contains(&"knot.fixture.primary"));
             assert!(definitions.contains(&"knot.fixture.secondary"));
-
+        });
+        cx.update(|cx| {
+            let first = ExtensionKey::new(
+                crate::host::protocol::ExtensionId::new(1),
+                crate::host::protocol::ExtensionLifecycleId::new(1),
+            );
+            let second = ExtensionKey::new(
+                crate::host::protocol::ExtensionId::new(2),
+                crate::host::protocol::ExtensionLifecycleId::new(1),
+            );
+            host.update(cx, |host, cx| {
+                host.unload(first, cx).unwrap();
+                host.unload(second, cx).unwrap();
+                assert!(host.semantics.completion_snapshot().is_empty());
+                assert_eq!(
+                    host._fixture_tree.read(cx).lifecycle_state(),
+                    (false, 0, false, 0)
+                );
+                assert!(
+                    !host.commands.definitions().any(|definition| {
+                        definition.name.as_ref().starts_with("knot.fixture.")
+                    })
+                );
+            });
             drop(cx.remove_global::<ApplicationExtensionHost>());
         });
         drop(host);

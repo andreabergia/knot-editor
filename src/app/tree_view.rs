@@ -181,6 +181,14 @@ impl TreeView {
         )
     }
 
+    #[cfg(test)]
+    pub(crate) fn root_labels(&self) -> Vec<String> {
+        self.children
+            .get(&None)
+            .map(|state| state.items.iter().map(|item| item.label.clone()).collect())
+            .unwrap_or_default()
+    }
+
     pub(crate) fn remove_lifecycle(
         &mut self,
         extension: ExtensionId,

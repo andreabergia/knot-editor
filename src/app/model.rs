@@ -759,6 +759,9 @@ impl BufferRegistry {
     }
 
     pub fn open(&mut self, model: &Entity<BufferModel>) -> BufferHandle {
+        if let Some(handle) = self.handle_for(model) {
+            return handle;
+        }
         self.register(model.downgrade())
     }
 
@@ -1167,6 +1170,18 @@ mod tests {
         let third_handle = registry.register(WeakEntity::new_invalid());
         assert_ne!(third_handle, first_handle);
         assert_ne!(third_handle, second_handle);
+    }
+
+    #[gpui::test]
+    fn opening_the_same_model_reuses_its_handle(cx: &mut gpui::TestAppContext) {
+        let model = cx.new(|_| BufferModel::from_text("text"));
+        let other = cx.new(|_| BufferModel::from_text("other"));
+        let mut registry = BufferRegistry::new();
+        let first = registry.open(&model);
+        assert_eq!(registry.open(&model), first);
+        assert_eq!(registry.handle_for(&model), Some(first));
+        assert_ne!(registry.open(&other), first);
+        assert_eq!(registry.buffers.len(), 2);
     }
 
     #[test]

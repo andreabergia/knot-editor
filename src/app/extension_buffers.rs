@@ -61,7 +61,7 @@ impl ExtensionBufferBridge {
 
     #[allow(
         dead_code,
-        reason = "document closure notifications do not yet expose a product buffer-removal event"
+        reason = "product document closure has no buffer-removal event"
     )]
     pub(crate) fn close_buffer(
         &mut self,
