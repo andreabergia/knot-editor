@@ -3,7 +3,9 @@
 use std::{
     collections::{HashMap, VecDeque},
     num::NonZeroUsize,
+    pin::Pin,
     sync::{Arc, Condvar, Mutex, mpsc},
+    task::{Context, Poll},
     thread::JoinHandle,
     time::{Duration, Instant},
 };
@@ -148,12 +150,43 @@ impl std::fmt::Display for SchedulerError {
 
 impl std::error::Error for SchedulerError {}
 
-struct CompletionSlot(Option<mpsc::Sender<CompletionOutcome>>);
+struct CompletionSlot(
+    Option<(
+        mpsc::Sender<CompletionOutcome>,
+        tokio::sync::oneshot::Sender<CompletionOutcome>,
+    )>,
+);
+
+/// Blocking and awaitable views of one root's terminal disposition.
+pub struct CompletionReceiver {
+    blocking: mpsc::Receiver<CompletionOutcome>,
+    asynchronous: tokio::sync::oneshot::Receiver<CompletionOutcome>,
+}
+
+impl CompletionReceiver {
+    pub fn recv(&self) -> Result<CompletionOutcome, mpsc::RecvError> {
+        self.blocking.recv()
+    }
+
+    #[cfg(test)]
+    fn try_recv(&self) -> Result<CompletionOutcome, mpsc::TryRecvError> {
+        self.blocking.try_recv()
+    }
+}
+
+impl Future for CompletionReceiver {
+    type Output = Result<CompletionOutcome, tokio::sync::oneshot::error::RecvError>;
+
+    fn poll(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
+        Pin::new(&mut self.asynchronous).poll(context)
+    }
+}
 
 impl CompletionSlot {
     fn settle(&mut self, outcome: CompletionOutcome) {
-        if let Some(sender) = self.0.take() {
-            let _ = sender.send(outcome);
+        if let Some((blocking, asynchronous)) = self.0.take() {
+            let _ = blocking.send(outcome.clone());
+            let _ = asynchronous.send(outcome);
         }
     }
 }
@@ -276,13 +309,14 @@ impl<W> StateMachine<W> {
         &mut self,
         key: ExtensionKey,
         work: W,
-    ) -> Result<(RootId, mpsc::Receiver<CompletionOutcome>), SchedulerError> {
+    ) -> Result<(RootId, CompletionReceiver), SchedulerError> {
         if self.shutting_down {
             return Err(SchedulerError::ShuttingDown);
         }
         let id = RootId::new(self.next_root);
         self.next_root += 1;
         let (sender, receiver) = mpsc::channel();
+        let (async_sender, async_receiver) = tokio::sync::oneshot::channel();
         let was_idle = {
             let extension = self.extension_mut(key)?;
             match &extension.state {
@@ -298,7 +332,7 @@ impl<W> StateMachine<W> {
                     work,
                     enqueued_at: Instant::now(),
                 },
-                completion: CompletionSlot(Some(sender)),
+                completion: CompletionSlot(Some((sender, async_sender))),
             });
             extension.state == ExtensionState::Idle
         };
@@ -306,7 +340,13 @@ impl<W> StateMachine<W> {
         if was_idle {
             self.make_ready(key);
         }
-        Ok((id, receiver))
+        Ok((
+            id,
+            CompletionReceiver {
+                blocking: receiver,
+                asynchronous: async_receiver,
+            },
+        ))
     }
 
     pub fn enqueue_continuation(
@@ -682,7 +722,7 @@ impl<W> SchedulerHandle<W> {
         &self,
         key: ExtensionKey,
         work: W,
-    ) -> Result<(RootId, mpsc::Receiver<CompletionOutcome>), SchedulerError> {
+    ) -> Result<(RootId, CompletionReceiver), SchedulerError> {
         let result = self.shared.state.lock().unwrap().enqueue_root(key, work);
         self.shared.ready.notify_one();
         result

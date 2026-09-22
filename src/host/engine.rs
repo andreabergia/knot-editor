@@ -9,13 +9,15 @@ use std::{
     sync::{
         Arc, Mutex, Once,
         atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
-        mpsc,
     },
     thread::ThreadId,
     time::{Duration, Instant},
 };
 
 use url::Url;
+
+#[cfg(test)]
+use std::sync::mpsc;
 
 use super::{
     lifecycle::{ExtensionKey, Failure},
@@ -29,8 +31,8 @@ use super::{
         TreeChildrenResponse, TreeItem, TreeProviderError, TreeProviderRegistrationId,
     },
     scheduler::{
-        CompletionOutcome, PoolConfig, RootId, SchedulerError, SchedulerHandle, SchedulerPool,
-        Turn, TurnOutcome,
+        CompletionOutcome, CompletionReceiver, PoolConfig, RootId, SchedulerError, SchedulerHandle,
+        SchedulerPool, Turn, TurnOutcome,
     },
 };
 
@@ -1773,7 +1775,7 @@ enum EngineWork {
 /// Completion side of one scheduled JavaScript turn.
 pub(crate) struct RuntimeExecution {
     result: ResultReceiver<ExecutionReport>,
-    completion: mpsc::Receiver<CompletionOutcome>,
+    completion: CompletionReceiver,
 }
 
 impl RuntimeExecution {
@@ -1808,23 +1810,33 @@ impl std::future::Future for RuntimeExecution {
         mut self: std::pin::Pin<&mut Self>,
         context: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Self::Output> {
-        std::pin::Pin::new(&mut self.result)
-            .poll(context)
-            .map(|result| {
-                result.unwrap_or_else(|_| {
-                    Err(RuntimeError::fatal(
+        match std::pin::Pin::new(&mut self.result).poll(context) {
+            std::task::Poll::Ready(Ok(result)) => std::task::Poll::Ready(result),
+            std::task::Poll::Ready(Err(_)) => std::pin::Pin::new(&mut self.completion)
+                .poll(context)
+                .map(|outcome| match outcome {
+                    Ok(CompletionOutcome::Cancelled) => Err(RuntimeError::fatal(
+                        RuntimeErrorKind::Cancelled,
+                        "extension JavaScript execution was cancelled",
+                    )),
+                    Ok(CompletionOutcome::Failed(failure)) => Err(RuntimeError::fatal(
+                        RuntimeErrorKind::LifecycleFailed,
+                        failure.message().to_owned(),
+                    )),
+                    Ok(CompletionOutcome::Completed) | Err(_) => Err(RuntimeError::fatal(
                         RuntimeErrorKind::Engine,
                         "extension worker closed without an execution result",
-                    ))
-                })
-            })
+                    )),
+                }),
+            std::task::Poll::Pending => std::task::Poll::Pending,
+        }
     }
 }
 
 /// Completion side of one scheduled extension command handler.
 pub(crate) struct RuntimeCommandExecution {
     result: ResultReceiver<CommandOutcome>,
-    completion: mpsc::Receiver<CompletionOutcome>,
+    completion: CompletionReceiver,
 }
 
 impl RuntimeCommandExecution {
@@ -1856,23 +1868,30 @@ impl std::future::Future for RuntimeCommandExecution {
         mut self: std::pin::Pin<&mut Self>,
         context: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Self::Output> {
-        std::pin::Pin::new(&mut self.result)
-            .poll(context)
-            .map(|result| {
-                result.unwrap_or_else(|_| {
-                    Err(RuntimeError::fatal(
+        match std::pin::Pin::new(&mut self.result).poll(context) {
+            std::task::Poll::Ready(Ok(result)) => std::task::Poll::Ready(result),
+            std::task::Poll::Ready(Err(_)) => std::pin::Pin::new(&mut self.completion)
+                .poll(context)
+                .map(|outcome| match outcome {
+                    Ok(CompletionOutcome::Cancelled) => Ok(CommandOutcome::Cancelled),
+                    Ok(CompletionOutcome::Failed(failure)) => Err(RuntimeError::fatal(
+                        RuntimeErrorKind::LifecycleFailed,
+                        failure.message().to_owned(),
+                    )),
+                    Ok(CompletionOutcome::Completed) | Err(_) => Err(RuntimeError::fatal(
                         RuntimeErrorKind::Engine,
                         "extension worker closed without a command outcome",
-                    ))
-                })
-            })
+                    )),
+                }),
+            std::task::Poll::Pending => std::task::Poll::Pending,
+        }
     }
 }
 
 /// Completion side of one native-to-extension semantic provider callback.
 pub(crate) struct RuntimeProviderExecution<T> {
     result: Option<ResultReceiver<T>>,
-    completion: mpsc::Receiver<CompletionOutcome>,
+    completion: CompletionReceiver,
     cancellation: Option<ProviderCancellation>,
 }
 
@@ -1931,16 +1950,34 @@ impl<T> std::future::Future for RuntimeProviderExecution<T> {
             .as_mut()
             .expect("provider execution owns its result");
         match std::pin::Pin::new(receiver).poll(context) {
-            std::task::Poll::Ready(result) => {
-                self.result = None;
-                self.cancellation = None;
-                std::task::Poll::Ready(result.unwrap_or_else(|_| {
-                    Err(RuntimeError::fatal(
-                        RuntimeErrorKind::Engine,
-                        "extension worker closed without a provider response",
-                    ))
-                }))
-            }
+            std::task::Poll::Ready(result) => match result {
+                Ok(result) => {
+                    self.result = None;
+                    self.cancellation = None;
+                    std::task::Poll::Ready(result)
+                }
+                Err(_) => match std::pin::Pin::new(&mut self.completion).poll(context) {
+                    std::task::Poll::Ready(outcome) => {
+                        self.result = None;
+                        self.cancellation = None;
+                        std::task::Poll::Ready(match outcome {
+                            Ok(CompletionOutcome::Cancelled) => Err(RuntimeError::fatal(
+                                RuntimeErrorKind::Cancelled,
+                                "semantic provider request was cancelled",
+                            )),
+                            Ok(CompletionOutcome::Failed(failure)) => Err(RuntimeError::fatal(
+                                RuntimeErrorKind::LifecycleFailed,
+                                failure.message().to_owned(),
+                            )),
+                            Ok(CompletionOutcome::Completed) | Err(_) => Err(RuntimeError::fatal(
+                                RuntimeErrorKind::Engine,
+                                "extension worker closed without a provider response",
+                            )),
+                        })
+                    }
+                    std::task::Poll::Pending => std::task::Poll::Pending,
+                },
+            },
             std::task::Poll::Pending => std::task::Poll::Pending,
         }
     }
@@ -4879,6 +4916,116 @@ mod tests {
                 result: Ok(HostResponseValue::ActiveBuffer(None)),
             }),
             Err(RuntimeResponseError::WrongExtension)
+        );
+        pool.shutdown();
+    }
+
+    #[test]
+    fn awaited_queued_executions_report_unload_cancellation() {
+        let pool = RuntimePool::new(PoolConfig::single_worker());
+        let runtime = key(1);
+        pool.load(runtime, IsolateConfig::default()).unwrap();
+        let waiting = pool
+            .execute_fixture_module(
+                runtime,
+                "file:///fixtures/awaited-queued.js",
+                "import { editor } from 'knot:editor'; await editor.activeBuffer();",
+            )
+            .unwrap();
+        pool.receive_request().unwrap();
+        wait_for_state(&pool, runtime, ExtensionState::AwaitingHostWork);
+
+        let script = pool.execute(runtime, "queued.js", "42").unwrap();
+        let command = pool
+            .invoke_command(
+                runtime,
+                CommandInvocation {
+                    id: CommandInvocationId::new(1),
+                    registration: CommandRegistrationId::new(1),
+                    extension: runtime.extension,
+                    lifecycle: runtime.lifecycle,
+                    arguments: CommandArgumentValue::Null,
+                },
+                None,
+            )
+            .unwrap();
+        let provider = pool
+            .request_tree_children(
+                runtime,
+                TreeChildrenRequest {
+                    registration: TreeProviderRegistrationId::new(1),
+                    parent_id: None,
+                    generation: 1,
+                },
+            )
+            .unwrap();
+
+        pool.unload(runtime).unwrap();
+        assert_eq!(
+            pollster::block_on(waiting).unwrap_err().kind(),
+            RuntimeErrorKind::Cancelled
+        );
+        assert_eq!(
+            pollster::block_on(script).unwrap_err().kind(),
+            RuntimeErrorKind::Cancelled
+        );
+        assert_eq!(
+            pollster::block_on(command).unwrap(),
+            CommandOutcome::Cancelled
+        );
+        assert_eq!(
+            pollster::block_on(provider).unwrap_err().kind(),
+            RuntimeErrorKind::Cancelled
+        );
+        pool.shutdown();
+    }
+
+    #[test]
+    fn awaited_queued_executions_report_shutdown_and_fatal_failure() {
+        let pool = RuntimePool::new(PoolConfig::single_worker());
+        let runtime = key(1);
+        pool.load(runtime, IsolateConfig::default()).unwrap();
+        let waiting = pool
+            .execute_fixture_module(
+                runtime,
+                "file:///fixtures/awaited-shutdown.js",
+                "import { editor } from 'knot:editor'; await editor.activeBuffer();",
+            )
+            .unwrap();
+        pool.receive_request().unwrap();
+        wait_for_state(&pool, runtime, ExtensionState::AwaitingHostWork);
+        let queued = pool.execute(runtime, "queued-shutdown.js", "42").unwrap();
+        pool.shutdown();
+        assert_eq!(
+            pollster::block_on(waiting).unwrap_err().kind(),
+            RuntimeErrorKind::Cancelled
+        );
+        assert_eq!(
+            pollster::block_on(queued).unwrap_err().kind(),
+            RuntimeErrorKind::Cancelled
+        );
+
+        let pool = RuntimePool::new(PoolConfig::single_worker());
+        let runtime = key(2);
+        pool.load(runtime, IsolateConfig::default()).unwrap();
+        let waiting = pool
+            .execute_fixture_module(
+                runtime,
+                "file:///fixtures/awaited-fatal.js",
+                "import { editor } from 'knot:editor'; await editor.activeBuffer();",
+            )
+            .unwrap();
+        pool.receive_request().unwrap();
+        wait_for_state(&pool, runtime, ExtensionState::AwaitingHostWork);
+        let queued = pool.execute(runtime, "queued-fatal.js", "42").unwrap();
+        assert!(pool.termination_handle(runtime).unwrap().terminate());
+        assert_eq!(
+            pollster::block_on(waiting).unwrap_err().kind(),
+            RuntimeErrorKind::Terminated
+        );
+        assert_eq!(
+            pollster::block_on(queued).unwrap_err().kind(),
+            RuntimeErrorKind::LifecycleFailed
         );
         pool.shutdown();
     }
