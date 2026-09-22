@@ -1308,6 +1308,150 @@ mod tests {
     }
 
     #[test]
+    fn many_lifecycles_preserve_queued_roots_and_delayed_continuations() {
+        let mut scheduler = StateMachine::default();
+        for lifecycle in 1..=3 {
+            let keys = (1..=12)
+                .map(|extension| key(extension, lifecycle))
+                .collect::<Vec<_>>();
+            let mut pending = Vec::new();
+            for key in &keys {
+                scheduler.admit(*key).unwrap();
+                scheduler.finish_loading(*key, Ok(())).unwrap();
+                let (root, completed) = scheduler.enqueue_root(*key, "await host").unwrap();
+                let (_, next_completed) = scheduler.enqueue_root(*key, "next root").unwrap();
+                pending.push((root, completed, next_completed));
+            }
+            assert_eq!(scheduler.diagnostics(2).queue_depth, 24);
+            for key in &keys {
+                let turn = scheduler.next_turn_on_worker(0).unwrap();
+                assert_eq!(turn.key, *key);
+                assert_eq!((turn.kind, turn.work), (TurnKind::Root, "await host"));
+                scheduler
+                    .finish_turn(*key, turn.id, TurnOutcome::AwaitingHostWork)
+                    .unwrap();
+            }
+            assert!(scheduler.next_turn().is_none());
+            assert_eq!(scheduler.diagnostics(2).queue_depth, 12);
+
+            // Host replies can arrive after every isolate has yielded, in any order.
+            for (key, (root, _, _)) in keys.iter().zip(&pending).rev() {
+                scheduler
+                    .enqueue_continuation(*key, *root, "host reply")
+                    .unwrap();
+            }
+            for key in keys.iter().rev() {
+                let turn = scheduler.next_turn_on_worker(1).unwrap();
+                assert_eq!(turn.key, *key);
+                assert_eq!((turn.kind, turn.work), (TurnKind::Continuation, "host reply"));
+                scheduler
+                    .finish_turn(*key, turn.id, TurnOutcome::Completed)
+                    .unwrap();
+            }
+            for key in keys.iter().rev() {
+                let turn = scheduler.next_turn_on_worker(0).unwrap();
+                assert_eq!(turn.key, *key);
+                assert_eq!((turn.kind, turn.work), (TurnKind::Root, "next root"));
+                scheduler
+                    .finish_turn(*key, turn.id, TurnOutcome::Completed)
+                    .unwrap();
+            }
+            assert!(scheduler.next_turn().is_none());
+            for (first, second) in pending.into_iter().map(|(_, first, second)| (first, second)) {
+                assert_eq!(first.recv().unwrap(), CompletionOutcome::Completed);
+                assert_eq!(second.recv().unwrap(), CompletionOutcome::Completed);
+            }
+            assert_eq!(scheduler.diagnostics(2).queue_depth, 0);
+            for key in keys {
+                scheduler.stop(key).unwrap();
+            }
+        }
+        let diagnostics = scheduler.diagnostics(2);
+        assert_eq!(diagnostics.worker_count, 2);
+        assert_eq!(diagnostics.turn_count, 108);
+        assert_eq!(diagnostics.worker_movements, 72);
+    }
+
+    #[test]
+    fn yielding_turn_frees_a_worker_for_queued_extensions() {
+        struct GatedWork {
+            key: ExtensionKey,
+            outcome: TurnOutcome,
+            started: mpsc::Sender<ExtensionKey>,
+            release: mpsc::Receiver<()>,
+        }
+        let pool = SchedulerPool::new(
+            PoolConfig::new(NonZeroUsize::new(2).unwrap()),
+            |turn: Turn<GatedWork>| {
+                turn.work.started.send(turn.work.key).unwrap();
+                turn.work.release.recv().unwrap();
+                turn.work.outcome
+            },
+        );
+        let handle = pool.handle();
+        let keys = (1..=4).map(|extension| key(extension, 1)).collect::<Vec<_>>();
+        for key in &keys {
+            handle.admit(*key).unwrap();
+            handle.finish_loading(*key, Ok(())).unwrap();
+        }
+        let (started, starts) = mpsc::channel();
+        let mut releases = Vec::new();
+        let mut completions = Vec::new();
+        for (index, key) in keys.iter().enumerate() {
+            let (release, released) = mpsc::channel();
+            let work = GatedWork {
+                key: *key,
+                outcome: if index == 0 {
+                    TurnOutcome::AwaitingHostWork
+                } else {
+                    TurnOutcome::Completed
+                },
+                started: started.clone(),
+                release: released,
+            };
+            let (root, completion) = handle.enqueue_root(*key, work).unwrap();
+            releases.push(release);
+            completions.push((root, completion));
+        }
+        let first_two = [
+            starts.recv_timeout(Duration::from_secs(2)).unwrap(),
+            starts.recv_timeout(Duration::from_secs(2)).unwrap(),
+        ];
+        assert!(first_two.contains(&keys[0]));
+        assert!(first_two.contains(&keys[1]));
+        assert_eq!(handle.diagnostics().queue_depth, 2);
+        releases[0].send(()).unwrap();
+        assert_eq!(starts.recv_timeout(Duration::from_secs(2)).unwrap(), keys[2]);
+        assert_eq!(handle.state(keys[0]).unwrap(), ExtensionState::AwaitingHostWork);
+        releases[1].send(()).unwrap();
+        assert_eq!(starts.recv_timeout(Duration::from_secs(2)).unwrap(), keys[3]);
+        releases[2].send(()).unwrap();
+        releases[3].send(()).unwrap();
+        for (_, completed) in completions.iter_mut().skip(1) {
+            assert_eq!(completed.recv().unwrap(), CompletionOutcome::Completed);
+        }
+
+        let (release_reply, released_reply) = mpsc::channel();
+        handle
+            .enqueue_continuation(
+                keys[0],
+                completions[0].0,
+                GatedWork {
+                    key: keys[0],
+                    outcome: TurnOutcome::Completed,
+                    started,
+                    release: released_reply,
+                },
+            )
+            .unwrap();
+        assert_eq!(starts.recv_timeout(Duration::from_secs(2)).unwrap(), keys[0]);
+        release_reply.send(()).unwrap();
+        assert_eq!(completions[0].1.recv().unwrap(), CompletionOutcome::Completed);
+        assert_eq!(pool.diagnostics().turn_count, 5);
+        pool.shutdown();
+    }
+
+    #[test]
     fn executor_panic_fails_only_its_extension() {
         let pool = SchedulerPool::new(PoolConfig::single_worker(), |turn: Turn<&'static str>| {
             assert_ne!(turn.work, "panic");

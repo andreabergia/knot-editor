@@ -4226,9 +4226,8 @@ mod tests {
             runtime,
             "slow-listener.js",
             r#"
-            globalThis.listener = (event) => {
-              const end = Date.now() + 30;
-              while (Date.now() < end) {}
+            globalThis.listener = async (event) => {
+              if (event.revision === 1) await editorApi.activeBuffer();
               events.push(event.revision);
             };
         "#,
@@ -4255,6 +4254,17 @@ mod tests {
             )
             .unwrap();
         }
+        let request = pool.receive_request_timeout(Duration::from_secs(1)).unwrap();
+        wait_for_state(&pool, runtime, ExtensionState::AwaitingHostWork);
+        let queued = pool.buffer_change_queue_metrics(runtime).unwrap();
+        assert!(queued.max_depth >= 7, "metrics: {queued:?}");
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: request.id,
+            result: Ok(HostResponseValue::ActiveBuffer(Some(BufferHandle::new(3)))),
+        })
+        .unwrap();
         pool.execute(
             runtime,
             "verify-burst.js",
@@ -4266,11 +4276,8 @@ mod tests {
         .wait()
         .unwrap();
         let metrics = pool.buffer_change_queue_metrics(runtime).unwrap();
-        assert!(metrics.max_depth >= 4, "metrics: {metrics:?}");
-        assert!(
-            metrics.max_enqueue_to_start_lag >= Duration::from_millis(50),
-            "metrics: {metrics:?}"
-        );
+        assert!(metrics.max_depth >= 7, "metrics: {metrics:?}");
+        assert!(metrics.max_enqueue_to_start_lag > Duration::ZERO);
         pool.shutdown();
     }
 
