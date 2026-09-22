@@ -1,6 +1,6 @@
-//! `v8-bench` binary: Step 7 runtime boundary evidence.
+//! Production extension pool benchmark.
 //!
-//! Usage: `v8-bench [--samples <n>]`
+//! Usage: `v8-bench [--samples N] [--workers N] [--stress]`
 
 use std::process::ExitCode;
 
