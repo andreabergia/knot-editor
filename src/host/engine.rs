@@ -4254,7 +4254,9 @@ mod tests {
             )
             .unwrap();
         }
-        let request = pool.receive_request_timeout(Duration::from_secs(1)).unwrap();
+        let request = pool
+            .receive_request_timeout(Duration::from_secs(1))
+            .unwrap();
         wait_for_state(&pool, runtime, ExtensionState::AwaitingHostWork);
         let queued = pool.buffer_change_queue_metrics(runtime).unwrap();
         assert!(queued.max_depth >= 7, "metrics: {queued:?}");

@@ -1,6 +1,6 @@
 # D017: Production V8 Isolate Pool and Scheduling
 
-Status: in progress; Tasks 1-9 implemented, Task 9 awaiting review.
+Status: in progress; Tasks 1-10 implemented, Task 10 awaiting review.
 
 This slice replaces the prototype `deno_core` runtime with a direct
 `rusty_v8` host and runs persistent extension isolates on a bounded worker
@@ -355,18 +355,44 @@ Manual review gate:
 
 ## Task 10: Validate scheduling and resource behavior
 
-- ⬜ Rework `v8-bench` around the production pool and preserve comparable
+- ✅ Rework `v8-bench` around the production pool and preserve comparable
   startup, host-call, edit, transfer, fan-out, and slow-consumer measurements
   where they still describe the new architecture.
-- ⬜ Add evidence for bounded threads, queue wait, parallel turns, isolate
+- ✅ Add evidence for bounded threads, queue wait, parallel turns, isolate
   movement, async yielding, fairness between ready extensions, shutdown, and
   per-isolate idle memory.
-- ⬜ Stress more extensions than workers with persistent state, delayed host
+- ✅ Stress more extensions than workers with persistent state, delayed host
   responses, failures, and repeated load/unload cycles.
-- ⬜ Audit that no scheduler behavior silently implements quotas, timeouts,
+- ✅ Audit that no scheduler behavior silently implements quotas, timeouts,
   dropping, coalescing, or backpressure belonging to D019.
-- ⬜ Run the complete regression suite and resolve flaky timing assumptions by
+- ✅ Run the complete regression suite and resolve flaky timing assumptions by
   adding deterministic synchronization rather than widening sleeps.
+
+Review evidence (2026-09-22, target macOS, release build):
+
+- `cargo test --all-targets`: 340 library tests passed; all binary test targets
+  passed. The slow-consumer test now waits on a host-response gate instead of
+  asserting a wall-clock delay.
+- `cargo run --release --bin v8-bench -- --samples 2`: V8 initialization
+  10.34 ms; incremental isolate startup 9.26 ms/isolate; active-buffer host call
+  1.32 ms; ten batched edits 546 µs; external UTF-16 snapshot transfer, 10 MiB,
+  350 µs; fan-out, two isolates × eight events, 3.03 ms. Idle process RSS delta
+  was 4.09 MiB/isolate; slow-consumer maximum depth eight and start lag 2.87 ms.
+  The run recorded 64 turns, 15 worker movements, maximum queue wait 2.95 ms,
+  and 12 process threads with two configured pool workers. These are a small
+  review sample, not performance gates or directly comparable hardware results.
+- `cargo run --release --bin v8-bench -- --stress --workers 2`: three
+  load/unload cycles of nine extensions each passed, with persistent JavaScript
+  state, a delayed host response, an isolated fatal watchdog termination, and
+  neighbor progress. The run recorded 237 turns and 106 worker movements.
+  Scheduler tests separately prove concurrent turns on two workers, no
+  concurrent turns within one extension, FIFO fairness, and that an awaiting
+  extension releases a worker. The configured worker count stayed at two.
+- The scheduler uses unbounded FIFO root and continuation queues. It applies
+  no automatic quota, deadline, event dropping, coalescing, or backpressure.
+  Explicit heap limits, cancellation, termination, and lifecycle shutdown are
+  the selected D017 behavior; receive timeouts occur only in tests and the
+  diagnostic benchmark.
 
 Automated checks:
 

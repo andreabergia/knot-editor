@@ -1343,7 +1343,10 @@ mod tests {
             for key in keys.iter().rev() {
                 let turn = scheduler.next_turn_on_worker(1).unwrap();
                 assert_eq!(turn.key, *key);
-                assert_eq!((turn.kind, turn.work), (TurnKind::Continuation, "host reply"));
+                assert_eq!(
+                    (turn.kind, turn.work),
+                    (TurnKind::Continuation, "host reply")
+                );
                 scheduler
                     .finish_turn(*key, turn.id, TurnOutcome::Completed)
                     .unwrap();
@@ -1357,7 +1360,10 @@ mod tests {
                     .unwrap();
             }
             assert!(scheduler.next_turn().is_none());
-            for (first, second) in pending.into_iter().map(|(_, first, second)| (first, second)) {
+            for (first, second) in pending
+                .into_iter()
+                .map(|(_, first, second)| (first, second))
+            {
                 assert_eq!(first.recv().unwrap(), CompletionOutcome::Completed);
                 assert_eq!(second.recv().unwrap(), CompletionOutcome::Completed);
             }
@@ -1389,7 +1395,9 @@ mod tests {
             },
         );
         let handle = pool.handle();
-        let keys = (1..=4).map(|extension| key(extension, 1)).collect::<Vec<_>>();
+        let keys = (1..=4)
+            .map(|extension| key(extension, 1))
+            .collect::<Vec<_>>();
         for key in &keys {
             handle.admit(*key).unwrap();
             handle.finish_loading(*key, Ok(())).unwrap();
@@ -1421,10 +1429,19 @@ mod tests {
         assert!(first_two.contains(&keys[1]));
         assert_eq!(handle.diagnostics().queue_depth, 2);
         releases[0].send(()).unwrap();
-        assert_eq!(starts.recv_timeout(Duration::from_secs(2)).unwrap(), keys[2]);
-        assert_eq!(handle.state(keys[0]).unwrap(), ExtensionState::AwaitingHostWork);
+        assert_eq!(
+            starts.recv_timeout(Duration::from_secs(2)).unwrap(),
+            keys[2]
+        );
+        assert_eq!(
+            handle.state(keys[0]).unwrap(),
+            ExtensionState::AwaitingHostWork
+        );
         releases[1].send(()).unwrap();
-        assert_eq!(starts.recv_timeout(Duration::from_secs(2)).unwrap(), keys[3]);
+        assert_eq!(
+            starts.recv_timeout(Duration::from_secs(2)).unwrap(),
+            keys[3]
+        );
         releases[2].send(()).unwrap();
         releases[3].send(()).unwrap();
         for (_, completed) in completions.iter_mut().skip(1) {
@@ -1444,9 +1461,15 @@ mod tests {
                 },
             )
             .unwrap();
-        assert_eq!(starts.recv_timeout(Duration::from_secs(2)).unwrap(), keys[0]);
+        assert_eq!(
+            starts.recv_timeout(Duration::from_secs(2)).unwrap(),
+            keys[0]
+        );
         release_reply.send(()).unwrap();
-        assert_eq!(completions[0].1.recv().unwrap(), CompletionOutcome::Completed);
+        assert_eq!(
+            completions[0].1.recv().unwrap(),
+            CompletionOutcome::Completed
+        );
         assert_eq!(pool.diagnostics().turn_count, 5);
         pool.shutdown();
     }
