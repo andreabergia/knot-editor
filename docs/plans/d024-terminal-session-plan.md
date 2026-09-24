@@ -1,6 +1,6 @@
 # D024: Product Terminal Sessions
 
-Status: in progress. Checkpoints 1 and 2 implemented; checkpoint 2 manual review pending.
+Status: in progress. Checkpoints 1 and 2 complete.
 
 This slice brings the validated local terminal into the product workbench. A
 stable `TerminalSession` owns the PTY, emulator, process, and terminal events;
@@ -128,6 +128,9 @@ view**, and confirm the process and grid survive. Check process exit and
 restart in Activity Monitor or an equivalent process listing. The diagnostic
 window exercises session/view lifetime without adding terminal tabs to the
 product workbench.
+
+Manual review gate: ✅ approved. The diagnostic session and view rebuild worked
+in local use; product workbench integration remains checkpoint 3.
 
 ## Checkpoint 3: Make terminals usable in the product workbench
 

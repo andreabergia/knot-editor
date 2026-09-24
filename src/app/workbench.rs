@@ -148,9 +148,11 @@ pub(crate) enum WorkbenchTabPayload {
         document_id: DocumentId,
         editor: Entity<EditorView>,
     },
-    Terminal {
-        session_id: TerminalSessionId,
-    },
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "terminal tabs await product integration")
+    )]
+    Terminal { session_id: TerminalSessionId },
 }
 
 impl WorkbenchTab {
@@ -351,6 +353,10 @@ impl Workbench {
         Some(tab_id)
     }
 
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "terminal tabs await product integration")
+    )]
     pub(crate) fn open_terminal_tab(
         &mut self,
         pane_id: PaneId,
@@ -448,6 +454,10 @@ impl Workbench {
     }
 
     /// Split a captured pane, allocating an independent session for a terminal.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "terminal tabs await product integration")
+    )]
     pub(crate) fn split_pane_with_terminal(
         &mut self,
         pane_id: PaneId,
@@ -493,6 +503,10 @@ impl Workbench {
             .count()
     }
 
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "terminal tabs await product integration")
+    )]
     fn has_terminal_session(&self, session_id: TerminalSessionId) -> bool {
         self.panes
             .iter()
