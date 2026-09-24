@@ -122,9 +122,12 @@ terminal tabs do not enter document persistence or change dirty-document prompts
 Automated checks: focused terminal lifecycle tests; `cargo check --all-targets`.
 
 Manual review gate: inspect session/view references and thread boundaries.
-Run a local shell and a full-screen TUI, rebuild its view, and confirm the
-process and grid survive. Check process exit and restart in Activity Monitor
-or an equivalent process listing.
+Run `cargo run --bin knot -- --terminal-fixture` to open the diagnostic
+terminal window. Run a local shell and a full-screen TUI, click **rebuild
+view**, and confirm the process and grid survive. Check process exit and
+restart in Activity Monitor or an equivalent process listing. The diagnostic
+window exercises session/view lifetime without adding terminal tabs to the
+product workbench.
 
 ## Checkpoint 3: Make terminals usable in the product workbench
 

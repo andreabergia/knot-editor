@@ -53,6 +53,7 @@ mod resource;
     reason = "retained native generated-text surface outside the current product shell"
 )]
 mod search_results;
+mod terminal_fixture;
 #[allow(
     dead_code,
     reason = "terminal sessions await product workbench integration"
@@ -168,5 +169,6 @@ pub fn run() {
     match launch {
         entry::LaunchConfiguration::Product(request) => product::run(request, None),
         entry::LaunchConfiguration::Fixture(fixture) => product::run(None, Some(fixture)),
+        entry::LaunchConfiguration::TerminalFixture => terminal_fixture::run(),
     }
 }

@@ -91,4 +91,6 @@ before a handoff; releasing the view also releases its lease. The view sends
 input and size changes to its session, and the session retains the final grid
 and exit status after natural process exit. Startup failure remains visible as
 a status and can be retried by restarting. Terminal sessions are not yet wired
-into product workbench tabs; see the [D024 plan](../plans/d024-terminal-session-plan.md).
+into product workbench tabs. A diagnostic terminal window exercises view
+rebuilding before product integration; see the
+[D024 plan](../plans/d024-terminal-session-plan.md).
