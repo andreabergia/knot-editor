@@ -86,7 +86,7 @@ a session shuts it down and reaps the child off the foreground thread.
 ## Terminal: validated production direction
 
 The following separation is a validated design, not the current implementation
-(see [D024](../deferred.md#terminals-and-generated-surfaces)).
+(see the [D024 plan](../plans/d024-terminal-session-plan.md)).
 
 The production boundary separates a stable `TerminalSession`, which owns the
 PTY, emulator, and process lifecycle, from a disposable `TerminalView`, which

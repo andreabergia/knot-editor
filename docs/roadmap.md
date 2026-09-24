@@ -131,10 +131,6 @@ the item is removed from this register.
 
 ## Terminals and generated surfaces
 
-- **D024 — Production `TerminalSession` separation**
-  - Deferred: The prototype validated the terminal path with view-owned state.
-  - Reconsider: Terminal use enters the product workbench.
-
 - **D025 — Terminal persistence, simultaneous views, remote PTYs, and shell
   integration**
   - Deferred: These exceed the validated local interactive-session use case.
