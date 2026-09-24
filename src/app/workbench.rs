@@ -37,7 +37,16 @@ impl TabId {
 pub(crate) struct WorkbenchTabSnapshot {
     pub(crate) pane_id: PaneId,
     pub(crate) tab_id: TabId,
-    pub(crate) document_id: DocumentId,
+    pub(crate) surface: TabSurfaceId,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) struct TerminalSessionId(pub(crate) u64);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum TabSurfaceId {
+    Document(DocumentId),
+    Terminal(TerminalSessionId),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -129,29 +138,53 @@ impl WorkbenchLayout {
     }
 }
 
-pub(crate) struct EditorTab {
+pub(crate) struct WorkbenchTab {
     id: TabId,
-    document_id: DocumentId,
-    editor: Entity<EditorView>,
+    payload: WorkbenchTabPayload,
 }
 
-impl EditorTab {
+pub(crate) enum WorkbenchTabPayload {
+    Document {
+        document_id: DocumentId,
+        editor: Entity<EditorView>,
+    },
+    Terminal {
+        session_id: TerminalSessionId,
+    },
+}
+
+impl WorkbenchTab {
     pub(crate) fn id(&self) -> TabId {
         self.id
     }
 
-    pub(crate) fn document_id(&self) -> DocumentId {
-        self.document_id
+    pub(crate) fn surface_id(&self) -> TabSurfaceId {
+        match &self.payload {
+            WorkbenchTabPayload::Document { document_id, .. } => {
+                TabSurfaceId::Document(*document_id)
+            }
+            WorkbenchTabPayload::Terminal { session_id } => TabSurfaceId::Terminal(*session_id),
+        }
     }
 
-    pub(crate) fn editor(&self) -> &Entity<EditorView> {
-        &self.editor
+    pub(crate) fn document_id(&self) -> Option<DocumentId> {
+        match self.surface_id() {
+            TabSurfaceId::Document(document_id) => Some(document_id),
+            TabSurfaceId::Terminal(_) => None,
+        }
+    }
+
+    pub(crate) fn editor(&self) -> Option<&Entity<EditorView>> {
+        match &self.payload {
+            WorkbenchTabPayload::Document { editor, .. } => Some(editor),
+            WorkbenchTabPayload::Terminal { .. } => None,
+        }
     }
 }
 
 pub(crate) struct Pane {
     id: PaneId,
-    tabs: Vec<EditorTab>,
+    tabs: Vec<WorkbenchTab>,
     active_tab: TabId,
 }
 
@@ -160,7 +193,7 @@ impl Pane {
         self.id
     }
 
-    pub(crate) fn tabs(&self) -> &[EditorTab] {
+    pub(crate) fn tabs(&self) -> &[WorkbenchTab] {
         &self.tabs
     }
 
@@ -168,7 +201,7 @@ impl Pane {
         self.active_tab
     }
 
-    pub(crate) fn active_tab(&self) -> &EditorTab {
+    pub(crate) fn active_tab(&self) -> &WorkbenchTab {
         self.tabs
             .iter()
             .find(|tab| tab.id == self.active_tab)
@@ -203,10 +236,12 @@ impl Workbench {
             layout: Some(WorkbenchLayout::Pane(pane_id)),
             panes: vec![Pane {
                 id: pane_id,
-                tabs: vec![EditorTab {
+                tabs: vec![WorkbenchTab {
                     id: tab_id,
-                    document_id,
-                    editor: cx.new(|cx| EditorView::new(model, cx)),
+                    payload: WorkbenchTabPayload::Document {
+                        document_id,
+                        editor: cx.new(|cx| EditorView::new(model, cx)),
+                    },
                 }],
                 active_tab: tab_id,
             }],
@@ -254,7 +289,7 @@ impl Workbench {
                     .map(move |tab| WorkbenchTabSnapshot {
                         pane_id,
                         tab_id: tab.id,
-                        document_id: tab.document_id,
+                        surface: tab.surface_id(),
                     })
             })
             .collect()
@@ -303,10 +338,33 @@ impl Workbench {
         let tab_id = self.allocate_tab_id();
         let editor = cx.new(|cx| EditorView::new(model, cx));
         let pane = &mut self.panes[pane_index];
-        pane.tabs.push(EditorTab {
+        pane.tabs.push(WorkbenchTab {
             id: tab_id,
-            document_id,
-            editor,
+            payload: WorkbenchTabPayload::Document {
+                document_id,
+                editor,
+            },
+        });
+        pane.active_tab = tab_id;
+        self.focused_pane = Some(pane_id);
+        self.debug_assert_invariants();
+        Some(tab_id)
+    }
+
+    pub(crate) fn open_terminal_tab(
+        &mut self,
+        pane_id: PaneId,
+        session_id: TerminalSessionId,
+    ) -> Option<TabId> {
+        if self.has_terminal_session(session_id) {
+            return None;
+        }
+        let pane_index = self.panes.iter().position(|pane| pane.id == pane_id)?;
+        let tab_id = self.allocate_tab_id();
+        let pane = &mut self.panes[pane_index];
+        pane.tabs.push(WorkbenchTab {
+            id: tab_id,
+            payload: WorkbenchTabPayload::Terminal { session_id },
         });
         pane.active_tab = tab_id;
         self.focused_pane = Some(pane_id);
@@ -328,8 +386,13 @@ impl Workbench {
         let Some(tab) = pane.tabs.iter_mut().find(|tab| tab.id == tab_id) else {
             return false;
         };
-        tab.document_id = document_id;
-        tab.editor = cx.new(|cx| EditorView::new(model, cx));
+        if !matches!(tab.payload, WorkbenchTabPayload::Document { .. }) {
+            return false;
+        }
+        tab.payload = WorkbenchTabPayload::Document {
+            document_id,
+            editor: cx.new(|cx| EditorView::new(model, cx)),
+        };
         pane.active_tab = tab_id;
         self.focused_pane = Some(pane_id);
         self.debug_assert_invariants();
@@ -357,8 +420,8 @@ impl Workbench {
         cx: &mut Context<Self>,
     ) -> Option<PaneId> {
         let active = self.pane(pane_id)?.active_tab();
-        let document_id = active.document_id;
-        let model = active.editor.read(cx).model().clone();
+        let document_id = active.document_id()?;
+        let model = active.editor()?.read(cx).model().clone();
         let new_pane_id = self.allocate_pane_id();
         let tab_id = self.allocate_tab_id();
         let editor = cx.new(|cx| EditorView::new(model, cx));
@@ -370,10 +433,50 @@ impl Workbench {
         );
         self.panes.push(Pane {
             id: new_pane_id,
-            tabs: vec![EditorTab {
+            tabs: vec![WorkbenchTab {
                 id: tab_id,
-                document_id,
-                editor,
+                payload: WorkbenchTabPayload::Document {
+                    document_id,
+                    editor,
+                },
+            }],
+            active_tab: tab_id,
+        });
+        self.focused_pane = Some(new_pane_id);
+        self.debug_assert_invariants();
+        Some(new_pane_id)
+    }
+
+    /// Split a captured pane, allocating an independent session for a terminal.
+    pub(crate) fn split_pane_with_terminal(
+        &mut self,
+        pane_id: PaneId,
+        direction: SplitDirection,
+        placement: SplitPlacement,
+        new_session_id: TerminalSessionId,
+        cx: &mut Context<Self>,
+    ) -> Option<PaneId> {
+        let active = self.pane(pane_id)?.active_tab();
+        if active.document_id().is_some() {
+            return self.split_pane(pane_id, direction, placement, cx);
+        }
+        if self.has_terminal_session(new_session_id) {
+            return None;
+        }
+        let new_pane_id = self.allocate_pane_id();
+        let tab_id = self.allocate_tab_id();
+        let layout = self.layout.as_mut()?;
+        assert!(
+            layout.split_pane(pane_id, new_pane_id, direction, placement),
+            "captured pane must occur exactly once in the layout"
+        );
+        self.panes.push(Pane {
+            id: new_pane_id,
+            tabs: vec![WorkbenchTab {
+                id: tab_id,
+                payload: WorkbenchTabPayload::Terminal {
+                    session_id: new_session_id,
+                },
             }],
             active_tab: tab_id,
         });
@@ -386,8 +489,15 @@ impl Workbench {
         self.panes
             .iter()
             .flat_map(|pane| &pane.tabs)
-            .filter(|tab| tab.document_id == document_id)
+            .filter(|tab| tab.document_id() == Some(document_id))
             .count()
+    }
+
+    fn has_terminal_session(&self, session_id: TerminalSessionId) -> bool {
+        self.panes
+            .iter()
+            .flat_map(|pane| &pane.tabs)
+            .any(|tab| tab.surface_id() == TabSurfaceId::Terminal(session_id))
     }
 
     fn allocate_pane_id(&mut self) -> PaneId {
@@ -455,7 +565,20 @@ impl Workbench {
         self.pane(pane_id).is_some_and(|pane| {
             pane.tabs
                 .iter()
-                .any(|tab| tab.id == tab_id && tab.document_id == document_id)
+                .any(|tab| tab.id == tab_id && tab.document_id() == Some(document_id))
+        })
+    }
+
+    pub(crate) fn contains_surface(
+        &self,
+        pane_id: PaneId,
+        tab_id: TabId,
+        surface: TabSurfaceId,
+    ) -> bool {
+        self.pane(pane_id).is_some_and(|pane| {
+            pane.tabs
+                .iter()
+                .any(|tab| tab.id == tab_id && tab.surface_id() == surface)
         })
     }
 
@@ -488,7 +611,7 @@ impl Workbench {
 }
 
 struct RemovedTab {
-    tab: EditorTab,
+    tab: WorkbenchTab,
     removed_pane: Option<PaneId>,
 }
 
@@ -505,6 +628,121 @@ mod tests {
 
     use super::*;
     use crate::app::{documents::DocumentCollection, model::BufferModel};
+
+    #[gpui::test]
+    fn mixed_tabs_keep_identity_activation_and_document_views(cx: &mut TestAppContext) {
+        let model = cx.new(|_| BufferModel::from_text("document"));
+        let mut documents = DocumentCollection::new();
+        let document = cx.update(|cx| documents.create_untitled("Document", model, cx));
+        let workbench = cx.new(|cx| Workbench::new(documents.get(document).unwrap(), cx));
+
+        workbench.update(cx, |workbench, _| {
+            let pane = workbench.focused_pane_id().unwrap();
+            let document_tab = workbench.focused_pane().unwrap().active_tab_id();
+            let terminal = TerminalSessionId(41);
+            let terminal_tab = workbench.open_terminal_tab(pane, terminal).unwrap();
+            assert_eq!(workbench.view_count(document), 1);
+            assert_eq!(
+                workbench.focused_pane().unwrap().active_tab_id(),
+                terminal_tab
+            );
+            assert_eq!(
+                workbench.focused_pane().unwrap().active_tab().editor(),
+                None
+            );
+            assert_eq!(
+                workbench.tab_snapshots(),
+                vec![
+                    WorkbenchTabSnapshot {
+                        pane_id: pane,
+                        tab_id: document_tab,
+                        surface: TabSurfaceId::Document(document),
+                    },
+                    WorkbenchTabSnapshot {
+                        pane_id: pane,
+                        tab_id: terminal_tab,
+                        surface: TabSurfaceId::Terminal(terminal),
+                    },
+                ]
+            );
+            assert!(!workbench.contains_surface(
+                pane,
+                document_tab,
+                TabSurfaceId::Terminal(terminal)
+            ));
+            assert!(workbench.activate_tab(pane, document_tab));
+            assert_eq!(
+                workbench.focused_pane().unwrap().active_tab().document_id(),
+                Some(document)
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn terminal_split_gets_independent_session_and_document_split_keeps_model(
+        cx: &mut TestAppContext,
+    ) {
+        let model = cx.new(|_| BufferModel::from_text("document"));
+        let mut documents = DocumentCollection::new();
+        let document = cx.update(|cx| documents.create_untitled("Document", model, cx));
+        let workbench = cx.new(|cx| Workbench::new(documents.get(document).unwrap(), cx));
+
+        workbench.update(cx, |workbench, cx| {
+            let document_pane = workbench.focused_pane_id().unwrap();
+            let terminal_source = TerminalSessionId(41);
+            workbench
+                .open_terminal_tab(document_pane, terminal_source)
+                .unwrap();
+            assert!(
+                workbench
+                    .split_pane(
+                        document_pane,
+                        SplitDirection::Horizontal,
+                        SplitPlacement::After,
+                        cx
+                    )
+                    .is_none()
+            );
+            let terminal_pane = workbench
+                .split_pane_with_terminal(
+                    document_pane,
+                    SplitDirection::Horizontal,
+                    SplitPlacement::After,
+                    TerminalSessionId(42),
+                    cx,
+                )
+                .unwrap();
+            assert_eq!(workbench.view_count(document), 1);
+            assert_eq!(
+                workbench
+                    .pane(terminal_pane)
+                    .unwrap()
+                    .active_tab()
+                    .surface_id(),
+                TabSurfaceId::Terminal(TerminalSessionId(42))
+            );
+            assert_eq!(
+                workbench
+                    .pane(document_pane)
+                    .unwrap()
+                    .active_tab()
+                    .surface_id(),
+                TabSurfaceId::Terminal(terminal_source)
+            );
+            let document_tab = workbench.pane(document_pane).unwrap().tabs()[0].id();
+            assert!(workbench.activate_tab(document_pane, document_tab));
+            workbench
+                .split_pane_with_terminal(
+                    document_pane,
+                    SplitDirection::Vertical,
+                    SplitPlacement::After,
+                    TerminalSessionId(43),
+                    cx,
+                )
+                .unwrap();
+            assert_eq!(workbench.view_count(document), 2);
+        });
+    }
 
     #[gpui::test]
     fn panes_keep_ordered_tabs_and_stable_focus(cx: &mut TestAppContext) {
@@ -524,7 +762,7 @@ mod tests {
 
             let pane = workbench.focused_pane().unwrap();
             assert_eq!(
-                pane.tabs().iter().map(EditorTab::id).collect::<Vec<_>>(),
+                pane.tabs().iter().map(WorkbenchTab::id).collect::<Vec<_>>(),
                 vec![first_tab, second_tab]
             );
             assert_eq!(pane.active_tab_id(), second_tab);
@@ -566,22 +804,22 @@ mod tests {
                     WorkbenchTabSnapshot {
                         pane_id: preceding_pane,
                         tab_id: preceding_first_tab,
-                        document_id: first_document,
+                        surface: TabSurfaceId::Document(first_document),
                     },
                     WorkbenchTabSnapshot {
                         pane_id: preceding_pane,
                         tab_id: preceding_second_tab,
-                        document_id: third_document,
+                        surface: TabSurfaceId::Document(third_document),
                     },
                     WorkbenchTabSnapshot {
                         pane_id: first_pane,
                         tab_id: first_tab,
-                        document_id: first_document,
+                        surface: TabSurfaceId::Document(first_document),
                     },
                     WorkbenchTabSnapshot {
                         pane_id: first_pane,
                         tab_id: second_tab,
-                        document_id: second_document,
+                        surface: TabSurfaceId::Document(second_document),
                     },
                 ]
             );
@@ -661,6 +899,7 @@ mod tests {
                 .unwrap()
                 .active_tab()
                 .editor()
+                .unwrap()
                 .clone();
             let second_tab = workbench
                 .open_tab(first_pane, documents.get(document).unwrap(), cx)
@@ -673,6 +912,7 @@ mod tests {
                 .find(|tab| tab.id() == second_tab)
                 .unwrap()
                 .editor()
+                .unwrap()
                 .clone();
             let split_pane = workbench
                 .split_focused(SplitDirection::Vertical, SplitPlacement::After, cx)
@@ -682,6 +922,7 @@ mod tests {
                 .unwrap()
                 .active_tab()
                 .editor()
+                .unwrap()
                 .clone();
 
             assert_ne!(first_editor, second_editor);

@@ -1,6 +1,6 @@
 # D024: Product Terminal Sessions
 
-Status: planned.
+Status: in progress. Checkpoint 1 implemented; manual review gate pending.
 
 This slice brings the validated local terminal into the product workbench. A
 stable `TerminalSession` owns the PTY, emulator, process, and terminal events;
@@ -84,16 +84,16 @@ Keep the plan current, including any scope decisions made at a gate.
 
 ## Checkpoint 1: Make workbench tabs surface-aware
 
-- [ ] Model document and terminal tab payloads without assigning a fake
+- [x] ✅ Model document and terminal tab payloads without assigning a fake
   `DocumentId` or `BufferModel` to terminals. Preserve stable pane/tab IDs,
   activation, layout, and editor-view behavior.
-- [ ] Make snapshots, application-wide document view counts, and close planning
+- [x] ✅ Make snapshots, application-wide document view counts, and close planning
   inspect only document tabs for dirty document decisions.
-- [ ] Define captured product target validation by exact tab identity and
+- [x] ✅ Define captured product target validation by exact tab identity and
   surface kind. Document-only commands return an explicit unavailable or
   invalid-target outcome for terminal tabs as appropriate; native terminal
   input remains view-owned.
-- [ ] Cover mixed-tab activation, split policy, stale captured targets,
+- [x] ✅ Cover mixed-tab activation, split policy, stale captured targets,
   document view counts, and mixed-window/quit close decisions with workbench
   and product command tests. A lightweight terminal tab test double may be
   used before live PTY integration.

@@ -35,8 +35,8 @@ gpui's foreground thread exclusively owns editor state. The application owns
 documents, resource providers, and product command dispatch. A document owns its
 buffer model and persistence identity; a buffer model owns text, session-local
 edit history, anchored geometry, and semantic contributions. Each window owns
-a workbench whose tabs own independent editor views of application-owned
-documents.
+a workbench whose typed tabs own document editor views or identify terminal
+surfaces. Terminal tabs do not own document models.
 
 Views own presentation and interaction. Extension runtimes communicate through
 Knot-owned typed messages and opaque identities. Asynchronous results revalidate

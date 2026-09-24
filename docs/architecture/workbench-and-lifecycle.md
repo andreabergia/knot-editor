@@ -27,14 +27,15 @@ notifications then update the other views through their persistent positions.
 
 ## Workbench and protected closure
 
-`Workbench` is the window-local editor layout model. It owns a binary split
-tree, stable pane and tab identities, the focused pane, and ordered tabs within
-each pane. Split-tree leaves refer to panes; each tab refers to an
-application-owned document and strongly owns one `EditorView`. Splitting a
-pane creates a new view of its active document, and closing a tab drops that
-view. Empty panes are removed and their split branch collapses; closing the
-last tab produces an explicit empty-workbench transition for the product shell
-to handle.
+`Workbench` is the window-local layout model. It owns a binary split tree,
+stable pane and tab identities, the focused pane, and ordered tabs within each
+pane. Split-tree leaves refer to panes. A document tab refers to an
+application-owned document and strongly owns one `EditorView`; a terminal tab
+has a distinct terminal identity and no document or buffer model. Splitting a
+document pane creates a new view of its active document. The terminal split
+policy allocates a distinct terminal identity for the new pane. Empty panes
+are removed and their split branch collapses; closing the last tab produces
+an explicit empty-workbench transition for the product shell to handle.
 
 Workbench closure stays independent of native dialogs. The application-wide
 view count determines whether a tab is the last view of its document. A dirty
@@ -46,16 +47,17 @@ This keeps window-local presentation mutation separate from application-level
 document and confirmation coordination.
 
 Protected closure is application-coordinated across tab, window, and quit
-scopes. It snapshots exact view identities, determines which dirty documents
-would lose their final application-wide view, deduplicates them, and presents
-native Save / Don't Save / Cancel alerts serially. Save reuses the ordinary
+scopes. It snapshots exact tab and surface identities, determines which dirty
+documents would lose their final application-wide view, deduplicates them, and
+presents native Save / Don't Save / Cancel alerts serially. Save reuses the ordinary
 captured persistence path. View and window mutation is deferred until every
 decision succeeds, then the snapshot and approved document revisions are
 revalidated before one scope transition is applied. Cancellation, persistence
 failure, racing edits, stale views, and concurrent closure attempts leave the
-presentation intact. Native window-close requests are vetoed until this flow
-authorizes programmatic removal; Quit enters the same flow before asking gpui
-to terminate.
+presentation intact. Terminal tabs participate in the scope and its stale
+identity checks, but not document view counts or dirty prompts. Native
+window-close requests are vetoed until this flow authorizes programmatic
+removal; Quit enters the same flow before asking gpui to terminate.
 
 Each native product window renders one workbench recursively as tabbed panes
 and horizontal or vertical splits. A shell-wide weak workbench registry counts

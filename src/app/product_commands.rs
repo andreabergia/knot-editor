@@ -118,8 +118,37 @@ pub(crate) struct ProductCommandTarget {
     pub(crate) workbench: WeakEntity<super::workbench::Workbench>,
     pub(crate) pane: super::workbench::PaneId,
     pub(crate) tab: super::workbench::TabId,
-    pub(crate) document: super::documents::DocumentId,
+    pub(crate) surface: super::workbench::TabSurfaceId,
     pub(crate) focus: WeakFocusHandle,
+}
+
+impl ProductCommandTarget {
+    /// Validate the captured tab and its surface before using its contents.
+    pub(crate) fn validate_tab(&self, cx: &App) -> Result<(), CommandOutcome> {
+        let workbench = self
+            .workbench
+            .upgrade()
+            .ok_or(CommandOutcome::InvalidTarget)?;
+        if workbench
+            .read(cx)
+            .contains_surface(self.pane, self.tab, self.surface)
+        {
+            Ok(())
+        } else {
+            Err(CommandOutcome::InvalidTarget)
+        }
+    }
+
+    pub(crate) fn document_id(
+        &self,
+        cx: &App,
+    ) -> Result<super::documents::DocumentId, CommandOutcome> {
+        self.validate_tab(cx)?;
+        match self.surface {
+            super::workbench::TabSurfaceId::Document(document) => Ok(document),
+            super::workbench::TabSurfaceId::Terminal(_) => Err(CommandOutcome::Unavailable),
+        }
+    }
 }
 
 pub(crate) struct ApplicationProductCommands(pub(crate) Entity<ProductCommandDispatcher>);
@@ -383,8 +412,9 @@ fn break_captured_history_group(target: &ProductCommandTarget, cx: &mut App) {
         .read(cx)
         .pane(target.pane)
         .and_then(|pane| pane.tabs().iter().find(|tab| tab.id() == target.tab))
-        .filter(|tab| tab.document_id() == target.document)
-        .map(|tab| tab.editor().read(cx).model().clone());
+        .filter(|tab| tab.surface_id() == target.surface)
+        .and_then(|tab| tab.editor())
+        .map(|editor| editor.read(cx).model().clone());
     if let Some(model) = model {
         model.update(cx, |model, _| model.break_history_group());
     }
@@ -411,6 +441,7 @@ fn dispatch_open_to_captured_target(
         if window.root::<ProductShell>().flatten().as_ref() != Some(&shell) {
             return Err(CommandOutcome::InvalidTarget);
         }
+        target.document_id(cx)?;
         break_captured_history_group(&target, cx);
         shell.update(cx, |shell, cx| {
             shell.start_open_dialog(target, completion, cx);
@@ -442,6 +473,7 @@ fn dispatch_save_to_captured_target(
         if window.root::<ProductShell>().flatten().as_ref() != Some(&shell) {
             return Err(CommandOutcome::InvalidTarget);
         }
+        target.document_id(cx)?;
         break_captured_history_group(&target, cx);
         shell.update(cx, |shell, cx| {
             shell.start_save_command(save_as, target, completion, cx);
@@ -482,6 +514,7 @@ fn dispatch_close_to_captured_target(
     if !valid {
         return Err(CommandOutcome::InvalidTarget);
     }
+    target.validate_tab(cx)?;
     break_captured_history_group(&target, cx);
     ProductShell::begin_protected_close(kind, target, Some(completion), cx);
     Ok(())
@@ -507,6 +540,14 @@ fn dispatch_to_captured_target(
         };
         if window.root::<ProductShell>().flatten().as_ref() != Some(&shell) {
             return CommandOutcome::InvalidTarget;
+        }
+        if let Err(outcome) = target.validate_tab(cx) {
+            return outcome;
+        }
+        if command.name.as_ref().starts_with("editor.") {
+            if let Err(outcome) = target.document_id(cx) {
+                return outcome;
+            }
         }
         if !matches!(
             command.name.as_ref(),

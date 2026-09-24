@@ -467,6 +467,9 @@ impl ProductExtensionHost {
         target: ProductCommandTarget,
         cx: &mut Context<Self>,
     ) -> crate::host::protocol::CommandOutcome {
+        if let Err(outcome) = target.document_id(cx) {
+            return outcome;
+        }
         let Some(buffer) = self.open_target_buffer(&target, cx) else {
             return crate::host::protocol::CommandOutcome::InvalidTarget;
         };
@@ -479,9 +482,9 @@ impl ProductExtensionHost {
             .and_then(|pane| {
                 pane.tabs()
                     .iter()
-                    .find(|tab| tab.id() == target.tab && tab.document_id() == target.document)
+                    .find(|tab| tab.id() == target.tab && tab.surface_id() == target.surface)
             })
-            .map(|tab| tab.editor().clone())
+            .and_then(|tab| tab.editor().cloned())
         else {
             return crate::host::protocol::CommandOutcome::InvalidTarget;
         };
@@ -534,14 +537,15 @@ impl ProductExtensionHost {
         target: &ProductCommandTarget,
         cx: &mut Context<Self>,
     ) -> Option<crate::host::protocol::BufferHandle> {
+        target.document_id(cx).ok()?;
         let workbench = target.workbench.upgrade()?;
         let model = workbench
             .read(cx)
             .pane(target.pane)?
             .tabs()
             .iter()
-            .find(|tab| tab.id() == target.tab && tab.document_id() == target.document)?
-            .editor()
+            .find(|tab| tab.id() == target.tab && tab.surface_id() == target.surface)?
+            .editor()?
             .read(cx)
             .model()
             .clone();

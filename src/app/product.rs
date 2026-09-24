@@ -31,7 +31,7 @@ use super::{
     },
     workbench::{
         CloseRequestOutcome, DocumentCloseDisposition, PaneId, SplitDirection, SplitPlacement,
-        TabId, Workbench, WorkbenchLayout,
+        TabId, TabSurfaceId, Workbench, WorkbenchLayout,
     },
     workspace::WorkspaceState,
     workspace_tree::{
@@ -65,13 +65,13 @@ struct ProtectedViewKey {
     window: AnyWindowHandle,
     pane: PaneId,
     tab: TabId,
-    document: DocumentId,
+    surface: TabSurfaceId,
 }
 
 #[derive(Clone)]
 struct ProtectedView {
     key: ProtectedViewKey,
-    target: ProductCommandTarget,
+    target: Option<ProductCommandTarget>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -155,19 +155,30 @@ struct OpenTarget {
     document: DocumentId,
 }
 
-impl From<&ProductCommandTarget> for OpenTarget {
-    fn from(target: &ProductCommandTarget) -> Self {
-        Self {
+impl OpenTarget {
+    fn from_command(target: &ProductCommandTarget) -> Option<Self> {
+        let TabSurfaceId::Document(document) = target.surface else {
+            return None;
+        };
+        Some(Self {
             workbench: target.workbench.clone(),
             pane: target.pane,
             tab: target.tab,
-            document: target.document,
-        }
+            document,
+        })
+    }
+}
+
+fn target_document(target: &ProductCommandTarget) -> Option<DocumentId> {
+    match target.surface {
+        TabSurfaceId::Document(document) => Some(document),
+        TabSurfaceId::Terminal(_) => None,
     }
 }
 
 pub(crate) struct ProductShell {
     workbench: Entity<Workbench>,
+    terminal_focus: Option<FocusHandle>,
     status: SharedString,
     command_palette: Option<Entity<CommandPalette<ProductCommandTarget>>>,
     command_palette_subscription: Option<Subscription>,
@@ -182,6 +193,7 @@ impl ProductShell {
     fn new(workbench: Entity<Workbench>) -> Self {
         Self {
             workbench,
+            terminal_focus: None,
             status: "ready".into(),
             command_palette: None,
             command_palette_subscription: None,
@@ -213,7 +225,7 @@ impl ProductShell {
             workbench: self.workbench.downgrade(),
             pane: pane.id(),
             tab: tab.id(),
-            document: tab.document_id(),
+            surface: tab.surface_id(),
             focus: focus.downgrade(),
         })
     }
@@ -235,8 +247,11 @@ impl ProductShell {
             workbench: self.workbench.downgrade(),
             pane: pane.id(),
             tab: tab.id(),
-            document: tab.document_id(),
-            focus: tab.editor().focus_handle(cx).downgrade(),
+            surface: tab.surface_id(),
+            focus: tab
+                .editor()
+                .map(|editor| editor.focus_handle(cx).downgrade())
+                .or_else(|| window.focused(cx).map(|focus| focus.downgrade()))?,
         })
     }
 
@@ -299,10 +314,20 @@ impl ProductShell {
     }
 
     fn sync_focused_pane(&self, window: &Window, cx: &mut Context<Self>) {
+        if self
+            .terminal_focus
+            .as_ref()
+            .is_some_and(|focus| focus.contains_focused(window, cx))
+        {
+            return;
+        }
         let focused_pane = self.workbench.read(cx).panes().iter().find_map(|pane| {
             pane.tabs()
                 .iter()
-                .any(|tab| tab.editor().focus_handle(cx).contains_focused(window, cx))
+                .any(|tab| {
+                    tab.editor()
+                        .is_some_and(|editor| editor.focus_handle(cx).contains_focused(window, cx))
+                })
                 .then_some(pane.id())
         });
         if let Some(focused_pane) = focused_pane {
@@ -339,7 +364,7 @@ impl ProductShell {
                     Some(
                         snapshots
                             .into_iter()
-                            .filter_map(|snapshot| {
+                            .map(|snapshot| {
                                 let editor = {
                                     let workbench = workbench.read(cx);
                                     workbench
@@ -348,27 +373,26 @@ impl ProductShell {
                                             pane.tabs()
                                                 .iter()
                                                 .find(|tab| tab.id() == snapshot.tab_id)
-                                        })?
-                                        .editor()
-                                        .clone()
+                                        })
+                                        .and_then(|tab| tab.editor().cloned())
                                 };
-                                Some(ProtectedView {
+                                ProtectedView {
                                     key: ProtectedViewKey {
                                         window: window_handle,
                                         pane: snapshot.pane_id,
                                         tab: snapshot.tab_id,
-                                        document: snapshot.document_id,
+                                        surface: snapshot.surface,
                                     },
-                                    target: ProductCommandTarget {
+                                    target: editor.map(|editor| ProductCommandTarget {
                                         window: window_handle,
                                         shell: shell.downgrade(),
                                         workbench: workbench.downgrade(),
                                         pane: snapshot.pane_id,
                                         tab: snapshot.tab_id,
-                                        document: snapshot.document_id,
+                                        surface: snapshot.surface,
                                         focus: editor.focus_handle(cx).downgrade(),
-                                    },
-                                })
+                                    }),
+                                }
                             })
                             .collect::<Vec<_>>(),
                     )
@@ -392,7 +416,7 @@ impl ProductShell {
             window: request.origin.window,
             pane: request.origin.pane,
             tab: request.origin.tab,
-            document: request.origin.document,
+            surface: request.origin.surface,
         };
         if !views.iter().any(|view| view.key == origin_key) {
             return Err(CommandOutcome::InvalidTarget);
@@ -408,18 +432,24 @@ impl ProductShell {
             .collect::<Vec<_>>();
         let scope = scoped.iter().map(|view| view.key).collect::<Vec<_>>();
         let total_counts = views.iter().fold(HashMap::new(), |mut counts, view| {
-            *counts.entry(view.key.document).or_insert(0usize) += 1;
+            if let TabSurfaceId::Document(document) = view.key.surface {
+                *counts.entry(document).or_insert(0usize) += 1;
+            }
             counts
         });
         let scoped_counts = scoped.iter().fold(HashMap::new(), |mut counts, view| {
-            *counts.entry(view.key.document).or_insert(0usize) += 1;
+            if let TabSurfaceId::Document(document) = view.key.surface {
+                *counts.entry(document).or_insert(0usize) += 1;
+            }
             counts
         });
         let documents = Self::documents(cx);
         let mut prompted = HashSet::new();
         let mut prompts = Vec::new();
         for view in &scoped {
-            let document = view.key.document;
+            let TabSurfaceId::Document(document) = view.key.surface else {
+                continue;
+            };
             let loses_final_view = request.kind == ProtectedCloseKind::Quit
                 || scoped_counts.get(&document) == total_counts.get(&document);
             if loses_final_view
@@ -429,7 +459,10 @@ impl ProductShell {
                     .get(document)
                     .is_some_and(|document| document.is_dirty(cx))
             {
-                prompts.push((document, view.target.clone()));
+                prompts.push((
+                    document,
+                    view.target.clone().expect("document tab has editor focus"),
+                ));
             }
         }
         if request.kind == ProtectedCloseKind::Quit
@@ -484,7 +517,7 @@ impl ProductShell {
             && self
                 .workbench
                 .read(cx)
-                .contains_tab(target.pane, target.tab, target.document)
+                .contains_surface(target.pane, target.tab, target.surface)
     }
 
     pub(crate) fn start_save_command(
@@ -503,7 +536,15 @@ impl ProductShell {
             return;
         }
         let documents = Self::documents(cx);
-        let Some(document) = documents.read(cx).get(target.document) else {
+        let Some(document_id) = target_document(&target) else {
+            self.finish_save_command(
+                completion,
+                crate::host::protocol::CommandOutcome::Unavailable,
+                cx,
+            );
+            return;
+        };
+        let Some(document) = documents.read(cx).get(document_id) else {
             self.finish_save_command(
                 completion,
                 crate::host::protocol::CommandOutcome::InvalidTarget,
@@ -538,7 +579,7 @@ impl ProductShell {
     ) {
         let suggested_name = Self::documents(cx)
             .read(cx)
-            .get(target.document)
+            .get(target_document(&target).expect("save target is a document"))
             .map(|document| document.title().clone())
             .unwrap_or_else(|| "Untitled".into());
         let selection = if let Some(dialog) = cx.try_global::<ApplicationSaveDialog>() {
@@ -615,7 +656,9 @@ impl ProductShell {
         let documents = Self::documents(cx);
         let (model, title, state) = {
             let documents = documents.read(cx);
-            let Some(document) = documents.get(target.document) else {
+            let Some(document) =
+                documents.get(target_document(&target).expect("save target is a document"))
+            else {
                 self.finish_save_command(
                     completion,
                     crate::host::protocol::CommandOutcome::InvalidTarget,
@@ -632,7 +675,7 @@ impl ProductShell {
         if documents
             .read(cx)
             .document_for_resource(&uri)
-            .is_some_and(|document| document != target.document)
+            .is_some_and(|document| Some(document) != target_document(&target))
         {
             let message = format!("another open document already owns {uri}");
             self.status = format!("save failed: {message}").into();
@@ -646,7 +689,10 @@ impl ProductShell {
         }
         let (text, revision) = model.read_with(cx, |model, _| (model.text(), model.revision()));
         let Some(capture) = documents.update(cx, |documents, _| {
-            documents.begin_persistence(target.document, &model)
+            documents.begin_persistence(
+                target_document(&target).expect("save target is a document"),
+                &model,
+            )
         }) else {
             self.finish_save_command(
                 completion,
@@ -709,7 +755,7 @@ impl ProductShell {
                     Ok((uri, version)) if this.target_is_live(&target, cx) => {
                         let committed = Self::documents(cx).update(cx, |documents, _| {
                             documents.finish_persistence(
-                                target.document,
+                                target_document(&target).expect("save target is a document"),
                                 &model,
                                 &capture,
                                 title,
@@ -843,7 +889,7 @@ impl ProductShell {
         let documents = Self::documents(cx);
         let Some((model, title)) = documents
             .read(cx)
-            .get(target.document)
+            .get(target_document(&target).expect("save target is a document"))
             .map(|document| (document.model().clone(), document.title().clone()))
         else {
             self.finish_save_command(
@@ -855,7 +901,10 @@ impl ProductShell {
         };
         let revision = model.read(cx).revision();
         let Some(capture) = documents.update(cx, |documents, _| {
-            documents.begin_persistence(target.document, &model)
+            documents.begin_persistence(
+                target_document(&target).expect("save target is a document"),
+                &model,
+            )
         }) else {
             self.finish_save_command(
                 completion,
@@ -886,7 +935,8 @@ impl ProductShell {
                                     let loaded_revision = model.read(cx).revision();
                                     if Self::documents(cx).update(cx, |documents, _| {
                                         documents.finish_persistence(
-                                            target.document,
+                                            target_document(&target)
+                                                .expect("save target is a document"),
                                             &model,
                                             &capture,
                                             title,
@@ -930,6 +980,22 @@ impl ProductShell {
         completion: CommandCompletion,
         cx: &mut Context<Self>,
     ) {
+        if !self.target_is_live(&target, cx) {
+            self.finish_open_command(
+                completion,
+                crate::host::protocol::CommandOutcome::InvalidTarget,
+                cx,
+            );
+            return;
+        }
+        let Some(open_target) = OpenTarget::from_command(&target) else {
+            self.finish_open_command(
+                completion,
+                crate::host::protocol::CommandOutcome::Unavailable,
+                cx,
+            );
+            return;
+        };
         let selection: OpenDialogFuture =
             if let Some(dialog) = cx.try_global::<ApplicationOpenDialog>() {
                 dialog.0.select()
@@ -1019,13 +1085,7 @@ impl ProductShell {
             let delivered = completion.clone();
             if this
                 .update(cx, |this, cx| {
-                    this.start_open_request(
-                        request,
-                        OpenTarget::from(&target),
-                        false,
-                        Some(delivered),
-                        cx,
-                    );
+                    this.start_open_request(request, open_target, false, Some(delivered), cx);
                 })
                 .is_err()
             {
@@ -1161,8 +1221,8 @@ impl ProductShell {
         let existing = self.workbench.read(cx).panes().iter().find_map(|pane| {
             pane.tabs()
                 .iter()
-                .find(|tab| tab.document_id() == document)
-                .map(|tab| (pane.id(), tab.id(), tab.editor().clone()))
+                .find(|tab| tab.document_id() == Some(document))
+                .map(|tab| (pane.id(), tab.id(), tab.editor().unwrap().clone()))
         });
         if let Some((pane, tab, _)) = existing {
             self.workbench.update(cx, |workbench, _| {
@@ -1234,11 +1294,14 @@ impl ProductShell {
                     return;
                 };
                 let tab = pane.active_tab();
+                let Some(document) = tab.document_id() else {
+                    return;
+                };
                 let target = OpenTarget {
                     workbench: self.workbench.downgrade(),
                     pane: pane.id(),
                     tab: tab.id(),
-                    document: tab.document_id(),
+                    document,
                 };
                 self.start_open_request(
                     OpenRequest::from_uri_for_product(uri),
@@ -1315,7 +1378,13 @@ impl ProductShell {
         let model = documents.read(cx).get(document).unwrap().model().clone();
         let editor = self.workbench.update(cx, |workbench, cx| {
             workbench.open_tab_for_document(pane, document, model, cx);
-            workbench.pane(pane).unwrap().active_tab().editor().clone()
+            workbench
+                .pane(pane)
+                .unwrap()
+                .active_tab()
+                .editor()
+                .unwrap()
+                .clone()
         });
         editor.focus_handle(cx).focus(window);
         self.status = "new untitled document".into();
@@ -1341,7 +1410,7 @@ impl ProductShell {
     ) -> bool {
         let editor = self.workbench.update(cx, |workbench, cx| {
             workbench.split_pane(pane, direction, SplitPlacement::After, cx)?;
-            Some(workbench.focused_pane()?.active_tab().editor().clone())
+            workbench.focused_pane()?.active_tab().editor().cloned()
         });
         if let Some(editor) = editor {
             editor.focus_handle(cx).focus(window);
@@ -1366,23 +1435,32 @@ impl ProductShell {
     ) {
         let editor = self.workbench.update(cx, |workbench, _| {
             workbench.activate_tab(pane, tab);
-            Some(workbench.pane(pane)?.active_tab().editor().clone())
+            workbench.pane(pane)?.active_tab().editor().cloned()
         });
         if let Some(editor) = editor {
             editor.focus_handle(cx).focus(window);
-            cx.notify();
+        } else if self
+            .workbench
+            .read(cx)
+            .pane(pane)
+            .is_some_and(|pane| matches!(pane.active_tab().surface_id(), TabSurfaceId::Terminal(_)))
+        {
+            self.terminal_focus
+                .get_or_insert_with(|| cx.focus_handle())
+                .focus(window);
         }
+        cx.notify();
     }
 
     #[cfg(test)]
     fn close_active_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.sync_focused_pane(window, cx);
-        let Some((pane, tab, document)) = self.workbench.read(cx).focused_pane().map(|pane| {
-            (
+        let Some((pane, tab, document)) = self.workbench.read(cx).focused_pane().and_then(|pane| {
+            Some((
                 pane.id(),
                 pane.active_tab_id(),
-                pane.active_tab().document_id(),
-            )
+                pane.active_tab().document_id()?,
+            ))
         }) else {
             return;
         };
@@ -1638,7 +1716,7 @@ impl ProductShell {
                     view.key.window == plan.request.origin.window
                         && view.key.pane == plan.request.origin.pane
                         && view.key.tab == plan.request.origin.tab
-                        && view.key.document == plan.request.origin.document
+                        && view.key.surface == plan.request.origin.surface
                 }
                 ProtectedCloseKind::Window => view.key.window == plan.request.origin.window,
                 ProtectedCloseKind::Quit => true,
@@ -1664,13 +1742,17 @@ impl ProductShell {
             }
         }
         let total_counts = views.iter().fold(HashMap::new(), |mut counts, view| {
-            *counts.entry(view.key.document).or_insert(0usize) += 1;
+            if let TabSurfaceId::Document(document) = view.key.surface {
+                *counts.entry(document).or_insert(0usize) += 1;
+            }
             counts
         });
         let scoped_counts = current_scope
             .iter()
             .fold(HashMap::new(), |mut counts, view| {
-                *counts.entry(view.document).or_insert(0usize) += 1;
+                if let TabSurfaceId::Document(document) = view.surface {
+                    *counts.entry(document).or_insert(0usize) += 1;
+                }
                 counts
             });
         for document in documents.read(cx).documents() {
@@ -1692,7 +1774,7 @@ impl ProductShell {
                 plan.request.origin.window,
                 plan.request.origin.pane,
                 plan.request.origin.tab,
-                plan.request.origin.document,
+                plan.request.origin.surface,
                 cx,
             ),
             ProtectedCloseKind::Window => {
@@ -1760,7 +1842,7 @@ impl ProductShell {
             CloseRequestOutcome::Closed(transition) => transition,
         };
 
-        if transition.document == DocumentCloseDisposition::CloseRequested {
+        if transition.document == Some(DocumentCloseDisposition::CloseRequested) {
             documents.update(cx, |documents, _| {
                 documents.remove(document);
             });
@@ -1785,15 +1867,41 @@ impl ProductShell {
         window_handle: AnyWindowHandle,
         pane: PaneId,
         tab: TabId,
-        document: DocumentId,
+        surface: TabSurfaceId,
         cx: &mut Context<Self>,
     ) -> crate::host::protocol::CommandOutcome {
         use crate::app::workbench::CloseConfirmation;
         use crate::host::protocol::CommandOutcome;
 
-        if !self.workbench.read(cx).contains_tab(pane, tab, document) {
+        if !self.workbench.read(cx).contains_surface(pane, tab, surface) {
             return CommandOutcome::InvalidTarget;
         }
+        let TabSurfaceId::Document(document) = surface else {
+            let TabSurfaceId::Terminal(session_id) = surface else {
+                unreachable!()
+            };
+            let outcome = self.workbench.update(cx, |workbench, _| {
+                workbench.request_close_terminal_tab(pane, tab, session_id)
+            });
+            let Some(transition) = outcome else {
+                return CommandOutcome::InvalidTarget;
+            };
+            if transition.workbench_is_empty() {
+                self.replace_empty_workbench(cx);
+            }
+            let editor = self
+                .workbench
+                .read(cx)
+                .focused_pane()
+                .and_then(|pane| pane.active_tab().editor().cloned());
+            if let Some(editor) = editor {
+                let _ = cx.update_window(window_handle, move |_, window, cx| {
+                    editor.focus_handle(cx).focus(window);
+                });
+            }
+            cx.notify();
+            return CommandOutcome::Completed;
+        };
         let open_view_count = cx
             .global::<ApplicationWorkbenches>()
             .view_count(document, cx);
@@ -1825,18 +1933,13 @@ impl ProductShell {
                 .unwrap(),
             None => return CommandOutcome::InvalidTarget,
         };
-        if transition.document == DocumentCloseDisposition::CloseRequested {
+        if transition.document == Some(DocumentCloseDisposition::CloseRequested) {
             documents.update(cx, |documents, _| {
                 documents.remove(document);
             });
         }
         if transition.workbench_is_empty() {
-            let replacement = create_untitled_document(&documents, cx);
-            let model = documents.read(cx).get(replacement).unwrap().model().clone();
-            let workbench = cx.new(|cx| Workbench::new_for_document(replacement, model, cx));
-            cx.global::<ApplicationWorkbenches>().register(&workbench);
-            self.workbench = workbench;
-            self.status = "created replacement untitled document".into();
+            self.replace_empty_workbench(cx);
         } else {
             self.status = "closed tab".into();
         }
@@ -1844,7 +1947,7 @@ impl ProductShell {
             .workbench
             .read(cx)
             .focused_pane()
-            .map(|pane| pane.active_tab().editor().clone());
+            .and_then(|pane| pane.active_tab().editor().cloned());
         if let Some(editor) = editor {
             let _ = cx.update_window(window_handle, move |_, window, cx| {
                 editor.focus_handle(cx).focus(window);
@@ -1859,10 +1962,20 @@ impl ProductShell {
             .workbench
             .read(cx)
             .focused_pane()
-            .map(|pane| pane.active_tab().editor().clone())
+            .and_then(|pane| pane.active_tab().editor().cloned())
         {
             editor.focus_handle(cx).focus(window);
         }
+    }
+
+    fn replace_empty_workbench(&mut self, cx: &mut Context<Self>) {
+        let documents = Self::documents(cx);
+        let replacement = create_untitled_document(&documents, cx);
+        let model = documents.read(cx).get(replacement).unwrap().model().clone();
+        let workbench = cx.new(|cx| Workbench::new_for_document(replacement, model, cx));
+        cx.global::<ApplicationWorkbenches>().register(&workbench);
+        self.workbench = workbench;
+        self.status = "created replacement untitled document".into();
     }
 
     pub(crate) fn execute_product_command(
@@ -1878,7 +1991,7 @@ impl ProductShell {
             && self
                 .workbench
                 .read(cx)
-                .contains_tab(target.pane, target.tab, target.document);
+                .contains_surface(target.pane, target.tab, target.surface);
         if !target_is_live {
             return CommandOutcome::InvalidTarget;
         }
@@ -1888,7 +2001,7 @@ impl ProductShell {
             .read(cx)
             .pane(target.pane)
             .and_then(|pane| pane.tabs().iter().find(|tab| tab.id() == target.tab))
-            .map(|tab| tab.editor().clone());
+            .and_then(|tab| tab.editor().cloned());
         if let Some(editor) = editor {
             if editor.update(cx, |editor, cx| {
                 editor.execute_editing_command(name, window, cx)
@@ -1903,6 +2016,11 @@ impl ProductShell {
                 .then_some(CommandOutcome::Completed)
                 .unwrap_or(CommandOutcome::InvalidTarget),
             CLOSE_TAB_COMMAND => CommandOutcome::Unavailable,
+            SPLIT_HORIZONTAL_COMMAND | SPLIT_VERTICAL_COMMAND
+                if matches!(target.surface, TabSurfaceId::Terminal(_)) =>
+            {
+                CommandOutcome::Unavailable
+            }
             SPLIT_HORIZONTAL_COMMAND => self
                 .split_pane(target.pane, SplitDirection::Horizontal, window, cx)
                 .then_some(CommandOutcome::Completed)
@@ -1980,7 +2098,7 @@ impl ProductShell {
         let workbench = self.workbench.read(cx);
         let pane = workbench.pane(pane_id).unwrap();
         let active_tab = pane.active_tab_id();
-        let editor = pane.active_tab().editor().clone();
+        let editor = pane.active_tab().editor().cloned();
         let documents = Self::documents(cx);
         let tabs = pane
             .tabs()
@@ -1988,12 +2106,17 @@ impl ProductShell {
             .map(|tab| {
                 let tab_id = tab.id();
                 let documents = documents.read(cx);
-                let document = documents.get(tab.document_id()).unwrap();
-                let title = format!(
-                    "{}{}",
-                    document.title(),
-                    if document.is_dirty(cx) { " •" } else { "" }
-                );
+                let title = match tab.surface_id() {
+                    TabSurfaceId::Document(document_id) => {
+                        let document = documents.get(document_id).unwrap();
+                        format!(
+                            "{}{}",
+                            document.title(),
+                            if document.is_dirty(cx) { " •" } else { "" }
+                        )
+                    }
+                    TabSurfaceId::Terminal(_) => "Terminal".to_owned(),
+                };
                 div()
                     .id(("tab", tab_id.value()))
                     .px_3()
@@ -2035,7 +2158,24 @@ impl ProductShell {
                     .bg(rgb(0x2d2d2d))
                     .children(tabs),
             )
-            .child(div().flex_1().min_h_0().overflow_hidden().child(editor))
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_hidden()
+                    .when_some(editor, |element, editor| element.child(editor))
+                    .when(
+                        matches!(pane.active_tab().surface_id(), TabSurfaceId::Terminal(_)),
+                        |element| {
+                            element.child(
+                                div()
+                                    .p_3()
+                                    .text_color(rgb(0xaaaaaa))
+                                    .child("Terminal session"),
+                            )
+                        },
+                    ),
+            )
             .into_any_element()
     }
 }
@@ -2248,7 +2388,9 @@ pub(crate) fn open_product_window(request: Option<OpenRequest>, cx: &mut App) {
                     workbench: shell.read(cx).workbench.downgrade(),
                     pane: pane.id(),
                     tab: tab.id(),
-                    document: tab.document_id(),
+                    document: tab
+                        .document_id()
+                        .expect("initial product tab is a document"),
                 };
                 shell.update(cx, |shell, cx| {
                     shell.start_open_request(request, target, true, None, cx);
@@ -2490,6 +2632,7 @@ mod tests {
             ProviderFuture, ResourceEntry, ResourceFile, ResourceStat, ResourceVersion,
         },
         resource::ResourceUri,
+        workbench::{TabSurfaceId, TerminalSessionId},
     };
 
     struct GatedFileSystemProvider {
@@ -2637,7 +2780,7 @@ mod tests {
             workbench: shell.workbench.downgrade(),
             pane: pane.id(),
             tab: tab.id(),
-            document: tab.document_id(),
+            document: tab.document_id().unwrap(),
         }
     }
 
@@ -2898,6 +3041,7 @@ mod tests {
                 .unwrap()
                 .active_tab()
                 .editor()
+                .unwrap()
                 .clone()
         });
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
@@ -2947,8 +3091,8 @@ mod tests {
             (
                 first.id(),
                 second.id(),
-                first.active_tab().editor().clone(),
-                second.active_tab().editor().clone(),
+                first.active_tab().editor().unwrap().clone(),
+                second.active_tab().editor().unwrap().clone(),
             )
         });
         let target = cx
@@ -3092,7 +3236,7 @@ mod tests {
             (
                 first.id(),
                 workbench.panes()[1].id(),
-                first.active_tab().editor().clone(),
+                first.active_tab().editor().unwrap().clone(),
             )
         });
         cx.update_window(window_handle, |_, window, cx| {
@@ -3163,7 +3307,8 @@ mod tests {
                 .focused_pane()
                 .unwrap()
                 .active_tab()
-                .editor();
+                .editor()
+                .unwrap();
             assert_eq!(active.read(cx).model().read(cx).text(), "");
         });
         let execution = dispatcher.update(cx, |dispatcher, cx| {
@@ -3206,6 +3351,7 @@ mod tests {
                 .unwrap()
                 .active_tab()
                 .editor()
+                .unwrap()
                 .clone();
             editor.update(cx, |editor, cx| {
                 editor.replace_text_in_range(None, "# Notes\n👩‍💻 é ", window, cx);
@@ -3296,6 +3442,7 @@ mod tests {
                 .unwrap()
                 .active_tab()
                 .editor()
+                .unwrap()
                 .clone()
         });
         let bounds = cx.read(|cx| editor.read(cx).interaction_bounds());
@@ -3413,7 +3560,7 @@ mod tests {
             let second = &pane.tabs()[1];
             let second_model = documents
                 .read(cx)
-                .get(second.document_id())
+                .get(second.document_id().unwrap())
                 .unwrap()
                 .model()
                 .clone();
@@ -3421,7 +3568,7 @@ mod tests {
                 pane.id(),
                 first.id(),
                 second.id(),
-                second.document_id(),
+                second.document_id().unwrap(),
                 second_model,
             )
         });
@@ -3469,7 +3616,8 @@ mod tests {
                     .focused_pane()
                     .unwrap()
                     .active_tab()
-                    .document_id(),
+                    .document_id()
+                    .unwrap(),
                 second_document
             );
         });
@@ -3493,8 +3641,8 @@ mod tests {
         let (first, second) = cx.read(|cx| {
             let workbench = shell.read(cx).workbench.read(cx);
             (
-                workbench.panes()[0].active_tab().editor().clone(),
-                workbench.panes()[1].active_tab().editor().clone(),
+                workbench.panes()[0].active_tab().editor().unwrap().clone(),
+                workbench.panes()[1].active_tab().editor().unwrap().clone(),
             )
         });
         cx.update_window(window_handle, |_, window, cx| {
@@ -3620,8 +3768,9 @@ mod tests {
                     .unwrap()
                     .active_tab()
                     .editor()
+                    .unwrap()
                     .clone(),
-                workbench.panes()[1].active_tab().editor().clone(),
+                workbench.panes()[1].active_tab().editor().unwrap().clone(),
             )
         });
         cx.update(|window, cx| second_editor.focus_handle(cx).focus(window));
@@ -3678,7 +3827,8 @@ mod tests {
                 .focused_pane()
                 .unwrap()
                 .active_tab()
-                .document_id();
+                .document_id()
+                .unwrap();
             assert_ne!(replacement, original);
             assert!(documents.read(cx).get(original).is_none());
             assert!(documents.read(cx).get(replacement).is_some());
@@ -3754,7 +3904,8 @@ mod tests {
                 .focused_pane()
                 .unwrap()
                 .active_tab()
-                .document_id();
+                .document_id()
+                .unwrap();
             assert_ne!(replacement, document);
             assert!(documents.read(cx).get(replacement).is_some());
         });
@@ -4428,7 +4579,13 @@ mod tests {
             shell.update(cx, |shell, cx| {
                 shell.start_save_command(false, target.clone(), completion, cx);
                 assert_eq!(
-                    shell.close_tab(target.pane, target.tab, target.document, window, cx),
+                    shell.close_tab(
+                        target.pane,
+                        target.tab,
+                        super::target_document(&target).unwrap(),
+                        window,
+                        cx
+                    ),
                     CommandOutcome::Completed
                 );
             });
@@ -4989,7 +5146,8 @@ mod tests {
                     .focused_pane()
                     .unwrap()
                     .active_tab()
-                    .document_id(),
+                    .document_id()
+                    .unwrap(),
                 placeholder
             );
             assert!(shell.read(cx).status.contains("not valid UTF-8"));
@@ -5015,5 +5173,158 @@ mod tests {
             assert!(shell.workspace_tree.is_some());
             assert_eq!(documents.read(cx).documents().count(), 1);
         });
+    }
+
+    #[gpui::test]
+    async fn terminal_tab_has_a_captured_surface_and_document_commands_are_unavailable(
+        cx: &mut TestAppContext,
+    ) {
+        let documents = install_globals(cx);
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        let (shell, window) = product_window(document, model, cx);
+        let session = TerminalSessionId(11);
+        let (pane, tab) = shell.update(cx, |shell, cx| {
+            let pane = shell.workbench.read(cx).focused_pane_id().unwrap();
+            let tab = shell.workbench.update(cx, |workbench, _| {
+                workbench.open_terminal_tab(pane, session).unwrap()
+            });
+            (pane, tab)
+        });
+        let target = cx
+            .update_window(window, |_, window, cx| {
+                shell.update(cx, |shell, cx| {
+                    shell.activate_tab(pane, tab, window, cx);
+                    shell.capture_command_target(window, cx).unwrap()
+                })
+            })
+            .unwrap();
+        assert_eq!(target.surface, TabSurfaceId::Terminal(session));
+        cx.read(|cx| {
+            assert_eq!(shell.read(cx).workbench.read(cx).view_count(document), 1);
+            assert_eq!(
+                cx.global::<ApplicationWorkbenches>()
+                    .view_count(document, cx),
+                1
+            );
+        });
+        let (completion, receiver) = super::CommandCompletion::new();
+        shell.update(cx, |shell, cx| {
+            shell.start_save_command(false, target.clone(), completion, cx)
+        });
+        assert_eq!(receiver.await.unwrap(), CommandOutcome::Unavailable);
+        let result = cx
+            .update_window(window, |_, window, cx| {
+                shell.update(cx, |shell, cx| {
+                    shell.execute_product_command("editor.move-left", &target, window, cx)
+                })
+            })
+            .unwrap();
+        assert_eq!(result, CommandOutcome::Unavailable);
+        let mut wrong_surface = target;
+        wrong_surface.surface = TabSurfaceId::Document(document);
+        let result = cx
+            .update_window(window, |_, window, cx| {
+                shell.update(cx, |shell, cx| {
+                    shell.execute_product_command(NEW_COMMAND, &wrong_surface, window, cx)
+                })
+            })
+            .unwrap();
+        assert_eq!(result, CommandOutcome::InvalidTarget);
+    }
+
+    #[gpui::test]
+    async fn closing_terminal_tab_preserves_dirty_document_and_invalidates_its_target(
+        cx: &mut TestAppContext,
+    ) {
+        let documents = install_globals(cx);
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        model.update(cx, |model, _| model.replace(0..0, "unsaved").unwrap());
+        let (shell, window) = product_window(document, model, cx);
+        let (pane, tab) = shell.update(cx, |shell, cx| {
+            let pane = shell.workbench.read(cx).focused_pane_id().unwrap();
+            let tab = shell.workbench.update(cx, |workbench, _| {
+                workbench
+                    .open_terminal_tab(pane, TerminalSessionId(12))
+                    .unwrap()
+            });
+            (pane, tab)
+        });
+        let stale = cx
+            .update_window(window, |_, window, cx| {
+                shell.update(cx, |shell, cx| {
+                    shell.activate_tab(pane, tab, window, cx);
+                    shell.capture_command_target(window, cx).unwrap()
+                })
+            })
+            .unwrap();
+        let execution = dispatch_product_command(&shell, window, CLOSE_TAB_COMMAND, cx);
+        assert_eq!(
+            execution.completion.await.unwrap(),
+            CommandOutcome::Completed
+        );
+        assert!(!cx.has_pending_prompt());
+        cx.read(|cx| {
+            let workbench = shell.read(cx).workbench.clone();
+            assert_eq!(workbench.read(cx).tab_snapshots().len(), 1);
+            assert_eq!(workbench.read(cx).view_count(document), 1);
+            assert!(documents.read(cx).get(document).unwrap().is_dirty(cx));
+        });
+        let result = cx
+            .update_window(window, |_, window, cx| {
+                shell.update(cx, |shell, cx| {
+                    shell.execute_product_command(NEW_COMMAND, &stale, window, cx)
+                })
+            })
+            .unwrap();
+        assert_eq!(result, CommandOutcome::InvalidTarget);
+    }
+
+    #[gpui::test]
+    async fn mixed_window_and_quit_cancellation_preserve_every_surface(cx: &mut TestAppContext) {
+        let documents = install_globals(cx);
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        model.update(cx, |model, _| model.replace(0..0, "unsaved").unwrap());
+        let (shell, window) = product_window(document, model, cx);
+        let session = TerminalSessionId(21);
+        let (pane, tab) = shell.update(cx, |shell, cx| {
+            let pane = shell.workbench.read(cx).focused_pane_id().unwrap();
+            let tab = shell.workbench.update(cx, |workbench, _| {
+                workbench.open_terminal_tab(pane, session).unwrap()
+            });
+            (pane, tab)
+        });
+        cx.update_window(window, |_, window, cx| {
+            shell.update(cx, |shell, cx| shell.activate_tab(pane, tab, window, cx));
+        })
+        .unwrap();
+        for command in [CLOSE_WINDOW_COMMAND, QUIT_COMMAND] {
+            let execution = dispatch_product_command(&shell, window, command, cx);
+            cx.run_until_parked();
+            assert!(cx.has_pending_prompt());
+            cx.simulate_prompt_answer("Cancel");
+            assert_eq!(
+                execution.completion.await.unwrap(),
+                CommandOutcome::Cancelled
+            );
+            cx.read(|cx| {
+                assert!(cx.windows().contains(&window));
+                let snapshots = shell.read(cx).workbench.read(cx).tab_snapshots();
+                assert_eq!(snapshots.len(), 2);
+                assert!(
+                    snapshots
+                        .iter()
+                        .any(|tab| tab.surface == TabSurfaceId::Document(document))
+                );
+                assert!(
+                    snapshots
+                        .iter()
+                        .any(|tab| tab.surface == TabSurfaceId::Terminal(session))
+                );
+                assert!(documents.read(cx).get(document).unwrap().is_dirty(cx));
+            });
+        }
     }
 }

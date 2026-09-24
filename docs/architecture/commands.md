@@ -38,13 +38,14 @@ optional surface-associated buffer. These native target identities remain
 inside `app`.
 
 Product dispatch additionally captures the exact workbench, pane, tab, and
-document selected at admission. Native menu actions, fixed keybindings, the
-product palette, and toolbar actions all submit the same `Command` value and
+surface kind and identity selected at admission. Native menu actions, fixed
+keybindings, the product palette, and toolbar actions all submit the same `Command` value and
 captured product target. Dispatch is deferred and every
 source receives the same asynchronous structured outcome. Before execution,
 the dispatcher revalidates the captured window, shell, focus, workbench, pane,
-tab, and document identities. A focus change therefore cannot retarget an
-operation, and a closed or replaced target completes as invalid. Commands
+tab, and surface identities. A focus change therefore cannot retarget an
+operation, and a closed or replaced target completes as invalid. Document-only
+commands on a live terminal tab complete as unavailable. Commands
 whose behavior belongs to a later product checkpoint remain discoverable and
 complete as unavailable.
 
