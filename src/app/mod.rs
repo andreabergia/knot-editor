@@ -55,6 +55,13 @@ mod resource;
 mod search_results;
 #[allow(
     dead_code,
+    reason = "terminal sessions await product workbench integration"
+)]
+mod terminal_session;
+#[cfg(all(test, unix))]
+mod terminal_session_tests;
+#[allow(
+    dead_code,
     reason = "retained native terminal surface outside the current product shell"
 )]
 mod terminal_view;
