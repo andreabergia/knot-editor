@@ -74,25 +74,21 @@ requests containing normalized resource identities and workspace generations
 to the shell. It has no extension provider identity and does not share the
 extension-owned `TreeView` protocol.
 
-## Terminal: implemented fixture
+## Terminal sessions and views
 
-`TerminalView` is a native gpui surface that owns one authoritative local PTY
-session, Alacritty emulator grid, and its focus state. Alacritty's event loop
-performs PTY reads, parsing, and writes on a background thread and sends
-coalesced wakeups to the gpui foreground. The foreground routes input and
-resize messages to that event loop and renders the grid through gpui. The view
-does not use or expose an editor model. Layout bounds determine the grid and
-PTY dimensions. Child exit is reported back to the view; closing or replacing
-a session shuts it down and reaps the child off the foreground thread.
+`TerminalSession` is a stable gpui foreground model that owns one local PTY,
+Alacritty emulator grid, process status, authoritative grid size, and one
+coalesced wakeup path. Alacritty's event loop reads, parses, and writes on a
+background thread. Its child-exit and repaint events reach the session; the
+view observes session changes for repaint. A session survives release or
+reconstruction of that view. Shutdown sends the event-loop signal and joins its thread on a
+background thread; restart replaces the process and grid. Generation checks
+prevent old process events from changing the replacement.
 
-## Terminal: validated production direction
-
-The following separation is a validated design, not the current implementation
-(see the [D024 plan](../plans/d024-terminal-session-plan.md)).
-
-The production boundary separates a stable `TerminalSession`, which owns the
-PTY, emulator, and process lifecycle, from a disposable `TerminalView`, which
-owns presentation, focus, and layout. A session survives view reconstruction
-or relocation across tabs and windows. Explicit terminal closure terminates
-the session, and reopening creates a new one; detached persistence and
-simultaneous presentations remain out of scope.
+`TerminalView` owns focus, scroll interaction, layout, and gpui drawing. An
+attachment lease permits one view per session and can be released explicitly
+before a handoff; releasing the view also releases its lease. The view sends
+input and size changes to its session, and the session retains the final grid
+and exit status after natural process exit. Startup failure remains visible as
+a status and can be retried by restarting. Terminal sessions are not yet wired
+into product workbench tabs; see the [D024 plan](../plans/d024-terminal-session-plan.md).

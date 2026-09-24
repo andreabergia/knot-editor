@@ -150,11 +150,12 @@ text buffers. Ghostty VT offered no concrete behavioral advantage sufficient to
 offset separate PTY integration, pre-1.0 FFI, Zig packaging, integration size,
 and poor debug parsing performance.
 
-Production will separate stable sessions from disposable views so shells survive
-view relocation. Explicit closure will still terminate the session. Zed's
-GPL-compatible terminal implementation is the selected attributed source for
-the production adapter, model, mappings, renderer, resize, and event handling;
-this is a future implementation direction.
+The application now separates a stable terminal session from its disposable
+view so the process and grid survive view reconstruction. Explicit closure
+terminates the session, while natural exit preserves its final grid. The
+existing Alacritty adapter supplied the required lifecycle behavior without
+copying Zed code. Zed's GPL-compatible implementation remains an attributed
+reference for concrete behavior if later product integration exposes a gap.
 
 Reference: [workbench and lifecycle](architecture/workbench-and-lifecycle.md). Evidence: [terminal plan](archive/exploration/step9-terminal-plan.md).
 

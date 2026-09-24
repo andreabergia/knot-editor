@@ -1,6 +1,6 @@
 # D024: Product Terminal Sessions
 
-Status: in progress. Checkpoint 1 complete; checkpoint 2 not started.
+Status: in progress. Checkpoints 1 and 2 implemented; checkpoint 2 manual review pending.
 
 This slice brings the validated local terminal into the product workbench. A
 stable `TerminalSession` owns the PTY, emulator, process, and terminal events;
@@ -106,16 +106,16 @@ terminal tabs do not enter document persistence or change dirty-document prompts
 
 ## Checkpoint 2: Extract a stable terminal session
 
-- [ ] Move PTY, Alacritty grid, child status, coalesced wakeups, input/resize
+- [x] ✅ Move PTY, Alacritty grid, child status, coalesced wakeups, input/resize
   transport, restart, and shutdown out of `TerminalView` into a stable session
   model. Keep layout, focus, scroll interaction, and gpui drawing in the view.
-- [ ] Make view attachment/detachment explicit. Rebuilding a view over one
+- [x] ✅ Make view attachment/detachment explicit. Rebuilding a view over one
   session preserves its grid and process; dropping the view alone does not
   terminate the child.
-- [ ] Ensure explicit close and restart invalidate prior wakeups and exit
+- [x] ✅ Ensure explicit close and restart invalidate prior wakeups and exit
   events, terminate the right child, and reap asynchronously. Define behavior
   for startup failure and natural exit while retaining final visible output.
-- [ ] Add tests using a controllable local child/PTY fixture for view rebuild,
+- [x] ✅ Add tests using a controllable local child/PTY fixture for view rebuild,
   output and exit delivery, resize, close/restart races, and exact-once
   shutdown. Preserve the prototype's sustained-output responsiveness check.
 
