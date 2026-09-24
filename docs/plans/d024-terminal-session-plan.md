@@ -1,6 +1,6 @@
 # D024: Product Terminal Sessions
 
-Status: in progress. Checkpoint 1 implemented; manual review gate pending.
+Status: in progress. Checkpoint 1 complete; checkpoint 2 not started.
 
 This slice brings the validated local terminal into the product workbench. A
 stable `TerminalSession` owns the PTY, emulator, process, and terminal events;
@@ -101,8 +101,8 @@ Keep the plan current, including any scope decisions made at a gate.
 Automated checks: focused `app::workbench`, `app::product_commands`, and
 protected-close tests; `cargo check --all-targets`.
 
-Manual review gate: inspect tab ownership and target validation. Confirm no
-terminal path enters document persistence or changes dirty-document prompts.
+Manual review gate: ✅ approved. Tab ownership and target validation reviewed;
+terminal tabs do not enter document persistence or change dirty-document prompts.
 
 ## Checkpoint 2: Extract a stable terminal session
 
