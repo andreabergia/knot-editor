@@ -1,7 +1,6 @@
 # D017: Production V8 Isolate Pool and Scheduling
 
-Status: Tasks 1-11 implemented and automated checks passed; final manual review
-pending.
+Status: completed on 2026-09-24.
 
 This slice replaces the prototype `deno_core` runtime with a direct
 `rusty_v8` host and runs persistent extension isolates on a bounded worker
@@ -424,7 +423,7 @@ Manual review gate:
 - ✅ Record final benchmark and test evidence in this plan. The fixture evidence
   remains useful historical context.
 - ✅ Run `cargo fmt`, the full test suite, and the final release diagnostics.
-- ⬜ Record manual approval and mark this plan completed.
+- ✅ Record manual approval and mark this plan completed.
 
 Review evidence (2026-09-22, target macOS):
 
@@ -461,6 +460,8 @@ Manual review gate:
 - Review the complete diff and documentation against the selected design.
   Perform the multi-extension macOS stress run and approve the slice before
   marking this plan completed.
+
+The final manual review gate was approved on 2026-09-24.
 
 ## Explicit exclusions
 
