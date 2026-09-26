@@ -1,6 +1,6 @@
 # D024: Product Terminal Sessions
 
-Status: in progress. Checkpoints 1–3 implemented; checkpoint 3 manual gate pending.
+Status: in progress. Checkpoints 1–3 complete.
 
 This slice brings the validated local terminal into the product workbench. A
 stable `TerminalSession` owns the PTY, emulator, process, and terminal events;
@@ -154,6 +154,10 @@ Manual review gate: open a shell from the product UI; type, scroll, resize,
 switch tabs, split, and close. Cancel a dirty-document close in a mixed window
 and confirm the terminal stays running. Confirm closing a terminal ends its
 child without freezing the UI.
+
+Manual review gate: ✅ approved. Product terminal interaction, tab switching,
+independent splits, protected close cancellation, and terminal cleanup worked
+in local use.
 
 ## Checkpoint 4: Transfer a live session to a new window
 
