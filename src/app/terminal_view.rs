@@ -62,7 +62,7 @@ impl TerminalView {
         self.scroll_delta_y = 0.;
     }
 
-    fn resize(&mut self, size: TerminalSize, cx: &mut Context<Self>) {
+    pub(crate) fn resize(&mut self, size: TerminalSize, cx: &mut Context<Self>) {
         if self.attachment.is_none() {
             return;
         }

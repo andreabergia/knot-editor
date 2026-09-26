@@ -96,5 +96,13 @@ session and one tab presentation in the captured pane. Tab switching retains
 both; splitting a terminal allocates an independent session. A successful
 protected tab, window, or application close removes the affected registry
 entries and shuts their sessions down after dirty-document decisions complete.
+Move Terminal to New Window opens an empty destination shell, then revalidates
+the captured source tab, view, and registered session. In one foreground
+transition it detaches the source view, attaches a destination view to the same
+session and grid, removes the source tab, and focuses the new view. Failure to
+create or validate the destination leaves the source attached. The source
+workbench applies its ordinary empty-workbench replacement policy. Subsequent
+window closure sees only the tabs still in that window; destination resize and
+input belong to the new view.
 The diagnostic window continues to exercise view rebuilding; see the
 [D024 plan](../plans/d024-terminal-session-plan.md).

@@ -48,7 +48,10 @@ operation, and a closed or replaced target completes as invalid. Document-only
 commands on a live terminal tab complete as unavailable. New Terminal opens a
 session in the captured pane; split commands create an independent session
 when that pane's captured tab is a terminal. Close Tab, Close Window, and Quit
-use protected mixed-surface closure. Commands whose behavior belongs to a later
+use protected mixed-surface closure. Move Terminal to New Window requires a
+captured terminal tab and revalidates its session and view after opening the
+destination. It keeps the sole session presentation and returns unavailable on
+a document tab or invalid target after a stale capture. Commands whose behavior belongs to a later
 product checkpoint remain discoverable and complete as unavailable.
 
 Ordinary product editing uses this same captured-view path: character, word,

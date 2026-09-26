@@ -23,11 +23,12 @@ use super::{
     open::{OpenResource, enumerate_directory, load_resource},
     product_commands::{
         ApplicationProductCommands, CLOSE_TAB_COMMAND, CLOSE_WINDOW_COMMAND, COPY_COMMAND,
-        CUT_COMMAND, FIND_COMMAND, FIND_NEXT_COMMAND, FIND_PREVIOUS_COMMAND, NEW_COMMAND,
-        NEW_TERMINAL_COMMAND, NEW_WINDOW_COMMAND, OPEN_COMMAND, PASTE_COMMAND,
-        ProductCommandDispatcher, ProductCommandSource, ProductCommandTarget, QUIT_COMMAND,
-        REDO_COMMAND, SAVE_AS_COMMAND, SAVE_COMMAND, SELECT_ALL_COMMAND, SPLIT_HORIZONTAL_COMMAND,
-        SPLIT_VERTICAL_COMMAND, ShowProductCommandPalette, UNDO_COMMAND,
+        CUT_COMMAND, FIND_COMMAND, FIND_NEXT_COMMAND, FIND_PREVIOUS_COMMAND,
+        MOVE_TERMINAL_TO_NEW_WINDOW_COMMAND, NEW_COMMAND, NEW_TERMINAL_COMMAND, NEW_WINDOW_COMMAND,
+        OPEN_COMMAND, PASTE_COMMAND, ProductCommandDispatcher, ProductCommandSource,
+        ProductCommandTarget, QUIT_COMMAND, REDO_COMMAND, SAVE_AS_COMMAND, SAVE_COMMAND,
+        SELECT_ALL_COMMAND, SPLIT_HORIZONTAL_COMMAND, SPLIT_VERTICAL_COMMAND,
+        ShowProductCommandPalette, UNDO_COMMAND,
     },
     terminal_session::TerminalSession,
     terminal_view::TerminalView,
@@ -2110,7 +2111,7 @@ impl ProductShell {
         }
     }
 
-    fn replace_empty_workbench(&mut self, cx: &mut Context<Self>) {
+    fn replace_empty_workbench(&mut self, cx: &mut App) {
         let documents = Self::documents(cx);
         let replacement = create_untitled_document(&documents, cx);
         let model = documents.read(cx).get(replacement).unwrap().model().clone();
@@ -2118,6 +2119,104 @@ impl ProductShell {
         cx.global::<ApplicationWorkbenches>().register(&workbench);
         self.workbench = workbench;
         self.status = "created replacement untitled document".into();
+    }
+
+    fn move_terminal_to_new_window_with(
+        &mut self,
+        target: &ProductCommandTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        create_destination: impl FnOnce(&mut App) -> anyhow::Result<WindowHandle<ProductShell>>,
+    ) -> crate::host::protocol::CommandOutcome {
+        use crate::host::protocol::CommandOutcome;
+
+        let TabSurfaceId::Terminal(session_id) = target.surface else {
+            return CommandOutcome::Unavailable;
+        };
+        let source_view = self
+            .workbench
+            .read(cx)
+            .pane(target.pane)
+            .and_then(|pane| pane.tabs().iter().find(|tab| tab.id() == target.tab))
+            .and_then(|tab| tab.terminal_view().cloned());
+        let Some(source_view) = source_view else {
+            return CommandOutcome::InvalidTarget;
+        };
+        let session = cx
+            .global::<ApplicationTerminalSessions>()
+            .0
+            .borrow()
+            .sessions
+            .get(&session_id)
+            .cloned();
+        let Some(session) = session else {
+            return CommandOutcome::InvalidTarget;
+        };
+
+        let Ok(destination) = create_destination(cx) else {
+            self.status = "could not create terminal window".into();
+            cx.notify();
+            return CommandOutcome::HandlerFailure {
+                message: "could not create terminal window".into(),
+            };
+        };
+        let destination_handle = destination.into();
+        let result = cx.update_window(destination_handle, |_, destination_window, cx| {
+            let Some(destination_shell) = destination_window.root::<ProductShell>().flatten()
+            else {
+                return CommandOutcome::InvalidTarget;
+            };
+            let still_live = self.target_is_live(target, cx)
+                && cx
+                    .global::<ApplicationTerminalSessions>()
+                    .0
+                    .borrow()
+                    .sessions
+                    .get(&session_id)
+                    == Some(&session)
+                && self
+                    .workbench
+                    .read(cx)
+                    .pane(target.pane)
+                    .and_then(|pane| pane.tabs().iter().find(|tab| tab.id() == target.tab))
+                    .and_then(|tab| tab.terminal_view())
+                    == Some(&source_view);
+            if !still_live {
+                return CommandOutcome::InvalidTarget;
+            }
+
+            source_view.update(cx, |view, cx| view.detach(cx));
+            let destination_view = cx.new(|cx| TerminalView::new(session, cx));
+            let destination_workbench =
+                cx.new(|_| Workbench::new_for_terminal(session_id, destination_view));
+            cx.global::<ApplicationWorkbenches>()
+                .register(&destination_workbench);
+            let transition = self
+                .workbench
+                .update(cx, |workbench, _| {
+                    workbench.request_close_terminal_tab(target.pane, target.tab, session_id)
+                })
+                .expect("validated source terminal remains until transfer");
+            if transition.workbench_is_empty() {
+                self.replace_empty_workbench(cx);
+            } else {
+                self.status = "moved terminal to new window".into();
+            }
+            destination_shell.update(cx, |shell, cx| {
+                shell.workbench = destination_workbench;
+                shell.status = "terminal moved here".into();
+                shell.focus_active_surface(destination_window, cx);
+                cx.notify();
+            });
+            CommandOutcome::Completed
+        });
+        if !matches!(result, Ok(CommandOutcome::Completed)) {
+            let _ = cx.update_window(destination_handle, |_, window, _| window.remove_window());
+            return CommandOutcome::InvalidTarget;
+        }
+        self.focus_active_surface(window, cx);
+        cx.notify();
+        CommandOutcome::Completed
     }
 
     pub(crate) fn execute_product_command(
@@ -2161,6 +2260,12 @@ impl ProductShell {
                 .new_terminal_in_pane(target.pane, window, cx)
                 .then_some(CommandOutcome::Completed)
                 .unwrap_or(CommandOutcome::InvalidTarget),
+            MOVE_TERMINAL_TO_NEW_WINDOW_COMMAND => self.move_terminal_to_new_window_with(
+                target,
+                window,
+                cx,
+                open_terminal_transfer_window,
+            ),
             CLOSE_TAB_COMMAND => CommandOutcome::Unavailable,
             SPLIT_HORIZONTAL_COMMAND => self
                 .split_pane(target.pane, SplitDirection::Horizontal, window, cx)
@@ -2358,6 +2463,12 @@ impl Render for ProductShell {
                         NEW_TERMINAL_COMMAND,
                     ))
                     .child(command_button(
+                        "move terminal",
+                        "move-terminal",
+                        &entity,
+                        MOVE_TERMINAL_TO_NEW_WINDOW_COMMAND,
+                    ))
+                    .child(command_button(
                         "split →",
                         "split-horizontal",
                         &entity,
@@ -2548,6 +2659,23 @@ pub(crate) fn open_product_window(request: Option<OpenRequest>, cx: &mut App) {
     .expect("product window must open");
 }
 
+fn open_terminal_transfer_window(cx: &mut App) -> anyhow::Result<WindowHandle<ProductShell>> {
+    let bounds = Bounds::centered(None, size(px(1000.), px(720.)), cx);
+    cx.open_window(
+        WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            window_min_size: Some(size(px(480.), px(320.))),
+            ..Default::default()
+        },
+        |window, cx| {
+            let workbench = cx.new(|_| Workbench::empty());
+            let shell = cx.new(|_| ProductShell::new(workbench));
+            install_protected_window_close(&shell, window, cx);
+            shell
+        },
+    )
+}
+
 pub(crate) fn run(initial_request: Option<OpenRequest>, fixture: Option<String>) {
     let application = Application::new();
     let (open_requests, mut incoming_requests) = tokio::sync::mpsc::unbounded_channel();
@@ -2589,6 +2717,10 @@ pub(crate) fn run(initial_request: Option<OpenRequest>, fixture: Option<String>)
                     MenuItem::action(
                         "New Terminal",
                         ProductCommandSource::new(NEW_TERMINAL_COMMAND),
+                    ),
+                    MenuItem::action(
+                        "Move Terminal to New Window",
+                        ProductCommandSource::new(MOVE_TERMINAL_TO_NEW_WINDOW_COMMAND),
                     ),
                     MenuItem::action("New Window", ProductCommandSource::new(NEW_WINDOW_COMMAND)),
                     MenuItem::action("Open…", ProductCommandSource::new(OPEN_COMMAND)),
@@ -2661,6 +2793,11 @@ fn bind_product_keys(cx: &mut App) {
         KeyBinding::new(
             "cmd-shift-t",
             ProductCommandSource::new(NEW_TERMINAL_COMMAND),
+            Some("product"),
+        ),
+        KeyBinding::new(
+            "cmd-ctrl-shift-n",
+            ProductCommandSource::new(MOVE_TERMINAL_TO_NEW_WINDOW_COMMAND),
             Some("product"),
         ),
         KeyBinding::new(
@@ -2776,12 +2913,13 @@ mod tests {
         ApplicationDocuments, ApplicationFileSystems, ApplicationOpenDialog,
         ApplicationProductCommands, ApplicationProtectedClosure, ApplicationSaveDialog,
         ApplicationTerminalSessions, ApplicationWorkbenches, BufferModel, CLOSE_TAB_COMMAND,
-        CLOSE_WINDOW_COMMAND, DocumentCollection, Entity, NEW_COMMAND, NEW_TERMINAL_COMMAND,
-        OpenDialogFuture, OpenDialogOutcome, OpenRequest, OpenTarget, ProductCommandDispatcher,
-        ProductCommandSource, ProductOpenDialog, ProductSaveDialog, ProductShell, QUIT_COMMAND,
-        REDO_COMMAND, RefCell, SAVE_AS_COMMAND, SAVE_COMMAND, SPLIT_HORIZONTAL_COMMAND,
-        SaveDialogFuture, SaveDialogOutcome, SplitDirection, TerminalSessions, UNDO_COMMAND,
-        Workbench, WorkbenchLayout, create_untitled_document, install_protected_window_close,
+        CLOSE_WINDOW_COMMAND, DocumentCollection, Entity, MOVE_TERMINAL_TO_NEW_WINDOW_COMMAND,
+        NEW_COMMAND, NEW_TERMINAL_COMMAND, OpenDialogFuture, OpenDialogOutcome, OpenRequest,
+        OpenTarget, ProductCommandDispatcher, ProductCommandSource, ProductOpenDialog,
+        ProductSaveDialog, ProductShell, QUIT_COMMAND, REDO_COMMAND, RefCell, SAVE_AS_COMMAND,
+        SAVE_COMMAND, SPLIT_HORIZONTAL_COMMAND, SaveDialogFuture, SaveDialogOutcome,
+        SplitDirection, TerminalSessions, UNDO_COMMAND, Workbench, WorkbenchLayout,
+        create_untitled_document, install_protected_window_close, open_terminal_transfer_window,
         product_filesystems,
     };
     use crate::app::{
@@ -5941,6 +6079,389 @@ mod tests {
                     crate::app::terminal_session::TerminalStatus::Closed
                 );
             }
+        });
+    }
+
+    #[gpui::test]
+    async fn moving_terminal_keeps_its_session_and_source_window_close_does_not_stop_it(
+        cx: &mut TestAppContext,
+    ) {
+        let documents = install_globals(cx);
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        let (source, source_window) = product_window(document, model, cx);
+        assert_eq!(
+            dispatch_product_command(&source, source_window, NEW_TERMINAL_COMMAND, cx)
+                .completion
+                .await
+                .unwrap(),
+            CommandOutcome::Completed
+        );
+        let (id, session, grid, source_view) = cx.read(|cx| {
+            let shell = source.read(cx);
+            let tab = shell
+                .workbench
+                .read(cx)
+                .focused_pane()
+                .unwrap()
+                .active_tab();
+            let TabSurfaceId::Terminal(id) = tab.surface_id() else {
+                panic!()
+            };
+            let session = cx
+                .global::<ApplicationTerminalSessions>()
+                .0
+                .borrow()
+                .sessions[&id]
+                .clone();
+            let grid = session.read(cx).terminal().unwrap().clone();
+            (id, session, grid, tab.terminal_view().unwrap().clone())
+        });
+        assert_eq!(
+            dispatch_product_command(
+                &source,
+                source_window,
+                MOVE_TERMINAL_TO_NEW_WINDOW_COMMAND,
+                cx
+            )
+            .completion
+            .await
+            .unwrap(),
+            CommandOutcome::Completed
+        );
+        let destination_window = cx.read(|cx| {
+            *cx.windows()
+                .iter()
+                .find(|handle| **handle != source_window)
+                .unwrap()
+        });
+        let destination = cx
+            .update_window(destination_window, |_, window, _| {
+                window.root::<ProductShell>().flatten().unwrap()
+            })
+            .unwrap();
+        let destination_view = cx.read(|cx| {
+            destination
+                .read(cx)
+                .workbench
+                .read(cx)
+                .focused_pane()
+                .unwrap()
+                .active_tab()
+                .terminal_view()
+                .unwrap()
+                .clone()
+        });
+        cx.update_window(destination_window, |_, window, cx| {
+            assert!(
+                destination_view
+                    .focus_handle(cx)
+                    .contains_focused(window, cx)
+            );
+        })
+        .unwrap();
+        let destination_size =
+            crate::app::terminal_session::TerminalSize::from_pixels(640., 320., 1.);
+        destination_view.update(cx, |view, cx| view.resize(destination_size, cx));
+        cx.read(|cx| assert_eq!(session.read(cx).size(), destination_size));
+        let stale_size = crate::app::terminal_session::TerminalSize::from_pixels(320., 160., 1.);
+        source_view.update(cx, |view, cx| view.resize(stale_size, cx));
+        cx.read(|cx| assert_eq!(session.read(cx).size(), destination_size));
+        cx.read(|cx| {
+            assert!(
+                !source
+                    .read(cx)
+                    .workbench
+                    .read(cx)
+                    .tab_snapshots()
+                    .iter()
+                    .any(|tab| tab.surface == TabSurfaceId::Terminal(id))
+            );
+            let destination_shell = destination.read(cx);
+            let tab = destination_shell
+                .workbench
+                .read(cx)
+                .focused_pane()
+                .unwrap()
+                .active_tab();
+            assert_eq!(tab.surface_id(), TabSurfaceId::Terminal(id));
+            assert_ne!(tab.terminal_view(), Some(&source_view));
+            assert!(std::sync::Arc::ptr_eq(
+                session.read(cx).terminal().unwrap(),
+                &grid
+            ));
+            assert_eq!(
+                cx.global::<ApplicationTerminalSessions>()
+                    .0
+                    .borrow()
+                    .sessions[&id],
+                session
+            );
+        });
+        assert_eq!(
+            dispatch_product_command(&source, source_window, CLOSE_WINDOW_COMMAND, cx)
+                .completion
+                .await
+                .unwrap(),
+            CommandOutcome::Completed
+        );
+        cx.read(|cx| {
+            assert_eq!(
+                session.read(cx).status(),
+                crate::app::terminal_session::TerminalStatus::Running
+            );
+            assert!(cx.windows().contains(&destination_window));
+        });
+        assert_eq!(
+            dispatch_product_command(&destination, destination_window, CLOSE_TAB_COMMAND, cx)
+                .completion
+                .await
+                .unwrap(),
+            CommandOutcome::Completed
+        );
+        cx.read(|cx| {
+            assert_eq!(
+                session.read(cx).status(),
+                crate::app::terminal_session::TerminalStatus::Closed
+            );
+            assert!(
+                !cx.global::<ApplicationTerminalSessions>()
+                    .0
+                    .borrow()
+                    .sessions
+                    .contains_key(&id)
+            );
+        });
+    }
+
+    #[gpui::test]
+    async fn failed_terminal_destination_leaves_source_attached(cx: &mut TestAppContext) {
+        let documents = install_globals(cx);
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        let (shell, window) = product_window(document, model, cx);
+        assert_eq!(
+            dispatch_product_command(&shell, window, NEW_TERMINAL_COMMAND, cx)
+                .completion
+                .await
+                .unwrap(),
+            CommandOutcome::Completed
+        );
+        let outcome = cx
+            .update_window(window, |_, window, cx| {
+                shell.update(cx, |shell, cx| {
+                    let target = shell.capture_command_target(window, cx).unwrap();
+                    shell.move_terminal_to_new_window_with(&target, window, cx, |_| {
+                        anyhow::bail!("simulated window creation failure")
+                    })
+                })
+            })
+            .unwrap();
+        assert!(matches!(outcome, CommandOutcome::HandlerFailure { .. }));
+        cx.read(|cx| {
+            let shell = shell.read(cx);
+            let tab = shell
+                .workbench
+                .read(cx)
+                .focused_pane()
+                .unwrap()
+                .active_tab();
+            let TabSurfaceId::Terminal(id) = tab.surface_id() else {
+                panic!()
+            };
+            assert!(tab.terminal_view().is_some());
+            assert!(
+                cx.global::<ApplicationTerminalSessions>()
+                    .0
+                    .borrow()
+                    .sessions
+                    .contains_key(&id)
+            );
+            assert_eq!(cx.windows().len(), 1);
+        });
+    }
+
+    #[gpui::test]
+    async fn vanished_terminal_destination_leaves_source_attached(cx: &mut TestAppContext) {
+        let documents = install_globals(cx);
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        let (shell, window) = product_window(document, model, cx);
+        assert_eq!(
+            dispatch_product_command(&shell, window, MOVE_TERMINAL_TO_NEW_WINDOW_COMMAND, cx)
+                .completion
+                .await
+                .unwrap(),
+            CommandOutcome::Unavailable
+        );
+        assert_eq!(
+            dispatch_product_command(&shell, window, NEW_TERMINAL_COMMAND, cx)
+                .completion
+                .await
+                .unwrap(),
+            CommandOutcome::Completed
+        );
+        let outcome = cx
+            .update_window(window, |_, window, cx| {
+                shell.update(cx, |shell, cx| {
+                    let target = shell.capture_command_target(window, cx).unwrap();
+                    shell.move_terminal_to_new_window_with(&target, window, cx, |cx| {
+                        let destination = open_terminal_transfer_window(cx)?;
+                        cx.update_window(destination.into(), |_, window, _| {
+                            window.remove_window()
+                        })?;
+                        Ok(destination)
+                    })
+                })
+            })
+            .unwrap();
+        assert_eq!(outcome, CommandOutcome::InvalidTarget);
+        cx.read(|cx| {
+            let shell = shell.read(cx);
+            let tab = shell
+                .workbench
+                .read(cx)
+                .focused_pane()
+                .unwrap()
+                .active_tab();
+            let TabSurfaceId::Terminal(id) = tab.surface_id() else {
+                panic!()
+            };
+            assert!(tab.terminal_view().is_some());
+            assert!(
+                cx.global::<ApplicationTerminalSessions>()
+                    .0
+                    .borrow()
+                    .sessions
+                    .contains_key(&id)
+            );
+            assert_eq!(cx.windows().len(), 1);
+        });
+    }
+
+    #[gpui::test]
+    async fn stale_terminal_move_target_is_rejected(cx: &mut TestAppContext) {
+        let documents = install_globals(cx);
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        let (shell, window) = product_window(document, model, cx);
+        assert_eq!(
+            dispatch_product_command(&shell, window, NEW_TERMINAL_COMMAND, cx)
+                .completion
+                .await
+                .unwrap(),
+            CommandOutcome::Completed
+        );
+        let target = cx
+            .update_window(window, |_, window, cx| {
+                shell.update(cx, |shell, cx| {
+                    shell.capture_command_target(window, cx).unwrap()
+                })
+            })
+            .unwrap();
+        assert_eq!(
+            dispatch_product_command(&shell, window, CLOSE_TAB_COMMAND, cx)
+                .completion
+                .await
+                .unwrap(),
+            CommandOutcome::Completed
+        );
+        let command = crate::host::protocol::Command {
+            name: MOVE_TERMINAL_TO_NEW_WINDOW_COMMAND.into(),
+            arguments: crate::host::protocol::CommandArgumentValue::Null,
+        };
+        let execution = cx.update(|cx| {
+            let dispatcher = cx.global::<ApplicationProductCommands>().0.clone();
+            dispatcher.update(cx, |dispatcher, cx| {
+                dispatcher.dispatch(command, target, cx)
+            })
+        });
+        assert_eq!(
+            execution.completion.await.unwrap(),
+            CommandOutcome::InvalidTarget
+        );
+        cx.read(|cx| assert_eq!(cx.windows().len(), 1));
+    }
+
+    #[gpui::test]
+    async fn process_exit_during_terminal_handoff_keeps_final_grid(cx: &mut TestAppContext) {
+        use alacritty_terminal::tty::{Options, Shell};
+        use std::{thread, time::Duration};
+
+        let documents = install_globals(cx);
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        let (source, source_window) = product_window(document, model, cx);
+        let session = cx.update(|cx| {
+            cx.new(|cx| {
+                crate::app::terminal_session::TerminalSession::new_with_options(
+                    Options {
+                        shell: Some(Shell::new(
+                            "/bin/sh".into(),
+                            vec![
+                                "-c".into(),
+                                "printf 'handoff-output\\n'; sleep 0.05; exit 7".into(),
+                            ],
+                        )),
+                        drain_on_exit: true,
+                        ..Default::default()
+                    },
+                    cx,
+                )
+            })
+        });
+        let id = source.update(cx, |shell, cx| {
+            let id = cx
+                .global::<ApplicationTerminalSessions>()
+                .0
+                .borrow_mut()
+                .allocate_id();
+            cx.global::<ApplicationTerminalSessions>()
+                .0
+                .borrow_mut()
+                .sessions
+                .insert(id, session.clone());
+            let view =
+                cx.new(|cx| crate::app::terminal_view::TerminalView::new(session.clone(), cx));
+            let pane = shell.workbench.read(cx).focused_pane_id().unwrap();
+            shell.workbench.update(cx, |workbench, _| {
+                workbench.open_terminal_tab(pane, id, view).unwrap()
+            });
+            id
+        });
+        let outcome = cx
+            .update_window(source_window, |_, window, cx| {
+                source.update(cx, |shell, cx| {
+                    shell.focus_active_surface(window, cx);
+                    let target = shell.capture_command_target(window, cx).unwrap();
+                    shell.move_terminal_to_new_window_with(&target, window, cx, |cx| {
+                        thread::sleep(Duration::from_millis(100));
+                        open_terminal_transfer_window(cx)
+                    })
+                })
+            })
+            .unwrap();
+        assert_eq!(outcome, CommandOutcome::Completed);
+        cx.run_until_parked();
+        cx.read(|cx| {
+            assert!(matches!(
+                session.read(cx).status(),
+                crate::app::terminal_session::TerminalStatus::Exited(_)
+            ));
+            let terminal = session.read(cx).terminal().unwrap().lock();
+            let output: String = terminal
+                .renderable_content()
+                .display_iter
+                .map(|cell| cell.cell.c)
+                .collect();
+            assert!(output.contains("handoff-output"));
+            assert!(
+                cx.global::<ApplicationTerminalSessions>()
+                    .0
+                    .borrow()
+                    .sessions
+                    .contains_key(&id)
+            );
         });
     }
 }

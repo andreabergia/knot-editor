@@ -1,6 +1,7 @@
 # D024: Product Terminal Sessions
 
-Status: in progress. Checkpoints 1–3 complete.
+Status: in progress. Checkpoint 4 implementation and automated checks complete;
+manual review gate pending.
 
 This slice brings the validated local terminal into the product workbench. A
 stable `TerminalSession` owns the PTY, emulator, process, and terminal events;
@@ -161,15 +162,15 @@ in local use.
 
 ## Checkpoint 4: Transfer a live session to a new window
 
-- [ ] Add Move Terminal to New Window for a captured terminal tab. Transfer
+- [x] ✅ Add Move Terminal to New Window for a captured terminal tab. Transfer
   the same session and final grid to one new view, preserving process identity.
-- [ ] Make destination creation and source removal one validated operation
+- [x] ✅ Make destination creation and source removal one validated operation
   with a safe failure path. Revalidate tab/session identity across any deferred
   work and prevent a second active presentation during handoff.
-- [ ] Keep resize and focus owned by the destination view after transfer.
+- [x] ✅ Keep resize and focus owned by the destination view after transfer.
   Closing the source window after a move cannot shut down the transferred
   session; closing the destination terminal can.
-- [ ] Cover successful transfer, stale target, destination creation failure,
+- [x] ✅ Cover successful transfer, stale target, destination creation failure,
   source close, destination close, and process exit during handoff.
 
 Automated checks: focused transfer, close, and terminal lifecycle tests;

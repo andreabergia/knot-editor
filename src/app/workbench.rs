@@ -227,6 +227,43 @@ pub(crate) struct Workbench {
 }
 
 impl Workbench {
+    pub(crate) fn empty() -> Self {
+        Self {
+            next_pane_id: 1,
+            next_tab_id: 1,
+            layout: None,
+            panes: Vec::new(),
+            focused_pane: None,
+        }
+    }
+
+    pub(crate) fn new_for_terminal(
+        session_id: TerminalSessionId,
+        view: Entity<TerminalView>,
+    ) -> Self {
+        let pane_id = PaneId(1);
+        let tab_id = TabId(1);
+        let workbench = Self {
+            next_pane_id: 2,
+            next_tab_id: 2,
+            layout: Some(WorkbenchLayout::Pane(pane_id)),
+            panes: vec![Pane {
+                id: pane_id,
+                tabs: vec![WorkbenchTab {
+                    id: tab_id,
+                    payload: WorkbenchTabPayload::Terminal {
+                        session_id,
+                        view: Some(view),
+                    },
+                }],
+                active_tab: tab_id,
+            }],
+            focused_pane: Some(pane_id),
+        };
+        workbench.debug_assert_invariants();
+        workbench
+    }
+
     #[cfg_attr(not(test), allow(dead_code, reason = "document convenience API"))]
     pub(crate) fn new(document: &Document, cx: &mut Context<Self>) -> Self {
         Self::new_for_document(document.id(), document.model().clone(), cx)

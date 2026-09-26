@@ -18,6 +18,7 @@ use super::{CommandCompletion, CommandExecution};
 
 pub(crate) const NEW_COMMAND: &str = "file.new";
 pub(crate) const NEW_TERMINAL_COMMAND: &str = "terminal.new";
+pub(crate) const MOVE_TERMINAL_TO_NEW_WINDOW_COMMAND: &str = "terminal.move-to-new-window";
 pub(crate) const OPEN_COMMAND: &str = "file.open";
 pub(crate) const SAVE_COMMAND: &str = "file.save";
 pub(crate) const SAVE_AS_COMMAND: &str = "file.save-as";
@@ -69,6 +70,10 @@ const PRODUCT_COMMANDS: &[(&str, &str)] = &[
     ("editor.delete-forward", "Delete Forward"),
     (NEW_COMMAND, "New Document"),
     (NEW_TERMINAL_COMMAND, "New Terminal"),
+    (
+        MOVE_TERMINAL_TO_NEW_WINDOW_COMMAND,
+        "Move Terminal to New Window",
+    ),
     (OPEN_COMMAND, "Open…"),
     (SAVE_COMMAND, "Save"),
     (SAVE_AS_COMMAND, "Save As…"),
