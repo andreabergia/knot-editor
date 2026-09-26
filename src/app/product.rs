@@ -5697,6 +5697,83 @@ mod tests {
     }
 
     #[gpui::test]
+    async fn closing_the_final_terminal_tab_installs_an_untitled_workbench(
+        cx: &mut TestAppContext,
+    ) {
+        let documents = install_globals(cx);
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        let (shell, window) = product_window(document, model, cx);
+        assert_eq!(
+            dispatch_product_command(&shell, window, NEW_TERMINAL_COMMAND, cx)
+                .completion
+                .await
+                .unwrap(),
+            CommandOutcome::Completed
+        );
+        let (pane, document_tab, session) = cx.read(|cx| {
+            let shell = shell.read(cx);
+            let pane = shell.workbench.read(cx).focused_pane().unwrap();
+            let TabSurfaceId::Terminal(id) = pane.active_tab().surface_id() else {
+                panic!()
+            };
+            (
+                pane.id(),
+                pane.tabs()[0].id(),
+                cx.global::<ApplicationTerminalSessions>()
+                    .0
+                    .borrow()
+                    .sessions[&id]
+                    .clone(),
+            )
+        });
+        cx.update_window(window, |_, window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.activate_tab(pane, document_tab, window, cx)
+            });
+        })
+        .unwrap();
+        assert_eq!(
+            dispatch_product_command(&shell, window, CLOSE_TAB_COMMAND, cx)
+                .completion
+                .await
+                .unwrap(),
+            CommandOutcome::Completed
+        );
+        cx.read(|cx| {
+            let shell = shell.read(cx);
+            let tabs = shell.workbench.read(cx).tab_snapshots();
+            assert_eq!(tabs.len(), 1);
+            assert!(matches!(tabs[0].surface, TabSurfaceId::Terminal(_)));
+            assert!(documents.read(cx).get(document).is_none());
+        });
+        assert_eq!(
+            dispatch_product_command(&shell, window, CLOSE_TAB_COMMAND, cx)
+                .completion
+                .await
+                .unwrap(),
+            CommandOutcome::Completed
+        );
+        cx.read(|cx| {
+            let shell = shell.read(cx);
+            let tabs = shell.workbench.read(cx).tab_snapshots();
+            assert_eq!(tabs.len(), 1);
+            assert!(matches!(tabs[0].surface, TabSurfaceId::Document(_)));
+            assert_eq!(
+                session.read(cx).status(),
+                crate::app::terminal_session::TerminalStatus::Closed
+            );
+            assert!(
+                cx.global::<ApplicationTerminalSessions>()
+                    .0
+                    .borrow()
+                    .sessions
+                    .is_empty()
+            );
+        });
+    }
+
+    #[gpui::test]
     async fn window_close_shuts_down_terminal_after_protected_decisions(cx: &mut TestAppContext) {
         let documents = install_globals(cx);
         let document = cx.update(|cx| create_untitled_document(&documents, cx));
