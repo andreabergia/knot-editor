@@ -24,14 +24,16 @@ use super::{
     product_commands::{
         ApplicationProductCommands, CLOSE_TAB_COMMAND, CLOSE_WINDOW_COMMAND, COPY_COMMAND,
         CUT_COMMAND, FIND_COMMAND, FIND_NEXT_COMMAND, FIND_PREVIOUS_COMMAND, NEW_COMMAND,
-        NEW_WINDOW_COMMAND, OPEN_COMMAND, PASTE_COMMAND, ProductCommandDispatcher,
-        ProductCommandSource, ProductCommandTarget, QUIT_COMMAND, REDO_COMMAND, SAVE_AS_COMMAND,
-        SAVE_COMMAND, SELECT_ALL_COMMAND, SPLIT_HORIZONTAL_COMMAND, SPLIT_VERTICAL_COMMAND,
-        ShowProductCommandPalette, UNDO_COMMAND,
+        NEW_TERMINAL_COMMAND, NEW_WINDOW_COMMAND, OPEN_COMMAND, PASTE_COMMAND,
+        ProductCommandDispatcher, ProductCommandSource, ProductCommandTarget, QUIT_COMMAND,
+        REDO_COMMAND, SAVE_AS_COMMAND, SAVE_COMMAND, SELECT_ALL_COMMAND, SPLIT_HORIZONTAL_COMMAND,
+        SPLIT_VERTICAL_COMMAND, ShowProductCommandPalette, UNDO_COMMAND,
     },
+    terminal_session::TerminalSession,
+    terminal_view::TerminalView,
     workbench::{
         CloseRequestOutcome, DocumentCloseDisposition, PaneId, SplitDirection, SplitPlacement,
-        TabId, TabSurfaceId, Workbench, WorkbenchLayout,
+        TabId, TabSurfaceId, TerminalSessionId, Workbench, WorkbenchLayout,
     },
     workspace::WorkspaceState,
     workspace_tree::{
@@ -46,6 +48,30 @@ impl Global for ApplicationWorkbenches {}
 struct ApplicationProtectedClosure(RefCell<bool>);
 
 impl Global for ApplicationProtectedClosure {}
+
+struct ApplicationTerminalSessions(RefCell<TerminalSessions>);
+
+impl Global for ApplicationTerminalSessions {}
+
+#[derive(Default)]
+struct TerminalSessions {
+    next_id: u64,
+    sessions: HashMap<TerminalSessionId, Entity<TerminalSession>>,
+}
+
+impl TerminalSessions {
+    fn allocate_id(&mut self) -> TerminalSessionId {
+        self.next_id = self
+            .next_id
+            .checked_add(1)
+            .expect("terminal identity exhausted");
+        TerminalSessionId(self.next_id)
+    }
+
+    fn remove(&mut self, id: TerminalSessionId) -> Option<Entity<TerminalSession>> {
+        self.sessions.remove(&id)
+    }
+}
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(crate) enum ProtectedCloseKind {
@@ -178,7 +204,6 @@ fn target_document(target: &ProductCommandTarget) -> Option<DocumentId> {
 
 pub(crate) struct ProductShell {
     workbench: Entity<Workbench>,
-    terminal_focus: Option<FocusHandle>,
     status: SharedString,
     command_palette: Option<Entity<CommandPalette<ProductCommandTarget>>>,
     command_palette_subscription: Option<Subscription>,
@@ -193,7 +218,6 @@ impl ProductShell {
     fn new(workbench: Entity<Workbench>) -> Self {
         Self {
             workbench,
-            terminal_focus: None,
             status: "ready".into(),
             command_palette: None,
             command_palette_subscription: None,
@@ -207,6 +231,66 @@ impl ProductShell {
 
     fn command_dispatcher(cx: &App) -> Entity<ProductCommandDispatcher> {
         cx.global::<ApplicationProductCommands>().0.clone()
+    }
+
+    fn create_terminal(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> (TerminalSessionId, Entity<TerminalView>) {
+        let id = cx
+            .global::<ApplicationTerminalSessions>()
+            .0
+            .borrow_mut()
+            .allocate_id();
+        let session = cx.new(TerminalSession::new);
+        let view = cx.new(|cx| TerminalView::new(session.clone(), cx));
+        cx.global::<ApplicationTerminalSessions>()
+            .0
+            .borrow_mut()
+            .sessions
+            .insert(id, session);
+        (id, view)
+    }
+
+    fn close_terminal(&mut self, id: TerminalSessionId, cx: &mut Context<Self>) {
+        let session = cx
+            .global::<ApplicationTerminalSessions>()
+            .0
+            .borrow_mut()
+            .remove(id);
+        if let Some(session) = session {
+            session.update(cx, |session, cx| session.close(cx));
+        }
+    }
+
+    fn close_terminal_ids(ids: impl IntoIterator<Item = TerminalSessionId>, cx: &mut App) {
+        for id in ids {
+            let session = cx
+                .global::<ApplicationTerminalSessions>()
+                .0
+                .borrow_mut()
+                .remove(id);
+            if let Some(session) = session {
+                session.update(cx, |session, cx| session.close(cx));
+            }
+        }
+    }
+
+    fn focus_active_surface(&self, window: &mut Window, cx: &App) {
+        let Some(tab) = self
+            .workbench
+            .read(cx)
+            .focused_pane()
+            .map(|pane| pane.active_tab())
+        else {
+            return;
+        };
+        if let Some(editor) = tab.editor() {
+            editor.focus_handle(cx).focus(window);
+        }
+        if let Some(view) = tab.terminal_view() {
+            view.focus_handle(cx).focus(window);
+        }
     }
 
     pub(crate) fn capture_command_target(
@@ -251,6 +335,10 @@ impl ProductShell {
             focus: tab
                 .editor()
                 .map(|editor| editor.focus_handle(cx).downgrade())
+                .or_else(|| {
+                    tab.terminal_view()
+                        .map(|view| view.focus_handle(cx).downgrade())
+                })
                 .or_else(|| window.focused(cx).map(|focus| focus.downgrade()))?,
         })
     }
@@ -314,11 +402,16 @@ impl ProductShell {
     }
 
     fn sync_focused_pane(&self, window: &Window, cx: &mut Context<Self>) {
-        if self
-            .terminal_focus
-            .as_ref()
-            .is_some_and(|focus| focus.contains_focused(window, cx))
-        {
+        if let Some(pane_id) = self.workbench.read(cx).panes().iter().find_map(|pane| {
+            pane.tabs().iter().find_map(|tab| {
+                tab.terminal_view()
+                    .filter(|view| view.focus_handle(cx).contains_focused(window, cx))
+                    .map(|_| pane.id())
+            })
+        }) {
+            self.workbench.update(cx, |workbench, _| {
+                workbench.focus_pane(pane_id);
+            });
             return;
         }
         let focused_pane = self.workbench.read(cx).panes().iter().find_map(|pane| {
@@ -1392,6 +1485,32 @@ impl ProductShell {
         true
     }
 
+    fn new_terminal_in_pane(
+        &mut self,
+        pane: PaneId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.workbench.read(cx).pane(pane).is_none() {
+            return false;
+        }
+        let (id, view) = self.create_terminal(cx);
+        if self
+            .workbench
+            .update(cx, |workbench, _| {
+                workbench.open_terminal_tab(pane, id, view)
+            })
+            .is_none()
+        {
+            self.close_terminal(id, cx);
+            return false;
+        }
+        self.focus_active_surface(window, cx);
+        self.status = "new terminal".into();
+        cx.notify();
+        true
+    }
+
     #[cfg(test)]
     fn split(&mut self, direction: SplitDirection, window: &mut Window, cx: &mut Context<Self>) {
         self.sync_focused_pane(window, cx);
@@ -1408,12 +1527,29 @@ impl ProductShell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        let editor = self.workbench.update(cx, |workbench, cx| {
-            workbench.split_pane(pane, direction, SplitPlacement::After, cx)?;
-            workbench.focused_pane()?.active_tab().editor().cloned()
-        });
-        if let Some(editor) = editor {
-            editor.focus_handle(cx).focus(window);
+        let terminal = matches!(
+            self.workbench
+                .read(cx)
+                .pane(pane)
+                .map(|pane| pane.active_tab().surface_id()),
+            Some(TabSurfaceId::Terminal(_))
+        );
+        let new_session = terminal.then(|| self.create_terminal(cx));
+        let split = self
+            .workbench
+            .update(cx, |workbench, cx| match new_session.clone() {
+                Some((id, view)) => workbench.split_pane_with_terminal(
+                    pane,
+                    direction,
+                    SplitPlacement::After,
+                    id,
+                    view,
+                    cx,
+                ),
+                None => workbench.split_pane(pane, direction, SplitPlacement::After, cx),
+            });
+        if split.is_some() {
+            self.focus_active_surface(window, cx);
             self.status = match direction {
                 SplitDirection::Horizontal => "split horizontally",
                 SplitDirection::Vertical => "split vertically",
@@ -1422,6 +1558,9 @@ impl ProductShell {
             cx.notify();
             true
         } else {
+            if let Some((id, _)) = new_session {
+                self.close_terminal(id, cx);
+            }
             false
         }
     }
@@ -1433,21 +1572,14 @@ impl ProductShell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let editor = self.workbench.update(cx, |workbench, _| {
+        let activated = self.workbench.update(cx, |workbench, _| {
             workbench.activate_tab(pane, tab);
-            workbench.pane(pane)?.active_tab().editor().cloned()
+            workbench
+                .pane(pane)
+                .is_some_and(|pane| pane.active_tab_id() == tab)
         });
-        if let Some(editor) = editor {
-            editor.focus_handle(cx).focus(window);
-        } else if self
-            .workbench
-            .read(cx)
-            .pane(pane)
-            .is_some_and(|pane| matches!(pane.active_tab().surface_id(), TabSurfaceId::Terminal(_)))
-        {
-            self.terminal_focus
-                .get_or_insert_with(|| cx.focus_handle())
-                .focus(window);
+        if activated {
+            self.focus_active_surface(window, cx);
         }
         cx.notify();
     }
@@ -1783,19 +1915,35 @@ impl ProductShell {
                     .filter(|(document, count)| total_counts.get(document) == Some(count))
                     .map(|(document, _)| *document)
                     .collect::<Vec<_>>();
-                documents.update(cx, |documents, _| {
-                    for document in final_documents {
-                        documents.remove(document);
-                    }
-                });
                 match cx.update_window(plan.request.origin.window, |_, window, _| {
                     window.remove_window();
                 }) {
-                    Ok(()) => CommandOutcome::Completed,
+                    Ok(()) => {
+                        documents.update(cx, |documents, _| {
+                            for document in final_documents {
+                                documents.remove(document);
+                            }
+                        });
+                        Self::close_terminal_ids(
+                            current_scope.iter().filter_map(|key| match key.surface {
+                                TabSurfaceId::Terminal(id) => Some(id),
+                                TabSurfaceId::Document(_) => None,
+                            }),
+                            cx,
+                        );
+                        CommandOutcome::Completed
+                    }
                     Err(_) => CommandOutcome::InvalidTarget,
                 }
             }
             ProtectedCloseKind::Quit => {
+                Self::close_terminal_ids(
+                    current_scope.iter().filter_map(|key| match key.surface {
+                        TabSurfaceId::Terminal(id) => Some(id),
+                        TabSurfaceId::Document(_) => None,
+                    }),
+                    cx,
+                );
                 cx.quit();
                 CommandOutcome::Completed
             }
@@ -1886,19 +2034,13 @@ impl ProductShell {
             let Some(transition) = outcome else {
                 return CommandOutcome::InvalidTarget;
             };
+            self.close_terminal(session_id, cx);
             if transition.workbench_is_empty() {
                 self.replace_empty_workbench(cx);
             }
-            let editor = self
-                .workbench
-                .read(cx)
-                .focused_pane()
-                .and_then(|pane| pane.active_tab().editor().cloned());
-            if let Some(editor) = editor {
-                let _ = cx.update_window(window_handle, move |_, window, cx| {
-                    editor.focus_handle(cx).focus(window);
-                });
-            }
+            let _ = cx.update_window(window_handle, |_, window, cx| {
+                self.focus_active_surface(window, cx)
+            });
             cx.notify();
             return CommandOutcome::Completed;
         };
@@ -2015,12 +2157,11 @@ impl ProductShell {
                 .new_document_in_pane(target.pane, window, cx)
                 .then_some(CommandOutcome::Completed)
                 .unwrap_or(CommandOutcome::InvalidTarget),
+            NEW_TERMINAL_COMMAND => self
+                .new_terminal_in_pane(target.pane, window, cx)
+                .then_some(CommandOutcome::Completed)
+                .unwrap_or(CommandOutcome::InvalidTarget),
             CLOSE_TAB_COMMAND => CommandOutcome::Unavailable,
-            SPLIT_HORIZONTAL_COMMAND | SPLIT_VERTICAL_COMMAND
-                if matches!(target.surface, TabSurfaceId::Terminal(_)) =>
-            {
-                CommandOutcome::Unavailable
-            }
             SPLIT_HORIZONTAL_COMMAND => self
                 .split_pane(target.pane, SplitDirection::Horizontal, window, cx)
                 .then_some(CommandOutcome::Completed)
@@ -2098,7 +2239,17 @@ impl ProductShell {
         let workbench = self.workbench.read(cx);
         let pane = workbench.pane(pane_id).unwrap();
         let active_tab = pane.active_tab_id();
-        let editor = pane.active_tab().editor().cloned();
+        let active_view: Option<AnyElement> = pane
+            .active_tab()
+            .editor()
+            .cloned()
+            .map(|editor| editor.into_any_element())
+            .or_else(|| {
+                pane.active_tab()
+                    .terminal_view()
+                    .cloned()
+                    .map(|view| view.into_any_element())
+            });
         let documents = Self::documents(cx);
         let tabs = pane
             .tabs()
@@ -2163,18 +2314,7 @@ impl ProductShell {
                     .flex_1()
                     .min_h_0()
                     .overflow_hidden()
-                    .when_some(editor, |element, editor| element.child(editor))
-                    .when(
-                        matches!(pane.active_tab().surface_id(), TabSurfaceId::Terminal(_)),
-                        |element| {
-                            element.child(
-                                div()
-                                    .p_3()
-                                    .text_color(rgb(0xaaaaaa))
-                                    .child("Terminal session"),
-                            )
-                        },
-                    ),
+                    .when_some(active_view, |element, view| element.child(view)),
             )
             .into_any_element()
     }
@@ -2211,6 +2351,12 @@ impl Render for ProductShell {
                     .text_xs()
                     .bg(rgb(0x252526))
                     .child(command_button("new tab", "new-tab", &entity, NEW_COMMAND))
+                    .child(command_button(
+                        "terminal",
+                        "new-terminal",
+                        &entity,
+                        NEW_TERMINAL_COMMAND,
+                    ))
                     .child(command_button(
                         "split →",
                         "split-horizontal",
@@ -2420,6 +2566,9 @@ pub(crate) fn run(initial_request: Option<OpenRequest>, fixture: Option<String>)
         cx.set_global(ApplicationDocuments(documents));
         cx.set_global(ApplicationWorkbenches(RefCell::new(Vec::new())));
         cx.set_global(ApplicationProtectedClosure(RefCell::new(false)));
+        cx.set_global(ApplicationTerminalSessions(RefCell::new(
+            TerminalSessions::default(),
+        )));
         cx.set_global(ApplicationFileSystems(product_filesystems()));
         let commands = cx.new(ProductCommandDispatcher::new);
         cx.set_global(ApplicationProductCommands(commands));
@@ -2437,6 +2586,10 @@ pub(crate) fn run(initial_request: Option<OpenRequest>, fixture: Option<String>)
                 name: "File".into(),
                 items: vec![
                     MenuItem::action("New", ProductCommandSource::new(NEW_COMMAND)),
+                    MenuItem::action(
+                        "New Terminal",
+                        ProductCommandSource::new(NEW_TERMINAL_COMMAND),
+                    ),
                     MenuItem::action("New Window", ProductCommandSource::new(NEW_WINDOW_COMMAND)),
                     MenuItem::action("Open…", ProductCommandSource::new(OPEN_COMMAND)),
                     MenuItem::action("Save", ProductCommandSource::new(SAVE_COMMAND)),
@@ -2503,6 +2656,11 @@ fn bind_product_keys(cx: &mut App) {
         KeyBinding::new(
             "cmd-t",
             ProductCommandSource::new(NEW_COMMAND),
+            Some("product"),
+        ),
+        KeyBinding::new(
+            "cmd-shift-t",
+            ProductCommandSource::new(NEW_TERMINAL_COMMAND),
             Some("product"),
         ),
         KeyBinding::new(
@@ -2617,13 +2775,14 @@ mod tests {
     use super::{
         ApplicationDocuments, ApplicationFileSystems, ApplicationOpenDialog,
         ApplicationProductCommands, ApplicationProtectedClosure, ApplicationSaveDialog,
-        ApplicationWorkbenches, BufferModel, CLOSE_TAB_COMMAND, CLOSE_WINDOW_COMMAND,
-        DocumentCollection, Entity, NEW_COMMAND, OpenDialogFuture, OpenDialogOutcome, OpenRequest,
-        OpenTarget, ProductCommandDispatcher, ProductCommandSource, ProductOpenDialog,
-        ProductSaveDialog, ProductShell, QUIT_COMMAND, REDO_COMMAND, RefCell, SAVE_AS_COMMAND,
-        SAVE_COMMAND, SPLIT_HORIZONTAL_COMMAND, SaveDialogFuture, SaveDialogOutcome,
-        SplitDirection, UNDO_COMMAND, Workbench, WorkbenchLayout, create_untitled_document,
-        install_protected_window_close, product_filesystems,
+        ApplicationTerminalSessions, ApplicationWorkbenches, BufferModel, CLOSE_TAB_COMMAND,
+        CLOSE_WINDOW_COMMAND, DocumentCollection, Entity, NEW_COMMAND, NEW_TERMINAL_COMMAND,
+        OpenDialogFuture, OpenDialogOutcome, OpenRequest, OpenTarget, ProductCommandDispatcher,
+        ProductCommandSource, ProductOpenDialog, ProductSaveDialog, ProductShell, QUIT_COMMAND,
+        REDO_COMMAND, RefCell, SAVE_AS_COMMAND, SAVE_COMMAND, SPLIT_HORIZONTAL_COMMAND,
+        SaveDialogFuture, SaveDialogOutcome, SplitDirection, TerminalSessions, UNDO_COMMAND,
+        Workbench, WorkbenchLayout, create_untitled_document, install_protected_window_close,
+        product_filesystems,
     };
     use crate::app::{
         documents::DocumentState,
@@ -2632,7 +2791,7 @@ mod tests {
             ProviderFuture, ResourceEntry, ResourceFile, ResourceStat, ResourceVersion,
         },
         resource::ResourceUri,
-        workbench::{TabSurfaceId, TerminalSessionId},
+        workbench::TabSurfaceId,
     };
 
     struct GatedFileSystemProvider {
@@ -2689,6 +2848,9 @@ mod tests {
         cx.set_global(ApplicationDocuments(documents.clone()));
         cx.set_global(ApplicationWorkbenches(RefCell::new(Vec::new())));
         cx.set_global(ApplicationProtectedClosure(RefCell::new(false)));
+        cx.set_global(ApplicationTerminalSessions(RefCell::new(
+            TerminalSessions::default(),
+        )));
         cx.set_global(ApplicationFileSystems(product_filesystems()));
         let commands = cx.new(ProductCommandDispatcher::new);
         cx.set_global(ApplicationProductCommands(commands));
@@ -2793,7 +2955,7 @@ mod tests {
         let target = cx
             .update_window(window_handle, |_, window, cx| {
                 shell.update(cx, |shell, cx| {
-                    shell.focus_active_editor(window, cx);
+                    shell.focus_active_surface(window, cx);
                     shell.capture_command_target(window, cx).unwrap()
                 })
             })
@@ -5183,13 +5345,23 @@ mod tests {
         let document = cx.update(|cx| create_untitled_document(&documents, cx));
         let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
         let (shell, window) = product_window(document, model, cx);
-        let session = TerminalSessionId(11);
         let (pane, tab) = shell.update(cx, |shell, cx| {
+            let (session, view) = shell.create_terminal(cx);
             let pane = shell.workbench.read(cx).focused_pane_id().unwrap();
             let tab = shell.workbench.update(cx, |workbench, _| {
-                workbench.open_terminal_tab(pane, session).unwrap()
+                workbench.open_terminal_tab(pane, session, view).unwrap()
             });
             (pane, tab)
+        });
+        let session = cx.read(|cx| {
+            shell
+                .read(cx)
+                .workbench
+                .read(cx)
+                .pane(pane)
+                .unwrap()
+                .active_tab()
+                .surface_id()
         });
         let target = cx
             .update_window(window, |_, window, cx| {
@@ -5199,7 +5371,7 @@ mod tests {
                 })
             })
             .unwrap();
-        assert_eq!(target.surface, TabSurfaceId::Terminal(session));
+        assert_eq!(target.surface, session);
         cx.read(|cx| {
             assert_eq!(shell.read(cx).workbench.read(cx).view_count(document), 1);
             assert_eq!(
@@ -5243,11 +5415,10 @@ mod tests {
         model.update(cx, |model, _| model.replace(0..0, "unsaved").unwrap());
         let (shell, window) = product_window(document, model, cx);
         let (pane, tab) = shell.update(cx, |shell, cx| {
+            let (session, view) = shell.create_terminal(cx);
             let pane = shell.workbench.read(cx).focused_pane_id().unwrap();
             let tab = shell.workbench.update(cx, |workbench, _| {
-                workbench
-                    .open_terminal_tab(pane, TerminalSessionId(12))
-                    .unwrap()
+                workbench.open_terminal_tab(pane, session, view).unwrap()
             });
             (pane, tab)
         });
@@ -5288,13 +5459,23 @@ mod tests {
         let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
         model.update(cx, |model, _| model.replace(0..0, "unsaved").unwrap());
         let (shell, window) = product_window(document, model, cx);
-        let session = TerminalSessionId(21);
         let (pane, tab) = shell.update(cx, |shell, cx| {
+            let (session, view) = shell.create_terminal(cx);
             let pane = shell.workbench.read(cx).focused_pane_id().unwrap();
             let tab = shell.workbench.update(cx, |workbench, _| {
-                workbench.open_terminal_tab(pane, session).unwrap()
+                workbench.open_terminal_tab(pane, session, view).unwrap()
             });
             (pane, tab)
+        });
+        let session = cx.read(|cx| {
+            shell
+                .read(cx)
+                .workbench
+                .read(cx)
+                .pane(pane)
+                .unwrap()
+                .active_tab()
+                .surface_id()
         });
         cx.update_window(window, |_, window, cx| {
             shell.update(cx, |shell, cx| shell.activate_tab(pane, tab, window, cx));
@@ -5318,13 +5499,371 @@ mod tests {
                         .iter()
                         .any(|tab| tab.surface == TabSurfaceId::Document(document))
                 );
-                assert!(
-                    snapshots
-                        .iter()
-                        .any(|tab| tab.surface == TabSurfaceId::Terminal(session))
+                assert!(snapshots.iter().any(|tab| tab.surface == session));
+                let TabSurfaceId::Terminal(id) = session else {
+                    panic!()
+                };
+                let registry = cx.global::<ApplicationTerminalSessions>().0.borrow();
+                assert_ne!(
+                    registry.sessions[&id].read(cx).status(),
+                    crate::app::terminal_session::TerminalStatus::Closed
                 );
                 assert!(documents.read(cx).get(document).unwrap().is_dirty(cx));
             });
         }
+    }
+
+    #[gpui::test]
+    async fn terminal_command_focuses_a_live_view_and_split_creates_an_independent_session(
+        cx: &mut TestAppContext,
+    ) {
+        let documents = install_globals(cx);
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        let (shell, window) = product_window(document, model, cx);
+
+        let command = dispatch_product_command(&shell, window, NEW_TERMINAL_COMMAND, cx);
+        assert_eq!(command.completion.await.unwrap(), CommandOutcome::Completed);
+        let (pane, first, document_tab) = cx.read(|cx| {
+            let shell = shell.read(cx);
+            let pane = shell.workbench.read(cx).focused_pane().unwrap();
+            (
+                pane.id(),
+                pane.active_tab().surface_id(),
+                pane.tabs()[0].id(),
+            )
+        });
+        let TabSurfaceId::Terminal(first_id) = first else {
+            panic!("terminal command opened a document")
+        };
+        cx.update_window(window, |_, window, cx| {
+            let shell = shell.read(cx);
+            let pane = shell.workbench.read(cx).pane(pane).unwrap();
+            assert!(
+                pane.active_tab()
+                    .terminal_view()
+                    .unwrap()
+                    .focus_handle(cx)
+                    .contains_focused(window, cx)
+            );
+        })
+        .unwrap();
+        cx.read(|cx| {
+            assert!(
+                cx.global::<ApplicationTerminalSessions>()
+                    .0
+                    .borrow()
+                    .sessions
+                    .contains_key(&first_id)
+            );
+        });
+
+        cx.update_window(window, |_, window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.activate_tab(pane, document_tab, window, cx)
+            });
+        })
+        .unwrap();
+        cx.update_window(window, |_, window, cx| {
+            shell.update(cx, |shell, cx| {
+                let terminal_tab = shell.workbench.read(cx).pane(pane).unwrap().tabs()[1].id();
+                shell.activate_tab(pane, terminal_tab, window, cx);
+            });
+        })
+        .unwrap();
+        cx.read(|cx| {
+            assert_eq!(
+                shell
+                    .read(cx)
+                    .workbench
+                    .read(cx)
+                    .pane(pane)
+                    .unwrap()
+                    .active_tab()
+                    .surface_id(),
+                first
+            );
+            assert!(
+                cx.global::<ApplicationTerminalSessions>()
+                    .0
+                    .borrow()
+                    .sessions
+                    .contains_key(&first_id)
+            );
+        });
+
+        let split = dispatch_product_command(&shell, window, SPLIT_HORIZONTAL_COMMAND, cx);
+        assert_eq!(split.completion.await.unwrap(), CommandOutcome::Completed);
+        let second_id = cx.read(|cx| {
+            let shell = shell.read(cx);
+            let workbench = shell.workbench.read(cx);
+            assert_eq!(workbench.panes().len(), 2);
+            match workbench.focused_pane().unwrap().active_tab().surface_id() {
+                TabSurfaceId::Terminal(id) => id,
+                TabSurfaceId::Document(_) => panic!("split did not create terminal"),
+            }
+        });
+        assert_ne!(first_id, second_id);
+        cx.read(|cx| {
+            let registry = cx.global::<ApplicationTerminalSessions>().0.borrow();
+            assert_eq!(registry.sessions.len(), 2);
+            assert!(registry.sessions.contains_key(&first_id));
+            assert!(registry.sessions.contains_key(&second_id));
+        });
+    }
+
+    #[gpui::test]
+    async fn terminal_close_and_reopen_settle_the_exact_session(cx: &mut TestAppContext) {
+        let documents = install_globals(cx);
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        let (shell, window) = product_window(document, model, cx);
+        assert_eq!(
+            dispatch_product_command(&shell, window, NEW_TERMINAL_COMMAND, cx)
+                .completion
+                .await
+                .unwrap(),
+            CommandOutcome::Completed
+        );
+        let (first_id, first_session) = cx.read(|cx| {
+            let TabSurfaceId::Terminal(id) = shell
+                .read(cx)
+                .workbench
+                .read(cx)
+                .focused_pane()
+                .unwrap()
+                .active_tab()
+                .surface_id()
+            else {
+                panic!()
+            };
+            (
+                id,
+                cx.global::<ApplicationTerminalSessions>()
+                    .0
+                    .borrow()
+                    .sessions[&id]
+                    .clone(),
+            )
+        });
+        assert_eq!(
+            dispatch_product_command(&shell, window, CLOSE_TAB_COMMAND, cx)
+                .completion
+                .await
+                .unwrap(),
+            CommandOutcome::Completed
+        );
+        cx.read(|cx| {
+            assert_eq!(
+                first_session.read(cx).status(),
+                crate::app::terminal_session::TerminalStatus::Closed
+            );
+            assert!(
+                !cx.global::<ApplicationTerminalSessions>()
+                    .0
+                    .borrow()
+                    .sessions
+                    .contains_key(&first_id)
+            );
+        });
+        assert_eq!(
+            dispatch_product_command(&shell, window, NEW_TERMINAL_COMMAND, cx)
+                .completion
+                .await
+                .unwrap(),
+            CommandOutcome::Completed
+        );
+        cx.read(|cx| {
+            let TabSurfaceId::Terminal(second_id) = shell
+                .read(cx)
+                .workbench
+                .read(cx)
+                .focused_pane()
+                .unwrap()
+                .active_tab()
+                .surface_id()
+            else {
+                panic!()
+            };
+            assert_ne!(first_id, second_id);
+            assert!(
+                cx.global::<ApplicationTerminalSessions>()
+                    .0
+                    .borrow()
+                    .sessions
+                    .contains_key(&second_id)
+            );
+        });
+    }
+
+    #[gpui::test]
+    async fn window_close_shuts_down_terminal_after_protected_decisions(cx: &mut TestAppContext) {
+        let documents = install_globals(cx);
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        let (shell, window) = product_window(document, model, cx);
+        assert_eq!(
+            dispatch_product_command(&shell, window, NEW_TERMINAL_COMMAND, cx)
+                .completion
+                .await
+                .unwrap(),
+            CommandOutcome::Completed
+        );
+        let session = cx.read(|cx| {
+            let TabSurfaceId::Terminal(id) = shell
+                .read(cx)
+                .workbench
+                .read(cx)
+                .focused_pane()
+                .unwrap()
+                .active_tab()
+                .surface_id()
+            else {
+                panic!()
+            };
+            cx.global::<ApplicationTerminalSessions>()
+                .0
+                .borrow()
+                .sessions[&id]
+                .clone()
+        });
+        assert_eq!(
+            dispatch_product_command(&shell, window, CLOSE_WINDOW_COMMAND, cx)
+                .completion
+                .await
+                .unwrap(),
+            CommandOutcome::Completed
+        );
+        cx.read(|cx| {
+            assert!(!cx.windows().contains(&window));
+            assert_eq!(
+                session.read(cx).status(),
+                crate::app::terminal_session::TerminalStatus::Closed
+            );
+            assert!(
+                cx.global::<ApplicationTerminalSessions>()
+                    .0
+                    .borrow()
+                    .sessions
+                    .is_empty()
+            );
+        });
+    }
+
+    #[gpui::test]
+    async fn mixed_window_save_failure_keeps_terminal_running(cx: &mut TestAppContext) {
+        let documents = install_globals(cx);
+        cx.set_global(ApplicationFileSystems(memory_filesystems()));
+        cx.set_global(ApplicationSaveDialog(Arc::new(FixedSaveDialog(
+            SaveDialogOutcome::Selected(ResourceUri::parse("mem://product/src").unwrap()),
+        ))));
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        model.update(cx, |model, _| model.replace(0..0, "unsaved").unwrap());
+        let (shell, window) = product_window(document, model, cx);
+        assert_eq!(
+            dispatch_product_command(&shell, window, NEW_TERMINAL_COMMAND, cx)
+                .completion
+                .await
+                .unwrap(),
+            CommandOutcome::Completed
+        );
+        let (id, session) = cx.read(|cx| {
+            let TabSurfaceId::Terminal(id) = shell
+                .read(cx)
+                .workbench
+                .read(cx)
+                .focused_pane()
+                .unwrap()
+                .active_tab()
+                .surface_id()
+            else {
+                panic!()
+            };
+            (
+                id,
+                cx.global::<ApplicationTerminalSessions>()
+                    .0
+                    .borrow()
+                    .sessions[&id]
+                    .clone(),
+            )
+        });
+        let execution = dispatch_product_command(&shell, window, CLOSE_WINDOW_COMMAND, cx);
+        cx.run_until_parked();
+        assert!(cx.has_pending_prompt());
+        cx.simulate_prompt_answer("Save");
+        assert!(matches!(
+            execution.completion.await.unwrap(),
+            CommandOutcome::HandlerFailure { .. }
+        ));
+        cx.read(|cx| {
+            assert!(cx.windows().contains(&window));
+            assert_eq!(shell.read(cx).workbench.read(cx).tab_snapshots().len(), 2);
+            assert!(
+                cx.global::<ApplicationTerminalSessions>()
+                    .0
+                    .borrow()
+                    .sessions
+                    .contains_key(&id)
+            );
+            assert_ne!(
+                session.read(cx).status(),
+                crate::app::terminal_session::TerminalStatus::Closed
+            );
+            assert!(documents.read(cx).get(document).unwrap().is_dirty(cx));
+        });
+    }
+
+    #[gpui::test]
+    async fn quit_shuts_down_terminal_sessions_in_every_window(cx: &mut TestAppContext) {
+        let documents = install_globals(cx);
+        let first = cx.update(|cx| create_untitled_document(&documents, cx));
+        let first_model = cx.read(|cx| documents.read(cx).get(first).unwrap().model().clone());
+        let (first_shell, first_window) = product_window(first, first_model, cx);
+        let second = cx.update(|cx| create_untitled_document(&documents, cx));
+        let second_model = cx.read(|cx| documents.read(cx).get(second).unwrap().model().clone());
+        let (second_shell, second_window) = product_window(second, second_model, cx);
+        for (shell, window) in [(&first_shell, first_window), (&second_shell, second_window)] {
+            assert_eq!(
+                dispatch_product_command(shell, window, NEW_TERMINAL_COMMAND, cx)
+                    .completion
+                    .await
+                    .unwrap(),
+                CommandOutcome::Completed
+            );
+        }
+        let sessions = cx.read(|cx| {
+            cx.global::<ApplicationTerminalSessions>()
+                .0
+                .borrow()
+                .sessions
+                .values()
+                .cloned()
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(sessions.len(), 2);
+        assert_eq!(
+            dispatch_product_command(&first_shell, first_window, QUIT_COMMAND, cx)
+                .completion
+                .await
+                .unwrap(),
+            CommandOutcome::Completed
+        );
+        cx.read(|cx| {
+            assert!(
+                cx.global::<ApplicationTerminalSessions>()
+                    .0
+                    .borrow()
+                    .sessions
+                    .is_empty()
+            );
+            for session in &sessions {
+                assert_eq!(
+                    session.read(cx).status(),
+                    crate::app::terminal_session::TerminalStatus::Closed
+                );
+            }
+        });
     }
 }

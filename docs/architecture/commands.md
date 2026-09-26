@@ -45,9 +45,11 @@ source receives the same asynchronous structured outcome. Before execution,
 the dispatcher revalidates the captured window, shell, focus, workbench, pane,
 tab, and surface identities. A focus change therefore cannot retarget an
 operation, and a closed or replaced target completes as invalid. Document-only
-commands on a live terminal tab complete as unavailable. Commands
-whose behavior belongs to a later product checkpoint remain discoverable and
-complete as unavailable.
+commands on a live terminal tab complete as unavailable. New Terminal opens a
+session in the captured pane; split commands create an independent session
+when that pane's captured tab is a terminal. Close Tab, Close Window, and Quit
+use protected mixed-surface closure. Commands whose behavior belongs to a later
+product checkpoint remain discoverable and complete as unavailable.
 
 Ordinary product editing uses this same captured-view path: character, word,
 line, page, and document movement and selection, newline and tab insertion,

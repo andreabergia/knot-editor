@@ -31,7 +31,8 @@ notifications then update the other views through their persistent positions.
 stable pane and tab identities, the focused pane, and ordered tabs within each
 pane. Split-tree leaves refer to panes. A document tab refers to an
 application-owned document and strongly owns one `EditorView`; a terminal tab
-has a distinct terminal identity and no document or buffer model. Splitting a
+refers to an application-owned session and owns its sole `TerminalView`. It has
+no document or buffer model. Splitting a
 document pane creates a new view of its active document. The terminal split
 policy allocates a distinct terminal identity for the new pane. Empty panes
 are removed and their split branch collapses; closing the last tab produces
@@ -90,7 +91,10 @@ attachment lease permits one view per session and can be released explicitly
 before a handoff; releasing the view also releases its lease. The view sends
 input and size changes to its session, and the session retains the final grid
 and exit status after natural process exit. Startup failure remains visible as
-a status and can be retried by restarting. Terminal sessions are not yet wired
-into product workbench tabs. A diagnostic terminal window exercises view
-rebuilding before product integration; see the
+a status and can be retried by restarting. New Terminal creates a registered
+session and one tab presentation in the captured pane. Tab switching retains
+both; splitting a terminal allocates an independent session. A successful
+protected tab, window, or application close removes the affected registry
+entries and shuts their sessions down after dirty-document decisions complete.
+The diagnostic window continues to exercise view rebuilding; see the
 [D024 plan](../plans/d024-terminal-session-plan.md).

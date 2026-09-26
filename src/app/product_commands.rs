@@ -17,6 +17,7 @@ use super::product::ProductShell;
 use super::{CommandCompletion, CommandExecution};
 
 pub(crate) const NEW_COMMAND: &str = "file.new";
+pub(crate) const NEW_TERMINAL_COMMAND: &str = "terminal.new";
 pub(crate) const OPEN_COMMAND: &str = "file.open";
 pub(crate) const SAVE_COMMAND: &str = "file.save";
 pub(crate) const SAVE_AS_COMMAND: &str = "file.save-as";
@@ -67,6 +68,7 @@ const PRODUCT_COMMANDS: &[(&str, &str)] = &[
     ("editor.delete-backward", "Delete Backward"),
     ("editor.delete-forward", "Delete Forward"),
     (NEW_COMMAND, "New Document"),
+    (NEW_TERMINAL_COMMAND, "New Terminal"),
     (OPEN_COMMAND, "Open…"),
     (SAVE_COMMAND, "Save"),
     (SAVE_AS_COMMAND, "Save As…"),

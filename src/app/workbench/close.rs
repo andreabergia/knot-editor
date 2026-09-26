@@ -188,7 +188,9 @@ mod tests {
             let pane = workbench.focused_pane_id().unwrap();
             let document_tab = workbench.focused_pane().unwrap().active_tab_id();
             let session = TerminalSessionId(7);
-            let terminal_tab = workbench.open_terminal_tab(pane, session).unwrap();
+            let terminal_tab = workbench
+                .open_terminal_tab_test_double(pane, session)
+                .unwrap();
             assert!(
                 workbench
                     .request_close_tab_with_state(pane, terminal_tab, document, true, 1)

@@ -1,7 +1,7 @@
 //! Window-local editor layout and view ownership.
 //!
 //! A workbench is a binary split tree whose leaves are tabbed panes. Tabs own
-//! editor views, while documents remain application-owned. This module models
+//! presentation views, while documents and terminal sessions remain application-owned. This module models
 //! layout and lifecycle transitions independently of native windows and
 //! confirmation dialogs.
 
@@ -13,6 +13,7 @@ use gpui::{AppContext, Context, Entity};
 use super::{
     documents::{Document, DocumentId},
     editor::EditorView,
+    terminal_view::TerminalView,
 };
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -148,11 +149,10 @@ pub(crate) enum WorkbenchTabPayload {
         document_id: DocumentId,
         editor: Entity<EditorView>,
     },
-    #[cfg_attr(
-        not(test),
-        allow(dead_code, reason = "terminal tabs await product integration")
-    )]
-    Terminal { session_id: TerminalSessionId },
+    Terminal {
+        session_id: TerminalSessionId,
+        view: Option<Entity<TerminalView>>,
+    },
 }
 
 impl WorkbenchTab {
@@ -165,7 +165,7 @@ impl WorkbenchTab {
             WorkbenchTabPayload::Document { document_id, .. } => {
                 TabSurfaceId::Document(*document_id)
             }
-            WorkbenchTabPayload::Terminal { session_id } => TabSurfaceId::Terminal(*session_id),
+            WorkbenchTabPayload::Terminal { session_id, .. } => TabSurfaceId::Terminal(*session_id),
         }
     }
 
@@ -180,6 +180,13 @@ impl WorkbenchTab {
         match &self.payload {
             WorkbenchTabPayload::Document { editor, .. } => Some(editor),
             WorkbenchTabPayload::Terminal { .. } => None,
+        }
+    }
+
+    pub(crate) fn terminal_view(&self) -> Option<&Entity<TerminalView>> {
+        match &self.payload {
+            WorkbenchTabPayload::Terminal { view, .. } => view.as_ref(),
+            WorkbenchTabPayload::Document { .. } => None,
         }
     }
 }
@@ -353,14 +360,29 @@ impl Workbench {
         Some(tab_id)
     }
 
-    #[cfg_attr(
-        not(test),
-        allow(dead_code, reason = "terminal tabs await product integration")
-    )]
     pub(crate) fn open_terminal_tab(
         &mut self,
         pane_id: PaneId,
         session_id: TerminalSessionId,
+        view: Entity<TerminalView>,
+    ) -> Option<TabId> {
+        self.insert_terminal_tab(pane_id, session_id, Some(view))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn open_terminal_tab_test_double(
+        &mut self,
+        pane_id: PaneId,
+        session_id: TerminalSessionId,
+    ) -> Option<TabId> {
+        self.insert_terminal_tab(pane_id, session_id, None)
+    }
+
+    fn insert_terminal_tab(
+        &mut self,
+        pane_id: PaneId,
+        session_id: TerminalSessionId,
+        view: Option<Entity<TerminalView>>,
     ) -> Option<TabId> {
         if self.has_terminal_session(session_id) {
             return None;
@@ -370,7 +392,7 @@ impl Workbench {
         let pane = &mut self.panes[pane_index];
         pane.tabs.push(WorkbenchTab {
             id: tab_id,
-            payload: WorkbenchTabPayload::Terminal { session_id },
+            payload: WorkbenchTabPayload::Terminal { session_id, view },
         });
         pane.active_tab = tab_id;
         self.focused_pane = Some(pane_id);
@@ -454,16 +476,44 @@ impl Workbench {
     }
 
     /// Split a captured pane, allocating an independent session for a terminal.
-    #[cfg_attr(
-        not(test),
-        allow(dead_code, reason = "terminal tabs await product integration")
-    )]
     pub(crate) fn split_pane_with_terminal(
         &mut self,
         pane_id: PaneId,
         direction: SplitDirection,
         placement: SplitPlacement,
         new_session_id: TerminalSessionId,
+        view: Entity<TerminalView>,
+        cx: &mut Context<Self>,
+    ) -> Option<PaneId> {
+        self.split_pane_with_terminal_view(
+            pane_id,
+            direction,
+            placement,
+            new_session_id,
+            Some(view),
+            cx,
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn split_pane_with_terminal_test_double(
+        &mut self,
+        pane_id: PaneId,
+        direction: SplitDirection,
+        placement: SplitPlacement,
+        new_session_id: TerminalSessionId,
+        cx: &mut Context<Self>,
+    ) -> Option<PaneId> {
+        self.split_pane_with_terminal_view(pane_id, direction, placement, new_session_id, None, cx)
+    }
+
+    fn split_pane_with_terminal_view(
+        &mut self,
+        pane_id: PaneId,
+        direction: SplitDirection,
+        placement: SplitPlacement,
+        new_session_id: TerminalSessionId,
+        view: Option<Entity<TerminalView>>,
         cx: &mut Context<Self>,
     ) -> Option<PaneId> {
         let active = self.pane(pane_id)?.active_tab();
@@ -486,6 +536,7 @@ impl Workbench {
                 id: tab_id,
                 payload: WorkbenchTabPayload::Terminal {
                     session_id: new_session_id,
+                    view,
                 },
             }],
             active_tab: tab_id,
@@ -654,7 +705,9 @@ mod tests {
             let pane = workbench.focused_pane_id().unwrap();
             let document_tab = workbench.focused_pane().unwrap().active_tab_id();
             let terminal = TerminalSessionId(41);
-            let terminal_tab = workbench.open_terminal_tab(pane, terminal).unwrap();
+            let terminal_tab = workbench
+                .open_terminal_tab_test_double(pane, terminal)
+                .unwrap();
             assert_eq!(workbench.view_count(document), 1);
             assert_eq!(
                 workbench.focused_pane().unwrap().active_tab_id(),
@@ -705,7 +758,7 @@ mod tests {
             let document_pane = workbench.focused_pane_id().unwrap();
             let terminal_source = TerminalSessionId(41);
             workbench
-                .open_terminal_tab(document_pane, terminal_source)
+                .open_terminal_tab_test_double(document_pane, terminal_source)
                 .unwrap();
             assert!(
                 workbench
@@ -718,7 +771,7 @@ mod tests {
                     .is_none()
             );
             let terminal_pane = workbench
-                .split_pane_with_terminal(
+                .split_pane_with_terminal_test_double(
                     document_pane,
                     SplitDirection::Horizontal,
                     SplitPlacement::After,
@@ -746,7 +799,7 @@ mod tests {
             let document_tab = workbench.pane(document_pane).unwrap().tabs()[0].id();
             assert!(workbench.activate_tab(document_pane, document_tab));
             workbench
-                .split_pane_with_terminal(
+                .split_pane_with_terminal_test_double(
                     document_pane,
                     SplitDirection::Vertical,
                     SplitPlacement::After,

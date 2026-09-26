@@ -1,6 +1,6 @@
 # D024: Product Terminal Sessions
 
-Status: in progress. Checkpoints 1 and 2 complete.
+Status: in progress. Checkpoints 1–3 implemented; checkpoint 3 manual gate pending.
 
 This slice brings the validated local terminal into the product workbench. A
 stable `TerminalSession` owns the PTY, emulator, process, and terminal events;
@@ -134,16 +134,16 @@ in local use; product workbench integration remains checkpoint 3.
 
 ## Checkpoint 3: Make terminals usable in the product workbench
 
-- [ ] Add a discoverable New Terminal command and product UI entry point. Open
+- [x] ✅ Add a discoverable New Terminal command and product UI entry point. Open
   a terminal tab in the captured pane, focus it, and keep editor commands from
   consuming terminal keystrokes.
-- [ ] Render terminal tabs and active terminal views in ordinary workbench
+- [x] ✅ Render terminal tabs and active terminal views in ordinary workbench
   panes. Switching tabs retains the session. Split from a terminal creates a
   new session; split from a document keeps existing shared-document behavior.
-- [ ] Route Close Tab, Close Window, and Quit through mixed-surface closure.
+- [x] ✅ Route Close Tab, Close Window, and Quit through mixed-surface closure.
   Finish dirty-document decisions before terminal teardown; closing the final
   tab follows the product shell's empty-workbench policy.
-- [ ] Cover command entry, focus and activation, independent split sessions,
+- [x] ✅ Cover command entry, focus and activation, independent split sessions,
   close/reopen, mixed close cancellation and save failure, and window/quit
   shutdown with product-level tests.
 
