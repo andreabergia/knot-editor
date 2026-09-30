@@ -2208,6 +2208,12 @@ impl ProductShell {
                 shell.focus_active_surface(destination_window, cx);
                 cx.notify();
             });
+            #[cfg(target_os = "macos")]
+            {
+                let clear = destination_window.draw(cx);
+                clear.clear();
+                destination_window.activate_window();
+            }
             CommandOutcome::Completed
         });
         if !matches!(result, Ok(CommandOutcome::Completed)) {
@@ -2665,6 +2671,8 @@ fn open_terminal_transfer_window(cx: &mut App) -> anyhow::Result<WindowHandle<Pr
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             window_min_size: Some(size(px(480.), px(320.))),
+            focus: !cfg!(target_os = "macos"),
+            show: !cfg!(target_os = "macos"),
             ..Default::default()
         },
         |window, cx| {

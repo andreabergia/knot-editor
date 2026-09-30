@@ -1,7 +1,7 @@
 # D024: Product Terminal Sessions
 
 Status: in progress. Checkpoint 4 implementation and automated checks complete;
-manual review gate pending.
+manual visual retest pending after a window flash found during review.
 
 This slice brings the validated local terminal into the product workbench. A
 stable `TerminalSession` owns the PTY, emulator, process, and terminal events;
@@ -180,6 +180,10 @@ Manual review gate: run a shell command that exposes its PID, move the terminal
 to a new window, and verify the PID, output, scrollback, input, and resize
 behavior remain continuous. Close the original window, then close the terminal
 and confirm the child exits.
+
+Manual review: transfer behavior worked, but a brief flash appeared around the
+original window. The destination now opens hidden on macOS and draws its terminal
+before activation. Recheck the flash before approving this gate.
 
 ## Checkpoint 5: Product acceptance and documentation
 

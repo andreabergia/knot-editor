@@ -103,6 +103,7 @@ session and grid, removes the source tab, and focuses the new view. Failure to
 create or validate the destination leaves the source attached. The source
 workbench applies its ordinary empty-workbench replacement policy. Subsequent
 window closure sees only the tabs still in that window; destination resize and
-input belong to the new view.
+input belong to the new view. On macOS the destination stays hidden until its
+terminal content has been laid out, then becomes the active window.
 The diagnostic window continues to exercise view rebuilding; see the
 [D024 plan](../plans/d024-terminal-session-plan.md).
