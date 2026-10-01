@@ -23,6 +23,8 @@ gpui application and views        extension runtimes
 - `host` contains V8 and the typed extension transport.
 - `app::extension_package` owns installed-directory manifest discovery and
   captures package-local JavaScript sources without entering V8.
+- `app::extension_load` plans dependency order and records startup outcomes
+  using Knot-owned package data and a rollback guard for each attempted load.
 - `view` is the standalone renderer benchmark harness, not the application
   view layer.
 

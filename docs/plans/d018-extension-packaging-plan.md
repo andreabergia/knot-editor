@@ -1,6 +1,6 @@
 # D018: Installable extension directories
 
-Status: checkpoint 1 implemented; awaiting its review gate.
+Status: checkpoints 1 and 2 implemented; checkpoint 2 awaits its review gate.
 
 ## Outcome and extension shape
 
@@ -75,11 +75,11 @@ and non-HTTP(S) websites are invalid. Missing roots contain no packages.
 Discovery returns valid packages plus per-directory diagnostics containing an
 optional parsed package name and a cause. Duplicate IDs invalidate every
 candidate with that ID; directory/name mismatches are reported separately.
-The source graph captures all `.js` and `.mjs` files at discovery. Main and local source
-files must resolve inside the package. File symlinks may resolve within it;
+The source graph captures all `.js` and `.mjs` files at discovery. Main and
+local source files must resolve inside the package. File symlinks may resolve within it;
 symlinked scope/package directories and symlinked subdirectories are rejected.
 
-### 2. Dependency planning and load outcomes ⬜
+### 2. Dependency planning and load outcomes ✅
 
 - Build a deterministic dependency graph from discovered manifests. Reject a
   missing required extension, self-dependency, and cycles with an actionable
@@ -92,6 +92,16 @@ symlinked scope/package directories and symlinked subdirectories are rejected.
   independent-package progress, and failed dependency propagation.
 - **Review gate:** inspect the ordered load report and failure behavior before
   product startup uses it.
+
+Checkpoint 2 contract: discovery diagnostics appear first, sorted by directory.
+Missing dependencies, self-dependencies, and cycle members are then reported
+by package ID. The runner attempts the lexicographically first ready package
+at each step and waits for its entry completion before marking it loaded.
+Startup failure propagates to dependents with the failed package and cause;
+unrelated packages continue. Every attempt owns a rollback guard until entry
+completion succeeds. Failure, cancellation, or unwinding invokes the guard,
+which the product loader will connect to the existing exact-once lifecycle
+teardown. Duplicate `requires` declarations fail manifest validation.
 
 ### 3. Package module graph in the V8 host ⬜
 
