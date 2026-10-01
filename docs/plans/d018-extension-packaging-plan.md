@@ -157,7 +157,7 @@ manifests, failed-entry cleanup, independent progress, semantic registration,
 and rescanning changed directories. The native
 `extensions.show-startup-report` command and toolbar button display the
 package name, generated directory, outcome, and failure cause. Startup also
-prints each outcome to stderr. `cargo test --all-targets` passed with 394
+prints each outcome to stderr. `cargo test --all-targets` passed with 395
 library tests and all binary test targets. The manual report and command review
 gate remains open.
 

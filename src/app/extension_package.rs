@@ -97,6 +97,18 @@ pub fn discover(root: &Path) -> DiscoveryReport {
     for package in &report.packages {
         *counts.entry(package.manifest.name.clone()).or_default() += 1;
     }
+    for diagnostic in &report.diagnostics {
+        if let Some(name) = &diagnostic.name {
+            *counts.entry(name.clone()).or_default() += 1;
+        }
+    }
+    for diagnostic in &mut report.diagnostics {
+        if let Some(name) = &diagnostic.name
+            && counts[name] > 1
+        {
+            diagnostic.cause = format!("duplicate package ID {name}; {}", diagnostic.cause);
+        }
+    }
     report.packages.retain(|package| {
         if counts[&package.manifest.name] > 1 {
             report.diagnostics.push(diagnostic(
@@ -422,6 +434,29 @@ mod tests {
                 .diagnostics
                 .iter()
                 .all(|item| item.cause.contains("duplicate package ID"))
+        );
+    }
+
+    #[test]
+    fn duplicate_id_invalidates_a_valid_package_even_when_peer_has_an_invalid_main() {
+        let temp = tempfile::tempdir().unwrap();
+        package(temp.path(), "@example/tools", VALID);
+        let invalid = package(temp.path(), "@example/other", VALID);
+        fs::remove_file(invalid.join("dist/main.js")).unwrap();
+        let report = discover(temp.path());
+        assert!(report.packages.is_empty());
+        assert_eq!(report.diagnostics.len(), 2);
+        assert!(
+            report
+                .diagnostics
+                .iter()
+                .all(|item| item.cause.contains("duplicate package ID"))
+        );
+        assert!(
+            report
+                .diagnostics
+                .iter()
+                .any(|item| item.cause.contains("main dist/main.js"))
         );
     }
 
