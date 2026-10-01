@@ -101,7 +101,7 @@ at each step and waits for its entry completion before marking it loaded.
 Startup failure propagates to dependents with the failed package and cause;
 unrelated packages continue. Every attempt owns a rollback guard until entry
 completion succeeds. Failure, cancellation, or unwinding invokes the guard,
-which the product loader will connect to the existing exact-once lifecycle
+which the product loader connects to the existing exact-once lifecycle
 teardown. Duplicate `requires` declarations fail manifest validation.
 
 ### 3. Package module graph in the V8 host ✅
@@ -127,9 +127,8 @@ isolate and schedules entry evaluation. Package imports resolve only
 `knot:editor` or relative modules present inside that graph; private bootstrap,
 bare and absolute specifiers, cross-package paths, missing files, and dynamic
 imports fail. Errors retain generated source URL, line, and column, including
-the import site for resolution errors. Fixture and benchmark clients still use
-their diagnostic source API; product startup will move `--fixture` to the
-package load API in checkpoint 4.
+the import site for resolution errors. The product `--fixture` path uses the
+package load API; benchmarks retain the diagnostic source API.
 
 ### 4. Product startup and usable extension 🟡
 
