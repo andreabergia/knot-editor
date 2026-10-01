@@ -107,6 +107,17 @@ the item is removed from this register.
   - Reconsider: Extensions must be distributed rather than embedded as
     fixtures.
 
+- **D032 — Extension source maps**
+  - Deferred: D018 can load built JavaScript and report generated source
+    locations without mapping them back to authoring files.
+  - Reconsider: Debugging built extensions requires errors and stack traces to
+    identify the original source locations.
+
+- **D033 — Extension archive installation and unpacking**
+  - Deferred: D018 installs extension directories directly.
+  - Reconsider: Distributing or updating extensions as single archives becomes
+    a concrete workflow.
+
 - **D019 — Quotas, backpressure, slow-consumer policy, and timeouts**
   - Deferred: Correct policy depends on observed extension workloads.
   - Reconsider: Real extensions can affect responsiveness or resource use.
