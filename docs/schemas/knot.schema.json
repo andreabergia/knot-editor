@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Knot extension manifest",
+  "description": "knot.jsonc accepts JSON comments and trailing commas before schema validation.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name", "version", "main"],
+  "properties": {
+    "name": { "$ref": "#/$defs/packageName" },
+    "version": { "type": "string", "description": "A semantic version." },
+    "main": {
+      "type": "string",
+      "description": "A relative .js or .mjs file path inside the package; empty, dot, parent, and backslash segments are invalid."
+    },
+    "requires": {
+      "type": "array",
+      "default": [],
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/packageName" }
+    },
+    "displayName": { "$ref": "#/$defs/nonEmpty" },
+    "description": { "$ref": "#/$defs/nonEmpty" },
+    "author": { "$ref": "#/$defs/nonEmpty" },
+    "website": { "type": "string", "format": "uri", "pattern": "^https?://" },
+    "license": { "$ref": "#/$defs/nonEmpty" }
+  },
+  "$defs": {
+    "packageName": {
+      "type": "string",
+      "pattern": "^@(?!knot/)[a-z][a-z0-9._-]*/[a-z][a-z0-9._-]*$"
+    },
+    "nonEmpty": { "type": "string", "pattern": "\\S" }
+  }
+}

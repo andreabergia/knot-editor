@@ -1,6 +1,6 @@
 # D018: Installable extension directories
 
-Status: planned. Checkpoints are review gates; implementation has not started.
+Status: checkpoint 1 implemented; awaiting its review gate.
 
 ## Outcome and extension shape
 
@@ -51,7 +51,7 @@ deferred to D032. Archive installation and unpacking are deferred to D033.
 
 ## Checkpoints
 
-### 1. Manifest and installed-directory contract ⬜
+### 1. Manifest and installed-directory contract ✅
 
 - Define the JSONC schema, canonical name validation, metadata validation, and
   one platform-appropriate per-user extensions root with an injectable root for
@@ -65,6 +65,19 @@ deferred to D032. Archive installation and unpacking are deferred to D033.
   paths, symlink escape, and discovery from temporary directories.
 - **Review gate:** approve the manifest example, install layout, error model,
   and path boundary before changing V8 loading.
+
+Checkpoint 1 contract: [`knot.schema.json`](../schemas/knot.schema.json) defines
+the manifest fields. The application discovers `@scope/package/knot.jsonc` under
+the platform's local application-data `Knot/extensions` directory, with the root
+passed explicitly for tests. Package IDs use lowercase ASCII components and
+reserve `@knot`; versions use SemVer. Unknown fields, empty descriptive values,
+and non-HTTP(S) websites are invalid. Missing roots contain no packages.
+Discovery returns valid packages plus per-directory diagnostics containing an
+optional parsed package name and a cause. Duplicate IDs invalidate every
+candidate with that ID; directory/name mismatches are reported separately.
+The source graph captures all `.js` and `.mjs` files at discovery. Main and local source
+files must resolve inside the package. File symlinks may resolve within it;
+symlinked scope/package directories and symlinked subdirectories are rejected.
 
 ### 2. Dependency planning and load outcomes ⬜
 

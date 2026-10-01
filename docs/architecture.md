@@ -21,6 +21,8 @@ gpui application and views        extension runtimes
 - `core` owns UI- and scripting-independent editor data.
 - `app` owns the gpui shell, foreground models, and native views.
 - `host` contains V8 and the typed extension transport.
+- `app::extension_package` owns installed-directory manifest discovery and
+  captures package-local JavaScript sources without entering V8.
 - `view` is the standalone renderer benchmark harness, not the application
   view layer.
 

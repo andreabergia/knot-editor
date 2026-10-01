@@ -28,6 +28,11 @@ mod entry;
 mod extension_buffers;
 mod extension_commands;
 mod extension_host;
+#[allow(
+    dead_code,
+    reason = "package discovery is exercised by its contract tests"
+)]
+pub(crate) mod extension_package;
 mod extension_semantics;
 #[allow(
     dead_code,
