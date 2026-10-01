@@ -3,7 +3,7 @@
 Current component boundaries, ownership, and dependency direction. Follow the
 subsystem references for runtime flows and behavioral constraints; implementation
 details and API contracts live in code. [Decisions](decisions.md) records
-rationale, while [deferred work](deferred.md) and [active plans](plans/) track
+rationale, while [deferred work](roadmap.md) and [active plans](plans/) track
 work that is not yet implemented.
 
 ## System map

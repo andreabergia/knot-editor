@@ -138,8 +138,12 @@ the item is removed from this register.
 
 - **D026 — Full terminal compatibility, mouse reporting, and hyperlinks**
   - Deferred: The emulator choice is settled; compatibility breadth is product
-    work.
-  - Reconsider: Terminal dogfooding exposes the required behaviors.
+    work. The terminal currently draws Menlo at 13 px in fixed 8×16 cells,
+    while the editor draws Menlo at 14 px with explicit Arabic, CJK, and emoji
+    fallbacks. Terminal font size, cell metrics, and fallback behavior are not
+    driven by shared Knot settings.
+  - Reconsider: Terminal dogfooding shows font or glyph mismatch, clipping, or
+    a need for mouse reporting, hyperlinks, or wider terminal compatibility.
 
 - **D027 — Additional generated text surfaces**
   - Deferred: Search did not expose another architectural boundary.

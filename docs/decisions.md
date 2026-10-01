@@ -3,7 +3,7 @@
 Durable choices and their rationale, validated by implementation and exploration.
 [Architecture](architecture.md) and its subsystem references describe behavior;
 linked exploration reports retain supporting evidence. Production directions
-are labeled explicitly. [Deferred work](deferred.md) tracks open scope and
+are labeled explicitly. [Deferred work](roadmap.md) tracks open scope and
 reconsideration triggers, and [active plans](plans/) track implementation.
 
 ## Platform and UI
@@ -150,12 +150,19 @@ text buffers. Ghostty VT offered no concrete behavioral advantage sufficient to
 offset separate PTY integration, pre-1.0 FFI, Zig packaging, integration size,
 and poor debug parsing performance.
 
-The application now separates a stable terminal session from its disposable
-view so the process and grid survive view reconstruction. Explicit closure
-terminates the session, while natural exit preserves its final grid. The
-existing Alacritty adapter supplied the required lifecycle behavior without
-copying Zed code. Zed's GPL-compatible implementation remains an attributed
-reference for concrete behavior if later product integration exposes a gap.
+The application owns a registry of stable terminal sessions; each workbench
+terminal tab owns the sole attached view. The process and grid survive view
+reconstruction and transfer to another window. One attached view keeps resize
+authority unambiguous. Releasing a view does not stop its session. Successful
+tab, window, and application closure removes affected sessions from the registry
+and shuts them down after dirty-document decisions; natural exit leaves the
+final grid visible until the tab is closed or restarted. PTY shutdown and child
+reaping run away from the foreground thread.
+
+The existing Alacritty adapter supplied the required session and product
+behavior without copying Zed code. Zed's GPL-compatible implementation remains
+an attributed reference for concrete input, rendering, or event behavior if
+later compatibility work exposes a gap.
 
 Reference: [workbench and lifecycle](architecture/workbench-and-lifecycle.md). Evidence: [terminal plan](archive/exploration/step9-terminal-plan.md).
 

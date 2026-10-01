@@ -56,14 +56,14 @@ mod search_results;
 mod terminal_fixture;
 #[allow(
     dead_code,
-    reason = "terminal sessions await product workbench integration"
+    reason = "session helpers also serve the diagnostic terminal fixture"
 )]
 mod terminal_session;
 #[cfg(all(test, unix))]
 mod terminal_session_tests;
 #[allow(
     dead_code,
-    reason = "retained native terminal surface outside the current product shell"
+    reason = "terminal view helpers also serve the diagnostic fixture"
 )]
 mod terminal_view;
 mod tree_view;
@@ -95,7 +95,6 @@ const DEFAULT_FIXTURE_NAME: &str = "rust_sample";
 const EDITOR_KEY_CONTEXT: &str = "editor";
 #[allow(dead_code, reason = "retained with the dormant extension tree view")]
 const TREE_KEY_CONTEXT: &str = "tree";
-#[allow(dead_code, reason = "retained with the dormant fixture terminal")]
 const TERMINAL_KEY_CONTEXT: &str = "terminal";
 const PALETTE_KEY_CONTEXT: &str = "palette";
 

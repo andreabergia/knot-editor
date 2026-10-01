@@ -170,14 +170,13 @@ Views contain presentation and interaction state:
 - selections;
 - rendering options.
 
-A `TerminalView` is a native, single-view terminal surface. It owns a
-pseudoterminal session and terminal emulator state, either directly or through
-an internal `TerminalSession`, as well as its presentation and input state.
-The session/controller remains internally separate from rendering for
-testability, but is not a `Buffer`. Sharing one terminal session between
-multiple views is intentionally unsupported: a PTY has one authoritative grid
-size, and multiple independently sized or focused views would introduce
-ambiguous resize and input semantics.
+A `TerminalView` is the sole presentation of an application-owned
+`TerminalSession`. The session owns the pseudoterminal, process, emulator state,
+and authoritative grid size; the view owns presentation and input state. A
+terminal is not a `Buffer`. The view can be rebuilt or moved to another window
+without restarting the session. Sharing one session between simultaneous views
+is intentionally unsupported because independently sized or focused views
+would introduce ambiguous resize and input semantics.
 
 Terminal support remains a core editor capability, not an optional extension
 or text-buffer emulation. Knot should reuse a mature terminal parser/state

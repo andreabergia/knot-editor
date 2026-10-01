@@ -591,10 +591,6 @@ impl Workbench {
             .count()
     }
 
-    #[cfg_attr(
-        not(test),
-        allow(dead_code, reason = "terminal tabs await product integration")
-    )]
     fn has_terminal_session(&self, session_id: TerminalSessionId) -> bool {
         self.panes
             .iter()

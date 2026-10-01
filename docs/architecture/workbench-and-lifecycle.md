@@ -1,7 +1,7 @@
 # Workbench and view lifecycle
 
 Part of the [architecture](../architecture.md). Design rationale is recorded in
-[decisions](../decisions.md); deferred work lives in [deferred.md](../deferred.md).
+[decisions](../decisions.md); deferred work lives in [roadmap.md](../roadmap.md).
 
 ## Editor views
 
@@ -91,7 +91,9 @@ attachment lease permits one view per session and can be released explicitly
 before a handoff; releasing the view also releases its lease. The view sends
 input and size changes to its session, and the session retains the final grid
 and exit status after natural process exit. Startup failure remains visible as
-a status and can be retried by restarting. New Terminal creates a registered
+a status and can be retried by restarting. Restart is a view-local action that
+replaces the session's process and grid while keeping its registry identity.
+New Terminal creates a registered
 session and one tab presentation in the captured pane. Tab switching retains
 both; splitting a terminal allocates an independent session. A successful
 protected tab, window, or application close removes the affected registry

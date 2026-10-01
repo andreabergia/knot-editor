@@ -1,7 +1,7 @@
 # D024: Product Terminal Sessions
 
-Status: in progress. Checkpoint 4 implementation and automated checks complete;
-manual visual retest pending after a window flash found during review.
+Status: completed. Checkpoint 5 automated checks, documentation, and manual
+product acceptance passed.
 
 This slice brings the validated local terminal into the product workbench. A
 stable `TerminalSession` owns the PTY, emulator, process, and terminal events;
@@ -185,25 +185,39 @@ Manual review: transfer behavior worked, but a brief flash appeared around the
 original window. The destination now opens hidden on macOS and draws its terminal
 before activation. Recheck the flash before approving this gate.
 
+Manual review gate: ✅ approved after retest. Transfer retained the running
+session without the previous window flash.
+
 ## Checkpoint 5: Product acceptance and documentation
 
-- [ ] Exercise an interactive shell, alternate-screen TUI, ANSI styling,
+- [x] ✅ Exercise an interactive shell, alternate-screen TUI, ANSI styling,
   cursor, scrollback, resize, natural exit, restart, and sustained output in
   the product window. Confirm editor/terminal font appearance against the
   selected Knot settings; record concrete parity gaps without expanding this
   slice into D026.
-- [ ] Run the full applicable test suite and `cargo check --all-targets`.
+- [x] ✅ Run the full applicable test suite and `cargo check --all-targets`.
   Resolve regressions in document editing, protected close, command routing,
   and terminal lifecycle.
-- [ ] Update `docs/architecture.md` if ownership or dependency direction
+- [x] ✅ Update `docs/architecture.md` if ownership or dependency direction
   changes, and update `docs/architecture/workbench-and-lifecycle.md` and
   `docs/architecture/commands.md` for implemented flows. Update
   `docs/decisions.md` for the final Zed-source and session-lifetime rationale;
   align any stale terminal wording in `docs/design.md`.
-- [ ] Mark this plan completed only after automated checks and the manual
+- [x] ✅ Mark this plan completed only after automated checks and the manual
   product gate pass. Record any remaining defects under the relevant deferred
   item with a concrete trigger.
 
 Manual review gate: dogfood a mixed editor/terminal workbench across two
 windows, including save cancellation and Quit. Inspect process cleanup and UI
 responsiveness before declaring D024 complete.
+
+Automated acceptance: `cargo test --all-targets` passed (369 library tests and
+all binary targets); `cargo check --all-targets` passed. Source review found no
+new architecture ownership or dependency change. The terminal and editor both
+select Menlo, but the terminal uses 13 px text in fixed 8×16 cells while the
+editor uses 14 px text and explicit Arabic, CJK, and emoji font fallbacks. D026
+records this concrete parity gap. Manual review found the current appearance
+acceptable. The product gate passed shell input, alternate-screen TUI, ANSI
+styling, cursor, scrollback, resize, natural exit, restart, sustained output,
+two-window transfer, save cancellation, Quit, child cleanup, and UI
+responsiveness.
