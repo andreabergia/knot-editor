@@ -102,11 +102,6 @@ the item is removed from this register.
 
 ## Extensions and automation
 
-- **D018 — Extension packaging, dependencies, resolution, and load order**
-  - Deferred: No installable extension product exists yet.
-  - Reconsider: Extensions must be distributed rather than embedded as
-    fixtures.
-
 - **D032 — Extension source maps**
   - Deferred: D018 can load built JavaScript and report generated source
     locations without mapping them back to authoring files.
