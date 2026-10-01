@@ -96,6 +96,13 @@ turn per dequeue, preserves unrelated roots in extension-local FIFO order, and
 admits same-tree continuations while a root is pending. It applies no automatic
 quotas, deadlines, event dropping, or backpressure; those policies remain D019.
 
+Installed packages supply a validated, immutable source graph to the host before
+entry evaluation. Generated file URLs identify modules and preserve useful
+failure locations, while graph membership and a package-root check prevent
+imports from reaching another package or native filesystem paths. V8 retains
+compiled modules and values inside its isolate; the application handles disk
+discovery and passes only Knot-owned sources into the host.
+
 Reference: [extension host](architecture/extension-host.md). Evidence: [v8 runtime](archive/exploration/step7-v8-runtime.md).
 
 ## Commands and keymaps

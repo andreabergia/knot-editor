@@ -11,6 +11,7 @@ pub mod bench;
 )]
 pub mod engine;
 pub mod lifecycle;
+pub(crate) mod module_graph;
 pub(crate) mod pool;
 pub mod protocol;
 pub mod scheduler;

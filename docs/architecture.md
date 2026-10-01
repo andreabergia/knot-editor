@@ -21,6 +21,8 @@ gpui application and views        extension runtimes
 - `core` owns UI- and scripting-independent editor data.
 - `app` owns the gpui shell, foreground models, and native views.
 - `host` contains V8 and the typed extension transport.
+- `host::module_graph` validates Knot-owned, immutable package source graphs
+  before they enter an extension isolate.
 - `app::extension_package` owns installed-directory manifest discovery and
   captures package-local JavaScript sources without entering V8.
 - `app::extension_load` plans dependency order and records startup outcomes

@@ -6,7 +6,7 @@ Part of the [architecture](../architecture.md). Design rationale is recorded in
 
 ## Boundaries
 
-`host` owns six boundaries:
+`host` owns seven boundaries:
 
 - `protocol` contains Knot-owned transport identities, requests, responses,
   contribution data, and errors. It depends on neither gpui nor concrete core
@@ -19,6 +19,15 @@ Part of the [architecture](../architecture.md). Design rationale is recorded in
 - `pool` exposes the V8-free application control, event-inbox, completion,
   watchdog, diagnostics, and shutdown surface.
 - `bench` owns host benchmark entry points.
+- `module_graph` validates generated file URLs, the entry module, and captured
+  package-local sources without V8 or filesystem access.
+
+A package load binds its immutable source graph to one isolate before scheduling
+entry as a root turn. Static imports may resolve only `knot:editor` or relative
+URLs that remain within the package root and name a captured source. Dynamic
+imports reject. Compilation and runtime failures carry generated source URL,
+line, and column as Knot-owned data. Package entry failure remains a failed
+startup attempt for the application to roll back through lifecycle unload.
 
 The scheduler owns a V8-independent state machine and a fixed worker pool of
 `min(available_parallelism, 4)` threads by default. Tests and diagnostics may

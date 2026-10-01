@@ -245,6 +245,7 @@ mod tests {
     use crate::app::extension_package::{Manifest, discover};
     use crate::host::{
         lifecycle::{ExtensionKey, ExtensionState},
+        module_graph::ModuleGraph,
         pool::{ExtensionConfig, ExtensionEvent, ExtensionExit, ExtensionPool},
         protocol::{ExtensionId, ExtensionLifecycleId},
         scheduler::PoolConfig,
@@ -456,21 +457,24 @@ mod tests {
         let (pool, mut inbox) = ExtensionPool::new(PoolConfig::single_worker());
         let key = ExtensionKey::new(ExtensionId::new(1), ExtensionLifecycleId::new(1));
         let plan = plan(vec![package("@test/a", &[])]);
+        let graph = ModuleGraph::new(
+            "file:///extensions/%40test/a/",
+            "main.js",
+            BTreeMap::from([(
+                "main.js".into(),
+                Arc::from("throw new Error('startup failed');"),
+            )]),
+        )
+        .unwrap();
         let owner = pool.clone();
         let report = pollster::block_on(plan.execute(move |_| {
             let runner = owner.clone();
             let rollback = owner.clone();
+            let graph = graph.clone();
             StartupAttempt::new(
                 async move {
                     runner
-                        .load(key, ExtensionConfig::default())
-                        .map_err(|error| error.to_string())?;
-                    runner
-                        .execute_fixture_module(
-                            key,
-                            "file:///test/main.js",
-                            "throw new Error('startup failed')",
-                        )
+                        .load_package(key, ExtensionConfig::default(), graph)
                         .map_err(|error| error.to_string())?
                         .await
                         .map_err(|error| error.to_string())?;

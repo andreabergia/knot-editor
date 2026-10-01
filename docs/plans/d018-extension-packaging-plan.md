@@ -1,6 +1,6 @@
 # D018: Installable extension directories
 
-Status: checkpoints 1 and 2 implemented; checkpoint 2 awaits its review gate.
+Status: checkpoints 1–3 implemented; checkpoint 3 awaits its review gate.
 
 ## Outcome and extension shape
 
@@ -103,7 +103,7 @@ completion succeeds. Failure, cancellation, or unwinding invokes the guard,
 which the product loader will connect to the existing exact-once lifecycle
 teardown. Duplicate `requires` declarations fail manifest validation.
 
-### 3. Package module graph in the V8 host ⬜
+### 3. Package module graph in the V8 host ✅
 
 - Replace the fixture-only source-registration path with an API that accepts
   one validated, immutable package module graph and entry specifier. Keep V8,
@@ -118,6 +118,17 @@ teardown. Duplicate `requires` declarations fail manifest validation.
   locations, unload, and startup rollback in the host without gpui.
 - **Review gate:** inspect module isolation and error reporting before wiring
   filesystem packages into the application.
+
+Checkpoint 3 contract: `host::module_graph::ModuleGraph` accepts a directory
+file URL, relative entry, and captured source map, then validates and owns the
+resulting generated URL graph. `ExtensionPool::load_package` binds it to one
+isolate and schedules entry evaluation. Package imports resolve only
+`knot:editor` or relative modules present inside that graph; private bootstrap,
+bare and absolute specifiers, cross-package paths, missing files, and dynamic
+imports fail. Errors retain generated source URL, line, and column, including
+the import site for resolution errors. Fixture and benchmark clients still use
+their diagnostic source API; product startup will move `--fixture` to the
+package load API in checkpoint 4.
 
 ### 4. Product startup and usable extension ⬜
 

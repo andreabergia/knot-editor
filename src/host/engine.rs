@@ -21,6 +21,7 @@ use std::sync::mpsc;
 
 use super::{
     lifecycle::{ExtensionKey, Failure},
+    module_graph::ModuleGraph,
     protocol::{
         BufferChange, BufferHandle, BufferSubscriptionId, ByteRange, Command, CommandArgumentValue,
         CommandInvocation, CommandInvocationId, CommandInvokeDispatch, CommandOutcome,
@@ -227,7 +228,7 @@ struct RuntimeLocalState {
     pending: Mutex<HashMap<RequestId, PendingRequest>>,
     active: Mutex<Option<ActiveExecution>>,
     rejections: Mutex<Vec<RejectionReport>>,
-    modules: Mutex<FixtureModuleRegistry>,
+    modules: Mutex<ModuleRegistry>,
     buffer_changes: Mutex<BufferChangeQueueState>,
     cancelled_commands: Mutex<HashSet<CommandInvocationId>>,
     #[cfg(test)]
@@ -239,7 +240,7 @@ struct RuntimeLocalState {
 }
 
 impl RuntimeLocalState {
-    fn new(key: ExtensionKey) -> Self {
+    fn new(key: ExtensionKey, graph: Option<&ModuleGraph>) -> Self {
         Self {
             key,
             next_request: AtomicU64::new(1),
@@ -248,7 +249,7 @@ impl RuntimeLocalState {
             pending: Mutex::new(HashMap::new()),
             active: Mutex::new(None),
             rejections: Mutex::new(Vec::new()),
-            modules: Mutex::new(FixtureModuleRegistry::default()),
+            modules: Mutex::new(ModuleRegistry::new(graph)),
             buffer_changes: Mutex::new(BufferChangeQueueState::default()),
             cancelled_commands: Mutex::new(HashSet::new()),
             #[cfg(test)]
@@ -351,7 +352,7 @@ struct BufferChangeQueueState {
 
 enum RootEvaluation {
     Script { source: Arc<str> },
-    Module { source: Arc<str> },
+    Module { source: Option<Arc<str>> },
 }
 
 enum ProviderCall {
@@ -421,27 +422,38 @@ impl ProviderCall {
     }
 }
 
-struct FixtureModuleRegistry {
+struct ModuleRegistry {
     sources: HashMap<String, Arc<str>>,
     modules: Vec<CompiledModule>,
     resolutions: Vec<ModuleResolution>,
+    package_root: Option<Arc<str>>,
 }
 
-impl Default for FixtureModuleRegistry {
-    fn default() -> Self {
+impl ModuleRegistry {
+    fn new(graph: Option<&ModuleGraph>) -> Self {
+        let mut sources = HashMap::from([
+            (
+                PRIVATE_BOOTSTRAP_SPECIFIER.to_owned(),
+                Arc::from(PRIVATE_BOOTSTRAP_SOURCE),
+            ),
+            (
+                PUBLIC_FACADE_SPECIFIER.to_owned(),
+                Arc::from(PUBLIC_FACADE_SOURCE),
+            ),
+        ]);
+        if let Some(graph) = graph {
+            sources.extend(
+                graph
+                    .sources()
+                    .iter()
+                    .map(|(name, source)| (name.clone(), source.clone())),
+            );
+        }
         Self {
-            sources: HashMap::from([
-                (
-                    PRIVATE_BOOTSTRAP_SPECIFIER.to_owned(),
-                    Arc::from(PRIVATE_BOOTSTRAP_SOURCE),
-                ),
-                (
-                    PUBLIC_FACADE_SPECIFIER.to_owned(),
-                    Arc::from(PUBLIC_FACADE_SOURCE),
-                ),
-            ]),
+            sources,
             modules: Vec::new(),
             resolutions: Vec::new(),
+            package_root: graph.map(|graph| Arc::from(graph.root())),
         }
     }
 }
@@ -455,6 +467,51 @@ struct ModuleResolution {
     referrer: v8::Global<v8::Module>,
     request: String,
     resolved: String,
+}
+
+struct ModuleCompileFailure {
+    kind: RuntimeErrorKind,
+    location: Option<(Arc<str>, u32, u32)>,
+}
+
+impl From<RuntimeErrorKind> for ModuleCompileFailure {
+    fn from(kind: RuntimeErrorKind) -> Self {
+        Self {
+            kind,
+            location: None,
+        }
+    }
+}
+
+impl ModuleCompileFailure {
+    fn at_import(kind: RuntimeErrorKind, source: &str, location: v8::Location) -> Self {
+        let line = u32::try_from(location.get_line_number())
+            .ok()
+            .and_then(|value| value.checked_add(1));
+        let column = u32::try_from(location.get_column_number())
+            .ok()
+            .and_then(|value| value.checked_add(1));
+        Self {
+            kind,
+            location: line
+                .zip(column)
+                .map(|(line, column)| (source.into(), line, column)),
+        }
+    }
+
+    fn report(
+        self,
+        try_catch: &mut v8::PinnedRef<'_, v8::TryCatch<v8::HandleScope>>,
+        fallback_source: &str,
+    ) -> RuntimeError {
+        let mut error = runtime_error_from_try_catch(try_catch, self.kind, fallback_source);
+        if let Some((source, line, column)) = self.location {
+            error.source = Some(source);
+            error.line = Some(line);
+            error.column = Some(column);
+        }
+        error
+    }
 }
 
 #[cfg(test)]
@@ -519,13 +576,22 @@ pub(crate) struct RuntimeCapsule {
 
 impl RuntimeCapsule {
     pub(crate) fn new(key: ExtensionKey, config: IsolateConfig) -> Result<Self, RuntimeError> {
+        Self::new_with_graph(key, config, None)
+    }
+
+    fn new_with_graph(
+        key: ExtensionKey,
+        config: IsolateConfig,
+        graph: Option<&ModuleGraph>,
+    ) -> Result<Self, RuntimeError> {
         initialize();
         let status = Arc::new(AtomicU8::new(ACTIVE));
-        let local_state = Arc::new(RuntimeLocalState::new(key));
+        let local_state = Arc::new(RuntimeLocalState::new(key, graph));
         let mut isolate =
             v8::Isolate::new(v8::CreateParams::default().heap_limits(0, config.heap_limit_bytes));
         isolate.set_microtasks_policy(v8::MicrotasksPolicy::Explicit);
         isolate.set_promise_reject_callback(promise_reject_callback);
+        isolate.set_host_import_module_dynamically_callback(reject_dynamic_import);
         isolate.set_slot(Arc::clone(&local_state));
         let handle = isolate.thread_safe_handle();
         let mut heap_state = Box::new(HeapLimitState {
@@ -742,7 +808,23 @@ impl RuntimeCapsule {
                 return TurnOutcome::Completed;
             }
         };
-        self.run_root_turn(root, canonical, result, RootEvaluation::Module { source })
+        self.run_root_turn(
+            root,
+            canonical,
+            result,
+            RootEvaluation::Module {
+                source: Some(source),
+            },
+        )
+    }
+
+    fn start_package_turn(
+        &self,
+        root: RootId,
+        entry: Arc<str>,
+        result: ResultSender<ExecutionReport>,
+    ) -> TurnOutcome {
+        self.run_root_turn(root, entry, result, RootEvaluation::Module { source: None })
     }
 
     fn start_buffer_change_turn(
@@ -1142,8 +1224,14 @@ impl RuntimeCapsule {
             RootEvaluation::Module {
                 source: module_source,
             } => (|| {
-                {
+                if let Some(module_source) = module_source {
                     let mut modules = self.local_state.modules.lock().unwrap();
+                    if modules.package_root.is_some() {
+                        return Err(module_resolution_error(
+                            &source,
+                            "package module graph cannot change after load",
+                        ));
+                    }
                     if let Some(existing) = modules.sources.get(source.as_ref()) {
                         if existing.as_ref() != module_source.as_ref() {
                             return Err(module_resolution_error(
@@ -1165,8 +1253,8 @@ impl RuntimeCapsule {
                 };
                 let compiled = match compiled {
                     Ok(compiled) => compiled,
-                    Err(kind) => {
-                        let error = runtime_error_from_try_catch(try_catch, kind, &source);
+                    Err(failure) => {
+                        let error = failure.report(try_catch, &source);
                         rollback_module_graph(&self.local_state, module_count, resolution_count);
                         return Err(error);
                     }
@@ -1751,6 +1839,10 @@ enum EngineWork {
         source: Arc<str>,
         result: ResultSender<ExecutionReport>,
     },
+    PackageModule {
+        entry: Arc<str>,
+        result: ResultSender<ExecutionReport>,
+    },
     HostResponse(HostResponse),
     BufferChange {
         subscription: BufferSubscriptionId,
@@ -2138,10 +2230,19 @@ impl RuntimePool {
         key: ExtensionKey,
         config: IsolateConfig,
     ) -> Result<(), RuntimePoolError> {
+        self.load_with_graph(key, config, None)
+    }
+
+    fn load_with_graph(
+        &self,
+        key: ExtensionKey,
+        config: IsolateConfig,
+        graph: Option<&ModuleGraph>,
+    ) -> Result<(), RuntimePoolError> {
         let scheduler = self.scheduler.as_ref().expect("runtime pool is active");
         let handle = scheduler.handle();
         handle.admit(key)?;
-        let capsule = match RuntimeCapsule::new(key, config) {
+        let capsule = match RuntimeCapsule::new_with_graph(key, config, graph) {
             Ok(capsule) => {
                 *capsule.local_state.event_sender.lock().unwrap() =
                     Some(self.finalizer.events.clone());
@@ -2169,6 +2270,36 @@ impl RuntimePool {
             return Err(error.into());
         }
         Ok(())
+    }
+
+    pub(crate) fn load_package(
+        &self,
+        key: ExtensionKey,
+        config: IsolateConfig,
+        graph: ModuleGraph,
+    ) -> Result<RuntimeExecution, RuntimePoolError> {
+        let entry: Arc<str> = Arc::from(graph.entry());
+        self.load_with_graph(key, config, Some(&graph))?;
+        let capsule = self.capsule(key)?;
+        let (result_sender, result) = tokio::sync::oneshot::channel();
+        let scheduled = self.scheduler_handle.enqueue_root(
+            key,
+            EngineTurn {
+                capsule,
+                work: EngineWork::PackageModule {
+                    entry,
+                    result: result_sender,
+                },
+            },
+        );
+        let (_, completion) = match scheduled {
+            Ok(scheduled) => scheduled,
+            Err(error) => {
+                let _ = self.unload(key);
+                return Err(error.into());
+            }
+        };
+        Ok(RuntimeExecution { result, completion })
     }
 
     pub(crate) fn execute(
@@ -2659,8 +2790,8 @@ fn evaluate_fixture_module(
     };
     let compiled = match compiled {
         Ok(compiled) => compiled,
-        Err(kind) => {
-            let error = runtime_error_from_try_catch(try_catch, kind, specifier);
+        Err(failure) => {
+            let error = failure.report(try_catch, specifier);
             rollback_module_graph(state, module_count, resolution_count);
             return Err(error);
         }
@@ -2764,9 +2895,9 @@ fn clear_module_registry(state: &RuntimeLocalState) {
 
 fn compile_module_graph(
     scope: &mut v8::PinScope<'_, '_>,
-    registry: &mut FixtureModuleRegistry,
+    registry: &mut ModuleRegistry,
     specifier: &str,
-) -> Result<v8::Global<v8::Module>, RuntimeErrorKind> {
+) -> Result<v8::Global<v8::Module>, ModuleCompileFailure> {
     if let Some(record) = registry
         .modules
         .iter()
@@ -2777,9 +2908,13 @@ fn compile_module_graph(
     let Some(source) = registry.sources.get(specifier).cloned() else {
         throw_module_error(
             scope,
-            &format!("Knot fixture module not found: {specifier}"),
+            &if registry.package_root.is_some() {
+                format!("Knot package module not found: {specifier}")
+            } else {
+                format!("Knot fixture module not found: {specifier}")
+            },
         );
-        return Err(RuntimeErrorKind::ModuleResolution);
+        return Err(RuntimeErrorKind::ModuleResolution.into());
     };
     let source_text = v8::String::new(scope, &source).ok_or(RuntimeErrorKind::Engine)?;
     let resource_name = v8::String::new(scope, specifier).ok_or(RuntimeErrorKind::Engine)?;
@@ -2810,14 +2945,33 @@ fn compile_module_graph(
         let request = requests.get(scope, index).ok_or(RuntimeErrorKind::Engine)?;
         let request = v8::Local::<v8::ModuleRequest>::try_from(request)
             .map_err(|_| RuntimeErrorKind::Engine)?;
+        let location = module.source_offset_to_location(request.get_source_offset());
         let request = request.get_specifier().to_rust_string_lossy(scope);
-        let resolved = match resolve_fixture_specifier(&request, specifier) {
-            Ok(resolved) => resolved,
-            Err(message) => {
-                throw_module_error(scope, &message);
-                return Err(RuntimeErrorKind::ModuleResolution);
-            }
-        };
+        let resolved =
+            match resolve_module_specifier(&request, specifier, registry.package_root.as_deref()) {
+                Ok(resolved) => resolved,
+                Err(message) => {
+                    throw_module_error(scope, &message);
+                    return Err(ModuleCompileFailure::at_import(
+                        RuntimeErrorKind::ModuleResolution,
+                        specifier,
+                        location,
+                    ));
+                }
+            };
+        if !registry.sources.contains_key(&resolved) {
+            let kind = if registry.package_root.is_some() {
+                "package"
+            } else {
+                "fixture"
+            };
+            throw_module_error(scope, &format!("Knot {kind} module not found: {resolved}"));
+            return Err(ModuleCompileFailure::at_import(
+                RuntimeErrorKind::ModuleResolution,
+                specifier,
+                location,
+            ));
+        }
         registry.resolutions.push(ModuleResolution {
             referrer: global.clone(),
             request,
@@ -2828,12 +2982,35 @@ fn compile_module_graph(
     Ok(global)
 }
 
-fn resolve_fixture_specifier(request: &str, referrer: &str) -> Result<String, String> {
+fn resolve_module_specifier(
+    request: &str,
+    referrer: &str,
+    package_root: Option<&str>,
+) -> Result<String, String> {
     if request == PRIVATE_BOOTSTRAP_SPECIFIER && referrer != PUBLIC_FACADE_SPECIFIER {
         return Err("Knot private bootstrap bindings are not importable by extensions".into());
     }
     if request == PRIVATE_BOOTSTRAP_SPECIFIER || request == PUBLIC_FACADE_SPECIFIER {
         return Ok(request.to_owned());
+    }
+    if let Some(package_root) = package_root {
+        if referrer == PUBLIC_FACADE_SPECIFIER
+            || (!request.starts_with("./") && !request.starts_with("../"))
+        {
+            return Err(format!(
+                "extension import must be relative or knot:editor: {request}"
+            ));
+        }
+        let resolved = Url::parse(referrer)
+            .and_then(|base| base.join(request))
+            .map_err(|_| format!("invalid extension import: {request}"))?;
+        if !resolved.as_str().starts_with(package_root)
+            || resolved.query().is_some()
+            || resolved.fragment().is_some()
+        {
+            return Err(format!("extension import escapes package: {request}"));
+        }
+        return Ok(resolved.to_string());
     }
     if let Ok(absolute) = Url::parse(request) {
         return Ok(absolute.to_string());
@@ -2865,6 +3042,20 @@ fn throw_module_error(scope: &mut v8::PinScope<'_, '_>, message: &str) {
     }
 }
 
+fn reject_dynamic_import<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    _options: v8::Local<'s, v8::Data>,
+    _resource_name: v8::Local<'s, v8::Value>,
+    _specifier: v8::Local<'s, v8::String>,
+    _attributes: v8::Local<'s, v8::FixedArray>,
+) -> Option<v8::Local<'s, v8::Promise>> {
+    let resolver = v8::PromiseResolver::new(scope)?;
+    let message = v8::String::new(scope, "dynamic imports are unavailable to extensions")?;
+    let error = v8::Exception::type_error(scope, message);
+    resolver.reject(scope, error);
+    Some(resolver.get_promise(scope))
+}
+
 fn resolve_module_callback<'s>(
     context: v8::Local<'s, v8::Context>,
     specifier: v8::Local<'s, v8::String>,
@@ -2879,10 +3070,7 @@ fn resolve_module_callback<'s>(
         resolution.request == request && v8::Local::new(scope, &resolution.referrer) == referrer
     });
     let Some(resolution) = resolution else {
-        throw_module_error(
-            scope,
-            &format!("unresolved fixture module import: {request}"),
-        );
+        throw_module_error(scope, &format!("unresolved module import: {request}"));
         return None;
     };
     registry
@@ -3587,6 +3775,9 @@ fn execute_engine_turn(turn: Turn<EngineTurn>, finalizer: &LifecycleFinalizer) -
             source,
             result,
         } => capsule.start_module_turn(root, specifier, source, result),
+        EngineWork::PackageModule { entry, result } => {
+            capsule.start_package_turn(root, entry, result)
+        }
         EngineWork::HostResponse(response) => capsule.resume_response_turn(root, response),
         EngineWork::BufferChange {
             subscription,
@@ -3798,6 +3989,298 @@ mod tests {
 
     fn key(extension: u64) -> ExtensionKey {
         ExtensionKey::new(ExtensionId::new(extension), ExtensionLifecycleId::new(1))
+    }
+
+    fn package_graph(root: &str, entry: &str, files: &[(&str, &str)]) -> ModuleGraph {
+        ModuleGraph::new(
+            root,
+            entry,
+            files
+                .iter()
+                .map(|(path, source)| ((*path).into(), Arc::from(*source)))
+                .collect(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn package_modules_support_local_imports_and_top_level_await() {
+        let pool = RuntimePool::new(PoolConfig::single_worker());
+        let runtime = key(50);
+        let graph = package_graph(
+            "file:///extensions/%40example/tools/",
+            "dist/main.js",
+            &[
+                (
+                    "dist/main.js",
+                    "import { editor } from 'knot:editor'; import { value } from './helper.js'; import { suffix } from '../suffix.mjs'; await Promise.resolve(); globalThis.packageValue = value + suffix + ':' + typeof editor.activeBuffer;",
+                ),
+                ("dist/helper.js", "export const value = 'ready';"),
+                ("suffix.mjs", "export const suffix = '!';"),
+            ],
+        );
+        pool.load_package(runtime, IsolateConfig::default(), graph)
+            .unwrap()
+            .wait()
+            .unwrap();
+        assert_eq!(
+            &*pool
+                .execute(runtime, "verify.js", "packageValue")
+                .unwrap()
+                .wait()
+                .unwrap()
+                .value,
+            "ready!:function"
+        );
+        let changed = pool
+            .execute_fixture_module(
+                runtime,
+                "file:///extensions/%40example/tools/other.js",
+                "export {};",
+            )
+            .unwrap()
+            .wait()
+            .unwrap_err();
+        assert!(changed.message().contains("cannot change after load"));
+        pool.unload(runtime).unwrap();
+        pool.shutdown();
+    }
+
+    #[test]
+    fn package_module_sources_are_isolated_per_lifecycle() {
+        let pool = RuntimePool::new(PoolConfig::single_worker());
+        let first = key(51);
+        let second = key(52);
+        for (runtime, root, value) in [
+            (first, "file:///extensions/%40example/first/", "first"),
+            (second, "file:///extensions/%40example/second/", "second"),
+        ] {
+            let graph = package_graph(
+                root,
+                "main.js",
+                &[
+                    (
+                        "main.js",
+                        "import { value } from './shared.js'; globalThis.packageValue = value;",
+                    ),
+                    (
+                        "shared.js",
+                        if value == "first" {
+                            "export const value = 'first';"
+                        } else {
+                            "export const value = 'second';"
+                        },
+                    ),
+                ],
+            );
+            pool.load_package(runtime, IsolateConfig::default(), graph)
+                .unwrap()
+                .wait()
+                .unwrap();
+        }
+        assert_eq!(
+            &*pool
+                .execute(first, "check.js", "packageValue")
+                .unwrap()
+                .wait()
+                .unwrap()
+                .value,
+            "first"
+        );
+        assert_eq!(
+            &*pool
+                .execute(second, "check.js", "packageValue")
+                .unwrap()
+                .wait()
+                .unwrap()
+                .value,
+            "second"
+        );
+        pool.unload(first).unwrap();
+        pool.unload(second).unwrap();
+        pool.shutdown();
+    }
+
+    #[test]
+    fn package_module_imports_stay_within_the_supplied_graph() {
+        let pool = RuntimePool::new(PoolConfig::single_worker());
+        for (index, (source, expected)) in [
+            ("import 'bare-package';", "relative or knot:editor"),
+            ("import '../other/secret.js';", "escapes package"),
+            (
+                "import 'file:///extensions/%40example/other/secret.js';",
+                "relative or knot:editor",
+            ),
+            ("import './missing.js';", "package module not found"),
+            ("import 'knot:bootstrap';", "not importable"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let runtime = key(60 + index as u64);
+            let graph = package_graph(
+                "file:///extensions/%40example/tools/",
+                "main.js",
+                &[("main.js", source)],
+            );
+            let failure = pool
+                .load_package(runtime, IsolateConfig::default(), graph)
+                .unwrap()
+                .wait()
+                .unwrap_err();
+            assert_eq!(failure.kind(), RuntimeErrorKind::ModuleResolution);
+            assert!(failure.message().contains(expected), "{failure}");
+            assert_eq!(
+                failure.source(),
+                Some("file:///extensions/%40example/tools/main.js")
+            );
+            assert_eq!(failure.line(), Some(1));
+            assert!(failure.column().is_some());
+            pool.unload(runtime).unwrap();
+        }
+        pool.shutdown();
+    }
+
+    #[test]
+    fn package_module_errors_report_generated_locations_and_dynamic_import_rejection() {
+        let pool = RuntimePool::new(PoolConfig::single_worker());
+        let root = "file:///extensions/%40example/tools/";
+        let runtime = key(70);
+        let graph = package_graph(
+            root,
+            "main.js",
+            &[
+                ("main.js", "import './bad.js';"),
+                ("bad.js", "export const = 1;"),
+            ],
+        );
+        let syntax = pool
+            .load_package(runtime, IsolateConfig::default(), graph)
+            .unwrap()
+            .wait()
+            .unwrap_err();
+        assert_eq!(syntax.kind(), RuntimeErrorKind::Compilation);
+        assert_eq!(
+            syntax.source(),
+            Some("file:///extensions/%40example/tools/bad.js")
+        );
+        assert_eq!(syntax.line(), Some(1));
+        assert!(syntax.column().is_some());
+        pool.unload(runtime).unwrap();
+
+        let runtime = key(71);
+        let graph = package_graph(
+            root,
+            "main.js",
+            &[("main.js", "\nthrow new Error('package boom');")],
+        );
+        let thrown = pool
+            .load_package(runtime, IsolateConfig::default(), graph)
+            .unwrap()
+            .wait()
+            .unwrap_err();
+        assert_eq!(thrown.kind(), RuntimeErrorKind::Rejection);
+        assert_eq!(
+            thrown.source(),
+            Some("file:///extensions/%40example/tools/main.js")
+        );
+        assert_eq!(thrown.line(), Some(2));
+        assert!(thrown.column().is_some());
+        pool.unload(runtime).unwrap();
+
+        let runtime = key(72);
+        let graph = package_graph(
+            root,
+            "main.js",
+            &[
+                ("main.js", "await import('./other.js');"),
+                ("other.js", "export {};"),
+            ],
+        );
+        let dynamic = pool
+            .load_package(runtime, IsolateConfig::default(), graph)
+            .unwrap()
+            .wait()
+            .unwrap_err();
+        assert!(
+            dynamic
+                .message()
+                .contains("dynamic imports are unavailable"),
+            "{dynamic}"
+        );
+        pool.unload(runtime).unwrap();
+
+        let runtime = key(73);
+        let graph = package_graph(
+            root,
+            "main.js",
+            &[
+                ("main.js", "import './child.js';"),
+                ("child.js", "\nthrow new Error('child boom');"),
+            ],
+        );
+        let child = pool
+            .load_package(runtime, IsolateConfig::default(), graph)
+            .unwrap()
+            .wait()
+            .unwrap_err();
+        assert_eq!(
+            child.source(),
+            Some("file:///extensions/%40example/tools/child.js")
+        );
+        assert_eq!(child.line(), Some(2));
+        assert!(child.column().is_some());
+        pool.unload(runtime).unwrap();
+        pool.shutdown();
+    }
+
+    #[test]
+    fn failed_package_entry_can_be_rolled_back_and_pending_entry_unloaded() {
+        let pool = RuntimePool::new(PoolConfig::single_worker());
+        let mut inbox = pool.take_event_inbox().unwrap();
+        let root = "file:///extensions/%40example/tools/";
+        let runtime = key(80);
+        let graph = package_graph(
+            root,
+            "main.js",
+            &[("main.js", "throw new Error('failed entry');")],
+        );
+        let failed = pool
+            .load_package(runtime, IsolateConfig::default(), graph)
+            .unwrap()
+            .wait()
+            .unwrap_err();
+        assert!(failed.message().contains("failed entry"));
+        pool.unload(runtime).unwrap();
+        assert!(
+            matches!(inbox.receive_timeout(Duration::from_secs(2)), Some(EngineEvent::LifecycleEnded {
+            key: ended,
+            reason: LifecycleEnd::Unloaded,
+        }) if ended == runtime)
+        );
+
+        let runtime = key(81);
+        let graph = package_graph(
+            root,
+            "main.js",
+            &[("main.js", "await new Promise(() => {});")],
+        );
+        let pending = pool
+            .load_package(runtime, IsolateConfig::default(), graph)
+            .unwrap();
+        wait_for_state(&pool, runtime, ExtensionState::AwaitingHostWork);
+        pool.unload(runtime).unwrap();
+        assert_eq!(
+            pending.wait().unwrap_err().kind(),
+            RuntimeErrorKind::Cancelled
+        );
+        assert!(
+            matches!(inbox.receive_timeout(Duration::from_secs(2)), Some(EngineEvent::LifecycleEnded {
+            key: ended,
+            reason: LifecycleEnd::Unloaded,
+        }) if ended == runtime)
+        );
+        pool.shutdown();
     }
 
     fn wait_for_state(pool: &RuntimePool, key: ExtensionKey, expected: ExtensionState) {
