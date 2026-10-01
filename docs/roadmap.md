@@ -56,6 +56,12 @@ the item is removed from this register.
   - Reconsider: Bundled cross-file search demonstrates that refresh or recovery
     is required.
 
+- **D034 — File explorer**
+  - Deferred: The existing workspace tree supports basic directory browsing
+    and file opening; a fuller explorer workflow has not been selected.
+  - Reconsider: Daily editing needs navigation beyond the current tree, such as
+    revealing the active file, refreshing directories, or filtering entries.
+
 ## Documents, storage, and history
 
 - **D008 — Live filesystem watching and automatic reload**
