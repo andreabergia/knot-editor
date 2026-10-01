@@ -1,3 +1,3 @@
 interface:
   display_name: "Implement Plan"
-  short_description: "Execute a plan or checkpoint through commits"
+  short_description: "Implement one plan checkpoint and stop at its gate"
