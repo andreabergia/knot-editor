@@ -105,6 +105,23 @@ discovery and passes only Knot-owned sources into the host.
 
 Reference: [extension host](architecture/extension-host.md). Evidence: [v8 runtime](archive/exploration/step7-v8-runtime.md).
 
+## Installed extension directories
+
+Use the platform's local application-data `Knot/extensions` root and canonical
+`@scope/package` directory names. Built JavaScript and a small JSONC manifest
+make installation inspectable and keep package management outside the editor.
+Discover and capture sources off gpui's foreground thread, then load eagerly in
+deterministic dependency order. A dependency establishes startup order and
+command availability without granting module access across isolates. Keep
+explicit command names in one global namespace so invocation semantics do not
+change with packaging.
+
+Retain the load result for every package in an application-owned startup report
+and expose it in each product window. The report makes malformed manifests and
+runtime failures visible while independent packages continue. Reuse exact-once
+lifecycle teardown for startup rollback so commands and semantic providers do
+not outlive a failed entry.
+
 ## Commands and keymaps
 
 Use one Knot-owned command namespace and dispatcher across invocation sources,

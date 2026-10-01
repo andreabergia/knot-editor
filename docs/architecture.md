@@ -30,10 +30,12 @@ gpui application and views        extension runtimes
 - `view` is the standalone renderer benchmark harness, not the application
   view layer.
 
-The default `knot` binary runs the product application through `app::run`.
+The default `knot` binary runs the product application through `app::run` and
+discovers installed extensions from the per-user local application-data root.
 `knot --fixture [name]` opens the same product shell with two static diagnostic
-extensions loaded through its application-owned pool. `v8-bench` measures the
-same pool and exercises multi-extension scheduling and lifecycle stress.
+extensions loaded through the package graph API and its application-owned pool.
+`v8-bench` measures the same pool and exercises multi-extension scheduling and
+lifecycle stress.
 
 ## Ownership
 
@@ -55,6 +57,11 @@ The application owns one extension pool. Its fixed workers enter persistent V8
 isolates for one turn at a time; awaiting host work retains JavaScript state without
 holding a worker. The host owns scheduling and runtime disposal, while the
 application owns protocol routing and foreground resource cleanup.
+Installed-package filesystem discovery runs on gpui's background executor.
+The application then loads valid packages in dependency order, keeps the
+startup report, and removes foreground registrations when a load fails or an
+extension unloads. Product windows expose the report through a native command
+and toolbar control.
 
 ## Subsystem references
 

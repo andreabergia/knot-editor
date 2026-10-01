@@ -1,6 +1,7 @@
 # D018: Installable extension directories
 
-Status: checkpoints 1–3 implemented; checkpoint 3 awaits its review gate.
+Status: checkpoint 4 implementation and automated validation complete; manual
+review gate pending.
 
 ## Outcome and extension shape
 
@@ -130,23 +131,35 @@ the import site for resolution errors. Fixture and benchmark clients still use
 their diagnostic source API; product startup will move `--fixture` to the
 package load API in checkpoint 4.
 
-### 4. Product startup and usable extension ⬜
+### 4. Product startup and usable extension 🟡
 
-- Discover, validate, plan, and eagerly load installed directories when the
+- ✅ Discover, validate, plan, and eagerly load installed directories when the
   product starts. Run filesystem work away from gpui's foreground thread and
   register capabilities through the existing application-owned bridges.
   Keep `--fixture` as a diagnostic path using the same host load API.
-- Provide a visible, inspectable startup report for loaded and failed packages
+- ✅ Provide a visible, inspectable startup report for loaded and failed packages
   with package name and cause; failures must not silently disappear. Exercise
   one real on-disk extension with a local import and a dependency whose command
   it invokes.
-- Test the product lifecycle, dependent command availability, failure
+- ✅ Test the product lifecycle, dependent command availability, failure
   isolation, registration cleanup, and a restart after changing installed
   directories. Run focused host/application tests and the applicable full
   suite. Update architecture and decisions for the resulting boundaries and
   rationale.
 - **Review gate:** use the on-disk extension in Knot and review the startup
   report, test results, and docs before marking D018 complete.
+
+The checked-in [installed extension example](../../examples/extensions/README.md)
+contains `@example/text-utils` and a dependent `@example/word-tools` package
+with a local module. Product tests load it from disk, invoke its dependent
+command, and verify the document edit. Other product tests cover malformed
+manifests, failed-entry cleanup, independent progress, semantic registration,
+and rescanning changed directories. The native
+`extensions.show-startup-report` command and toolbar button display the
+package name, generated directory, outcome, and failure cause. Startup also
+prints each outcome to stderr. `cargo test --all-targets` passed with 394
+library tests and all binary test targets. The manual report and command review
+gate remains open.
 
 ## Execution notes
 

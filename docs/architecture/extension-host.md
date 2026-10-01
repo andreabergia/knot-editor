@@ -2,7 +2,7 @@
 
 Part of the [architecture](../architecture.md). Design rationale is recorded in
 [decisions](../decisions.md); validation evidence lives in
-[D017](../plans/d017-v8-isolate-pool-plan.md).
+[D017](../archive/plans/d017-v8-isolate-pool-plan.md).
 
 ## Boundaries
 
@@ -39,7 +39,13 @@ and joins its workers. The engine composes this scheduler with one persistent
 runtime capsule per loaded lifecycle. One application-global
 `ProductExtensionHost` owns the pool, foreground protocol bridges, and an
 awaitable event-inbox task. The `--fixture` path loads two static diagnostic
-lifecycles through that same product composition; it is not a separate runtime.
+lifecycles through the same package graph API and product composition.
+Filesystem discovery runs on gpui's background executor. The application
+plans dependencies, admits each lifecycle on the foreground, and awaits entry
+completion before loading its dependents. A failed or cancelled entry unloads
+its isolate and clears foreground command and provider registrations before
+another package starts. The product retains and displays the ordered startup
+report, including invalid packages and runtime failures.
 
 V8 process initialization is idempotent and owned by `engine`. It must happen
 before creating scheduler workers, because every thread that may lock a shared
@@ -55,10 +61,10 @@ to a Knot-owned report, and leaves all scopes before releasing the locker.
 Synchronous exceptions and unhandled rejections fail only that turn. Forced
 termination and heap-limit termination are fatal to the lifecycle.
 
-Fixture modules run as scheduler root turns. Each capsule owns an immutable
-in-memory source graph and persistent compiled-module cache. Static imports use
-URL resolution and can reach only sources already embedded in that graph;
-bare, missing, and private-bootstrap imports fail resolution. The engine
+Package entry modules run as scheduler root turns. Each capsule owns an
+immutable in-memory source graph and persistent compiled-module cache. Static
+imports use URL resolution and can reach only sources already embedded in that
+graph; bare, missing, and private-bootstrap imports fail resolution. The engine
 eagerly evaluates a private `knot:bootstrap` module and the public
 `knot:editor` facade when it creates the capsule. Bootstrap captures the native
 request callback and removes its temporary global before extension work can
