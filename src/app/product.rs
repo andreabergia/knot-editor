@@ -27,8 +27,8 @@ use super::{
         MOVE_TERMINAL_TO_NEW_WINDOW_COMMAND, NEW_COMMAND, NEW_TERMINAL_COMMAND, NEW_WINDOW_COMMAND,
         OPEN_COMMAND, PASTE_COMMAND, ProductCommandDispatcher, ProductCommandSource,
         ProductCommandTarget, QUIT_COMMAND, REDO_COMMAND, SAVE_AS_COMMAND, SAVE_COMMAND,
-        SELECT_ALL_COMMAND, SPLIT_HORIZONTAL_COMMAND, SPLIT_VERTICAL_COMMAND,
-        ShowProductCommandPalette, UNDO_COMMAND,
+        SELECT_ALL_COMMAND, SHOW_EXTENSION_REPORT_COMMAND, SPLIT_HORIZONTAL_COMMAND,
+        SPLIT_VERTICAL_COMMAND, ShowProductCommandPalette, UNDO_COMMAND,
     },
     terminal_session::TerminalSession,
     terminal_view::TerminalView,
@@ -213,6 +213,8 @@ pub(crate) struct ProductShell {
     workspace_tree_subscription: Option<Subscription>,
     open_generation: u64,
     tasks: Vec<Task<()>>,
+    extension_report_open: bool,
+    extension_report_subscription: Option<Subscription>,
 }
 
 impl ProductShell {
@@ -227,6 +229,14 @@ impl ProductShell {
             workspace_tree_subscription: None,
             open_generation: 0,
             tasks: Vec::new(),
+            extension_report_open: false,
+            extension_report_subscription: None,
+        }
+    }
+
+    fn observe_extension_host(&mut self, cx: &mut Context<Self>) {
+        if let Some(host) = super::extension_host::entity(cx) {
+            self.extension_report_subscription = Some(cx.observe(&host, |_, _, cx| cx.notify()));
         }
     }
 
@@ -2293,6 +2303,11 @@ impl ProductShell {
                 cx.notify();
                 CommandOutcome::Unavailable
             }
+            SHOW_EXTENSION_REPORT_COMMAND => {
+                self.extension_report_open = !self.extension_report_open;
+                cx.notify();
+                CommandOutcome::Completed
+            }
             _ => CommandOutcome::Unavailable,
         }
     }
@@ -2437,6 +2452,27 @@ impl Render for ProductShell {
         let entity = cx.entity();
         let command_palette = self.command_palette.clone();
         let workspace_tree = self.workspace_tree.clone();
+        let startup_report = super::extension_host::startup_report(cx);
+        let extension_button_label = match &startup_report {
+            Some(report) if report.state == super::extension_host::StartupState::Complete => {
+                let failures = report
+                    .report
+                    .entries
+                    .iter()
+                    .filter(|entry| {
+                        matches!(entry.result, super::extension_load::LoadResult::Failed(_))
+                    })
+                    .count();
+                if failures > 0 {
+                    format!("extensions ({failures} failed)")
+                } else {
+                    "extensions".to_owned()
+                }
+            }
+            Some(_) => "extensions (loading)".to_owned(),
+            None => "extensions".to_owned(),
+        };
+        let extension_report = self.extension_report_open.then_some(startup_report);
         window.set_window_title("Knot");
 
         div()
@@ -2498,6 +2534,12 @@ impl Render for ProductShell {
                         &entity,
                         "",
                     ))
+                    .child(command_button(
+                        extension_button_label,
+                        "extension-startup-report",
+                        &entity,
+                        SHOW_EXTENSION_REPORT_COMMAND,
+                    ))
                     .child(div().flex_1())
                     .child(self.status.clone()),
             )
@@ -2542,17 +2584,123 @@ impl Render for ProductShell {
                         .child(palette),
                 )
             })
+            .when_some(extension_report, |root, report| {
+                root.child(render_extension_report(report, &entity))
+            })
             .into_any_element()
     }
 }
 
+fn render_extension_report(
+    snapshot: Option<super::extension_host::StartupReportSnapshot>,
+    shell: &Entity<ProductShell>,
+) -> AnyElement {
+    use super::extension_host::StartupState;
+    use super::extension_load::LoadResult;
+
+    let (root, state, entries) = match snapshot {
+        Some(snapshot) => (
+            snapshot.root.display().to_string(),
+            snapshot.state,
+            snapshot.report.entries,
+        ),
+        None => (
+            "No installed extension scan".to_owned(),
+            StartupState::Complete,
+            Vec::new(),
+        ),
+    };
+    let status = match state {
+        StartupState::Scanning => "Scanning installed extensions",
+        StartupState::Loading => "Loading installed extensions",
+        StartupState::Complete => "Extension startup report",
+    };
+    let rows = entries
+        .into_iter()
+        .map(|entry| {
+            let name = entry.name.unwrap_or_else(|| "<invalid package>".into());
+            let (label, color, cause) = match entry.result {
+                LoadResult::Loaded => ("Loaded", 0x8fd18f, None),
+                LoadResult::Failed(cause) => ("Failed", 0xf19a8e, Some(cause)),
+            };
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .py_2()
+                .border_b_1()
+                .border_color(rgb(0x454545))
+                .child(
+                    div()
+                        .text_color(rgb(color))
+                        .child(format!("{label}: {name}")),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(0xaaaaaa))
+                        .child(entry.directory.display().to_string()),
+                )
+                .when_some(cause, |row, cause| {
+                    row.child(div().text_color(rgb(0xf19a8e)).child(cause))
+                })
+        })
+        .collect::<Vec<_>>();
+    div()
+        .absolute()
+        .inset_0()
+        .flex()
+        .items_start()
+        .justify_center()
+        .pt(px(60.))
+        .bg(rgba(0x000000a0))
+        .child(
+            div()
+                .w(px(760.))
+                .h(px(520.))
+                .flex()
+                .flex_col()
+                .bg(rgb(0x252526))
+                .border_1()
+                .border_color(rgb(0x555555))
+                .p_4()
+                .gap_3()
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .child(div().flex_1().text_lg().child(status))
+                        .child(command_button(
+                            "close",
+                            "close-extension-report",
+                            shell,
+                            SHOW_EXTENSION_REPORT_COMMAND,
+                        )),
+                )
+                .child(div().text_xs().text_color(rgb(0xaaaaaa)).child(root))
+                .child(
+                    div()
+                        .id("extension-report-rows")
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_y_scroll()
+                        .when(rows.is_empty() && state == StartupState::Complete, |body| {
+                            body.child("No installed extensions")
+                        })
+                        .children(rows),
+                ),
+        )
+        .into_any_element()
+}
+
 fn command_button(
-    label: &'static str,
+    label: impl Into<SharedString>,
     id: &'static str,
     shell: &Entity<ProductShell>,
     command: &'static str,
 ) -> Stateful<Div> {
     let shell = shell.clone();
+    let label = label.into();
     div()
         .id(id)
         .cursor_pointer()
@@ -2642,6 +2790,7 @@ pub(crate) fn open_product_window(request: Option<OpenRequest>, cx: &mut App) {
             let workbench = cx.new(|cx| Workbench::new_for_document(document, model, cx));
             cx.global::<ApplicationWorkbenches>().register(&workbench);
             let shell = cx.new(|_| ProductShell::new(workbench));
+            shell.update(cx, |shell, cx| shell.observe_extension_host(cx));
             install_protected_window_close(&shell, window, cx);
             shell.read(cx).focus_active_editor(window, cx);
             if let Some(request) = request {
@@ -2678,6 +2827,7 @@ fn open_terminal_transfer_window(cx: &mut App) -> anyhow::Result<WindowHandle<Pr
         |window, cx| {
             let workbench = cx.new(|_| Workbench::empty());
             let shell = cx.new(|_| ProductShell::new(workbench));
+            shell.update(cx, |shell, cx| shell.observe_extension_host(cx));
             install_protected_window_close(&shell, window, cx);
             shell
         },
@@ -2781,6 +2931,14 @@ pub(crate) fn run(initial_request: Option<OpenRequest>, fixture: Option<String>)
         open_product_window(initial_request, cx);
         if let Some(fixture) = fixture.as_deref() {
             extension_host.update(cx, |host, cx| host.start_diagnostic_fixture(fixture, cx));
+        } else {
+            match super::extension_package::user_extensions_root() {
+                Ok(root) => {
+                    extension_host.update(cx, |host, cx| host.start_installed_extensions(root, cx))
+                }
+                Err(cause) => extension_host
+                    .update(cx, |host, cx| host.report_extensions_root_error(cause, cx)),
+            }
         }
     });
 }
@@ -2904,6 +3062,7 @@ fn bind_product_keys(cx: &mut App) {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
     use std::sync::{Arc, Mutex};
 
     use gpui::{
@@ -2925,10 +3084,10 @@ mod tests {
         NEW_COMMAND, NEW_TERMINAL_COMMAND, OpenDialogFuture, OpenDialogOutcome, OpenRequest,
         OpenTarget, ProductCommandDispatcher, ProductCommandSource, ProductOpenDialog,
         ProductSaveDialog, ProductShell, QUIT_COMMAND, REDO_COMMAND, RefCell, SAVE_AS_COMMAND,
-        SAVE_COMMAND, SPLIT_HORIZONTAL_COMMAND, SaveDialogFuture, SaveDialogOutcome,
-        SplitDirection, TerminalSessions, UNDO_COMMAND, Workbench, WorkbenchLayout,
-        create_untitled_document, install_protected_window_close, open_terminal_transfer_window,
-        product_filesystems,
+        SAVE_COMMAND, SHOW_EXTENSION_REPORT_COMMAND, SPLIT_HORIZONTAL_COMMAND, SaveDialogFuture,
+        SaveDialogOutcome, SplitDirection, TerminalSessions, UNDO_COMMAND, Workbench,
+        WorkbenchLayout, create_untitled_document, install_protected_window_close,
+        open_terminal_transfer_window, product_filesystems,
     };
     use crate::app::{
         documents::DocumentState,
@@ -3013,6 +3172,7 @@ mod tests {
             cx.global::<ApplicationWorkbenches>().register(&workbench);
             ProductShell::new(workbench)
         });
+        shell.update(cx, |shell, cx| shell.observe_extension_host(cx));
         let window = *cx.windows().last().unwrap();
         cx.update_window(window, |_, native_window, cx| {
             install_protected_window_close(&shell, native_window, cx);
@@ -3119,6 +3279,341 @@ mod tests {
                 )
             })
         })
+    }
+
+    fn install_extension(root: &Path, name: &str, requires: &[&str], files: &[(&str, &str)]) {
+        let directory = root.join(name);
+        std::fs::create_dir_all(&directory).unwrap();
+        let main = files[0].0;
+        std::fs::write(
+            directory.join("knot.jsonc"),
+            serde_json::json!({
+                "name": name,
+                "version": "1.0.0",
+                "main": main,
+                "requires": requires,
+            })
+            .to_string(),
+        )
+        .unwrap();
+        for (path, source) in files {
+            let destination = directory.join(path);
+            std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
+            std::fs::write(destination, source).unwrap();
+        }
+    }
+
+    fn wait_for_extension_report(
+        _host: &Entity<super::super::extension_host::ProductExtensionHost>,
+        cx: &mut TestAppContext,
+    ) -> super::super::extension_host::StartupReportSnapshot {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        loop {
+            cx.run_until_parked();
+            if let Some(report) = cx.read(|cx| super::super::extension_host::startup_report(cx)) {
+                if report.state == super::super::extension_host::StartupState::Complete {
+                    return report;
+                }
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "extension startup did not finish"
+            );
+            std::thread::yield_now();
+        }
+    }
+
+    #[gpui::test]
+    fn on_disk_extensions_load_in_order_invoke_dependencies_and_isolate_failures(
+        cx: &mut TestAppContext,
+    ) {
+        let root = tempfile::tempdir().unwrap();
+        install_extension(
+            root.path(),
+            "@example/base",
+            &[],
+            &[
+                (
+                    "dist/main.js",
+                    r#"
+                import { commands, editor } from 'knot:editor';
+                import { prefix } from './words.js';
+                await commands.register('example.base', async ({ buffer }) => {
+                    const snapshot = await buffer.snapshot();
+                    await buffer.applyEdits([{
+                        range: { startByteOffset: 0, endByteOffset: 0 },
+                        text: prefix,
+                    }], { ifRevision: snapshot.revision });
+                });
+                await editor.registerCompletionProvider('example-provider', {
+                    provideCompletions() { return [{ label: 'Installed', insertText: 'Installed' }]; }
+                });
+            "#,
+                ),
+                ("dist/words.js", "export const prefix = 'base ';"),
+            ],
+        );
+        install_extension(
+            root.path(),
+            "@example/dependent",
+            &["@example/base"],
+            &[(
+                "main.js",
+                r#"
+                import { commands } from 'knot:editor';
+                await commands.register('example.dependent', async () => {
+                    await commands.invoke('example.base', null);
+                });
+            "#,
+            )],
+        );
+        install_extension(
+            root.path(),
+            "@example/broken",
+            &[],
+            &[(
+                "main.js",
+                r#"
+                import { commands, editor } from 'knot:editor';
+                await commands.register('example.shared', async () => {});
+                await editor.registerCompletionProvider('broken-provider', {
+                    provideCompletions() { return []; }
+                });
+                throw new Error('broken entry');
+            "#,
+            )],
+        );
+        install_extension(
+            root.path(),
+            "@example/blocked",
+            &["@example/broken"],
+            &[("main.js", "throw new Error('must not run');")],
+        );
+        install_extension(
+            root.path(),
+            "@example/independent",
+            &[],
+            &[(
+                "main.js",
+                r#"
+                import { commands } from 'knot:editor';
+                await commands.register('example.shared', async () => {});
+            "#,
+            )],
+        );
+        let invalid = root.path().join("@example/invalid");
+        std::fs::create_dir_all(&invalid).unwrap();
+        std::fs::write(invalid.join("knot.jsonc"), "{ invalid").unwrap();
+
+        let documents = install_globals(cx);
+        let host = cx.update(super::super::extension_host::install);
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        let (shell, window) = product_window(document, model.clone(), cx);
+        host.update(cx, |host, cx| {
+            host.start_installed_extensions(root.path().to_path_buf(), cx)
+        });
+        let report = wait_for_extension_report(&host, cx);
+        let result = |name| {
+            report
+                .report
+                .entries
+                .iter()
+                .find(|entry| entry.name.as_deref() == Some(name))
+                .unwrap()
+                .result
+                .clone()
+        };
+        assert_eq!(
+            result("@example/base"),
+            super::super::extension_load::LoadResult::Loaded
+        );
+        assert_eq!(
+            result("@example/dependent"),
+            super::super::extension_load::LoadResult::Loaded
+        );
+        assert_eq!(
+            result("@example/independent"),
+            super::super::extension_load::LoadResult::Loaded
+        );
+        assert!(
+            matches!(result("@example/broken"), super::super::extension_load::LoadResult::Failed(cause) if cause.contains("broken entry"))
+        );
+        assert!(
+            matches!(result("@example/blocked"), super::super::extension_load::LoadResult::Failed(cause) if cause.contains("@example/broken"))
+        );
+        assert!(report.report.entries.iter().any(|entry| entry.directory == invalid && matches!(&entry.result, super::super::extension_load::LoadResult::Failed(cause) if cause.contains("invalid knot.jsonc"))));
+        let definitions = cx.read(|cx| {
+            cx.global::<ApplicationProductCommands>()
+                .0
+                .read(cx)
+                .definitions()
+                .map(|definition| definition.name.to_string())
+                .collect::<Vec<_>>()
+        });
+        assert!(definitions.contains(&"example.base".to_owned()));
+        assert!(definitions.contains(&"example.dependent".to_owned()));
+        assert!(definitions.contains(&"example.shared".to_owned()));
+        assert_eq!(
+            definitions
+                .iter()
+                .filter(|name| name.as_str() == "example.shared")
+                .count(),
+            1
+        );
+        let mut execution = dispatch_product_command(&shell, window, "example.dependent", cx);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        loop {
+            cx.run_until_parked();
+            match execution.completion.try_recv() {
+                Ok(outcome) => {
+                    assert_eq!(outcome, CommandOutcome::Completed);
+                    break;
+                }
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "dependent command did not finish"
+                    );
+                    std::thread::yield_now();
+                }
+                Err(error) => panic!("dependent command completion closed: {error}"),
+            }
+        }
+        assert_eq!(cx.read(|cx| model.read(cx).text()), "base ");
+        assert_eq!(
+            cx.read(super::super::extension_host::completion_provider_count),
+            1
+        );
+
+        let mut report_command =
+            dispatch_product_command(&shell, window, SHOW_EXTENSION_REPORT_COMMAND, cx);
+        cx.run_until_parked();
+        assert_eq!(
+            report_command.completion.try_recv().unwrap(),
+            CommandOutcome::Completed
+        );
+        assert!(cx.read(|cx| shell.read(cx).extension_report_open));
+    }
+
+    #[gpui::test]
+    fn extension_startup_rescans_changed_directories_and_cleans_old_registrations(
+        cx: &mut TestAppContext,
+    ) {
+        let root = tempfile::tempdir().unwrap();
+        install_extension(
+            root.path(),
+            "@example/old",
+            &[],
+            &[(
+                "main.js",
+                r#"
+                import { commands, editor } from 'knot:editor';
+                await commands.register('example.old', async () => {});
+                await editor.registerCompletionProvider('old-provider', {
+                    provideCompletions() { return []; }
+                });
+            "#,
+            )],
+        );
+        install_globals(cx);
+        let host = cx.update(super::super::extension_host::install);
+        host.update(cx, |host, cx| {
+            host.start_installed_extensions(root.path().to_path_buf(), cx)
+        });
+        let first = wait_for_extension_report(&host, cx);
+        assert_eq!(first.report.entries.len(), 1);
+        assert_eq!(
+            first.report.entries[0].name.as_deref(),
+            Some("@example/old")
+        );
+        assert_eq!(
+            cx.read(super::super::extension_host::completion_provider_count),
+            1
+        );
+
+        std::fs::remove_dir_all(root.path().join("@example/old")).unwrap();
+        install_extension(
+            root.path(),
+            "@example/new",
+            &[],
+            &[(
+                "main.js",
+                r#"
+                import { commands } from 'knot:editor';
+                await commands.register('example.new', async () => {});
+            "#,
+            )],
+        );
+        host.update(cx, |host, cx| {
+            host.start_installed_extensions(root.path().to_path_buf(), cx)
+        });
+        let second = wait_for_extension_report(&host, cx);
+        assert_eq!(second.report.entries.len(), 1);
+        assert_eq!(
+            second.report.entries[0].name.as_deref(),
+            Some("@example/new")
+        );
+        assert_eq!(
+            second.report.entries[0].result,
+            super::super::extension_load::LoadResult::Loaded
+        );
+        assert_eq!(
+            cx.read(super::super::extension_host::completion_provider_count),
+            0
+        );
+        let definitions = cx.read(|cx| {
+            cx.global::<ApplicationProductCommands>()
+                .0
+                .read(cx)
+                .definitions()
+                .map(|definition| definition.name.to_string())
+                .collect::<Vec<_>>()
+        });
+        assert!(definitions.contains(&"example.new".to_owned()));
+        assert!(!definitions.contains(&"example.old".to_owned()));
+    }
+
+    #[gpui::test]
+    fn checked_in_extension_example_runs_through_the_product_command_bridge(
+        cx: &mut TestAppContext,
+    ) {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/extensions");
+        let documents = install_globals(cx);
+        let host = cx.update(super::super::extension_host::install);
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        let (shell, window) = product_window(document, model.clone(), cx);
+        host.update(cx, |host, cx| host.start_installed_extensions(root, cx));
+        let report = wait_for_extension_report(&host, cx);
+        assert_eq!(report.report.entries.len(), 2);
+        assert!(
+            report
+                .report
+                .entries
+                .iter()
+                .all(|entry| entry.result == super::super::extension_load::LoadResult::Loaded)
+        );
+        let mut execution = dispatch_product_command(&shell, window, "example.greet", cx);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        loop {
+            cx.run_until_parked();
+            match execution.completion.try_recv() {
+                Ok(outcome) => {
+                    assert_eq!(outcome, CommandOutcome::Completed);
+                    break;
+                }
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "example command did not finish"
+                    );
+                    std::thread::yield_now();
+                }
+                Err(error) => panic!("example command completion closed: {error}"),
+            }
+        }
+        assert_eq!(cx.read(|cx| model.read(cx).text()), "Hello ");
     }
 
     struct FixedOpenDialog(OpenDialogOutcome);

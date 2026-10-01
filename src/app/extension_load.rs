@@ -19,7 +19,7 @@ pub struct LoadEntry {
     pub result: LoadResult,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct LoadReport {
     /// Validation failures first, then package attempts in deterministic ready order.
     pub entries: Vec<LoadEntry>,

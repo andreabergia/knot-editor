@@ -1,22 +1,33 @@
 //! Product ownership and foreground routing for the pooled extension host.
 
 use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
+    collections::{BTreeMap, HashMap, HashSet},
+    path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use gpui::{App, AppContext, Context, Entity, Global, Subscription, Task};
 
 use crate::host::{
     lifecycle::ExtensionKey,
-    pool::{ExtensionConfig, ExtensionEvent, ExtensionEventInbox, ExtensionPool},
-    protocol::{Command, CommandInvocationId, HostOperation, HostRequest},
+    module_graph::ModuleGraph,
+    pool::{
+        ExtensionConfig, ExtensionEvent, ExtensionEventInbox, ExtensionExecution, ExtensionPool,
+    },
+    protocol::{
+        Command, CommandInvocationId, ExtensionId, ExtensionLifecycleId, HostOperation, HostRequest,
+    },
     scheduler::PoolConfig,
 };
 
 use super::{
     extension_buffers::ExtensionBufferBridge,
     extension_commands::{ExtensionCommandBridge, ExtensionCommandEvent},
+    extension_load::{DependencyPlan, LoadEntry, LoadReport, LoadResult, StartupAttempt},
+    extension_package::{self, InstalledPackage},
     extension_semantics::ExtensionSemanticBridge,
     product::ProductShell,
     product_commands::{ApplicationProductCommands, ProductCommandTarget},
@@ -60,11 +71,52 @@ await editor.registerCompletionProvider("fixture-secondary", {
 });
 "#;
 
+fn graph_for_package(package: &InstalledPackage) -> Result<ModuleGraph, String> {
+    let root = url::Url::from_directory_path(&package.directory)
+        .map_err(|_| format!("invalid package directory: {}", package.directory.display()))?;
+    ModuleGraph::new(
+        root.as_str(),
+        &package.manifest.main,
+        package.sources.clone(),
+    )
+}
+
 pub(crate) struct ApplicationExtensionHost {
     _host: Entity<ProductExtensionHost>,
 }
 
 impl Global for ApplicationExtensionHost {}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum StartupState {
+    Scanning,
+    Loading,
+    Complete,
+}
+
+#[derive(Clone)]
+pub(crate) struct StartupReportSnapshot {
+    pub(crate) root: PathBuf,
+    pub(crate) state: StartupState,
+    pub(crate) report: LoadReport,
+}
+
+pub(crate) fn entity(cx: &App) -> Option<Entity<ProductExtensionHost>> {
+    cx.try_global::<ApplicationExtensionHost>()
+        .map(|global| global._host.clone())
+}
+
+pub(crate) fn startup_report(cx: &App) -> Option<StartupReportSnapshot> {
+    let host = entity(cx)?;
+    host.read(cx).startup_report.clone()
+}
+
+#[cfg(test)]
+pub(crate) fn completion_provider_count(cx: &App) -> usize {
+    entity(cx)
+        .map(|host| host.read(cx).semantics.completion_snapshot().len())
+        .unwrap_or_default()
+}
 
 pub(crate) fn install(cx: &mut App) -> Entity<ProductExtensionHost> {
     let (pool, inbox) = ExtensionPool::new(PoolConfig::default());
@@ -106,6 +158,9 @@ pub(crate) struct ProductExtensionHost {
     _fixture_tree: Entity<TreeView>,
     _fixture_tree_subscription: Subscription,
     _event_task: Task<()>,
+    startup_report: Option<StartupReportSnapshot>,
+    _startup_task: Option<Task<()>>,
+    next_extension_id: Arc<AtomicU64>,
 }
 
 impl ProductExtensionHost {
@@ -153,29 +208,154 @@ impl ProductExtensionHost {
             _fixture_tree: fixture_tree,
             _fixture_tree_subscription: fixture_tree_subscription,
             _event_task: event_task,
+            startup_report: None,
+            _startup_task: None,
+            next_extension_id: Arc::new(AtomicU64::new(1)),
+        }
+    }
+
+    pub(crate) fn start_installed_extensions(&mut self, root: PathBuf, cx: &mut Context<Self>) {
+        if self
+            .startup_report
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.state != StartupState::Complete)
+        {
+            return;
+        }
+        self._startup_task.take();
+        let previous = self.lifecycles.iter().copied().collect::<Vec<_>>();
+        for key in previous {
+            let _ = self.pool.unload(key);
+            self.remove_lifecycle(key, cx);
+        }
+        self.startup_report = Some(StartupReportSnapshot {
+            root: root.clone(),
+            state: StartupState::Scanning,
+            report: LoadReport::default(),
+        });
+        cx.notify();
+        let discovery = cx
+            .background_executor()
+            .spawn(async move { extension_package::discover(&root) });
+        let pool = self.pool.clone();
+        let next_extension_id = self.next_extension_id.clone();
+        self._startup_task = Some(cx.spawn(async move |this, cx| {
+            let discovered = discovery.await;
+            let _ = this.update(cx, |host, cx| {
+                if let Some(snapshot) = &mut host.startup_report {
+                    snapshot.state = StartupState::Loading;
+                }
+                cx.notify();
+            });
+            let report = DependencyPlan::new(discovered)
+                .execute(|package| {
+                    let id = next_extension_id.fetch_add(1, Ordering::Relaxed);
+                    assert_ne!(id, u64::MAX, "extension identity exhausted");
+                    let key = ExtensionKey::new(ExtensionId::new(id), ExtensionLifecycleId::new(1));
+                    let graph = graph_for_package(package);
+                    let execution = graph.and_then(|graph| {
+                        this.update(cx, |host, _| host.load_package(key, graph))
+                            .map_err(|error| error.to_string())?
+                    });
+                    let rollback_pool = pool.clone();
+                    let rollback_host = this.clone();
+                    let mut rollback_cx = cx.clone();
+                    StartupAttempt::new(
+                        async move {
+                            execution?
+                                .await
+                                .map(|_| ())
+                                .map_err(|error| error.to_string())
+                        },
+                        move || {
+                            let _ = rollback_pool.unload(key);
+                            let _ = rollback_host.update(&mut rollback_cx, |host, cx| {
+                                host.remove_lifecycle(key, cx);
+                            });
+                        },
+                    )
+                })
+                .await;
+            for entry in &report.entries {
+                let name = entry.name.as_deref().unwrap_or("<invalid package>");
+                match &entry.result {
+                    LoadResult::Loaded => eprintln!("[knot] extension loaded: {name}"),
+                    LoadResult::Failed(cause) => eprintln!(
+                        "[knot] extension failed: {name} ({}): {cause}",
+                        entry.directory.display()
+                    ),
+                }
+            }
+            let _ = this.update(cx, |host, cx| {
+                if let Some(snapshot) = &mut host.startup_report {
+                    snapshot.state = StartupState::Complete;
+                    snapshot.report = report;
+                }
+                cx.notify();
+            });
+        }));
+    }
+
+    pub(crate) fn report_extensions_root_error(&mut self, cause: String, cx: &mut Context<Self>) {
+        self.startup_report = Some(StartupReportSnapshot {
+            root: PathBuf::from("<user extensions>"),
+            state: StartupState::Complete,
+            report: LoadReport {
+                entries: vec![LoadEntry {
+                    directory: PathBuf::from("<user extensions>"),
+                    name: None,
+                    result: LoadResult::Failed(cause.clone()),
+                }],
+            },
+        });
+        eprintln!("[knot] cannot locate installed extensions: {cause}");
+        cx.notify();
+    }
+
+    fn load_package(
+        &mut self,
+        key: ExtensionKey,
+        graph: ModuleGraph,
+    ) -> Result<ExtensionExecution, String> {
+        let execution = self
+            .pool
+            .load_package(key, ExtensionConfig::default(), graph)
+            .map_err(|error| error.to_string())?;
+        self.admit_lifecycle(key);
+        Ok(execution)
+    }
+
+    fn admit_lifecycle(&mut self, key: ExtensionKey) {
+        if self.lifecycles.insert(key) {
+            self.buffers.admit_lifecycle(key.extension, key.lifecycle);
+            self.commands.admit_lifecycle(key.extension, key.lifecycle);
+            self.semantics.admit_lifecycle(key.extension, key.lifecycle);
         }
     }
 
     pub(crate) fn start_diagnostic_fixture(&mut self, name: &str, cx: &mut Context<Self>) {
         for (index, source) in [PRIMARY_FIXTURE, SECONDARY_FIXTURE].into_iter().enumerate() {
+            let id = self.next_extension_id.fetch_add(1, Ordering::Relaxed);
+            assert_ne!(id, u64::MAX, "extension identity exhausted");
             let key = ExtensionKey::new(
-                crate::host::protocol::ExtensionId::new(index as u64 + 1),
+                crate::host::protocol::ExtensionId::new(id),
                 crate::host::protocol::ExtensionLifecycleId::new(1),
             );
-            if let Err(error) = self.load(key, ExtensionConfig::default()) {
-                eprintln!("[knot] cannot load fixture {name:?} extension {index}: {error}");
-                continue;
-            }
-            let execution = self.pool.execute_fixture_module(
-                key,
-                format!("file:///fixtures/product-{index}.js"),
-                source,
-            );
+            let graph = ModuleGraph::new(
+                &format!("file:///fixtures/product-{index}/"),
+                "main.js",
+                BTreeMap::from([("main.js".into(), Arc::from(source))]),
+            )
+            .expect("diagnostic fixture graph is valid");
+            let execution = self.load_package(key, graph);
             match execution {
                 Ok(execution) => {
                     let name = name.to_owned();
-                    cx.spawn(async move |_, _| {
+                    let pool = self.pool.clone();
+                    cx.spawn(async move |this, cx| {
                         if let Err(error) = execution.await {
+                            let _ = pool.unload(key);
+                            let _ = this.update(cx, |host, cx| host.remove_lifecycle(key, cx));
                             eprintln!("[knot] fixture {name:?} extension {index} failed: {error}");
                         }
                     })
@@ -188,17 +368,14 @@ impl ProductExtensionHost {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn load(
         &mut self,
         key: ExtensionKey,
         config: ExtensionConfig,
     ) -> Result<(), crate::host::pool::ExtensionPoolError> {
         self.pool.load(key, config)?;
-        if self.lifecycles.insert(key) {
-            self.buffers.admit_lifecycle(key.extension, key.lifecycle);
-            self.commands.admit_lifecycle(key.extension, key.lifecycle);
-            self.semantics.admit_lifecycle(key.extension, key.lifecycle);
-        }
+        self.admit_lifecycle(key);
         Ok(())
     }
 

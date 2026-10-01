@@ -1,0 +1,7 @@
+{
+  "name": "@example/text-utils",
+  "displayName": "Text Utils",
+  "description": "A small text editing command used by Word Tools.",
+  "version": "1.0.0",
+  "main": "dist/main.js"
+}

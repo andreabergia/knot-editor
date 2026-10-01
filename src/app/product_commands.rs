@@ -38,6 +38,7 @@ pub(crate) const FIND_COMMAND: &str = "editor.find";
 pub(crate) const FIND_NEXT_COMMAND: &str = "editor.find-next";
 pub(crate) const FIND_PREVIOUS_COMMAND: &str = "editor.find-previous";
 pub(crate) const SHOW_COMPLETIONS_COMMAND: &str = "editor.show-completions";
+pub(crate) const SHOW_EXTENSION_REPORT_COMMAND: &str = "extensions.show-startup-report";
 
 const PRODUCT_COMMANDS: &[(&str, &str)] = &[
     ("editor.move-left", "Move left"),
@@ -93,6 +94,10 @@ const PRODUCT_COMMANDS: &[(&str, &str)] = &[
     (FIND_NEXT_COMMAND, "Find Next"),
     (FIND_PREVIOUS_COMMAND, "Find Previous"),
     (SHOW_COMPLETIONS_COMMAND, "Show Completions"),
+    (
+        SHOW_EXTENSION_REPORT_COMMAND,
+        "Show Extension Startup Report",
+    ),
 ];
 
 #[derive(Clone, PartialEq, Action)]

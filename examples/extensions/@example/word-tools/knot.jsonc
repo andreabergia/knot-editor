@@ -1,0 +1,8 @@
+{
+  "name": "@example/word-tools",
+  "displayName": "Word Tools",
+  "description": "Runs the greeting command from Text Utils.",
+  "version": "1.0.0",
+  "main": "dist/main.js",
+  "requires": ["@example/text-utils"]
+}
