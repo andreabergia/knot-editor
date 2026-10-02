@@ -609,125 +609,35 @@ impl Default for AnchoredRangeStore {
     }
 }
 
-/// Naive offset-remap store (D5): the measurement baseline.
-///
-/// Anchored ranges keep raw byte ranges and, on every edit, *every* anchored range's
-/// offsets are re-transformed by the same insert/delete rules the token store
-/// applies via `Position` stability. This is O(all anchored ranges) per edit by
-/// construction — the comparator that answers "which representation" in step
-/// 5's benchmark. It shares `transform_offset` with the correctness oracle.
-pub struct OffsetStore {
-    anns: HashMap<AnchoredRangeId, (usize, usize, Stickiness, Stickiness, bool)>,
-    cursor: usize,
-    next_id: AnchoredRangeId,
-}
-
-impl OffsetStore {
-    pub fn new() -> Self {
-        Self {
-            anns: HashMap::new(),
-            cursor: 0,
-            next_id: 1,
-        }
-    }
-
-    pub fn add(&mut self, start: usize, end: usize) -> AnchoredRangeId {
-        let id = self.next_id;
-        self.next_id += 1;
-        self.anns.insert(
-            id,
-            (start, end, Stickiness::Before, Stickiness::After, false),
-        );
-        id
-    }
-
-    /// O(all) per edit: walk every anchored range applying the edit transform.
-    pub fn stabilize(&mut self, buffer: &TextBuffer) {
-        let edits = buffer.edits_since(self.cursor);
-        assert!(
-            buffer.edit_seq() >= self.cursor,
-            "edit log shortened underneath the baseline store"
-        );
-        for (_, ann) in self.anns.iter_mut() {
-            let (s, e, ss, es, collapsed) = ann;
-            if *collapsed {
-                continue;
-            }
-            for edit in edits {
-                *s = transform_offset(*s, *ss, edit);
-                *e = transform_offset(*e, *es, edit);
-            }
-            if *s >= *e {
-                *collapsed = true;
-            }
-        }
-        self.cursor += edits.len();
-    }
-
-    pub fn resolve(&self, id: AnchoredRangeId) -> Option<Range<usize>> {
-        let (s, e, _, _, collapsed) = self.anns.get(&id)?;
-        if *collapsed {
-            return None;
-        }
-        if *s <= *e { Some(*s..*e) } else { Some(*e..*s) }
-    }
-}
-
-impl Default for OffsetStore {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Apply one edit to a single endpoint's byte offset under its stickiness
-/// (D2). Shared by `OffsetStore` and the correctness oracle so the baseline
-/// and the test agree on the expected transform semantics.
-///
-/// ## Stickiness in the offset-tracking model
-///
-/// In a pure byte-offset model `Before` and `After` produce the **same**
-/// surviving byte offset at an edit's boundary:
-///
-/// - **Insert at `at`, length `n`**: a position at `at` (the insert point)
-///   shifts with the content it was anchoring — the byte that was at `at`
-///   is now at `at + n` — so *both* stickiness modes land at `at + n`. This
-///   is the content-tracking reading D2's narrative ("the endpoint keeps
-///   pointing at the same content") settles on, and the one the unit tests
-///   pin: insert-before-`Before`-start moves the start with the content.
-/// - **Delete `[s, e)`**: a position strictly inside `(s, e)` snaps to the
-///   surviving edge. Whichever side, the post-delete byte that was at `e`
-///   has shifted to `s`, so `Before` and `After` agree numerically at `s`.
-///
-/// The genuine `Before`/`After` distinction lives in the *piece-anchoring*
-/// layer (sticky-left `position_at` for `Before`, explicit relocate for
-/// `After`) — the offset-tracking oracle proves the store's resolved byte
-/// ranges match a brute-force replay, not the per-mode anchoring choice.
-pub fn transform_offset(off: usize, _sticky: Stickiness, edit: &BufferEdit) -> usize {
-    match edit {
-        BufferEdit::Insert {
-            at, inserted_len, ..
-        } => {
-            if off < *at {
-                off
-            } else {
-                off + inserted_len
-            }
-        }
-        BufferEdit::Delete { range, .. } => {
-            if off <= range.start {
-                off
-            } else if off >= range.end {
-                off - (range.end - range.start)
-            } else {
-                range.start
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Expected byte-offset transform for the randomized correctness oracle.
+    // Both stickiness modes resolve to the same byte after an edit; their
+    // distinction is in how the store anchors the surviving piece.
+    fn transform_offset(off: usize, _sticky: Stickiness, edit: &BufferEdit) -> usize {
+        match edit {
+            BufferEdit::Insert {
+                at, inserted_len, ..
+            } => {
+                if off < *at {
+                    off
+                } else {
+                    off + inserted_len
+                }
+            }
+            BufferEdit::Delete { range, .. } => {
+                if off <= range.start {
+                    off
+                } else if off >= range.end {
+                    off - (range.end - range.start)
+                } else {
+                    range.start
+                }
+            }
+        }
+    }
 
     fn text() -> TextBuffer {
         TextBuffer::from_text("hello world")
