@@ -445,23 +445,20 @@ impl BufferModel {
             && cached.range == range
         {
             return Ok(crate::host::protocol::TextSnapshot {
-                text: SnapshotText::Utf16(Arc::clone(&cached.text)),
+                text: SnapshotText(Arc::clone(&cached.text)),
                 range,
                 revision: self.revision,
             });
         }
 
-        let text = match SnapshotText::from_utf8(&self.read_checked(range)?) {
-            SnapshotText::Utf16(text) => text,
-            SnapshotText::Utf8(_) => unreachable!("UTF-16 snapshot constructor returned UTF-8"),
-        };
+        let text = SnapshotText::from_utf8(&self.read_checked(range)?).0;
         *self.snapshot_cache.borrow_mut() = Some(CachedSnapshot {
             revision: self.revision,
             range,
             text: Arc::clone(&text),
         });
         Ok(crate::host::protocol::TextSnapshot {
-            text: SnapshotText::Utf16(text),
+            text: SnapshotText(text),
             range,
             revision: self.revision,
         })
@@ -1803,17 +1800,12 @@ mod tests {
         let mut model = BufferModel::from_text("abc");
         let first = model.snapshot(None).unwrap();
         let second = model.snapshot(None).unwrap();
-        let (SnapshotText::Utf16(first), SnapshotText::Utf16(second)) = (first.text, second.text)
-        else {
-            panic!("buffer snapshots must use UTF-16 cache storage");
-        };
+        let (SnapshotText(first), SnapshotText(second)) = (first.text, second.text);
         assert!(Arc::ptr_eq(&first, &second));
 
         assert!(model.replace(1..2, "B").unwrap());
         let third = model.snapshot(None).unwrap();
-        let SnapshotText::Utf16(third) = third.text else {
-            panic!("buffer snapshots must use UTF-16 cache storage");
-        };
+        let SnapshotText(third) = third.text;
         assert!(!Arc::ptr_eq(&first, &third));
         assert_eq!(String::from_utf16(&third).unwrap(), "aBc");
     }

@@ -477,26 +477,18 @@ pub struct CommandInvocation {
     pub arguments: CommandArgumentValue,
 }
 
-/// Immutable text storage for a snapshot crossing the runtime boundary.
+/// Immutable UTF-16 snapshot storage shared across isolates and externalized by V8.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum SnapshotText {
-    /// The existing serde path, retained as the benchmark baseline.
-    Utf8(String),
-    /// UTF-16 storage which can be shared across isolates and externalized by V8.
-    Utf16(Arc<[u16]>),
-}
+pub struct SnapshotText(pub Arc<[u16]>);
 
 impl SnapshotText {
     pub(crate) fn from_utf8(text: &str) -> Self {
-        Self::Utf16(text.encode_utf16().collect::<Vec<_>>().into())
+        Self(text.encode_utf16().collect::<Vec<_>>().into())
     }
 
     #[cfg(test)]
     pub(crate) fn to_utf8(&self) -> String {
-        match self {
-            Self::Utf8(text) => text.clone(),
-            Self::Utf16(text) => String::from_utf16(text).expect("snapshot UTF-16 is well formed"),
-        }
+        String::from_utf16(&self.0).expect("snapshot UTF-16 is well formed")
     }
 }
 

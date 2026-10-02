@@ -3713,10 +3713,9 @@ fn snapshot_text_to_v8<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     text: SnapshotText,
 ) -> Result<v8::Local<'s, v8::String>, &'static str> {
-    match text {
-        SnapshotText::Utf8(text) => v8::String::new(scope, &text).ok_or("UnsupportedOperation"),
-        SnapshotText::Utf16(text) if text.is_empty() => Ok(v8::String::empty(scope)),
-        SnapshotText::Utf16(text) => {
+    match text.0 {
+        text if text.is_empty() => Ok(v8::String::empty(scope)),
+        text => {
             let length = text.len();
             let raw = Arc::into_raw(text);
             let buffer = raw.cast::<u16>() as *mut u16;
@@ -4661,7 +4660,7 @@ mod tests {
                 lifecycle: runtime.lifecycle,
                 id: request.id,
                 result: Ok(HostResponseValue::Snapshot(TextSnapshot {
-                    text: SnapshotText::Utf16(Arc::clone(&text)),
+                    text: SnapshotText(Arc::clone(&text)),
                     range: ByteRange {
                         start_byte_offset: 0,
                         end_byte_offset: 6,

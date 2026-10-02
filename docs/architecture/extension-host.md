@@ -6,7 +6,7 @@ Part of the [architecture](../architecture.md). Design rationale is recorded in
 
 ## Boundaries
 
-`host` owns seven boundaries:
+`host` owns six boundaries:
 
 - `protocol` contains Knot-owned transport identities, requests, responses,
   contribution data, and errors. It depends on neither gpui nor concrete core
@@ -18,7 +18,6 @@ Part of the [architecture](../architecture.md). Design rationale is recorded in
   data. The engine owns exact-once teardown.
 - `pool` exposes the V8-free application control, event-inbox, completion,
   watchdog, diagnostics, and shutdown surface.
-- `bench` owns host benchmark entry points.
 - `module_graph` validates generated file URLs, the entry module, and captured
   package-local sources without V8 or filesystem access.
 

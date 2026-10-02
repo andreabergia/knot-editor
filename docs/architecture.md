@@ -32,8 +32,6 @@ The default `knot` binary runs the product application through `app::run` and
 discovers installed extensions from the per-user local application-data root.
 `knot --fixture [name]` opens the same product shell with two static diagnostic
 extensions loaded through the package graph API and its application-owned pool.
-`v8-bench` measures the same pool and exercises multi-extension scheduling and
-lifecycle stress.
 
 ## Ownership
 

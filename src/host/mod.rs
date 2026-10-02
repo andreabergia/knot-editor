@@ -4,7 +4,6 @@
 //! modules own policy independently of JavaScript mechanics, while [`protocol`]
 //! is the typed boundary shared with the application.
 
-pub mod bench;
 #[allow(
     dead_code,
     reason = "low-level V8 probes validate the engine beneath the product-facing pool"
