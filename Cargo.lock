@@ -3020,7 +3020,6 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
- "sysinfo 0.32.1",
  "tempfile",
  "tokio",
  "unicode-segmentation",
@@ -5427,20 +5426,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "sysinfo"
-version = "0.32.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4c33cd241af0f2e9e3b5c32163b873b29956890b5342e6745b917ce9d490f4af"
-dependencies = [
- "core-foundation-sys",
- "libc",
- "memchr",
- "ntapi",
- "rayon",
- "windows 0.57.0",
-]
-
-[[package]]
 name = "system-configuration"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7276,7 +7261,7 @@ dependencies = [
  "rand 0.8.6",
  "screencapturekit",
  "screencapturekit-sys",
- "sysinfo 0.31.4",
+ "sysinfo",
  "tao-core-video-sys",
  "windows 0.61.3",
  "windows-capture",

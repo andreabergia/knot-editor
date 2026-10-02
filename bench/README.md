@@ -1,6 +1,6 @@
 # Bench fixtures
 
-Version-controlled fixtures for the annotation benchmark. Each
+Version-controlled fixtures used by the annotation benchmark. Each
 fixture is a `.kfx` file in the format understood by
 `src/fixture.rs`:
 
@@ -13,7 +13,7 @@ N lines of raw text
 ...
 ```
 
-The segment table is optional. The current benchmarks use the text only.
+The segment table is optional. The annotation benchmark used the text only.
 
 ## Fixture set
 
@@ -26,12 +26,12 @@ The segment table is optional. The current benchmarks use the text only.
 | 5 | `emoji.kfx`         | ZWJ sequences, variation selectors, wide emoji      |
 | 6 | `minified_js.kfx`   | Very long single lines, horizontal scroll           |
 
-Fixture 2 is generated at startup by tiling fixture 1 with `--tile`.
+Fixture 2 was generated at startup by tiling fixture 1 with `--tile`.
 
 ## Regenerating fixture 1
 
 `rust_sample.kfx` is produced from `rust_sample.rs` by a small tokenizer.
-The benchmarks use the generated `.kfx` file. To regenerate after editing
+The benchmark used the generated `.kfx` file. To regenerate after editing
 the source:
 
 ```
@@ -39,9 +39,3 @@ python3 bench/tools/tokenize_rust.py bench/fixtures/rust_sample.rs bench/fixture
 ```
 
 The tokenizer is a coarse regex approximation, not a syntax highlighter.
-
-## Running
-
-```
-cargo run --bin anno-bench -- --fixture bench/fixtures/rust_sample.kfx --duration 5
-```
