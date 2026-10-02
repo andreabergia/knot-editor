@@ -30,7 +30,7 @@ use super::{
 static NEXT_HISTORY_CONTEXT: AtomicU64 = AtomicU64::new(1);
 
 /// Owned, frame-stable copy of one styled segment of one line.
-/// Mirrors `knot::view::fixture`'s borrowed `Segment`/`SegSpec` but holds
+/// Mirrors `knot::fixture`'s borrowed segments but holds
 /// byte offsets into our owned `lines` so nothing crosses a frame boundary
 /// with a lifetime.
 #[derive(Clone, Copy)]
@@ -269,7 +269,7 @@ impl EditorView {
 
     /// Build an editor preloaded with a styled fixture.
     pub fn from_fixture(
-        fixture: &crate::view::fixture::Fixture,
+        fixture: &crate::fixture::Fixture,
         model: Entity<BufferModel>,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -277,7 +277,7 @@ impl EditorView {
     }
 
     pub(crate) fn from_fixture_with_options(
-        fixture: &crate::view::fixture::Fixture,
+        fixture: &crate::fixture::Fixture,
         model: Entity<BufferModel>,
         element_id: usize,
         rendering: EditorRenderingOptions,
@@ -2642,7 +2642,7 @@ mod tests {
         BufferModel, ContributionSource, EditorRenderingOptions, EditorView,
         ResolvedEditorContribution, default_projection, project_contributions,
     };
-    use crate::view::fixture::Fixture;
+    use crate::fixture::Fixture;
     use crate::{
         app::completion::CompletionProviderRegistry,
         host::protocol::{

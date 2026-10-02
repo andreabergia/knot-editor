@@ -40,7 +40,7 @@ use anyhow::{Context, Result, bail};
 
 use knot::core::anchored_range::{AnchoredRangeStore, OffsetStore};
 use knot::core::buffer::TextBuffer;
-use knot::view::fixture::Fixture;
+use knot::fixture::Fixture;
 
 // ---- Config ---------------------------------------------------------------
 

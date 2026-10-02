@@ -1,4 +1,4 @@
-//! Fixture loading for the renderer benchmark.
+//! Text and style fixtures for diagnostics and benchmarks.
 //!
 //! A fixture is a text file paired with a tokenized representation giving
 //! the style segments per line. The on-disk format is documented inline
@@ -8,15 +8,19 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 
-use crate::view::Segment;
+/// A styled text run borrowed from a fixture line.
+pub struct Segment<'a> {
+    pub text: &'a str,
+    /// 0xRRGGBB
+    pub color: u32,
+    pub bold: bool,
+    pub italic: bool,
+}
 
 /// A loaded fixture: raw text plus per-line style segments.
 ///
-/// `lines` holds owned line text (without newline). `segments` is parallel
-/// to `lines`; each inner vec holds the styled segments for that line. The
-/// segments borrow from `lines`, so the struct is self-referential — we
-/// work around that by exposing `lines` and `segments_of` separately and
-/// handing out short-lived borrows from a borrow of the `Fixture`.
+/// `lines` holds owned line text (without newline). Style specs are stored
+/// separately; `segments_of` borrows their text from `lines` on demand.
 pub struct Fixture {
     /// Owned line text, one entry per line (no trailing newline).
     pub lines: Vec<String>,
@@ -123,8 +127,7 @@ impl Fixture {
     }
 
     /// Construct a fixture from raw text with no authored style segments.
-    /// Each line is rendered with the default style. Used by callers that
-    /// synthesize a fixture in memory (e.g. an editor pane's load fallback).
+    /// Each line uses the default style.
     pub fn from_lines(lines: Vec<String>) -> Self {
         let n = lines.len();
         Fixture {
@@ -135,10 +138,7 @@ impl Fixture {
 
     /// Tile the fixture `n` times, producing a synthetic large fixture.
     ///
-    /// Used for fixture 2 (1M-line tiled Rust): the on-disk fixture stays
-    /// small, and the harness synthesizes the large workload in memory at
-    /// startup. Styles are tiled alongside the text so the multi-attribute
-    /// shaping path is exercised at full scale.
+    /// Styles are tiled alongside the text.
     pub fn tiled(&self, n: usize) -> Self {
         if n <= 1 {
             return self.clone_shallow();
@@ -166,8 +166,7 @@ impl Fixture {
     /// Build the segment list for a single line, borrowing from `self`.
     ///
     /// Lines with no authored segments yield a single default segment
-    /// covering the whole line (color 0xC0C0C0, plain) so the renderer
-    /// always has something to draw.
+    /// covering the whole line (color 0xC0C0C0, plain).
     pub fn segments_of<'a>(&'a self, line: usize) -> Vec<Segment<'a>> {
         let text = self.lines.get(line).map(|s| s.as_str()).unwrap_or("");
         let specs = &self.styles[line.min(self.styles.len().saturating_sub(1))];

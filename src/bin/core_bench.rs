@@ -12,15 +12,12 @@
 //!   - `interleaved` two-producer alternating edits with Position remap
 //!   - `lookup`      line-index + Position resolve queries
 //!
-//! Output is one TSV-ish summary line per workload, the same shape as
-//! the renderer `bench` binary so the two can share a results table:
+//! Output is one TSV-ish summary line per workload:
 //!   <fixture>\t<workload>\tkey=val\t...
 //!
-//! Reuses the step-2 fixture corpus (see `bench/README.md`). The 1M-line
-//! workload is the existing `rust_sample.kfx` path with `--tile 635`.
-//! The fixture format (`src/view/fixture.rs`) gives raw line text usable
-//! as buffer input; the segment-table portion is renderer-only and
-//! ignored here.
+//! Uses the fixture corpus (see `bench/README.md`). The 1M-line workload
+//! uses `rust_sample.kfx` with `--tile 635`. This benchmark reads fixture
+//! text and ignores style segments.
 
 use std::env;
 use std::path::PathBuf;
@@ -30,7 +27,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 
 use knot::core::buffer::{BufferEdit, Position, Split, TextBuffer};
-use knot::view::fixture::Fixture;
+use knot::fixture::Fixture;
 
 // ---- Config ---------------------------------------------------------------
 

@@ -6,8 +6,6 @@ edition = "2024"
 [dependencies]
 alacritty_terminal = { version = "0.26", default-features = false }
 anyhow = "1"
-bytemuck = { version = "1", features = ["derive"] }
-cosmic-text = "0.19"
 directories = "6"
 gpui = { version = "0.2", default-features = false, features = ["font-kit", "windows-manifest"] }
 jsonc-parser = { version = "0.34", features = ["serde"] }
@@ -22,19 +20,6 @@ tempfile = "3"
 unicode-segmentation = "1"
 url = "2"
 v8 = "152.2"
-wgpu = "29"
-winit = "0.30"
-
-# skia backend (macOS only — Metal via raw-window-handle). Crate versions
-# pinned to skia-safe 0.99's metal-window example to avoid FFI drift.
-[target.'cfg(target_os = "macos")'.dependencies]
-skia-safe = { version = "0.99", features = ["gpu", "metal", "textlayout"] }
-objc2 = { version = "0.6.3", default-features = false }
-objc2-core-foundation = { version = "0.3.2", default-features = false }
-objc2-metal = { version = "0.3.2", default-features = false, features = ["MTLCommandBuffer", "MTLCommandQueue", "MTLDrawable", "MTLPixelFormat"] }
-objc2-quartz-core = { version = "0.3.2", default-features = false, features = ["objc2-core-foundation", "objc2-metal", "CAMetalLayer"] }
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["objc2-quartz-core", "NSView", "NSResponder"] }
-raw-window-handle = "0.6"
 
 [dev-dependencies]
 gpui = { version = "0.2", default-features = false, features = ["font-kit", "test-support", "windows-manifest"] }
@@ -46,10 +31,6 @@ path = "src/lib.rs"
 [[bin]]
 name = "knot"
 path = "src/main.rs"
-
-[[bin]]
-name = "bench"
-path = "src/bin/bench.rs"
 
 [[bin]]
 name = "step3-gpui"
