@@ -32,9 +32,5 @@ name = "knot"
 path = "src/main.rs"
 
 [[bin]]
-name = "step3-gpui"
-path = "src/step3/gpui/main.rs"
-
-[[bin]]
 name = "v8-bench"
 path = "src/bin/v8_bench.rs"
