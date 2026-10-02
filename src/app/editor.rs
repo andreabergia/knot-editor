@@ -14,7 +14,7 @@ use unicode_segmentation::UnicodeSegmentation;
 use crate::core::anchored_range::AnchoredRangeId;
 use crate::host::protocol::{
     BufferHandle, ByteRange, CompletionProviderRegistrationId, CompletionRequest,
-    CompletionResponse, DecorationToken, EditorContribution, GutterToken, TextEdit,
+    CompletionResponse, DecorationToken, GutterToken, TextEdit,
 };
 
 use super::{
@@ -29,10 +29,7 @@ use super::{
 
 static NEXT_HISTORY_CONTEXT: AtomicU64 = AtomicU64::new(1);
 
-/// Owned, frame-stable copy of one styled segment of one line.
-/// Mirrors `knot::fixture`'s borrowed segments but holds
-/// byte offsets into our owned `lines` so nothing crosses a frame boundary
-/// with a lifetime.
+/// One styled segment of a projected line, with byte offsets into `lines`.
 #[derive(Clone, Copy)]
 struct Seg {
     start: usize,
@@ -265,93 +262,6 @@ impl EditorView {
         editor.element_id = element_id;
         editor.rendering = rendering;
         editor
-    }
-
-    /// Build an editor preloaded with a styled fixture.
-    pub fn from_fixture(
-        fixture: &crate::fixture::Fixture,
-        model: Entity<BufferModel>,
-        cx: &mut Context<Self>,
-    ) -> Self {
-        Self::from_fixture_with_options(fixture, model, 0, EditorRenderingOptions::default(), cx)
-    }
-
-    pub(crate) fn from_fixture_with_options(
-        fixture: &crate::fixture::Fixture,
-        model: Entity<BufferModel>,
-        element_id: usize,
-        rendering: EditorRenderingOptions,
-        cx: &mut Context<Self>,
-    ) -> Self {
-        let n = fixture.line_count();
-        let mut lines = Vec::with_capacity(n);
-        let mut segs = Vec::with_capacity(n);
-        for i in 0..n {
-            let line = fixture.lines.get(i).cloned().unwrap_or_default();
-            lines.push(line);
-            let specs = fixture.segments_of(i);
-            let mut row = Vec::with_capacity(specs.len() + 1);
-            // The public `Segment` only exposes the styled text slice, not
-            // byte offsets, so we locate each seg's text in the real line
-            // and fill any whitespace gaps with default-color segs. This
-            // guarantees the run partition covers the full line byte range
-            // [0, len) contiguously, so `shape_line`'s byte layout matches
-            // the actual text and `x_for_index`/`closest_index_for_x` land
-            // on the right glyph. Segments are non-overlapping and ordered,
-            // so the first match at/after the running cursor is the seg's
-            // true position.
-            let full = lines[i].as_str();
-            let mut cursor = 0usize;
-            for seg in specs {
-                let seg_text = seg.text;
-                if seg_text.is_empty() {
-                    continue;
-                }
-                let start = match full[cursor..].find(seg_text) {
-                    Some(r) => cursor + r,
-                    None => cursor,
-                };
-                if start > cursor {
-                    row.push(Seg {
-                        start: cursor,
-                        end: start,
-                        color: DEFAULT_COLOR,
-                        bold: false,
-                        italic: false,
-                    });
-                }
-                let end = start + seg_text.len();
-                row.push(Seg {
-                    start,
-                    end,
-                    color: seg.color,
-                    bold: seg.bold,
-                    italic: seg.italic,
-                });
-                cursor = end;
-            }
-            if cursor < full.len() {
-                row.push(Seg {
-                    start: cursor,
-                    end: full.len(),
-                    color: DEFAULT_COLOR,
-                    bold: false,
-                    italic: false,
-                });
-            }
-            if row.is_empty() {
-                row.push(Seg {
-                    start: 0,
-                    end: full.len(),
-                    color: DEFAULT_COLOR,
-                    bold: false,
-                    italic: false,
-                });
-            }
-            segs.push(row);
-        }
-
-        Self::from_projection(model, lines, segs, element_id, rendering, cx)
     }
 
     fn from_projection(
@@ -1237,78 +1147,6 @@ impl EditorView {
             }
         }
     }
-}
-
-pub(crate) fn seed_fixture_contributions(
-    model: &mut BufferModel,
-    overlap_source: ContributionSource,
-) {
-    let text = model.text();
-    let mut primary = Vec::new();
-    for (needle, decoration) in [
-        ("LEAF_MAX", DecorationToken::Warning),
-        ("INTERNAL_MIN", DecorationToken::Warning),
-        ("unsafe", DecorationToken::Error),
-    ] {
-        primary.extend(
-            text.match_indices(needle)
-                .map(|(start, matched)| EditorContribution {
-                    range: ByteRange {
-                        start_byte_offset: start,
-                        end_byte_offset: start + matched.len(),
-                    },
-                    decoration: Some(decoration),
-                    gutter: None,
-                    command: None,
-                }),
-        );
-    }
-    for (start, _) in text.match_indices("fn ") {
-        let name_start = start + 3;
-        let rest = &text[name_start..];
-        let name_len = rest
-            .find(|c: char| !c.is_alphanumeric() && c != '_')
-            .unwrap_or(rest.len());
-        if name_len > 0 {
-            primary.push(EditorContribution {
-                range: ByteRange {
-                    start_byte_offset: name_start,
-                    end_byte_offset: name_start + name_len,
-                },
-                decoration: Some(DecorationToken::Info),
-                gutter: None,
-                command: None,
-            });
-        }
-    }
-
-    model
-        .replace_contributions(ContributionSource::BuiltIn, &primary, model.revision())
-        .expect("fixture contributions have valid ranges");
-
-    // A second source deliberately overlaps LEAF_MAX. Info is painted before
-    // warning, so the primary warning deterministically wins at the overlap.
-    let overlap = text
-        .match_indices("LEAF_MAX")
-        .map(|(start, _)| {
-            let line_start = text[..start].rfind('\n').map_or(0, |newline| newline + 1);
-            let line_end = text[start..]
-                .find('\n')
-                .map_or(text.len(), |newline| start + newline);
-            EditorContribution {
-                range: ByteRange {
-                    start_byte_offset: line_start,
-                    end_byte_offset: line_end,
-                },
-                decoration: Some(DecorationToken::Info),
-                gutter: None,
-                command: None,
-            }
-        })
-        .collect::<Vec<_>>();
-    model
-        .replace_contributions(overlap_source, &overlap, model.revision())
-        .expect("fixture overlap contributions have valid ranges");
 }
 
 fn project_contributions(
@@ -2520,9 +2358,8 @@ fn make_font(bold: bool, italic: bool) -> Font {
         font = font.italic();
     }
     // Menlo has no Arabic/CJK/emoji glyphs; add fallbacks so Core Text
-    // substitutes the system fonts for those ranges. The cascade order
-    // matches the fixture set: Geeza Pro (Arabic), PingFang SC (CJK),
-    // Apple Color Emoji.
+    // substitutes the system fonts for those ranges. The cascade order is
+    // Geeza Pro (Arabic), PingFang SC (CJK), then Apple Color Emoji.
     font.fallbacks = Some(FontFallbacks::from_fonts(vec![
         "Geeza Pro".into(),
         "PingFang SC".into(),
@@ -2642,7 +2479,6 @@ mod tests {
         BufferModel, ContributionSource, EditorRenderingOptions, EditorView,
         ResolvedEditorContribution, default_projection, project_contributions,
     };
-    use crate::fixture::Fixture;
     use crate::{
         app::completion::CompletionProviderRegistry,
         host::protocol::{
@@ -3262,9 +3098,8 @@ mod tests {
         let family = "👨‍👩‍👧‍👦";
         let first_line = "a😀b";
         let second_line = format!("{family}z");
-        let fixture = Fixture::from_lines(vec![first_line.into(), second_line.clone()]);
-        let model = cx.new(|_| BufferModel::from_text(fixture.lines.join("\n")));
-        let editor = cx.new(|cx| EditorView::from_fixture(&fixture, model, cx));
+        let model = cx.new(|_| BufferModel::from_text(format!("{first_line}\n{second_line}")));
+        let editor = cx.new(|cx| EditorView::new(model, cx));
 
         cx.read(|cx| {
             let editor = editor.read(cx);
@@ -3296,12 +3131,10 @@ mod tests {
 
     #[gpui::test]
     fn views_share_model_state_and_keep_presentation_state_independent(cx: &mut TestAppContext) {
-        let fixture = Fixture::from_lines(vec!["one".into(), "two".into(), "three".into()]);
-        let model = cx.new(|_| BufferModel::from_text(fixture.lines.join("\n")));
-        let first = cx.new(|cx| EditorView::from_fixture(&fixture, model.clone(), cx));
+        let model = cx.new(|_| BufferModel::from_text("one\ntwo\nthree"));
+        let first = cx.new(|cx| EditorView::new(model.clone(), cx));
         let second = cx.new(|cx| {
-            EditorView::from_fixture_with_options(
-                &fixture,
+            EditorView::new_with_options(
                 model.clone(),
                 1,
                 EditorRenderingOptions {
@@ -3373,10 +3206,9 @@ mod tests {
 
     #[gpui::test]
     fn selection_tracks_a_deletion_from_another_view(cx: &mut TestAppContext) {
-        let fixture = Fixture::from_lines(vec!["0123456789".into()]);
         let model = cx.new(|_| BufferModel::from_text("0123456789"));
-        let first = cx.new(|cx| EditorView::from_fixture(&fixture, model.clone(), cx));
-        let second = cx.new(|cx| EditorView::from_fixture(&fixture, model.clone(), cx));
+        let first = cx.new(|cx| EditorView::new(model.clone(), cx));
+        let second = cx.new(|cx| EditorView::new(model.clone(), cx));
 
         second.update(cx, |view, cx| {
             view.anchor_col = 4;

@@ -100,9 +100,3 @@ also rejects edits racing its asynchronous read.
 Native Save As provides overwrite consent, but replacement still checks the
 observed provider version so a later external change becomes a conflict.
 Live filesystem watching, binary buffers, and encoding detection remain deferred.
-
-## Fixture boundaries
-
-App startup and benchmark fixture setup may use manifest-relative paths and
-synchronous `std::fs`. These are explicit fixture paths, not resource APIs.
-The writable local fixture is isolated under the ignored `target` directory.

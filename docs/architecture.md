@@ -27,7 +27,6 @@ gpui application and views        extension runtimes
   captures package-local JavaScript sources without entering V8.
 - `app::extension_load` plans dependency order and records startup outcomes
   using Knot-owned package data and a rollback guard for each attempted load.
-- `fixture` provides text and style input for diagnostics and editor tests.
 
 The default `knot` binary runs the product application through `app::run` and
 discovers installed extensions from the per-user local application-data root.
@@ -89,5 +88,5 @@ and toolbar control.
 - Extension requests cross boundaries as Knot-owned semantic data and opaque
   identities.
 - Generic resource state uses normalized URIs; platform paths and native I/O
-  errors remain inside the local provider or explicit fixture/benchmark code.
+  errors remain inside the local provider or explicit diagnostic code.
 - `BufferModel` owns editable text, never resource identity or persistence.
