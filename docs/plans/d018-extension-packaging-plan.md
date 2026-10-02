@@ -154,10 +154,12 @@ command, and verify the document edit. Other product tests cover malformed
 manifests, failed-entry cleanup, independent progress, semantic registration,
 and rescanning changed directories. The native
 `extensions.show-startup-report` command and toolbar button display the
-package name, generated directory, outcome, and failure cause. Startup also
-prints each outcome to stderr. `cargo test --all-targets` passed with 395
-library tests and all binary test targets. Manual review of the installed
-example and startup report passed on 2026-10-02.
+package name, generated directory, outcome, and failure cause. Startup publishes
+each outcome to the report and stderr when it becomes known, so earlier results
+remain visible while a later entry is pending. The product test covers this
+case. `cargo test --all-targets` passed with 396 library tests and all binary
+test targets. Manual review of the installed example and startup report passed
+on 2026-10-02.
 
 ## Execution notes
 

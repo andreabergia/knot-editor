@@ -247,45 +247,56 @@ impl ProductExtensionHost {
                 }
                 cx.notify();
             });
+            let report_host = this.clone();
+            let mut report_cx = cx.clone();
             let report = DependencyPlan::new(discovered)
-                .execute(|package| {
-                    let id = next_extension_id.fetch_add(1, Ordering::Relaxed);
-                    assert_ne!(id, u64::MAX, "extension identity exhausted");
-                    let key = ExtensionKey::new(ExtensionId::new(id), ExtensionLifecycleId::new(1));
-                    let graph = graph_for_package(package);
-                    let execution = graph.and_then(|graph| {
-                        this.update(cx, |host, _| host.load_package(key, graph))
-                            .map_err(|error| error.to_string())?
-                    });
-                    let rollback_pool = pool.clone();
-                    let rollback_host = this.clone();
-                    let mut rollback_cx = cx.clone();
-                    StartupAttempt::new(
-                        async move {
-                            execution?
-                                .await
-                                .map(|_| ())
-                                .map_err(|error| error.to_string())
-                        },
-                        move || {
-                            let _ = rollback_pool.unload(key);
-                            let _ = rollback_host.update(&mut rollback_cx, |host, cx| {
-                                host.remove_lifecycle(key, cx);
-                            });
-                        },
-                    )
-                })
+                .execute_with_progress(
+                    |package| {
+                        let id = next_extension_id.fetch_add(1, Ordering::Relaxed);
+                        assert_ne!(id, u64::MAX, "extension identity exhausted");
+                        let key =
+                            ExtensionKey::new(ExtensionId::new(id), ExtensionLifecycleId::new(1));
+                        let graph = graph_for_package(package);
+                        let execution = graph.and_then(|graph| {
+                            this.update(cx, |host, _| host.load_package(key, graph))
+                                .map_err(|error| error.to_string())?
+                        });
+                        let rollback_pool = pool.clone();
+                        let rollback_host = this.clone();
+                        let mut rollback_cx = cx.clone();
+                        StartupAttempt::new(
+                            async move {
+                                execution?
+                                    .await
+                                    .map(|_| ())
+                                    .map_err(|error| error.to_string())
+                            },
+                            move || {
+                                let _ = rollback_pool.unload(key);
+                                let _ = rollback_host.update(&mut rollback_cx, |host, cx| {
+                                    host.remove_lifecycle(key, cx);
+                                });
+                            },
+                        )
+                    },
+                    |entry| {
+                        let name = entry.name.as_deref().unwrap_or("<invalid package>");
+                        match &entry.result {
+                            LoadResult::Loaded => eprintln!("[knot] extension loaded: {name}"),
+                            LoadResult::Failed(cause) => eprintln!(
+                                "[knot] extension failed: {name} ({}): {cause}",
+                                entry.directory.display()
+                            ),
+                        }
+                        let _ = report_host.update(&mut report_cx, |host, cx| {
+                            if let Some(snapshot) = &mut host.startup_report {
+                                snapshot.report.entries.push(entry.clone());
+                            }
+                            cx.notify();
+                        });
+                    },
+                )
                 .await;
-            for entry in &report.entries {
-                let name = entry.name.as_deref().unwrap_or("<invalid package>");
-                match &entry.result {
-                    LoadResult::Loaded => eprintln!("[knot] extension loaded: {name}"),
-                    LoadResult::Failed(cause) => eprintln!(
-                        "[knot] extension failed: {name} ({}): {cause}",
-                        entry.directory.display()
-                    ),
-                }
-            }
             let _ = this.update(cx, |host, cx| {
                 if let Some(snapshot) = &mut host.startup_report {
                     snapshot.state = StartupState::Complete;

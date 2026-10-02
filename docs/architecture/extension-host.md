@@ -44,8 +44,10 @@ Filesystem discovery runs on gpui's background executor. The application
 plans dependencies, admits each lifecycle on the foreground, and awaits entry
 completion before loading its dependents. A failed or cancelled entry unloads
 its isolate and clears foreground command and provider registrations before
-another package starts. The product retains and displays the ordered startup
-report, including invalid packages and runtime failures.
+another package starts. The product publishes each startup outcome to the
+ordered report and stderr as it becomes known, including invalid packages and
+runtime failures. Known outcomes remain visible while a later entry awaits
+completion.
 
 V8 process initialization is idempotent and owned by `engine`. It must happen
 before creating scheduler workers, because every thread that may lock a shared

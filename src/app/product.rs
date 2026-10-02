@@ -3497,6 +3497,67 @@ mod tests {
     }
 
     #[gpui::test]
+    fn extension_startup_shows_known_outcomes_while_a_later_entry_is_pending(
+        cx: &mut TestAppContext,
+    ) {
+        let root = tempfile::tempdir().unwrap();
+        install_extension(
+            root.path(),
+            "@example/a-ready",
+            &[],
+            &[("main.js", "export {};")],
+        );
+        install_extension(
+            root.path(),
+            "@example/z-pending",
+            &[],
+            &[("main.js", "await new Promise(() => {});")],
+        );
+        let invalid = root.path().join("@example/invalid");
+        std::fs::create_dir_all(&invalid).unwrap();
+        std::fs::write(invalid.join("knot.jsonc"), "{ invalid").unwrap();
+
+        install_globals(cx);
+        let host = cx.update(super::super::extension_host::install);
+        host.update(cx, |host, cx| {
+            host.start_installed_extensions(root.path().to_path_buf(), cx)
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        loop {
+            cx.run_until_parked();
+            let report = cx
+                .read(super::super::extension_host::startup_report)
+                .unwrap();
+            if report.report.entries.len() == 2 {
+                assert_eq!(
+                    report.state,
+                    super::super::extension_host::StartupState::Loading
+                );
+                assert_eq!(report.report.entries[0].directory, invalid);
+                assert!(matches!(
+                    &report.report.entries[0].result,
+                    super::super::extension_load::LoadResult::Failed(cause)
+                        if cause.contains("invalid knot.jsonc")
+                ));
+                assert_eq!(
+                    report.report.entries[1].name.as_deref(),
+                    Some("@example/a-ready")
+                );
+                assert_eq!(
+                    report.report.entries[1].result,
+                    super::super::extension_load::LoadResult::Loaded
+                );
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "startup outcomes were not published"
+            );
+            std::thread::yield_now();
+        }
+    }
+
+    #[gpui::test]
     fn extension_startup_rescans_changed_directories_and_cleans_old_registrations(
         cx: &mut TestAppContext,
     ) {

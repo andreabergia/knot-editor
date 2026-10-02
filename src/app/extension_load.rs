@@ -113,17 +113,38 @@ impl DependencyPlan {
         }
     }
 
-    pub async fn execute<Start, F, C>(self, mut start: Start) -> LoadReport
+    pub async fn execute<Start, F, C>(self, start: Start) -> LoadReport
     where
         Start: FnMut(&InstalledPackage) -> StartupAttempt<F, C>,
         F: Future<Output = Result<(), String>>,
         C: FnOnce(),
     {
-        let mut entries = self.diagnostics;
+        self.execute_with_progress(start, |_| {}).await
+    }
+
+    pub async fn execute_with_progress<Start, F, C, Progress>(
+        self,
+        mut start: Start,
+        mut on_entry: Progress,
+    ) -> LoadReport
+    where
+        Start: FnMut(&InstalledPackage) -> StartupAttempt<F, C>,
+        F: Future<Output = Result<(), String>>,
+        C: FnOnce(),
+        Progress: FnMut(&LoadEntry),
+    {
+        let mut entries = Vec::new();
+        let mut record = |entry| {
+            on_entry(&entry);
+            entries.push(entry);
+        };
+        for diagnostic in self.diagnostics {
+            record(diagnostic);
+        }
         let mut outcomes = BTreeMap::<String, Result<(), String>>::new();
         for (name, cause) in self.failures {
             let package = &self.packages[&name];
-            entries.push(LoadEntry {
+            record(LoadEntry {
                 directory: package.directory.clone(),
                 name: Some(name.clone()),
                 result: LoadResult::Failed(cause.clone()),
@@ -160,7 +181,7 @@ impl DependencyPlan {
             } else {
                 start(package).finish().await
             };
-            entries.push(LoadEntry {
+            record(LoadEntry {
                 directory: package.directory.clone(),
                 name: Some(name.clone()),
                 result: match &result {
