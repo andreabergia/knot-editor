@@ -1,7 +1,6 @@
 # D018: Installable extension directories
 
-Status: checkpoint 4 implementation and automated validation complete; manual
-review gate pending.
+Status: complete. Automated validation and manual product review passed.
 
 ## Outcome and extension shape
 
@@ -130,7 +129,7 @@ imports fail. Errors retain generated source URL, line, and column, including
 the import site for resolution errors. The product `--fixture` path uses the
 package load API; benchmarks retain the diagnostic source API.
 
-### 4. Product startup and usable extension 🟡
+### 4. Product startup and usable extension ✅
 
 - ✅ Discover, validate, plan, and eagerly load installed directories when the
   product starts. Run filesystem work away from gpui's foreground thread and
@@ -145,7 +144,7 @@ package load API; benchmarks retain the diagnostic source API.
   directories. Run focused host/application tests and the applicable full
   suite. Update architecture and decisions for the resulting boundaries and
   rationale.
-- **Review gate:** use the on-disk extension in Knot and review the startup
+- ✅ **Review gate:** use the on-disk extension in Knot and review the startup
   report, test results, and docs before marking D018 complete.
 
 The checked-in [installed extension example](../../examples/extensions/README.md)
@@ -157,8 +156,8 @@ and rescanning changed directories. The native
 `extensions.show-startup-report` command and toolbar button display the
 package name, generated directory, outcome, and failure cause. Startup also
 prints each outcome to stderr. `cargo test --all-targets` passed with 395
-library tests and all binary test targets. The manual report and command review
-gate remains open.
+library tests and all binary test targets. Manual review of the installed
+example and startup report passed on 2026-10-02.
 
 ## Execution notes
 
