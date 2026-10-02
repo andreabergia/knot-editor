@@ -108,8 +108,7 @@ impl Position {
     }
 
     /// Construct a token from raw `(piece, offset)` fields. Exposed so
-    /// callers (step 5's anchored-range layer, the benchmark's remap
-    /// simulation) can build the *remapped* token produced by applying
+    /// callers can build the *remapped* token produced by applying
     /// the D7 rule to a `Split` record — `(Split::new_piece,
     /// old_offset - Split::split_offset)`. Step 4 itself never uses
     /// this; the only in-crate producer of tokens is `position_at`.
@@ -275,8 +274,7 @@ pub struct TextBuffer {
     line_starts: Option<Vec<usize>>,
     /// Append-only edit log (D7). Each `insert` / `delete` pushes one
     /// `BufferEdit`. `replace` decomposes into a delete-then-insert pair
-    /// and pushes two. The log is unbounded; compaction is deferred
-    /// behind a benchmark number and `take_edits`.
+    /// and pushes two. The log is unbounded until `take_edits` drains it.
     edits: Vec<BufferEdit>,
 }
 
@@ -334,14 +332,6 @@ impl TextBuffer {
     /// transactions against being replayed against another buffer.
     pub(crate) fn instance_id(&self) -> u64 {
         self.instance_id
-    }
-
-    /// Number of pieces currently in the piece chain. Diagnostic only:
-    /// the chain grows under interior edits and is never coalesced (D7);
-    /// this count is exposed so benchmarks can report table size without
-    /// a separate internal probe. Not load-bearing for any operation.
-    pub fn piece_count(&self) -> usize {
-        self.pieces.len()
     }
 
     /// Whether the logical text is empty.

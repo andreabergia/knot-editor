@@ -12,8 +12,8 @@
 //!   - `resolve-all`    resolve every annotation (10k/frame) cost
 //!   - `query`          random `query_range` hits cost
 //!
-//! Output is one TSV summary line per workload, matching `core-bench`'s
-//! shape: `<fixture>\t<workload>\tkey=val\t...`.
+//! Output is one TSV summary line per workload:
+//! `<fixture>\t<workload>\tkey=val\t...`.
 //!
 //! ## Default vs full configuration
 //!

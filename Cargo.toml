@@ -37,10 +37,6 @@ name = "step3-gpui"
 path = "src/step3/gpui/main.rs"
 
 [[bin]]
-name = "core-bench"
-path = "src/bin/core_bench.rs"
-
-[[bin]]
 name = "anno-bench"
 path = "src/bin/anno_bench.rs"
 

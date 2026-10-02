@@ -1,6 +1,6 @@
 # Bench fixtures
 
-Version-controlled fixtures for the core and annotation benchmarks. Each
+Version-controlled fixtures for the annotation benchmark. Each
 fixture is a `.kfx` file in the format understood by
 `src/fixture.rs`:
 
@@ -43,6 +43,5 @@ The tokenizer is a coarse regex approximation, not a syntax highlighter.
 ## Running
 
 ```
-cargo run --bin core-bench -- --fixture bench/fixtures/rust_sample.kfx --duration 5
 cargo run --bin anno-bench -- --fixture bench/fixtures/rust_sample.kfx --duration 5
 ```
