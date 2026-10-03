@@ -738,7 +738,7 @@ impl ProductExtensionHost {
             .model()
             .clone();
         let buffer = self.buffers.open_buffer(&model);
-        if !self.buffer_observers.contains_key(&buffer) {
+        self.buffer_observers.entry(buffer).or_insert_with(|| {
             let observer = cx.observe(&model, |this, model, cx| {
                 for dispatch in this.buffers.drain_model_changes(&model, cx) {
                     let _ = this.pool.dispatch_buffer_change(
@@ -748,8 +748,8 @@ impl ProductExtensionHost {
                     );
                 }
             });
-            self.buffer_observers.insert(buffer, observer);
-        }
+            observer
+        });
         Some(buffer)
     }
 
