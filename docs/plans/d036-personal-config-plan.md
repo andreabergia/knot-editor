@@ -1,6 +1,6 @@
 # D036: Personal JavaScript configuration
 
-Status: proposed. Design agreed in discussion; implementation has not begun.
+Status: in progress. Checkpoint 1 is ready for review.
 
 Source: [D003's deferred keymap need](../roadmap.md). This plan establishes
 personal configuration independently; JavaScript-defined keymaps will have a
@@ -49,7 +49,7 @@ from the failed launch remain active.
 
 ## Checkpoints
 
-### 1. Config source and phase contract ⬜
+### 1. Config source and phase contract ✅
 
 - Resolve one platform-appropriate per-user config directory, injectable for
   tests. Capture `.js` and `.mjs` sources without blocking the foreground.
@@ -59,6 +59,16 @@ from the failed launch remain active.
 - Test empty config, either phase alone, local imports, path escape, and read
   failures.
 - **Review gate:** inspect the directory layout and diagnostic contract.
+
+Implemented source layout: the platform `Knot` config directory contains
+optional `pre-init.js` and `post-init.js` entries, with relative `.js` and
+`.mjs` imports below that directory. Capture runs through the application
+boundary on a caller-provided directory; product startup will schedule it on
+the background executor in checkpoint 3. The host compiles reachable modules
+without evaluating them to validate syntax and static imports. Diagnostics
+carry the phase, path, optional line and column, and cause. Checkpoint 1 tests
+cover optional entries, local imports, escapes, missing imports, invalid syntax,
+and read failures. Review gate pending inspection.
 
 ### 2. One lifecycle with two ordered module evaluations ⬜
 

@@ -2893,6 +2893,22 @@ fn clear_module_registry(state: &RuntimeLocalState) {
     registry.sources.clear();
 }
 
+/// Check syntax and static imports without evaluating user code. The caller
+/// supplies an immutable graph and runs this away from the foreground thread.
+pub(crate) fn validate_module_graph(graph: &ModuleGraph) -> Result<(), RuntimeError> {
+    initialize();
+    let mut isolate = v8::Isolate::new(Default::default());
+    let scope = pin!(v8::HandleScope::new(&mut isolate));
+    let mut scope = scope.init();
+    let context = v8::Context::new(&scope, Default::default());
+    let scope = &mut v8::ContextScope::new(&mut scope, context);
+    v8::tc_scope!(let try_catch, scope);
+    let mut modules = ModuleRegistry::new(Some(graph));
+    compile_module_graph(try_catch, &mut modules, graph.entry())
+        .map(|_| ())
+        .map_err(|failure| failure.report(try_catch, graph.entry()))
+}
+
 fn compile_module_graph(
     scope: &mut v8::PinScope<'_, '_>,
     registry: &mut ModuleRegistry,

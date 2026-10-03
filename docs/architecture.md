@@ -25,6 +25,9 @@ gpui application and views        extension runtimes
   before they enter an extension isolate.
 - `app::extension_package` owns installed-directory manifest discovery and
   captures package-local JavaScript sources without entering V8.
+- `app::personal_config` resolves the per-user config directory and captures
+  optional phase entries and contained JavaScript sources. The host validates
+  reachable static module graphs without evaluating them.
 - `app::extension_load` plans dependency order and records startup outcomes
   using Knot-owned package data and a rollback guard for each attempted load.
 

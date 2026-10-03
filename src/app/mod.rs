@@ -51,6 +51,11 @@ mod history;
 )]
 pub mod model;
 mod open;
+#[allow(
+    dead_code,
+    reason = "the config source contract is exercised independently of product startup"
+)]
+mod personal_config;
 mod product;
 mod product_commands;
 #[allow(
