@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 250 250" role="img" aria-labelledby="title">
+  <title id="title">Knot app icon</title>
+  <rect width="250" height="250" rx="46" fill="#d4dd7d"/>
+  <path d="M70 48 H164 L194 78 V205 H70 Z M164 49 V78 H194" fill="none" stroke="#493b35" stroke-width="11" stroke-linejoin="round"/>
+  <path d="M125 124 C138 139 145 145 160 142 C170 139 173 128 181 128" fill="none" stroke="#1c5e34" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M125 124 C128 128 131 132 134 135" fill="none" stroke="#d4dd7d" stroke-width="17"/>
+  <path d="M89 145 H110 C124 145 129 128 136 116 C150 104 149 88 131 88 C112 88 109 110 125 124" fill="none" stroke="#1c5e34" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M91 172 H143" fill="none" stroke="#493b35" stroke-width="9" stroke-linecap="round"/>
+</svg>
