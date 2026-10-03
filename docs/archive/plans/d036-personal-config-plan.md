@@ -2,7 +2,7 @@
 
 Status: completed. All checkpoint review gates passed on 2026-10-04.
 
-Source: [D003's deferred keymap need](../roadmap.md). This plan establishes
+Source: [D003's deferred keymap need](../../roadmap.md). This plan establishes
 personal configuration independently; JavaScript-defined keymaps will have a
 separate design session and plan.
 
