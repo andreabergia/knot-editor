@@ -260,7 +260,7 @@ mod tests {
     use std::future::{Future, pending, ready};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::task::{Context, Poll, Wake, Waker};
+    use std::task::{Context, Poll, Waker};
 
     use super::*;
     use crate::app::extension_package::{Manifest, discover};
@@ -449,11 +449,6 @@ mod tests {
         );
     }
 
-    struct Noop;
-    impl Wake for Noop {
-        fn wake(self: Arc<Self>) {}
-    }
-
     #[test]
     fn cancellation_drops_the_active_startup_and_rolls_it_back() {
         let rolled_back = Arc::new(AtomicUsize::new(0));
@@ -464,9 +459,8 @@ mod tests {
                 rollback.fetch_add(1, Ordering::SeqCst);
             })
         }));
-        let waker = Waker::from(Arc::new(Noop));
         assert!(matches!(
-            run.as_mut().poll(&mut Context::from_waker(&waker)),
+            run.as_mut().poll(&mut Context::from_waker(Waker::noop())),
             Poll::Pending
         ));
         drop(run);
