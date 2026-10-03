@@ -1027,7 +1027,7 @@ mod tests {
         const N: usize = 200;
         let mut o_start = Vec::with_capacity(N);
         let mut o_end = Vec::with_capacity(N);
-        let mut o_collapsed = vec![false; N];
+        let mut o_collapsed = [false; N];
         let mut ids = Vec::with_capacity(N);
         for _ in 0..N {
             let s = rng.below(b.len() + 1);
