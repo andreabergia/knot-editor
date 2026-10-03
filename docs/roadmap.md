@@ -174,15 +174,16 @@ the item is removed from this register.
 - **D028 — Linux framework checkpoint**
   - Deferred: Initial product dogfooding targets macOS.
   - Reconsider: The macOS editing slice is usable; Linux remains required
-    before broader production claims. Check the resolved personal config paths,
-    XDG precedence, and source capture with Linux tests and a product launch.
+    before broader production claims. Verify the actual Linux personal config
+    directory values and XDG precedence with Linux tests, then test source
+    capture and a product launch on Linux.
 
 - **D029 — Windows product polish**
   - Deferred: The framework path passed its portability checkpoint, not product
     validation.
-  - Reconsider: Windows becomes a supported dogfooding platform. Check the
-    resolved personal config paths, XDG precedence, and source capture with
-    Windows tests and a product launch.
+  - Reconsider: Windows becomes a supported dogfooding platform. Verify the
+    actual Windows personal config directory values and XDG precedence with
+    Windows tests, then test source capture and a product launch on Windows.
 
 - **D030 — Accessibility bridge**
   - Deferred: gpui lacks the public platform bridge required by the semantic
