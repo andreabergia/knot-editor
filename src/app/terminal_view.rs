@@ -539,5 +539,7 @@ fn hex_rgb(color: u32) -> Rgb {
 
 fn dim(color: u32) -> u32 {
     let rgb = hex_rgb(color);
-    (u32::from(rgb.r) * 2 / 3 << 16) | (u32::from(rgb.g) * 2 / 3 << 8) | u32::from(rgb.b) * 2 / 3
+    ((u32::from(rgb.r) * 2 / 3) << 16)
+        | ((u32::from(rgb.g) * 2 / 3) << 8)
+        | (u32::from(rgb.b) * 2 / 3)
 }
