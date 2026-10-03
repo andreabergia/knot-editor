@@ -68,14 +68,14 @@ impl EditHistory {
     pub(crate) fn apply_replace(
         &mut self,
         buffer: &mut TextBuffer,
-        range: Range<usize>,
-        text: &str,
+        edit: (Range<usize>, &str),
         grouping: Option<EditGrouping>,
         now: Instant,
-        before_state: u64,
-        after_state: u64,
+        state_change: (u64, u64),
         view: Option<HistoryViewChange>,
     ) {
+        let (range, text) = edit;
+        let (before_state, after_state) = state_change;
         self.redo.clear();
         if let Some(grouping) = grouping
             && self
@@ -236,12 +236,10 @@ mod tests {
         for (at, text) in [(0, "a"), (1, "β"), (3, "c")] {
             history.apply_replace(
                 &mut buffer,
-                at..at,
-                text,
+                (at..at, text),
                 Some(grouping(1, EditGroupKind::Typing)),
                 now,
-                0,
-                1,
+                (0, 1),
                 None,
             );
         }
@@ -253,12 +251,10 @@ mod tests {
         for range in [3..4, 1..3, 0..1] {
             history.apply_replace(
                 &mut buffer,
-                range,
-                "",
+                (range, ""),
                 Some(grouping(1, EditGroupKind::DeleteBackward)),
                 now,
-                1,
-                2,
+                (1, 2),
                 None,
             );
         }
@@ -268,12 +264,10 @@ mod tests {
         for range in [0..1, 0..2, 0..1] {
             history.apply_replace(
                 &mut buffer,
-                range,
-                "",
+                (range, ""),
                 Some(grouping(1, EditGroupKind::DeleteForward)),
                 now,
-                1,
-                2,
+                (1, 2),
                 None,
             );
         }
@@ -288,35 +282,29 @@ mod tests {
         let mut history = EditHistory::default();
         history.apply_replace(
             &mut buffer,
-            0..0,
-            "a",
+            (0..0, "a"),
             Some(grouping(1, EditGroupKind::Typing)),
             now,
-            0,
-            1,
+            (0, 1),
             None,
         );
         history.break_group();
         history.apply_replace(
             &mut buffer,
-            1..1,
-            "b",
+            (1..1, "b"),
             Some(grouping(1, EditGroupKind::Typing)),
             now,
-            1,
-            2,
+            (1, 2),
             None,
         );
         assert!(history.undo(&mut buffer).is_some());
         assert_eq!(buffer.read_range(0..buffer.len()), "a");
         history.apply_replace(
             &mut buffer,
-            1..1,
-            "c",
+            (1..1, "c"),
             Some(grouping(1, EditGroupKind::Typing)),
             now,
-            1,
-            3,
+            (1, 3),
             None,
         );
         assert!(history.redo(&mut buffer).is_none());
@@ -331,32 +319,26 @@ mod tests {
         let mut history = EditHistory::default();
         history.apply_replace(
             &mut buffer,
-            0..0,
-            "a",
+            (0..0, "a"),
             Some(grouping(1, EditGroupKind::Typing)),
             now,
-            0,
-            1,
+            (0, 1),
             None,
         );
         history.apply_replace(
             &mut buffer,
-            1..1,
-            "b",
+            (1..1, "b"),
             Some(grouping(2, EditGroupKind::Typing)),
             now,
-            1,
-            2,
+            (1, 2),
             None,
         );
         history.apply_replace(
             &mut buffer,
-            2..2,
-            "c",
+            (2..2, "c"),
             Some(grouping(2, EditGroupKind::Typing)),
             now + GROUPING_TIMEOUT + Duration::from_millis(1),
-            2,
-            3,
+            (2, 3),
             None,
         );
         assert!(history.undo(&mut buffer).is_some());
@@ -373,15 +355,13 @@ mod tests {
         let mut buffer = TextBuffer::from_text("");
         let mut history = EditHistory::default();
         let composition = Some(grouping(1, EditGroupKind::Composition));
-        history.apply_replace(&mut buffer, 0..0, "に", composition, now, 0, 1, None);
+        history.apply_replace(&mut buffer, (0..0, "に"), composition, now, (0, 1), None);
         history.apply_replace(
             &mut buffer,
-            0.."に".len(),
-            "日本",
+            (0.."に".len(), "日本"),
             composition,
             now + GROUPING_TIMEOUT + Duration::from_secs(5),
-            1,
-            2,
+            (1, 2),
             None,
         );
 
@@ -408,12 +388,10 @@ mod tests {
         };
         history.apply_replace(
             &mut buffer,
-            1..3,
-            "x",
+            (1..3, "x"),
             Some(grouping(7, EditGroupKind::Typing)),
             now,
-            0,
-            1,
+            (0, 1),
             Some(first.clone()),
         );
         let last = HistoryViewChange {
@@ -426,12 +404,10 @@ mod tests {
         };
         history.apply_replace(
             &mut buffer,
-            2..2,
-            "y",
+            (2..2, "y"),
             Some(grouping(7, EditGroupKind::Typing)),
             now,
-            1,
-            2,
+            (1, 2),
             Some(last.clone()),
         );
 

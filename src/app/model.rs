@@ -569,12 +569,10 @@ impl BufferModel {
         let after_state = self.allocate_content_state();
         self.history.apply_replace(
             &mut self.buffer,
-            range,
-            text,
+            (range, text),
             grouping,
             Instant::now(),
-            before_state,
-            after_state,
+            (before_state, after_state),
             view,
         );
         self.content_state = after_state;

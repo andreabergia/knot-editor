@@ -864,8 +864,7 @@ impl ProductShell {
                                 &capture,
                                 title,
                                 uri.clone(),
-                                version,
-                                revision,
+                                (version, revision),
                             )
                         });
                         let outcome = if committed {
@@ -1045,8 +1044,7 @@ impl ProductShell {
                                             &capture,
                                             title,
                                             uri.clone(),
-                                            version,
-                                            loaded_revision,
+                                            (version, loaded_revision),
                                         )
                                     }) {
                                         this.status = format!("reloaded {uri}").into();

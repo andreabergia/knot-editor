@@ -281,9 +281,9 @@ impl DocumentCollection {
         capture: &PersistenceCapture,
         title: impl Into<SharedString>,
         uri: ResourceUri,
-        version: ResourceVersion,
-        revision: u64,
+        persisted_state: (ResourceVersion, u64),
     ) -> bool {
+        let (version, revision) = persisted_state;
         if self
             .resources
             .get(&uri)
@@ -453,8 +453,7 @@ mod tests {
             &capture,
             "new.txt",
             destination_uri.clone(),
-            version(2),
-            0,
+            (version(2), 0),
         ));
         assert!(matches!(
             documents.get(destination_id).unwrap().state(),
@@ -470,8 +469,7 @@ mod tests {
             &capture,
             "untitled.txt",
             untitled_uri.clone(),
-            version(3),
-            untitled_revision,
+            (version(3), untitled_revision),
         ));
         let document = documents.get(untitled_id).unwrap();
         assert_eq!(document.title(), "untitled.txt");
@@ -509,8 +507,7 @@ mod tests {
             &capture,
             "notes.txt",
             uri.clone(),
-            version(2),
-            0,
+            (version(2), 0),
         ));
         assert!(matches!(
             documents.get(untitled).unwrap().state(),
@@ -546,8 +543,7 @@ mod tests {
             &stale,
             "notes.txt",
             uri.clone(),
-            version(2),
-            1,
+            (version(2), 1),
         ));
         assert!(!documents.finish_persistence(
             DocumentId(u64::MAX),
@@ -555,8 +551,7 @@ mod tests {
             &current,
             "notes.txt",
             uri.clone(),
-            version(2),
-            1,
+            (version(2), 1),
         ));
         assert_eq!(
             documents.get(id).unwrap().state().persisted_revision(),
@@ -580,8 +575,7 @@ mod tests {
             &capture,
             "new.txt",
             new_uri.clone(),
-            version(2),
-            0,
+            (version(2), 0),
         ));
         assert_eq!(documents.document_for_resource(&old_uri), None);
         assert_eq!(documents.document_for_resource(&new_uri), Some(id));
@@ -606,8 +600,7 @@ mod tests {
             &capture,
             "notes.txt",
             uri.clone(),
-            version(2),
-            captured_revision,
+            (version(2), captured_revision),
         ));
         let document = documents.get(id).unwrap();
         assert_eq!(
