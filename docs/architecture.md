@@ -62,6 +62,10 @@ The application then loads valid packages in dependency order, keeps the
 startup report, and removes foreground registrations when a load fails or an
 extension unloads. Product windows expose the report through a native command
 and toolbar control.
+Product launch captures personal config off the foreground, awaits pre-init,
+installed extensions, and post-init, then opens queued product windows. Fatal
+config failures unload every startup lifecycle and show a dedicated diagnostic
+window while product windows remain unavailable.
 
 ## Subsystem references
 

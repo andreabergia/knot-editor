@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use directories::{BaseDirs, ProjectDirs};
 
+use crate::host::engine::RuntimeError;
 use crate::host::{engine::validate_module_graph_entry, module_graph::ModuleGraph};
 
 const PRE_INIT: &str = "pre-init.js";
@@ -26,6 +27,13 @@ impl ConfigPhase {
             Self::PostInit => POST_INIT,
         }
     }
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::PreInit => "Pre-init",
+            Self::PostInit => "Post-init",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -35,23 +43,75 @@ pub(crate) struct ConfigDiagnostic {
     pub(crate) line: Option<u32>,
     pub(crate) column: Option<u32>,
     pub(crate) cause: String,
+    pub(crate) stack: Option<String>,
 }
 
 impl ConfigDiagnostic {
-    fn new(phase: Option<ConfigPhase>, path: &Path, cause: impl Into<String>) -> Self {
+    pub(crate) fn new(phase: Option<ConfigPhase>, path: &Path, cause: impl Into<String>) -> Self {
         Self {
             phase,
             path: path.to_path_buf(),
             line: None,
             column: None,
             cause: cause.into(),
+            stack: None,
         }
+    }
+
+    pub(crate) fn from_runtime(
+        phase: ConfigPhase,
+        directory: &Path,
+        canonical_directory: &Path,
+        error: &RuntimeError,
+    ) -> Self {
+        let path = error
+            .source()
+            .and_then(|source| url::Url::parse(source).ok())
+            .and_then(|url| url.to_file_path().ok())
+            .map(|path| {
+                path.strip_prefix(canonical_directory)
+                    .map(|relative| directory.join(relative))
+                    .unwrap_or(path)
+            })
+            .unwrap_or_else(|| directory.join(phase.entry()));
+        Self {
+            phase: Some(phase),
+            path,
+            line: error.line(),
+            column: error.column(),
+            cause: error
+                .message()
+                .replace("extension import", "configuration import")
+                .replace("package", "configuration"),
+            stack: error.stack().map(str::to_owned),
+        }
+    }
+
+    pub(crate) fn clipboard_text(&self) -> String {
+        let phase = self.phase.map(ConfigPhase::label).unwrap_or("Discovery");
+        let mut location = self.path.display().to_string();
+        if let Some(line) = self.line {
+            location.push_str(&format!(":{line}"));
+            if let Some(column) = self.column {
+                location.push_str(&format!(":{column}"));
+            }
+        }
+        let mut diagnostic = format!(
+            "Knot personal configuration failed during {phase}\n{location}\n{}",
+            self.cause
+        );
+        if let Some(stack) = &self.stack {
+            diagnostic.push('\n');
+            diagnostic.push_str(stack);
+        }
+        diagnostic
     }
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct ConfigSources {
     pub(crate) directory: PathBuf,
+    canonical_directory: PathBuf,
     pub(crate) pre_init: bool,
     pub(crate) post_init: bool,
     /// Slash-separated paths relative to the config directory.
@@ -60,6 +120,10 @@ pub(crate) struct ConfigSources {
 }
 
 impl ConfigSources {
+    pub(crate) fn canonical_directory(&self) -> &Path {
+        &self.canonical_directory
+    }
+
     pub(crate) fn into_graph(self) -> Option<ModuleGraph> {
         self.graph
     }
@@ -99,6 +163,7 @@ fn select_config_root(native: &Path, home: Option<&Path>, xdg_home: Option<&OsSt
 pub(crate) fn capture(directory: &Path) -> Result<ConfigSources, ConfigDiagnostic> {
     let mut captured = ConfigSources {
         directory: directory.to_path_buf(),
+        canonical_directory: directory.to_path_buf(),
         pre_init: false,
         post_init: false,
         sources: BTreeMap::new(),
@@ -118,6 +183,7 @@ pub(crate) fn capture(directory: &Path) -> Result<ConfigSources, ConfigDiagnosti
     }
     let canonical = fs::canonicalize(directory)
         .map_err(|error| ConfigDiagnostic::new(None, directory, error.to_string()))?;
+    captured.canonical_directory = canonical.clone();
     for phase in [ConfigPhase::PreInit, ConfigPhase::PostInit] {
         let path = directory.join(phase.entry());
         match fs::symlink_metadata(&path) {
@@ -157,26 +223,7 @@ pub(crate) fn capture(directory: &Path) -> Result<ConfigSources, ConfigDiagnosti
             continue;
         }
         validate_module_graph_entry(&graph, phase.entry()).map_err(|error| {
-            let path = error
-                .source()
-                .and_then(|source| url::Url::parse(source).ok())
-                .and_then(|url| url.to_file_path().ok())
-                .map(|path| {
-                    path.strip_prefix(&canonical)
-                        .map(|relative| directory.join(relative))
-                        .unwrap_or(path)
-                })
-                .unwrap_or_else(|| directory.join(phase.entry()));
-            ConfigDiagnostic {
-                phase: Some(phase),
-                path,
-                line: error.line(),
-                column: error.column(),
-                cause: error
-                    .message()
-                    .replace("extension import", "configuration import")
-                    .replace("package", "configuration"),
-            }
+            ConfigDiagnostic::from_runtime(phase, directory, &canonical, &error)
         })?;
     }
     captured.graph = Some(graph);

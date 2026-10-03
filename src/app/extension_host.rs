@@ -13,7 +13,7 @@ use gpui::{App, AppContext, Context, Entity, Global, Subscription, Task};
 
 use crate::host::{
     lifecycle::ExtensionKey,
-    module_graph::ModuleGraph,
+    module_graph::{ConfigPhase as HostConfigPhase, ModuleGraph},
     pool::{
         ExtensionConfig, ExtensionEvent, ExtensionEventInbox, ExtensionExecution, ExtensionPool,
     },
@@ -29,7 +29,8 @@ use super::{
     extension_load::{DependencyPlan, LoadEntry, LoadReport, LoadResult, StartupAttempt},
     extension_package::{self, InstalledPackage},
     extension_semantics::ExtensionSemanticBridge,
-    product::ProductShell,
+    personal_config::{self, ConfigDiagnostic, ConfigPhase},
+    product::{self, ProductShell},
     product_commands::{ApplicationProductCommands, ProductCommandTarget},
     tree_view::{TreeView, TreeViewEvent},
 };
@@ -160,6 +161,8 @@ pub(crate) struct ProductExtensionHost {
     _event_task: Task<()>,
     startup_report: Option<StartupReportSnapshot>,
     _startup_task: Option<Task<()>>,
+    _personal_startup_task: Option<Task<()>>,
+    personal_config_key: Option<ExtensionKey>,
     next_extension_id: Arc<AtomicU64>,
 }
 
@@ -210,20 +213,37 @@ impl ProductExtensionHost {
             _event_task: event_task,
             startup_report: None,
             _startup_task: None,
+            _personal_startup_task: None,
+            personal_config_key: None,
             next_extension_id: Arc::new(AtomicU64::new(1)),
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn start_installed_extensions(&mut self, root: PathBuf, cx: &mut Context<Self>) {
+        let _ = self.start_installed_extensions_with_completion(root, cx);
+    }
+
+    fn start_installed_extensions_with_completion(
+        &mut self,
+        root: PathBuf,
+        cx: &mut Context<Self>,
+    ) -> Option<tokio::sync::oneshot::Receiver<()>> {
         if self
             .startup_report
             .as_ref()
             .is_some_and(|snapshot| snapshot.state != StartupState::Complete)
         {
-            return;
+            return None;
         }
+        let (done_sender, done_receiver) = tokio::sync::oneshot::channel();
         self._startup_task.take();
-        let previous = self.lifecycles.iter().copied().collect::<Vec<_>>();
+        let previous = self
+            .lifecycles
+            .iter()
+            .copied()
+            .filter(|key| Some(*key) != self.personal_config_key)
+            .collect::<Vec<_>>();
         for key in previous {
             let _ = self.pool.unload(key);
             self.remove_lifecycle(key, cx);
@@ -304,7 +324,9 @@ impl ProductExtensionHost {
                 }
                 cx.notify();
             });
+            let _ = done_sender.send(());
         }));
+        Some(done_receiver)
     }
 
     pub(crate) fn report_extensions_root_error(&mut self, cause: String, cx: &mut Context<Self>) {
@@ -321,6 +343,164 @@ impl ProductExtensionHost {
         });
         eprintln!("[knot] cannot locate installed extensions: {cause}");
         cx.notify();
+    }
+
+    pub(crate) fn start_product_startup(
+        &mut self,
+        config_root: Option<PathBuf>,
+        extensions_root: Result<PathBuf, String>,
+        cx: &mut Context<Self>,
+    ) {
+        let capture = cx.background_executor().spawn(async move {
+            let root = match config_root {
+                Some(root) => root,
+                None => personal_config::user_config_root().map_err(|cause| {
+                    ConfigDiagnostic::new(None, &PathBuf::from("<user configuration>"), cause)
+                })?,
+            };
+            personal_config::capture(&root).map(|sources| (root, sources))
+        });
+        self._personal_startup_task = Some(cx.spawn(async move |this, cx| {
+            let result: Result<(), ConfigDiagnostic> = async {
+                let (config_root, captured) = capture.await?;
+                let canonical_config_root = captured.canonical_directory().to_path_buf();
+                let pre_init = captured.pre_init;
+                let post_init = captured.post_init;
+                let config_key = if let Some(graph) = captured.into_graph() {
+                    let key = ExtensionKey::new(ExtensionId::new(0), ExtensionLifecycleId::new(1));
+                    let loaded = this
+                        .update(cx, |host, _| host.load_personal_config(key, graph))
+                        .map_err(|error| {
+                            ConfigDiagnostic::new(None, &config_root, error.to_string())
+                        })?;
+                    loaded.map_err(|cause| ConfigDiagnostic::new(None, &config_root, cause))?;
+                    Some(key)
+                } else {
+                    None
+                };
+                if pre_init {
+                    let key = config_key.expect("pre-init has a loaded config graph");
+                    let execution = this
+                        .update(cx, |host, _| {
+                            host.evaluate_personal_config_phase(key, HostConfigPhase::PreInit)
+                        })
+                        .map_err(|error| {
+                            ConfigDiagnostic::new(
+                                Some(ConfigPhase::PreInit),
+                                &config_root.join(ConfigPhase::PreInit.entry()),
+                                error.to_string(),
+                            )
+                        })?
+                        .map_err(|cause| {
+                            ConfigDiagnostic::new(
+                                Some(ConfigPhase::PreInit),
+                                &config_root.join(ConfigPhase::PreInit.entry()),
+                                cause,
+                            )
+                        })?;
+                    execution.await.map_err(|error| {
+                        ConfigDiagnostic::from_runtime(
+                            ConfigPhase::PreInit,
+                            &config_root,
+                            &canonical_config_root,
+                            &error,
+                        )
+                    })?;
+                }
+                match extensions_root {
+                    Ok(root) => {
+                        let done = this
+                            .update(cx, |host, cx| {
+                                host.start_installed_extensions_with_completion(root, cx)
+                            })
+                            .map_err(|error| {
+                                ConfigDiagnostic::new(None, &config_root, error.to_string())
+                            })?
+                            .ok_or_else(|| {
+                                ConfigDiagnostic::new(
+                                    None,
+                                    &config_root,
+                                    "installed extension startup is already running",
+                                )
+                            })?;
+                        done.await.map_err(|error| {
+                            ConfigDiagnostic::new(None, &config_root, error.to_string())
+                        })?;
+                    }
+                    Err(cause) => {
+                        let _ = this
+                            .update(cx, |host, cx| host.report_extensions_root_error(cause, cx));
+                    }
+                }
+                if post_init {
+                    let key = config_key.expect("post-init has a loaded config graph");
+                    let execution = this
+                        .update(cx, |host, _| {
+                            host.evaluate_personal_config_phase(key, HostConfigPhase::PostInit)
+                        })
+                        .map_err(|error| {
+                            ConfigDiagnostic::new(
+                                Some(ConfigPhase::PostInit),
+                                &config_root.join(ConfigPhase::PostInit.entry()),
+                                error.to_string(),
+                            )
+                        })?
+                        .map_err(|cause| {
+                            ConfigDiagnostic::new(
+                                Some(ConfigPhase::PostInit),
+                                &config_root.join(ConfigPhase::PostInit.entry()),
+                                cause,
+                            )
+                        })?;
+                    execution.await.map_err(|error| {
+                        ConfigDiagnostic::from_runtime(
+                            ConfigPhase::PostInit,
+                            &config_root,
+                            &canonical_config_root,
+                            &error,
+                        )
+                    })?;
+                }
+                Ok(())
+            }
+            .await;
+            if result.is_err() {
+                let _ = this.update(cx, |host, cx| host.abort_product_startup(cx));
+            }
+            let _ = cx.update(|cx| product::finish_product_startup(result, cx));
+        }));
+    }
+
+    fn load_personal_config(
+        &mut self,
+        key: ExtensionKey,
+        graph: ModuleGraph,
+    ) -> Result<(), String> {
+        self.pool
+            .load_personal_config(key, ExtensionConfig::default(), graph)
+            .map_err(|error| error.to_string())?;
+        self.personal_config_key = Some(key);
+        self.admit_lifecycle(key);
+        Ok(())
+    }
+
+    fn evaluate_personal_config_phase(
+        &self,
+        key: ExtensionKey,
+        phase: HostConfigPhase,
+    ) -> Result<ExtensionExecution, String> {
+        self.pool
+            .evaluate_personal_config_phase(key, phase)
+            .map_err(|error| error.to_string())
+    }
+
+    fn abort_product_startup(&mut self, cx: &mut Context<Self>) {
+        let lifecycles = self.lifecycles.iter().copied().collect::<Vec<_>>();
+        for key in lifecycles {
+            let _ = self.pool.unload(key);
+            self.remove_lifecycle(key, cx);
+        }
+        self.personal_config_key = None;
     }
 
     fn load_package(
@@ -342,6 +522,11 @@ impl ProductExtensionHost {
             self.commands.admit_lifecycle(key.extension, key.lifecycle);
             self.semantics.admit_lifecycle(key.extension, key.lifecycle);
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn lifecycle_count(&self) -> usize {
+        self.lifecycles.len()
     }
 
     pub(crate) fn start_diagnostic_fixture(&mut self, name: &str, cx: &mut Context<Self>) {
@@ -755,6 +940,9 @@ impl ProductExtensionHost {
     fn remove_lifecycle(&mut self, key: ExtensionKey, cx: &mut Context<Self>) {
         if !self.lifecycles.remove(&key) {
             return;
+        }
+        if self.personal_config_key == Some(key) {
+            self.personal_config_key = None;
         }
         self.commands.remove_lifecycle(key.extension, key.lifecycle);
         let dispatcher = cx.global::<ApplicationProductCommands>().0.clone();

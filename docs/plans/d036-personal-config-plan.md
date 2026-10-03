@@ -1,6 +1,6 @@
 # D036: Personal JavaScript configuration
 
-Status: in progress. Checkpoint 2 is ready for review.
+Status: in progress. Checkpoint 3 implementation is ready for manual review.
 
 Source: [D003's deferred keymap need](../roadmap.md). This plan establishes
 personal configuration independently; JavaScript-defined keymaps will have a
@@ -89,9 +89,9 @@ through a helper module. Compilation and runtime errors retain generated
 source locations; the application owns the fatal startup response in
 checkpoint 3. Host tests cover shared module state, an awaited command
 registration, top-level await, post-init alone, phase errors, and unload.
-Review gate pending inspection.
+The host phase behavior is covered by tests.
 
-### 3. Product startup and fatal error window ⬜
+### 3. Product startup and fatal error window 🟡
 
 - Gate product readiness and incoming open requests on pre-init, installed
   extension startup, then post-init. Keep existing installed-extension failure
@@ -101,6 +101,15 @@ Review gate pending inspection.
   cleanup, queued open requests, and clipboard diagnostic content. Review the
   error window manually in a product build.
 - **Review gate:** approve startup flow and the user-facing failure experience.
+
+The product queues launch requests, captures config on the background executor,
+awaits pre-init, installed-extension startup, then post-init, and opens product
+windows only after success. Config failure unloads all admitted lifecycles and
+opens a dedicated native window with phase, source location, message, Copy,
+and Quit. Product tests cover successful startup, either phase failing,
+independent installed-extension failures, cleanup of command and completion
+registrations, queued file opens, and clipboard content. Manual product-window
+review remains before this checkpoint is complete.
 
 After the final checkpoint, update the architecture subsystem references and
 validated decisions to reflect the implemented config ownership and lifecycle.

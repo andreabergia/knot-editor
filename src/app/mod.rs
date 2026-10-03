@@ -53,9 +53,10 @@ pub mod model;
 mod open;
 #[allow(
     dead_code,
-    reason = "the config source contract is exercised independently of product startup"
+    reason = "source snapshots remain inspectable at the application boundary"
 )]
 mod personal_config;
+mod personal_config_error;
 mod product;
 mod product_commands;
 #[allow(

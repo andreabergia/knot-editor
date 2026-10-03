@@ -3,13 +3,17 @@
 Part of the [architecture](../architecture.md). Design rationale is recorded in
 [decisions](../decisions.md); deferred work lives in [roadmap.md](../roadmap.md).
 
-## macOS application launch
+## Product application launch
 
 The local macOS build packages the product binary and icon in `Knot.app`.
 At startup the application consumes an already-delivered file-open request for
-the initial window, opens that window, and activates the app. Later file-open
-events open product windows through the same normalized request path. Dock
-reopen creates a new product window when no windows remain.
+the initial window and queues it while personal config and installed extensions
+start. Later file-open events and dock reopens join the same launch queue.
+Successful startup opens the queued product windows, or one empty product
+window when no requests arrived, then activates the app. A fatal personal
+config error discards the queue and opens a dedicated diagnostic window with
+Copy and Quit controls. The editor does not open in that launch; the diagnostic
+window stays open until Quit.
 
 ## Editor views
 

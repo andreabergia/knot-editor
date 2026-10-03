@@ -128,6 +128,25 @@ runtime failures visible while independent packages continue. Reuse exact-once
 lifecycle teardown for startup rollback so commands and semantic providers do
 not outlive a failed entry.
 
+## Personal configuration
+
+Use two optional JavaScript entry modules in one selected per-user config
+directory. Prefer an existing `XDG_CONFIG_HOME/knot`, then an existing
+`~/.config/knot`, then the platform `Knot` config directory, so a launch has one
+unambiguous source root on every platform. Keep config separate from installed
+packages: it has no manifest, has its own lifecycle identity, and its pre-init
+and post-init turns share JavaScript state across extension startup.
+
+Treat config failure as fatal to startup because continuing after only part of
+a personal setup ran would leave the editor in an unpredictable state. Hold
+product windows and launch requests until both phases succeed; on failure,
+unload all startup lifecycles and present an error window that stays available
+for copying the diagnostic or quitting. Installed-package failures keep their
+independent reporting and do not stop other packages or post-init.
+
+Reference: [extension host](architecture/extension-host.md) and
+[workbench lifecycle](architecture/workbench-and-lifecycle.md).
+
 ## Commands and keymaps
 
 Use one Knot-owned command namespace and dispatcher across invocation sources,

@@ -85,6 +85,12 @@ and registrations remain in the capsule between turns. Pre-init cannot import
 post-init, including through another local module, so the later entry cannot
 run during the earlier phase. Either entry may be absent. Unload uses the same
 exact-once lifecycle finalizer as installed extensions.
+The application reserves a distinct config lifecycle identity. It captures
+sources on the background executor before loading that lifecycle, awaits
+pre-init, then the installed-package dependency plan, then post-init. A config
+failure unloads the config and every installed lifecycle admitted during that
+launch and removes their foreground registrations. Installed-package failures
+retain their independent report outcomes and do not interrupt post-init.
 
 Command handlers remain persistent JavaScript functions keyed by opaque
 foreground-issued registrations. Native-to-extension invocation enters as

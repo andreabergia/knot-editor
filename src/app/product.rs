@@ -54,6 +54,49 @@ struct ApplicationTerminalSessions(RefCell<TerminalSessions>);
 
 impl Global for ApplicationTerminalSessions {}
 
+struct ApplicationLaunchGate(RefCell<LaunchGate>);
+
+impl Global for ApplicationLaunchGate {}
+
+enum LaunchGate {
+    Pending(Vec<Option<OpenRequest>>),
+    Ready,
+    Failed,
+}
+
+impl LaunchGate {
+    fn request(&mut self, request: Option<OpenRequest>) -> Option<Option<OpenRequest>> {
+        match self {
+            Self::Pending(requests) => {
+                requests.push(request);
+                None
+            }
+            Self::Ready => Some(request),
+            Self::Failed => None,
+        }
+    }
+
+    fn complete(&mut self) -> Vec<Option<OpenRequest>> {
+        match std::mem::replace(self, Self::Ready) {
+            Self::Pending(mut requests) => {
+                if requests.is_empty() {
+                    requests.push(None);
+                }
+                requests
+            }
+            Self::Ready => Vec::new(),
+            Self::Failed => {
+                *self = Self::Failed;
+                Vec::new()
+            }
+        }
+    }
+
+    fn fail(&mut self) {
+        *self = Self::Failed;
+    }
+}
+
 #[derive(Default)]
 struct TerminalSessions {
     next_id: u64,
@@ -2843,6 +2886,42 @@ fn open_terminal_transfer_window(cx: &mut App) -> anyhow::Result<WindowHandle<Pr
     )
 }
 
+fn dispatch_launch_request(request: Option<OpenRequest>, cx: &mut App) {
+    let ready_request = cx
+        .global::<ApplicationLaunchGate>()
+        .0
+        .borrow_mut()
+        .request(request);
+    if let Some(request) = ready_request {
+        open_product_window(request, cx);
+        cx.activate(true);
+    }
+}
+
+pub(super) fn finish_product_startup(
+    result: Result<(), super::personal_config::ConfigDiagnostic>,
+    cx: &mut App,
+) {
+    match result {
+        Ok(()) => {
+            let requests = cx
+                .global::<ApplicationLaunchGate>()
+                .0
+                .borrow_mut()
+                .complete();
+            for request in requests {
+                open_product_window(request, cx);
+            }
+            cx.activate(true);
+        }
+        Err(diagnostic) => {
+            cx.global::<ApplicationLaunchGate>().0.borrow_mut().fail();
+            eprintln!("[knot] {}", diagnostic.clipboard_text().replace('\n', ": "));
+            super::personal_config_error::open(diagnostic, cx);
+        }
+    }
+}
+
 pub(crate) fn run(initial_request: Option<OpenRequest>, fixture: Option<String>) {
     let application = Application::new();
     let (open_requests, mut incoming_requests) = tokio::sync::mpsc::unbounded_channel();
@@ -2857,8 +2936,7 @@ pub(crate) fn run(initial_request: Option<OpenRequest>, fixture: Option<String>)
         }
     });
     application.on_reopen(|cx| {
-        open_product_window(None, cx);
-        cx.activate(true);
+        dispatch_launch_request(None, cx);
     });
     application.run(move |cx| {
         let documents = cx.new(|_| DocumentCollection::new());
@@ -2868,6 +2946,9 @@ pub(crate) fn run(initial_request: Option<OpenRequest>, fixture: Option<String>)
         cx.set_global(ApplicationTerminalSessions(RefCell::new(
             TerminalSessions::default(),
         )));
+        cx.set_global(ApplicationLaunchGate(RefCell::new(LaunchGate::Pending(
+            Vec::new(),
+        ))));
         cx.set_global(ApplicationFileSystems(product_filesystems()));
         let commands = cx.new(ProductCommandDispatcher::new);
         cx.set_global(ApplicationProductCommands(commands));
@@ -2936,24 +3017,23 @@ pub(crate) fn run(initial_request: Option<OpenRequest>, fixture: Option<String>)
             },
         ]);
         let first_request = initial_request.or_else(|| incoming_requests.try_recv().ok());
+        if let Some(request) = first_request {
+            dispatch_launch_request(Some(request), cx);
+        }
         cx.spawn(async move |cx| {
             while let Some(request) = incoming_requests.recv().await {
-                let _ = cx.update(|cx| open_product_window(Some(request), cx));
+                let _ = cx.update(|cx| dispatch_launch_request(Some(request), cx));
             }
         })
         .detach();
-        open_product_window(first_request, cx);
-        cx.activate(true);
         if let Some(fixture) = fixture.as_deref() {
+            finish_product_startup(Ok(()), cx);
             extension_host.update(cx, |host, cx| host.start_diagnostic_fixture(fixture, cx));
         } else {
-            match super::extension_package::user_extensions_root() {
-                Ok(root) => {
-                    extension_host.update(cx, |host, cx| host.start_installed_extensions(root, cx))
-                }
-                Err(cause) => extension_host
-                    .update(cx, |host, cx| host.report_extensions_root_error(cause, cx)),
-            }
+            let extensions_root = super::extension_package::user_extensions_root();
+            extension_host.update(cx, |host, cx| {
+                host.start_product_startup(None, extensions_root, cx)
+            });
         }
     });
 }
@@ -3092,16 +3172,16 @@ mod tests {
     };
 
     use super::{
-        ApplicationDocuments, ApplicationFileSystems, ApplicationOpenDialog,
+        ApplicationDocuments, ApplicationFileSystems, ApplicationLaunchGate, ApplicationOpenDialog,
         ApplicationProductCommands, ApplicationProtectedClosure, ApplicationSaveDialog,
         ApplicationTerminalSessions, ApplicationWorkbenches, BufferModel, CLOSE_TAB_COMMAND,
-        CLOSE_WINDOW_COMMAND, DocumentCollection, Entity, MOVE_TERMINAL_TO_NEW_WINDOW_COMMAND,
-        NEW_COMMAND, NEW_TERMINAL_COMMAND, OpenDialogFuture, OpenDialogOutcome, OpenRequest,
-        OpenTarget, ProductCommandDispatcher, ProductCommandSource, ProductOpenDialog,
-        ProductSaveDialog, ProductShell, QUIT_COMMAND, REDO_COMMAND, RefCell, SAVE_AS_COMMAND,
-        SAVE_COMMAND, SHOW_EXTENSION_REPORT_COMMAND, SPLIT_HORIZONTAL_COMMAND, SaveDialogFuture,
-        SaveDialogOutcome, SplitDirection, TerminalSessions, UNDO_COMMAND, Workbench,
-        WorkbenchLayout, create_untitled_document, install_protected_window_close,
+        CLOSE_WINDOW_COMMAND, DocumentCollection, Entity, LaunchGate,
+        MOVE_TERMINAL_TO_NEW_WINDOW_COMMAND, NEW_COMMAND, NEW_TERMINAL_COMMAND, OpenDialogFuture,
+        OpenDialogOutcome, OpenRequest, OpenTarget, ProductCommandDispatcher, ProductCommandSource,
+        ProductOpenDialog, ProductSaveDialog, ProductShell, QUIT_COMMAND, REDO_COMMAND, RefCell,
+        SAVE_AS_COMMAND, SAVE_COMMAND, SHOW_EXTENSION_REPORT_COMMAND, SPLIT_HORIZONTAL_COMMAND,
+        SaveDialogFuture, SaveDialogOutcome, SplitDirection, TerminalSessions, UNDO_COMMAND,
+        Workbench, WorkbenchLayout, create_untitled_document, install_protected_window_close,
         open_terminal_transfer_window, product_filesystems,
     };
     use crate::app::{
@@ -3175,6 +3255,58 @@ mod tests {
         let commands = cx.new(ProductCommandDispatcher::new);
         cx.set_global(ApplicationProductCommands(commands));
         documents
+    }
+
+    fn install_launch_gate(cx: &mut TestAppContext) {
+        cx.set_global(ApplicationLaunchGate(RefCell::new(LaunchGate::Pending(
+            Vec::new(),
+        ))));
+    }
+
+    fn wait_for_product_startup(cx: &mut TestAppContext) -> bool {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        loop {
+            cx.run_until_parked();
+            let state = cx.read(
+                |cx| match &*cx.global::<ApplicationLaunchGate>().0.borrow() {
+                    LaunchGate::Pending(_) => None,
+                    LaunchGate::Ready => Some(true),
+                    LaunchGate::Failed => Some(false),
+                },
+            );
+            if let Some(ready) = state {
+                return ready;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "product startup did not finish"
+            );
+            std::thread::yield_now();
+        }
+    }
+
+    #[test]
+    fn launch_gate_keeps_requests_ordered_and_discards_them_on_failure() {
+        let first = OpenRequest::from_uri_for_product(
+            ResourceUri::parse("file:///queued-first.txt").unwrap(),
+        );
+        let second = OpenRequest::from_uri_for_product(
+            ResourceUri::parse("file:///queued-second.txt").unwrap(),
+        );
+        let mut gate = LaunchGate::Pending(Vec::new());
+        assert!(gate.request(Some(first.clone())).is_none());
+        assert!(gate.request(Some(second.clone())).is_none());
+        assert_eq!(gate.complete(), vec![Some(first), Some(second.clone())]);
+        assert_eq!(gate.request(None), Some(None));
+
+        let mut failed = LaunchGate::Pending(Vec::new());
+        failed.request(None);
+        failed.fail();
+        assert!(failed.complete().is_empty());
+        assert!(failed.request(Some(second)).is_none());
+
+        let mut empty = LaunchGate::Pending(Vec::new());
+        assert_eq!(empty.complete(), vec![None]);
     }
 
     fn product_window(
@@ -3336,6 +3468,258 @@ mod tests {
             );
             std::thread::yield_now();
         }
+    }
+
+    #[gpui::test]
+    fn personal_config_gates_product_windows_and_keeps_extension_failures_independent(
+        cx: &mut TestAppContext,
+    ) {
+        let config = tempfile::tempdir().unwrap();
+        let extensions = tempfile::tempdir().unwrap();
+        std::fs::write(
+            config.path().join("pre-init.js"),
+            "import { commands } from 'knot:editor'; await commands.register('config.pre', () => {});",
+        )
+        .unwrap();
+        std::fs::write(
+            config.path().join("post-init.js"),
+            "import { commands } from 'knot:editor'; await commands.register('config.post', () => {});",
+        )
+        .unwrap();
+        install_extension(
+            extensions.path(),
+            "@example/good",
+            &[],
+            &[(
+                "main.js",
+                "import { commands } from 'knot:editor'; await commands.register('extension.good', () => {});",
+            )],
+        );
+        install_extension(
+            extensions.path(),
+            "@example/bad",
+            &[],
+            &[("main.js", "throw new Error('package failed');")],
+        );
+        install_globals(cx);
+        install_launch_gate(cx);
+        let host = cx.update(super::super::extension_host::install);
+        cx.update(|cx| super::dispatch_launch_request(None, cx));
+        assert!(cx.windows().is_empty());
+        host.update(cx, |host, cx| {
+            host.start_product_startup(
+                Some(config.path().to_path_buf()),
+                Ok(extensions.path().to_path_buf()),
+                cx,
+            )
+        });
+        assert!(wait_for_product_startup(cx));
+        assert_eq!(cx.windows().len(), 1);
+        let report = cx
+            .read(super::super::extension_host::startup_report)
+            .unwrap();
+        assert!(
+            report
+                .report
+                .entries
+                .iter()
+                .any(|entry| entry.name.as_deref() == Some("@example/good")
+                    && entry.result == super::super::extension_load::LoadResult::Loaded)
+        );
+        assert!(report.report.entries.iter().any(|entry| entry.name.as_deref() == Some("@example/bad") && matches!(&entry.result, super::super::extension_load::LoadResult::Failed(cause) if cause.contains("package failed"))));
+        let names = cx.read(|cx| {
+            cx.global::<ApplicationProductCommands>()
+                .0
+                .read(cx)
+                .definitions()
+                .map(|definition| definition.name.to_string())
+                .collect::<Vec<_>>()
+        });
+        for name in ["config.pre", "extension.good", "config.post"] {
+            assert!(names.contains(&name.to_owned()), "missing {name}");
+        }
+        cx.update(|cx| super::dispatch_launch_request(None, cx));
+        assert_eq!(cx.windows().len(), 2);
+    }
+
+    #[gpui::test]
+    fn queued_file_open_runs_only_after_configured_startup(cx: &mut TestAppContext) {
+        let config = tempfile::tempdir().unwrap();
+        let extensions = tempfile::tempdir().unwrap();
+        let file = config.path().join("queued.txt");
+        std::fs::write(&file, "queued contents").unwrap();
+        let request = OpenRequest::from_path(&file, config.path()).unwrap();
+        let uri = request.uri().clone();
+        let documents = install_globals(cx);
+        install_launch_gate(cx);
+        let host = cx.update(super::super::extension_host::install);
+        cx.update(|cx| super::dispatch_launch_request(Some(request), cx));
+        assert!(cx.windows().is_empty());
+        host.update(cx, |host, cx| {
+            host.start_product_startup(
+                Some(config.path().to_path_buf()),
+                Ok(extensions.path().to_path_buf()),
+                cx,
+            )
+        });
+        assert!(wait_for_product_startup(cx));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        loop {
+            cx.run_until_parked();
+            let text = cx.read(|cx| {
+                let documents = documents.read(cx);
+                documents
+                    .document_for_resource(&uri)
+                    .and_then(|id| documents.get(id))
+                    .map(|document| document.model().read(cx).text().to_owned())
+            });
+            if let Some(text) = text {
+                assert_eq!(text, "queued contents");
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "queued file did not open"
+            );
+            std::thread::yield_now();
+        }
+    }
+
+    #[gpui::test]
+    fn pre_init_failure_skips_extensions_and_opens_only_the_error_window(cx: &mut TestAppContext) {
+        let config = tempfile::tempdir().unwrap();
+        let extensions = tempfile::tempdir().unwrap();
+        std::fs::write(config.path().join("pre-init.js"), "import { commands } from 'knot:editor'; await commands.register('config.before-failure', () => {}); throw new Error('pre failed');").unwrap();
+        install_extension(
+            extensions.path(),
+            "@example/skipped",
+            &[],
+            &[("main.js", "throw new Error('extension ran');")],
+        );
+        install_globals(cx);
+        install_launch_gate(cx);
+        let host = cx.update(super::super::extension_host::install);
+        let queued = OpenRequest::from_uri_for_product(
+            ResourceUri::parse("file:///never-open-on-failure.txt").unwrap(),
+        );
+        cx.update(|cx| super::dispatch_launch_request(Some(queued.clone()), cx));
+        assert!(cx.windows().is_empty());
+        host.update(cx, |host, cx| {
+            host.start_product_startup(
+                Some(config.path().to_path_buf()),
+                Ok(extensions.path().to_path_buf()),
+                cx,
+            )
+        });
+        assert!(!wait_for_product_startup(cx));
+        assert_eq!(cx.windows().len(), 1);
+        assert!(
+            cx.read(super::super::extension_host::startup_report)
+                .is_none()
+        );
+        assert!(cx.read(|cx| cx.global::<ApplicationWorkbenches>().0.borrow().is_empty()));
+        assert_eq!(cx.read(|cx| host.read(cx).lifecycle_count()), 0);
+        let names = cx.read(|cx| {
+            cx.global::<ApplicationProductCommands>()
+                .0
+                .read(cx)
+                .definitions()
+                .map(|definition| definition.name.to_string())
+                .collect::<Vec<_>>()
+        });
+        assert!(!names.contains(&"config.before-failure".to_owned()));
+        cx.update(|cx| super::dispatch_launch_request(Some(queued), cx));
+        assert_eq!(cx.windows().len(), 1);
+    }
+
+    #[gpui::test]
+    fn invalid_config_import_prevents_extension_discovery(cx: &mut TestAppContext) {
+        let config = tempfile::tempdir().unwrap();
+        let extensions = tempfile::tempdir().unwrap();
+        std::fs::write(config.path().join("pre-init.js"), "import './missing.js';").unwrap();
+        install_extension(
+            extensions.path(),
+            "@example/skipped",
+            &[],
+            &[("main.js", "throw new Error('extension ran');")],
+        );
+        install_globals(cx);
+        install_launch_gate(cx);
+        let host = cx.update(super::super::extension_host::install);
+        host.update(cx, |host, cx| {
+            host.start_product_startup(
+                Some(config.path().to_path_buf()),
+                Ok(extensions.path().to_path_buf()),
+                cx,
+            )
+        });
+        assert!(!wait_for_product_startup(cx));
+        assert_eq!(cx.windows().len(), 1);
+        assert!(
+            cx.read(super::super::extension_host::startup_report)
+                .is_none()
+        );
+        assert_eq!(cx.read(|cx| host.read(cx).lifecycle_count()), 0);
+    }
+
+    #[gpui::test]
+    fn post_init_failure_unloads_config_and_installed_extensions(cx: &mut TestAppContext) {
+        let config = tempfile::tempdir().unwrap();
+        let extensions = tempfile::tempdir().unwrap();
+        std::fs::write(
+            config.path().join("pre-init.js"),
+            "import { commands, editor } from 'knot:editor'; await commands.register('config.before', () => {}); await editor.registerCompletionProvider('config-provider', { provideCompletions() { return []; } });",
+        )
+        .unwrap();
+        std::fs::write(
+            config.path().join("post-init.js"),
+            "throw new Error('post failed');",
+        )
+        .unwrap();
+        install_extension(
+            extensions.path(),
+            "@example/loaded",
+            &[],
+            &[(
+                "main.js",
+                "import { commands } from 'knot:editor'; await commands.register('extension.before', () => {});",
+            )],
+        );
+        install_globals(cx);
+        install_launch_gate(cx);
+        let host = cx.update(super::super::extension_host::install);
+        host.update(cx, |host, cx| {
+            host.start_product_startup(
+                Some(config.path().to_path_buf()),
+                Ok(extensions.path().to_path_buf()),
+                cx,
+            )
+        });
+        assert!(!wait_for_product_startup(cx));
+        assert_eq!(cx.windows().len(), 1);
+        assert!(cx.read(|cx| cx.global::<ApplicationWorkbenches>().0.borrow().is_empty()));
+        let report = cx
+            .read(super::super::extension_host::startup_report)
+            .unwrap();
+        assert_eq!(
+            report.report.entries[0].result,
+            super::super::extension_load::LoadResult::Loaded
+        );
+        assert_eq!(cx.read(|cx| host.read(cx).lifecycle_count()), 0);
+        let names = cx.read(|cx| {
+            cx.global::<ApplicationProductCommands>()
+                .0
+                .read(cx)
+                .definitions()
+                .map(|definition| definition.name.to_string())
+                .collect::<Vec<_>>()
+        });
+        assert!(!names.contains(&"config.before".to_owned()));
+        assert!(!names.contains(&"extension.before".to_owned()));
+        assert_eq!(
+            cx.read(super::super::extension_host::completion_provider_count),
+            0
+        );
     }
 
     #[gpui::test]
