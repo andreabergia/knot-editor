@@ -56,7 +56,7 @@ pub(crate) enum ResourceError {
     },
     OutsideWorkspace {
         uri: ResourceUri,
-        root: ResourceUri,
+        root: Box<ResourceUri>,
     },
     ProviderNotFound {
         scheme: String,

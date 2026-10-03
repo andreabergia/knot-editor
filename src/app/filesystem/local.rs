@@ -67,7 +67,7 @@ impl LocalFileSystemProvider {
         if self.root.as_ref().is_some_and(|root| !uri.is_within(root)) {
             return Err(ResourceError::OutsideWorkspace {
                 uri,
-                root: self.root.clone().unwrap(),
+                root: Box::new(self.root.clone().unwrap()),
             });
         }
         Ok(uri)
@@ -109,7 +109,7 @@ fn path_to_uri(root: &ResourceUri, path: &Path) -> Result<ResourceUri, ResourceE
     if !uri.is_within(root) {
         return Err(ResourceError::OutsideWorkspace {
             uri,
-            root: root.clone(),
+            root: Box::new(root.clone()),
         });
     }
     Ok(uri)

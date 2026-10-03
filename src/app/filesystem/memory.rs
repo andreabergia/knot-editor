@@ -109,7 +109,7 @@ impl MemoryFileSystemProvider {
         if !uri.is_within(&self.root) {
             return Err(ResourceError::OutsideWorkspace {
                 uri,
-                root: self.root.clone(),
+                root: Box::new(self.root.clone()),
             });
         }
         Ok(uri)
