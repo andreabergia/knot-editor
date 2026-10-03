@@ -235,8 +235,8 @@ impl EditorView {
         self.break_history_group(cx);
         self.marked_range_utf16 = None;
         self.preferred_x = None;
-        let anchor = self.from_flat_byte(range.start_byte_offset);
-        let caret = self.from_flat_byte(range.end_byte_offset);
+        let anchor = self.flat_byte_to_position(range.start_byte_offset);
+        let caret = self.flat_byte_to_position(range.end_byte_offset);
         self.anchor_line = anchor.0;
         self.anchor_col = anchor.1;
         self.cursor_line = caret.0;
@@ -372,7 +372,7 @@ impl EditorView {
             + byte_col
     }
 
-    fn from_flat_byte(&self, mut offset: usize) -> (usize, usize) {
+    fn flat_byte_to_position(&self, mut offset: usize) -> (usize, usize) {
         for (line, text) in self.lines.iter().enumerate() {
             if offset <= text.len() {
                 return (line, offset);
@@ -412,8 +412,8 @@ impl EditorView {
     }
 
     fn restore_view_position(&mut self, range: Range<usize>) {
-        let start = self.from_flat_byte(range.start);
-        let end = self.from_flat_byte(range.end);
+        let start = self.flat_byte_to_position(range.start);
+        let end = self.flat_byte_to_position(range.end);
         if self.has_selection && !range.is_empty() {
             if self.selection_reversed {
                 (self.cursor_line, self.cursor_col) = start;
@@ -451,8 +451,8 @@ impl EditorView {
         if state.context != self.history_context {
             return;
         }
-        (self.anchor_line, self.anchor_col) = self.from_flat_byte(state.anchor);
-        (self.cursor_line, self.cursor_col) = self.from_flat_byte(state.caret);
+        (self.anchor_line, self.anchor_col) = self.flat_byte_to_position(state.anchor);
+        (self.cursor_line, self.cursor_col) = self.flat_byte_to_position(state.caret);
         self.has_selection = state.anchor != state.caret;
         self.selection_reversed = state.caret < state.anchor;
         self.reveal_caret = true;
@@ -751,7 +751,7 @@ impl EditorView {
                         .last()
                         .unwrap_or(0)
                 };
-                self.from_flat_byte(offset)
+                self.flat_byte_to_position(offset)
             }
             "up" | "down" | "page-up" | "page-down" => {
                 let rows = if movement.starts_with("page-") {
@@ -1039,7 +1039,7 @@ impl EditorView {
     }
 
     /// Convert a flat UTF-16 offset to a (line, byte_col) position.
-    fn from_flat_utf16(&self, mut off: usize) -> (usize, usize) {
+    fn flat_utf16_to_position(&self, mut off: usize) -> (usize, usize) {
         for (i, l) in self.lines.iter().enumerate() {
             let line_utf16_len = l.chars().map(char::len_utf16).sum::<usize>();
             if off <= line_utf16_len {
@@ -1296,7 +1296,7 @@ impl EditorView {
         let doc = self.flat_doc();
         let insert_end_byte = byte_start + text.len();
         let insert_end_utf16 = self.byte_col_to_utf16(&doc, insert_end_byte.min(doc.len()));
-        let (line, col) = self.from_flat_utf16(insert_end_utf16);
+        let (line, col) = self.flat_utf16_to_position(insert_end_utf16);
         self.cursor_line = line;
         self.cursor_col = col;
         self.has_selection = false;
@@ -1452,8 +1452,8 @@ impl EntityInputHandler for EditorView {
         // Caret + anchor from new_selected_range (relative to marked start).
         let anchor_utf16 = marked_start_utf16 + sel_start_rel.min(marked_utf16_len);
         let caret_utf16 = marked_start_utf16 + sel_end_rel.min(marked_utf16_len);
-        let (al, ac) = self.from_flat_utf16(anchor_utf16);
-        let (cl, cc) = self.from_flat_utf16(caret_utf16);
+        let (al, ac) = self.flat_utf16_to_position(anchor_utf16);
+        let (cl, cc) = self.flat_utf16_to_position(caret_utf16);
         self.anchor_line = al;
         self.anchor_col = ac;
         self.cursor_line = cl;
@@ -1475,8 +1475,8 @@ impl EntityInputHandler for EditorView {
         window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
-        let (start_line, start_col) = self.from_flat_utf16(range_utf16.start);
-        let (end_line, end_col) = self.from_flat_utf16(range_utf16.end);
+        let (start_line, start_col) = self.flat_utf16_to_position(range_utf16.start);
+        let (end_line, end_col) = self.flat_utf16_to_position(range_utf16.end);
         let line = start_line;
         let line_str = self.lines.get(line)?;
         let top = element_bounds.origin.y + px(line as f32 * LINE_HEIGHT) - px(self.scroll);
@@ -1972,11 +1972,11 @@ impl Element for EditorElement {
                 None
             };
             // Convert marked UTF-16 range to (line, byte_col) start/end for
-            // underline painting. Done inside the borrow since from_flat_utf16
+            // underline painting. Done inside the borrow since flat_utf16_to_position
             // needs &self.
             let marked = view.marked_range_utf16.as_ref().map(|mr| {
-                let s = view.from_flat_utf16(mr.start);
-                let e = view.from_flat_utf16(mr.end);
+                let s = view.flat_utf16_to_position(mr.start);
+                let e = view.flat_utf16_to_position(mr.end);
                 (s, e)
             });
             // Only copy decorations that fall on visible lines.
@@ -3106,11 +3106,11 @@ mod tests {
             let second_line_start = 5;
             let family_utf16_len = family.chars().map(char::len_utf16).sum::<usize>();
 
-            assert_eq!(editor.from_flat_utf16(1), (0, 1));
-            assert_eq!(editor.from_flat_utf16(3), (0, "a😀".len()));
-            assert_eq!(editor.from_flat_utf16(second_line_start), (1, 0));
+            assert_eq!(editor.flat_utf16_to_position(1), (0, 1));
+            assert_eq!(editor.flat_utf16_to_position(3), (0, "a😀".len()));
+            assert_eq!(editor.flat_utf16_to_position(second_line_start), (1, 0));
             assert_eq!(
-                editor.from_flat_utf16(second_line_start + family_utf16_len),
+                editor.flat_utf16_to_position(second_line_start + family_utf16_len),
                 (1, family.len())
             );
 
@@ -3124,7 +3124,7 @@ mod tests {
                 (1, second_line.len()),
             ] {
                 let utf16 = editor.to_flat_utf16(line, byte_col);
-                assert_eq!(editor.from_flat_utf16(utf16), (line, byte_col));
+                assert_eq!(editor.flat_utf16_to_position(utf16), (line, byte_col));
             }
         });
     }
