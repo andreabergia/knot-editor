@@ -17,6 +17,12 @@ Initial product dogfooding targets macOS. Windows passed the framework
 portability checkpoint; Linux validation remains required before broader
 production claims.
 
+Local macOS builds package the Rust binary as `Knot.app` with the supplied
+application icon and a plain-text document declaration. A small repository
+script keeps local packaging independent of distribution credentials and lets
+the product use gpui's activation, open-URL, and reopen callbacks. Signing and
+notarization remain distribution work.
+
 Reference: [workbench and lifecycle](architecture/workbench-and-lifecycle.md). Evidence: [renderer benchmark](archive/exploration/step2-renderer-benchmark.md),[framework comparison](archive/exploration/step3-framework-comparison.md).
 
 ## Text buffer and stable positions

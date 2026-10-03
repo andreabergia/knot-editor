@@ -3,6 +3,14 @@
 Part of the [architecture](../architecture.md). Design rationale is recorded in
 [decisions](../decisions.md); deferred work lives in [roadmap.md](../roadmap.md).
 
+## macOS application launch
+
+The local macOS build packages the product binary and icon in `Knot.app`.
+At startup the application consumes an already-delivered file-open request for
+the initial window, opens that window, and activates the app. Later file-open
+events open product windows through the same normalized request path. Dock
+reopen creates a new product window when no windows remain.
+
 ## Editor views
 
 Each `EditorView` owns cursor, selection, scroll, focus, IME, rendering choices,

@@ -2847,6 +2847,10 @@ pub(crate) fn run(initial_request: Option<OpenRequest>, fixture: Option<String>)
             }
         }
     });
+    application.on_reopen(|cx| {
+        open_product_window(None, cx);
+        cx.activate(true);
+    });
     application.run(move |cx| {
         let documents = cx.new(|_| DocumentCollection::new());
         cx.set_global(ApplicationDocuments(documents));
@@ -2922,13 +2926,15 @@ pub(crate) fn run(initial_request: Option<OpenRequest>, fixture: Option<String>)
                 ],
             },
         ]);
+        let first_request = initial_request.or_else(|| incoming_requests.try_recv().ok());
         cx.spawn(async move |cx| {
             while let Some(request) = incoming_requests.recv().await {
                 let _ = cx.update(|cx| open_product_window(Some(request), cx));
             }
         })
         .detach();
-        open_product_window(initial_request, cx);
+        open_product_window(first_request, cx);
+        cx.activate(true);
         if let Some(fixture) = fixture.as_deref() {
             extension_host.update(cx, |host, cx| host.start_diagnostic_fixture(fixture, cx));
         } else {
