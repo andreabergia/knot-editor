@@ -51,7 +51,7 @@ impl OpenRequest {
         self.uri
             .as_url()
             .path_segments()
-            .and_then(|segments| segments.filter(|segment| !segment.is_empty()).next_back())
+            .and_then(|mut segments| segments.rfind(|segment| !segment.is_empty()))
             .map(percent_encoding::percent_decode_str)
             .and_then(|name| name.decode_utf8().ok())
             .filter(|name| !name.is_empty())
