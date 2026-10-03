@@ -335,8 +335,7 @@ impl Element for TerminalElement {
             f32::from(bounds.size.height),
             window.scale_factor(),
         );
-        let _ = self
-            .entity
+        self.entity
             .update(cx, |terminal, cx| terminal.resize(size, cx));
         window.insert_hitbox(bounds, HitboxBehavior::Normal)
     }
@@ -355,7 +354,7 @@ impl Element for TerminalElement {
         let entity = self.entity.clone();
         window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
             if phase == DispatchPhase::Bubble && hitbox.should_handle_scroll(window) {
-                let _ = entity.update(cx, |terminal, cx| {
+                entity.update(cx, |terminal, cx| {
                     terminal.scroll(event.delta, cx);
                 });
                 cx.stop_propagation();
@@ -378,7 +377,7 @@ impl Element for TerminalElement {
                     } else {
                         cell_width
                     };
-                    let _ = window.paint_quad(fill(
+                    window.paint_quad(fill(
                         Bounds {
                             origin,
                             size: size(width, cell_height),
@@ -405,7 +404,7 @@ impl Element for TerminalElement {
                         size: size(cell_width, px(2.)),
                     },
                     CursorShape::HollowBlock => {
-                        let _ = window.paint_quad(quad(
+                        window.paint_quad(quad(
                             Bounds {
                                 origin,
                                 size: size(cell_width, cell_height),
@@ -428,7 +427,7 @@ impl Element for TerminalElement {
                     CursorShape::Hidden => unreachable!(),
                 };
                 if cursor_bounds.size.width > px(0.) {
-                    let _ = window.paint_quad(fill(cursor_bounds, rgba(0xd4d4d480)));
+                    window.paint_quad(fill(cursor_bounds, rgba(0xd4d4d480)));
                 }
             }
 

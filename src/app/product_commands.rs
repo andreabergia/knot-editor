@@ -284,7 +284,7 @@ impl ProductCommandDispatcher {
                 if command.name.as_ref() == SHOW_COMPLETIONS_COMMAND {
                     let outcome = super::extension_host::start_completion(target, cx);
                     completion.complete(outcome.clone());
-                    let _ = dispatcher.update(cx, |dispatcher, cx| {
+                    dispatcher.update(cx, |dispatcher, cx| {
                         dispatcher.last_outcome = Some(outcome);
                         cx.notify();
                     });
@@ -315,7 +315,7 @@ impl ProductCommandDispatcher {
                     Err(CommandOutcome::Unavailable) => {}
                     Err(outcome) => {
                         completion.complete(outcome.clone());
-                        let _ = dispatcher.update(cx, |dispatcher, cx| {
+                        dispatcher.update(cx, |dispatcher, cx| {
                             dispatcher.last_outcome = Some(outcome);
                             cx.notify();
                         });
@@ -333,7 +333,7 @@ impl ProductCommandDispatcher {
                 dispatch_to_captured_target(&command, &target, cx)
             };
             completion.complete(outcome.clone());
-            let _ = dispatcher.update(cx, |dispatcher, cx| {
+            dispatcher.update(cx, |dispatcher, cx| {
                 dispatcher.last_outcome = Some(outcome);
                 cx.notify();
             });

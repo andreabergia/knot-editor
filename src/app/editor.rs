@@ -2112,7 +2112,7 @@ impl Element for EditorElement {
                         origin: point(bounds.origin.x + *x_off + rx, top),
                         size: size(rw, line_height),
                     };
-                    let _ = window.paint_quad(fill(rect, sel_color));
+                    window.paint_quad(fill(rect, sel_color));
                 }
                 // Empty interior lines: no shaped line above, so paint a
                 // full-width highlight here so the selection looks unbroken
@@ -2124,7 +2124,7 @@ impl Element for EditorElement {
                             origin: point(bounds.origin.x, top),
                             size: size(pane_w, line_height),
                         };
-                        let _ = window.paint_quad(fill(rect, sel_color));
+                        window.paint_quad(fill(rect, sel_color));
                     }
                 }
             }
@@ -2181,7 +2181,7 @@ impl Element for EditorElement {
                         origin: point(bounds.origin.x + *x_off + rx, top),
                         size: size(rw, underline_h),
                     };
-                    let _ = window.paint_quad(fill(rect, mark_color));
+                    window.paint_quad(fill(rect, mark_color));
                 }
             }
 
@@ -2202,7 +2202,7 @@ impl Element for EditorElement {
                         origin: point(bounds.origin.x + x_off + caret_x, top),
                         size: size(px(2.), line_height),
                     };
-                    let _ = window.paint_quad(fill(caret_bounds, hsla(0., 0., 0.9, 1.0)));
+                    window.paint_quad(fill(caret_bounds, hsla(0., 0., 0.9, 1.0)));
                 }
             }
 
@@ -2260,7 +2260,7 @@ impl Element for EditorElement {
                     origin: point(bounds.origin.x + px(3.), top + px(6.)),
                     size: size(px(7.), px(7.)),
                 };
-                let _ = window.paint_quad(fill(marker_bounds, rgb(marker.color)));
+                window.paint_quad(fill(marker_bounds, rgb(marker.color)));
             }
         });
 
@@ -2280,7 +2280,7 @@ impl Element for EditorElement {
                 origin: point(bounds.origin.x + bounds.size.width - px(track), px(thumb_y)),
                 size: size(px(track), px(thumb_h)),
             };
-            let _ = window.paint_quad(fill(thumb_bounds, hsla(0., 0., 0.6, 0.4)));
+            window.paint_quad(fill(thumb_bounds, hsla(0., 0., 0.6, 0.4)));
         }
     }
 }
