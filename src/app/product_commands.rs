@@ -556,10 +556,10 @@ fn dispatch_to_captured_target(
         if let Err(outcome) = target.validate_tab(cx) {
             return outcome;
         }
-        if command.name.as_ref().starts_with("editor.") {
-            if let Err(outcome) = target.document_id(cx) {
-                return outcome;
-            }
+        if command.name.as_ref().starts_with("editor.")
+            && let Err(outcome) = target.document_id(cx)
+        {
+            return outcome;
         }
         if !matches!(
             command.name.as_ref(),

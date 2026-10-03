@@ -488,10 +488,10 @@ impl BufferModel {
         let mut changed = false;
         for edit in edits {
             let range = self.checked_range(edit.range)?;
-            if let Some(previous) = &previous {
-                if range.start < previous.start || range.start < previous.end {
-                    return Err(BufferAccessError::InvalidEditBatch);
-                }
+            if let Some(previous) = &previous
+                && (range.start < previous.start || range.start < previous.end)
+            {
+                return Err(BufferAccessError::InvalidEditBatch);
             }
             if self.buffer.read_range(range.clone()) != edit.text {
                 changed = true;

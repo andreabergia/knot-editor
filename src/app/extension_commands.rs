@@ -483,15 +483,15 @@ impl ExtensionCommandBridge {
         }
         node.cancelled = true;
         let child = node.child;
-        if node.started {
-            if let InvocationTarget::Extension(target) = node.target {
-                self.events
-                    .push_back(ExtensionCommandEvent::CancelExtension {
-                        extension: target.extension,
-                        lifecycle: target.lifecycle,
-                        invocation,
-                    });
-            }
+        if node.started
+            && let InvocationTarget::Extension(target) = node.target
+        {
+            self.events
+                .push_back(ExtensionCommandEvent::CancelExtension {
+                    extension: target.extension,
+                    lifecycle: target.lifecycle,
+                    invocation,
+                });
         }
         if let Some(child) = child {
             self.cancel_subtree(child);

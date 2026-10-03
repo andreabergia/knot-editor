@@ -1247,10 +1247,9 @@ impl ProductShell {
                     }
                 })
                 .is_err()
+                && let Some(completion) = fallback
             {
-                if let Some(completion) = fallback {
-                    completion.complete(crate::host::protocol::CommandOutcome::InvalidTarget);
-                }
+                completion.complete(crate::host::protocol::CommandOutcome::InvalidTarget);
             }
         });
         self.tasks.push(task);
@@ -2259,12 +2258,12 @@ impl ProductShell {
             .pane(target.pane)
             .and_then(|pane| pane.tabs().iter().find(|tab| tab.id() == target.tab))
             .and_then(|tab| tab.editor().cloned());
-        if let Some(editor) = editor {
-            if editor.update(cx, |editor, cx| {
+        if let Some(editor) = editor
+            && editor.update(cx, |editor, cx| {
                 editor.execute_editing_command(name, window, cx)
-            }) {
-                return CommandOutcome::Completed;
-            }
+            })
+        {
+            return CommandOutcome::Completed;
         }
 
         match name {
@@ -3328,10 +3327,10 @@ mod tests {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
         loop {
             cx.run_until_parked();
-            if let Some(report) = cx.read(super::super::extension_host::startup_report) {
-                if report.state == super::super::extension_host::StartupState::Complete {
-                    return report;
-                }
+            if let Some(report) = cx.read(super::super::extension_host::startup_report)
+                && report.state == super::super::extension_host::StartupState::Complete
+            {
+                return report;
             }
             assert!(
                 std::time::Instant::now() < deadline,

@@ -827,10 +827,11 @@ mod tests {
                 let q = store.query_range(&b, a, bnd);
                 let mut expected = Vec::new();
                 for id in store.anchored_ranges.keys().copied() {
-                    if let Some(r) = store.resolve(&b, id) {
-                        if r.start < bnd && r.end > a {
-                            expected.push(id);
-                        }
+                    if let Some(r) = store.resolve(&b, id)
+                        && r.start < bnd
+                        && r.end > a
+                    {
+                        expected.push(id);
                     }
                 }
                 let mut q = q;
@@ -872,10 +873,11 @@ mod tests {
                 let q = store.query_range(&b, a, bnd);
                 let mut expected = Vec::new();
                 for id in store.anchored_ranges.keys().copied() {
-                    if let Some(r) = store.resolve(&b, id) {
-                        if r.start < bnd && r.end > a {
-                            expected.push(id);
-                        }
+                    if let Some(r) = store.resolve(&b, id)
+                        && r.start < bnd
+                        && r.end > a
+                    {
+                        expected.push(id);
                     }
                 }
                 let mut q = q;

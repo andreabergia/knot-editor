@@ -2190,20 +2190,21 @@ impl Element for EditorElement {
             // window focus AND there is no active selection (macOS hides the
             // caret while a selection is drag-held). No blink yet —
             // IME/selection stages get a timer.
-            if focused && selection.is_none() {
-                if let Some((line_ix, col)) = caret {
-                    let (caret_x, x_off) = shaped
-                        .iter()
-                        .find(|(ix, _, _, _)| *ix == line_ix)
-                        .map(|(_, s, x_off, line_str)| (x_for_index_dir(s, col, line_str), *x_off))
-                        .unwrap_or((px(0.), px(0.)));
-                    let top = bounds.origin.y + px(line_ix as f32 * LINE_HEIGHT) - px(scroll);
-                    let caret_bounds = Bounds {
-                        origin: point(bounds.origin.x + x_off + caret_x, top),
-                        size: size(px(2.), line_height),
-                    };
-                    window.paint_quad(fill(caret_bounds, hsla(0., 0., 0.9, 1.0)));
-                }
+            if focused
+                && selection.is_none()
+                && let Some((line_ix, col)) = caret
+            {
+                let (caret_x, x_off) = shaped
+                    .iter()
+                    .find(|(ix, _, _, _)| *ix == line_ix)
+                    .map(|(_, s, x_off, line_str)| (x_for_index_dir(s, col, line_str), *x_off))
+                    .unwrap_or((px(0.), px(0.)));
+                let top = bounds.origin.y + px(line_ix as f32 * LINE_HEIGHT) - px(scroll);
+                let caret_bounds = Bounds {
+                    origin: point(bounds.origin.x + x_off + caret_x, top),
+                    size: size(px(2.), line_height),
+                };
+                window.paint_quad(fill(caret_bounds, hsla(0., 0., 0.9, 1.0)));
             }
 
             // Decoration overlay: wavy underlines beneath contributed byte
