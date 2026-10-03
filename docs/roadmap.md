@@ -167,9 +167,9 @@ the item is removed from this register.
 - **D035 — macOS distribution**
   - Deferred: Local `Knot.app` builds cover dogfooding without release
     credentials or a distribution channel.
-  - Reconsider: Knot is ready to run on other Macs; choose a stable bundle
-    identity and release artifact, then add Developer ID signing, hardened
-    runtime validation for V8, notarization, and an install/update path.
+  - Reconsider: Knot is ready to run on other Macs; choose a release artifact,
+    then add Developer ID signing, hardened runtime validation for V8,
+    notarization, and an install/update path.
 
 - **D028 — Linux framework checkpoint**
   - Deferred: Initial product dogfooding targets macOS.
