@@ -2268,14 +2268,20 @@ impl ProductShell {
         }
 
         match name {
-            NEW_COMMAND => self
-                .new_document_in_pane(target.pane, window, cx)
-                .then_some(CommandOutcome::Completed)
-                .unwrap_or(CommandOutcome::InvalidTarget),
-            NEW_TERMINAL_COMMAND => self
-                .new_terminal_in_pane(target.pane, window, cx)
-                .then_some(CommandOutcome::Completed)
-                .unwrap_or(CommandOutcome::InvalidTarget),
+            NEW_COMMAND => {
+                if self.new_document_in_pane(target.pane, window, cx) {
+                    CommandOutcome::Completed
+                } else {
+                    CommandOutcome::InvalidTarget
+                }
+            }
+            NEW_TERMINAL_COMMAND => {
+                if self.new_terminal_in_pane(target.pane, window, cx) {
+                    CommandOutcome::Completed
+                } else {
+                    CommandOutcome::InvalidTarget
+                }
+            }
             MOVE_TERMINAL_TO_NEW_WINDOW_COMMAND => self.move_terminal_to_new_window_with(
                 target,
                 window,
@@ -2283,14 +2289,20 @@ impl ProductShell {
                 open_terminal_transfer_window,
             ),
             CLOSE_TAB_COMMAND => CommandOutcome::Unavailable,
-            SPLIT_HORIZONTAL_COMMAND => self
-                .split_pane(target.pane, SplitDirection::Horizontal, window, cx)
-                .then_some(CommandOutcome::Completed)
-                .unwrap_or(CommandOutcome::InvalidTarget),
-            SPLIT_VERTICAL_COMMAND => self
-                .split_pane(target.pane, SplitDirection::Vertical, window, cx)
-                .then_some(CommandOutcome::Completed)
-                .unwrap_or(CommandOutcome::InvalidTarget),
+            SPLIT_HORIZONTAL_COMMAND => {
+                if self.split_pane(target.pane, SplitDirection::Horizontal, window, cx) {
+                    CommandOutcome::Completed
+                } else {
+                    CommandOutcome::InvalidTarget
+                }
+            }
+            SPLIT_VERTICAL_COMMAND => {
+                if self.split_pane(target.pane, SplitDirection::Vertical, window, cx) {
+                    CommandOutcome::Completed
+                } else {
+                    CommandOutcome::InvalidTarget
+                }
+            }
             CLOSE_WINDOW_COMMAND => CommandOutcome::Unavailable,
             NEW_WINDOW_COMMAND => {
                 open_product_window(None, cx);
