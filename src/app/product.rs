@@ -3316,7 +3316,7 @@ mod tests {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
         loop {
             cx.run_until_parked();
-            if let Some(report) = cx.read(|cx| super::super::extension_host::startup_report(cx)) {
+            if let Some(report) = cx.read(super::super::extension_host::startup_report) {
                 if report.state == super::super::extension_host::StartupState::Complete {
                     return report;
                 }
