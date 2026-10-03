@@ -137,9 +137,7 @@ impl EditHistory {
     }
 
     pub(crate) fn undo(&mut self, buffer: &mut TextBuffer) -> Option<HistoryReplay> {
-        let Some(mut entry) = self.undo.pop() else {
-            return None;
-        };
+        let mut entry = self.undo.pop()?;
         entry.group = None;
         entry.transaction.prepare_for_history_replay(buffer);
         entry.transaction.undo(buffer);
@@ -153,9 +151,7 @@ impl EditHistory {
     }
 
     pub(crate) fn redo(&mut self, buffer: &mut TextBuffer) -> Option<HistoryReplay> {
-        let Some(mut entry) = self.redo.pop() else {
-            return None;
-        };
+        let mut entry = self.redo.pop()?;
         entry.transaction.prepare_for_history_replay(buffer);
         entry.transaction.redo(buffer);
         let replay = HistoryReplay {

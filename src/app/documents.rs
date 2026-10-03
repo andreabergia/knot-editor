@@ -253,9 +253,10 @@ impl DocumentCollection {
         id: DocumentId,
         model: &Entity<BufferModel>,
     ) -> Option<PersistenceCapture> {
-        let Some(document) = self.documents.iter_mut().find(|document| document.id == id) else {
-            return None;
-        };
+        let document = self
+            .documents
+            .iter_mut()
+            .find(|document| document.id == id)?;
         if &document.model != model || matches!(document.state, DocumentState::Generated) {
             return None;
         }
