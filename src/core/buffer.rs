@@ -1069,10 +1069,10 @@ mod tests {
         b.insert(5, "d"); // "abacada"
         b.insert(7, "e"); // at end == len, append -> "abacadae"
         let mut e = String::from("aaaa");
-        e.insert_str(1, "b"); // "abaaa"
-        e.insert_str(3, "c"); // "abacaa"
-        e.insert_str(5, "d"); // "abacada"
-        e.insert_str(7, "e"); // "abacadae"
+        e.insert(1, 'b'); // "abaaa"
+        e.insert(3, 'c'); // "abacaa"
+        e.insert(5, 'd'); // "abacada"
+        e.insert(7, 'e'); // "abacadae"
         assert_eq!(s(&b), e);
         assert_eq!(b.len(), 8);
         assert!(b.pieces.len() > 1);
