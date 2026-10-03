@@ -2468,6 +2468,9 @@ fn x_for_index_dir(s: &ShapedLine, index: usize, line_str: &str) -> Pixels {
     best.unwrap_or(if rtl_base { px(0.) } else { s.width })
 }
 
+const FONT_SIZE: f32 = 14.0;
+const LINE_HEIGHT: f32 = 20.0;
+
 #[cfg(test)]
 mod tests {
     use gpui::{
@@ -3233,6 +3236,3 @@ mod tests {
         });
     }
 }
-
-const FONT_SIZE: f32 = 14.0;
-const LINE_HEIGHT: f32 = 20.0;
