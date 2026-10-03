@@ -178,16 +178,18 @@ pub(crate) fn capture(directory: &Path) -> Result<ConfigSources, ConfigDiagnosti
         sources: BTreeMap::new(),
         graph: None,
     };
-    let metadata = match fs::symlink_metadata(directory) {
-        Ok(metadata) => metadata,
+    match fs::symlink_metadata(directory) {
+        Ok(_) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(captured),
         Err(error) => return Err(ConfigDiagnostic::new(None, directory, error.to_string())),
-    };
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+    }
+    let metadata = fs::metadata(directory)
+        .map_err(|error| ConfigDiagnostic::new(None, directory, error.to_string()))?;
+    if !metadata.is_dir() {
         return Err(ConfigDiagnostic::new(
             None,
             directory,
-            "configuration root must be a directory, not a symlink",
+            "configuration root must be a directory",
         ));
     }
     let canonical = fs::canonicalize(directory)
@@ -572,6 +574,39 @@ mod tests {
         let file_root = temp.path().join("file-root");
         fs::write(&file_root, "").unwrap();
         assert_eq!(capture(&file_root).unwrap_err().path, file_root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn follows_selected_root_symlink_but_keeps_imports_contained() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().unwrap();
+        let target = temp.path().join("dotfiles/knot");
+        let xdg = temp.path().join("xdg");
+        let selected = xdg.join("knot");
+        fs::create_dir_all(&target).unwrap();
+        fs::create_dir(&xdg).unwrap();
+        fs::write(target.join(PRE_INIT), "import './helper.js';").unwrap();
+        fs::write(target.join("helper.js"), "export {};").unwrap();
+        symlink(&target, &selected).unwrap();
+
+        assert_eq!(
+            select_config_root(temp.path(), None, Some(xdg.as_os_str())),
+            selected
+        );
+        let captured = capture(&selected).unwrap();
+        assert_eq!(captured.canonical_directory(), fs::canonicalize(&target).unwrap());
+        assert!(captured.pre_init);
+        assert_eq!(captured.sources.len(), 2);
+
+        let outside = temp.path().join("outside.js");
+        fs::write(&outside, "export {};").unwrap();
+        fs::remove_file(target.join("helper.js")).unwrap();
+        symlink(&outside, target.join("helper.js")).unwrap();
+        let escaped = capture(&selected).unwrap_err();
+        assert_eq!(escaped.phase, Some(ConfigPhase::PreInit));
+        assert!(escaped.cause.contains("escapes"));
     }
 
     #[cfg(unix)]
