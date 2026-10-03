@@ -1,6 +1,6 @@
 # D036: Personal JavaScript configuration
 
-Status: in progress. Checkpoint 3 implementation is ready for manual review.
+Status: completed. All checkpoint review gates passed on 2026-10-04.
 
 Source: [D003's deferred keymap need](../roadmap.md). This plan establishes
 personal configuration independently; JavaScript-defined keymaps will have a
@@ -65,8 +65,8 @@ Implemented source layout: the selected config directory contains optional
 below that directory. An existing `XDG_CONFIG_HOME/knot` takes precedence over
 an existing `~/.config/knot`, then the platform `Knot` config directory. Only
 one directory is active. Capture runs through the application boundary on a
-caller-provided directory; product startup will schedule it on
-the background executor in checkpoint 3. The host compiles reachable modules
+caller-provided directory; product startup schedules it on the background
+executor. The host compiles reachable modules
 without evaluating them to validate syntax and static imports. Diagnostics
 carry the phase, path, optional line and column, and cause. Checkpoint 1 tests
 cover directory selection, optional entries, local imports, escapes, missing
@@ -92,7 +92,7 @@ checkpoint 3. Host tests cover shared module state, an awaited command
 registration, top-level await, post-init alone, phase errors, and unload.
 The host phase behavior is covered by tests.
 
-### 3. Product startup and fatal error window 🟡
+### 3. Product startup and fatal error window ✅
 
 - Gate product readiness and incoming open requests on pre-init, installed
   extension startup, then post-init. Keep existing installed-extension failure
@@ -112,8 +112,8 @@ independent installed-extension failures, cleanup of command and completion
 registrations, queued file opens, and clipboard content. Manual product-window
 review found that Cmd-Q did not reach the error window. The error window now
 owns keyboard focus and handles the Quit command in its own key context; a
-key-dispatch test covers the path. Recheck Cmd-Q in the product build before
-this checkpoint is complete.
+key-dispatch test covers the path. The product build passed manual review for
+success, pre-init failure, post-init failure, Copy, Quit, and the Cmd-Q recheck.
 
-After the final checkpoint, update the architecture subsystem references and
-validated decisions to reflect the implemented config ownership and lifecycle.
+The architecture subsystem references and validated decisions reflect the
+implemented config ownership and lifecycle.
