@@ -21,7 +21,7 @@ use std::sync::mpsc;
 
 use super::{
     lifecycle::{ExtensionKey, Failure},
-    module_graph::ModuleGraph,
+    module_graph::{ConfigPhase, ModuleGraph},
     protocol::{
         BufferChange, BufferHandle, BufferSubscriptionId, ByteRange, Command, CommandArgumentValue,
         CommandInvocation, CommandInvocationId, CommandInvokeDispatch, CommandOutcome,
@@ -427,6 +427,7 @@ struct ModuleRegistry {
     modules: Vec<CompiledModule>,
     resolutions: Vec<ModuleResolution>,
     package_root: Option<Arc<str>>,
+    entries: HashMap<String, Arc<str>>,
 }
 
 impl ModuleRegistry {
@@ -454,6 +455,15 @@ impl ModuleRegistry {
             modules: Vec::new(),
             resolutions: Vec::new(),
             package_root: graph.map(|graph| Arc::from(graph.root())),
+            entries: graph
+                .map(|graph| {
+                    graph
+                        .entries()
+                        .iter()
+                        .map(|(name, url)| (name.clone(), url.clone()))
+                        .collect()
+                })
+                .unwrap_or_default(),
         }
     }
 }
@@ -1249,7 +1259,8 @@ impl RuntimeCapsule {
                 };
                 let compiled = {
                     let mut modules = self.local_state.modules.lock().unwrap();
-                    compile_module_graph(try_catch, &mut modules, &source)
+                    let blocked = blocked_post_init_import(&modules, &source);
+                    compile_module_graph(try_catch, &mut modules, &source, blocked.as_deref())
                 };
                 let compiled = match compiled {
                     Ok(compiled) => compiled,
@@ -2302,6 +2313,53 @@ impl RuntimePool {
         Ok(RuntimeExecution { result, completion })
     }
 
+    pub(crate) fn load_personal_config(
+        &self,
+        key: ExtensionKey,
+        config: IsolateConfig,
+        graph: ModuleGraph,
+    ) -> Result<(), RuntimePoolError> {
+        if graph.entries().keys().any(|name| {
+            name != ConfigPhase::PreInit.entry() && name != ConfigPhase::PostInit.entry()
+        }) {
+            return Err(RuntimeError::fatal(
+                RuntimeErrorKind::InvalidModuleSpecifier,
+                "personal config has an unknown phase entry",
+            )
+            .into());
+        }
+        self.load_with_graph(key, config, Some(&graph))
+    }
+
+    pub(crate) fn evaluate_personal_config_phase(
+        &self,
+        key: ExtensionKey,
+        phase: ConfigPhase,
+    ) -> Result<RuntimeExecution, RuntimePoolError> {
+        let capsule = self.capsule(key)?;
+        let entry = {
+            let modules = capsule.local_state.modules.lock().unwrap();
+            modules.entries.get(phase.entry()).cloned().ok_or_else(|| {
+                RuntimeError::fatal(
+                    RuntimeErrorKind::InvalidModuleSpecifier,
+                    format!("personal config {} is unavailable", phase.entry()),
+                )
+            })?
+        };
+        let (result_sender, result) = tokio::sync::oneshot::channel();
+        let (_, completion) = self.scheduler_handle.enqueue_root(
+            key,
+            EngineTurn {
+                capsule,
+                work: EngineWork::PackageModule {
+                    entry,
+                    result: result_sender,
+                },
+            },
+        )?;
+        Ok(RuntimeExecution { result, completion })
+    }
+
     pub(crate) fn execute(
         &self,
         key: ExtensionKey,
@@ -2786,7 +2844,7 @@ fn evaluate_fixture_module(
     };
     let compiled = {
         let mut modules = state.modules.lock().unwrap();
-        compile_module_graph(try_catch, &mut modules, specifier)
+        compile_module_graph(try_catch, &mut modules, specifier, None)
     };
     let compiled = match compiled {
         Ok(compiled) => compiled,
@@ -2895,7 +2953,16 @@ fn clear_module_registry(state: &RuntimeLocalState) {
 
 /// Check syntax and static imports without evaluating user code. The caller
 /// supplies an immutable graph and runs this away from the foreground thread.
-pub(crate) fn validate_module_graph(graph: &ModuleGraph) -> Result<(), RuntimeError> {
+pub(crate) fn validate_module_graph_entry(
+    graph: &ModuleGraph,
+    entry: &str,
+) -> Result<(), RuntimeError> {
+    let entry = graph.entry_url(entry).ok_or_else(|| {
+        RuntimeError::fatal(
+            RuntimeErrorKind::InvalidModuleSpecifier,
+            format!("module graph entry is unavailable: {entry}"),
+        )
+    })?;
     initialize();
     let mut isolate = v8::Isolate::new(Default::default());
     let scope = pin!(v8::HandleScope::new(&mut isolate));
@@ -2904,15 +2971,27 @@ pub(crate) fn validate_module_graph(graph: &ModuleGraph) -> Result<(), RuntimeEr
     let scope = &mut v8::ContextScope::new(&mut scope, context);
     v8::tc_scope!(let try_catch, scope);
     let mut modules = ModuleRegistry::new(Some(graph));
-    compile_module_graph(try_catch, &mut modules, graph.entry())
+    let blocked = blocked_post_init_import(&modules, entry);
+    compile_module_graph(try_catch, &mut modules, entry, blocked.as_deref())
         .map(|_| ())
-        .map_err(|failure| failure.report(try_catch, graph.entry()))
+        .map_err(|failure| failure.report(try_catch, entry))
+}
+
+fn blocked_post_init_import(registry: &ModuleRegistry, entry: &str) -> Option<Arc<str>> {
+    (registry
+        .entries
+        .get(ConfigPhase::PreInit.entry())
+        .map(AsRef::as_ref)
+        == Some(entry))
+    .then(|| registry.entries.get(ConfigPhase::PostInit.entry()).cloned())
+    .flatten()
 }
 
 fn compile_module_graph(
     scope: &mut v8::PinScope<'_, '_>,
     registry: &mut ModuleRegistry,
     specifier: &str,
+    blocked_import: Option<&str>,
 ) -> Result<v8::Global<v8::Module>, ModuleCompileFailure> {
     if let Some(record) = registry
         .modules
@@ -2975,6 +3054,14 @@ fn compile_module_graph(
                     ));
                 }
             };
+        if blocked_import == Some(resolved.as_str()) {
+            throw_module_error(scope, "pre-init cannot import post-init.js");
+            return Err(ModuleCompileFailure::at_import(
+                RuntimeErrorKind::ModuleResolution,
+                specifier,
+                location,
+            ));
+        }
         if !registry.sources.contains_key(&resolved) {
             let kind = if registry.package_root.is_some() {
                 "package"
@@ -2993,7 +3080,7 @@ fn compile_module_graph(
             request,
             resolved: resolved.clone(),
         });
-        compile_module_graph(scope, registry, &resolved)?;
+        compile_module_graph(scope, registry, &resolved, blocked_import)?;
     }
     Ok(global)
 }
@@ -4016,6 +4103,217 @@ mod tests {
                 .collect(),
         )
         .unwrap()
+    }
+
+    fn config_graph(entries: &[&str], files: &[(&str, &str)]) -> ModuleGraph {
+        ModuleGraph::with_entries(
+            "file:///config/knot/",
+            entries,
+            files
+                .iter()
+                .map(|(path, source)| ((*path).into(), Arc::from(*source)))
+                .collect(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn personal_config_phases_share_one_awaited_lifecycle() {
+        let pool = RuntimePool::new(PoolConfig::single_worker());
+        let mut inbox = pool.take_event_inbox().unwrap();
+        let runtime = key(90);
+        let graph = config_graph(
+            &["pre-init.js", "post-init.js"],
+            &[
+                (
+                    "counter.mjs",
+                    "export let count = 0; export function increment() { count++; }",
+                ),
+                (
+                    "pre-init.js",
+                    "import { commands } from 'knot:editor'; import { increment } from './counter.mjs'; globalThis.phaseOrder = ['pre']; increment(); await Promise.resolve(); globalThis.configCommand = await commands.register('knot.config.test', () => {});",
+                ),
+                (
+                    "post-init.js",
+                    "import { count, increment } from './counter.mjs'; if (count !== 1 || !globalThis.configCommand) throw new Error('lost pre-init state'); increment(); await Promise.resolve(); globalThis.phaseOrder.push('post');",
+                ),
+            ],
+        );
+        pool.load_personal_config(runtime, IsolateConfig::default(), graph)
+            .unwrap();
+        let pre = pool
+            .evaluate_personal_config_phase(runtime, ConfigPhase::PreInit)
+            .unwrap();
+        let Some(EngineEvent::Request(request)) = inbox.receive_timeout(Duration::from_secs(1))
+        else {
+            panic!("personal config registration request was not received");
+        };
+        assert_eq!(
+            request.operation,
+            HostOperation::RegisterCommand {
+                name: "knot.config.test".into(),
+                title: "knot.config.test".into(),
+            }
+        );
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: request.id,
+            result: Ok(HostResponseValue::CommandRegistered {
+                registration: CommandRegistrationId::new(100),
+            }),
+        })
+        .unwrap();
+        pre.wait().unwrap();
+        let extension = key(94);
+        pool.load_package(
+            extension,
+            IsolateConfig::default(),
+            package_graph(
+                "file:///extensions/%40example/during-config/",
+                "main.js",
+                &[("main.js", "globalThis.extensionStarted = true;")],
+            ),
+        )
+        .unwrap()
+        .wait()
+        .unwrap();
+        pool.evaluate_personal_config_phase(runtime, ConfigPhase::PostInit)
+            .unwrap()
+            .wait()
+            .unwrap();
+        assert_eq!(
+            pool.execute(runtime, "verify.js", "phaseOrder.join(',')")
+                .unwrap()
+                .wait()
+                .unwrap()
+                .value
+                .as_ref(),
+            "pre,post"
+        );
+        pool.unload(runtime).unwrap();
+        assert!(matches!(
+            inbox.receive_timeout(Duration::from_secs(1)),
+            Some(EngineEvent::LifecycleEnded { key: ended, reason: LifecycleEnd::Unloaded }) if ended == runtime
+        ));
+        assert!(
+            pool.evaluate_personal_config_phase(runtime, ConfigPhase::PostInit)
+                .is_err()
+        );
+        pool.unload(extension).unwrap();
+        pool.shutdown();
+    }
+
+    #[test]
+    fn personal_config_runtime_blocks_early_post_init_import() {
+        let pool = RuntimePool::new(PoolConfig::single_worker());
+        let runtime = key(95);
+        let graph = config_graph(
+            &["pre-init.js", "post-init.js"],
+            &[
+                ("pre-init.js", "import './helper.js';"),
+                ("helper.js", "import './post-init.js';"),
+                ("post-init.js", "globalThis.startedEarly = true;"),
+            ],
+        );
+        pool.load_personal_config(runtime, IsolateConfig::default(), graph)
+            .unwrap();
+        let error = pool
+            .evaluate_personal_config_phase(runtime, ConfigPhase::PreInit)
+            .unwrap()
+            .wait()
+            .unwrap_err();
+        assert_eq!(error.kind(), RuntimeErrorKind::ModuleResolution);
+        assert_eq!(error.source(), Some("file:///config/knot/helper.js"));
+        assert_eq!(error.line(), Some(1));
+        pool.unload(runtime).unwrap();
+        pool.shutdown();
+    }
+
+    #[test]
+    fn personal_config_phase_errors_keep_their_source_and_can_be_unloaded() {
+        let pool = RuntimePool::new(PoolConfig::single_worker());
+        for (index, failing_phase) in [ConfigPhase::PreInit, ConfigPhase::PostInit]
+            .into_iter()
+            .enumerate()
+        {
+            let runtime = key(91 + index as u64);
+            let graph = config_graph(
+                &["pre-init.js", "post-init.js"],
+                &[
+                    (
+                        "pre-init.js",
+                        if failing_phase == ConfigPhase::PreInit {
+                            "\nthrow new Error('pre boom');"
+                        } else {
+                            "globalThis.ready = true;"
+                        },
+                    ),
+                    ("post-init.js", "\nthrow new Error('post boom');"),
+                ],
+            );
+            pool.load_personal_config(runtime, IsolateConfig::default(), graph)
+                .unwrap();
+            let pre = pool
+                .evaluate_personal_config_phase(runtime, ConfigPhase::PreInit)
+                .unwrap()
+                .wait();
+            let error = if failing_phase == ConfigPhase::PreInit {
+                pre.unwrap_err()
+            } else {
+                pre.unwrap();
+                pool.evaluate_personal_config_phase(runtime, ConfigPhase::PostInit)
+                    .unwrap()
+                    .wait()
+                    .unwrap_err()
+            };
+            assert_eq!(error.kind(), RuntimeErrorKind::Rejection);
+            assert_eq!(error.line(), Some(2));
+            assert_eq!(
+                error.source(),
+                Some(if failing_phase == ConfigPhase::PreInit {
+                    "file:///config/knot/pre-init.js"
+                } else {
+                    "file:///config/knot/post-init.js"
+                })
+            );
+            pool.unload(runtime).unwrap();
+        }
+        pool.shutdown();
+    }
+
+    #[test]
+    fn personal_config_can_have_only_post_init() {
+        let pool = RuntimePool::new(PoolConfig::single_worker());
+        let runtime = key(93);
+        let graph = config_graph(
+            &["post-init.js"],
+            &[(
+                "post-init.js",
+                "await Promise.resolve(); globalThis.postOnly = true;",
+            )],
+        );
+        pool.load_personal_config(runtime, IsolateConfig::default(), graph)
+            .unwrap();
+        assert!(
+            pool.evaluate_personal_config_phase(runtime, ConfigPhase::PreInit)
+                .is_err()
+        );
+        pool.evaluate_personal_config_phase(runtime, ConfigPhase::PostInit)
+            .unwrap()
+            .wait()
+            .unwrap();
+        assert_eq!(
+            pool.execute(runtime, "verify.js", "postOnly")
+                .unwrap()
+                .wait()
+                .unwrap()
+                .value
+                .as_ref(),
+            "true"
+        );
+        pool.unload(runtime).unwrap();
+        pool.shutdown();
     }
 
     #[test]

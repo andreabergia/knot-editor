@@ -18,8 +18,8 @@ Part of the [architecture](../architecture.md). Design rationale is recorded in
   data. The engine owns exact-once teardown.
 - `pool` exposes the V8-free application control, event-inbox, completion,
   watchdog, diagnostics, and shutdown surface.
-- `module_graph` validates generated file URLs, the entry module, and captured
-  package-local sources without V8 or filesystem access.
+- `module_graph` validates generated file URLs, one or more entry modules, and
+  captured directory-local sources without V8 or filesystem access.
 
 A package load binds its immutable source graph to one isolate before scheduling
 entry as a root turn. Static imports may resolve only `knot:editor` or relative
@@ -77,6 +77,14 @@ worker. Cached JavaScript buffer proxies expose revisioned snapshots, batched
 edits, change subscriptions, and one replaceable contribution set. The engine
 converts these values directly at the V8 boundary; immutable UTF-16 snapshot
 storage is externalized with one `Arc` reference retained until V8 releases it.
+
+Personal config uses one capsule with optional pre-init and post-init graph
+entries. Loading the graph evaluates neither entry; the application schedules
+each entry as a separate awaited root turn. Compiled modules, JavaScript state,
+and registrations remain in the capsule between turns. Pre-init cannot import
+post-init, including through another local module, so the later entry cannot
+run during the earlier phase. Either entry may be absent. Unload uses the same
+exact-once lifecycle finalizer as installed extensions.
 
 Command handlers remain persistent JavaScript functions keyed by opaque
 foreground-issued registrations. Native-to-extension invocation enters as

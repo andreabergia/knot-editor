@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use directories::{BaseDirs, ProjectDirs};
 
-use crate::host::{engine::validate_module_graph, module_graph::ModuleGraph};
+use crate::host::{engine::validate_module_graph_entry, module_graph::ModuleGraph};
 
 const PRE_INIT: &str = "pre-init.js";
 const POST_INIT: &str = "post-init.js";
@@ -56,6 +56,13 @@ pub(crate) struct ConfigSources {
     pub(crate) post_init: bool,
     /// Slash-separated paths relative to the config directory.
     pub(crate) sources: BTreeMap<String, Arc<str>>,
+    graph: Option<ModuleGraph>,
+}
+
+impl ConfigSources {
+    pub(crate) fn into_graph(self) -> Option<ModuleGraph> {
+        self.graph
+    }
 }
 
 pub(crate) fn user_config_root() -> Result<PathBuf, String> {
@@ -95,6 +102,7 @@ pub(crate) fn capture(directory: &Path) -> Result<ConfigSources, ConfigDiagnosti
         pre_init: false,
         post_init: false,
         sources: BTreeMap::new(),
+        graph: None,
     };
     let metadata = match fs::symlink_metadata(directory) {
         Ok(metadata) => metadata,
@@ -130,6 +138,16 @@ pub(crate) fn capture(directory: &Path) -> Result<ConfigSources, ConfigDiagnosti
     let root = url::Url::from_directory_path(&canonical).map_err(|_| {
         ConfigDiagnostic::new(None, directory, "configuration directory has no file URL")
     })?;
+    let entries: Vec<_> = [ConfigPhase::PreInit, ConfigPhase::PostInit]
+        .into_iter()
+        .filter(|phase| match phase {
+            ConfigPhase::PreInit => captured.pre_init,
+            ConfigPhase::PostInit => captured.post_init,
+        })
+        .map(ConfigPhase::entry)
+        .collect();
+    let graph = ModuleGraph::with_entries(root.as_str(), &entries, captured.sources.clone())
+        .map_err(|cause| ConfigDiagnostic::new(None, directory, cause))?;
     for phase in [ConfigPhase::PreInit, ConfigPhase::PostInit] {
         let present = match phase {
             ConfigPhase::PreInit => captured.pre_init,
@@ -138,11 +156,7 @@ pub(crate) fn capture(directory: &Path) -> Result<ConfigSources, ConfigDiagnosti
         if !present {
             continue;
         }
-        let graph = ModuleGraph::new(root.as_str(), phase.entry(), captured.sources.clone())
-            .map_err(|cause| {
-                ConfigDiagnostic::new(Some(phase), &directory.join(phase.entry()), cause)
-            })?;
-        validate_module_graph(&graph).map_err(|error| {
+        validate_module_graph_entry(&graph, phase.entry()).map_err(|error| {
             let path = error
                 .source()
                 .and_then(|source| url::Url::parse(source).ok())
@@ -165,6 +179,7 @@ pub(crate) fn capture(directory: &Path) -> Result<ConfigSources, ConfigDiagnosti
             }
         })?;
     }
+    captured.graph = Some(graph);
     Ok(captured)
 }
 
@@ -291,6 +306,13 @@ mod tests {
         let both = capture(temp.path()).unwrap();
         assert!(both.pre_init && both.post_init);
         assert_eq!(both.sources.len(), 3);
+        assert!(
+            both.clone()
+                .into_graph()
+                .unwrap()
+                .entry_url(POST_INIT)
+                .is_some()
+        );
         fs::write(temp.path().join("lib/state.mjs"), "changed").unwrap();
         assert_eq!(
             both.sources["lib/state.mjs"].as_ref(),
@@ -323,6 +345,19 @@ mod tests {
         let invalid = capture(temp.path()).unwrap_err();
         assert_eq!(invalid.path, temp.path().join("valid.js"));
         assert_eq!(invalid.line, Some(1));
+    }
+
+    #[test]
+    fn pre_init_cannot_import_post_init() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(temp.path().join(PRE_INIT), "import './helper.js';").unwrap();
+        fs::write(temp.path().join("helper.js"), "import './post-init.js';").unwrap();
+        fs::write(temp.path().join(POST_INIT), "export {};").unwrap();
+        let error = capture(temp.path()).unwrap_err();
+        assert_eq!(error.phase, Some(ConfigPhase::PreInit));
+        assert_eq!(error.path, temp.path().join("helper.js"));
+        assert_eq!(error.line, Some(1));
+        assert!(error.cause.contains("pre-init cannot import post-init"));
     }
 
     #[test]

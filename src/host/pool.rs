@@ -5,7 +5,7 @@ use std::sync::Arc;
 use super::{
     engine::{self, EngineEvent, LifecycleEnd, RuntimePool},
     lifecycle::ExtensionKey,
-    module_graph::ModuleGraph,
+    module_graph::{ConfigPhase, ModuleGraph},
     protocol::{
         BufferChange, BufferHandle, BufferSubscriptionId, CommandInvocation, CommandInvocationId,
         CompletionRequest, HostRequest, HostResponse, TreeChildrenRequest,
@@ -128,6 +128,23 @@ impl ExtensionPool {
         graph: ModuleGraph,
     ) -> Result<ExtensionExecution, ExtensionPoolError> {
         self.engine.load_package(key, config.0, graph)
+    }
+
+    pub(crate) fn load_personal_config(
+        &self,
+        key: ExtensionKey,
+        config: ExtensionConfig,
+        graph: ModuleGraph,
+    ) -> Result<(), ExtensionPoolError> {
+        self.engine.load_personal_config(key, config.0, graph)
+    }
+
+    pub(crate) fn evaluate_personal_config_phase(
+        &self,
+        key: ExtensionKey,
+        phase: ConfigPhase,
+    ) -> Result<ExtensionExecution, ExtensionPoolError> {
+        self.engine.evaluate_personal_config_phase(key, phase)
     }
 
     #[cfg(test)]

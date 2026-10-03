@@ -1,6 +1,6 @@
 # D036: Personal JavaScript configuration
 
-Status: in progress. Checkpoint 1 is ready for review.
+Status: in progress. Checkpoint 2 is ready for review.
 
 Source: [D003's deferred keymap need](../roadmap.md). This plan establishes
 personal configuration independently; JavaScript-defined keymaps will have a
@@ -64,15 +64,16 @@ Implemented source layout: the selected config directory contains optional
 `pre-init.js` and `post-init.js` entries, with relative `.js` and `.mjs` imports
 below that directory. An existing `XDG_CONFIG_HOME/knot` takes precedence over
 an existing `~/.config/knot`, then the platform `Knot` config directory. Only
-one directory is active. Capture runs through the application
-boundary on a caller-provided directory; product startup will schedule it on
+one directory is active. Capture runs through the application boundary on a
+caller-provided directory; product startup will schedule it on
 the background executor in checkpoint 3. The host compiles reachable modules
 without evaluating them to validate syntax and static imports. Diagnostics
 carry the phase, path, optional line and column, and cause. Checkpoint 1 tests
 cover directory selection, optional entries, local imports, escapes, missing
-imports, invalid syntax, and read failures. Review gate pending inspection.
+imports, invalid syntax, and read failures. The XDG precedence was agreed
+during review.
 
-### 2. One lifecycle with two ordered module evaluations ⬜
+### 2. One lifecycle with two ordered module evaluations ✅
 
 - Extend the package-graph host boundary so the same isolate can evaluate the
   optional pre-init and post-init entries as separate awaited root turns.
@@ -80,6 +81,15 @@ imports, invalid syntax, and read failures. Review gate pending inspection.
 - Test evaluation order, shared state, top-level await, runtime errors, and
   lifecycle teardown without gpui.
 - **Review gate:** inspect phase isolation and host error behavior.
+
+The host accepts one immutable graph with either or both phase roots, loads it
+without evaluating either root, then exposes separate awaited phase turns on
+the same lifecycle. Pre-init imports cannot reach `post-init.js`, including
+through a helper module. Compilation and runtime errors retain generated
+source locations; the application owns the fatal startup response in
+checkpoint 3. Host tests cover shared module state, an awaited command
+registration, top-level await, post-init alone, phase errors, and unload.
+Review gate pending inspection.
 
 ### 3. Product startup and fatal error window ⬜
 

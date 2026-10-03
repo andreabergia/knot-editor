@@ -5,10 +5,26 @@ use std::sync::Arc;
 
 use url::Url;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ConfigPhase {
+    PreInit,
+    PostInit,
+}
+
+impl ConfigPhase {
+    pub(crate) const fn entry(self) -> &'static str {
+        match self {
+            Self::PreInit => "pre-init.js",
+            Self::PostInit => "post-init.js",
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct ModuleGraph {
     root: Arc<str>,
     entry: Arc<str>,
+    entries: Arc<BTreeMap<String, Arc<str>>>,
     sources: Arc<BTreeMap<String, Arc<str>>>,
 }
 
@@ -19,6 +35,17 @@ impl ModuleGraph {
         entry: &str,
         files: BTreeMap<String, Arc<str>>,
     ) -> Result<Self, String> {
+        Self::with_entries(root, &[entry], files)
+    }
+
+    pub(crate) fn with_entries(
+        root: &str,
+        entries: &[&str],
+        files: BTreeMap<String, Arc<str>>,
+    ) -> Result<Self, String> {
+        if entries.is_empty() {
+            return Err("module graph needs an entry".into());
+        }
         let root_url = Url::parse(root).map_err(|error| format!("invalid package URL: {error}"))?;
         if root_url.scheme() != "file"
             || !root_url.as_str().ends_with('/')
@@ -27,7 +54,6 @@ impl ModuleGraph {
         {
             return Err("package root must be a directory file URL".into());
         }
-        validate_path(entry)?;
         let mut sources = BTreeMap::new();
         for (path, source) in files {
             validate_path(&path)?;
@@ -39,13 +65,25 @@ impl ModuleGraph {
                 return Err(format!("duplicate module URL for {path}"));
             }
         }
-        let entry = file_url(&root_url, entry)?.to_string();
-        if !sources.contains_key(&entry) {
-            return Err(format!("entry module is unavailable: {entry}"));
+        let mut entry_urls = BTreeMap::<String, Arc<str>>::new();
+        for entry in entries {
+            validate_path(entry)?;
+            let url = file_url(&root_url, entry)?.to_string();
+            if !sources.contains_key(&url) {
+                return Err(format!("entry module is unavailable: {url}"));
+            }
+            if entry_urls
+                .insert((*entry).to_owned(), Arc::from(url))
+                .is_some()
+            {
+                return Err(format!("duplicate module entry: {entry}"));
+            }
         }
+        let entry = entry_urls[entries[0]].clone();
         Ok(Self {
             root: root_url.to_string().into(),
-            entry: entry.into(),
+            entry,
+            entries: Arc::new(entry_urls),
             sources: Arc::new(sources),
         })
     }
@@ -56,6 +94,14 @@ impl ModuleGraph {
 
     pub(crate) fn entry(&self) -> &str {
         &self.entry
+    }
+
+    pub(crate) fn entry_url(&self, name: &str) -> Option<&str> {
+        self.entries.get(name).map(AsRef::as_ref)
+    }
+
+    pub(crate) fn entries(&self) -> &BTreeMap<String, Arc<str>> {
+        &self.entries
     }
 
     pub(crate) fn sources(&self) -> &BTreeMap<String, Arc<str>> {
@@ -137,5 +183,34 @@ mod tests {
             graph.entry(),
             "file:///extensions/%40example/tools/main%20%231.js"
         );
+    }
+
+    #[test]
+    fn multiple_entries_must_exist_and_keep_distinct_urls() {
+        let files = BTreeMap::from([
+            ("pre-init.js".into(), Arc::from("export {};")),
+            ("post-init.js".into(), Arc::from("export {};")),
+        ]);
+        let graph = ModuleGraph::with_entries(
+            "file:///config/knot/",
+            &["pre-init.js", "post-init.js"],
+            files.clone(),
+        )
+        .unwrap();
+        assert_eq!(graph.entry(), "file:///config/knot/pre-init.js");
+        assert_eq!(
+            graph.entry_url("post-init.js"),
+            Some("file:///config/knot/post-init.js")
+        );
+        assert!(ModuleGraph::with_entries("file:///config/knot/", &[], files.clone()).is_err());
+        assert!(
+            ModuleGraph::with_entries(
+                "file:///config/knot/",
+                &["pre-init.js", "pre-init.js"],
+                files.clone()
+            )
+            .is_err()
+        );
+        assert!(ModuleGraph::with_entries("file:///config/knot/", &["missing.js"], files).is_err());
     }
 }
