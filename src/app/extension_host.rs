@@ -739,7 +739,7 @@ impl ProductExtensionHost {
             .clone();
         let buffer = self.buffers.open_buffer(&model);
         self.buffer_observers.entry(buffer).or_insert_with(|| {
-            let observer = cx.observe(&model, |this, model, cx| {
+            cx.observe(&model, |this, model, cx| {
                 for dispatch in this.buffers.drain_model_changes(&model, cx) {
                     let _ = this.pool.dispatch_buffer_change(
                         ExtensionKey::new(dispatch.extension, dispatch.lifecycle),
@@ -747,8 +747,7 @@ impl ProductExtensionHost {
                         dispatch.change,
                     );
                 }
-            });
-            observer
+            })
         });
         Some(buffer)
     }
