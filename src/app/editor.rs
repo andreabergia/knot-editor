@@ -1944,18 +1944,7 @@ impl Element for EditorElement {
             gutter_markers,
             focus_handle,
             entity,
-        ): (
-            f32,
-            f32,
-            Vec<(usize, String, Vec<Seg>)>,
-            Option<(usize, usize)>,
-            Option<((usize, usize), (usize, usize))>,
-            Option<((usize, usize), (usize, usize))>,
-            Vec<RenderedDecoration>,
-            Vec<RenderedGutterMarker>,
-            FocusHandle,
-            Entity<EditorView>,
-        ) = {
+        ): EditorPaintState = {
             let view = self.entity.read(cx);
             let max = (view.lines.len() as f32) * LINE_HEIGHT;
             let first = (view.scroll / LINE_HEIGHT).floor() as usize;
@@ -2471,6 +2460,19 @@ fn x_for_index_dir(s: &ShapedLine, index: usize, line_str: &str) -> Pixels {
 
 const FONT_SIZE: f32 = 14.0;
 const LINE_HEIGHT: f32 = 20.0;
+
+type EditorPaintState = (
+    f32,
+    f32,
+    Vec<(usize, String, Vec<Seg>)>,
+    Option<(usize, usize)>,
+    Option<((usize, usize), (usize, usize))>,
+    Option<((usize, usize), (usize, usize))>,
+    Vec<RenderedDecoration>,
+    Vec<RenderedGutterMarker>,
+    FocusHandle,
+    Entity<EditorView>,
+);
 
 #[cfg(test)]
 mod tests {
