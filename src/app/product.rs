@@ -3038,7 +3038,7 @@ pub(crate) fn run(initial_request: Option<OpenRequest>, fixture: Option<String>)
     });
 }
 
-fn bind_product_keys(cx: &mut App) {
+pub(super) fn bind_product_keys(cx: &mut App) {
     super::product_commands::bind_editing_keys(cx);
     cx.bind_keys([
         KeyBinding::new(
@@ -3151,6 +3151,11 @@ fn bind_product_keys(cx: &mut App) {
             "cmd-q",
             ProductCommandSource::new(QUIT_COMMAND),
             Some("product"),
+        ),
+        KeyBinding::new(
+            "cmd-q",
+            ProductCommandSource::new(QUIT_COMMAND),
+            Some("config-error"),
         ),
     ]);
 }

@@ -13,7 +13,8 @@ Successful startup opens the queued product windows, or one empty product
 window when no requests arrived, then activates the app. A fatal personal
 config error discards the queue and opens a dedicated diagnostic window with
 Copy and Quit controls. The editor does not open in that launch; the diagnostic
-window stays open until Quit.
+window takes keyboard focus and accepts the Quit command, including Cmd-Q. It
+stays open until Quit.
 
 ## Editor views
 

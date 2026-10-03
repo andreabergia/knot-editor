@@ -2,20 +2,29 @@
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, AppContext, Bounds, ClipboardItem, Context, InteractiveElement, IntoElement,
+    App, AppContext, Bounds, ClipboardItem, Context, FocusHandle, InteractiveElement, IntoElement,
     ParentElement, Render, StatefulInteractiveElement, Styled, Window, WindowBounds, WindowOptions,
     div, px, rgb, size,
 };
 
 use super::personal_config::ConfigDiagnostic;
+use super::product_commands::{ProductCommandSource, QUIT_COMMAND};
 
 pub(crate) struct PersonalConfigErrorView {
     diagnostic: ConfigDiagnostic,
+    focus: FocusHandle,
+    #[cfg(test)]
+    quit_requested: bool,
 }
 
 impl PersonalConfigErrorView {
-    fn new(diagnostic: ConfigDiagnostic) -> Self {
-        Self { diagnostic }
+    fn new(diagnostic: ConfigDiagnostic, cx: &mut Context<Self>) -> Self {
+        Self {
+            diagnostic,
+            focus: cx.focus_handle(),
+            #[cfg(test)]
+            quit_requested: false,
+        }
     }
 
     fn copy(&self, cx: &mut App) {
@@ -39,6 +48,17 @@ impl Render for PersonalConfigErrorView {
             _ => self.diagnostic.path.display().to_string(),
         };
         div()
+            .track_focus(&self.focus)
+            .key_context("config-error")
+            .on_action(cx.listener(|_this, source: &ProductCommandSource, _, cx| {
+                if source.name.as_ref() == QUIT_COMMAND {
+                    #[cfg(test)]
+                    {
+                        _this.quit_requested = true;
+                    }
+                    cx.quit();
+                }
+            }))
             .size_full()
             .flex()
             .flex_col()
@@ -105,7 +125,9 @@ pub(crate) fn open(diagnostic: ConfigDiagnostic, cx: &mut App) {
         },
         |window, cx| {
             window.on_window_should_close(cx, |_, _| false);
-            cx.new(|_| PersonalConfigErrorView::new(diagnostic))
+            let view = cx.new(|cx| PersonalConfigErrorView::new(diagnostic, cx));
+            view.read(cx).focus.focus(window);
+            view
         },
     )
     .expect("personal configuration error window must open");
@@ -116,20 +138,37 @@ pub(crate) fn open(diagnostic: ConfigDiagnostic, cx: &mut App) {
 mod tests {
     use super::*;
     use crate::app::personal_config::ConfigPhase;
+    use crate::app::product::bind_product_keys;
     use gpui::TestAppContext;
 
-    #[gpui::test]
-    fn copy_places_the_complete_diagnostic_on_the_clipboard(cx: &mut TestAppContext) {
-        let diagnostic = ConfigDiagnostic {
+    fn diagnostic() -> ConfigDiagnostic {
+        ConfigDiagnostic {
             phase: Some(ConfigPhase::PostInit),
             path: std::path::PathBuf::from("config").join("knot/post-init.js"),
             line: Some(7),
             column: Some(3),
             cause: "Error: bad configuration".into(),
             stack: Some("at post-init.js:7:3".into()),
-        };
+        }
+    }
+
+    #[gpui::test]
+    fn quit_command_is_bound_in_the_error_window(cx: &mut TestAppContext) {
+        cx.update(bind_product_keys);
+        cx.update(|cx| open(diagnostic(), cx));
+        let window = cx.windows()[0]
+            .downcast::<PersonalConfigErrorView>()
+            .unwrap();
+        cx.simulate_keystrokes(*window, "cmd-q");
+        cx.read(|cx| assert!(window.read(cx).unwrap().quit_requested));
+    }
+
+    #[gpui::test]
+    fn copy_places_the_complete_diagnostic_on_the_clipboard(cx: &mut TestAppContext) {
+        let diagnostic = diagnostic();
         cx.update(|cx| {
-            PersonalConfigErrorView::new(diagnostic.clone()).copy(cx);
+            let view = cx.new(|cx| PersonalConfigErrorView::new(diagnostic.clone(), cx));
+            view.update(cx, |view, cx| view.copy(cx));
             assert_eq!(
                 cx.read_from_clipboard().unwrap().text().unwrap(),
                 format!(

@@ -110,7 +110,10 @@ opens a dedicated native window with phase, source location, message, Copy,
 and Quit. Product tests cover successful startup, either phase failing,
 independent installed-extension failures, cleanup of command and completion
 registrations, queued file opens, and clipboard content. Manual product-window
-review remains before this checkpoint is complete.
+review found that Cmd-Q did not reach the error window. The error window now
+owns keyboard focus and handles the Quit command in its own key context; a
+key-dispatch test covers the path. Recheck Cmd-Q in the product build before
+this checkpoint is complete.
 
 After the final checkpoint, update the architecture subsystem references and
 validated decisions to reflect the implemented config ownership and lifecycle.
