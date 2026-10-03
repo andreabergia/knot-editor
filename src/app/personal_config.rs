@@ -1,11 +1,12 @@
 //! Personal configuration source capture before JavaScript enters the host.
 
 use std::collections::BTreeMap;
+use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use directories::ProjectDirs;
+use directories::{BaseDirs, ProjectDirs};
 
 use crate::host::{engine::validate_module_graph, module_graph::ModuleGraph};
 
@@ -60,7 +61,30 @@ pub(crate) struct ConfigSources {
 pub(crate) fn user_config_root() -> Result<PathBuf, String> {
     let dirs = ProjectDirs::from("", "", "Knot")
         .ok_or_else(|| "cannot determine the user configuration directory".to_owned())?;
-    Ok(dirs.config_dir().to_path_buf())
+    let base = BaseDirs::new();
+    let xdg_home = std::env::var_os("XDG_CONFIG_HOME");
+    Ok(select_config_root(
+        dirs.config_dir(),
+        base.as_ref().map(BaseDirs::home_dir),
+        xdg_home.as_deref(),
+    ))
+}
+
+fn select_config_root(native: &Path, home: Option<&Path>, xdg_home: Option<&OsStr>) -> PathBuf {
+    let xdg = xdg_home
+        .map(Path::new)
+        .filter(|path| path.is_absolute())
+        .map(|path| path.join("knot"));
+    let default_xdg = home.map(|home| home.join(".config/knot"));
+    for path in [xdg, default_xdg].into_iter().flatten() {
+        // Select an inaccessible or invalid existing path so capture can report
+        // its failure instead of silently loading a lower-priority directory.
+        if !matches!(fs::symlink_metadata(&path), Err(error) if error.kind() == std::io::ErrorKind::NotFound)
+        {
+            return path;
+        }
+    }
+    native.to_path_buf()
 }
 
 /// Call on a background executor. `directory` is explicit so tests and launch
@@ -217,6 +241,34 @@ fn collect(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn selects_one_existing_xdg_root_before_native_root() {
+        let temp = tempfile::tempdir().unwrap();
+        let native = temp.path().join("native/Knot");
+        let home = temp.path().join("home");
+        let xdg = temp.path().join("xdg");
+        fs::create_dir_all(&native).unwrap();
+        fs::create_dir_all(&home).unwrap();
+        fs::write(native.join(PRE_INIT), "globalThis.native = true;").unwrap();
+        assert_eq!(select_config_root(&native, Some(&home), None), native);
+
+        let default_xdg = home.join(".config/knot");
+        fs::create_dir_all(&default_xdg).unwrap();
+        fs::write(default_xdg.join(POST_INIT), "export {};").unwrap();
+        assert_eq!(select_config_root(&native, Some(&home), None), default_xdg);
+        assert_eq!(
+            select_config_root(&native, Some(&home), Some(OsStr::new("relative"))),
+            default_xdg
+        );
+
+        fs::create_dir_all(xdg.join("knot")).unwrap();
+        let selected = select_config_root(&native, Some(&home), Some(xdg.as_os_str()));
+        assert_eq!(selected, xdg.join("knot"));
+        let captured = capture(&selected).unwrap();
+        assert!(!captured.pre_init && !captured.post_init);
+        assert!(captured.sources.is_empty());
+    }
 
     #[test]
     fn missing_directory_and_entries_are_optional() {

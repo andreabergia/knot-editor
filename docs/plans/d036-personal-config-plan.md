@@ -60,15 +60,17 @@ from the failed launch remain active.
   failures.
 - **Review gate:** inspect the directory layout and diagnostic contract.
 
-Implemented source layout: the platform `Knot` config directory contains
-optional `pre-init.js` and `post-init.js` entries, with relative `.js` and
-`.mjs` imports below that directory. Capture runs through the application
+Implemented source layout: the selected config directory contains optional
+`pre-init.js` and `post-init.js` entries, with relative `.js` and `.mjs` imports
+below that directory. An existing `XDG_CONFIG_HOME/knot` takes precedence over
+an existing `~/.config/knot`, then the platform `Knot` config directory. Only
+one directory is active. Capture runs through the application
 boundary on a caller-provided directory; product startup will schedule it on
 the background executor in checkpoint 3. The host compiles reachable modules
 without evaluating them to validate syntax and static imports. Diagnostics
 carry the phase, path, optional line and column, and cause. Checkpoint 1 tests
-cover optional entries, local imports, escapes, missing imports, invalid syntax,
-and read failures. Review gate pending inspection.
+cover directory selection, optional entries, local imports, escapes, missing
+imports, invalid syntax, and read failures. Review gate pending inspection.
 
 ### 2. One lifecycle with two ordered module evaluations ⬜
 
