@@ -6,7 +6,7 @@ fmt:
 
 # Lint all Rust targets
 lint:
-    cargo clippy --all-targets
+    cargo clippy --all-targets -- -D warnings
 
 # Run all Rust tests
 test:
