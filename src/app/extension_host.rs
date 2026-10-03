@@ -366,6 +366,7 @@ impl ProductExtensionHost {
                 let canonical_config_root = captured.canonical_directory().to_path_buf();
                 let pre_init = captured.pre_init;
                 let post_init = captured.post_init;
+                let post_init_error = captured.post_init_error.clone();
                 let config_key = if let Some(graph) = captured.into_graph() {
                     let key = ExtensionKey::new(ExtensionId::new(0), ExtensionLifecycleId::new(1));
                     let loaded = this
@@ -431,6 +432,9 @@ impl ProductExtensionHost {
                         let _ = this
                             .update(cx, |host, cx| host.report_extensions_root_error(cause, cx));
                     }
+                }
+                if let Some(error) = post_init_error {
+                    return Err(error);
                 }
                 if post_init {
                     let key = config_key.expect("post-init has a loaded config graph");

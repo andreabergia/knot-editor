@@ -70,8 +70,9 @@ the background executor in checkpoint 3. The host compiles reachable modules
 without evaluating them to validate syntax and static imports. Diagnostics
 carry the phase, path, optional line and column, and cause. Checkpoint 1 tests
 cover directory selection, optional entries, local imports, escapes, missing
-imports, invalid syntax, and read failures. The XDG precedence was agreed
-during review.
+imports, invalid syntax, and read failures. Post-init capture and validation
+errors are retained until the post-init phase so installed extensions still
+start after a successful pre-init. The XDG precedence was agreed during review.
 
 ### 2. One lifecycle with two ordered module evaluations ✅
 

@@ -79,11 +79,8 @@ impl ConfigDiagnostic {
             path,
             line: error.line(),
             column: error.column(),
-            cause: error
-                .message()
-                .replace("extension import", "configuration import")
-                .replace("package", "configuration"),
-            stack: error.stack().map(str::to_owned),
+            cause: config_message(error.message()),
+            stack: error.stack().map(config_message),
         }
     }
 
@@ -108,12 +105,23 @@ impl ConfigDiagnostic {
     }
 }
 
+fn config_message(message: &str) -> String {
+    message
+        .replace(
+            "Knot package module not found",
+            "Knot configuration module not found",
+        )
+        .replace("extension import", "configuration import")
+        .replace("escapes package", "escapes configuration")
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct ConfigSources {
     pub(crate) directory: PathBuf,
     canonical_directory: PathBuf,
     pub(crate) pre_init: bool,
     pub(crate) post_init: bool,
+    pub(crate) post_init_error: Option<ConfigDiagnostic>,
     /// Slash-separated paths relative to the config directory.
     pub(crate) sources: BTreeMap<String, Arc<str>>,
     graph: Option<ModuleGraph>,
@@ -166,6 +174,7 @@ pub(crate) fn capture(directory: &Path) -> Result<ConfigSources, ConfigDiagnosti
         canonical_directory: directory.to_path_buf(),
         pre_init: false,
         post_init: false,
+        post_init_error: None,
         sources: BTreeMap::new(),
         graph: None,
     };
@@ -187,31 +196,83 @@ pub(crate) fn capture(directory: &Path) -> Result<ConfigSources, ConfigDiagnosti
     for phase in [ConfigPhase::PreInit, ConfigPhase::PostInit] {
         let path = directory.join(phase.entry());
         match fs::symlink_metadata(&path) {
-            Ok(_) => match phase {
-                ConfigPhase::PreInit => captured.pre_init = true,
-                ConfigPhase::PostInit => captured.post_init = true,
-            },
+            Ok(metadata) => {
+                if metadata.is_dir() {
+                    let diagnostic = ConfigDiagnostic::new(
+                        Some(phase),
+                        &path,
+                        "phase entry is a directory, not a JavaScript file",
+                    );
+                    match phase {
+                        ConfigPhase::PreInit => return Err(diagnostic),
+                        ConfigPhase::PostInit => captured.post_init_error = Some(diagnostic),
+                    }
+                }
+                match phase {
+                    ConfigPhase::PreInit => captured.pre_init = true,
+                    ConfigPhase::PostInit => captured.post_init = true,
+                }
+            }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => {
-                return Err(ConfigDiagnostic::new(Some(phase), &path, error.to_string()));
+                let diagnostic = ConfigDiagnostic::new(Some(phase), &path, error.to_string());
+                match phase {
+                    ConfigPhase::PreInit => return Err(diagnostic),
+                    ConfigPhase::PostInit => {
+                        captured.post_init = true;
+                        captured.post_init_error = Some(diagnostic);
+                    }
+                }
             }
         }
     }
     if !captured.pre_init && !captured.post_init {
         return Ok(captured);
     }
-    collect(directory, directory, &canonical, &mut captured.sources)?;
+    let mut source_failures = BTreeMap::new();
+    collect(
+        directory,
+        directory,
+        &canonical,
+        &mut captured.sources,
+        &mut source_failures,
+    )?;
+    if let Some(mut error) = source_failures.remove(PRE_INIT) {
+        error.phase = Some(ConfigPhase::PreInit);
+        return Err(error);
+    }
+    if captured.pre_init && !captured.sources.contains_key(PRE_INIT) {
+        return Err(ConfigDiagnostic::new(
+            Some(ConfigPhase::PreInit),
+            &directory.join(PRE_INIT),
+            "pre-init entry is not a readable JavaScript file",
+        ));
+    }
+    if let Some(mut error) = source_failures.remove(POST_INIT) {
+        error.phase = Some(ConfigPhase::PostInit);
+        captured.post_init_error = Some(error);
+    }
+    if captured.post_init
+        && !captured.sources.contains_key(POST_INIT)
+        && captured.post_init_error.is_none()
+    {
+        captured.post_init_error = Some(ConfigDiagnostic::new(
+            Some(ConfigPhase::PostInit),
+            &directory.join(POST_INIT),
+            "post-init entry is not a readable JavaScript file",
+        ));
+    }
     let root = url::Url::from_directory_path(&canonical).map_err(|_| {
         ConfigDiagnostic::new(None, directory, "configuration directory has no file URL")
     })?;
     let entries: Vec<_> = [ConfigPhase::PreInit, ConfigPhase::PostInit]
         .into_iter()
-        .filter(|phase| match phase {
-            ConfigPhase::PreInit => captured.pre_init,
-            ConfigPhase::PostInit => captured.post_init,
-        })
+        .filter(|phase| captured.sources.contains_key(phase.entry()))
         .map(ConfigPhase::entry)
         .collect();
+    if entries.is_empty() {
+        return Ok(captured);
+    }
     let graph = ModuleGraph::with_entries(root.as_str(), &entries, captured.sources.clone())
         .map_err(|cause| ConfigDiagnostic::new(None, directory, cause))?;
     for phase in [ConfigPhase::PreInit, ConfigPhase::PostInit] {
@@ -219,12 +280,33 @@ pub(crate) fn capture(directory: &Path) -> Result<ConfigSources, ConfigDiagnosti
             ConfigPhase::PreInit => captured.pre_init,
             ConfigPhase::PostInit => captured.post_init,
         };
-        if !present {
+        if !present
+            || !captured.sources.contains_key(phase.entry())
+            || (phase == ConfigPhase::PostInit && captured.post_init_error.is_some())
+        {
             continue;
         }
-        validate_module_graph_entry(&graph, phase.entry()).map_err(|error| {
-            ConfigDiagnostic::from_runtime(phase, directory, &canonical, &error)
-        })?;
+        let validation = validate_module_graph_entry(&graph, phase.entry()).map_err(|error| {
+            let mut diagnostic =
+                ConfigDiagnostic::from_runtime(phase, directory, &canonical, &error);
+            for (relative, failure) in &source_failures {
+                let url = root.join(relative).expect("captured module path is valid");
+                if error.message().contains(url.as_str()) {
+                    diagnostic.cause.push_str(&format!(
+                        "; {}: {}",
+                        failure.path.display(),
+                        failure.cause
+                    ));
+                    break;
+                }
+            }
+            diagnostic
+        });
+        match (phase, validation) {
+            (_, Ok(())) => {}
+            (ConfigPhase::PreInit, Err(error)) => return Err(error),
+            (ConfigPhase::PostInit, Err(error)) => captured.post_init_error = Some(error),
+        }
     }
     captured.graph = Some(graph);
     Ok(captured)
@@ -235,6 +317,7 @@ fn collect(
     directory: &Path,
     canonical_root: &Path,
     sources: &mut BTreeMap<String, Arc<str>>,
+    failures: &mut BTreeMap<String, ConfigDiagnostic>,
 ) -> Result<(), ConfigDiagnostic> {
     let mut paths = fs::read_dir(directory)
         .map_err(|error| ConfigDiagnostic::new(None, directory, error.to_string()))?
@@ -249,20 +332,24 @@ fn collect(
         let metadata = fs::symlink_metadata(&path)
             .map_err(|error| ConfigDiagnostic::new(None, &path, error.to_string()))?;
         if metadata.is_dir() {
-            collect(root, &path, canonical_root, sources)?;
-            continue;
-        }
-        if metadata.file_type().is_symlink() && path.is_dir() {
-            return Err(ConfigDiagnostic::new(
-                None,
-                &path,
-                "symlinked configuration directory is unsupported",
-            ));
-        }
-        if !matches!(
-            path.extension().and_then(|ext| ext.to_str()),
-            Some("js" | "mjs")
-        ) {
+            if path.parent() == Some(root) && path.file_name().is_some_and(|name| name == POST_INIT)
+            {
+                continue;
+            }
+            if let Err(error) = collect(root, &path, canonical_root, sources, failures) {
+                let relative = path
+                    .strip_prefix(root)
+                    .unwrap()
+                    .components()
+                    .map(|part| {
+                        part.as_os_str().to_str().ok_or_else(|| {
+                            ConfigDiagnostic::new(None, &path, "module path is not UTF-8")
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?
+                    .join("/");
+                failures.insert(relative, error);
+            }
             continue;
         }
         let phase = match path.file_name().and_then(|name| name.to_str()) {
@@ -270,17 +357,13 @@ fn collect(
             Some(POST_INIT) if path.parent() == Some(root) => Some(ConfigPhase::PostInit),
             _ => None,
         };
-        let target = fs::canonicalize(&path)
-            .map_err(|error| ConfigDiagnostic::new(phase, &path, error.to_string()))?;
-        if !target.starts_with(canonical_root) {
-            return Err(ConfigDiagnostic::new(
-                phase,
-                &path,
-                "module path escapes the configuration directory",
-            ));
-        }
-        if !target.is_file() {
-            return Err(ConfigDiagnostic::new(phase, &path, "module is not a file"));
+        let symlinked_directory = metadata.file_type().is_symlink() && path.is_dir();
+        let javascript_file = matches!(
+            path.extension().and_then(|ext| ext.to_str()),
+            Some("js" | "mjs")
+        );
+        if !symlinked_directory && !javascript_file {
+            continue;
         }
         let relative = path
             .strip_prefix(root)
@@ -293,9 +376,41 @@ fn collect(
             })
             .collect::<Result<Vec<_>, _>>()?
             .join("/");
-        let source = fs::read_to_string(&target)
-            .map_err(|error| ConfigDiagnostic::new(phase, &path, error.to_string()))?;
-        sources.insert(relative, Arc::from(source));
+        if symlinked_directory {
+            failures.insert(
+                relative,
+                ConfigDiagnostic::new(
+                    phase,
+                    &path,
+                    "symlinked configuration directory is unsupported",
+                ),
+            );
+            continue;
+        }
+        let source = (|| {
+            let target = fs::canonicalize(&path)
+                .map_err(|error| ConfigDiagnostic::new(phase, &path, error.to_string()))?;
+            if !target.starts_with(canonical_root) {
+                return Err(ConfigDiagnostic::new(
+                    phase,
+                    &path,
+                    "module path escapes the configuration directory",
+                ));
+            }
+            if !target.is_file() {
+                return Err(ConfigDiagnostic::new(phase, &path, "module is not a file"));
+            }
+            fs::read_to_string(&target)
+                .map_err(|error| ConfigDiagnostic::new(phase, &path, error.to_string()))
+        })();
+        match source {
+            Ok(source) => {
+                sources.insert(relative, Arc::from(source));
+            }
+            Err(error) => {
+                failures.insert(relative, error);
+            }
+        }
     }
     Ok(())
 }
@@ -372,14 +487,14 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let entry = temp.path().join(POST_INIT);
         fs::write(&entry, "import './missing.mjs';").unwrap();
-        let missing = capture(temp.path()).unwrap_err();
+        let missing = capture(temp.path()).unwrap().post_init_error.unwrap();
         assert_eq!(missing.phase, Some(ConfigPhase::PostInit));
         assert_eq!(missing.path, entry);
         assert_eq!(missing.line, Some(1));
         assert!(missing.cause.contains("configuration module not found"));
 
         fs::write(&entry, "import '../outside.js';").unwrap();
-        let escape = capture(temp.path()).unwrap_err();
+        let escape = capture(temp.path()).unwrap().post_init_error.unwrap();
         assert_eq!(escape.phase, Some(ConfigPhase::PostInit));
         assert_eq!(escape.line, Some(1));
         assert!(escape.cause.contains("escapes configuration"));
@@ -389,9 +504,47 @@ mod tests {
         assert!(capture(temp.path()).is_ok());
 
         fs::write(temp.path().join("valid.js"), "export const = ;").unwrap();
-        let invalid = capture(temp.path()).unwrap_err();
+        let invalid = capture(temp.path()).unwrap().post_init_error.unwrap();
         assert_eq!(invalid.path, temp.path().join("valid.js"));
         assert_eq!(invalid.line, Some(1));
+    }
+
+    #[test]
+    fn defers_post_init_entry_and_import_read_failures() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(temp.path().join(PRE_INIT), "globalThis.ready = true;").unwrap();
+        fs::write(temp.path().join(POST_INIT), [0xff]).unwrap();
+        let captured = capture(temp.path()).unwrap();
+        assert!(captured.pre_init && captured.post_init);
+        assert_eq!(
+            captured.post_init_error.as_ref().unwrap().path,
+            temp.path().join(POST_INIT)
+        );
+        assert!(
+            captured
+                .into_graph()
+                .unwrap()
+                .entry_url(POST_INIT)
+                .is_none()
+        );
+
+        fs::write(temp.path().join(POST_INIT), "import './helper.mjs';").unwrap();
+        fs::write(temp.path().join("helper.mjs"), [0xff]).unwrap();
+        let captured = capture(temp.path()).unwrap();
+        let error = captured.post_init_error.unwrap();
+        assert_eq!(error.phase, Some(ConfigPhase::PostInit));
+        assert_eq!(error.path, temp.path().join(POST_INIT));
+        assert_eq!(error.line, Some(1));
+        assert!(error.cause.contains("helper.mjs"));
+        assert!(error.cause.contains("utf-8") || error.cause.contains("UTF-8"));
+
+        fs::remove_file(temp.path().join(POST_INIT)).unwrap();
+        fs::create_dir(temp.path().join(POST_INIT)).unwrap();
+        let captured = capture(temp.path()).unwrap();
+        assert_eq!(
+            captured.post_init_error.unwrap().phase,
+            Some(ConfigPhase::PostInit)
+        );
     }
 
     #[test]
@@ -442,5 +595,25 @@ mod tests {
         let missing = capture(temp.path()).unwrap_err();
         assert_eq!(missing.path, temp.path().join(PRE_INIT));
         assert_eq!(missing.phase, Some(ConfigPhase::PreInit));
+
+        fs::remove_file(temp.path().join(PRE_INIT)).unwrap();
+        fs::write(temp.path().join(PRE_INIT), "export {};").unwrap();
+        symlink(
+            outside.path().join("outside.js"),
+            temp.path().join(POST_INIT),
+        )
+        .unwrap();
+        let deferred = capture(temp.path()).unwrap().post_init_error.unwrap();
+        assert_eq!(deferred.phase, Some(ConfigPhase::PostInit));
+        assert!(deferred.cause.contains("escapes"));
+
+        fs::remove_file(temp.path().join(POST_INIT)).unwrap();
+        fs::write(temp.path().join(POST_INIT), "import './linked/helper.js';").unwrap();
+        fs::create_dir(outside.path().join("directory")).unwrap();
+        fs::write(outside.path().join("directory/helper.js"), "export {};").unwrap();
+        symlink(outside.path().join("directory"), temp.path().join("linked")).unwrap();
+        let deferred = capture(temp.path()).unwrap().post_init_error.unwrap();
+        assert_eq!(deferred.phase, Some(ConfigPhase::PostInit));
+        assert!(deferred.cause.contains("symlinked configuration directory"));
     }
 }

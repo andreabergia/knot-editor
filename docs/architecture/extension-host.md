@@ -88,6 +88,8 @@ exact-once lifecycle finalizer as installed extensions.
 The application reserves a distinct config lifecycle identity. It captures
 sources on the background executor before loading that lifecycle, awaits
 pre-init, then the installed-package dependency plan, then post-init. A config
+capture or validation error associated with post-init is retained until that
+phase; pre-init errors stop startup before extension loading. A config
 failure unloads the config and every installed lifecycle admitted during that
 launch and removes their foreground registrations. Installed-package failures
 retain their independent report outcomes and do not interrupt post-init.

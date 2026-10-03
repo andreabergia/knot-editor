@@ -3723,6 +3723,44 @@ mod tests {
     }
 
     #[gpui::test]
+    fn post_init_validation_failure_waits_for_installed_extensions(cx: &mut TestAppContext) {
+        let config = tempfile::tempdir().unwrap();
+        let extensions = tempfile::tempdir().unwrap();
+        std::fs::write(
+            config.path().join("pre-init.js"),
+            "globalThis.preRan = true;",
+        )
+        .unwrap();
+        std::fs::write(config.path().join("post-init.js"), "import './missing.js';").unwrap();
+        install_extension(
+            extensions.path(),
+            "@example/loaded",
+            &[],
+            &[("main.js", "export {};")],
+        );
+        install_globals(cx);
+        install_launch_gate(cx);
+        let host = cx.update(super::super::extension_host::install);
+        host.update(cx, |host, cx| {
+            host.start_product_startup(
+                Some(config.path().to_path_buf()),
+                Ok(extensions.path().to_path_buf()),
+                cx,
+            )
+        });
+        assert!(!wait_for_product_startup(cx));
+        let report = cx
+            .read(super::super::extension_host::startup_report)
+            .unwrap();
+        assert_eq!(
+            report.report.entries[0].result,
+            super::super::extension_load::LoadResult::Loaded
+        );
+        assert_eq!(cx.read(|cx| host.read(cx).lifecycle_count()), 0);
+        assert!(cx.read(|cx| cx.global::<ApplicationWorkbenches>().0.borrow().is_empty()));
+    }
+
+    #[gpui::test]
     fn on_disk_extensions_load_in_order_invoke_dependencies_and_isolate_failures(
         cx: &mut TestAppContext,
     ) {
