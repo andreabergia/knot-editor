@@ -574,6 +574,25 @@ impl EditorView {
         cx.stop_propagation();
     }
 
+    pub(crate) fn handle_command(
+        &mut self,
+        command: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> super::product_commands::HandlerResult {
+        use super::product_commands::HandlerResult;
+        use crate::host::protocol::CommandOutcome;
+
+        if command == "copy" && !self.has_selection() {
+            return HandlerResult::Declined;
+        }
+        if self.execute_editing_command(command, window, cx) {
+            HandlerResult::Claimed(CommandOutcome::Completed)
+        } else {
+            HandlerResult::Declined
+        }
+    }
+
     pub(crate) fn execute_editing_command(
         &mut self,
         command: &str,
@@ -612,7 +631,7 @@ impl EditorView {
             }
             return true;
         }
-        if matches!(command, "editor.copy" | "editor.cut") {
+        if matches!(command, "copy" | "editor.cut") {
             self.marked_range_utf16 = None;
             if command == "editor.cut" && !self.model.read(cx).is_editable() {
                 return true;
@@ -795,10 +814,6 @@ impl EditorView {
 
     pub(crate) fn has_selection(&self) -> bool {
         self.selection_range().is_some()
-    }
-
-    pub(crate) fn current_line_text(&self) -> String {
-        self.lines[self.cursor_line].clone()
     }
 
     fn caret_x(&self, window: &Window) -> Pixels {

@@ -1,5 +1,7 @@
 use alacritty_terminal::{
-    grid::Scroll,
+    grid::{Dimensions, Scroll},
+    index::{Column, Line, Point as TermPoint, Side},
+    selection::{Selection, SelectionType},
     term::{cell::Flags, color::Colors, point_to_viewport},
     vte::ansi::{Color, CursorShape, NamedColor, Rgb},
 };
@@ -24,38 +26,32 @@ pub(crate) struct TerminalView {
     _session_subscription: Subscription,
     focus: FocusHandle,
     scroll_delta_y: f32,
+    selecting: bool,
+    interaction_bounds: Bounds<Pixels>,
 }
 
 impl TerminalView {
-    pub(crate) fn visible_text(&self, cx: &App) -> Option<String> {
-        if self.attachment.is_none() {
-            return None;
+    pub(crate) fn handle_command(
+        &mut self,
+        command: &str,
+        cx: &mut Context<Self>,
+    ) -> super::product_commands::HandlerResult {
+        use super::product_commands::HandlerResult;
+        if command != "copy" || self.attachment.is_none() {
+            return HandlerResult::Declined;
         }
-        let snapshot = TerminalSnapshot::capture(self, cx);
-        let mut lines: Vec<String> = Vec::new();
-        let mut last_column = Vec::new();
-        for cell in snapshot.cells {
-            while lines.len() <= cell.line {
-                lines.push(String::new());
-                last_column.push(0);
-            }
-            if cell.text == " " && lines[cell.line].is_empty() {
-                continue;
-            }
-            for _ in last_column[cell.line]..cell.column {
-                lines[cell.line].push(' ');
-            }
-            lines[cell.line].push_str(&cell.text);
-            last_column[cell.line] = cell.column + 1;
+        let selected = self
+            .session
+            .read(cx)
+            .terminal()
+            .and_then(|terminal| terminal.lock().selection_to_string())
+            .filter(|text| !text.is_empty());
+        if let Some(text) = selected {
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
+            HandlerResult::Claimed(crate::host::protocol::CommandOutcome::Completed)
+        } else {
+            HandlerResult::Declined
         }
-        let text = lines
-            .iter()
-            .map(|line| line.trim_end())
-            .collect::<Vec<_>>()
-            .join("\n")
-            .trim_end_matches('\n')
-            .to_owned();
-        (!text.is_empty()).then_some(text)
     }
 
     pub(crate) fn new(session: Entity<TerminalSession>, cx: &mut Context<Self>) -> Self {
@@ -69,6 +65,8 @@ impl TerminalView {
             _session_subscription: subscription,
             focus: cx.focus_handle(),
             scroll_delta_y: 0.,
+            selecting: false,
+            interaction_bounds: Bounds::default(),
         }
     }
 
@@ -163,6 +161,48 @@ impl TerminalView {
             }
             cx.notify();
         }
+    }
+
+    fn select_at(
+        &mut self,
+        position: Point<Pixels>,
+        bounds: Bounds<Pixels>,
+        start: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if self.attachment.is_none() {
+            return;
+        }
+        let Some(terminal) = self.session.read(cx).terminal().cloned() else {
+            return;
+        };
+        let mut terminal = terminal.lock();
+        let column = (f32::from(position.x - bounds.origin.x) / CELL_WIDTH)
+            .floor()
+            .max(0.) as usize;
+        let line = (f32::from(position.y - bounds.origin.y) / CELL_HEIGHT)
+            .floor()
+            .max(0.) as usize;
+        let point = TermPoint::new(
+            Line(
+                line.min(terminal.screen_lines().saturating_sub(1)) as i32
+                    - terminal.grid().display_offset() as i32,
+            ),
+            Column(column.min(terminal.columns().saturating_sub(1))),
+        );
+        if start {
+            terminal.selection = Some(Selection::new(SelectionType::Simple, point, Side::Left));
+            self.selecting = true;
+        } else if let Some(selection) = terminal.selection.as_mut() {
+            selection.update(point, Side::Right);
+        }
+        drop(terminal);
+        cx.notify();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn interaction_bounds(&self) -> Bounds<Pixels> {
+        self.interaction_bounds
     }
 }
 
@@ -265,6 +305,7 @@ struct RenderCell {
     foreground: u32,
     background: u32,
     flags: Flags,
+    selected: bool,
 }
 
 struct TerminalSnapshot {
@@ -289,6 +330,7 @@ impl TerminalSnapshot {
         let terminal = terminal.lock();
         let content = terminal.renderable_content();
         let display_offset = content.display_offset;
+        let selection = content.selection;
         let colors = *content.colors;
         let cursor = point_to_viewport(display_offset, content.cursor.point)
             .map(|point| (point.line, point.column.0, content.cursor.shape));
@@ -319,6 +361,7 @@ impl TerminalSnapshot {
                     foreground,
                     background,
                     flags: cell.flags,
+                    selected: selection.is_some_and(|range| range.contains(indexed.point)),
                 })
             })
             .collect();
@@ -366,8 +409,10 @@ impl Element for TerminalElement {
             f32::from(bounds.size.height),
             window.scale_factor(),
         );
-        self.entity
-            .update(cx, |terminal, cx| terminal.resize(size, cx));
+        self.entity.update(cx, |terminal, cx| {
+            terminal.interaction_bounds = bounds;
+            terminal.resize(size, cx);
+        });
         window.insert_hitbox(bounds, HitboxBehavior::Normal)
     }
 
@@ -392,6 +437,34 @@ impl Element for TerminalElement {
             }
         });
 
+        let entity = self.entity.clone();
+        window.on_mouse_event(move |event: &MouseDownEvent, phase, _, cx| {
+            if phase == DispatchPhase::Bubble
+                && event.button == MouseButton::Left
+                && bounds.contains(&event.position)
+            {
+                entity.update(cx, |terminal, cx| {
+                    terminal.select_at(event.position, bounds, true, cx);
+                });
+            }
+        });
+        let entity = self.entity.clone();
+        window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
+            if phase == DispatchPhase::Bubble && event.dragging() {
+                entity.update(cx, |terminal, cx| {
+                    if terminal.selecting {
+                        terminal.select_at(event.position, bounds, false, cx);
+                    }
+                });
+            }
+        });
+        let entity = self.entity.clone();
+        window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
+            if phase == DispatchPhase::Bubble && event.button == MouseButton::Left {
+                entity.update(cx, |terminal, _| terminal.selecting = false);
+            }
+        });
+
         let snapshot = TerminalSnapshot::capture(self.entity.read(cx), cx);
         let cell_width = px(CELL_WIDTH);
         let cell_height = px(CELL_HEIGHT);
@@ -402,7 +475,7 @@ impl Element for TerminalElement {
                     bounds.origin.x + cell_width * cell.column,
                     bounds.origin.y + cell_height * cell.line,
                 );
-                if cell.background != BACKGROUND {
+                if cell.background != BACKGROUND || cell.selected {
                     let width = if cell.flags.contains(Flags::WIDE_CHAR) {
                         cell_width * 2
                     } else {
@@ -413,7 +486,11 @@ impl Element for TerminalElement {
                             origin,
                             size: size(width, cell_height),
                         },
-                        rgb(cell.background),
+                        rgb(if cell.selected {
+                            0x355a88
+                        } else {
+                            cell.background
+                        }),
                     ));
                 }
             }

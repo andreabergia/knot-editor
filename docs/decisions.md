@@ -149,9 +149,10 @@ Reference: [extension host](architecture/extension-host.md) and
 
 ## Commands and keymaps
 
-Use one Knot-owned command namespace and dispatcher across invocation sources,
-while retaining gpui focus routing for native handlers. Captured targets make
-palette and delayed execution preserve user intent across focus changes.
+Use one Knot-owned command namespace and dispatcher across invocation sources.
+The captured window focus path lets native views claim or decline before
+workbench and application behavior. Captured targets make palette and delayed
+execution preserve user intent across focus changes.
 
 Awaited command composition runs one root tree at a time. Nested same-extension
 frames avoid self-queue deadlock; ancestry checks and one unfinished child per

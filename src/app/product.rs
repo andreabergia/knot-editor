@@ -2293,20 +2293,6 @@ impl ProductShell {
             return CommandOutcome::InvalidTarget;
         }
 
-        let editor = self
-            .workbench
-            .read(cx)
-            .pane(target.pane)
-            .and_then(|pane| pane.tabs().iter().find(|tab| tab.id() == target.tab))
-            .and_then(|tab| tab.editor().cloned());
-        if let Some(editor) = editor
-            && editor.update(cx, |editor, cx| {
-                editor.execute_editing_command(name, window, cx)
-            })
-        {
-            return CommandOutcome::Completed;
-        }
-
         match name {
             NEW_COMMAND => {
                 if self.new_document_in_pane(target.pane, window, cx) {
@@ -4641,7 +4627,7 @@ mod tests {
     }
 
     #[gpui::test]
-    async fn copy_routes_through_focused_views_and_workbench_fallback(cx: &mut TestAppContext) {
+    async fn copy_requires_focused_selection_and_declines_on_terminal(cx: &mut TestAppContext) {
         use alacritty_terminal::vte::ansi::Handler;
         use gpui::EntityInputHandler;
 
@@ -4661,10 +4647,38 @@ mod tests {
                 .unwrap()
                 .clone();
             editor.update(cx, |editor, cx| {
-                editor.replace_text_in_range(None, "fallback line", window, cx);
+                editor.replace_text_in_range(None, "selected text", window, cx);
             });
         })
         .unwrap();
+        let no_selection = dispatch_product_command(&shell, window, super::COPY_COMMAND, cx);
+        assert_eq!(
+            no_selection.completion.await.unwrap(),
+            CommandOutcome::Unavailable
+        );
+        cx.update_window(window, |_, window, cx| {
+            let editor = shell
+                .read(cx)
+                .workbench
+                .read(cx)
+                .focused_pane()
+                .unwrap()
+                .active_tab()
+                .editor()
+                .unwrap()
+                .clone();
+            editor.update(cx, |editor, cx| {
+                editor.execute_editing_command("editor.select-all", window, cx);
+            });
+        })
+        .unwrap();
+        let editor_target = cx
+            .update_window(window, |_, window, cx| {
+                shell.update(cx, |shell, cx| {
+                    shell.capture_command_target(window, cx).unwrap()
+                })
+            })
+            .unwrap();
         let editor_copy = dispatch_product_command(&shell, window, super::COPY_COMMAND, cx);
         assert_eq!(
             editor_copy.completion.await.unwrap(),
@@ -4673,13 +4687,13 @@ mod tests {
         cx.update(|cx| {
             assert_eq!(
                 cx.read_from_clipboard().unwrap().text().unwrap(),
-                "fallback line"
+                "selected text"
             )
         });
         let legacy_copy = dispatch_product_command(&shell, window, "editor.copy", cx);
         assert_eq!(
             legacy_copy.completion.await.unwrap(),
-            CommandOutcome::Completed
+            CommandOutcome::Unavailable
         );
 
         cx.update_window(window, |_, window, cx| {
@@ -4692,7 +4706,7 @@ mod tests {
         cx.update(|cx| {
             assert_eq!(
                 cx.read_from_clipboard().unwrap().text().unwrap(),
-                "fallback line"
+                "selected text"
             );
             assert_eq!(
                 cx.global::<ApplicationProductCommands>()
@@ -4703,7 +4717,7 @@ mod tests {
             );
         });
 
-        let (target, session) = cx
+        let target = cx
             .update_window(window, |_, window, cx| {
                 shell.update(cx, |shell, cx| {
                     let (session, view) = shell.create_terminal(cx);
@@ -4714,24 +4728,31 @@ mod tests {
                             .unwrap()
                     });
                     shell.activate_tab(pane, tab, window, cx);
-                    (shell.capture_command_target(window, cx).unwrap(), session)
+                    shell.capture_command_target(window, cx).unwrap()
                 })
             })
             .unwrap();
-        cx.read(|cx| {
-            let session = cx
-                .global::<ApplicationTerminalSessions>()
-                .0
-                .borrow()
-                .sessions[&session]
-                .clone();
-            let terminal = session.read(cx).terminal().unwrap().clone();
-            let mut terminal = terminal.lock();
-            for ch in "terminal-copy-marker".chars() {
-                terminal.input(ch);
-            }
-        });
         let dispatcher = cx.read(|cx| cx.global::<ApplicationProductCommands>().0.clone());
+        let captured_editor = dispatcher.update(cx, |dispatcher, cx| {
+            dispatcher.dispatch(
+                Command {
+                    name: super::COPY_COMMAND.into(),
+                    arguments: CommandArgumentValue::Null,
+                },
+                editor_target,
+                cx,
+            )
+        });
+        assert_eq!(
+            captured_editor.completion.await.unwrap(),
+            CommandOutcome::Completed
+        );
+        cx.read(|cx| {
+            assert_eq!(
+                cx.read_from_clipboard().unwrap().text().unwrap(),
+                "selected text"
+            )
+        });
         let execution = dispatcher.update(cx, |dispatcher, cx| {
             dispatcher.dispatch(
                 Command {
@@ -4744,17 +4765,89 @@ mod tests {
         });
         assert_eq!(
             execution.completion.await.unwrap(),
+            CommandOutcome::Unavailable
+        );
+        cx.read(|cx| {
+            let session_id = match target.surface {
+                TabSurfaceId::Terminal(id) => id,
+                _ => unreachable!(),
+            };
+            let session = cx
+                .global::<ApplicationTerminalSessions>()
+                .0
+                .borrow()
+                .sessions[&session_id]
+                .clone();
+            let terminal = session.read(cx).terminal().unwrap().clone();
+            let mut terminal = terminal.lock();
+            terminal.goto(0, 0);
+            for ch in "selected terminal text".chars() {
+                terminal.input(ch);
+            }
+        });
+        cx.refresh().unwrap();
+        let bounds = cx.read(|cx| {
+            shell
+                .read(cx)
+                .workbench
+                .read(cx)
+                .focused_pane()
+                .unwrap()
+                .active_tab()
+                .terminal_view()
+                .unwrap()
+                .read(cx)
+                .interaction_bounds()
+        });
+        let start = point(bounds.origin.x + px(1.), bounds.origin.y + px(5.));
+        let end = point(
+            bounds.origin.x + px(21. * 8. + 1.),
+            bounds.origin.y + px(5.),
+        );
+        {
+            let mut window_cx = VisualTestContext::from_window(window, cx);
+            window_cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+            window_cx.simulate_mouse_move(end, MouseButton::Left, Modifiers::default());
+            window_cx.simulate_mouse_up(end, MouseButton::Left, Modifiers::default());
+        }
+        let selected_text = cx.read(|cx| {
+            let session_id = match target.surface {
+                TabSurfaceId::Terminal(id) => id,
+                _ => unreachable!(),
+            };
+            let session = cx
+                .global::<ApplicationTerminalSessions>()
+                .0
+                .borrow()
+                .sessions[&session_id]
+                .clone();
+            session
+                .read(cx)
+                .terminal()
+                .unwrap()
+                .lock()
+                .selection_to_string()
+                .unwrap()
+        });
+        assert!(!selected_text.is_empty());
+        let selected_terminal = dispatch_product_command(&shell, window, super::COPY_COMMAND, cx);
+        assert_eq!(
+            selected_terminal.completion.await.unwrap(),
             CommandOutcome::Completed
         );
-        cx.update(|cx| {
-            assert!(
-                cx.read_from_clipboard()
-                    .unwrap()
-                    .text()
-                    .unwrap()
-                    .contains("terminal-copy-marker")
-            )
+        cx.read(|cx| {
+            assert_eq!(
+                cx.read_from_clipboard().unwrap().text().unwrap(),
+                selected_text
+            );
         });
+        let application =
+            dispatch_product_command(&shell, window, super::SHOW_EXTENSION_REPORT_COMMAND, cx);
+        assert_eq!(
+            application.completion.await.unwrap(),
+            CommandOutcome::Completed
+        );
+        cx.read(|cx| assert!(shell.read(cx).extension_report_open));
 
         let scripted = dispatcher.update(cx, |dispatcher, cx| {
             dispatcher.dispatch_host_request(

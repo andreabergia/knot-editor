@@ -32,7 +32,6 @@ pub(crate) const UNDO_COMMAND: &str = "editor.undo";
 pub(crate) const REDO_COMMAND: &str = "editor.redo";
 pub(crate) const CUT_COMMAND: &str = "editor.cut";
 pub(crate) const COPY_COMMAND: &str = "copy";
-const LEGACY_COPY_COMMAND: &str = "editor.copy";
 pub(crate) const PASTE_COMMAND: &str = "editor.paste";
 pub(crate) const SELECT_ALL_COMMAND: &str = "editor.select-all";
 pub(crate) const FIND_COMMAND: &str = "editor.find";
@@ -174,77 +173,9 @@ pub(crate) struct ProductCommandDispatcher {
     last_outcome: Option<CommandOutcome>,
 }
 
-enum HandlerResult {
+pub(crate) enum HandlerResult {
     Claimed(CommandOutcome),
     Declined,
-}
-
-type NativeHandler = fn(&ProductCommandTarget, &mut Window, &mut App) -> HandlerResult;
-
-struct FocusedHandler {
-    command: &'static str,
-    handle: NativeHandler,
-}
-
-const FOCUSED_HANDLERS: &[FocusedHandler] = &[
-    FocusedHandler {
-        command: COPY_COMMAND,
-        handle: copy_editor_selection,
-    },
-    FocusedHandler {
-        command: COPY_COMMAND,
-        handle: copy_terminal_view,
-    },
-];
-const WORKBENCH_HANDLERS: &[FocusedHandler] = &[FocusedHandler {
-    command: COPY_COMMAND,
-    handle: copy_editor_line,
-}];
-const APPLICATION_HANDLERS: &[FocusedHandler] = &[FocusedHandler {
-    command: SHOW_EXTENSION_REPORT_COMMAND,
-    handle: show_extension_report,
-}];
-
-fn has_native_handler(command: &str) -> bool {
-    FOCUSED_HANDLERS
-        .iter()
-        .chain(WORKBENCH_HANDLERS)
-        .chain(APPLICATION_HANDLERS)
-        .any(|handler| handler.command == command)
-}
-
-fn route_native_handler(
-    command: &str,
-    target: &ProductCommandTarget,
-    window: &mut Window,
-    cx: &mut App,
-) -> CommandOutcome {
-    for handler in FOCUSED_HANDLERS
-        .iter()
-        .chain(WORKBENCH_HANDLERS)
-        .chain(APPLICATION_HANDLERS)
-    {
-        if handler.command != command {
-            continue;
-        }
-        match (handler.handle)(target, window, cx) {
-            HandlerResult::Claimed(outcome) => return outcome,
-            HandlerResult::Declined => {}
-        }
-    }
-    CommandOutcome::Unavailable
-}
-
-fn show_extension_report(
-    target: &ProductCommandTarget,
-    _window: &mut Window,
-    cx: &mut App,
-) -> HandlerResult {
-    let Some(shell) = target.shell.upgrade() else {
-        return HandlerResult::Claimed(CommandOutcome::InvalidTarget);
-    };
-    shell.update(cx, |shell, cx| shell.toggle_extension_report(cx));
-    HandlerResult::Claimed(CommandOutcome::Completed)
 }
 
 fn captured_editor(
@@ -261,64 +192,6 @@ fn captured_editor(
         .find(|tab| tab.id() == target.tab)?
         .editor()
         .cloned()
-}
-
-fn copy_editor_selection(
-    target: &ProductCommandTarget,
-    window: &mut Window,
-    cx: &mut App,
-) -> HandlerResult {
-    let Some(editor) = captured_editor(target, cx) else {
-        return HandlerResult::Declined;
-    };
-    if target.focus.upgrade() != Some(editor.focus_handle(cx)) || !editor.read(cx).has_selection() {
-        return HandlerResult::Declined;
-    }
-    editor.update(cx, |editor, cx| {
-        editor.execute_editing_command(LEGACY_COPY_COMMAND, window, cx);
-    });
-    HandlerResult::Claimed(CommandOutcome::Completed)
-}
-
-fn copy_terminal_view(
-    target: &ProductCommandTarget,
-    _window: &mut Window,
-    cx: &mut App,
-) -> HandlerResult {
-    let Some(view) = target.workbench.upgrade().and_then(|workbench| {
-        workbench
-            .read(cx)
-            .pane(target.pane)?
-            .tabs()
-            .iter()
-            .find(|tab| tab.id() == target.tab)?
-            .terminal_view()
-            .cloned()
-    }) else {
-        return HandlerResult::Declined;
-    };
-    if target.focus.upgrade() != Some(view.focus_handle(cx)) {
-        return HandlerResult::Declined;
-    }
-    if let Some(text) = view.read(cx).visible_text(cx) {
-        cx.write_to_clipboard(ClipboardItem::new_string(text));
-        HandlerResult::Claimed(CommandOutcome::Completed)
-    } else {
-        HandlerResult::Declined
-    }
-}
-
-fn copy_editor_line(
-    target: &ProductCommandTarget,
-    _window: &mut Window,
-    cx: &mut App,
-) -> HandlerResult {
-    let Some(editor) = captured_editor(target, cx) else {
-        return HandlerResult::Declined;
-    };
-    let text = editor.read(cx).current_line_text();
-    cx.write_to_clipboard(ClipboardItem::new_string(text));
-    HandlerResult::Claimed(CommandOutcome::Completed)
 }
 
 #[cfg(test)]
@@ -381,9 +254,6 @@ impl ProductCommandDispatcher {
         extension: ExtensionId,
         lifecycle: ExtensionLifecycleId,
     ) -> Result<CommandRegistrationId, CommandCatalogError> {
-        if name.as_ref() == LEGACY_COPY_COMMAND {
-            return Err(CommandCatalogError::NameInUse);
-        }
         self.catalog
             .register_extension(name, title, extension, lifecycle)
     }
@@ -407,13 +277,10 @@ impl ProductCommandDispatcher {
 
     pub(crate) fn dispatch(
         &mut self,
-        mut command: Command,
+        command: Command,
         target: ProductCommandTarget,
         cx: &mut Context<Self>,
     ) -> CommandExecution {
-        if command.name.as_ref() == LEGACY_COPY_COMMAND {
-            command.name = COPY_COMMAND.into();
-        }
         if matches!(
             self.catalog.resolve(command.name.as_ref()),
             Ok(CommandTargetKind::Extension(_))
@@ -434,50 +301,7 @@ impl ProductCommandDispatcher {
         let admitted = self.catalog.resolve(command.name.as_ref()) == Ok(CommandTargetKind::Native);
         let dispatcher = cx.entity();
         cx.defer(move |cx| {
-            if admitted && command.arguments == CommandArgumentValue::Null {
-                if command.name.as_ref() == SHOW_COMPLETIONS_COMMAND {
-                    let outcome = super::extension_host::start_completion(target, cx);
-                    completion.complete(outcome.clone());
-                    dispatcher.update(cx, |dispatcher, cx| {
-                        dispatcher.last_outcome = Some(outcome);
-                        cx.notify();
-                    });
-                    return;
-                }
-                let asynchronous = match command.name.as_ref() {
-                    OPEN_COMMAND => {
-                        dispatch_open_to_captured_target(&target, completion.clone(), cx)
-                    }
-                    SAVE_COMMAND => {
-                        dispatch_save_to_captured_target(&target, false, completion.clone(), cx)
-                    }
-                    SAVE_AS_COMMAND => {
-                        dispatch_save_to_captured_target(&target, true, completion.clone(), cx)
-                    }
-                    CLOSE_TAB_COMMAND | CLOSE_WINDOW_COMMAND | QUIT_COMMAND => {
-                        dispatch_close_to_captured_target(
-                            &target,
-                            command.name.as_ref(),
-                            completion.clone(),
-                            cx,
-                        )
-                    }
-                    _ => Err(CommandOutcome::Unavailable),
-                };
-                match asynchronous {
-                    Ok(()) => return,
-                    Err(CommandOutcome::Unavailable) => {}
-                    Err(outcome) => {
-                        completion.complete(outcome.clone());
-                        dispatcher.update(cx, |dispatcher, cx| {
-                            dispatcher.last_outcome = Some(outcome);
-                            cx.notify();
-                        });
-                        return;
-                    }
-                }
-            }
-            let outcome = if !admitted {
+            let mut outcome = if !admitted {
                 CommandOutcome::Unavailable
             } else if command.arguments != CommandArgumentValue::Null {
                 CommandOutcome::InvalidArgument {
@@ -486,6 +310,39 @@ impl ProductCommandDispatcher {
             } else {
                 dispatch_to_captured_target(&command, &target, cx)
             };
+            if admitted
+                && command.arguments == CommandArgumentValue::Null
+                && outcome == CommandOutcome::Unavailable
+            {
+                if command.name.as_ref() == SHOW_COMPLETIONS_COMMAND {
+                    outcome = super::extension_host::start_completion(target, cx);
+                } else {
+                    let asynchronous = match command.name.as_ref() {
+                        OPEN_COMMAND => {
+                            dispatch_open_to_captured_target(&target, completion.clone(), cx)
+                        }
+                        SAVE_COMMAND => {
+                            dispatch_save_to_captured_target(&target, false, completion.clone(), cx)
+                        }
+                        SAVE_AS_COMMAND => {
+                            dispatch_save_to_captured_target(&target, true, completion.clone(), cx)
+                        }
+                        CLOSE_TAB_COMMAND | CLOSE_WINDOW_COMMAND | QUIT_COMMAND => {
+                            dispatch_close_to_captured_target(
+                                &target,
+                                command.name.as_ref(),
+                                completion.clone(),
+                                cx,
+                            )
+                        }
+                        _ => Err(CommandOutcome::Unavailable),
+                    };
+                    match asynchronous {
+                        Ok(()) => return,
+                        Err(error) => outcome = error,
+                    }
+                }
+            }
             completion.complete(outcome.clone());
             dispatcher.update(cx, |dispatcher, cx| {
                 dispatcher.last_outcome = Some(outcome);
@@ -710,20 +567,43 @@ fn dispatch_to_captured_target(
         if let Err(outcome) = target.validate_tab(cx) {
             return outcome;
         }
-        if has_native_handler(command.name.as_ref()) {
-            break_captured_history_group(&target, cx);
-            return route_native_handler(command.name.as_ref(), &target, window, cx);
-        }
-        if command.name.as_ref().starts_with("editor.")
-            && let Err(outcome) = target.document_id(cx)
-        {
-            return outcome;
-        }
         if !matches!(
             command.name.as_ref(),
             "editor.delete-backward" | "editor.delete-forward"
         ) {
             break_captured_history_group(&target, cx);
+        }
+        if let Some(editor) = captured_editor(&target, cx)
+            && target.focus.upgrade() == Some(editor.focus_handle(cx))
+        {
+            let result = editor.update(cx, |editor, cx| {
+                editor.handle_command(command.name.as_ref(), window, cx)
+            });
+            if let HandlerResult::Claimed(outcome) = result {
+                return outcome;
+            }
+        }
+        if let Some(view) = target.workbench.upgrade().and_then(|workbench| {
+            workbench
+                .read(cx)
+                .pane(target.pane)?
+                .tabs()
+                .iter()
+                .find(|tab| tab.id() == target.tab)?
+                .terminal_view()
+                .cloned()
+        }) && target.focus.upgrade() == Some(view.focus_handle(cx))
+        {
+            let result = view.update(cx, |view, cx| {
+                view.handle_command(command.name.as_ref(), cx)
+            });
+            if let HandlerResult::Claimed(outcome) = result {
+                return outcome;
+            }
+        }
+        if command.name.as_ref() == SHOW_EXTENSION_REPORT_COMMAND {
+            shell.update(cx, |shell, cx| shell.toggle_extension_report(cx));
+            return CommandOutcome::Completed;
         }
         shell.update(cx, |shell, cx| {
             shell.execute_product_command(command.name.as_ref(), &target, window, cx)

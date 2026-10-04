@@ -1,6 +1,6 @@
 # D003a: Focused command routing
 
-Status: checkpoint 1 requires revision to the agreed window-first dispatch model.
+Status: checkpoint 1 implementation ready for review.
 
 Source: D003, promoted from the [deferred-work register](../roadmap.md).
 This plan establishes the command behavior needed by the
@@ -64,18 +64,18 @@ line merely to force a claim.
 
 ### 1. Window-first routing contract 🔄
 
-- Replace the provisional preselected native handler tables with dispatch into
+- ✅ Replace the provisional preselected native handler tables with dispatch into
   the captured window focus path. Let participants claim or decline after
   receiving the command; preserve structured outcomes and captured-target
   validation for asynchronous continuations.
-- Remove the `editor.copy` alias and the provisional terminal-screen and
+- ✅ Remove the `editor.copy` alias and the provisional terminal-screen and
   editor-line copy behavior. Route `copy` through an editor selection and a
   second focused native surface with meaningful selected content; a focused
   terminal requires terminal selection support before it can claim `copy`.
-- Exercise bubbling through a real workbench or application handler without
+- ✅ Exercise bubbling through a real workbench or application handler without
   inventing copy behavior solely for a fallback. Keep key, palette, menu, and
   script invocation on the same window dispatch path.
-- Test claim order, decline and bubbling, unavailable commands, focus changes,
+- ✅ Test claim order, decline and bubbling, unavailable commands, focus changes,
   stale targets, asynchronous target validation, and equivalent outcomes across
   invocation sources.
 - **Review gate:** confirm the window-first path and public `copy` behavior

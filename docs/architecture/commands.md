@@ -6,11 +6,9 @@ Part of the [architecture](../architecture.md). Design rationale is recorded in
 ## Dispatch and captured targets
 
 `CommandCatalog` owns discovery metadata and name ownership for native and
-extension commands. Extension definitions bind their names to one lifecycle;
-the product's scoped native handler registry remains in `app`, separate from
-the catalog. Legacy native editing handlers still live on gpui views and the
-product shell. Both use Knot-owned `Command` values containing a stable name
-and explicit JSON-like arguments.
+extension commands. Extension definitions bind their names to one lifecycle.
+Native participants receive Knot-owned `Command` values containing a stable
+name and explicit JSON-like arguments.
 
 Keybindings and the command palette enter the product dispatcher. The product
 application owns one native catalog and dispatcher across all product windows.
@@ -24,14 +22,12 @@ keybinding / palette
         admitted Command + captured origin
                    |
                    v
-       serialized root FIFO queue
+       captured product window
                    |
                    v
-      gpui action at captured focus
+      focused view -> workbench -> application
                    |
-       focused view -> enclosing shell
-                   |
-                 native handler
+             claim or decline
 ```
 
 Dispatch captures the originating window, weak shell and focus identities, and
@@ -55,14 +51,12 @@ destination. It keeps the sole session presentation and returns unavailable on
 a document tab or invalid target after a stale capture. Commands whose behavior belongs to a later
 product checkpoint remain discoverable and complete as unavailable.
 
-The product `copy` definition routes through ordered native handlers. A handler
-claims with a structured outcome or declines so routing continues. The captured
-focused editor copies its selection; the captured focused terminal copies visible
-terminal text. The workbench fallback copies the editor's current line when the
-focused editor has no selection. With no applicable handler, dispatch returns
-unavailable. The former `editor.copy` invocation name is accepted as an alias for
-`copy`; discovery, bindings, and menus use `copy`. The same registry reaches an
-application handler for the extension startup report command.
+The product `copy` definition reaches the captured focused view first. An editor
+copies its selection, and a terminal copies its selected cells. Either declines
+without a selection. The workbench may claim commands with its own operation;
+the application claims the extension startup report command. A command that no
+participant claims is unavailable. `copy` is the public name in discovery,
+bindings, menus, and scripts.
 
 Ordinary product editing uses this same captured-view path: character, word,
 line, page, and document movement and selection, newline and tab insertion,
