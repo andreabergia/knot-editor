@@ -30,12 +30,6 @@ the item is removed from this register.
   - Reconsider: The editing loop is trustworthy and source readability becomes
     the dominant problem.
 
-- **D003 — JavaScript-configurable and extension-defined keymaps**
-  - Deferred: Fixed native bindings cover initial use; loading and changing
-    bindings through JavaScript is not required by the current slice.
-  - Reconsider: Dogfooding identifies concrete remapping needs or the extension
-    slice requires JavaScript-defined bindings.
-
 - **D005 — Workbench layout and session restoration**
   - Deferred: Persistence semantics should follow a workbench people actually
     use.
