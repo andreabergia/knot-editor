@@ -3237,7 +3237,7 @@ fn host_request_callback<'s, 'i>(
     let Ok(request_value) =
         state
             .next_request
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
                 next.checked_add(1)
             })
     else {
