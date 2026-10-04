@@ -2355,13 +2355,13 @@ impl ProductShell {
                 cx.notify();
                 CommandOutcome::Unavailable
             }
-            SHOW_EXTENSION_REPORT_COMMAND => {
-                self.extension_report_open = !self.extension_report_open;
-                cx.notify();
-                CommandOutcome::Completed
-            }
             _ => CommandOutcome::Unavailable,
         }
+    }
+
+    pub(crate) fn toggle_extension_report(&mut self, cx: &mut Context<Self>) {
+        self.extension_report_open = !self.extension_report_open;
+        cx.notify();
     }
 
     fn render_layout(&self, layout: &WorkbenchLayout, cx: &mut Context<Self>) -> AnyElement {
@@ -4638,6 +4638,182 @@ mod tests {
                 "fn café() {\n    👩‍💻\n}\n"
             );
         });
+    }
+
+    #[gpui::test]
+    async fn copy_routes_through_focused_views_and_workbench_fallback(cx: &mut TestAppContext) {
+        use alacritty_terminal::vte::ansi::Handler;
+        use gpui::EntityInputHandler;
+
+        let documents = install_globals(cx);
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        let (shell, window) = product_window(document, model.clone(), cx);
+        cx.update_window(window, |_, window, cx| {
+            let editor = shell
+                .read(cx)
+                .workbench
+                .read(cx)
+                .focused_pane()
+                .unwrap()
+                .active_tab()
+                .editor()
+                .unwrap()
+                .clone();
+            editor.update(cx, |editor, cx| {
+                editor.replace_text_in_range(None, "fallback line", window, cx);
+            });
+        })
+        .unwrap();
+        let editor_copy = dispatch_product_command(&shell, window, super::COPY_COMMAND, cx);
+        assert_eq!(
+            editor_copy.completion.await.unwrap(),
+            CommandOutcome::Completed
+        );
+        cx.update(|cx| {
+            assert_eq!(
+                cx.read_from_clipboard().unwrap().text().unwrap(),
+                "fallback line"
+            )
+        });
+        let legacy_copy = dispatch_product_command(&shell, window, "editor.copy", cx);
+        assert_eq!(
+            legacy_copy.completion.await.unwrap(),
+            CommandOutcome::Completed
+        );
+
+        cx.update_window(window, |_, window, cx| {
+            shell.update(cx, |shell, cx| shell.open_command_palette(window, cx));
+        })
+        .unwrap();
+        cx.refresh().unwrap();
+        cx.simulate_keystrokes(window, "c o p y enter");
+        cx.run_until_parked();
+        cx.update(|cx| {
+            assert_eq!(
+                cx.read_from_clipboard().unwrap().text().unwrap(),
+                "fallback line"
+            );
+            assert_eq!(
+                cx.global::<ApplicationProductCommands>()
+                    .0
+                    .read(cx)
+                    .last_outcome(),
+                Some(&CommandOutcome::Completed)
+            );
+        });
+
+        let (target, session) = cx
+            .update_window(window, |_, window, cx| {
+                shell.update(cx, |shell, cx| {
+                    let (session, view) = shell.create_terminal(cx);
+                    let pane = shell.workbench.read(cx).focused_pane_id().unwrap();
+                    let tab = shell.workbench.update(cx, |workbench, _| {
+                        workbench
+                            .open_terminal_tab(pane, session.clone(), view)
+                            .unwrap()
+                    });
+                    shell.activate_tab(pane, tab, window, cx);
+                    (shell.capture_command_target(window, cx).unwrap(), session)
+                })
+            })
+            .unwrap();
+        cx.read(|cx| {
+            let session = cx
+                .global::<ApplicationTerminalSessions>()
+                .0
+                .borrow()
+                .sessions[&session]
+                .clone();
+            let terminal = session.read(cx).terminal().unwrap().clone();
+            let mut terminal = terminal.lock();
+            for ch in "terminal-copy-marker".chars() {
+                terminal.input(ch);
+            }
+        });
+        let dispatcher = cx.read(|cx| cx.global::<ApplicationProductCommands>().0.clone());
+        let execution = dispatcher.update(cx, |dispatcher, cx| {
+            dispatcher.dispatch(
+                Command {
+                    name: super::COPY_COMMAND.into(),
+                    arguments: CommandArgumentValue::Null,
+                },
+                target.clone(),
+                cx,
+            )
+        });
+        assert_eq!(
+            execution.completion.await.unwrap(),
+            CommandOutcome::Completed
+        );
+        cx.update(|cx| {
+            assert!(
+                cx.read_from_clipboard()
+                    .unwrap()
+                    .text()
+                    .unwrap()
+                    .contains("terminal-copy-marker")
+            )
+        });
+
+        let scripted = dispatcher.update(cx, |dispatcher, cx| {
+            dispatcher.dispatch_host_request(
+                HostRequest {
+                    extension: ExtensionId::new(91),
+                    lifecycle: ExtensionLifecycleId::new(7),
+                    id: RequestId::new(99),
+                    invocation: None,
+                    operation: HostOperation::InvokeCommand {
+                        command: Command {
+                            name: super::COPY_COMMAND.into(),
+                            arguments: CommandArgumentValue::Null,
+                        },
+                    },
+                },
+                Some(target.clone()),
+                cx,
+            )
+        });
+        assert!(matches!(
+            scripted.resolve().await.result,
+            Ok(HostResponseValue::CommandInvoked {
+                dispatch: CommandInvokeDispatch::Outcome {
+                    outcome: CommandOutcome::Completed
+                }
+            })
+        ));
+
+        let unavailable = dispatcher.update(cx, |dispatcher, cx| {
+            dispatcher.dispatch(
+                Command {
+                    name: "missing.command".into(),
+                    arguments: CommandArgumentValue::Null,
+                },
+                target.clone(),
+                cx,
+            )
+        });
+        assert_eq!(
+            unavailable.completion.await.unwrap(),
+            CommandOutcome::Unavailable
+        );
+
+        let mut stale = target;
+        stale.surface = TabSurfaceId::Document(document);
+        let execution = dispatcher.update(cx, |dispatcher, cx| {
+            dispatcher.dispatch(
+                Command {
+                    name: super::COPY_COMMAND.into(),
+                    arguments: CommandArgumentValue::Null,
+                },
+                stale,
+                cx,
+            )
+        });
+        assert_eq!(
+            execution.completion.await.unwrap(),
+            CommandOutcome::InvalidTarget
+        );
     }
 
     #[gpui::test]

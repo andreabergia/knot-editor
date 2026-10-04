@@ -793,6 +793,14 @@ impl EditorView {
         true
     }
 
+    pub(crate) fn has_selection(&self) -> bool {
+        self.selection_range().is_some()
+    }
+
+    pub(crate) fn current_line_text(&self) -> String {
+        self.lines[self.cursor_line].clone()
+    }
+
     fn caret_x(&self, window: &Window) -> Pixels {
         let text = &self.lines[self.cursor_line];
         let shaped = shape_editor_line(

@@ -31,7 +31,8 @@ pub(crate) const SPLIT_VERTICAL_COMMAND: &str = "workbench.split-vertical";
 pub(crate) const UNDO_COMMAND: &str = "editor.undo";
 pub(crate) const REDO_COMMAND: &str = "editor.redo";
 pub(crate) const CUT_COMMAND: &str = "editor.cut";
-pub(crate) const COPY_COMMAND: &str = "editor.copy";
+pub(crate) const COPY_COMMAND: &str = "copy";
+const LEGACY_COPY_COMMAND: &str = "editor.copy";
 pub(crate) const PASTE_COMMAND: &str = "editor.paste";
 pub(crate) const SELECT_ALL_COMMAND: &str = "editor.select-all";
 pub(crate) const FIND_COMMAND: &str = "editor.find";
@@ -173,6 +174,153 @@ pub(crate) struct ProductCommandDispatcher {
     last_outcome: Option<CommandOutcome>,
 }
 
+enum HandlerResult {
+    Claimed(CommandOutcome),
+    Declined,
+}
+
+type NativeHandler = fn(&ProductCommandTarget, &mut Window, &mut App) -> HandlerResult;
+
+struct FocusedHandler {
+    command: &'static str,
+    handle: NativeHandler,
+}
+
+const FOCUSED_HANDLERS: &[FocusedHandler] = &[
+    FocusedHandler {
+        command: COPY_COMMAND,
+        handle: copy_editor_selection,
+    },
+    FocusedHandler {
+        command: COPY_COMMAND,
+        handle: copy_terminal_view,
+    },
+];
+const WORKBENCH_HANDLERS: &[FocusedHandler] = &[FocusedHandler {
+    command: COPY_COMMAND,
+    handle: copy_editor_line,
+}];
+const APPLICATION_HANDLERS: &[FocusedHandler] = &[FocusedHandler {
+    command: SHOW_EXTENSION_REPORT_COMMAND,
+    handle: show_extension_report,
+}];
+
+fn has_native_handler(command: &str) -> bool {
+    FOCUSED_HANDLERS
+        .iter()
+        .chain(WORKBENCH_HANDLERS)
+        .chain(APPLICATION_HANDLERS)
+        .any(|handler| handler.command == command)
+}
+
+fn route_native_handler(
+    command: &str,
+    target: &ProductCommandTarget,
+    window: &mut Window,
+    cx: &mut App,
+) -> CommandOutcome {
+    for handler in FOCUSED_HANDLERS
+        .iter()
+        .chain(WORKBENCH_HANDLERS)
+        .chain(APPLICATION_HANDLERS)
+    {
+        if handler.command != command {
+            continue;
+        }
+        match (handler.handle)(target, window, cx) {
+            HandlerResult::Claimed(outcome) => return outcome,
+            HandlerResult::Declined => {}
+        }
+    }
+    CommandOutcome::Unavailable
+}
+
+fn show_extension_report(
+    target: &ProductCommandTarget,
+    _window: &mut Window,
+    cx: &mut App,
+) -> HandlerResult {
+    let Some(shell) = target.shell.upgrade() else {
+        return HandlerResult::Claimed(CommandOutcome::InvalidTarget);
+    };
+    shell.update(cx, |shell, cx| shell.toggle_extension_report(cx));
+    HandlerResult::Claimed(CommandOutcome::Completed)
+}
+
+fn captured_editor(
+    target: &ProductCommandTarget,
+    cx: &App,
+) -> Option<Entity<super::editor::EditorView>> {
+    target
+        .workbench
+        .upgrade()?
+        .read(cx)
+        .pane(target.pane)?
+        .tabs()
+        .iter()
+        .find(|tab| tab.id() == target.tab)?
+        .editor()
+        .cloned()
+}
+
+fn copy_editor_selection(
+    target: &ProductCommandTarget,
+    window: &mut Window,
+    cx: &mut App,
+) -> HandlerResult {
+    let Some(editor) = captured_editor(target, cx) else {
+        return HandlerResult::Declined;
+    };
+    if target.focus.upgrade() != Some(editor.focus_handle(cx)) || !editor.read(cx).has_selection() {
+        return HandlerResult::Declined;
+    }
+    editor.update(cx, |editor, cx| {
+        editor.execute_editing_command(LEGACY_COPY_COMMAND, window, cx);
+    });
+    HandlerResult::Claimed(CommandOutcome::Completed)
+}
+
+fn copy_terminal_view(
+    target: &ProductCommandTarget,
+    _window: &mut Window,
+    cx: &mut App,
+) -> HandlerResult {
+    let Some(view) = target.workbench.upgrade().and_then(|workbench| {
+        workbench
+            .read(cx)
+            .pane(target.pane)?
+            .tabs()
+            .iter()
+            .find(|tab| tab.id() == target.tab)?
+            .terminal_view()
+            .cloned()
+    }) else {
+        return HandlerResult::Declined;
+    };
+    if target.focus.upgrade() != Some(view.focus_handle(cx)) {
+        return HandlerResult::Declined;
+    }
+    if let Some(text) = view.read(cx).visible_text(cx) {
+        cx.write_to_clipboard(ClipboardItem::new_string(text));
+        HandlerResult::Claimed(CommandOutcome::Completed)
+    } else {
+        HandlerResult::Declined
+    }
+}
+
+fn copy_editor_line(
+    target: &ProductCommandTarget,
+    _window: &mut Window,
+    cx: &mut App,
+) -> HandlerResult {
+    let Some(editor) = captured_editor(target, cx) else {
+        return HandlerResult::Declined;
+    };
+    let text = editor.read(cx).current_line_text();
+    cx.write_to_clipboard(ClipboardItem::new_string(text));
+    HandlerResult::Claimed(CommandOutcome::Completed)
+}
+
 #[cfg(test)]
 pub(crate) enum ProductCommandHostResponse {
     Ready(HostResponse),
@@ -233,6 +381,9 @@ impl ProductCommandDispatcher {
         extension: ExtensionId,
         lifecycle: ExtensionLifecycleId,
     ) -> Result<CommandRegistrationId, CommandCatalogError> {
+        if name.as_ref() == LEGACY_COPY_COMMAND {
+            return Err(CommandCatalogError::NameInUse);
+        }
         self.catalog
             .register_extension(name, title, extension, lifecycle)
     }
@@ -256,10 +407,13 @@ impl ProductCommandDispatcher {
 
     pub(crate) fn dispatch(
         &mut self,
-        command: Command,
+        mut command: Command,
         target: ProductCommandTarget,
         cx: &mut Context<Self>,
     ) -> CommandExecution {
+        if command.name.as_ref() == LEGACY_COPY_COMMAND {
+            command.name = COPY_COMMAND.into();
+        }
         if matches!(
             self.catalog.resolve(command.name.as_ref()),
             Ok(CommandTargetKind::Extension(_))
@@ -555,6 +709,10 @@ fn dispatch_to_captured_target(
         }
         if let Err(outcome) = target.validate_tab(cx) {
             return outcome;
+        }
+        if has_native_handler(command.name.as_ref()) {
+            break_captured_history_group(&target, cx);
+            return route_native_handler(command.name.as_ref(), &target, window, cx);
         }
         if command.name.as_ref().starts_with("editor.")
             && let Err(outcome) = target.document_id(cx)

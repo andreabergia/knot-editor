@@ -27,6 +27,37 @@ pub(crate) struct TerminalView {
 }
 
 impl TerminalView {
+    pub(crate) fn visible_text(&self, cx: &App) -> Option<String> {
+        if self.attachment.is_none() {
+            return None;
+        }
+        let snapshot = TerminalSnapshot::capture(self, cx);
+        let mut lines: Vec<String> = Vec::new();
+        let mut last_column = Vec::new();
+        for cell in snapshot.cells {
+            while lines.len() <= cell.line {
+                lines.push(String::new());
+                last_column.push(0);
+            }
+            if cell.text == " " && lines[cell.line].is_empty() {
+                continue;
+            }
+            for _ in last_column[cell.line]..cell.column {
+                lines[cell.line].push(' ');
+            }
+            lines[cell.line].push_str(&cell.text);
+            last_column[cell.line] = cell.column + 1;
+        }
+        let text = lines
+            .iter()
+            .map(|line| line.trim_end())
+            .collect::<Vec<_>>()
+            .join("\n")
+            .trim_end_matches('\n')
+            .to_owned();
+        (!text.is_empty()).then_some(text)
+    }
+
     pub(crate) fn new(session: Entity<TerminalSession>, cx: &mut Context<Self>) -> Self {
         let attachment = session
             .update(cx, |session, _| session.attach())
