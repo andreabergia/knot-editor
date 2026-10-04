@@ -596,7 +596,10 @@ mod tests {
             selected
         );
         let captured = capture(&selected).unwrap();
-        assert_eq!(captured.canonical_directory(), fs::canonicalize(&target).unwrap());
+        assert_eq!(
+            captured.canonical_directory(),
+            fs::canonicalize(&target).unwrap()
+        );
         assert!(captured.pre_init);
         assert_eq!(captured.sources.len(), 2);
 
