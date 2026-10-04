@@ -36,12 +36,6 @@ the item is removed from this register.
   - Reconsider: Dogfooding identifies concrete remapping needs or the extension
     slice requires JavaScript-defined bindings.
 
-- **D004 — Tab dragging and general docking**
-  - Deferred: Initial windows, panes, tabs, and splits need only command-driven
-    placement.
-  - Reconsider: Rearranging real sessions is common enough to define the
-    interaction.
-
 - **D005 — Workbench layout and session restoration**
   - Deferred: Persistence semantics should follow a workbench people actually
     use.
@@ -61,6 +55,13 @@ the item is removed from this register.
     and file opening; a fuller explorer workflow has not been selected.
   - Reconsider: Daily editing needs navigation beyond the current tree, such as
     revealing the active file, refreshing directories, or filtering entries.
+
+- **D037 — Whole-pane dragging and arbitrary split-tree reshaping**
+  - Deferred: D004 moves individual tabs into existing panes or new edge splits;
+    moving groups of tabs and restructuring whole split branches is a separate
+    interaction and layout problem.
+  - Reconsider: Daily use shows that moving tabs one at a time or creating edge
+    splits is too cumbersome for a common layout change.
 
 ## Documents, storage, and history
 
