@@ -14,6 +14,8 @@ Current sources of truth:
 - [deferred.md](deferred.md) is the unordered register of known work outside
   the active slice.
 - [plans/](plans/) contains active executable slice plans.
+- [development.md](development.md) covers local checks, CI, and the Rust
+  toolchain.
 
 Completed prototype plans, measurements, and their roadmap live under
 [archive/exploration/](archive/exploration/). They provide historical evidence
