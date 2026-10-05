@@ -4,11 +4,9 @@ use std::sync::{Arc, Mutex};
 
 #[cfg(test)]
 use crate::host::protocol::BufferHandle;
+use crate::host::protocol::CommandOutcome;
 
 use gpui::*;
-
-#[cfg(test)]
-use crate::host::protocol::CommandOutcome;
 
 #[allow(
     dead_code,

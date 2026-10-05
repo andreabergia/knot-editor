@@ -1,13 +1,16 @@
 //! Product ownership and foreground routing for the pooled extension host.
 
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{HashMap, HashSet},
     path::PathBuf,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
     },
 };
+
+#[cfg(test)]
+use std::collections::BTreeMap;
 
 use gpui::{App, AppContext, ClipboardItem, Context, Entity, Global, Subscription, Task};
 
