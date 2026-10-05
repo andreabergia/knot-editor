@@ -126,8 +126,6 @@ impl TreeView {
     pub(crate) fn handle_command(
         &self,
         command: &Command,
-        target: &super::product_commands::ProductCommandTarget,
-        completion: super::CommandCompletion,
         cx: &mut Context<Self>,
     ) -> super::product_commands::CommandClaim {
         use super::product_commands::{ApplicationProductCommands, COPY_COMMAND, CommandClaim};
@@ -146,11 +144,10 @@ impl TreeView {
         else {
             return CommandClaim::Declined;
         };
-        let command = command.clone();
-        let target = target.clone();
-        CommandClaim::Pending(Box::new(move |cx| {
-            super::extension_host::start_view_command(command, target, handler, completion, cx)
-        }))
+        CommandClaim::Extension {
+            handler,
+            view: Some(self.instance_id),
+        }
     }
 
     #[cfg(test)]

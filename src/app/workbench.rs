@@ -179,8 +179,6 @@ impl CommandView {
     pub(crate) fn handle_command(
         &self,
         command: &Command,
-        target: &super::product_commands::ProductCommandTarget,
-        completion: super::CommandCompletion,
         window: &mut Window,
         cx: &mut App,
     ) -> CommandClaim {
@@ -189,9 +187,7 @@ impl CommandView {
                 view.update(cx, |view, cx| view.handle_command(command, window, cx))
             }
             Self::Terminal(view) => view.update(cx, |view, cx| view.handle_command(command, cx)),
-            Self::Extension(view) => view.update(cx, |view, cx| {
-                view.handle_command(command, target, completion, cx)
-            }),
+            Self::Extension(view) => view.update(cx, |view, cx| view.handle_command(command, cx)),
         }
     }
 }

@@ -244,6 +244,10 @@ pub(crate) enum CommandClaim {
     Declined,
     Finished(CommandOutcome),
     Pending(PendingCommandStart),
+    Extension {
+        handler: super::model::CommandTarget,
+        view: Option<ViewId>,
+    },
 }
 
 pub(crate) fn validate_native_arguments(command: &Command) -> Result<(), CommandClaim> {
@@ -350,6 +354,29 @@ impl ProductCommandDispatcher {
                     Ok(()) => return,
                     Err(outcome) => outcome,
                 },
+                CommandClaim::Extension { handler, view } => {
+                    let result = if view.is_some() {
+                        super::extension_host::start_view_command(
+                            command.clone(),
+                            target.clone(),
+                            handler,
+                            completion.clone(),
+                            cx,
+                        )
+                    } else {
+                        super::extension_host::start_global_command(
+                            command.clone(),
+                            target.clone(),
+                            handler,
+                            completion.clone(),
+                            cx,
+                        )
+                    };
+                    match result {
+                        Ok(()) => return,
+                        Err(outcome) => outcome,
+                    }
+                }
             };
             completion.complete(outcome.clone());
             dispatcher.update(cx, |dispatcher, cx| {
@@ -576,7 +603,7 @@ fn dispatch_to_captured_target(
         if let Some(view) = target.command_view(cx)
             && view.matches_focus(&target.focus, cx)
         {
-            let result = view.handle_command(command, &target, completion.clone(), window, cx);
+            let result = view.handle_command(command, window, cx);
             if !matches!(result, CommandClaim::Declined) {
                 return result;
             }

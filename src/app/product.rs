@@ -2476,13 +2476,10 @@ impl ProductShell {
                     Ok(super::model::CommandTargetKind::Extension(handler)) => handler,
                     _ => return CommandClaim::Declined,
                 };
-                let command = command.clone();
-                let target = target.clone();
-                CommandClaim::Pending(Box::new(move |cx| {
-                    super::extension_host::start_global_command(
-                        command, target, handler, completion, cx,
-                    )
-                }))
+                CommandClaim::Extension {
+                    handler,
+                    view: None,
+                }
             }
         }
     }
