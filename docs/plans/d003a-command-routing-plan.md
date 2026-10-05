@@ -106,6 +106,8 @@ line merely to force a claim.
 Progress: ✅ global extension commands, tree item actions, and top-level and
 nested script invocations enter the product window route. The compiled bridge
 paths and diagnostic editing path remain for checkpoint 4's removal audit.
+Native argument checks apply only to commands the receiving participant
+implements; other names continue bubbling with their arguments intact.
 
 Implemented command inventory:
 

@@ -4892,6 +4892,78 @@ if (outcome.kind !== "completed") throw new Error(`file.new: ${outcome.kind}`);
     }
 
     #[gpui::test]
+    fn extension_command_with_editor_prefix_keeps_its_arguments(cx: &mut TestAppContext) {
+        use crate::host::lifecycle::ExtensionKey;
+
+        let documents = install_globals(cx);
+        let host = cx.update(super::super::extension_host::install);
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        let (shell, window) = product_window(document, model, cx);
+        let key = ExtensionKey::new(ExtensionId::new(91), ExtensionLifecycleId::new(1));
+        host.update(cx, |host, cx| {
+            let execution = host
+                .load_test_source(
+                    key,
+                    r#"
+import { commands } from "knot:editor";
+await commands.register("editor.custom", async ({ arguments: args }) => {
+  if (args?.value !== 42) throw new Error("missing command arguments");
+});
+"#,
+                )
+                .unwrap();
+            cx.spawn(async move |_, _| {
+                execution.await.unwrap();
+            })
+            .detach();
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            cx.run_until_parked();
+            if cx.read(|cx| {
+                cx.global::<ApplicationProductCommands>()
+                    .0
+                    .read(cx)
+                    .catalog()
+                    .borrow()
+                    .resolve("editor.custom")
+                    .is_ok()
+            }) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "command did not register"
+            );
+            std::thread::yield_now();
+        }
+        let target = cx
+            .update_window(window, |_, window, cx| {
+                shell.read(cx).focus_active_editor(window, cx);
+                shell.update(cx, |shell, cx| {
+                    shell.capture_command_target(window, cx).unwrap()
+                })
+            })
+            .unwrap();
+        let dispatcher = cx.read(|cx| cx.global::<ApplicationProductCommands>().0.clone());
+        let execution = dispatcher.update(cx, |dispatcher, cx| {
+            dispatcher.dispatch(
+                Command {
+                    name: "editor.custom".into(),
+                    arguments: CommandArgumentValue::Object(std::collections::BTreeMap::from([(
+                        "value".into(),
+                        CommandArgumentValue::Number(42.),
+                    )])),
+                },
+                target,
+                cx,
+            )
+        });
+        assert_eq!(wait_for_command(execution, cx), CommandOutcome::Completed);
+    }
+
+    #[gpui::test]
     fn nested_script_waits_for_a_pending_native_command(cx: &mut TestAppContext) {
         use crate::host::lifecycle::ExtensionKey;
 
