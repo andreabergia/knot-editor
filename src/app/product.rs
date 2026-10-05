@@ -4723,9 +4723,7 @@ mod tests {
                     let (session, view) = shell.create_terminal(cx);
                     let pane = shell.workbench.read(cx).focused_pane_id().unwrap();
                     let tab = shell.workbench.update(cx, |workbench, _| {
-                        workbench
-                            .open_terminal_tab(pane, session.clone(), view)
-                            .unwrap()
+                        workbench.open_terminal_tab(pane, session, view).unwrap()
                     });
                     shell.activate_tab(pane, tab, window, cx);
                     shell.capture_command_target(window, cx).unwrap()
