@@ -2,7 +2,7 @@
 
 use gpui::*;
 
-use crate::host::protocol::{Command, CommandArgumentValue, CommandOutcome};
+use crate::host::protocol::{Command, CommandArgumentValue, CommandOutcome, ViewId};
 #[cfg(test)]
 use crate::host::protocol::{
     CommandInvokeDispatch, ExtensionId, ExtensionLifecycleId, HostOperation, HostRequest,
@@ -160,6 +160,7 @@ pub(crate) struct ProductCommandTarget {
     pub(crate) tab: super::workbench::TabId,
     pub(crate) surface: super::workbench::TabSurfaceId,
     pub(crate) focus: WeakFocusHandle,
+    pub(crate) view: Option<ViewId>,
 }
 
 impl ProductCommandTarget {
@@ -191,6 +192,14 @@ impl ProductCommandTarget {
     }
 
     pub(crate) fn command_view(&self, cx: &App) -> Option<super::workbench::CommandView> {
+        if let Some(view) = self.view {
+            return self
+                .shell
+                .upgrade()?
+                .read(cx)
+                .extension_command_view(view, cx)
+                .map(super::workbench::CommandView::Extension);
+        }
         self.workbench
             .upgrade()?
             .read(cx)
@@ -199,6 +208,23 @@ impl ProductCommandTarget {
             .iter()
             .find(|tab| tab.id() == self.tab && tab.surface_id() == self.surface)?
             .command_view()
+    }
+
+    pub(crate) fn validate_view(&self, cx: &App) -> Result<(), CommandOutcome> {
+        let Some(view) = self.view else { return Ok(()) };
+        if !cx.windows().contains(&self.window) {
+            return Err(CommandOutcome::InvalidTarget);
+        }
+        let shell = self.shell.upgrade().ok_or(CommandOutcome::InvalidTarget)?;
+        let tree = shell
+            .read(cx)
+            .extension_command_view(view, cx)
+            .ok_or(CommandOutcome::InvalidTarget)?;
+        if self.focus.upgrade() == Some(tree.focus_handle(cx)) {
+            Ok(())
+        } else {
+            Err(CommandOutcome::InvalidTarget)
+        }
     }
 }
 
@@ -545,10 +571,13 @@ fn dispatch_to_captured_target(
         if let Err(outcome) = target.validate_tab(cx) {
             return CommandClaim::Finished(outcome);
         }
+        if let Err(outcome) = target.validate_view(cx) {
+            return CommandClaim::Finished(outcome);
+        }
         if let Some(view) = target.command_view(cx)
             && view.matches_focus(&target.focus, cx)
         {
-            let result = view.handle_command(command, window, cx);
+            let result = view.handle_command(command, &target, completion.clone(), window, cx);
             if !matches!(result, CommandClaim::Declined) {
                 return result;
             }

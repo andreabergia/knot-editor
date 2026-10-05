@@ -17,6 +17,7 @@ use super::{
     editor::EditorView,
     product_commands::CommandClaim,
     terminal_view::TerminalView,
+    tree_view::TreeView,
 };
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -162,6 +163,7 @@ pub(crate) enum WorkbenchTabPayload {
 pub(crate) enum CommandView {
     Editor(Entity<EditorView>),
     Terminal(Entity<TerminalView>),
+    Extension(Entity<TreeView>),
 }
 
 impl CommandView {
@@ -169,6 +171,7 @@ impl CommandView {
         let handle = match self {
             Self::Editor(view) => view.focus_handle(cx),
             Self::Terminal(view) => view.focus_handle(cx),
+            Self::Extension(view) => view.focus_handle(cx),
         };
         focus.upgrade() == Some(handle)
     }
@@ -176,6 +179,8 @@ impl CommandView {
     pub(crate) fn handle_command(
         &self,
         command: &Command,
+        target: &super::product_commands::ProductCommandTarget,
+        completion: super::CommandCompletion,
         window: &mut Window,
         cx: &mut App,
     ) -> CommandClaim {
@@ -184,6 +189,9 @@ impl CommandView {
                 view.update(cx, |view, cx| view.handle_command(command, window, cx))
             }
             Self::Terminal(view) => view.update(cx, |view, cx| view.handle_command(command, cx)),
+            Self::Extension(view) => view.update(cx, |view, cx| {
+                view.handle_command(command, target, completion, cx)
+            }),
         }
     }
 }

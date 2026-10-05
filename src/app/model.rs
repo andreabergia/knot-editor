@@ -19,7 +19,7 @@ use crate::{
     host::protocol::{
         BufferHandle, BufferSubscriptionId, ByteRange, CommandName, CommandRegistrationId,
         DecorationToken, EditorContribution, ExtensionId, ExtensionLifecycleId, GutterToken,
-        SnapshotText,
+        SnapshotText, ViewId,
     },
 };
 
@@ -857,7 +857,16 @@ pub struct CommandDefinition {
 pub struct CommandCatalog {
     next_registration: u64,
     by_name: HashMap<CommandName, CommandCatalogEntry>,
-    by_id: HashMap<CommandRegistrationId, CommandName>,
+    declared_view_kinds: HashSet<String>,
+    view_kinds: HashMap<ViewId, String>,
+    view_handlers: HashMap<(String, CommandName), CommandTarget>,
+    by_view: HashMap<(ViewId, CommandName), CommandTarget>,
+    by_id: HashMap<CommandRegistrationId, CommandRegistrationScope>,
+}
+
+enum CommandRegistrationScope {
+    Global(CommandName),
+    View(String, CommandName),
 }
 
 /// Foreground-authoritative buffer-change subscriptions.
@@ -984,6 +993,7 @@ pub(crate) enum CommandTargetKind {
 pub(crate) enum CommandCatalogError {
     NameInUse,
     NotFound,
+    ViewNotFound,
 }
 
 impl CommandCatalog {
@@ -991,6 +1001,10 @@ impl CommandCatalog {
         Self {
             next_registration: 1,
             by_name: HashMap::new(),
+            declared_view_kinds: HashSet::new(),
+            view_kinds: HashMap::new(),
+            view_handlers: HashMap::new(),
+            by_view: HashMap::new(),
             by_id: HashMap::new(),
         }
     }
@@ -1024,8 +1038,80 @@ impl CommandCatalog {
                 extension_registration: Some(id),
             },
         );
-        self.by_id.insert(id, name);
+        self.by_id
+            .insert(id, CommandRegistrationScope::Global(name));
         Ok(id)
+    }
+
+    pub(crate) fn declare_view_kind(&mut self, kind: impl Into<String>) {
+        self.declared_view_kinds.insert(kind.into());
+    }
+
+    pub(crate) fn bind_view(
+        &mut self,
+        kind: &str,
+        view: ViewId,
+    ) -> Result<(), CommandCatalogError> {
+        if !self.declared_view_kinds.contains(kind) {
+            return Err(CommandCatalogError::ViewNotFound);
+        }
+        if self.view_kinds.contains_key(&view) {
+            return Err(CommandCatalogError::NameInUse);
+        }
+        self.view_kinds.insert(view, kind.to_owned());
+        for ((handler_kind, name), target) in &self.view_handlers {
+            if handler_kind == kind {
+                self.by_view.insert((view, name.clone()), *target);
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn register_view_handler(
+        &mut self,
+        kind: String,
+        name: CommandName,
+        extension: ExtensionId,
+        lifecycle: ExtensionLifecycleId,
+    ) -> Result<CommandRegistrationId, CommandCatalogError> {
+        if !self.declared_view_kinds.contains(&kind) {
+            return Err(CommandCatalogError::ViewNotFound);
+        }
+        if !self.by_name.contains_key(&name) {
+            return Err(CommandCatalogError::NotFound);
+        }
+        let key = (kind, name);
+        if self.view_handlers.contains_key(&key) {
+            return Err(CommandCatalogError::NameInUse);
+        }
+        let registration = CommandRegistrationId::new(self.next_registration);
+        self.next_registration = self
+            .next_registration
+            .checked_add(1)
+            .expect("command registration space exhausted");
+        let target = CommandTarget {
+            registration,
+            extension,
+            lifecycle,
+        };
+        for (view, kind) in &self.view_kinds {
+            if kind == &key.0 {
+                self.by_view.insert((*view, key.1.clone()), target);
+            }
+        }
+        self.view_handlers.insert(key.clone(), target);
+        self.by_id
+            .insert(registration, CommandRegistrationScope::View(key.0, key.1));
+        Ok(registration)
+    }
+
+    pub(crate) fn resolve_view(&self, view: ViewId, name: &str) -> Option<CommandTarget> {
+        self.by_view.get(&(view, name.into())).copied()
+    }
+
+    pub(crate) fn remove_view(&mut self, view: ViewId) {
+        self.view_kinds.remove(&view);
+        self.by_view.retain(|(owner, _), _| *owner != view);
     }
 
     pub(crate) fn register_native(
@@ -1090,18 +1176,34 @@ impl CommandCatalog {
         extension: ExtensionId,
         lifecycle: ExtensionLifecycleId,
     ) -> Result<(), CommandCatalogError> {
-        let name = self.by_id.get(&id).ok_or(CommandCatalogError::NotFound)?;
-        let entry = self.by_name.get(name).expect("command indexes agree");
-        if entry.definition.owner
-            != (CommandOwner::Extension {
-                extension,
-                lifecycle,
-            })
-        {
-            return Err(CommandCatalogError::NotFound);
+        match self.by_id.get(&id).ok_or(CommandCatalogError::NotFound)? {
+            CommandRegistrationScope::Global(name) => {
+                let entry = self.by_name.get(name).expect("command indexes agree");
+                if entry.definition.owner
+                    != (CommandOwner::Extension {
+                        extension,
+                        lifecycle,
+                    })
+                {
+                    return Err(CommandCatalogError::NotFound);
+                }
+                let name = name.clone();
+                self.by_id.remove(&id);
+                self.by_name.remove(&name);
+                self.remove_view_handlers_for_command(&name);
+            }
+            CommandRegistrationScope::View(kind, name) => {
+                let key = (kind.clone(), name.clone());
+                if self.view_handlers.get(&key).is_none_or(|target| {
+                    (target.extension, target.lifecycle) != (extension, lifecycle)
+                }) {
+                    return Err(CommandCatalogError::NotFound);
+                }
+                self.by_id.remove(&id);
+                self.view_handlers.remove(&key);
+                self.by_view.retain(|_, target| target.registration != id);
+            }
         }
-        let name = self.by_id.remove(&id).expect("command exists");
-        self.by_name.remove(&name);
         Ok(())
     }
 
@@ -1133,7 +1235,31 @@ impl CommandCatalog {
         for (id, name) in registrations {
             self.by_id.remove(&id);
             self.by_name.remove(&name);
+            self.remove_view_handlers_for_command(&name);
         }
+        self.view_handlers.retain(|_, target| {
+            if (target.extension, target.lifecycle) == (extension, lifecycle) {
+                self.by_id.remove(&target.registration);
+                false
+            } else {
+                true
+            }
+        });
+        self.by_view
+            .retain(|_, target| (target.extension, target.lifecycle) != (extension, lifecycle));
+    }
+
+    fn remove_view_handlers_for_command(&mut self, name: &CommandName) {
+        self.view_handlers.retain(|(_, registered_name), target| {
+            if registered_name == name {
+                self.by_id.remove(&target.registration);
+                false
+            } else {
+                true
+            }
+        });
+        self.by_view
+            .retain(|(_, registered_name), _| registered_name != name);
     }
 }
 
@@ -1950,6 +2076,74 @@ mod tests {
             ),
             Err(CommandCatalogError::NameInUse)
         );
+    }
+
+    #[test]
+    fn view_handlers_share_public_names_without_owning_definitions() {
+        let mut catalog = CommandCatalog::new();
+        let first_view = ViewId::new(11);
+        let second_view = ViewId::new(12);
+        let extension = ExtensionId::new(7);
+        let lifecycle = ExtensionLifecycleId::new(3);
+        catalog
+            .register_native("copy".into(), "Copy".into())
+            .unwrap();
+        catalog.declare_view_kind("outline");
+        catalog.bind_view("outline", first_view).unwrap();
+
+        assert_eq!(
+            catalog.register_view_handler("outline".into(), "missing".into(), extension, lifecycle),
+            Err(CommandCatalogError::NotFound)
+        );
+        let first = catalog
+            .register_view_handler("outline".into(), "copy".into(), extension, lifecycle)
+            .unwrap();
+        catalog.bind_view("outline", second_view).unwrap();
+        assert_eq!(
+            catalog.register_view_handler("outline".into(), "copy".into(), extension, lifecycle),
+            Err(CommandCatalogError::NameInUse)
+        );
+        assert_eq!(catalog.definitions().count(), 1);
+        assert_eq!(catalog.resolve("copy"), Ok(CommandTargetKind::Native));
+        assert_eq!(
+            catalog
+                .resolve_view(first_view, "copy")
+                .unwrap()
+                .registration,
+            first
+        );
+        assert_eq!(
+            catalog
+                .resolve_view(second_view, "copy")
+                .unwrap()
+                .registration,
+            first
+        );
+        assert_eq!(
+            catalog.unregister(first, extension, ExtensionLifecycleId::new(4)),
+            Err(CommandCatalogError::NotFound)
+        );
+        catalog.remove_view(first_view);
+        assert_eq!(catalog.resolve_view(first_view, "copy"), None);
+        assert_eq!(
+            catalog
+                .resolve_view(second_view, "copy")
+                .unwrap()
+                .registration,
+            first
+        );
+        assert_eq!(catalog.unregister(first, extension, lifecycle), Ok(()));
+        assert_eq!(catalog.resolve_view(second_view, "copy"), None);
+        let replacement = catalog
+            .register_view_handler("outline".into(), "copy".into(), extension, lifecycle)
+            .unwrap();
+        catalog.remove_lifecycle(extension, lifecycle);
+        assert_eq!(catalog.resolve_view(second_view, "copy"), None);
+        assert_eq!(
+            catalog.unregister(replacement, extension, lifecycle),
+            Err(CommandCatalogError::NotFound)
+        );
+        assert_eq!(catalog.resolve("copy"), Ok(CommandTargetKind::Native));
     }
 
     #[test]

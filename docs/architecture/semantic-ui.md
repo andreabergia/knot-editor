@@ -102,6 +102,10 @@ timeouts, backpressure, richer edits, and popup polish remain deferred.
 `TreeView` owns cached semantic items, expansion, selection, focus, scroll, and
 per-parent loading/error generations. It renders and handles input from cached
 foreground state only.
+Each product window owns an instance of a declared tree kind. The foreground
+semantic bridge retains weak references to live instances, accepts provider
+registration before windows open, and routes invalidations and responses to
+each instance. Its generation rejects responses from a replaced request.
 
 Semantic tree state retains accessibility information, but gpui 0.2.2 lacks
 the required public platform bridge.

@@ -304,6 +304,9 @@ enum HostOperationKind {
     ReplaceEditorContributions,
     DisposeEditorContributions,
     RegisterCommand,
+    RegisterViewCommand,
+    SelectedViewText,
+    WriteClipboardText,
     UnregisterCommand,
     InvokeCommand,
     CompleteInlineCommand,
@@ -3333,6 +3336,23 @@ fn parse_host_operation<'s, 'i>(
             },
             HostOperationKind::RegisterCommand,
         )),
+        "registerViewCommand" => Ok((
+            HostOperation::RegisterViewCommand {
+                view_kind: required_string(scope, arguments.get(2), "UnsupportedOperation")?,
+                name: required_string(scope, arguments.get(3), "UnsupportedOperation")?.into(),
+            },
+            HostOperationKind::RegisterViewCommand,
+        )),
+        "selectedViewText" => Ok((
+            HostOperation::SelectedViewText,
+            HostOperationKind::SelectedViewText,
+        )),
+        "writeClipboardText" => Ok((
+            HostOperation::WriteClipboardText {
+                text: required_string(scope, arguments.get(2), "UnsupportedOperation")?,
+            },
+            HostOperationKind::WriteClipboardText,
+        )),
         "unregisterCommand" => Ok((
             HostOperation::UnregisterCommand {
                 registration: CommandRegistrationId::new(argument_u64(scope, arguments, 2)?),
@@ -3699,7 +3719,22 @@ fn host_response_to_v8<'s>(
         (
             HostOperationKind::RegisterCommand,
             HostResponseValue::CommandRegistered { registration },
+        )
+        | (
+            HostOperationKind::RegisterViewCommand,
+            HostResponseValue::ViewCommandRegistered { registration },
         ) => Ok(v8::Number::new(scope, registration.value() as f64).into()),
+        (HostOperationKind::SelectedViewText, HostResponseValue::SelectedViewText(None)) => {
+            Ok(v8::null(scope).into())
+        }
+        (HostOperationKind::SelectedViewText, HostResponseValue::SelectedViewText(Some(text))) => {
+            Ok(v8::String::new(scope, &text)
+                .ok_or("UnsupportedOperation")?
+                .into())
+        }
+        (HostOperationKind::WriteClipboardText, HostResponseValue::ClipboardTextWritten) => {
+            Ok(v8::undefined(scope).into())
+        }
         (HostOperationKind::UnregisterCommand, HostResponseValue::CommandUnregistered { .. })
         | (
             HostOperationKind::CompleteInlineCommand,

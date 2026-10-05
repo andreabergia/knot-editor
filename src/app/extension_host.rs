@@ -9,7 +9,7 @@ use std::{
     },
 };
 
-use gpui::{App, AppContext, Context, Entity, Global, Subscription, Task};
+use gpui::{App, AppContext, ClipboardItem, Context, Entity, Global, Subscription, Task};
 
 use crate::host::{
     lifecycle::ExtensionKey,
@@ -18,7 +18,8 @@ use crate::host::{
         ExtensionConfig, ExtensionEvent, ExtensionEventInbox, ExtensionExecution, ExtensionPool,
     },
     protocol::{
-        Command, CommandInvocationId, ExtensionId, ExtensionLifecycleId, HostOperation, HostRequest,
+        Command, CommandInvocationId, ExtensionId, ExtensionLifecycleId, HostOperation,
+        HostRequest, ViewId,
     },
     scheduler::PoolConfig,
 };
@@ -29,6 +30,7 @@ use super::{
     extension_load::{DependencyPlan, LoadEntry, LoadReport, LoadResult, StartupAttempt},
     extension_package::{self, InstalledPackage},
     extension_semantics::ExtensionSemanticBridge,
+    model::CommandTarget,
     personal_config::{self, ConfigDiagnostic, ConfigPhase},
     product::{self, ProductShell},
     product_commands::{ApplicationProductCommands, ProductCommandTarget},
@@ -147,6 +149,49 @@ pub(crate) fn start_completion(
     host.update(cx, |host, cx| host.start_completion(target, cx))
 }
 
+pub(crate) fn attach_tree_view(view: Entity<TreeView>, cx: &mut App) {
+    let Some(host) = entity(cx) else { return };
+    host.update(cx, |host, cx| {
+        let id = view.read(cx).instance_id();
+        host.commands
+            .catalog()
+            .borrow_mut()
+            .bind_view("outline", id)
+            .expect("outline is a declared view kind");
+        host.semantics
+            .add_tree_view("outline", view, cx)
+            .expect("new outline view accepts its provider");
+    });
+}
+
+pub(crate) fn detach_tree_view(view: ViewId, cx: &mut App) {
+    let Some(host) = entity(cx) else { return };
+    host.update(cx, |host, cx| {
+        host.semantics.remove_tree_view(view, cx);
+        host.commands.catalog().borrow_mut().remove_view(view);
+    });
+}
+
+pub(crate) fn route_tree_event(event: &TreeViewEvent, cx: &mut App) {
+    let Some(host) = entity(cx) else { return };
+    host.update(cx, |host, cx| host.handle_tree_event(event, cx));
+}
+
+pub(crate) fn start_view_command(
+    command: Command,
+    target: ProductCommandTarget,
+    handler: CommandTarget,
+    completion: super::CommandCompletion,
+    cx: &mut App,
+) -> Result<(), crate::host::protocol::CommandOutcome> {
+    target.validate_tab(cx)?;
+    target.validate_view(cx)?;
+    let host = entity(cx).ok_or(crate::host::protocol::CommandOutcome::InvalidTarget)?;
+    host.update(cx, |host, cx| {
+        host.start_view_command(command, target, handler, completion, cx)
+    })
+}
+
 /// Owns the one process-wide extension pool and all foreground protocol state.
 pub(crate) struct ProductExtensionHost {
     pool: Arc<ExtensionPool>,
@@ -155,8 +200,16 @@ pub(crate) struct ProductExtensionHost {
     buffer_observers: HashMap<crate::host::protocol::BufferHandle, Subscription>,
     commands: ExtensionCommandBridge,
     command_targets: HashMap<CommandInvocationId, ProductCommandTarget>,
+    view_command_handlers:
+        HashMap<CommandInvocationId, (CommandTarget, crate::host::protocol::CommandName)>,
+    #[cfg(test)]
+    hold_clipboard_writes: bool,
+    #[cfg(test)]
+    deferred_view_requests: Vec<HostRequest>,
     semantics: ExtensionSemanticBridge,
+    #[cfg(test)]
     _fixture_tree: Entity<TreeView>,
+    #[cfg(test)]
     _fixture_tree_subscription: Subscription,
     _event_task: Task<()>,
     startup_report: Option<StartupReportSnapshot>,
@@ -173,10 +226,18 @@ impl ProductExtensionHost {
         cx: &mut Context<Self>,
     ) -> Self {
         let product_commands = cx.global::<ApplicationProductCommands>().0.clone();
-        let commands = ExtensionCommandBridge::with_catalog(product_commands.read(cx).catalog());
+        let catalog = product_commands.read(cx).catalog();
+        catalog.borrow_mut().declare_view_kind("outline");
+        let commands = ExtensionCommandBridge::with_catalog(catalog);
+        #[cfg(test)]
         let fixture_tree = cx.new(|cx| TreeView::new("outline", cx));
         let mut semantics = ExtensionSemanticBridge::new();
-        semantics.add_tree_view("outline", fixture_tree.clone());
+        semantics.declare_tree_kind("outline");
+        #[cfg(test)]
+        semantics
+            .add_tree_view("outline", fixture_tree.clone(), cx)
+            .unwrap();
+        #[cfg(test)]
         let fixture_tree_subscription = cx.subscribe(&fixture_tree, |this, _, event, cx| {
             this.handle_tree_event(event, cx)
         });
@@ -197,8 +258,15 @@ impl ProductExtensionHost {
             buffer_observers: HashMap::new(),
             commands,
             command_targets: HashMap::new(),
+            view_command_handlers: HashMap::new(),
+            #[cfg(test)]
+            hold_clipboard_writes: false,
+            #[cfg(test)]
+            deferred_view_requests: Vec::new(),
             semantics,
+            #[cfg(test)]
             _fixture_tree: fixture_tree,
+            #[cfg(test)]
             _fixture_tree_subscription: fixture_tree_subscription,
             _event_task: event_task,
             startup_report: None,
@@ -510,6 +578,21 @@ impl ProductExtensionHost {
         Ok(execution)
     }
 
+    #[cfg(test)]
+    pub(crate) fn load_test_source(
+        &mut self,
+        key: ExtensionKey,
+        source: &str,
+    ) -> Result<ExtensionExecution, String> {
+        let graph = ModuleGraph::new(
+            "file:///fixtures/view-command/",
+            "main.js",
+            BTreeMap::from([("main.js".into(), Arc::from(source))]),
+        )
+        .map_err(|error| error.to_string())?;
+        self.load_package(key, graph)
+    }
+
     fn admit_lifecycle(&mut self, key: ExtensionKey) {
         if self.lifecycles.insert(key) {
             self.buffers.admit_lifecycle(key.extension, key.lifecycle);
@@ -606,12 +689,116 @@ impl ProductExtensionHost {
                 )
             }
             RequestRoute::Command => self.commands.handle_host_request(request, active_buffer),
+            RequestRoute::View => self.dispatch_view_request(request, cx),
             RequestRoute::Semantic => Some(self.semantics.dispatch(request, cx)),
         };
         if let Some(response) = response {
             let _ = self.pool.respond(response);
         }
         self.drain_command_events(cx);
+    }
+
+    fn dispatch_view_request(
+        &mut self,
+        request: HostRequest,
+        cx: &mut Context<Self>,
+    ) -> Option<crate::host::protocol::HostResponse> {
+        #[cfg(test)]
+        if self.hold_clipboard_writes
+            && matches!(&request.operation, HostOperation::WriteClipboardText { .. })
+        {
+            self.deferred_view_requests.push(request);
+            return None;
+        }
+        Some(self.handle_view_request(request, cx))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn hold_clipboard_writes(&mut self) {
+        self.hold_clipboard_writes = true;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pending_view_request_count(&self) -> usize {
+        self.deferred_view_requests.len()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn release_view_requests(&mut self, cx: &mut Context<Self>) {
+        self.hold_clipboard_writes = false;
+        for request in std::mem::take(&mut self.deferred_view_requests) {
+            let response = self.handle_view_request(request, cx);
+            let _ = self.pool.respond(response);
+        }
+    }
+
+    fn handle_view_request(
+        &self,
+        request: HostRequest,
+        cx: &mut App,
+    ) -> crate::host::protocol::HostResponse {
+        use crate::host::protocol::{HostRequestError, HostResponseValue};
+        let result = (|| {
+            let invocation = request.invocation.ok_or(HostRequestError::Cancelled)?;
+            let root = self
+                .commands
+                .root_of(invocation)
+                .ok_or(HostRequestError::Cancelled)?;
+            let (handler, name) = self
+                .view_command_handlers
+                .get(&root)
+                .ok_or(HostRequestError::Cancelled)?;
+            if (handler.extension, handler.lifecycle) != (request.extension, request.lifecycle)
+                || !self
+                    .lifecycles
+                    .contains(&ExtensionKey::new(handler.extension, handler.lifecycle))
+            {
+                return Err(HostRequestError::Cancelled);
+            }
+            let target = self
+                .command_targets
+                .get(&root)
+                .ok_or(HostRequestError::Cancelled)?;
+            target
+                .validate_tab(cx)
+                .map_err(|_| HostRequestError::Cancelled)?;
+            target
+                .validate_view(cx)
+                .map_err(|_| HostRequestError::Cancelled)?;
+            let view = target.view.ok_or(HostRequestError::Cancelled)?;
+            if self
+                .commands
+                .catalog()
+                .borrow()
+                .resolve_view(view, name.as_ref())
+                != Some(*handler)
+            {
+                return Err(HostRequestError::Cancelled);
+            }
+            match request.operation {
+                HostOperation::SelectedViewText => {
+                    let shell = target.shell.upgrade().ok_or(HostRequestError::Cancelled)?;
+                    let tree = shell
+                        .read(cx)
+                        .extension_command_view(view, cx)
+                        .ok_or(HostRequestError::Cancelled)?;
+                    Ok(HostResponseValue::SelectedViewText(
+                        tree.read(cx).selected_text(),
+                    ))
+                }
+                HostOperation::WriteClipboardText { text } => {
+                    cx.write_to_clipboard(ClipboardItem::new_string(text));
+                    Ok(HostResponseValue::ClipboardTextWritten)
+                }
+                _ => Err(HostRequestError::UnsupportedOperation),
+            }
+        })();
+        crate::host::protocol::HostResponse {
+            extension: request.extension,
+            lifecycle: request.lifecycle,
+            id: request.id,
+            result,
+        }
     }
 
     fn drain_command_events(&mut self, cx: &mut Context<Self>) {
@@ -687,6 +874,7 @@ impl ProductExtensionHost {
                                 this.commands.complete(id, outcome);
                                 if id == root {
                                     this.command_targets.remove(&root);
+                                    this.view_command_handlers.remove(&root);
                                 }
                                 this.drain_command_events(cx);
                             });
@@ -786,6 +974,73 @@ impl ProductExtensionHost {
         self.command_targets.insert(execution.id, target);
         self.drain_command_events(cx);
         execution
+    }
+
+    fn start_view_command(
+        &mut self,
+        command: Command,
+        target: ProductCommandTarget,
+        handler: CommandTarget,
+        completion: super::CommandCompletion,
+        cx: &mut Context<Self>,
+    ) -> Result<(), crate::host::protocol::CommandOutcome> {
+        let view = target
+            .view
+            .ok_or(crate::host::protocol::CommandOutcome::InvalidTarget)?;
+        let active = self
+            .commands
+            .catalog()
+            .borrow()
+            .resolve_view(view, command.name.as_ref());
+        if active != Some(handler)
+            || !self
+                .lifecycles
+                .contains(&ExtensionKey::new(handler.extension, handler.lifecycle))
+        {
+            return Err(crate::host::protocol::CommandOutcome::InvalidTarget);
+        }
+        let buffer = self.open_target_buffer(&target, cx);
+        let name = command.name.clone();
+        let execution = self.commands.enqueue_view_root(command, handler, buffer);
+        self.command_targets.insert(execution.id, target.clone());
+        self.view_command_handlers
+            .insert(execution.id, (handler, name.clone()));
+        self.drain_command_events(cx);
+        cx.spawn(async move |this, cx| {
+            let outcome = execution
+                .completion
+                .await
+                .unwrap_or(crate::host::protocol::CommandOutcome::Cancelled);
+            let outcome = cx
+                .update(|cx| {
+                    if let Err(invalid) = target.validate_view(cx) {
+                        return invalid;
+                    }
+                    let Some(host) = this.upgrade() else {
+                        return crate::host::protocol::CommandOutcome::Cancelled;
+                    };
+                    let host = host.read(cx);
+                    if !host
+                        .lifecycles
+                        .contains(&ExtensionKey::new(handler.extension, handler.lifecycle))
+                        || target.view.is_none_or(|view| {
+                            host.commands
+                                .catalog()
+                                .borrow()
+                                .resolve_view(view, name.as_ref())
+                                != Some(handler)
+                        })
+                    {
+                        crate::host::protocol::CommandOutcome::Cancelled
+                    } else {
+                        outcome
+                    }
+                })
+                .unwrap_or(crate::host::protocol::CommandOutcome::InvalidTarget);
+            completion.complete(outcome);
+        })
+        .detach();
+        Ok(())
     }
 
     fn start_completion(
@@ -900,6 +1155,8 @@ impl ProductExtensionHost {
         self.commands.remove_lifecycle(key.extension, key.lifecycle);
         self.command_targets
             .retain(|root, _| self.commands.contains_invocation(*root));
+        self.view_command_handlers
+            .retain(|root, _| self.commands.contains_invocation(*root));
         self.buffers
             .remove_lifecycle(key.extension, key.lifecycle, cx);
         self.semantics
@@ -912,6 +1169,7 @@ impl ProductExtensionHost {
 enum RequestRoute {
     Buffer,
     Command,
+    View,
     Semantic,
 }
 
@@ -925,9 +1183,13 @@ fn request_route(operation: &HostOperation) -> RequestRoute {
         | HostOperation::ReplaceEditorContributions { .. }
         | HostOperation::DisposeEditorContributions { .. } => RequestRoute::Buffer,
         HostOperation::RegisterCommand { .. }
+        | HostOperation::RegisterViewCommand { .. }
         | HostOperation::UnregisterCommand { .. }
         | HostOperation::InvokeCommand { .. }
         | HostOperation::CompleteInlineCommand { .. } => RequestRoute::Command,
+        HostOperation::SelectedViewText | HostOperation::WriteClipboardText { .. } => {
+            RequestRoute::View
+        }
         HostOperation::RegisterTreeProvider { .. }
         | HostOperation::InvalidateTreeProvider { .. }
         | HostOperation::UnregisterTreeProvider { .. }

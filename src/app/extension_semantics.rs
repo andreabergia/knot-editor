@@ -2,13 +2,13 @@
 
 use std::collections::{HashMap, HashSet};
 
-use gpui::{App, Entity};
+use gpui::{App, Entity, WeakEntity};
 
 #[cfg(test)]
 use crate::host::protocol::CompletionProviderRegistrationId;
 use crate::host::protocol::{
     ExtensionId, ExtensionLifecycleId, HostOperation, HostRequest, HostRequestError, HostResponse,
-    HostResponseValue, TreeChildrenResponse, TreeProviderRegistrationId,
+    HostResponseValue, TreeChildrenResponse, TreeProviderRegistrationId, ViewId,
 };
 
 use super::{
@@ -21,16 +21,23 @@ type Lifecycle = (ExtensionId, ExtensionLifecycleId);
 /// Foreground registries and native tree surfaces exposed to extension requests.
 pub(crate) struct ExtensionSemanticBridge {
     lifecycles: HashSet<Lifecycle>,
-    tree_views: HashMap<String, Entity<TreeView>>,
-    tree_registrations: HashMap<TreeProviderRegistrationId, Entity<TreeView>>,
+    tree_kinds: HashSet<String>,
+    tree_views: HashMap<String, Vec<WeakEntity<TreeView>>>,
+    tree_registrations: HashMap<TreeProviderRegistrationId, TreeRegistration>,
     next_tree_registration: u64,
     completion_providers: CompletionProviderRegistry,
+}
+
+struct TreeRegistration {
+    kind: String,
+    identity: TreeProviderIdentity,
 }
 
 impl ExtensionSemanticBridge {
     pub(crate) fn new() -> Self {
         Self {
             lifecycles: HashSet::new(),
+            tree_kinds: HashSet::new(),
             tree_views: HashMap::new(),
             tree_registrations: HashMap::new(),
             next_tree_registration: 1,
@@ -46,8 +53,42 @@ impl ExtensionSemanticBridge {
         self.lifecycles.insert((extension, lifecycle));
     }
 
-    pub(crate) fn add_tree_view(&mut self, view_id: impl Into<String>, view: Entity<TreeView>) {
-        self.tree_views.insert(view_id.into(), view);
+    pub(crate) fn declare_tree_kind(&mut self, kind: impl Into<String>) {
+        self.tree_kinds.insert(kind.into());
+    }
+
+    pub(crate) fn add_tree_view(
+        &mut self,
+        kind: impl Into<String>,
+        view: Entity<TreeView>,
+        cx: &mut App,
+    ) -> Result<(), TreeViewRegistrationError> {
+        let kind = kind.into();
+        self.tree_kinds.insert(kind.clone());
+        if let Some(registration) = self
+            .tree_registrations
+            .values()
+            .find(|entry| entry.kind == kind)
+        {
+            view.update(cx, |tree, cx| {
+                tree.register_provider(&kind, registration.identity, cx)
+            })?;
+        }
+        self.tree_views
+            .entry(kind)
+            .or_default()
+            .push(view.downgrade());
+        Ok(())
+    }
+
+    pub(crate) fn remove_tree_view(&mut self, view: ViewId, cx: &App) {
+        for views in self.tree_views.values_mut() {
+            views.retain(|candidate| {
+                candidate
+                    .upgrade()
+                    .is_some_and(|entity| entity.read(cx).instance_id() != view)
+            });
+        }
     }
 
     pub(crate) fn dispatch(&mut self, request: HostRequest, cx: &mut App) -> HostResponse {
@@ -72,46 +113,58 @@ impl ExtensionSemanticBridge {
     ) -> Result<HostResponseValue, HostRequestError> {
         match &request.operation {
             HostOperation::RegisterTreeProvider { view_id } => {
-                let view = self
-                    .tree_views
-                    .get(view_id)
-                    .cloned()
-                    .ok_or(HostRequestError::TreeViewNotFound)?;
+                if !self.tree_kinds.contains(view_id) {
+                    return Err(HostRequestError::TreeViewNotFound);
+                }
+                if self
+                    .tree_registrations
+                    .values()
+                    .any(|entry| entry.kind == *view_id)
+                {
+                    return Err(HostRequestError::TreeProviderInUse);
+                }
                 let registration = TreeProviderRegistrationId::new(self.next_tree_registration);
-                view.update(cx, |tree, cx| {
-                    tree.register_provider(
-                        view_id,
-                        TreeProviderIdentity {
-                            extension: request.extension,
-                            lifecycle: request.lifecycle,
-                            registration,
-                        },
-                        cx,
-                    )
-                })
-                .map_err(map_tree_error)?;
+                let identity = TreeProviderIdentity {
+                    extension: request.extension,
+                    lifecycle: request.lifecycle,
+                    registration,
+                };
+                for view in self.live_tree_views(view_id) {
+                    view.update(cx, |tree, cx| tree.register_provider(view_id, identity, cx))
+                        .map_err(map_tree_error)?;
+                }
                 self.next_tree_registration = self
                     .next_tree_registration
                     .checked_add(1)
                     .expect("tree registration space exhausted");
-                self.tree_registrations.insert(registration, view);
+                self.tree_registrations.insert(
+                    registration,
+                    TreeRegistration {
+                        kind: view_id.clone(),
+                        identity,
+                    },
+                );
                 Ok(HostResponseValue::TreeProviderRegistered { registration })
             }
             HostOperation::InvalidateTreeProvider {
                 registration,
                 parent_id,
             } => {
-                let view = self.owned_tree_view(*registration, request, cx)?;
-                view.update(cx, |tree, cx| {
-                    tree.invalidate(*registration, parent_id.clone(), cx)
-                })
-                .map_err(map_tree_error)?;
+                let kind = self.owned_tree_kind(*registration, request)?;
+                for view in self.live_tree_views(&kind) {
+                    view.update(cx, |tree, cx| {
+                        tree.invalidate(*registration, parent_id.clone(), cx)
+                    })
+                    .map_err(map_tree_error)?;
+                }
                 Ok(HostResponseValue::TreeProviderInvalidated)
             }
             HostOperation::UnregisterTreeProvider { registration } => {
-                let view = self.owned_tree_view(*registration, request, cx)?;
-                view.update(cx, |tree, cx| tree.unregister_provider(*registration, cx))
-                    .map_err(map_tree_error)?;
+                let kind = self.owned_tree_kind(*registration, request)?;
+                for view in self.live_tree_views(&kind) {
+                    view.update(cx, |tree, cx| tree.unregister_provider(*registration, cx))
+                        .map_err(map_tree_error)?;
+                }
                 self.tree_registrations.remove(registration);
                 Ok(HostResponseValue::TreeProviderUnregistered {
                     registration: *registration,
@@ -141,30 +194,41 @@ impl ExtensionSemanticBridge {
         }
     }
 
-    fn owned_tree_view(
+    fn owned_tree_kind(
         &self,
         registration: TreeProviderRegistrationId,
         request: &HostRequest,
-        cx: &App,
-    ) -> Result<Entity<TreeView>, HostRequestError> {
-        let view = self
+    ) -> Result<String, HostRequestError> {
+        let entry = self
             .tree_registrations
             .get(&registration)
-            .cloned()
             .ok_or(HostRequestError::TreeProviderNotFound)?;
-        if !view
-            .read(cx)
-            .owns_provider(registration, request.extension, request.lifecycle)
+        if (entry.identity.extension, entry.identity.lifecycle)
+            != (request.extension, request.lifecycle)
         {
             return Err(HostRequestError::TreeProviderNotFound);
         }
-        Ok(view)
+        Ok(entry.kind.clone())
     }
 
     pub(crate) fn apply_tree_response(&self, response: TreeChildrenResponse, cx: &mut App) -> bool {
-        self.tree_registrations
-            .get(&response.registration)
-            .is_some_and(|view| view.update(cx, |tree, cx| tree.apply_response(response, cx)))
+        let Some(entry) = self.tree_registrations.get(&response.registration) else {
+            return false;
+        };
+        let mut applied = false;
+        for view in self.live_tree_views(&entry.kind) {
+            applied |= view.update(cx, |tree, cx| tree.apply_response(response.clone(), cx));
+        }
+        applied
+    }
+
+    fn live_tree_views(&self, kind: &str) -> Vec<Entity<TreeView>> {
+        self.tree_views
+            .get(kind)
+            .into_iter()
+            .flatten()
+            .filter_map(WeakEntity::upgrade)
+            .collect()
     }
 
     pub(crate) fn completion_snapshot(&self) -> Vec<CompletionProviderRegistration> {
@@ -189,15 +253,15 @@ impl ExtensionSemanticBridge {
         cx: &mut App,
     ) {
         self.lifecycles.remove(&(extension, lifecycle));
-        self.tree_registrations.retain(|registration, view| {
-            !view
-                .read(cx)
-                .owns_provider(*registration, extension, lifecycle)
+        self.tree_registrations.retain(|_, entry| {
+            (entry.identity.extension, entry.identity.lifecycle) != (extension, lifecycle)
         });
-        for view in self.tree_views.values() {
-            view.update(cx, |tree, cx| {
-                tree.remove_lifecycle(extension, lifecycle, cx)
-            });
+        for views in self.tree_views.values() {
+            for view in views.iter().filter_map(WeakEntity::upgrade) {
+                view.update(cx, |tree, cx| {
+                    tree.remove_lifecycle(extension, lifecycle, cx)
+                });
+            }
         }
         self.completion_providers
             .remove_lifecycle(extension, lifecycle);
@@ -253,7 +317,7 @@ mod tests {
         let tree = cx.new(|cx| TreeView::new("outline", cx));
         cx.update(|cx| {
             let mut bridge = ExtensionSemanticBridge::new();
-            bridge.add_tree_view("outline", tree.clone());
+            bridge.add_tree_view("outline", tree.clone(), cx).unwrap();
             bridge.admit_lifecycle(extension, lifecycle);
 
             let registered = bridge.dispatch(
@@ -276,11 +340,12 @@ mod tests {
                 tree.read(cx)
                     .owns_provider(registration, extension, lifecycle)
             );
+            let generation = tree.read(cx).root_generation();
             assert!(bridge.apply_tree_response(
                 TreeChildrenResponse {
                     registration,
                     parent_id: None,
-                    generation: 1,
+                    generation,
                     result: Ok(vec![TreeItem {
                         id: "root".into(),
                         label: "Root".into(),
@@ -320,7 +385,7 @@ mod tests {
                 TreeChildrenResponse {
                     registration,
                     parent_id: None,
-                    generation: 1,
+                    generation,
                     result: Err(TreeProviderError {
                         message: "late".into(),
                     }),
@@ -337,7 +402,7 @@ mod tests {
         let tree = cx.new(|cx| TreeView::new("outline", cx));
         cx.update(|cx| {
             let mut bridge = ExtensionSemanticBridge::new();
-            bridge.add_tree_view("outline", tree);
+            bridge.add_tree_view("outline", tree, cx).unwrap();
             assert_eq!(
                 bridge
                     .dispatch(

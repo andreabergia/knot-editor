@@ -52,6 +52,8 @@ Views own presentation and interaction. Extension runtimes communicate through
 Knot-owned typed messages and opaque identities. Asynchronous results revalidate
 their captured target, revision or generation, and lifecycle before changing
 foreground state. Native I/O runs off the foreground thread.
+Each product window owns its extension-backed semantic tree surface; the
+application's foreground catalog binds command handlers to live view instances.
 
 The application owns one extension pool. Its fixed workers enter persistent V8
 isolates for one turn at a time; awaiting host work retains JavaScript state without

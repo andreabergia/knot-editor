@@ -1,15 +1,19 @@
 //! Native presentation and interaction state for a semantic extension tree.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use gpui::{prelude::FluentBuilder, *};
 
 use crate::host::protocol::{
-    ExtensionId, ExtensionLifecycleId, TreeChildrenRequest, TreeChildrenResponse,
-    TreeCollapsibleState, TreeIcon, TreeItem, TreeProviderRegistrationId,
+    Command, ExtensionId, ExtensionLifecycleId, TreeChildrenRequest, TreeChildrenResponse,
+    TreeCollapsibleState, TreeIcon, TreeItem, TreeProviderRegistrationId, ViewId,
 };
 
 use super::TREE_KEY_CONTEXT;
+
+static NEXT_VIEW_ID: AtomicU64 = AtomicU64::new(1);
+static NEXT_TREE_GENERATION: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct TreeProviderIdentity {
@@ -64,27 +68,103 @@ enum VisibleRow {
 /// Foreground-owned cache and presentation state for one native tree surface.
 pub(crate) struct TreeView {
     view_id: String,
+    instance_id: ViewId,
     provider: Option<TreeProviderIdentity>,
     children: HashMap<Option<String>, ChildrenState>,
     expanded: HashSet<String>,
     selected: Option<String>,
     focus: FocusHandle,
     scroll: UniformListScrollHandle,
-    next_generation: u64,
 }
 
 impl TreeView {
     pub(crate) fn new(view_id: impl Into<String>, cx: &mut Context<Self>) -> Self {
         Self {
             view_id: view_id.into(),
+            instance_id: ViewId::new(NEXT_VIEW_ID.fetch_add(1, Ordering::Relaxed)),
             provider: None,
             children: HashMap::new(),
             expanded: HashSet::new(),
             selected: None,
             focus: cx.focus_handle(),
             scroll: UniformListScrollHandle::new(),
-            next_generation: 1,
         }
+    }
+
+    pub(crate) fn instance_id(&self) -> ViewId {
+        self.instance_id
+    }
+
+    pub(crate) fn has_provider(&self) -> bool {
+        self.provider.is_some()
+    }
+
+    pub(crate) fn selected_text(&self) -> Option<String> {
+        let selected = self.selected.as_deref()?;
+        self.children
+            .values()
+            .flat_map(|children| &children.items)
+            .find(|item| item.id == selected)
+            .map(|item| item.label.clone())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn select_item(&mut self, id: &str, cx: &mut Context<Self>) -> bool {
+        if !self
+            .children
+            .values()
+            .flat_map(|children| &children.items)
+            .any(|item| item.id == id)
+        {
+            return false;
+        }
+        self.selected = Some(id.to_owned());
+        cx.notify();
+        true
+    }
+
+    pub(crate) fn handle_command(
+        &self,
+        command: &Command,
+        target: &super::product_commands::ProductCommandTarget,
+        completion: super::CommandCompletion,
+        cx: &mut Context<Self>,
+    ) -> super::product_commands::CommandClaim {
+        use super::product_commands::{ApplicationProductCommands, COPY_COMMAND, CommandClaim};
+
+        if command.name.as_ref() == COPY_COMMAND && self.selected_text().is_none() {
+            return CommandClaim::Declined;
+        }
+        let catalog = cx
+            .global::<ApplicationProductCommands>()
+            .0
+            .read(cx)
+            .catalog();
+        let Some(handler) = catalog
+            .borrow()
+            .resolve_view(self.instance_id, command.name.as_ref())
+        else {
+            return CommandClaim::Declined;
+        };
+        let command = command.clone();
+        let target = target.clone();
+        CommandClaim::Pending(Box::new(move |cx| {
+            super::extension_host::start_view_command(command, target, handler, completion, cx)
+        }))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn owns_provider(
+        &self,
+        registration: TreeProviderRegistrationId,
+        extension: ExtensionId,
+        lifecycle: ExtensionLifecycleId,
+    ) -> bool {
+        self.provider.is_some_and(|provider| {
+            provider.registration == registration
+                && provider.extension == extension
+                && provider.lifecycle == lifecycle
+        })
     }
 
     pub(crate) fn register_provider(
@@ -114,11 +194,7 @@ impl TreeView {
             .provider
             .filter(|provider| provider.registration == registration)
             .ok_or(TreeViewRegistrationError::ProviderNotFound)?;
-        let generation = self.next_generation;
-        self.next_generation = self
-            .next_generation
-            .checked_add(1)
-            .expect("tree provider generation overflowed");
+        let generation = NEXT_TREE_GENERATION.fetch_add(1, Ordering::Relaxed);
         let state = self.children.entry(parent_id.clone()).or_default();
         state.generation = generation;
         state.loading = true;
@@ -150,22 +226,14 @@ impl TreeView {
         Ok(())
     }
 
-    pub(crate) fn owns_provider(
-        &self,
-        registration: TreeProviderRegistrationId,
-        extension: ExtensionId,
-        lifecycle: ExtensionLifecycleId,
-    ) -> bool {
-        self.provider.is_some_and(|provider| {
-            provider.registration == registration
-                && provider.extension == extension
-                && provider.lifecycle == lifecycle
-        })
-    }
-
     #[cfg(test)]
     pub(crate) fn is_loading(&self) -> bool {
         self.children.values().any(|state| state.loading)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn root_generation(&self) -> u64 {
+        self.children[&None].generation
     }
 
     #[cfg(test)]
@@ -207,7 +275,6 @@ impl TreeView {
         self.children.clear();
         self.expanded.clear();
         self.selected = None;
-        self.next_generation = self.next_generation.wrapping_add(1).max(1);
         cx.notify();
     }
 
@@ -534,7 +601,7 @@ mod tests {
     fn stale_and_disposed_tree_responses_are_ignored(cx: &mut TestAppContext) {
         let registration = TreeProviderRegistrationId::new(3);
         let tree = cx.new(|cx| TreeView::new("outline", cx));
-        tree.update(cx, |tree, cx| {
+        let stale_generation = tree.update(cx, |tree, cx| {
             tree.register_provider(
                 "outline",
                 TreeProviderIdentity {
@@ -545,7 +612,9 @@ mod tests {
                 cx,
             )
             .unwrap();
+            let stale_generation = tree.children[&None].generation;
             tree.invalidate(registration, None, cx).unwrap();
+            stale_generation
         });
 
         tree.update(cx, |tree, cx| {
@@ -553,16 +622,17 @@ mod tests {
                 TreeChildrenResponse {
                     registration,
                     parent_id: None,
-                    generation: 1,
+                    generation: stale_generation,
                     result: Ok(Vec::new()),
                 },
                 cx,
             ));
+            let current_generation = tree.children[&None].generation;
             assert!(tree.apply_response(
                 TreeChildrenResponse {
                     registration,
                     parent_id: None,
-                    generation: 2,
+                    generation: current_generation,
                     result: Ok(vec![TreeItem {
                         id: "root".into(),
                         label: "Root".into(),
@@ -580,7 +650,7 @@ mod tests {
                 TreeChildrenResponse {
                     registration,
                     parent_id: None,
-                    generation: 2,
+                    generation: current_generation,
                     result: Ok(Vec::new()),
                 },
                 cx,

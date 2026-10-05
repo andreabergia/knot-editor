@@ -101,6 +101,11 @@ foreground-issued registrations. Native-to-extension invocation enters as
 scheduler root work with explicit JSON-compatible arguments and its captured
 buffer. Handler outcomes cross back as Knot-owned structured results rather
 than V8 values.
+View-scoped handlers use the same JavaScript execution path. The foreground
+catalog binds a handler to live Knot-owned view instances; a focused view starts
+its handler only after it claims the command in the originating window. The
+foreground validates the captured view, registration, and lifecycle before
+serving view requests or accepting completion.
 
 Tree and completion providers remain persistent JavaScript objects keyed by
 opaque foreground-issued registrations. Native child and completion requests
@@ -108,6 +113,10 @@ enter as unrelated scheduler roots and return only typed semantic data with
 their registration, generation, and revision identities preserved. Callback
 throws and invalid results become recoverable per-request provider failures;
 they do not fail the extension lifecycle.
+Tree providers are registered by declared kind even before a product window
+opens. Each window owns its tree surface; provider registration and invalidation
+fan out to live surfaces, and responses are checked against each surface's
+generation. Window closure detaches that surface from foreground routing.
 
 The engine retains the root script or module promise independently from its
 host-request promises. A pending root with no runnable JavaScript yields its
@@ -199,11 +208,11 @@ Unregistration removes the JavaScript provider synchronously, and unload or
 pool shutdown settles outstanding native callback completions during the
 ordinary lifecycle teardown.
 
-The foreground command bridge owns the lifecycle-scoped catalog and one serial
-invocation tree. It captures the active buffer on the root, inherits it through
+The foreground command bridge shares the application's lifecycle-scoped catalog
+and owns one serial invocation tree. It captures the active buffer on the root, inherits it through
 children, returns same-lifecycle children to JavaScript as inline
 continuations, and defers cross-lifecycle or native outcomes until their work
-settles. The product catalog mirrors lifecycle registrations for palette and
+settles. The shared catalog supplies lifecycle registrations for palette and
 keybinding discovery, while the application bridge retains the captured native
 target for the whole root tree. Each parent has at most one unfinished child,
 and ancestry cycles are rejected as unavailable. Cancellation marks the tree,

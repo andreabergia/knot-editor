@@ -56,6 +56,16 @@ impl CommandRegistrationId {
     }
 }
 
+/// A Knot-owned identity for one live view instance.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct ViewId(u64);
+
+impl ViewId {
+    pub(crate) const fn new(value: u64) -> Self {
+        Self(value)
+    }
+}
+
 /// An opaque identity for one command invocation.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct CommandInvocationId(u64);
@@ -373,6 +383,14 @@ pub enum HostOperation {
         name: CommandName,
         title: String,
     },
+    RegisterViewCommand {
+        view_kind: String,
+        name: CommandName,
+    },
+    SelectedViewText,
+    WriteClipboardText {
+        text: String,
+    },
     UnregisterCommand {
         registration: CommandRegistrationId,
     },
@@ -435,6 +453,11 @@ pub enum HostResponseValue {
     CommandRegistered {
         registration: CommandRegistrationId,
     },
+    ViewCommandRegistered {
+        registration: CommandRegistrationId,
+    },
+    SelectedViewText(Option<String>),
+    ClipboardTextWritten,
     CommandUnregistered {
         registration: CommandRegistrationId,
     },
@@ -520,6 +543,7 @@ pub enum HostRequestError {
     RevisionConflict,
     ContributionSetNotFound,
     TreeViewNotFound,
+    ViewNotFound,
     TreeProviderInUse,
     TreeProviderNotFound,
     CompletionProviderNotFound,

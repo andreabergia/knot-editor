@@ -12,11 +12,19 @@ and scripts carry the same Knot-owned command and structured outcome. The
 palette retains the origin captured before it takes focus.
 
 Each native product invocation captures its window, focus, workbench, tab, and surface.
+An extension-backed focused view also contributes its Knot-owned view identity.
 The window routes the command to the captured focused view, then the workbench,
 then the application. A participant declines, finishes with an outcome, or
 starts pending work. If all decline, the command is unavailable. Focus changes
 cannot redirect an admitted command; closed or replaced targets are invalid.
 Pending work revalidates its captured target before applying results.
+
+The catalog retains one public definition per command name. An extension can
+register a handler for an existing name and a declared view kind. The foreground
+binds that handler to each live instance of the kind, while the focused view
+claims or declines the command during window dispatch. Disposal, lifecycle
+teardown, and window closure remove the corresponding bindings. Extension
+requests and late results validate the captured instance and lifecycle.
 
 The workbench exposes the tab's typed command view to this routing path.
 Participants decide which names and arguments they handle. Raw text input,

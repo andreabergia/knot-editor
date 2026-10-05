@@ -256,6 +256,11 @@ pub(crate) struct ProductShell {
     workspace: Option<WorkspaceState>,
     workspace_tree: Option<Entity<WorkspaceTree>>,
     workspace_tree_subscription: Option<Subscription>,
+    extension_tree: Option<Entity<super::tree_view::TreeView>>,
+    extension_tree_subscription: Option<Subscription>,
+    extension_tree_observer: Option<Subscription>,
+    extension_tree_release: Option<Subscription>,
+    extension_tree_window_closed: Option<Subscription>,
     open_generation: u64,
     tasks: Vec<Task<()>>,
     extension_report_open: bool,
@@ -272,6 +277,11 @@ impl ProductShell {
             workspace: None,
             workspace_tree: None,
             workspace_tree_subscription: None,
+            extension_tree: None,
+            extension_tree_subscription: None,
+            extension_tree_observer: None,
+            extension_tree_release: None,
+            extension_tree_window_closed: None,
             open_generation: 0,
             tasks: Vec::new(),
             extension_report_open: false,
@@ -279,10 +289,38 @@ impl ProductShell {
         }
     }
 
-    fn observe_extension_host(&mut self, cx: &mut Context<Self>) {
+    fn observe_extension_host(&mut self, window: gpui::AnyWindowHandle, cx: &mut Context<Self>) {
         if let Some(host) = super::extension_host::entity(cx) {
             self.extension_report_subscription = Some(cx.observe(&host, |_, _, cx| cx.notify()));
+            let tree = cx.new(|cx| super::tree_view::TreeView::new("outline", cx));
+            let view = tree.read(cx).instance_id();
+            self.extension_tree_subscription = Some(cx.subscribe(&tree, |_, _, event, cx| {
+                super::extension_host::route_tree_event(event, cx);
+                cx.notify();
+            }));
+            self.extension_tree_observer = Some(cx.observe(&tree, |_, _, cx| cx.notify()));
+            self.extension_tree_release = Some(cx.on_release(move |_, cx| {
+                super::extension_host::detach_tree_view(view, cx);
+            }));
+            self.extension_tree_window_closed = Some(cx.on_window_closed(move |cx| {
+                if !cx.windows().contains(&window) {
+                    super::extension_host::detach_tree_view(view, cx);
+                }
+            }));
+            super::extension_host::attach_tree_view(tree.clone(), cx);
+            self.extension_tree = Some(tree);
         }
+    }
+
+    pub(crate) fn extension_command_view(
+        &self,
+        id: crate::host::protocol::ViewId,
+        cx: &App,
+    ) -> Option<Entity<super::tree_view::TreeView>> {
+        self.extension_tree
+            .as_ref()
+            .filter(|view| view.read(cx).instance_id() == id)
+            .cloned()
     }
 
     fn command_dispatcher(cx: &App) -> Entity<ProductCommandDispatcher> {
@@ -359,6 +397,10 @@ impl ProductShell {
         let workbench = self.workbench.read(cx);
         let pane = workbench.focused_pane()?;
         let tab = pane.active_tab();
+        let view = self
+            .extension_tree
+            .as_ref()
+            .and_then(|tree| (tree.focus_handle(cx) == focus).then(|| tree.read(cx).instance_id()));
         Some(ProductCommandTarget {
             window: window.window_handle(),
             shell: cx.entity().downgrade(),
@@ -367,6 +409,7 @@ impl ProductShell {
             tab: tab.id(),
             surface: tab.surface_id(),
             focus: focus.downgrade(),
+            view,
         })
     }
 
@@ -396,6 +439,7 @@ impl ProductShell {
                         .map(|view| view.focus_handle(cx).downgrade())
                 })
                 .or_else(|| window.focused(cx).map(|focus| focus.downgrade()))?,
+            view: None,
         })
     }
 
@@ -539,6 +583,7 @@ impl ProductShell {
                                         tab: snapshot.tab_id,
                                         surface: snapshot.surface,
                                         focus: editor.focus_handle(cx).downgrade(),
+                                        view: None,
                                     }),
                                 }
                             })
@@ -2548,6 +2593,11 @@ impl Render for ProductShell {
         let entity = cx.entity();
         let command_palette = self.command_palette.clone();
         let workspace_tree = self.workspace_tree.clone();
+        let extension_tree = self
+            .extension_tree
+            .as_ref()
+            .filter(|tree| tree.read(cx).has_provider())
+            .cloned();
         let startup_report = super::extension_host::startup_report(cx);
         let extension_button_label = match &startup_report {
             Some(report) if report.state == super::extension_host::StartupState::Complete => {
@@ -2647,6 +2697,17 @@ impl Render for ProductShell {
                     .min_h_0()
                     .min_w_0()
                     .when_some(workspace_tree, |element, tree| {
+                        element.child(
+                            div()
+                                .w(px(240.))
+                                .h_full()
+                                .flex_none()
+                                .border_r_1()
+                                .border_color(rgb(0x454545))
+                                .child(tree),
+                        )
+                    })
+                    .when_some(extension_tree, |element, tree| {
                         element.child(
                             div()
                                 .w(px(240.))
@@ -2886,7 +2947,9 @@ pub(crate) fn open_product_window(request: Option<OpenRequest>, cx: &mut App) {
             let workbench = cx.new(|cx| Workbench::new_for_document(document, model, cx));
             cx.global::<ApplicationWorkbenches>().register(&workbench);
             let shell = cx.new(|_| ProductShell::new(workbench));
-            shell.update(cx, |shell, cx| shell.observe_extension_host(cx));
+            shell.update(cx, |shell, cx| {
+                shell.observe_extension_host(window.window_handle(), cx)
+            });
             install_protected_window_close(&shell, window, cx);
             shell.read(cx).focus_active_editor(window, cx);
             if let Some(request) = request {
@@ -2923,7 +2986,9 @@ fn open_terminal_transfer_window(cx: &mut App) -> anyhow::Result<WindowHandle<Pr
         |window, cx| {
             let workbench = cx.new(|_| Workbench::empty());
             let shell = cx.new(|_| ProductShell::new(workbench));
-            shell.update(cx, |shell, cx| shell.observe_extension_host(cx));
+            shell.update(cx, |shell, cx| {
+                shell.observe_extension_host(window.window_handle(), cx)
+            });
             install_protected_window_close(&shell, window, cx);
             shell
         },
@@ -3368,9 +3433,9 @@ mod tests {
             cx.global::<ApplicationWorkbenches>().register(&workbench);
             ProductShell::new(workbench)
         });
-        shell.update(cx, |shell, cx| shell.observe_extension_host(cx));
         let window = *cx.windows().last().unwrap();
         cx.update_window(window, |_, native_window, cx| {
+            shell.update(cx, |shell, cx| shell.observe_extension_host(window, cx));
             install_protected_window_close(&shell, native_window, cx);
         })
         .unwrap();
@@ -3862,6 +3927,7 @@ mod tests {
                 r#"
                 import { commands, editor } from 'knot:editor';
                 await commands.register('example.shared', async () => {});
+                await commands.registerForView('outline', 'copy', async () => {});
                 await editor.registerCompletionProvider('broken-provider', {
                     provideCompletions() { return []; }
                 });
@@ -3947,6 +4013,18 @@ mod tests {
                 .count(),
             1
         );
+        cx.read(|cx| {
+            let tree = shell.read(cx).extension_tree.as_ref().unwrap().clone();
+            assert!(
+                cx.global::<ApplicationProductCommands>()
+                    .0
+                    .read(cx)
+                    .catalog()
+                    .borrow()
+                    .resolve_view(tree.read(cx).instance_id(), "copy")
+                    .is_none()
+            );
+        });
         let mut execution = dispatch_product_command(&shell, window, "example.dependent", cx);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
         loop {
@@ -4416,6 +4494,355 @@ mod tests {
             drop(cx.remove_global::<super::super::extension_host::ApplicationExtensionHost>())
         });
         cx.run_until_parked();
+    }
+
+    fn wait_for_command(
+        mut execution: crate::app::CommandExecution,
+        cx: &mut TestAppContext,
+    ) -> CommandOutcome {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            cx.run_until_parked();
+            match execution.completion.try_recv() {
+                Ok(outcome) => return outcome,
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "command did not settle"
+                    );
+                    std::thread::yield_now();
+                }
+                Err(error) => panic!("command completion closed: {error}"),
+            }
+        }
+    }
+
+    fn dispatch_tree_copy(
+        shell: &Entity<ProductShell>,
+        window: gpui::AnyWindowHandle,
+        cx: &mut TestAppContext,
+    ) -> crate::app::CommandExecution {
+        let target = cx
+            .update_window(window, |_, window, cx| {
+                shell.update(cx, |shell, cx| {
+                    shell.capture_command_target(window, cx).unwrap()
+                })
+            })
+            .unwrap();
+        let dispatcher = cx.read(|cx| cx.global::<ApplicationProductCommands>().0.clone());
+        dispatcher.update(cx, |dispatcher, cx| {
+            dispatcher.dispatch(
+                Command {
+                    name: super::COPY_COMMAND.into(),
+                    arguments: CommandArgumentValue::Null,
+                },
+                target,
+                cx,
+            )
+        })
+    }
+
+    #[gpui::test]
+    fn focused_extension_tree_claims_copy_and_unload_removes_its_handler(cx: &mut TestAppContext) {
+        use crate::host::lifecycle::ExtensionKey;
+
+        const SOURCE: &str = r#"
+import { commands, workbench } from "knot:editor";
+await workbench.registerTreeDataProvider("outline", {
+  getChildren(parentId) {
+    return parentId === null ? [
+      { id: "first", label: "Selected tree item", collapsibleState: "none" },
+      { id: "failure", label: "Fail", collapsibleState: "none" },
+    ] : [];
+  },
+});
+const viewCopy = await commands.registerForView("outline", "copy", async () => {
+  const text = await workbench.selectedText();
+  if (text === "Fail") throw new Error("copy failed");
+  await workbench.writeClipboardText(text);
+});
+await commands.register("test.dispose-view-copy", async () => viewCopy.dispose());
+"#;
+
+        let documents = install_globals(cx);
+        let host = cx.update(super::super::extension_host::install);
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        let (shell, window) = product_window(document, model.clone(), cx);
+        let key = ExtensionKey::new(ExtensionId::new(87), ExtensionLifecycleId::new(1));
+        host.update(cx, |host, cx| {
+            let execution = host.load_test_source(key, SOURCE).unwrap();
+            cx.spawn(async move |_, _| {
+                execution.await.unwrap();
+            })
+            .detach();
+        });
+
+        let tree = cx.read(|cx| shell.read(cx).extension_tree.clone().unwrap());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            cx.run_until_parked();
+            if cx.read(|cx| {
+                tree.read(cx).root_labels().len() == 2
+                    && cx
+                        .global::<ApplicationProductCommands>()
+                        .0
+                        .read(cx)
+                        .catalog()
+                        .borrow()
+                        .resolve_view(tree.read(cx).instance_id(), "copy")
+                        .is_some()
+            }) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "tree provider did not settle"
+            );
+            std::thread::yield_now();
+        }
+
+        cx.update_window(window, |_, window, cx| {
+            tree.focus_handle(cx).focus(window);
+            let target = shell.update(cx, |shell, cx| {
+                shell.capture_command_target(window, cx).unwrap()
+            });
+            assert_eq!(target.view, Some(tree.read(cx).instance_id()));
+        })
+        .unwrap();
+        let declined = dispatch_tree_copy(&shell, window, cx);
+        assert_eq!(wait_for_command(declined, cx), CommandOutcome::Unavailable);
+        cx.update(|cx| tree.update(cx, |tree, cx| assert!(tree.select_item("first", cx))));
+        let copy = dispatch_tree_copy(&shell, window, cx);
+        assert_eq!(wait_for_command(copy, cx), CommandOutcome::Completed);
+        cx.read(|cx| {
+            assert_eq!(
+                cx.read_from_clipboard().unwrap().text().unwrap(),
+                "Selected tree item"
+            )
+        });
+
+        let (second_shell, second_window) = product_window(document, model.clone(), cx);
+        let second_tree = cx.read(|cx| second_shell.read(cx).extension_tree.clone().unwrap());
+        assert_ne!(
+            cx.read(|cx| tree.read(cx).instance_id()),
+            cx.read(|cx| second_tree.read(cx).instance_id())
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            cx.run_until_parked();
+            if cx.read(|cx| second_tree.read(cx).root_labels().len() == 2) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "second tree did not receive provider data"
+            );
+            std::thread::yield_now();
+        }
+        cx.update_window(second_window, |_, window, cx| {
+            second_tree.update(cx, |tree, cx| assert!(tree.select_item("first", cx)));
+            second_tree.focus_handle(cx).focus(window);
+        })
+        .unwrap();
+        assert_eq!(
+            wait_for_command(dispatch_tree_copy(&second_shell, second_window, cx), cx),
+            CommandOutcome::Completed
+        );
+
+        cx.update(|cx| tree.update(cx, |tree, cx| assert!(tree.select_item("failure", cx))));
+        let failure = dispatch_tree_copy(&shell, window, cx);
+        assert!(matches!(
+            wait_for_command(failure, cx),
+            CommandOutcome::HandlerFailure { .. }
+        ));
+        cx.update(|cx| tree.update(cx, |tree, cx| assert!(tree.select_item("first", cx))));
+        let recovery = dispatch_tree_copy(&shell, window, cx);
+        assert_eq!(wait_for_command(recovery, cx), CommandOutcome::Completed);
+
+        let dispose = dispatch_product_command(&shell, window, "test.dispose-view-copy", cx);
+        assert_eq!(wait_for_command(dispose, cx), CommandOutcome::Completed);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            cx.run_until_parked();
+            if cx.read(|cx| {
+                cx.global::<ApplicationProductCommands>()
+                    .0
+                    .read(cx)
+                    .catalog()
+                    .borrow()
+                    .resolve_view(tree.read(cx).instance_id(), "copy")
+                    .is_none()
+            }) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "disposed view handler remained registered"
+            );
+            std::thread::yield_now();
+        }
+        let disposed = dispatch_tree_copy(&second_shell, second_window, cx);
+        assert_eq!(wait_for_command(disposed, cx), CommandOutcome::Unavailable);
+
+        host.update(cx, |host, cx| host.unload(key, cx).unwrap());
+        let unavailable = dispatch_tree_copy(&second_shell, second_window, cx);
+        assert_eq!(
+            wait_for_command(unavailable, cx),
+            CommandOutcome::Unavailable
+        );
+        cx.read(|cx| {
+            assert!(!tree.read(cx).has_provider());
+            assert!(!second_tree.read(cx).has_provider());
+        });
+    }
+
+    #[gpui::test]
+    fn delayed_extension_copy_rejects_a_closed_captured_view(cx: &mut TestAppContext) {
+        use crate::host::lifecycle::ExtensionKey;
+
+        const SOURCE: &str = r#"
+import { commands, workbench } from "knot:editor";
+await workbench.registerTreeDataProvider("outline", {
+  getChildren(parentId) {
+    return parentId === null
+      ? [{ id: "held", label: "Held selection", collapsibleState: "none" }]
+      : [];
+  },
+});
+await commands.registerForView("outline", "copy", async () => {
+  const text = await workbench.selectedText();
+  await workbench.writeClipboardText(text);
+});
+"#;
+
+        let documents = install_globals(cx);
+        let host = cx.update(super::super::extension_host::install);
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        let (shell, window) = product_window(document, model.clone(), cx);
+        let key = ExtensionKey::new(ExtensionId::new(88), ExtensionLifecycleId::new(1));
+        host.update(cx, |host, cx| {
+            let execution = host.load_test_source(key, SOURCE).unwrap();
+            cx.spawn(async move |_, _| {
+                execution.await.unwrap();
+            })
+            .detach();
+        });
+        let tree = cx.read(|cx| shell.read(cx).extension_tree.clone().unwrap());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            cx.run_until_parked();
+            if cx.read(|cx| {
+                tree.read(cx).root_labels().len() == 1
+                    && cx
+                        .global::<ApplicationProductCommands>()
+                        .0
+                        .read(cx)
+                        .catalog()
+                        .borrow()
+                        .resolve_view(tree.read(cx).instance_id(), "copy")
+                        .is_some()
+            }) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "view handler did not register"
+            );
+            std::thread::yield_now();
+        }
+        cx.update_window(window, |_, window, cx| {
+            tree.update(cx, |tree, cx| assert!(tree.select_item("held", cx)));
+            tree.focus_handle(cx).focus(window);
+        })
+        .unwrap();
+        host.update(cx, |host, _| host.hold_clipboard_writes());
+        cx.update(|cx| cx.write_to_clipboard(gpui::ClipboardItem::new_string("untouched".into())));
+        let execution = dispatch_tree_copy(&shell, window, cx);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            cx.run_until_parked();
+            if cx.read(|cx| host.read(cx).pending_view_request_count() == 1) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "view request was not held"
+            );
+            std::thread::yield_now();
+        }
+        cx.update_window(window, |_, window, _| window.remove_window())
+            .unwrap();
+        host.update(cx, |host, cx| host.release_view_requests(cx));
+        assert_eq!(
+            wait_for_command(execution, cx),
+            CommandOutcome::InvalidTarget
+        );
+        cx.read(|cx| {
+            assert_eq!(
+                cx.read_from_clipboard().unwrap().text().unwrap(),
+                "untouched"
+            )
+        });
+        let closed_view = cx.read(|cx| tree.read(cx).instance_id());
+        drop(shell);
+        cx.run_until_parked();
+        cx.read(|cx| {
+            assert!(
+                cx.global::<ApplicationProductCommands>()
+                    .0
+                    .read(cx)
+                    .catalog()
+                    .borrow()
+                    .resolve_view(closed_view, "copy")
+                    .is_none()
+            )
+        });
+
+        let (second_shell, second_window) = product_window(document, model, cx);
+        let second_tree = cx.read(|cx| second_shell.read(cx).extension_tree.clone().unwrap());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            cx.run_until_parked();
+            if cx.read(|cx| second_tree.read(cx).root_labels().len() == 1) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "second tree did not load"
+            );
+            std::thread::yield_now();
+        }
+        cx.update_window(second_window, |_, window, cx| {
+            second_tree.update(cx, |tree, cx| assert!(tree.select_item("held", cx)));
+            second_tree.focus_handle(cx).focus(window);
+        })
+        .unwrap();
+        host.update(cx, |host, _| host.hold_clipboard_writes());
+        let interrupted = dispatch_tree_copy(&second_shell, second_window, cx);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            cx.run_until_parked();
+            if cx.read(|cx| host.read(cx).pending_view_request_count() == 1) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "second clipboard write was not held"
+            );
+            std::thread::yield_now();
+        }
+        host.update(cx, |host, cx| host.unload(key, cx).unwrap());
+        host.update(cx, |host, cx| host.release_view_requests(cx));
+        assert_eq!(wait_for_command(interrupted, cx), CommandOutcome::Cancelled);
+        cx.read(|cx| {
+            assert_eq!(
+                cx.read_from_clipboard().unwrap().text().unwrap(),
+                "untouched"
+            );
+            assert!(!second_tree.read(cx).has_provider());
+        });
     }
 
     #[gpui::test]

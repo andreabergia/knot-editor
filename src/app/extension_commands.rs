@@ -83,6 +83,9 @@ pub(crate) struct ExtensionCommandBridge {
 }
 
 impl ExtensionCommandBridge {
+    pub(crate) fn catalog(&self) -> SharedCommandCatalog {
+        self.catalog.clone()
+    }
     #[cfg(test)]
     pub(crate) fn new() -> Self {
         Self::with_catalog(std::rc::Rc::new(std::cell::RefCell::new(
@@ -136,7 +139,16 @@ impl ExtensionCommandBridge {
         command: Command,
         buffer: Option<BufferHandle>,
     ) -> CommandExecution {
-        self.enqueue_root_for(command, buffer, None, None)
+        self.enqueue_root_for(command, buffer, None, None, None)
+    }
+
+    pub(crate) fn enqueue_view_root(
+        &mut self,
+        command: Command,
+        handler: CommandTarget,
+        buffer: Option<BufferHandle>,
+    ) -> CommandExecution {
+        self.enqueue_root_for(command, buffer, None, None, Some(handler))
     }
 
     /// Handles command protocol operations. A `None` result means the invoke
@@ -158,6 +170,14 @@ impl ExtensionCommandBridge {
                     .borrow_mut()
                     .register_extension(name, title, request.extension, request.lifecycle)
                     .map(|registration| HostResponseValue::CommandRegistered { registration })
+                    .map_err(map_catalog_error),
+            )),
+            HostOperation::RegisterViewCommand { view_kind, name } => Some(response(
+                &request,
+                self.catalog
+                    .borrow_mut()
+                    .register_view_handler(view_kind, name, request.extension, request.lifecycle)
+                    .map(|registration| HostResponseValue::ViewCommandRegistered { registration })
                     .map_err(map_catalog_error),
             )),
             HostOperation::UnregisterCommand { registration } => Some(response(
@@ -188,6 +208,7 @@ impl ExtensionCommandBridge {
                             lifecycle: request.lifecycle,
                             request: request.id,
                         }),
+                        None,
                     );
                     None
                 }
@@ -292,6 +313,12 @@ impl ExtensionCommandBridge {
         self.invocations.contains_key(&invocation)
     }
 
+    pub(crate) fn root_of(&self, invocation: CommandInvocationId) -> Option<CommandInvocationId> {
+        self.invocations
+            .contains_key(&invocation)
+            .then(|| self.root_for(invocation))
+    }
+
     pub(crate) fn is_cancelled(&self, invocation: Option<CommandInvocationId>) -> bool {
         invocation.is_some_and(|invocation| {
             self.invocations
@@ -306,10 +333,15 @@ impl ExtensionCommandBridge {
         buffer: Option<BufferHandle>,
         caller: Option<Lifecycle>,
         host_response: Option<PendingHostResponse>,
+        routed_target: Option<CommandTarget>,
     ) -> CommandExecution {
         let id = self.allocate_invocation();
         let (completion, receiver) = CommandCompletion::new();
-        let target = match self.catalog.borrow().resolve(command.name.as_ref()) {
+        let target = match routed_target
+            .map(CommandTargetKind::Extension)
+            .map(Ok)
+            .unwrap_or_else(|| self.catalog.borrow().resolve(command.name.as_ref()))
+        {
             Ok(CommandTargetKind::Native) => InvocationTarget::Native,
             Ok(CommandTargetKind::Extension(target))
                 if caller == Some((target.extension, target.lifecycle)) =>
@@ -602,6 +634,7 @@ fn map_catalog_error(error: CommandCatalogError) -> HostRequestError {
     match error {
         CommandCatalogError::NameInUse => HostRequestError::CommandNameInUse,
         CommandCatalogError::NotFound => HostRequestError::CommandNotFound,
+        CommandCatalogError::ViewNotFound => HostRequestError::ViewNotFound,
     }
 }
 

@@ -9,6 +9,7 @@ const hostErrorNames = Object.freeze({
   RevisionConflict: "RevisionConflictError",
   ContributionSetNotFound: "ContributionSetNotFoundError",
   TreeViewNotFound: "TreeViewNotFoundError",
+  ViewNotFound: "ViewNotFoundError",
   TreeProviderInUse: "TreeProviderInUseError",
   TreeProviderNotFound: "TreeProviderNotFoundError",
   CompletionProviderNotFound: "CompletionProviderNotFoundError",
@@ -226,6 +227,34 @@ export async function registerCommand(name, handler) {
       void request("unregisterCommand", registration);
     },
   });
+}
+
+export async function registerViewCommand(viewKind, name, handler) {
+  if (typeof viewKind !== "string" || typeof name !== "string" || typeof handler !== "function") {
+    throw new TypeError("commands.registerForView requires a view, command name, and handler");
+  }
+  const registration = await request("registerViewCommand", viewKind, name);
+  commandHandlers.set(registration, handler);
+  let disposed = false;
+  return Object.freeze({
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      commandHandlers.delete(registration);
+      void request("unregisterCommand", registration);
+    },
+  });
+}
+
+export async function selectedViewText() {
+  return request("selectedViewText");
+}
+
+export async function writeClipboardText(text) {
+  if (typeof text !== "string") {
+    throw new TypeError("workbench.writeClipboardText requires text");
+  }
+  await request("writeClipboardText", text);
 }
 
 export async function invokeCommand(name, commandArguments) {

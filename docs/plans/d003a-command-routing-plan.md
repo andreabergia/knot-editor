@@ -1,6 +1,6 @@
 # D003a: Focused command routing
 
-Status: checkpoint 1 approved; checkpoint 2 in progress.
+Status: checkpoint 1 approved; checkpoint 2 implemented, awaiting review.
 
 Source: D003, promoted from the [deferred-work register](../roadmap.md).
 This plan establishes the command behavior needed by the
@@ -85,18 +85,18 @@ line merely to force a claim.
 - **Review gate:** confirm the window-first path and public `copy` behavior
   before extending the handler protocol.
 
-### 2. Extension-owned view handlers ⬜
+### 2. Extension-owned view handlers ✅
 
 - ✅ Share one foreground command catalog between product discovery and the
   extension invocation bridge; keep native command names in the product command
   definitions used by bindings and handlers.
-- Allow an extension-backed focused view to receive and handle an existing
+- ✅ Allow an extension-backed focused view to receive and handle an existing
   command through the same window focus path, using Knot-owned view and
   lifecycle identities. Keep JavaScript execution asynchronous and painting
   independent of it.
-- Remove handlers on disposal, failed startup, or unload. Reject late results
+- ✅ Remove handlers on disposal, failed startup, or unload. Reject late results
   against a replaced view or ended lifecycle.
-- Test a focused extension-backed view handling `copy`, declining through the
+- ✅ Test a focused extension-backed view handling `copy`, declining through the
   remaining participants, failure isolation, and exact cleanup after unload.
 - **Review gate:** confirm extension views are ordinary routing participants and
   that no tree-specific command rule leaked into the public contract.
