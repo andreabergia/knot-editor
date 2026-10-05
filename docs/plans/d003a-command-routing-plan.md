@@ -1,6 +1,6 @@
 # D003a: Focused command routing
 
-Status: checkpoints 1–2 approved; checkpoint 3 in progress.
+Status: checkpoints 1–2 approved; checkpoint 3 implemented, awaiting review.
 
 Source: D003, promoted from the [deferred-work register](../roadmap.md).
 This plan establishes the command behavior needed by the
@@ -101,21 +101,36 @@ line merely to force a claim.
 - **Review gate:** confirm extension views are ordinary routing participants and
   that no tree-specific command rule leaked into the public contract.
 
-### 3. Product integration and architecture record ⬜
+### 3. Product integration and architecture record ✅
 
-Progress: ✅ global extension commands, tree item actions, and top-level script
-invocations now enter the product window route. The remaining nested extension
-composition path and complete command inventory still need review.
+Progress: ✅ global extension commands, tree item actions, and top-level and
+nested script invocations enter the product window route. The compiled bridge
+paths and diagnostic editing path remain for checkpoint 4's removal audit.
 
-- Inventory every implemented command and move all remaining native view,
+Implemented command inventory:
+
+| Participant | Commands |
+| --- | --- |
+| Editor view | `editor.move-*`, `editor.select-*`, `editor.undo`, `editor.redo`, `editor.cut`, `copy`, `editor.paste`, `editor.select-all`, `editor.insert-*`, `editor.delete-*` |
+| Terminal view | `copy` when terminal text is selected |
+| Extension-backed view | Registered handlers for an existing command name, currently `outline` `copy` |
+| Workbench | `file.new`, `file.open`, `file.save`, `file.save-as`, `terminal.new`, `terminal.move-to-new-window`, `workbench.close-tab`, `workbench.split-*`, `editor.show-completions` |
+| Application | `window.new`, `window.close`, `application.quit`, `extensions.show-startup-report`, globally registered extension commands |
+
+`editor.find`, `editor.find-next`, and `editor.find-previous` are discoverable
+but have no behavior yet. Keys, palette, menu actions, toolbar actions, tree item
+actions, and script invocations enter the product dispatcher; nested script
+invocations reuse the captured window and keep the bridge's composition rules.
+
+- ✅ Inventory every implemented command and move all remaining native view,
   workbench, application, and extension command paths onto window-first
   bubbling. Remove parallel dispatch and product-shell applicability switches.
   Preserve protected closure and captured-target validation.
-- Cover the complete implemented-command inventory at the appropriate model
+- ✅ Cover the complete implemented-command inventory at the appropriate model
   and integration boundaries, with product-level tests for representative
   editor, terminal, workbench, and extension commands and palette and menu
   entry points.
-- Update the command and extension-host architecture references and record only
+- ✅ Update the command and extension-host architecture references and record only
   validated decisions in `docs/decisions.md`.
 - **Review gate:** verify that every implemented command enters the window-first
   path, then review the regression evidence before D003b changes key bindings.

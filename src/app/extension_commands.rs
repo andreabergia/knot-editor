@@ -30,6 +30,12 @@ enum InvocationTarget {
     Unavailable,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum RoutedCommandTarget {
+    Native,
+    Extension(CommandTarget),
+}
+
 struct PendingHostResponse {
     extension: ExtensionId,
     lifecycle: ExtensionLifecycleId,
@@ -241,6 +247,55 @@ impl ExtensionCommandBridge {
         }
     }
 
+    pub(crate) fn handle_routed_child(
+        &mut self,
+        request: &HostRequest,
+        target: RoutedCommandTarget,
+    ) -> (Option<HostResponse>, Option<CommandInvocationId>) {
+        let identity = (request.extension, request.lifecycle);
+        if !self.lifecycles.contains(&identity) {
+            return (
+                Some(response(request, Err(HostRequestError::Cancelled))),
+                None,
+            );
+        }
+        let (Some(parent), HostOperation::InvokeCommand { command }) =
+            (request.invocation, &request.operation)
+        else {
+            return (
+                Some(response(
+                    request,
+                    Err(HostRequestError::UnsupportedOperation),
+                )),
+                None,
+            );
+        };
+        let (target, already_started) = match target {
+            RoutedCommandTarget::Native => (InvocationTarget::Native, true),
+            RoutedCommandTarget::Extension(handler) => {
+                (InvocationTarget::Extension(handler), false)
+            }
+        };
+        match self.enqueue_child_with_target(
+            parent,
+            command.clone(),
+            identity,
+            Some(request),
+            target,
+            already_started,
+        ) {
+            Ok((Some(dispatch), id)) => (
+                Some(response(
+                    request,
+                    Ok(HostResponseValue::CommandInvoked { dispatch }),
+                )),
+                Some(id),
+            ),
+            Ok((None, id)) => (None, Some(id)),
+            Err(outcome) => (Some(command_outcome_response(request, outcome)), None),
+        }
+    }
+
     pub(crate) fn complete(&mut self, invocation: CommandInvocationId, outcome: CommandOutcome) {
         let Some(node) = self.invocations.get_mut(&invocation) else {
             return;
@@ -319,6 +374,30 @@ impl ExtensionCommandBridge {
             .then(|| self.root_for(invocation))
     }
 
+    pub(crate) fn admit_child(
+        &self,
+        parent: CommandInvocationId,
+        caller: (ExtensionId, ExtensionLifecycleId),
+    ) -> Result<(), CommandOutcome> {
+        let Some(parent_node) = self.invocations.get(&parent) else {
+            return Err(CommandOutcome::Unavailable);
+        };
+        if parent_node.cancelled {
+            return Err(CommandOutcome::Cancelled);
+        }
+        if parent_node.handler_outcome.is_some()
+            || parent_node.child.is_some()
+            || !matches!(
+                parent_node.target,
+                InvocationTarget::Extension(target)
+                    if (target.extension, target.lifecycle) == caller
+            )
+        {
+            return Err(CommandOutcome::Unavailable);
+        }
+        Ok(())
+    }
+
     pub(crate) fn is_cancelled(&self, invocation: Option<CommandInvocationId>) -> bool {
         invocation.is_some_and(|invocation| {
             self.invocations
@@ -381,27 +460,25 @@ impl ExtensionCommandBridge {
         caller: Lifecycle,
         request: Option<&HostRequest>,
     ) -> Result<Option<CommandInvokeDispatch>, CommandOutcome> {
-        let Some(parent_node) = self.invocations.get(&parent) else {
-            return Err(CommandOutcome::Unavailable);
-        };
-        if parent_node.cancelled {
-            return Err(CommandOutcome::Cancelled);
-        }
-        if parent_node.handler_outcome.is_some()
-            || parent_node.child.is_some()
-            || !matches!(
-                parent_node.target,
-                InvocationTarget::Extension(target)
-                    if (target.extension, target.lifecycle) == caller
-            )
-        {
-            return Err(CommandOutcome::Unavailable);
-        }
         let target = match self.catalog.borrow().resolve(command.name.as_ref()) {
             Ok(CommandTargetKind::Native) => InvocationTarget::Native,
             Ok(CommandTargetKind::Extension(target)) => InvocationTarget::Extension(target),
             Err(_) => return Err(CommandOutcome::Unavailable),
         };
+        self.enqueue_child_with_target(parent, command, caller, request, target, false)
+            .map(|(dispatch, _)| dispatch)
+    }
+
+    fn enqueue_child_with_target(
+        &mut self,
+        parent: CommandInvocationId,
+        command: Command,
+        caller: Lifecycle,
+        request: Option<&HostRequest>,
+        target: InvocationTarget,
+        already_started: bool,
+    ) -> Result<(Option<CommandInvokeDispatch>, CommandInvocationId), CommandOutcome> {
+        self.admit_child(parent, caller)?;
         let same_runtime = matches!(
             target,
             InvocationTarget::Extension(target)
@@ -444,7 +521,7 @@ impl ExtensionCommandBridge {
                 completion,
                 host_response: if same_runtime { None } else { host_response },
                 handler_outcome: None,
-                started: same_runtime,
+                started: same_runtime || already_started,
                 cancelled: false,
             },
         );
@@ -453,13 +530,18 @@ impl ExtensionCommandBridge {
             let InvocationTarget::Extension(target) = target else {
                 unreachable!();
             };
-            Ok(Some(CommandInvokeDispatch::Inline {
-                invocation: id,
-                registration: target.registration,
-            }))
+            Ok((
+                Some(CommandInvokeDispatch::Inline {
+                    invocation: id,
+                    registration: target.registration,
+                }),
+                id,
+            ))
         } else {
-            self.start_invocation(id);
-            Ok(None)
+            if !already_started {
+                self.start_invocation(id);
+            }
+            Ok((None, id))
         }
     }
 

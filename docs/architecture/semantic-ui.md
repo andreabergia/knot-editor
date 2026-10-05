@@ -106,6 +106,9 @@ Each product window owns an instance of a declared tree kind. The foreground
 semantic bridge retains weak references to live instances, accepts provider
 registration before windows open, and routes invalidations and responses to
 each instance. Its generation rejects responses from a replaced request.
+Clicking an item focuses its tree before emitting its command. The product
+shell routes that event after the tree update through the captured window
+command path.
 
 Semantic tree state retains accessibility information, but gpui 0.2.2 lacks
 the required public platform bridge.

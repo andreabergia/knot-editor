@@ -209,11 +209,13 @@ pool shutdown settles outstanding native callback completions during the
 ordinary lifecycle teardown.
 
 The foreground command bridge shares the application's lifecycle-scoped catalog
-and owns one serial invocation tree. It captures the active buffer on the root, inherits it through
-children, returns same-lifecycle children to JavaScript as inline
+and owns one serial invocation tree. It captures the active buffer on the root,
+inherits it through children, returns same-lifecycle children to JavaScript as inline
 continuations, and defers cross-lifecycle or native outcomes until their work
-settles. The shared catalog supplies lifecycle registrations for palette and
-keybinding discovery, while the application bridge retains the captured native
+settles. Product nested commands are offered to the captured window before a
+child is admitted; the bridge then preserves one-child and ancestry checks for
+the selected handler. The shared catalog supplies lifecycle registrations for
+palette and keybinding discovery, while the application bridge retains the captured native
 target for the whole root tree. Each parent has at most one unfinished child,
 and ancestry cycles are rejected as unavailable. Cancellation marks the tree,
 wakes a suspended isolate turn, aborts its JavaScript signal, rejects its

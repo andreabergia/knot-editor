@@ -572,7 +572,7 @@ pub(crate) fn dispatch_close_to_captured_target(
     Ok(())
 }
 
-fn dispatch_to_captured_target(
+pub(crate) fn dispatch_to_captured_target(
     command: &Command,
     target: &ProductCommandTarget,
     completion: CommandCompletion,

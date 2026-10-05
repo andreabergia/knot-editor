@@ -157,6 +157,10 @@ Extensions may handle an existing command for a declared view kind without
 owning another public command name. Each live view instance is bound and
 validated by Knot; the application participant handles global extension
 commands only after the focused view and workbench decline.
+Nested extension invocation reuses the parent's captured window for handler
+selection, then keeps the bridge's inline same-lifecycle execution and
+one-child ancestry rules. This preserves composition without a second window
+dispatch for native children.
 
 Awaited command composition runs one root tree at a time. Nested same-extension
 frames avoid self-queue deadlock; ancestry checks and one unfinished child per

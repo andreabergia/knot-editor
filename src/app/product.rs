@@ -295,7 +295,8 @@ impl ProductShell {
             let tree = cx.new(|cx| super::tree_view::TreeView::new("outline", cx));
             let view = tree.read(cx).instance_id();
             self.extension_tree_subscription = Some(cx.subscribe(&tree, |_, _, event, cx| {
-                super::extension_host::route_tree_event(event, cx);
+                let event = event.clone();
+                cx.defer(move |cx| super::extension_host::route_tree_event(&event, cx));
                 cx.notify();
             }));
             self.extension_tree_observer = Some(cx.observe(&tree, |_, _, cx| cx.notify()));
@@ -4596,7 +4597,7 @@ import { commands, workbench } from "knot:editor";
 await workbench.registerTreeDataProvider("outline", {
   getChildren(parentId) {
     return parentId === null ? [
-      { id: "first", label: "Selected tree item", collapsibleState: "none" },
+      { id: "first", label: "Selected tree item", collapsibleState: "none", command: "test.view-first" },
       { id: "failure", label: "Fail", collapsibleState: "none" },
     ] : [];
   },
@@ -4609,7 +4610,17 @@ const viewCopy = await commands.registerForView("outline", "copy", async () => {
 await commands.register("test.view-first", async () => {
   throw new Error("global handler ran");
 });
-await commands.registerForView("outline", "test.view-first", async () => {});
+await commands.registerForView("outline", "test.view-first", async () => {
+  await workbench.writeClipboardText("tree item");
+});
+await commands.register("test.nested-view-copy", async () => {
+  const outcome = await commands.invoke("copy");
+  if (outcome.kind !== "completed") throw new Error(`nested copy: ${outcome.kind}`);
+});
+await commands.register("test.nested-new", async () => {
+  const outcome = await commands.invoke("file.new");
+  if (outcome.kind !== "completed") throw new Error(`nested new: ${outcome.kind}`);
+});
 await commands.register("test.dispose-view-copy", async () => viewCopy.dispose());
 "#;
 
@@ -4663,9 +4674,76 @@ await commands.register("test.dispose-view-copy", async () => viewCopy.dispose()
         assert_eq!(wait_for_command(declined, cx), CommandOutcome::Unavailable);
         let view_first = dispatch_tree_command(&shell, window, "test.view-first", cx);
         assert_eq!(wait_for_command(view_first, cx), CommandOutcome::Completed);
+        cx.update(|cx| cx.write_to_clipboard(gpui::ClipboardItem::new_string("untouched".into())));
+        cx.refresh().unwrap();
+        cx.simulate_keystrokes(window, "enter");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            cx.run_until_parked();
+            if cx.read(|cx| {
+                cx.read_from_clipboard()
+                    .is_some_and(|item| item.text().as_deref() == Some("tree item"))
+            }) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "tree item command did not run"
+            );
+            std::thread::yield_now();
+        }
+        cx.update_window(window, |_, window, cx| {
+            shell.read(cx).focus_active_editor(window, cx)
+        })
+        .unwrap();
+        cx.update(|cx| cx.write_to_clipboard(gpui::ClipboardItem::new_string("untouched".into())));
+        cx.refresh().unwrap();
+        {
+            let mut window_cx = VisualTestContext::from_window(window, cx);
+            let row = point(px(50.), px(42.));
+            window_cx.simulate_mouse_down(row, MouseButton::Left, Modifiers::default());
+            window_cx.simulate_mouse_up(row, MouseButton::Left, Modifiers::default());
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            cx.run_until_parked();
+            if cx.read(|cx| {
+                cx.read_from_clipboard()
+                    .is_some_and(|item| item.text().as_deref() == Some("tree item"))
+            }) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "tree click command did not run"
+            );
+            std::thread::yield_now();
+        }
         cx.update(|cx| tree.update(cx, |tree, cx| assert!(tree.select_item("first", cx))));
         let copy = dispatch_tree_copy(&shell, window, cx);
         assert_eq!(wait_for_command(copy, cx), CommandOutcome::Completed);
+        let nested = dispatch_tree_command(&shell, window, "test.nested-view-copy", cx);
+        assert_eq!(wait_for_command(nested, cx), CommandOutcome::Completed);
+        let nested_native = dispatch_tree_command(&shell, window, "test.nested-new", cx);
+        assert_eq!(
+            wait_for_command(nested_native, cx),
+            CommandOutcome::Completed
+        );
+        cx.read(|cx| {
+            assert_eq!(
+                shell
+                    .read(cx)
+                    .workbench
+                    .read(cx)
+                    .focused_pane()
+                    .unwrap()
+                    .tabs()
+                    .len(),
+                2
+            );
+        });
+        cx.update_window(window, |_, window, cx| tree.focus_handle(cx).focus(window))
+            .unwrap();
         cx.read(|cx| {
             assert_eq!(
                 cx.read_from_clipboard().unwrap().text().unwrap(),
@@ -4811,6 +4889,62 @@ if (outcome.kind !== "completed") throw new Error(`file.new: ${outcome.kind}`);
                 2
             );
         });
+    }
+
+    #[gpui::test]
+    fn nested_script_waits_for_a_pending_native_command(cx: &mut TestAppContext) {
+        use crate::host::lifecycle::ExtensionKey;
+
+        let documents = install_globals(cx);
+        cx.set_global(ApplicationOpenDialog(Arc::new(FixedOpenDialog(
+            OpenDialogOutcome::Cancelled,
+        ))));
+        let host = cx.update(super::super::extension_host::install);
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        let (shell, window) = product_window(document, model, cx);
+        let key = ExtensionKey::new(ExtensionId::new(90), ExtensionLifecycleId::new(1));
+        host.update(cx, |host, cx| {
+            let execution = host
+                .load_test_source(
+                    key,
+                    r#"
+import { commands } from "knot:editor";
+await commands.register("test.nested-open", async () => {
+  const outcome = await commands.invoke("file.open");
+  if (outcome.kind !== "cancelled") throw new Error(`open: ${outcome.kind}`);
+});
+"#,
+                )
+                .unwrap();
+            cx.spawn(async move |_, _| {
+                execution.await.unwrap();
+            })
+            .detach();
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            cx.run_until_parked();
+            if cx.read(|cx| {
+                cx.global::<ApplicationProductCommands>()
+                    .0
+                    .read(cx)
+                    .catalog()
+                    .borrow()
+                    .resolve("test.nested-open")
+                    .is_ok()
+            }) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "nested command did not register"
+            );
+            std::thread::yield_now();
+        }
+        let execution = dispatch_product_command(&shell, window, "test.nested-open", cx);
+        assert_eq!(wait_for_command(execution, cx), CommandOutcome::Completed);
+        cx.read(|cx| assert_eq!(documents.read(cx).documents().count(), 1));
     }
 
     #[gpui::test]
@@ -5105,6 +5239,43 @@ await commands.registerForView("outline", "copy", async () => {
                     .read(cx)
                     .last_outcome(),
                 Some(&CommandOutcome::Completed)
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn menu_action_enters_the_captured_window_dispatcher(cx: &mut TestAppContext) {
+        let documents = install_globals(cx);
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        let (shell, window) = product_window(document, model, cx);
+        cx.update_window(window, |_, window, cx| {
+            shell.read(cx).focus_active_editor(window, cx)
+        })
+        .unwrap();
+        cx.refresh().unwrap();
+
+        cx.dispatch_action(window, ProductCommandSource::new(NEW_COMMAND));
+        cx.run_until_parked();
+
+        cx.read(|cx| {
+            assert_eq!(
+                shell
+                    .read(cx)
+                    .workbench
+                    .read(cx)
+                    .focused_pane()
+                    .unwrap()
+                    .tabs()
+                    .len(),
+                2
+            );
+            assert_eq!(
+                cx.global::<ApplicationProductCommands>()
+                    .0
+                    .read(cx)
+                    .last_outcome(),
+                Some(&CommandOutcome::Completed),
             );
         });
     }
@@ -5706,6 +5877,95 @@ await commands.registerForView("outline", "copy", async () => {
                     .text(),
                 "edit"
             );
+        });
+    }
+
+    #[gpui::test]
+    async fn every_editor_motion_command_reaches_the_focused_view(cx: &mut TestAppContext) {
+        let documents = install_globals(cx);
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        let (shell, window) = product_window(document, model, cx);
+        let target = cx
+            .update_window(window, |_, window, cx| {
+                shell.read(cx).focus_active_editor(window, cx);
+                shell.update(cx, |shell, cx| {
+                    shell.capture_command_target(window, cx).unwrap()
+                })
+            })
+            .unwrap();
+        let dispatcher = cx.read(|cx| cx.global::<ApplicationProductCommands>().0.clone());
+        for name in super::super::product_commands::product_command_names().filter(|name| {
+            name.starts_with(super::super::product_commands::EDITOR_MOVE_PREFIX)
+                || name.starts_with(super::super::product_commands::EDITOR_SELECT_PREFIX)
+        }) {
+            let execution = dispatcher.update(cx, |dispatcher, cx| {
+                dispatcher.dispatch(
+                    Command {
+                        name: name.into(),
+                        arguments: CommandArgumentValue::Null,
+                    },
+                    target.clone(),
+                    cx,
+                )
+            });
+            assert_eq!(
+                execution.completion.await.unwrap(),
+                CommandOutcome::Completed,
+                "{name}"
+            );
+        }
+    }
+
+    #[gpui::test]
+    async fn native_participants_reject_arguments_before_mutation(cx: &mut TestAppContext) {
+        let documents = install_globals(cx);
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        let (shell, window) = product_window(document, model.clone(), cx);
+        let target = cx
+            .update_window(window, |_, window, cx| {
+                shell.read(cx).focus_active_editor(window, cx);
+                shell.update(cx, |shell, cx| {
+                    shell.capture_command_target(window, cx).unwrap()
+                })
+            })
+            .unwrap();
+        cx.update(|cx| cx.write_to_clipboard(gpui::ClipboardItem::new_string("ignored".into())));
+        let dispatcher = cx.read(|cx| cx.global::<ApplicationProductCommands>().0.clone());
+        for name in [super::PASTE_COMMAND, NEW_COMMAND, super::NEW_WINDOW_COMMAND] {
+            let execution = dispatcher.update(cx, |dispatcher, cx| {
+                dispatcher.dispatch(
+                    Command {
+                        name: name.into(),
+                        arguments: CommandArgumentValue::String("unexpected".into()),
+                    },
+                    target.clone(),
+                    cx,
+                )
+            });
+            assert!(
+                matches!(
+                    execution.completion.await.unwrap(),
+                    CommandOutcome::InvalidArgument { .. }
+                ),
+                "{name}"
+            );
+        }
+        cx.read(|cx| {
+            assert_eq!(model.read(cx).text(), "");
+            assert_eq!(
+                shell
+                    .read(cx)
+                    .workbench
+                    .read(cx)
+                    .focused_pane()
+                    .unwrap()
+                    .tabs()
+                    .len(),
+                1
+            );
+            assert_eq!(cx.windows().len(), 1);
         });
     }
 

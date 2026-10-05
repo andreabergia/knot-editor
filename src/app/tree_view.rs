@@ -512,8 +512,11 @@ impl Render for TreeView {
                             .on_click({
                                 let entity = entity.clone();
                                 move |_, window, cx| {
-                                    let window = window.window_handle();
-                                    entity.update(cx, |tree, cx| tree.activate(&id, window, cx));
+                                    let handle = window.window_handle();
+                                    entity.update(cx, |tree, cx| {
+                                        tree.focus_handle(cx).focus(window);
+                                        tree.activate(&id, handle, cx);
+                                    });
                                 }
                             })
                             .into_any_element()

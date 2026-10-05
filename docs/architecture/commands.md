@@ -28,6 +28,10 @@ requests and late results validate the captured instance and lifecycle.
 Globally registered extension commands reach the application participant after
 the focused view and workbench have declined. Top-level script invocation
 captures the active product window and enters that same dispatch path.
+Nested script invocation reuses its parent's captured window. The window selects
+the participant before the extension bridge schedules a child or returns an
+inline same-lifecycle handler. A native child reports its result to the bridge
+without routing the command a second time.
 
 The workbench exposes the tab's typed command view to this routing path.
 Participants decide which names and arguments they handle. Raw text input,

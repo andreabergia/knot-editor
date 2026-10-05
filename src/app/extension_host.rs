@@ -26,14 +26,16 @@ use crate::host::{
 
 use super::{
     extension_buffers::ExtensionBufferBridge,
-    extension_commands::{ExtensionCommandBridge, ExtensionCommandEvent},
+    extension_commands::{ExtensionCommandBridge, ExtensionCommandEvent, RoutedCommandTarget},
     extension_load::{DependencyPlan, LoadEntry, LoadReport, LoadResult, StartupAttempt},
     extension_package::{self, InstalledPackage},
     extension_semantics::ExtensionSemanticBridge,
     model::{CommandTarget, CommandTargetKind},
     personal_config::{self, ConfigDiagnostic, ConfigPhase},
     product::{self, ProductShell},
-    product_commands::{ApplicationProductCommands, ProductCommandTarget},
+    product_commands::{
+        ApplicationProductCommands, CommandClaim, ProductCommandTarget, dispatch_to_captured_target,
+    },
     tree_view::{TreeView, TreeViewEvent},
 };
 
@@ -192,6 +194,112 @@ pub(crate) fn start_global_command(
     host.update(cx, |host, cx| {
         host.start_global_command(command, target, handler, completion, cx)
     })
+}
+
+fn nested_command_response(
+    request: &HostRequest,
+    outcome: crate::host::protocol::CommandOutcome,
+) -> crate::host::protocol::HostResponse {
+    use crate::host::protocol::{CommandInvokeDispatch, HostResponse, HostResponseValue};
+    HostResponse {
+        extension: request.extension,
+        lifecycle: request.lifecycle,
+        id: request.id,
+        result: Ok(HostResponseValue::CommandInvoked {
+            dispatch: CommandInvokeDispatch::Outcome { outcome },
+        }),
+    }
+}
+
+fn complete_nested_command(
+    host: &Entity<ProductExtensionHost>,
+    child: CommandInvocationId,
+    outcome: crate::host::protocol::CommandOutcome,
+    cx: &mut App,
+) {
+    host.update(cx, |host, cx| {
+        host.commands.complete(child, outcome);
+        host.drain_command_events(cx);
+    });
+}
+
+fn route_nested_command(request: HostRequest, cx: &mut App) {
+    use crate::host::protocol::{CommandOutcome, HostOperation};
+
+    let Some(host) = entity(cx) else { return };
+    let HostOperation::InvokeCommand { command } = request.operation.clone() else {
+        return;
+    };
+    let parent = request.invocation.expect("nested invocation");
+    if let Err(outcome) = host
+        .read(cx)
+        .commands
+        .admit_child(parent, (request.extension, request.lifecycle))
+    {
+        let _ = host
+            .read(cx)
+            .pool
+            .respond(nested_command_response(&request, outcome));
+        return;
+    }
+    let target = host
+        .read(cx)
+        .commands
+        .root_of(parent)
+        .and_then(|root| host.read(cx).command_targets.get(&root).cloned());
+    let Some(target) = target else {
+        let _ = host
+            .read(cx)
+            .pool
+            .respond(nested_command_response(&request, CommandOutcome::Cancelled));
+        return;
+    };
+    let (completion, receiver) = super::CommandCompletion::new();
+    let claim = dispatch_to_captured_target(&command, &target, completion, cx);
+    let (response, child) = host.update(cx, |host, cx| {
+        let routed = match &claim {
+            CommandClaim::Extension { handler, .. } => RoutedCommandTarget::Extension(*handler),
+            _ => RoutedCommandTarget::Native,
+        };
+        let (response, child) = host.commands.handle_routed_child(&request, routed);
+        if let (
+            CommandClaim::Extension {
+                handler,
+                view: Some(_),
+            },
+            Some(child),
+        ) = (&claim, child)
+        {
+            host.view_command_handlers
+                .insert(child, (*handler, command.name.clone()));
+        }
+        host.drain_command_events(cx);
+        (response, child)
+    });
+    if let Some(response) = response {
+        let _ = host.read(cx).pool.respond(response);
+    }
+    let Some(child) = child else { return };
+    match claim {
+        CommandClaim::Declined => {
+            complete_nested_command(&host, child, CommandOutcome::Unavailable, cx)
+        }
+        CommandClaim::Finished(outcome) => complete_nested_command(&host, child, outcome, cx),
+        CommandClaim::Pending(start) => match start(cx) {
+            Err(outcome) => complete_nested_command(&host, child, outcome, cx),
+            Ok(()) => {
+                cx.spawn(async move |cx| {
+                    let outcome = receiver.await.unwrap_or(CommandOutcome::Cancelled);
+                    let _ = host.update(cx, |host, cx| {
+                        host.commands.complete(child, outcome);
+                        host.drain_command_events(cx);
+                    });
+                })
+                .detach();
+            }
+        },
+        CommandClaim::Extension { .. } => {}
+    }
 }
 
 /// Owns the one process-wide extension pool and all foreground protocol state.
@@ -696,6 +804,9 @@ impl ProductExtensionHost {
                     && request.invocation.is_none()
                 {
                     self.dispatch_script_command(request, active_target, cx)
+                } else if matches!(&request.operation, HostOperation::InvokeCommand { .. }) {
+                    cx.defer(move |cx| route_nested_command(request, cx));
+                    None
                 } else {
                     self.commands.handle_host_request(request, active_buffer)
                 }
@@ -821,7 +932,7 @@ impl ProductExtensionHost {
                 .ok_or(HostRequestError::Cancelled)?;
             let (handler, name) = self
                 .view_command_handlers
-                .get(&root)
+                .get(&invocation)
                 .ok_or(HostRequestError::Cancelled)?;
             if (handler.extension, handler.lifecycle) != (request.extension, request.lifecycle)
                 || !self
@@ -959,6 +1070,8 @@ impl ProductExtensionHost {
                 }
             }
         }
+        self.view_command_handlers
+            .retain(|invocation, _| self.commands.contains_invocation(*invocation));
     }
 
     fn handle_tree_event(&mut self, event: &TreeViewEvent, cx: &mut Context<Self>) {
