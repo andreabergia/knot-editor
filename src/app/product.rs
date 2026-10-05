@@ -431,7 +431,6 @@ impl ProductShell {
         let entries = Self::command_dispatcher(cx)
             .read(cx)
             .definitions()
-            .cloned()
             .map(|definition| {
                 CommandPaletteEntry::new(
                     definition,

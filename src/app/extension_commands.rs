@@ -13,10 +13,12 @@ use crate::host::protocol::{
 };
 
 #[cfg(test)]
+use super::model::CommandCatalog;
+#[cfg(test)]
 use super::model::CommandDefinition;
 use super::{
     CommandCompletion, CommandExecution,
-    model::{CommandCatalog, CommandCatalogError, CommandTarget, CommandTargetKind},
+    model::{CommandCatalogError, CommandTarget, CommandTargetKind, SharedCommandCatalog},
 };
 
 type Lifecycle = (ExtensionId, ExtensionLifecycleId);
@@ -71,7 +73,7 @@ pub(crate) enum ExtensionCommandEvent {
 
 /// Foreground-authoritative command catalog and serial invocation tree.
 pub(crate) struct ExtensionCommandBridge {
-    catalog: CommandCatalog,
+    catalog: SharedCommandCatalog,
     lifecycles: HashSet<Lifecycle>,
     next_invocation: u64,
     invocations: HashMap<CommandInvocationId, InvocationNode>,
@@ -81,9 +83,16 @@ pub(crate) struct ExtensionCommandBridge {
 }
 
 impl ExtensionCommandBridge {
+    #[cfg(test)]
     pub(crate) fn new() -> Self {
+        Self::with_catalog(std::rc::Rc::new(std::cell::RefCell::new(
+            CommandCatalog::new(),
+        )))
+    }
+
+    pub(crate) fn with_catalog(catalog: SharedCommandCatalog) -> Self {
         Self {
-            catalog: CommandCatalog::new(),
+            catalog,
             lifecycles: HashSet::new(),
             next_invocation: 1,
             invocations: HashMap::new(),
@@ -101,17 +110,25 @@ impl ExtensionCommandBridge {
         self.lifecycles.insert((extension, lifecycle));
     }
 
+    #[cfg(test)]
     pub(crate) fn register_native(
         &mut self,
         name: impl Into<crate::host::protocol::CommandName>,
         title: impl Into<String>,
     ) -> Result<(), CommandCatalogError> {
-        self.catalog.register_native(name.into(), title.into())
+        self.catalog
+            .borrow_mut()
+            .register_native(name.into(), title.into())
     }
 
     #[cfg(test)]
-    pub(crate) fn definitions(&self) -> impl Iterator<Item = &CommandDefinition> {
-        self.catalog.definitions()
+    pub(crate) fn definitions(&self) -> impl Iterator<Item = CommandDefinition> {
+        self.catalog
+            .borrow()
+            .definitions()
+            .cloned()
+            .collect::<Vec<_>>()
+            .into_iter()
     }
 
     pub(crate) fn enqueue_root(
@@ -138,6 +155,7 @@ impl ExtensionCommandBridge {
             HostOperation::RegisterCommand { name, title } => Some(response(
                 &request,
                 self.catalog
+                    .borrow_mut()
                     .register_extension(name, title, request.extension, request.lifecycle)
                     .map(|registration| HostResponseValue::CommandRegistered { registration })
                     .map_err(map_catalog_error),
@@ -145,6 +163,7 @@ impl ExtensionCommandBridge {
             HostOperation::UnregisterCommand { registration } => Some(response(
                 &request,
                 self.catalog
+                    .borrow_mut()
                     .unregister(registration, request.extension, request.lifecycle)
                     .map(|()| HostResponseValue::CommandUnregistered { registration })
                     .map_err(map_catalog_error),
@@ -239,7 +258,9 @@ impl ExtensionCommandBridge {
     ) {
         let identity = (extension, lifecycle);
         self.lifecycles.remove(&identity);
-        self.catalog.remove_lifecycle(extension, lifecycle);
+        self.catalog
+            .borrow_mut()
+            .remove_lifecycle(extension, lifecycle);
         let affected = self
             .invocations
             .iter()
@@ -288,7 +309,7 @@ impl ExtensionCommandBridge {
     ) -> CommandExecution {
         let id = self.allocate_invocation();
         let (completion, receiver) = CommandCompletion::new();
-        let target = match self.catalog.resolve(command.name.as_ref()) {
+        let target = match self.catalog.borrow().resolve(command.name.as_ref()) {
             Ok(CommandTargetKind::Native) => InvocationTarget::Native,
             Ok(CommandTargetKind::Extension(target))
                 if caller == Some((target.extension, target.lifecycle)) =>
@@ -344,7 +365,7 @@ impl ExtensionCommandBridge {
         {
             return Err(CommandOutcome::Unavailable);
         }
-        let target = match self.catalog.resolve(command.name.as_ref()) {
+        let target = match self.catalog.borrow().resolve(command.name.as_ref()) {
             Ok(CommandTargetKind::Native) => InvocationTarget::Native,
             Ok(CommandTargetKind::Extension(target)) => InvocationTarget::Extension(target),
             Err(_) => return Err(CommandOutcome::Unavailable),
@@ -549,6 +570,7 @@ impl ExtensionCommandBridge {
     }
 }
 
+#[cfg(test)]
 impl Default for ExtensionCommandBridge {
     fn default() -> Self {
         Self::new()

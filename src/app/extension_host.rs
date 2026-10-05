@@ -173,17 +173,7 @@ impl ProductExtensionHost {
         cx: &mut Context<Self>,
     ) -> Self {
         let product_commands = cx.global::<ApplicationProductCommands>().0.clone();
-        let definitions = product_commands
-            .read(cx)
-            .definitions()
-            .map(|definition| (definition.name.clone(), definition.title.clone()))
-            .collect::<Vec<_>>();
-        let mut commands = ExtensionCommandBridge::new();
-        for (name, title) in definitions {
-            commands
-                .register_native(name, title)
-                .expect("product command names are unique in the extension catalog");
-        }
+        let commands = ExtensionCommandBridge::with_catalog(product_commands.read(cx).catalog());
         let fixture_tree = cx.new(|cx| TreeView::new("outline", cx));
         let mut semantics = ExtensionSemanticBridge::new();
         semantics.add_tree_view("outline", fixture_tree.clone());
@@ -606,7 +596,6 @@ impl ProductExtensionHost {
         if active_buffer.is_none() {
             self.buffers.set_active_buffer(None);
         }
-        let command_operation = request.operation.clone();
         let response = match request_route(&request.operation) {
             RequestRoute::Buffer => {
                 let invocation = request.invocation;
@@ -620,49 +609,9 @@ impl ProductExtensionHost {
             RequestRoute::Semantic => Some(self.semantics.dispatch(request, cx)),
         };
         if let Some(response) = response {
-            self.sync_product_command_catalog(&command_operation, &response, cx);
             let _ = self.pool.respond(response);
         }
         self.drain_command_events(cx);
-    }
-
-    fn sync_product_command_catalog(
-        &self,
-        operation: &HostOperation,
-        response: &crate::host::protocol::HostResponse,
-        cx: &mut Context<Self>,
-    ) {
-        let dispatcher = cx.global::<ApplicationProductCommands>().0.clone();
-        match (operation, &response.result) {
-            (
-                HostOperation::RegisterCommand { name, title },
-                Ok(crate::host::protocol::HostResponseValue::CommandRegistered { registration }),
-            ) => {
-                let mirrored = dispatcher.update(cx, |dispatcher, _| {
-                    dispatcher.register_extension(
-                        name.clone(),
-                        title.clone(),
-                        response.extension,
-                        response.lifecycle,
-                    )
-                });
-                assert_eq!(mirrored, Ok(*registration), "command catalogs diverged");
-            }
-            (
-                HostOperation::UnregisterCommand { registration },
-                Ok(crate::host::protocol::HostResponseValue::CommandUnregistered { .. }),
-            ) => {
-                let mirrored = dispatcher.update(cx, |dispatcher, _| {
-                    dispatcher.unregister_extension(
-                        *registration,
-                        response.extension,
-                        response.lifecycle,
-                    )
-                });
-                assert_eq!(mirrored, Ok(()), "command catalogs diverged");
-            }
-            _ => {}
-        }
     }
 
     fn drain_command_events(&mut self, cx: &mut Context<Self>) {
@@ -949,10 +898,6 @@ impl ProductExtensionHost {
             self.personal_config_key = None;
         }
         self.commands.remove_lifecycle(key.extension, key.lifecycle);
-        let dispatcher = cx.global::<ApplicationProductCommands>().0.clone();
-        dispatcher.update(cx, |dispatcher, _| {
-            dispatcher.remove_extension_lifecycle(key.extension, key.lifecycle)
-        });
         self.command_targets
             .retain(|root, _| self.commands.contains_invocation(*root));
         self.buffers
@@ -1141,10 +1086,10 @@ mod tests {
             let definitions = host
                 .commands
                 .definitions()
-                .map(|definition| definition.name.as_ref())
+                .map(|definition| definition.name.to_string())
                 .collect::<Vec<_>>();
-            assert!(definitions.contains(&"knot.fixture.primary"));
-            assert!(definitions.contains(&"knot.fixture.secondary"));
+            assert!(definitions.contains(&"knot.fixture.primary".to_owned()));
+            assert!(definitions.contains(&"knot.fixture.secondary".to_owned()));
         });
         cx.update(|cx| {
             let first = ExtensionKey::new(

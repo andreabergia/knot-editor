@@ -37,7 +37,9 @@ impl TerminalView {
         cx: &mut Context<Self>,
     ) -> super::product_commands::CommandClaim {
         use super::product_commands::CommandClaim;
-        if command.name.as_ref() != "copy" || self.attachment.is_none() {
+        if command.name.as_ref() != super::product_commands::COPY_COMMAND
+            || self.attachment.is_none()
+        {
             return CommandClaim::Declined;
         }
         let selected = self

@@ -2,17 +2,14 @@
 
 use gpui::*;
 
-use crate::host::protocol::{
-    Command, CommandArgumentValue, CommandOutcome, CommandRegistrationId, ExtensionId,
-    ExtensionLifecycleId,
-};
+use crate::host::protocol::{Command, CommandArgumentValue, CommandOutcome};
 #[cfg(test)]
 use crate::host::protocol::{
-    CommandInvokeDispatch, HostOperation, HostRequest, HostRequestError, HostResponse,
-    HostResponseValue, RequestId,
+    CommandInvokeDispatch, ExtensionId, ExtensionLifecycleId, HostOperation, HostRequest,
+    HostRequestError, HostResponse, HostResponseValue, RequestId,
 };
 
-use super::model::{CommandCatalog, CommandCatalogError, CommandDefinition, CommandTargetKind};
+use super::model::{CommandCatalog, CommandDefinition, CommandTargetKind, SharedCommandCatalog};
 use super::product::ProductShell;
 use super::{CommandCompletion, CommandExecution};
 
@@ -39,36 +36,67 @@ pub(crate) const FIND_NEXT_COMMAND: &str = "editor.find-next";
 pub(crate) const FIND_PREVIOUS_COMMAND: &str = "editor.find-previous";
 pub(crate) const SHOW_COMPLETIONS_COMMAND: &str = "editor.show-completions";
 pub(crate) const SHOW_EXTENSION_REPORT_COMMAND: &str = "extensions.show-startup-report";
+pub(crate) const EDITOR_MOVE_PREFIX: &str = "editor.move-";
+pub(crate) const EDITOR_SELECT_PREFIX: &str = "editor.select-";
+
+pub(crate) const DELETE_BACKWARD_COMMAND: &str = "editor.delete-backward";
+pub(crate) const DELETE_FORWARD_COMMAND: &str = "editor.delete-forward";
+pub(crate) const INSERT_NEWLINE_COMMAND: &str = "editor.insert-newline";
+pub(crate) const INSERT_TAB_COMMAND: &str = "editor.insert-tab";
+pub(crate) const MOVE_DOCUMENT_END_COMMAND: &str = "editor.move-document-end";
+pub(crate) const MOVE_DOCUMENT_START_COMMAND: &str = "editor.move-document-start";
+pub(crate) const MOVE_DOWN_COMMAND: &str = "editor.move-down";
+pub(crate) const MOVE_LEFT_COMMAND: &str = "editor.move-left";
+pub(crate) const MOVE_LINE_END_COMMAND: &str = "editor.move-line-end";
+pub(crate) const MOVE_LINE_START_COMMAND: &str = "editor.move-line-start";
+pub(crate) const MOVE_PAGE_DOWN_COMMAND: &str = "editor.move-page-down";
+pub(crate) const MOVE_PAGE_UP_COMMAND: &str = "editor.move-page-up";
+pub(crate) const MOVE_RIGHT_COMMAND: &str = "editor.move-right";
+pub(crate) const MOVE_UP_COMMAND: &str = "editor.move-up";
+pub(crate) const MOVE_WORD_LEFT_COMMAND: &str = "editor.move-word-left";
+pub(crate) const MOVE_WORD_RIGHT_COMMAND: &str = "editor.move-word-right";
+pub(crate) const SELECT_DOCUMENT_END_COMMAND: &str = "editor.select-document-end";
+pub(crate) const SELECT_DOCUMENT_START_COMMAND: &str = "editor.select-document-start";
+pub(crate) const SELECT_DOWN_COMMAND: &str = "editor.select-down";
+pub(crate) const SELECT_LEFT_COMMAND: &str = "editor.select-left";
+pub(crate) const SELECT_LINE_END_COMMAND: &str = "editor.select-line-end";
+pub(crate) const SELECT_LINE_START_COMMAND: &str = "editor.select-line-start";
+pub(crate) const SELECT_PAGE_DOWN_COMMAND: &str = "editor.select-page-down";
+pub(crate) const SELECT_PAGE_UP_COMMAND: &str = "editor.select-page-up";
+pub(crate) const SELECT_RIGHT_COMMAND: &str = "editor.select-right";
+pub(crate) const SELECT_UP_COMMAND: &str = "editor.select-up";
+pub(crate) const SELECT_WORD_LEFT_COMMAND: &str = "editor.select-word-left";
+pub(crate) const SELECT_WORD_RIGHT_COMMAND: &str = "editor.select-word-right";
 
 const PRODUCT_COMMANDS: &[(&str, &str)] = &[
-    ("editor.move-left", "Move left"),
-    ("editor.move-right", "Move right"),
-    ("editor.move-up", "Move up"),
-    ("editor.move-down", "Move down"),
-    ("editor.move-word-left", "Move to previous word"),
-    ("editor.move-word-right", "Move to next word"),
-    ("editor.move-line-start", "Move to line start"),
-    ("editor.move-line-end", "Move to line end"),
-    ("editor.move-page-up", "Move up one page"),
-    ("editor.move-page-down", "Move down one page"),
-    ("editor.move-document-start", "Move to document start"),
-    ("editor.move-document-end", "Move to document end"),
-    ("editor.select-left", "Select left"),
-    ("editor.select-right", "Select right"),
-    ("editor.select-up", "Select up"),
-    ("editor.select-down", "Select down"),
-    ("editor.select-word-left", "Select to previous word"),
-    ("editor.select-word-right", "Select to next word"),
-    ("editor.select-line-start", "Select to line start"),
-    ("editor.select-line-end", "Select to line end"),
-    ("editor.select-page-up", "Select up one page"),
-    ("editor.select-page-down", "Select down one page"),
-    ("editor.select-document-start", "Select to document start"),
-    ("editor.select-document-end", "Select to document end"),
-    ("editor.insert-newline", "Insert Newline"),
-    ("editor.insert-tab", "Insert Tab"),
-    ("editor.delete-backward", "Delete Backward"),
-    ("editor.delete-forward", "Delete Forward"),
+    (MOVE_LEFT_COMMAND, "Move left"),
+    (MOVE_RIGHT_COMMAND, "Move right"),
+    (MOVE_UP_COMMAND, "Move up"),
+    (MOVE_DOWN_COMMAND, "Move down"),
+    (MOVE_WORD_LEFT_COMMAND, "Move to previous word"),
+    (MOVE_WORD_RIGHT_COMMAND, "Move to next word"),
+    (MOVE_LINE_START_COMMAND, "Move to line start"),
+    (MOVE_LINE_END_COMMAND, "Move to line end"),
+    (MOVE_PAGE_UP_COMMAND, "Move up one page"),
+    (MOVE_PAGE_DOWN_COMMAND, "Move down one page"),
+    (MOVE_DOCUMENT_START_COMMAND, "Move to document start"),
+    (MOVE_DOCUMENT_END_COMMAND, "Move to document end"),
+    (SELECT_LEFT_COMMAND, "Select left"),
+    (SELECT_RIGHT_COMMAND, "Select right"),
+    (SELECT_UP_COMMAND, "Select up"),
+    (SELECT_DOWN_COMMAND, "Select down"),
+    (SELECT_WORD_LEFT_COMMAND, "Select to previous word"),
+    (SELECT_WORD_RIGHT_COMMAND, "Select to next word"),
+    (SELECT_LINE_START_COMMAND, "Select to line start"),
+    (SELECT_LINE_END_COMMAND, "Select to line end"),
+    (SELECT_PAGE_UP_COMMAND, "Select up one page"),
+    (SELECT_PAGE_DOWN_COMMAND, "Select down one page"),
+    (SELECT_DOCUMENT_START_COMMAND, "Select to document start"),
+    (SELECT_DOCUMENT_END_COMMAND, "Select to document end"),
+    (INSERT_NEWLINE_COMMAND, "Insert Newline"),
+    (INSERT_TAB_COMMAND, "Insert Tab"),
+    (DELETE_BACKWARD_COMMAND, "Delete Backward"),
+    (DELETE_FORWARD_COMMAND, "Delete Forward"),
     (NEW_COMMAND, "New Document"),
     (NEW_TERMINAL_COMMAND, "New Terminal"),
     (
@@ -179,7 +207,7 @@ pub(crate) struct ApplicationProductCommands(pub(crate) Entity<ProductCommandDis
 impl Global for ApplicationProductCommands {}
 
 pub(crate) struct ProductCommandDispatcher {
-    catalog: CommandCatalog,
+    catalog: SharedCommandCatalog,
     next_invocation: u64,
     last_outcome: Option<CommandOutcome>,
 }
@@ -235,42 +263,23 @@ impl ProductCommandDispatcher {
         }
 
         Self {
-            catalog,
+            catalog: std::rc::Rc::new(std::cell::RefCell::new(catalog)),
             next_invocation: 1,
             last_outcome: None,
         }
     }
 
-    pub(crate) fn definitions(&self) -> impl Iterator<Item = &CommandDefinition> {
-        self.catalog.definitions()
-    }
-
-    pub(crate) fn register_extension(
-        &mut self,
-        name: crate::host::protocol::CommandName,
-        title: String,
-        extension: ExtensionId,
-        lifecycle: ExtensionLifecycleId,
-    ) -> Result<CommandRegistrationId, CommandCatalogError> {
+    pub(crate) fn definitions(&self) -> impl Iterator<Item = CommandDefinition> {
         self.catalog
-            .register_extension(name, title, extension, lifecycle)
+            .borrow()
+            .definitions()
+            .cloned()
+            .collect::<Vec<_>>()
+            .into_iter()
     }
 
-    pub(crate) fn unregister_extension(
-        &mut self,
-        registration: CommandRegistrationId,
-        extension: ExtensionId,
-        lifecycle: ExtensionLifecycleId,
-    ) -> Result<(), CommandCatalogError> {
-        self.catalog.unregister(registration, extension, lifecycle)
-    }
-
-    pub(crate) fn remove_extension_lifecycle(
-        &mut self,
-        extension: ExtensionId,
-        lifecycle: ExtensionLifecycleId,
-    ) {
-        self.catalog.remove_lifecycle(extension, lifecycle);
+    pub(crate) fn catalog(&self) -> SharedCommandCatalog {
+        self.catalog.clone()
     }
 
     pub(crate) fn dispatch(
@@ -280,7 +289,7 @@ impl ProductCommandDispatcher {
         cx: &mut Context<Self>,
     ) -> CommandExecution {
         if matches!(
-            self.catalog.resolve(command.name.as_ref()),
+            self.catalog.borrow().resolve(command.name.as_ref()),
             Ok(CommandTargetKind::Extension(_))
         ) {
             return super::extension_host::dispatch_product_command(command, target, cx);
@@ -296,7 +305,8 @@ impl ProductCommandDispatcher {
             completion: receiver,
         };
 
-        let admitted = self.catalog.resolve(command.name.as_ref()) == Ok(CommandTargetKind::Native);
+        let admitted =
+            self.catalog.borrow().resolve(command.name.as_ref()) == Ok(CommandTargetKind::Native);
         let dispatcher = cx.entity();
         cx.defer(move |cx| {
             let claim = if !admitted {
@@ -565,38 +575,38 @@ pub(crate) fn product_command_names() -> impl Iterator<Item = &'static str> {
 pub(crate) fn bind_editing_keys(cx: &mut App) {
     cx.bind_keys(
         [
-            ("left", "editor.move-left"),
-            ("shift-left", "editor.select-left"),
-            ("right", "editor.move-right"),
-            ("shift-right", "editor.select-right"),
-            ("up", "editor.move-up"),
-            ("shift-up", "editor.select-up"),
-            ("down", "editor.move-down"),
-            ("shift-down", "editor.select-down"),
-            ("alt-left", "editor.move-word-left"),
-            ("shift-alt-left", "editor.select-word-left"),
-            ("alt-right", "editor.move-word-right"),
-            ("shift-alt-right", "editor.select-word-right"),
-            ("cmd-left", "editor.move-line-start"),
-            ("shift-cmd-left", "editor.select-line-start"),
-            ("cmd-right", "editor.move-line-end"),
-            ("shift-cmd-right", "editor.select-line-end"),
-            ("home", "editor.move-line-start"),
-            ("shift-home", "editor.select-line-start"),
-            ("end", "editor.move-line-end"),
-            ("shift-end", "editor.select-line-end"),
-            ("pageup", "editor.move-page-up"),
-            ("shift-pageup", "editor.select-page-up"),
-            ("pagedown", "editor.move-page-down"),
-            ("shift-pagedown", "editor.select-page-down"),
-            ("cmd-up", "editor.move-document-start"),
-            ("shift-cmd-up", "editor.select-document-start"),
-            ("cmd-down", "editor.move-document-end"),
-            ("shift-cmd-down", "editor.select-document-end"),
-            ("enter", "editor.insert-newline"),
-            ("tab", "editor.insert-tab"),
-            ("backspace", "editor.delete-backward"),
-            ("delete", "editor.delete-forward"),
+            ("left", MOVE_LEFT_COMMAND),
+            ("shift-left", SELECT_LEFT_COMMAND),
+            ("right", MOVE_RIGHT_COMMAND),
+            ("shift-right", SELECT_RIGHT_COMMAND),
+            ("up", MOVE_UP_COMMAND),
+            ("shift-up", SELECT_UP_COMMAND),
+            ("down", MOVE_DOWN_COMMAND),
+            ("shift-down", SELECT_DOWN_COMMAND),
+            ("alt-left", MOVE_WORD_LEFT_COMMAND),
+            ("shift-alt-left", SELECT_WORD_LEFT_COMMAND),
+            ("alt-right", MOVE_WORD_RIGHT_COMMAND),
+            ("shift-alt-right", SELECT_WORD_RIGHT_COMMAND),
+            ("cmd-left", MOVE_LINE_START_COMMAND),
+            ("shift-cmd-left", SELECT_LINE_START_COMMAND),
+            ("cmd-right", MOVE_LINE_END_COMMAND),
+            ("shift-cmd-right", SELECT_LINE_END_COMMAND),
+            ("home", MOVE_LINE_START_COMMAND),
+            ("shift-home", SELECT_LINE_START_COMMAND),
+            ("end", MOVE_LINE_END_COMMAND),
+            ("shift-end", SELECT_LINE_END_COMMAND),
+            ("pageup", MOVE_PAGE_UP_COMMAND),
+            ("shift-pageup", SELECT_PAGE_UP_COMMAND),
+            ("pagedown", MOVE_PAGE_DOWN_COMMAND),
+            ("shift-pagedown", SELECT_PAGE_DOWN_COMMAND),
+            ("cmd-up", MOVE_DOCUMENT_START_COMMAND),
+            ("shift-cmd-up", SELECT_DOCUMENT_START_COMMAND),
+            ("cmd-down", MOVE_DOCUMENT_END_COMMAND),
+            ("shift-cmd-down", SELECT_DOCUMENT_END_COMMAND),
+            ("enter", INSERT_NEWLINE_COMMAND),
+            ("tab", INSERT_TAB_COMMAND),
+            ("backspace", DELETE_BACKWARD_COMMAND),
+            ("delete", DELETE_FORWARD_COMMAND),
         ]
         .into_iter()
         .map(|(key, command)| {

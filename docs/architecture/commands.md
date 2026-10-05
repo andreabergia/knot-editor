@@ -6,10 +6,10 @@ remaining routing work.
 
 ## Dispatch
 
-The application owns command definitions, name ownership, and invocation
-admission. Keybindings, palette choices, native menus, and scripts carry the
-same Knot-owned command and structured outcome. The palette retains the origin
-captured before it takes focus.
+The application owns one foreground catalog for command definitions, name
+ownership, and invocation admission. Keybindings, palette choices, native menus,
+and scripts carry the same Knot-owned command and structured outcome. The
+palette retains the origin captured before it takes focus.
 
 Each native product invocation captures its window, focus, workbench, tab, and surface.
 The window routes the command to the captured focused view, then the workbench,

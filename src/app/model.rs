@@ -4,6 +4,7 @@ use std::{
     cell::RefCell,
     collections::{HashMap, HashSet, VecDeque},
     ops::Range,
+    rc::Rc,
     sync::Arc,
     time::Instant,
 };
@@ -962,6 +963,8 @@ struct CommandCatalogEntry {
     extension_registration: Option<CommandRegistrationId>,
 }
 
+pub(crate) type SharedCommandCatalog = Rc<RefCell<CommandCatalog>>;
+
 /// The extension lifetime authorized to receive a named command invocation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct CommandTarget {
@@ -1025,10 +1028,6 @@ impl CommandCatalog {
         Ok(id)
     }
 
-    #[allow(
-        dead_code,
-        reason = "native definitions are registered when native command routing is introduced"
-    )]
     pub(crate) fn register_native(
         &mut self,
         name: CommandName,

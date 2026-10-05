@@ -17,6 +17,8 @@ use crate::host::protocol::{
     CompletionResponse, DecorationToken, GutterToken, TextEdit,
 };
 
+use super::product_commands as commands;
+
 use super::{
     CompletionAccept, CompletionDismiss, CompletionNext, CompletionPrevious, EDITOR_KEY_CONTEXT,
     completion::{
@@ -557,10 +559,10 @@ impl EditorView {
             "pagedown" => "page-down",
             key if !modifiers.platform && !modifiers.control && !modifiers.alt => {
                 let command = match key {
-                    "enter" => "editor.insert-newline",
-                    "tab" => "editor.insert-tab",
-                    "backspace" => "editor.delete-backward",
-                    "delete" => "editor.delete-forward",
+                    "enter" => commands::INSERT_NEWLINE_COMMAND,
+                    "tab" => commands::INSERT_TAB_COMMAND,
+                    "backspace" => commands::DELETE_BACKWARD_COMMAND,
+                    "delete" => commands::DELETE_FORWARD_COMMAND,
                     _ => return,
                 };
                 self.execute_editing_command(command, window, cx);
@@ -569,8 +571,12 @@ impl EditorView {
             }
             _ => return,
         };
-        let prefix = if modifiers.shift { "select" } else { "move" };
-        self.execute_editing_command(&format!("editor.{prefix}-{movement}"), window, cx);
+        let prefix = if modifiers.shift {
+            commands::EDITOR_SELECT_PREFIX
+        } else {
+            commands::EDITOR_MOVE_PREFIX
+        };
+        self.execute_editing_command(&format!("{prefix}{movement}"), window, cx);
         cx.stop_propagation();
     }
 
@@ -596,12 +602,12 @@ impl EditorView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if command == "editor.undo" || command == "editor.redo" {
+        if command == commands::UNDO_COMMAND || command == commands::REDO_COMMAND {
             self.break_history_group(cx);
             self.marked_range_utf16 = None;
             self.preferred_x = None;
             let replay = self.model.update(cx, |model, cx| {
-                let changed = if command == "editor.undo" {
+                let changed = if command == commands::UNDO_COMMAND {
                     model.undo()
                 } else {
                     model.redo()
@@ -629,13 +635,13 @@ impl EditorView {
             }
             return true;
         }
-        if matches!(command, "copy" | "editor.cut") {
-            if command == "copy" && !self.has_selection() {
+        if matches!(command, commands::COPY_COMMAND | commands::CUT_COMMAND) {
+            if command == commands::COPY_COMMAND && !self.has_selection() {
                 return false;
             }
             self.break_history_group(cx);
             self.marked_range_utf16 = None;
-            if command == "editor.cut" && !self.model.read(cx).is_editable() {
+            if command == commands::CUT_COMMAND && !self.model.read(cx).is_editable() {
                 return true;
             }
             if let Some((start, end)) = self.selection_range() {
@@ -643,20 +649,20 @@ impl EditorView {
                     [self.to_flat_byte(start.0, start.1)..self.to_flat_byte(end.0, end.1)]
                     .to_owned();
                 cx.write_to_clipboard(ClipboardItem::new_string(text));
-                if command == "editor.cut" {
+                if command == commands::CUT_COMMAND {
                     self.replace_text_with_grouping(None, "", None, window, cx);
                 }
             }
             return true;
         }
-        if command == "editor.paste" {
+        if command == commands::PASTE_COMMAND {
             self.break_history_group(cx);
             if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
                 self.replace_text_with_grouping(None, &text, None, window, cx);
             }
             return true;
         }
-        if command == "editor.select-all" {
+        if command == commands::SELECT_ALL_COMMAND {
             self.break_history_group(cx);
             self.marked_range_utf16 = None;
             self.anchor_line = 0;
@@ -668,7 +674,10 @@ impl EditorView {
             self.finish_position_change(cx);
             return true;
         }
-        if matches!(command, "editor.insert-newline" | "editor.insert-tab") {
+        if matches!(
+            command,
+            commands::INSERT_NEWLINE_COMMAND | commands::INSERT_TAB_COMMAND
+        ) {
             self.break_history_group(cx);
             self.replace_text_with_grouping(
                 None,
@@ -683,7 +692,10 @@ impl EditorView {
             );
             return true;
         }
-        if matches!(command, "editor.delete-backward" | "editor.delete-forward") {
+        if matches!(
+            command,
+            commands::DELETE_BACKWARD_COMMAND | commands::DELETE_FORWARD_COMMAND
+        ) {
             if self.has_selection || self.marked_range_utf16.is_some() {
                 self.replace_text_with_grouping(None, "", None, window, cx);
             } else {
@@ -725,13 +737,14 @@ impl EditorView {
             }
             return true;
         }
-        let (movement, extend) = if let Some(movement) = command.strip_prefix("editor.move-") {
-            (movement, false)
-        } else if let Some(movement) = command.strip_prefix("editor.select-") {
-            (movement, true)
-        } else {
-            return false;
-        };
+        let (movement, extend) =
+            if let Some(movement) = command.strip_prefix(commands::EDITOR_MOVE_PREFIX) {
+                (movement, false)
+            } else if let Some(movement) = command.strip_prefix(commands::EDITOR_SELECT_PREFIX) {
+                (movement, true)
+            } else {
+                return false;
+            };
         self.break_history_group(cx);
         self.marked_range_utf16 = None;
         let last = self.lines.len() - 1;

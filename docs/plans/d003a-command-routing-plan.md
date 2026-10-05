@@ -1,6 +1,6 @@
 # D003a: Focused command routing
 
-Status: checkpoint 1 generic routing revision ready for review.
+Status: checkpoint 1 approved; checkpoint 2 in progress.
 
 Source: D003, promoted from the [deferred-work register](../roadmap.md).
 This plan establishes the command behavior needed by the
@@ -87,6 +87,9 @@ line merely to force a claim.
 
 ### 2. Extension-owned view handlers ⬜
 
+- ✅ Share one foreground command catalog between product discovery and the
+  extension invocation bridge; keep native command names in the product command
+  definitions used by bindings and handlers.
 - Allow an extension-backed focused view to receive and handle an existing
   command through the same window focus path, using Knot-owned view and
   lifecycle identities. Keep JavaScript execution asynchronous and painting
