@@ -3,12 +3,12 @@
 Status: complete. All four checkpoint review gates approved; the final package
 suite passed 427 tests with `cargo test --quiet -- --test-threads=1`.
 
-Source: D003, promoted from the [deferred-work register](../roadmap.md).
+Source: D003, promoted from the [deferred-work register](../../roadmap.md).
 This plan establishes the command behavior needed by the
-[D003b keymap plan](d003b-keymaps-plan.md). See the current
-[command architecture](../architecture/commands.md),
-[extension host](../architecture/extension-host.md), and
-[architecture decisions](../decisions.md).
+[D003b keymap plan](../../plans/d003b-keymaps-plan.md). See the current
+[command architecture](../../architecture/commands.md),
+[extension host](../../architecture/extension-host.md), and
+[architecture decisions](../../decisions.md).
 
 ## Outcome and design
 
@@ -55,7 +55,7 @@ line merely to force a claim.
 ## Exclusions and deferred decisions
 
 - Key binding registration, precedence, remapping, and removal belong to
-  [D003b](d003b-keymaps-plan.md).
+  [D003b](../../plans/d003b-keymaps-plan.md).
 - This plan does not create a general declarative extension UI system or make
   raw text input, IME, pointer events, or terminal byte input into commands.
 - Argument schemas, command aliases, and general handler priorities are

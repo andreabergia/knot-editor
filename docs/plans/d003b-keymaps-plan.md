@@ -3,7 +3,7 @@
 Status: proposed. Design agreed; implementation has not started.
 
 Source: D003, promoted from the [deferred-work register](../roadmap.md).
-Depends on the [D003a focused command-routing plan](d003a-command-routing-plan.md).
+Depends on the [D003a focused command-routing plan](../archive/plans/d003a-command-routing-plan.md).
 See the current [command architecture](../architecture/commands.md),
 [personal config plan](../archive/plans/d036-personal-config-plan.md), and
 [architecture decisions](../decisions.md).
