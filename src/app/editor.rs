@@ -583,23 +583,7 @@ impl EditorView {
         use super::product_commands::CommandClaim;
         use crate::host::protocol::CommandOutcome;
 
-        let name = command.name.as_ref();
-        if name == "copy" && !self.has_selection() {
-            return CommandClaim::Declined;
-        }
-        if matches!(
-            name,
-            "copy"
-                | "editor.cut"
-                | "editor.paste"
-                | "editor.undo"
-                | "editor.redo"
-                | "editor.insert-newline"
-                | "editor.insert-tab"
-        ) {
-            self.break_history_group(cx);
-        }
-        if self.execute_editing_command(name, window, cx) {
+        if self.execute_editing_command(command.name.as_ref(), window, cx) {
             CommandClaim::Finished(CommandOutcome::Completed)
         } else {
             CommandClaim::Declined
@@ -613,6 +597,7 @@ impl EditorView {
         cx: &mut Context<Self>,
     ) -> bool {
         if command == "editor.undo" || command == "editor.redo" {
+            self.break_history_group(cx);
             self.marked_range_utf16 = None;
             self.preferred_x = None;
             let replay = self.model.update(cx, |model, cx| {
@@ -645,6 +630,10 @@ impl EditorView {
             return true;
         }
         if matches!(command, "copy" | "editor.cut") {
+            if command == "copy" && !self.has_selection() {
+                return false;
+            }
+            self.break_history_group(cx);
             self.marked_range_utf16 = None;
             if command == "editor.cut" && !self.model.read(cx).is_editable() {
                 return true;
@@ -661,6 +650,7 @@ impl EditorView {
             return true;
         }
         if command == "editor.paste" {
+            self.break_history_group(cx);
             if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
                 self.replace_text_with_grouping(None, &text, None, window, cx);
             }
@@ -679,6 +669,7 @@ impl EditorView {
             return true;
         }
         if matches!(command, "editor.insert-newline" | "editor.insert-tab") {
+            self.break_history_group(cx);
             self.replace_text_with_grouping(
                 None,
                 if command.ends_with("newline") {
