@@ -3068,7 +3068,7 @@ pub(super) fn finish_product_startup(
     }
 }
 
-pub(crate) fn run(initial_request: Option<OpenRequest>, fixture: Option<String>) {
+pub(crate) fn run(initial_request: Option<OpenRequest>) {
     let application = Application::new();
     let (open_requests, mut incoming_requests) = tokio::sync::mpsc::unbounded_channel();
     application.on_open_urls(move |urls| {
@@ -3172,15 +3172,10 @@ pub(crate) fn run(initial_request: Option<OpenRequest>, fixture: Option<String>)
             }
         })
         .detach();
-        if let Some(fixture) = fixture.as_deref() {
-            finish_product_startup(Ok(()), cx);
-            extension_host.update(cx, |host, cx| host.start_diagnostic_fixture(fixture, cx));
-        } else {
-            let extensions_root = super::extension_package::user_extensions_root();
-            extension_host.update(cx, |host, cx| {
-                host.start_product_startup(None, extensions_root, cx)
-            });
-        }
+        let extensions_root = super::extension_package::user_extensions_root();
+        extension_host.update(cx, |host, cx| {
+            host.start_product_startup(None, extensions_root, cx)
+        });
     });
 }
 
@@ -3317,9 +3312,7 @@ mod tests {
     };
 
     use crate::host::protocol::{
-        Command, CommandArgumentValue, CommandInvocationId, CommandInvokeDispatch, CommandOutcome,
-        ExtensionId, ExtensionLifecycleId, HostOperation, HostRequest, HostRequestError,
-        HostResponseValue, RequestId,
+        Command, CommandArgumentValue, CommandOutcome, ExtensionId, ExtensionLifecycleId,
     };
 
     use super::{
@@ -4315,129 +4308,6 @@ mod tests {
     }
 
     #[gpui::test]
-    async fn product_host_requests_await_outcomes_and_reject_invalid_routes(
-        cx: &mut TestAppContext,
-    ) {
-        let documents = install_globals(cx);
-        let document = cx.update(|cx| create_untitled_document(&documents, cx));
-        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
-        let (shell, window_handle) = product_window(document, model, cx);
-        let target = cx
-            .update_window(window_handle, |_, window, cx| {
-                shell.update(cx, |shell, cx| {
-                    shell.focus_active_editor(window, cx);
-                    shell.capture_command_target(window, cx).unwrap()
-                })
-            })
-            .unwrap();
-        let extension = ExtensionId::new(91);
-        let lifecycle = ExtensionLifecycleId::new(7);
-        let request = |id, invocation, operation| HostRequest {
-            extension,
-            lifecycle,
-            id: RequestId::new(id),
-            invocation,
-            operation,
-        };
-
-        let pending = cx.update(|cx| {
-            let dispatcher = cx.global::<ApplicationProductCommands>().0.clone();
-            dispatcher.update(cx, |dispatcher, cx| {
-                dispatcher.dispatch_host_request(
-                    request(
-                        1,
-                        None,
-                        HostOperation::InvokeCommand {
-                            command: Command {
-                                name: NEW_COMMAND.into(),
-                                arguments: CommandArgumentValue::Null,
-                            },
-                        },
-                    ),
-                    Some(target.clone()),
-                    cx,
-                )
-            })
-        });
-        cx.run_until_parked();
-        assert!(matches!(
-            pending.resolve().await.result,
-            Ok(HostResponseValue::CommandInvoked {
-                dispatch: CommandInvokeDispatch::Outcome {
-                    outcome: CommandOutcome::Completed
-                }
-            })
-        ));
-
-        for (route, expected) in [
-            (
-                request(
-                    2,
-                    Some(CommandInvocationId::new(1)),
-                    HostOperation::InvokeCommand {
-                        command: Command {
-                            name: NEW_COMMAND.into(),
-                            arguments: CommandArgumentValue::Null,
-                        },
-                    },
-                ),
-                CommandOutcome::Unavailable,
-            ),
-            (
-                request(
-                    3,
-                    None,
-                    HostOperation::InvokeCommand {
-                        command: Command {
-                            name: NEW_COMMAND.into(),
-                            arguments: CommandArgumentValue::Null,
-                        },
-                    },
-                ),
-                CommandOutcome::InvalidTarget,
-            ),
-        ] {
-            let response = cx
-                .update(|cx| {
-                    let dispatcher = cx.global::<ApplicationProductCommands>().0.clone();
-                    dispatcher.update(cx, |dispatcher, cx| {
-                        dispatcher.dispatch_host_request(
-                            route,
-                            (expected != CommandOutcome::InvalidTarget).then(|| target.clone()),
-                            cx,
-                        )
-                    })
-                })
-                .resolve()
-                .await;
-            assert!(matches!(
-                response.result,
-                Ok(HostResponseValue::CommandInvoked {
-                    dispatch: CommandInvokeDispatch::Outcome { outcome }
-                }) if outcome == expected
-            ));
-        }
-
-        let unsupported = cx
-            .update(|cx| {
-                let dispatcher = cx.global::<ApplicationProductCommands>().0.clone();
-                dispatcher.update(cx, |dispatcher, cx| {
-                    dispatcher.dispatch_host_request(
-                        request(4, None, HostOperation::ActiveBuffer),
-                        Some(target),
-                        cx,
-                    )
-                })
-            })
-            .resolve()
-            .await;
-        assert_eq!(
-            unsupported.result,
-            Err(HostRequestError::UnsupportedOperation)
-        );
-    }
-
-    #[gpui::test]
     fn pooled_fixture_commands_and_completions_use_the_product_target(cx: &mut TestAppContext) {
         let documents = install_globals(cx);
         let document = cx.update(|cx| create_untitled_document(&documents, cx));
@@ -4445,7 +4315,7 @@ mod tests {
         let (shell, window) = product_window(document, model.clone(), cx);
         let host = cx.update(|cx| {
             let host = super::super::extension_host::install(cx);
-            host.update(cx, |host, cx| host.start_diagnostic_fixture("product", cx));
+            host.update(cx, |host, cx| host.start_test_fixture("product", cx));
             host
         });
 
@@ -5692,31 +5562,19 @@ await commands.registerForView("outline", "copy", async () => {
         cx.read(|cx| assert!(shell.read(cx).extension_report_open));
 
         let scripted = dispatcher.update(cx, |dispatcher, cx| {
-            dispatcher.dispatch_host_request(
-                HostRequest {
-                    extension: ExtensionId::new(91),
-                    lifecycle: ExtensionLifecycleId::new(7),
-                    id: RequestId::new(99),
-                    invocation: None,
-                    operation: HostOperation::InvokeCommand {
-                        command: Command {
-                            name: super::COPY_COMMAND.into(),
-                            arguments: CommandArgumentValue::Null,
-                        },
-                    },
+            dispatcher.dispatch(
+                Command {
+                    name: super::COPY_COMMAND.into(),
+                    arguments: CommandArgumentValue::Null,
                 },
-                Some(target.clone()),
+                target.clone(),
                 cx,
             )
         });
-        assert!(matches!(
-            scripted.resolve().await.result,
-            Ok(HostResponseValue::CommandInvoked {
-                dispatch: CommandInvokeDispatch::Outcome {
-                    outcome: CommandOutcome::Completed
-                }
-            })
-        ));
+        assert_eq!(
+            scripted.completion.await.unwrap(),
+            CommandOutcome::Completed
+        );
 
         let unavailable = dispatcher.update(cx, |dispatcher, cx| {
             dispatcher.dispatch(

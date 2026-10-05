@@ -63,7 +63,6 @@ impl OpenRequest {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum LaunchConfiguration {
     Product(Option<OpenRequest>),
-    Fixture(String),
     TerminalFixture,
 }
 
@@ -80,29 +79,13 @@ impl LaunchConfiguration {
 
         if first == "--terminal-fixture" {
             if arguments.next().is_some() {
-                return Err(
-                    "usage: knot [path] | knot --fixture [name] | knot --terminal-fixture".into(),
-                );
+                return Err("usage: knot [path] | knot --terminal-fixture".into());
             }
             return Ok(Self::TerminalFixture);
         }
 
-        if first == "--fixture" {
-            let fixture = arguments
-                .next()
-                .unwrap_or_else(|| super::DEFAULT_FIXTURE_NAME.into());
-            if arguments.next().is_some() {
-                return Err(
-                    "usage: knot [path] | knot --fixture [name] | knot --terminal-fixture".into(),
-                );
-            }
-            return Ok(Self::Fixture(fixture));
-        }
-
         if arguments.next().is_some() {
-            return Err(
-                "usage: knot [path] | knot --fixture [name] | knot --terminal-fixture".into(),
-            );
+            return Err("usage: knot [path] | knot --terminal-fixture".into());
         }
         Ok(Self::Product(Some(OpenRequest::from_path(
             &PathBuf::from(first),
@@ -146,15 +129,7 @@ mod tests {
     }
 
     #[test]
-    fn fixture_exploration_requires_an_explicit_flag() {
-        assert_eq!(
-            LaunchConfiguration::parse(
-                ["knot".into(), "--fixture".into(), "unicode_mix".into()],
-                Path::new("/tmp")
-            )
-            .unwrap(),
-            LaunchConfiguration::Fixture("unicode_mix".into())
-        );
+    fn terminal_fixture_requires_an_explicit_flag() {
         assert_eq!(
             LaunchConfiguration::parse(
                 ["knot".into(), "--terminal-fixture".into()],

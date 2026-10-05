@@ -2,10 +2,12 @@
 
 use std::sync::{Arc, Mutex};
 
+#[cfg(test)]
+use crate::host::protocol::BufferHandle;
+
 use gpui::*;
 
 #[cfg(test)]
-use crate::host::protocol::BufferHandle;
 use crate::host::protocol::CommandOutcome;
 
 #[allow(
@@ -107,7 +109,6 @@ actions!(
     ]
 );
 
-const DEFAULT_FIXTURE_NAME: &str = "rust_sample";
 const EDITOR_KEY_CONTEXT: &str = "editor";
 #[allow(dead_code, reason = "retained with the dormant extension tree view")]
 const TREE_KEY_CONTEXT: &str = "tree";
@@ -182,8 +183,7 @@ pub fn run() {
         std::process::exit(2);
     });
     match launch {
-        entry::LaunchConfiguration::Product(request) => product::run(request, None),
-        entry::LaunchConfiguration::Fixture(fixture) => product::run(None, Some(fixture)),
+        entry::LaunchConfiguration::Product(request) => product::run(request),
         entry::LaunchConfiguration::TerminalFixture => terminal_fixture::run(),
     }
 }

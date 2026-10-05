@@ -30,7 +30,7 @@ the focused view and workbench have declined. Top-level script invocation
 captures the active product window and enters that same dispatch path.
 Nested script invocation reuses its parent's captured window. The window selects
 the participant before the extension bridge schedules a child or returns an
-inline same-lifecycle handler. A native child reports its result to the bridge
+inline same-lifecycle handler. A window-handled child reports its result to the bridge
 without routing the command a second time.
 
 The workbench exposes the tab's typed command view to this routing path.
@@ -42,7 +42,7 @@ IME, pointer events, scrolling, and terminal bytes remain view input protocols.
 The foreground extension command bridge and pooled V8 runtime preserve serial
 root trees, captured buffers, structured outcomes, cancellation, and nested
 composition. Same-lifecycle children run within their parent's scheduler root;
-native and cross-lifecycle children await foreground outcomes. Extension
+window-handled and cross-lifecycle children await foreground outcomes. Extension
 registrations and pending work are tied to their lifecycle.
 
 Command outcomes report execution status, not semantic values. Direct JavaScript

@@ -6904,7 +6904,7 @@ mod tests {
                 "file:///fixtures/duplicate-command.js",
                 r#"
                     import { commands } from "knot:editor";
-                    await commands.register("editor.copy", () => {});
+                    await commands.register("fixture.copy", () => {});
                 "#,
             )
             .unwrap();

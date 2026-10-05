@@ -1,6 +1,6 @@
 # D003a: Focused command routing
 
-Status: checkpoints 1–2 approved; checkpoint 3 implemented, awaiting review.
+Status: checkpoints 1–3 approved; checkpoint 4 implemented, awaiting review.
 
 Source: D003, promoted from the [deferred-work register](../roadmap.md).
 This plan establishes the command behavior needed by the
@@ -62,7 +62,7 @@ line merely to force a claim.
 
 ## Checkpoints
 
-### 1. Window-first routing contract 🔄
+### 1. Window-first routing contract ✅
 
 - ✅ Use one participant result for decline, finished outcome, or pending work.
   The dispatcher admits and settles invocations; the focused view, workbench,
@@ -104,8 +104,7 @@ line merely to force a claim.
 ### 3. Product integration and architecture record ✅
 
 Progress: ✅ global extension commands, tree item actions, and top-level and
-nested script invocations enter the product window route. The compiled bridge
-paths and diagnostic editing path remain for checkpoint 4's removal audit.
+nested script invocations enter the product window route.
 Native argument checks apply only to commands the receiving participant
 implements; other names continue bubbling with their arguments intact.
 
@@ -137,20 +136,31 @@ invocations reuse the captured window and keep the bridge's composition rules.
 - **Review gate:** verify that every implemented command enters the window-first
   path, then review the regression evidence before D003b changes key bindings.
 
-### 4. Remove superseded command experiments and legacy paths ⬜
+### 4. Remove superseded command experiments and legacy paths 🔄
 
-- Inventory production command entry points, catalogs, bridges, handlers,
+Removal audit: product keys, menus, palette, tree actions, and script requests
+enter the product dispatcher with a captured target. The editor, terminal,
+workbench, and application claim after dispatch. Extension roots are enqueued
+only after a focused view or application claim; nested invocations first enter
+the captured window path, then join the bridge's invocation tree. The bridge no
+longer resolves a command name to a native target or emits native dispatch work.
+The product runtime no longer accepts `--fixture`, and the editor no longer has
+a diagnostic direct-command key path. Static source fixtures remain test-only
+because they cover command, buffer, completion, and tree integration. The
+separate terminal fixture exercises terminal behavior and remains available.
+
+- ✅ Inventory production command entry points, catalogs, bridges, handlers,
   aliases, and diagnostic fixtures against the final window-first path. Remove
   the preselected native handler tables, native-versus-extension dispatch split,
   duplicate catalog or queue machinery made obsolete by the new routing model,
   `editor.copy` compatibility code, and provisional copy behavior. Do not leave
   an alternate production path behind a feature flag or diagnostic entry point.
-- Remove command-routing experiment scaffolding, including runtime fixture
+- ✅ Remove command-routing experiment scaffolding, including runtime fixture
   paths used only to exercise the old design. If a fixture also covers another
   supported feature, move that coverage to focused tests before deleting the
   runtime path. Replace tests that assert legacy behavior with tests of the
   final contract; retain test fixtures that exercise supported behavior.
-- Search production code, tests, bindings, menus, and documentation for removed
+- ✅ Search production code, tests, bindings, menus, and documentation for removed
   names and paths. Verify that every remaining command entry point reaches the
   captured window focus path and that no old routing implementation remains
   reachable or compiled.

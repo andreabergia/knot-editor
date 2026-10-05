@@ -39,6 +39,7 @@ use super::{
     tree_view::{TreeView, TreeViewEvent},
 };
 
+#[cfg(test)]
 const PRIMARY_FIXTURE: &str = r#"
 import { commands, editor, workbench } from "knot:editor";
 
@@ -64,6 +65,7 @@ await workbench.registerTreeDataProvider("outline", {
 });
 "#;
 
+#[cfg(test)]
 const SECONDARY_FIXTURE: &str = r#"
 import { commands, editor } from "knot:editor";
 
@@ -259,7 +261,7 @@ fn route_nested_command(request: HostRequest, cx: &mut App) {
     let (response, child) = host.update(cx, |host, cx| {
         let routed = match &claim {
             CommandClaim::Extension { handler, .. } => RoutedCommandTarget::Extension(*handler),
-            _ => RoutedCommandTarget::Native,
+            _ => RoutedCommandTarget::Window,
         };
         let (response, child) = host.commands.handle_routed_child(&request, routed);
         if let (
@@ -318,9 +320,9 @@ pub(crate) struct ProductExtensionHost {
     deferred_view_requests: Vec<HostRequest>,
     semantics: ExtensionSemanticBridge,
     #[cfg(test)]
-    _fixture_tree: Entity<TreeView>,
+    _outline_tree: Entity<TreeView>,
     #[cfg(test)]
-    _fixture_tree_subscription: Subscription,
+    _outline_tree_subscription: Subscription,
     _event_task: Task<()>,
     startup_report: Option<StartupReportSnapshot>,
     _startup_task: Option<Task<()>>,
@@ -340,15 +342,15 @@ impl ProductExtensionHost {
         catalog.borrow_mut().declare_view_kind("outline");
         let commands = ExtensionCommandBridge::with_catalog(catalog);
         #[cfg(test)]
-        let fixture_tree = cx.new(|cx| TreeView::new("outline", cx));
+        let outline_tree = cx.new(|cx| TreeView::new("outline", cx));
         let mut semantics = ExtensionSemanticBridge::new();
         semantics.declare_tree_kind("outline");
         #[cfg(test)]
         semantics
-            .add_tree_view("outline", fixture_tree.clone(), cx)
+            .add_tree_view("outline", outline_tree.clone(), cx)
             .unwrap();
         #[cfg(test)]
-        let fixture_tree_subscription = cx.subscribe(&fixture_tree, |this, _, event, cx| {
+        let outline_tree_subscription = cx.subscribe(&outline_tree, |this, _, event, cx| {
             this.handle_tree_event(event, cx)
         });
         let event_task = cx.spawn(async move |this, cx| {
@@ -375,9 +377,9 @@ impl ProductExtensionHost {
             deferred_view_requests: Vec::new(),
             semantics,
             #[cfg(test)]
-            _fixture_tree: fixture_tree,
+            _outline_tree: outline_tree,
             #[cfg(test)]
-            _fixture_tree_subscription: fixture_tree_subscription,
+            _outline_tree_subscription: outline_tree_subscription,
             _event_task: event_task,
             startup_report: None,
             _startup_task: None,
@@ -716,7 +718,8 @@ impl ProductExtensionHost {
         self.lifecycles.len()
     }
 
-    pub(crate) fn start_diagnostic_fixture(&mut self, name: &str, cx: &mut Context<Self>) {
+    #[cfg(test)]
+    pub(crate) fn start_test_fixture(&mut self, name: &str, cx: &mut Context<Self>) {
         for (index, source) in [PRIMARY_FIXTURE, SECONDARY_FIXTURE].into_iter().enumerate() {
             let id = self.next_extension_id.fetch_add(1, Ordering::Relaxed);
             assert_ne!(id, u64::MAX, "extension identity exhausted");
@@ -729,7 +732,7 @@ impl ProductExtensionHost {
                 "main.js",
                 BTreeMap::from([("main.js".into(), Arc::from(source))]),
             )
-            .expect("diagnostic fixture graph is valid");
+            .expect("test fixture graph is valid");
             let execution = self.load_package(key, graph);
             match execution {
                 Ok(execution) => {
@@ -762,7 +765,7 @@ impl ProductExtensionHost {
         Ok(())
     }
 
-    #[allow(dead_code, reason = "explicit unload is used by diagnostic clients")]
+    #[cfg(test)]
     pub(crate) fn unload(
         &mut self,
         key: ExtensionKey,
@@ -808,7 +811,7 @@ impl ProductExtensionHost {
                     cx.defer(move |cx| route_nested_command(request, cx));
                     None
                 } else {
-                    self.commands.handle_host_request(request, active_buffer)
+                    Some(self.commands.handle_host_request(request))
                 }
             }
             RequestRoute::View => self.dispatch_view_request(request, cx),
@@ -1007,38 +1010,6 @@ impl ProductExtensionHost {
                             .pool
                             .cancel_command(ExtensionKey::new(extension, lifecycle), invocation);
                     }
-                    ExtensionCommandEvent::DispatchNative {
-                        root,
-                        invocation,
-                        command,
-                        ..
-                    } => {
-                        let Some(target) = self.command_targets.get(&root).cloned() else {
-                            self.commands.complete(
-                                invocation,
-                                crate::host::protocol::CommandOutcome::InvalidTarget,
-                            );
-                            continue;
-                        };
-                        let dispatcher = cx.global::<ApplicationProductCommands>().0.clone();
-                        let execution = dispatcher.update(cx, |dispatcher, cx| {
-                            dispatcher.dispatch(command, target, cx)
-                        });
-                        cx.spawn(async move |this, cx| {
-                            let outcome = execution
-                                .completion
-                                .await
-                                .unwrap_or(crate::host::protocol::CommandOutcome::Cancelled);
-                            let _ = this.update(cx, |this, cx| {
-                                this.commands.complete(invocation, outcome);
-                                if invocation == root {
-                                    this.command_targets.remove(&root);
-                                }
-                                this.drain_command_events(cx);
-                            });
-                        })
-                        .detach();
-                    }
                     ExtensionCommandEvent::DispatchExtension {
                         root,
                         invocation,
@@ -1172,7 +1143,9 @@ impl ProductExtensionHost {
             return Err(CommandOutcome::Cancelled);
         }
         let buffer = self.open_target_buffer(&target, cx);
-        let execution = self.commands.enqueue_root(command, buffer);
+        let execution = self
+            .commands
+            .enqueue_extension_root(command, handler, buffer);
         self.command_targets.insert(execution.id, target.clone());
         self.drain_command_events(cx);
         cx.spawn(async move |this, cx| {
@@ -1238,7 +1211,9 @@ impl ProductExtensionHost {
         }
         let buffer = self.open_target_buffer(&target, cx);
         let name = command.name.clone();
-        let execution = self.commands.enqueue_view_root(command, handler, buffer);
+        let execution = self
+            .commands
+            .enqueue_extension_root(command, handler, buffer);
         self.command_targets.insert(execution.id, target.clone());
         self.view_command_handlers
             .insert(execution.id, (handler, name.clone()));
@@ -1552,9 +1527,7 @@ mod tests {
             let commands = cx.new(super::super::product_commands::ProductCommandDispatcher::new);
             cx.set_global(ApplicationProductCommands(commands));
             let host = install(cx);
-            host.update(cx, |host, cx| {
-                host.start_diagnostic_fixture("integration", cx)
-            });
+            host.update(cx, |host, cx| host.start_test_fixture("integration", cx));
             host
         });
 
@@ -1564,7 +1537,7 @@ mod tests {
             if cx.update(|cx| {
                 let host = host.read(cx);
                 host.semantics.completion_snapshot().len() == 2
-                    && host._fixture_tree.read(cx).lifecycle_state() == (true, 1, false, 0)
+                    && host._outline_tree.read(cx).lifecycle_state() == (true, 1, false, 0)
             }) {
                 break;
             }
@@ -1579,7 +1552,7 @@ mod tests {
             assert_eq!(host.lifecycles.len(), 2);
             assert_eq!(host.semantics.completion_snapshot().len(), 2);
             assert_eq!(
-                host._fixture_tree.read(cx).root_labels(),
+                host._outline_tree.read(cx).root_labels(),
                 ["Pooled fixture"]
             );
             let definitions = host
@@ -1604,7 +1577,7 @@ mod tests {
                 host.unload(second, cx).unwrap();
                 assert!(host.semantics.completion_snapshot().is_empty());
                 assert_eq!(
-                    host._fixture_tree.read(cx).lifecycle_state(),
+                    host._outline_tree.read(cx).lifecycle_state(),
                     (false, 0, false, 0)
                 );
                 assert!(

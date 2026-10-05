@@ -532,54 +532,6 @@ impl EditorView {
         }
     }
 
-    /// Fixture key fallback; product keybindings invoke the same semantic operations.
-    fn on_key_down(&mut self, ev: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        if window
-            .root::<super::product::ProductShell>()
-            .flatten()
-            .is_some()
-        {
-            return;
-        }
-        let modifiers = ev.keystroke.modifiers;
-        let movement = match ev.keystroke.key.as_str() {
-            "left" if modifiers.platform => "line-start",
-            "right" if modifiers.platform => "line-end",
-            "up" if modifiers.platform => "document-start",
-            "down" if modifiers.platform => "document-end",
-            "left" if modifiers.alt => "word-left",
-            "right" if modifiers.alt => "word-right",
-            "left" => "left",
-            "right" => "right",
-            "up" => "up",
-            "down" => "down",
-            "home" => "line-start",
-            "end" => "line-end",
-            "pageup" => "page-up",
-            "pagedown" => "page-down",
-            key if !modifiers.platform && !modifiers.control && !modifiers.alt => {
-                let command = match key {
-                    "enter" => commands::INSERT_NEWLINE_COMMAND,
-                    "tab" => commands::INSERT_TAB_COMMAND,
-                    "backspace" => commands::DELETE_BACKWARD_COMMAND,
-                    "delete" => commands::DELETE_FORWARD_COMMAND,
-                    _ => return,
-                };
-                self.execute_editing_command(command, window, cx);
-                cx.stop_propagation();
-                return;
-            }
-            _ => return,
-        };
-        let prefix = if modifiers.shift {
-            commands::EDITOR_SELECT_PREFIX
-        } else {
-            commands::EDITOR_MOVE_PREFIX
-        };
-        self.execute_editing_command(&format!("{prefix}{movement}"), window, cx);
-        cx.stop_propagation();
-    }
-
     pub(crate) fn handle_command(
         &mut self,
         command: &crate::host::protocol::Command,
@@ -1640,7 +1592,6 @@ impl Render for EditorView {
             .on_action(cx.listener(Self::completion_next))
             .on_action(cx.listener(Self::completion_accept))
             .on_action(cx.listener(Self::completion_dismiss))
-            .on_key_down(cx.listener(Self::on_key_down))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
             // Mouse-move extends the selection while the left button is held
             // (drag-select). `MouseMoveEvent::dragging()` is true when the

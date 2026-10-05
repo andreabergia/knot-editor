@@ -37,8 +37,8 @@ queues roots, wakes continuations, and requests stop; the pool owner shuts down
 and joins its workers. The engine composes this scheduler with one persistent
 runtime capsule per loaded lifecycle. One application-global
 `ProductExtensionHost` owns the pool, foreground protocol bridges, and an
-awaitable event-inbox task. The `--fixture` path loads two static diagnostic
-lifecycles through the same package graph API and product composition.
+awaitable event-inbox task. Product integration tests load source fixtures
+through the same package graph API.
 Filesystem discovery runs on gpui's background executor. The application
 plans dependencies, admits each lifecycle on the foreground, and awaits entry
 completion before loading its dependents. A failed or cancelled entry unloads

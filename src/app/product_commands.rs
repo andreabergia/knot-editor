@@ -2,16 +2,10 @@
 
 use gpui::*;
 
-use crate::host::protocol::{Command, CommandArgumentValue, CommandOutcome, ViewId};
-#[cfg(test)]
-use crate::host::protocol::{
-    CommandInvokeDispatch, ExtensionId, ExtensionLifecycleId, HostOperation, HostRequest,
-    HostRequestError, HostResponse, HostResponseValue, RequestId,
-};
-
 use super::model::{CommandCatalog, CommandDefinition, SharedCommandCatalog};
 use super::product::ProductShell;
 use super::{CommandCompletion, CommandExecution};
+use crate::host::protocol::{Command, CommandArgumentValue, CommandOutcome, ViewId};
 
 pub(crate) const NEW_COMMAND: &str = "file.new";
 pub(crate) const NEW_TERMINAL_COMMAND: &str = "terminal.new";
@@ -260,39 +254,6 @@ pub(crate) fn validate_native_arguments(command: &Command) -> Result<(), Command
     }
 }
 
-#[cfg(test)]
-pub(crate) enum ProductCommandHostResponse {
-    Ready(HostResponse),
-    Awaiting {
-        extension: ExtensionId,
-        lifecycle: ExtensionLifecycleId,
-        request: RequestId,
-        completion: tokio::sync::oneshot::Receiver<CommandOutcome>,
-    },
-}
-
-#[cfg(test)]
-impl ProductCommandHostResponse {
-    pub(crate) async fn resolve(self) -> HostResponse {
-        match self {
-            Self::Ready(response) => response,
-            Self::Awaiting {
-                extension,
-                lifecycle,
-                request,
-                completion,
-            } => command_host_response(
-                extension,
-                lifecycle,
-                request,
-                Ok(CommandInvokeDispatch::Outcome {
-                    outcome: completion.await.unwrap_or(CommandOutcome::Cancelled),
-                }),
-            ),
-        }
-    }
-}
-
 impl ProductCommandDispatcher {
     pub(crate) fn new(_cx: &mut Context<Self>) -> Self {
         let mut catalog = CommandCatalog::new();
@@ -388,55 +349,6 @@ impl ProductCommandDispatcher {
     }
 
     #[cfg(test)]
-    pub(crate) fn dispatch_host_request(
-        &mut self,
-        request: HostRequest,
-        target: Option<ProductCommandTarget>,
-        cx: &mut Context<Self>,
-    ) -> ProductCommandHostResponse {
-        let extension = request.extension;
-        let lifecycle = request.lifecycle;
-        let id = request.id;
-        match request.operation {
-            HostOperation::InvokeCommand { command } if request.invocation.is_none() => {
-                let Some(target) = target else {
-                    return ProductCommandHostResponse::Ready(command_host_response(
-                        extension,
-                        lifecycle,
-                        id,
-                        Ok(CommandInvokeDispatch::Outcome {
-                            outcome: CommandOutcome::InvalidTarget,
-                        }),
-                    ));
-                };
-                let execution = self.dispatch(command, target, cx);
-                ProductCommandHostResponse::Awaiting {
-                    extension,
-                    lifecycle,
-                    request: id,
-                    completion: execution.completion,
-                }
-            }
-            HostOperation::InvokeCommand { .. } => {
-                ProductCommandHostResponse::Ready(command_host_response(
-                    extension,
-                    lifecycle,
-                    id,
-                    Ok(CommandInvokeDispatch::Outcome {
-                        outcome: CommandOutcome::Unavailable,
-                    }),
-                ))
-            }
-            _ => ProductCommandHostResponse::Ready(HostResponse {
-                extension,
-                lifecycle,
-                id,
-                result: Err(HostRequestError::UnsupportedOperation),
-            }),
-        }
-    }
-
-    #[cfg(test)]
     pub(crate) fn last_outcome(&self) -> Option<&CommandOutcome> {
         self.last_outcome.as_ref()
     }
@@ -444,21 +356,6 @@ impl ProductCommandDispatcher {
     pub(crate) fn record_outcome(&mut self, outcome: CommandOutcome, cx: &mut Context<Self>) {
         self.last_outcome = Some(outcome);
         cx.notify();
-    }
-}
-
-#[cfg(test)]
-fn command_host_response(
-    extension: ExtensionId,
-    lifecycle: ExtensionLifecycleId,
-    id: RequestId,
-    dispatch: Result<CommandInvokeDispatch, HostRequestError>,
-) -> HostResponse {
-    HostResponse {
-        extension,
-        lifecycle,
-        id,
-        result: dispatch.map(|dispatch| HostResponseValue::CommandInvoked { dispatch }),
     }
 }
 

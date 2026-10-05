@@ -273,7 +273,7 @@ mod tests {
                 [
                     CommandPaletteEntry::new(
                         CommandDefinition {
-                            name: "editor.copy".into(),
+                            name: "copy".into(),
                             title: "Copy selection".into(),
                             owner: CommandOwner::Native,
                         },
@@ -313,7 +313,7 @@ mod tests {
                     .iter()
                     .map(|definition| definition.name.as_ref())
                     .collect::<Vec<_>>(),
-                ["editor.copy"]
+                ["copy"]
             );
             palette.confirm(cx);
         });
@@ -322,7 +322,7 @@ mod tests {
             events.borrow().as_slice()
                 == [CommandPaletteEvent::Confirmed {
                     command: Command {
-                        name: "editor.copy".into(),
+                        name: "copy".into(),
                         arguments: CommandArgumentValue::String("fixture".into()),
                     },
                     origin: expected_origin,
@@ -338,7 +338,7 @@ mod tests {
             CommandPalette::new(
                 [CommandPaletteEntry::new(
                     CommandDefinition {
-                        name: "editor.copy".into(),
+                        name: "copy".into(),
                         title: "Copy selection".into(),
                         owner: CommandOwner::Native,
                     },

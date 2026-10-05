@@ -2021,23 +2021,23 @@ mod tests {
         let lifecycle = ExtensionLifecycleId::new(3);
 
         catalog
-            .register_native("editor.copy".into(), "Copy".into())
+            .register_native("fixture.copy".into(), "Copy".into())
             .unwrap();
         assert_eq!(
-            catalog.resolve("editor.copy"),
+            catalog.resolve("fixture.copy"),
             Ok(CommandTargetKind::Native)
         );
         assert_eq!(
-            catalog.resolve_extension("editor.copy"),
+            catalog.resolve_extension("fixture.copy"),
             Err(CommandCatalogError::NotFound)
         );
         assert_eq!(
-            catalog.register_native("editor.copy".into(), "Other copy".into()),
+            catalog.register_native("fixture.copy".into(), "Other copy".into()),
             Err(CommandCatalogError::NameInUse)
         );
         assert_eq!(
             catalog.register_extension(
-                "editor.copy".into(),
+                "fixture.copy".into(),
                 "Replacement copy".into(),
                 extension,
                 lifecycle,
@@ -2062,14 +2062,14 @@ mod tests {
         assert_eq!(
             catalog.definitions().cloned().collect::<Vec<_>>(),
             vec![CommandDefinition {
-                name: "editor.copy".into(),
+                name: "fixture.copy".into(),
                 title: "Copy".into(),
                 owner: CommandOwner::Native,
             }]
         );
         assert_eq!(
             catalog.register_extension(
-                "editor.copy".into(),
+                "fixture.copy".into(),
                 "Replacement copy".into(),
                 extension,
                 ExtensionLifecycleId::new(4),
@@ -2149,7 +2149,7 @@ mod tests {
     #[test]
     fn command_definitions_describe_native_and_extension_ownership() {
         let native = CommandDefinition {
-            name: "editor.copy".into(),
+            name: "fixture.copy".into(),
             title: "Copy".into(),
             owner: CommandOwner::Native,
         };
@@ -2162,7 +2162,7 @@ mod tests {
             },
         };
 
-        assert_eq!(native.name.as_ref(), "editor.copy");
+        assert_eq!(native.name.as_ref(), "fixture.copy");
         assert_eq!(native.title, "Copy");
         assert_eq!(native.owner, CommandOwner::Native);
         assert_eq!(extension.name.as_ref(), "example.transform");
