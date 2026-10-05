@@ -1,6 +1,6 @@
 # D003a: Focused command routing
 
-Status: checkpoint 1 implementation ready for review.
+Status: checkpoint 1 generic routing revision ready for review.
 
 Source: D003, promoted from the [deferred-work register](../roadmap.md).
 This plan establishes the command behavior needed by the
@@ -64,6 +64,10 @@ line merely to force a claim.
 
 ### 1. Window-first routing contract 🔄
 
+- ✅ Use one participant result for decline, finished outcome, or pending work.
+  The dispatcher admits and settles invocations; the focused view, workbench,
+  and application decide which commands they claim. A pending participant
+  starts work against the captured target after the window dispatch turn.
 - ✅ Replace the provisional preselected native handler tables with dispatch into
   the captured window focus path. Let participants claim or decline after
   receiving the command; preserve structured outcomes and captured-target

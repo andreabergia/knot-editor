@@ -23,12 +23,14 @@ use super::{
     open::{OpenResource, enumerate_directory, load_resource},
     product_commands::{
         ApplicationProductCommands, CLOSE_TAB_COMMAND, CLOSE_WINDOW_COMMAND, COPY_COMMAND,
-        CUT_COMMAND, FIND_COMMAND, FIND_NEXT_COMMAND, FIND_PREVIOUS_COMMAND,
+        CUT_COMMAND, CommandClaim, FIND_COMMAND, FIND_NEXT_COMMAND, FIND_PREVIOUS_COMMAND,
         MOVE_TERMINAL_TO_NEW_WINDOW_COMMAND, NEW_COMMAND, NEW_TERMINAL_COMMAND, NEW_WINDOW_COMMAND,
         OPEN_COMMAND, PASTE_COMMAND, ProductCommandDispatcher, ProductCommandSource,
         ProductCommandTarget, QUIT_COMMAND, REDO_COMMAND, SAVE_AS_COMMAND, SAVE_COMMAND,
-        SELECT_ALL_COMMAND, SHOW_EXTENSION_REPORT_COMMAND, SPLIT_HORIZONTAL_COMMAND,
-        SPLIT_VERTICAL_COMMAND, ShowProductCommandPalette, UNDO_COMMAND,
+        SELECT_ALL_COMMAND, SHOW_COMPLETIONS_COMMAND, SHOW_EXTENSION_REPORT_COMMAND,
+        SPLIT_HORIZONTAL_COMMAND, SPLIT_VERTICAL_COMMAND, ShowProductCommandPalette, UNDO_COMMAND,
+        dispatch_close_to_captured_target, dispatch_open_to_captured_target,
+        dispatch_save_to_captured_target,
     },
     terminal_session::TerminalSession,
     terminal_view::TerminalView,
@@ -2275,13 +2277,14 @@ impl ProductShell {
         CommandOutcome::Completed
     }
 
-    pub(crate) fn execute_product_command(
+    pub(crate) fn handle_workbench_command(
         &mut self,
-        name: &str,
+        command: &crate::host::protocol::Command,
         target: &ProductCommandTarget,
+        completion: CommandCompletion,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> crate::host::protocol::CommandOutcome {
+    ) -> CommandClaim {
         use crate::host::protocol::CommandOutcome;
 
         let target_is_live = target.workbench.upgrade() == Some(self.workbench.clone())
@@ -2290,58 +2293,114 @@ impl ProductShell {
                 .read(cx)
                 .contains_surface(target.pane, target.tab, target.surface);
         if !target_is_live {
-            return CommandOutcome::InvalidTarget;
+            return CommandClaim::Finished(CommandOutcome::InvalidTarget);
         }
-
-        match name {
+        let name = command.name.as_ref();
+        let result = match name {
             NEW_COMMAND => {
                 if self.new_document_in_pane(target.pane, window, cx) {
-                    CommandOutcome::Completed
+                    CommandClaim::Finished(CommandOutcome::Completed)
                 } else {
-                    CommandOutcome::InvalidTarget
+                    CommandClaim::Finished(CommandOutcome::InvalidTarget)
                 }
             }
             NEW_TERMINAL_COMMAND => {
                 if self.new_terminal_in_pane(target.pane, window, cx) {
-                    CommandOutcome::Completed
+                    CommandClaim::Finished(CommandOutcome::Completed)
                 } else {
-                    CommandOutcome::InvalidTarget
+                    CommandClaim::Finished(CommandOutcome::InvalidTarget)
                 }
             }
-            MOVE_TERMINAL_TO_NEW_WINDOW_COMMAND => self.move_terminal_to_new_window_with(
-                target,
-                window,
-                cx,
-                open_terminal_transfer_window,
-            ),
-            CLOSE_TAB_COMMAND => CommandOutcome::Unavailable,
+            MOVE_TERMINAL_TO_NEW_WINDOW_COMMAND => {
+                CommandClaim::Finished(self.move_terminal_to_new_window_with(
+                    target,
+                    window,
+                    cx,
+                    open_terminal_transfer_window,
+                ))
+            }
+            CLOSE_TAB_COMMAND => {
+                let target = target.clone();
+                CommandClaim::Pending(Box::new(move |cx| {
+                    dispatch_close_to_captured_target(
+                        &target,
+                        ProtectedCloseKind::Tab,
+                        completion,
+                        cx,
+                    )
+                }))
+            }
             SPLIT_HORIZONTAL_COMMAND => {
                 if self.split_pane(target.pane, SplitDirection::Horizontal, window, cx) {
-                    CommandOutcome::Completed
+                    CommandClaim::Finished(CommandOutcome::Completed)
                 } else {
-                    CommandOutcome::InvalidTarget
+                    CommandClaim::Finished(CommandOutcome::InvalidTarget)
                 }
             }
             SPLIT_VERTICAL_COMMAND => {
                 if self.split_pane(target.pane, SplitDirection::Vertical, window, cx) {
-                    CommandOutcome::Completed
+                    CommandClaim::Finished(CommandOutcome::Completed)
                 } else {
-                    CommandOutcome::InvalidTarget
+                    CommandClaim::Finished(CommandOutcome::InvalidTarget)
                 }
             }
-            CLOSE_WINDOW_COMMAND => CommandOutcome::Unavailable,
+            OPEN_COMMAND => {
+                let target = target.clone();
+                CommandClaim::Pending(Box::new(move |cx| {
+                    dispatch_open_to_captured_target(&target, completion, cx)
+                }))
+            }
+            SAVE_COMMAND | SAVE_AS_COMMAND => {
+                let target = target.clone();
+                let save_as = name == SAVE_AS_COMMAND;
+                CommandClaim::Pending(Box::new(move |cx| {
+                    dispatch_save_to_captured_target(&target, save_as, completion, cx)
+                }))
+            }
+            SHOW_COMPLETIONS_COMMAND => {
+                CommandClaim::Finished(super::extension_host::start_completion(target.clone(), cx))
+            }
+            _ => CommandClaim::Declined,
+        };
+        if !matches!(result, CommandClaim::Declined) {
+            super::product_commands::break_captured_history_group(target, cx);
+        }
+        result
+    }
+
+    pub(crate) fn handle_application_command(
+        &mut self,
+        command: &crate::host::protocol::Command,
+        target: &ProductCommandTarget,
+        completion: CommandCompletion,
+        cx: &mut Context<Self>,
+    ) -> CommandClaim {
+        use crate::host::protocol::CommandOutcome;
+
+        match command.name.as_ref() {
+            SHOW_EXTENSION_REPORT_COMMAND => {
+                super::product_commands::break_captured_history_group(target, cx);
+                self.toggle_extension_report(cx);
+                CommandClaim::Finished(CommandOutcome::Completed)
+            }
             NEW_WINDOW_COMMAND => {
+                super::product_commands::break_captured_history_group(target, cx);
                 open_product_window(None, cx);
-                CommandOutcome::Completed
+                CommandClaim::Finished(CommandOutcome::Completed)
             }
-            QUIT_COMMAND => CommandOutcome::Unavailable,
-            OPEN_COMMAND | SAVE_COMMAND | SAVE_AS_COMMAND => CommandOutcome::Unavailable,
-            FIND_COMMAND | FIND_NEXT_COMMAND | FIND_PREVIOUS_COMMAND => {
-                self.status = "command is not implemented yet".into();
-                cx.notify();
-                CommandOutcome::Unavailable
+            CLOSE_WINDOW_COMMAND | QUIT_COMMAND => {
+                super::product_commands::break_captured_history_group(target, cx);
+                let kind = if command.name.as_ref() == CLOSE_WINDOW_COMMAND {
+                    ProtectedCloseKind::Window
+                } else {
+                    ProtectedCloseKind::Quit
+                };
+                let target = target.clone();
+                CommandClaim::Pending(Box::new(move |cx| {
+                    dispatch_close_to_captured_target(&target, kind, completion, cx)
+                }))
             }
-            _ => CommandOutcome::Unavailable,
+            _ => CommandClaim::Declined,
         }
     }
 
@@ -6796,24 +6855,37 @@ mod tests {
             shell.start_save_command(false, target.clone(), completion, cx)
         });
         assert_eq!(receiver.await.unwrap(), CommandOutcome::Unavailable);
-        let result = cx
-            .update_window(window, |_, window, cx| {
-                shell.update(cx, |shell, cx| {
-                    shell.execute_product_command("editor.move-left", &target, window, cx)
-                })
-            })
-            .unwrap();
-        assert_eq!(result, CommandOutcome::Unavailable);
+        let dispatcher = cx.read(|cx| cx.global::<ApplicationProductCommands>().0.clone());
+        let result = dispatcher.update(cx, |dispatcher, cx| {
+            dispatcher.dispatch(
+                Command {
+                    name: "editor.move-left".into(),
+                    arguments: CommandArgumentValue::Null,
+                },
+                target.clone(),
+                cx,
+            )
+        });
+        assert_eq!(
+            result.completion.await.unwrap(),
+            CommandOutcome::Unavailable
+        );
         let mut wrong_surface = target;
         wrong_surface.surface = TabSurfaceId::Document(document);
-        let result = cx
-            .update_window(window, |_, window, cx| {
-                shell.update(cx, |shell, cx| {
-                    shell.execute_product_command(NEW_COMMAND, &wrong_surface, window, cx)
-                })
-            })
-            .unwrap();
-        assert_eq!(result, CommandOutcome::InvalidTarget);
+        let result = dispatcher.update(cx, |dispatcher, cx| {
+            dispatcher.dispatch(
+                Command {
+                    name: NEW_COMMAND.into(),
+                    arguments: CommandArgumentValue::Null,
+                },
+                wrong_surface,
+                cx,
+            )
+        });
+        assert_eq!(
+            result.completion.await.unwrap(),
+            CommandOutcome::InvalidTarget
+        );
     }
 
     #[gpui::test]
@@ -6853,14 +6925,21 @@ mod tests {
             assert_eq!(workbench.read(cx).view_count(document), 1);
             assert!(documents.read(cx).get(document).unwrap().is_dirty(cx));
         });
-        let result = cx
-            .update_window(window, |_, window, cx| {
-                shell.update(cx, |shell, cx| {
-                    shell.execute_product_command(NEW_COMMAND, &stale, window, cx)
-                })
-            })
-            .unwrap();
-        assert_eq!(result, CommandOutcome::InvalidTarget);
+        let dispatcher = cx.read(|cx| cx.global::<ApplicationProductCommands>().0.clone());
+        let result = dispatcher.update(cx, |dispatcher, cx| {
+            dispatcher.dispatch(
+                Command {
+                    name: NEW_COMMAND.into(),
+                    arguments: CommandArgumentValue::Null,
+                },
+                stale,
+                cx,
+            )
+        });
+        assert_eq!(
+            result.completion.await.unwrap(),
+            CommandOutcome::InvalidTarget
+        );
     }
 
     #[gpui::test]

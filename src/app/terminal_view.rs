@@ -33,12 +33,12 @@ pub(crate) struct TerminalView {
 impl TerminalView {
     pub(crate) fn handle_command(
         &mut self,
-        command: &str,
+        command: &crate::host::protocol::Command,
         cx: &mut Context<Self>,
-    ) -> super::product_commands::HandlerResult {
-        use super::product_commands::HandlerResult;
-        if command != "copy" || self.attachment.is_none() {
-            return HandlerResult::Declined;
+    ) -> super::product_commands::CommandClaim {
+        use super::product_commands::CommandClaim;
+        if command.name.as_ref() != "copy" || self.attachment.is_none() {
+            return CommandClaim::Declined;
         }
         let selected = self
             .session
@@ -48,9 +48,9 @@ impl TerminalView {
             .filter(|text| !text.is_empty());
         if let Some(text) = selected {
             cx.write_to_clipboard(ClipboardItem::new_string(text));
-            HandlerResult::Claimed(crate::host::protocol::CommandOutcome::Completed)
+            CommandClaim::Finished(crate::host::protocol::CommandOutcome::Completed)
         } else {
-            HandlerResult::Declined
+            CommandClaim::Declined
         }
     }
 

@@ -576,20 +576,33 @@ impl EditorView {
 
     pub(crate) fn handle_command(
         &mut self,
-        command: &str,
+        command: &crate::host::protocol::Command,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> super::product_commands::HandlerResult {
-        use super::product_commands::HandlerResult;
+    ) -> super::product_commands::CommandClaim {
+        use super::product_commands::CommandClaim;
         use crate::host::protocol::CommandOutcome;
 
-        if command == "copy" && !self.has_selection() {
-            return HandlerResult::Declined;
+        let name = command.name.as_ref();
+        if name == "copy" && !self.has_selection() {
+            return CommandClaim::Declined;
         }
-        if self.execute_editing_command(command, window, cx) {
-            HandlerResult::Claimed(CommandOutcome::Completed)
+        if matches!(
+            name,
+            "copy"
+                | "editor.cut"
+                | "editor.paste"
+                | "editor.undo"
+                | "editor.redo"
+                | "editor.insert-newline"
+                | "editor.insert-tab"
+        ) {
+            self.break_history_group(cx);
+        }
+        if self.execute_editing_command(name, window, cx) {
+            CommandClaim::Finished(CommandOutcome::Completed)
         } else {
-            HandlerResult::Declined
+            CommandClaim::Declined
         }
     }
 

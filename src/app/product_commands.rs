@@ -161,6 +161,17 @@ impl ProductCommandTarget {
             super::workbench::TabSurfaceId::Terminal(_) => Err(CommandOutcome::Unavailable),
         }
     }
+
+    pub(crate) fn command_view(&self, cx: &App) -> Option<super::workbench::CommandView> {
+        self.workbench
+            .upgrade()?
+            .read(cx)
+            .pane(self.pane)?
+            .tabs()
+            .iter()
+            .find(|tab| tab.id() == self.tab && tab.surface_id() == self.surface)?
+            .command_view()
+    }
 }
 
 pub(crate) struct ApplicationProductCommands(pub(crate) Entity<ProductCommandDispatcher>);
@@ -173,25 +184,12 @@ pub(crate) struct ProductCommandDispatcher {
     last_outcome: Option<CommandOutcome>,
 }
 
-pub(crate) enum HandlerResult {
-    Claimed(CommandOutcome),
-    Declined,
-}
+type PendingCommandStart = Box<dyn FnOnce(&mut App) -> Result<(), CommandOutcome>>;
 
-fn captured_editor(
-    target: &ProductCommandTarget,
-    cx: &App,
-) -> Option<Entity<super::editor::EditorView>> {
-    target
-        .workbench
-        .upgrade()?
-        .read(cx)
-        .pane(target.pane)?
-        .tabs()
-        .iter()
-        .find(|tab| tab.id() == target.tab)?
-        .editor()
-        .cloned()
+pub(crate) enum CommandClaim {
+    Declined,
+    Finished(CommandOutcome),
+    Pending(PendingCommandStart),
 }
 
 #[cfg(test)]
@@ -301,48 +299,23 @@ impl ProductCommandDispatcher {
         let admitted = self.catalog.resolve(command.name.as_ref()) == Ok(CommandTargetKind::Native);
         let dispatcher = cx.entity();
         cx.defer(move |cx| {
-            let mut outcome = if !admitted {
-                CommandOutcome::Unavailable
+            let claim = if !admitted {
+                CommandClaim::Declined
             } else if command.arguments != CommandArgumentValue::Null {
-                CommandOutcome::InvalidArgument {
+                CommandClaim::Finished(CommandOutcome::InvalidArgument {
                     message: "product commands do not accept arguments".into(),
-                }
+                })
             } else {
-                dispatch_to_captured_target(&command, &target, cx)
+                dispatch_to_captured_target(&command, &target, completion.clone(), cx)
             };
-            if admitted
-                && command.arguments == CommandArgumentValue::Null
-                && outcome == CommandOutcome::Unavailable
-            {
-                if command.name.as_ref() == SHOW_COMPLETIONS_COMMAND {
-                    outcome = super::extension_host::start_completion(target, cx);
-                } else {
-                    let asynchronous = match command.name.as_ref() {
-                        OPEN_COMMAND => {
-                            dispatch_open_to_captured_target(&target, completion.clone(), cx)
-                        }
-                        SAVE_COMMAND => {
-                            dispatch_save_to_captured_target(&target, false, completion.clone(), cx)
-                        }
-                        SAVE_AS_COMMAND => {
-                            dispatch_save_to_captured_target(&target, true, completion.clone(), cx)
-                        }
-                        CLOSE_TAB_COMMAND | CLOSE_WINDOW_COMMAND | QUIT_COMMAND => {
-                            dispatch_close_to_captured_target(
-                                &target,
-                                command.name.as_ref(),
-                                completion.clone(),
-                                cx,
-                            )
-                        }
-                        _ => Err(CommandOutcome::Unavailable),
-                    };
-                    match asynchronous {
-                        Ok(()) => return,
-                        Err(error) => outcome = error,
-                    }
-                }
-            }
+            let outcome = match claim {
+                CommandClaim::Declined => CommandOutcome::Unavailable,
+                CommandClaim::Finished(outcome) => outcome,
+                CommandClaim::Pending(start) => match start(cx) {
+                    Ok(()) => return,
+                    Err(outcome) => outcome,
+                },
+            };
             completion.complete(outcome.clone());
             dispatcher.update(cx, |dispatcher, cx| {
                 dispatcher.last_outcome = Some(outcome);
@@ -427,7 +400,7 @@ fn command_host_response(
     }
 }
 
-fn break_captured_history_group(target: &ProductCommandTarget, cx: &mut App) {
+pub(crate) fn break_captured_history_group(target: &ProductCommandTarget, cx: &mut App) {
     let Some(workbench) = target.workbench.upgrade() else {
         return;
     };
@@ -443,7 +416,7 @@ fn break_captured_history_group(target: &ProductCommandTarget, cx: &mut App) {
     }
 }
 
-fn dispatch_open_to_captured_target(
+pub(crate) fn dispatch_open_to_captured_target(
     target: &ProductCommandTarget,
     completion: CommandCompletion,
     cx: &mut App,
@@ -474,7 +447,7 @@ fn dispatch_open_to_captured_target(
     .unwrap_or(Err(CommandOutcome::InvalidTarget))
 }
 
-fn dispatch_save_to_captured_target(
+pub(crate) fn dispatch_save_to_captured_target(
     target: &ProductCommandTarget,
     save_as: bool,
     completion: CommandCompletion,
@@ -506,9 +479,9 @@ fn dispatch_save_to_captured_target(
     .unwrap_or(Err(CommandOutcome::InvalidTarget))
 }
 
-fn dispatch_close_to_captured_target(
+pub(crate) fn dispatch_close_to_captured_target(
     target: &ProductCommandTarget,
-    command: &str,
+    kind: super::product::ProtectedCloseKind,
     completion: CommandCompletion,
     cx: &mut App,
 ) -> Result<(), CommandOutcome> {
@@ -519,12 +492,6 @@ fn dispatch_close_to_captured_target(
     {
         return Err(CommandOutcome::InvalidTarget);
     }
-    let kind = match command {
-        CLOSE_TAB_COMMAND => super::product::ProtectedCloseKind::Tab,
-        CLOSE_WINDOW_COMMAND => super::product::ProtectedCloseKind::Window,
-        QUIT_COMMAND => super::product::ProtectedCloseKind::Quit,
-        _ => return Err(CommandOutcome::Unavailable),
-    };
     let Some(shell) = target.shell.upgrade() else {
         return Err(CommandOutcome::InvalidTarget);
     };
@@ -546,70 +513,47 @@ fn dispatch_close_to_captured_target(
 fn dispatch_to_captured_target(
     command: &Command,
     target: &ProductCommandTarget,
+    completion: CommandCompletion,
     cx: &mut App,
-) -> CommandOutcome {
+) -> CommandClaim {
     if target.shell.upgrade().is_none()
         || target.workbench.upgrade().is_none()
         || target.focus.upgrade().is_none()
         || !cx.windows().contains(&target.window)
     {
-        return CommandOutcome::InvalidTarget;
+        return CommandClaim::Finished(CommandOutcome::InvalidTarget);
     }
     let shell = target.shell.clone();
     let target = target.clone();
     cx.update_window(target.window, move |_, window, cx| {
         let Some(shell) = shell.upgrade() else {
-            return CommandOutcome::InvalidTarget;
+            return CommandClaim::Finished(CommandOutcome::InvalidTarget);
         };
         if window.root::<ProductShell>().flatten().as_ref() != Some(&shell) {
-            return CommandOutcome::InvalidTarget;
+            return CommandClaim::Finished(CommandOutcome::InvalidTarget);
         }
         if let Err(outcome) = target.validate_tab(cx) {
-            return outcome;
+            return CommandClaim::Finished(outcome);
         }
-        if !matches!(
-            command.name.as_ref(),
-            "editor.delete-backward" | "editor.delete-forward"
-        ) {
-            break_captured_history_group(&target, cx);
-        }
-        if let Some(editor) = captured_editor(&target, cx)
-            && target.focus.upgrade() == Some(editor.focus_handle(cx))
+        if let Some(view) = target.command_view(cx)
+            && view.matches_focus(&target.focus, cx)
         {
-            let result = editor.update(cx, |editor, cx| {
-                editor.handle_command(command.name.as_ref(), window, cx)
-            });
-            if let HandlerResult::Claimed(outcome) = result {
-                return outcome;
+            let result = view.handle_command(command, window, cx);
+            if !matches!(result, CommandClaim::Declined) {
+                return result;
             }
         }
-        if let Some(view) = target.workbench.upgrade().and_then(|workbench| {
-            workbench
-                .read(cx)
-                .pane(target.pane)?
-                .tabs()
-                .iter()
-                .find(|tab| tab.id() == target.tab)?
-                .terminal_view()
-                .cloned()
-        }) && target.focus.upgrade() == Some(view.focus_handle(cx))
-        {
-            let result = view.update(cx, |view, cx| {
-                view.handle_command(command.name.as_ref(), cx)
-            });
-            if let HandlerResult::Claimed(outcome) = result {
-                return outcome;
-            }
-        }
-        if command.name.as_ref() == SHOW_EXTENSION_REPORT_COMMAND {
-            shell.update(cx, |shell, cx| shell.toggle_extension_report(cx));
-            return CommandOutcome::Completed;
+        let result = shell.update(cx, |shell, cx| {
+            shell.handle_workbench_command(command, &target, completion.clone(), window, cx)
+        });
+        if !matches!(result, CommandClaim::Declined) {
+            return result;
         }
         shell.update(cx, |shell, cx| {
-            shell.execute_product_command(command.name.as_ref(), &target, window, cx)
+            shell.handle_application_command(command, &target, completion, cx)
         })
     })
-    .unwrap_or(CommandOutcome::InvalidTarget)
+    .unwrap_or(CommandClaim::Finished(CommandOutcome::InvalidTarget))
 }
 
 #[cfg(test)]

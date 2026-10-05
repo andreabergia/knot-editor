@@ -25,9 +25,9 @@ keybinding / palette
        captured product window
                    |
                    v
-      focused view -> workbench -> application
+       focused view -> workbench -> application
                    |
-             claim or decline
+       decline / finished / pending
 ```
 
 Dispatch captures the originating window, weak shell and focus identities, and
@@ -57,6 +57,16 @@ without a selection. The workbench may claim commands with its own operation;
 the application claims the extension startup report command. A command that no
 participant claims is unavailable. `copy` is the public name in discovery,
 bindings, menus, and scripts.
+
+Native participants receive the full command through one claim protocol. A
+finished claim settles immediately; a pending claim starts work with the captured
+target and completes later. The dispatcher does not select a native handler or
+special-case asynchronous command names. Open, Save, completion, and protected
+closure are claimed by their owning participant and retain target validation
+across their continuation.
+The captured tab exposes its focused command view as a typed workbench surface;
+adding another view kind extends that surface boundary rather than adding a
+dispatcher branch.
 
 Ordinary product editing uses this same captured-view path: character, word,
 line, page, and document movement and selection, newline and tab insertion,

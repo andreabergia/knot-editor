@@ -8,11 +8,14 @@
 #[cfg(debug_assertions)]
 use std::collections::HashSet;
 
-use gpui::{AppContext, Context, Entity};
+use gpui::{App, AppContext, Context, Entity, Focusable, WeakFocusHandle, Window};
+
+use crate::host::protocol::Command;
 
 use super::{
     documents::{Document, DocumentId},
     editor::EditorView,
+    product_commands::CommandClaim,
     terminal_view::TerminalView,
 };
 
@@ -155,7 +158,48 @@ pub(crate) enum WorkbenchTabPayload {
     },
 }
 
+#[derive(Clone)]
+pub(crate) enum CommandView {
+    Editor(Entity<EditorView>),
+    Terminal(Entity<TerminalView>),
+}
+
+impl CommandView {
+    pub(crate) fn matches_focus(&self, focus: &WeakFocusHandle, cx: &App) -> bool {
+        let handle = match self {
+            Self::Editor(view) => view.focus_handle(cx),
+            Self::Terminal(view) => view.focus_handle(cx),
+        };
+        focus.upgrade() == Some(handle)
+    }
+
+    pub(crate) fn handle_command(
+        &self,
+        command: &Command,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> CommandClaim {
+        match self {
+            Self::Editor(view) => {
+                view.update(cx, |view, cx| view.handle_command(command, window, cx))
+            }
+            Self::Terminal(view) => view.update(cx, |view, cx| view.handle_command(command, cx)),
+        }
+    }
+}
+
 impl WorkbenchTab {
+    pub(crate) fn command_view(&self) -> Option<CommandView> {
+        match &self.payload {
+            WorkbenchTabPayload::Document { editor, .. } => {
+                Some(CommandView::Editor(editor.clone()))
+            }
+            WorkbenchTabPayload::Terminal { view, .. } => {
+                view.as_ref().cloned().map(CommandView::Terminal)
+            }
+        }
+    }
+
     pub(crate) fn id(&self) -> TabId {
         self.id
     }
