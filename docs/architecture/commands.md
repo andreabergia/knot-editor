@@ -25,6 +25,9 @@ binds that handler to each live instance of the kind, while the focused view
 claims or declines the command during window dispatch. Disposal, lifecycle
 teardown, and window closure remove the corresponding bindings. Extension
 requests and late results validate the captured instance and lifecycle.
+Globally registered extension commands reach the application participant after
+the focused view and workbench have declined. Top-level script invocation
+captures the active product window and enters that same dispatch path.
 
 The workbench exposes the tab's typed command view to this routing path.
 Participants decide which names and arguments they handle. Raw text input,

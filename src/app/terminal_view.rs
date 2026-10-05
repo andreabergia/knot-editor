@@ -42,6 +42,9 @@ impl TerminalView {
         {
             return CommandClaim::Declined;
         }
+        if let Err(claim) = super::product_commands::validate_native_arguments(command) {
+            return claim;
+        }
         let selected = self
             .session
             .read(cx)

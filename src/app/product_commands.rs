@@ -9,7 +9,7 @@ use crate::host::protocol::{
     HostRequestError, HostResponse, HostResponseValue, RequestId,
 };
 
-use super::model::{CommandCatalog, CommandDefinition, CommandTargetKind, SharedCommandCatalog};
+use super::model::{CommandCatalog, CommandDefinition, SharedCommandCatalog};
 use super::product::ProductShell;
 use super::{CommandCompletion, CommandExecution};
 
@@ -246,6 +246,16 @@ pub(crate) enum CommandClaim {
     Pending(PendingCommandStart),
 }
 
+pub(crate) fn validate_native_arguments(command: &Command) -> Result<(), CommandClaim> {
+    if command.arguments == CommandArgumentValue::Null {
+        Ok(())
+    } else {
+        Err(CommandClaim::Finished(CommandOutcome::InvalidArgument {
+            message: "product commands do not accept arguments".into(),
+        }))
+    }
+}
+
 #[cfg(test)]
 pub(crate) enum ProductCommandHostResponse {
     Ready(HostResponse),
@@ -314,12 +324,6 @@ impl ProductCommandDispatcher {
         target: ProductCommandTarget,
         cx: &mut Context<Self>,
     ) -> CommandExecution {
-        if matches!(
-            self.catalog.borrow().resolve(command.name.as_ref()),
-            Ok(CommandTargetKind::Extension(_))
-        ) {
-            return super::extension_host::dispatch_product_command(command, target, cx);
-        }
         let id = crate::host::protocol::CommandInvocationId::new(self.next_invocation);
         self.next_invocation = self
             .next_invocation
@@ -331,16 +335,11 @@ impl ProductCommandDispatcher {
             completion: receiver,
         };
 
-        let admitted =
-            self.catalog.borrow().resolve(command.name.as_ref()) == Ok(CommandTargetKind::Native);
+        let admitted = self.catalog.borrow().resolve(command.name.as_ref()).is_ok();
         let dispatcher = cx.entity();
         cx.defer(move |cx| {
             let claim = if !admitted {
                 CommandClaim::Declined
-            } else if command.arguments != CommandArgumentValue::Null {
-                CommandClaim::Finished(CommandOutcome::InvalidArgument {
-                    message: "product commands do not accept arguments".into(),
-                })
             } else {
                 dispatch_to_captured_target(&command, &target, completion.clone(), cx)
             };

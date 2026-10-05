@@ -30,7 +30,7 @@ use super::{
     extension_load::{DependencyPlan, LoadEntry, LoadReport, LoadResult, StartupAttempt},
     extension_package::{self, InstalledPackage},
     extension_semantics::ExtensionSemanticBridge,
-    model::CommandTarget,
+    model::{CommandTarget, CommandTargetKind},
     personal_config::{self, ConfigDiagnostic, ConfigPhase},
     product::{self, ProductShell},
     product_commands::{ApplicationProductCommands, ProductCommandTarget},
@@ -130,17 +130,6 @@ pub(crate) fn install(cx: &mut App) -> Entity<ProductExtensionHost> {
     host
 }
 
-pub(crate) fn dispatch_product_command(
-    command: Command,
-    target: ProductCommandTarget,
-    cx: &mut App,
-) -> super::CommandExecution {
-    let host = cx.global::<ApplicationExtensionHost>()._host.clone();
-    host.update(cx, |host, cx| {
-        host.dispatch_product_command(command, target, cx)
-    })
-}
-
 pub(crate) fn start_completion(
     target: ProductCommandTarget,
     cx: &mut App,
@@ -189,6 +178,19 @@ pub(crate) fn start_view_command(
     let host = entity(cx).ok_or(crate::host::protocol::CommandOutcome::InvalidTarget)?;
     host.update(cx, |host, cx| {
         host.start_view_command(command, target, handler, completion, cx)
+    })
+}
+
+pub(crate) fn start_global_command(
+    command: Command,
+    target: ProductCommandTarget,
+    handler: CommandTarget,
+    completion: super::CommandCompletion,
+    cx: &mut App,
+) -> Result<(), crate::host::protocol::CommandOutcome> {
+    let host = entity(cx).ok_or(crate::host::protocol::CommandOutcome::InvalidTarget)?;
+    host.update(cx, |host, cx| {
+        host.start_global_command(command, target, handler, completion, cx)
     })
 }
 
@@ -675,10 +677,11 @@ impl ProductExtensionHost {
     }
 
     fn handle_request(&mut self, request: HostRequest, cx: &mut Context<Self>) {
-        let active_buffer = self.sync_active_buffer(cx).map(|(buffer, _)| buffer);
-        if active_buffer.is_none() {
-            self.buffers.set_active_buffer(None);
-        }
+        let active_target = capture_active_product_target(cx);
+        let active_buffer = active_target
+            .as_ref()
+            .and_then(|target| self.open_target_buffer(target, cx));
+        self.buffers.set_active_buffer(active_buffer);
         let response = match request_route(&request.operation) {
             RequestRoute::Buffer => {
                 let invocation = request.invocation;
@@ -688,7 +691,15 @@ impl ProductExtensionHost {
                         .dispatch(request, || commands.is_cancelled(invocation), cx),
                 )
             }
-            RequestRoute::Command => self.commands.handle_host_request(request, active_buffer),
+            RequestRoute::Command => {
+                if matches!(&request.operation, HostOperation::InvokeCommand { .. })
+                    && request.invocation.is_none()
+                {
+                    self.dispatch_script_command(request, active_target, cx)
+                } else {
+                    self.commands.handle_host_request(request, active_buffer)
+                }
+            }
             RequestRoute::View => self.dispatch_view_request(request, cx),
             RequestRoute::Semantic => Some(self.semantics.dispatch(request, cx)),
         };
@@ -696,6 +707,70 @@ impl ProductExtensionHost {
             let _ = self.pool.respond(response);
         }
         self.drain_command_events(cx);
+    }
+
+    fn dispatch_script_command(
+        &mut self,
+        request: HostRequest,
+        target: Option<ProductCommandTarget>,
+        cx: &mut Context<Self>,
+    ) -> Option<crate::host::protocol::HostResponse> {
+        use crate::host::protocol::{
+            CommandInvokeDispatch, CommandOutcome, HostResponse, HostResponseValue,
+        };
+
+        let HostOperation::InvokeCommand { command } = request.operation.clone() else {
+            unreachable!("only root command invocations enter this route");
+        };
+        let immediate = if !self
+            .lifecycles
+            .contains(&ExtensionKey::new(request.extension, request.lifecycle))
+        {
+            Some(CommandOutcome::Cancelled)
+        } else if let Ok(CommandTargetKind::Extension(handler)) = self
+            .commands
+            .catalog()
+            .borrow()
+            .resolve(command.name.as_ref())
+            && (handler.extension, handler.lifecycle) == (request.extension, request.lifecycle)
+        {
+            Some(CommandOutcome::Unavailable)
+        } else if target.is_none() {
+            Some(CommandOutcome::InvalidTarget)
+        } else {
+            None
+        };
+        if let Some(outcome) = immediate {
+            return Some(HostResponse {
+                extension: request.extension,
+                lifecycle: request.lifecycle,
+                id: request.id,
+                result: Ok(HostResponseValue::CommandInvoked {
+                    dispatch: CommandInvokeDispatch::Outcome { outcome },
+                }),
+            });
+        }
+        let dispatcher = cx.global::<ApplicationProductCommands>().0.clone();
+        let execution = dispatcher.update(cx, |dispatcher, cx| {
+            dispatcher.dispatch(command, target.expect("target was validated"), cx)
+        });
+        let pool = self.pool.clone();
+        cx.spawn(async move |_, _| {
+            let outcome = execution
+                .completion
+                .await
+                .unwrap_or(CommandOutcome::Cancelled);
+            let _ = pool.respond(HostResponse {
+                extension: request.extension,
+                lifecycle: request.lifecycle,
+                id: request.id,
+                result: Ok(HostResponseValue::CommandInvoked {
+                    dispatch: CommandInvokeDispatch::Outcome { outcome },
+                }),
+            });
+        })
+        .detach();
+        None
     }
 
     fn dispatch_view_request(
@@ -941,39 +1016,88 @@ impl ProductExtensionHost {
                 let Some(target) = capture_product_target(*window, cx) else {
                     return;
                 };
-                self.dispatch_product_command(
-                    Command {
-                        name: command.clone().into(),
-                        arguments: crate::host::protocol::CommandArgumentValue::Null,
-                    },
-                    target,
-                    cx,
-                );
+                if target.focus != *focus {
+                    return;
+                }
+                let dispatcher = cx.global::<ApplicationProductCommands>().0.clone();
+                dispatcher.update(cx, |dispatcher, cx| {
+                    dispatcher.dispatch(
+                        Command {
+                            name: command.clone().into(),
+                            arguments: crate::host::protocol::CommandArgumentValue::Null,
+                        },
+                        target,
+                        cx,
+                    );
+                });
             }
         }
     }
 
-    fn sync_active_buffer(
-        &mut self,
-        cx: &mut Context<Self>,
-    ) -> Option<(crate::host::protocol::BufferHandle, ProductCommandTarget)> {
-        let target = capture_active_product_target(cx)?;
-        let buffer = self.open_target_buffer(&target, cx)?;
-        self.buffers.set_active_buffer(Some(buffer));
-        Some((buffer, target))
-    }
-
-    pub(crate) fn dispatch_product_command(
+    fn start_global_command(
         &mut self,
         command: Command,
         target: ProductCommandTarget,
+        handler: CommandTarget,
+        completion: super::CommandCompletion,
         cx: &mut Context<Self>,
-    ) -> super::CommandExecution {
+    ) -> Result<(), crate::host::protocol::CommandOutcome> {
+        use crate::host::protocol::CommandOutcome;
+
+        target.validate_tab(cx)?;
+        target.validate_view(cx)?;
+        if !cx.windows().contains(&target.window) || target.shell.upgrade().is_none() {
+            return Err(CommandOutcome::InvalidTarget);
+        }
+        let name = command.name.clone();
+        if self.commands.catalog().borrow().resolve(name.as_ref())
+            != Ok(CommandTargetKind::Extension(handler))
+            || !self
+                .lifecycles
+                .contains(&ExtensionKey::new(handler.extension, handler.lifecycle))
+        {
+            return Err(CommandOutcome::Cancelled);
+        }
         let buffer = self.open_target_buffer(&target, cx);
         let execution = self.commands.enqueue_root(command, buffer);
-        self.command_targets.insert(execution.id, target);
+        self.command_targets.insert(execution.id, target.clone());
         self.drain_command_events(cx);
-        execution
+        cx.spawn(async move |this, cx| {
+            let outcome = execution
+                .completion
+                .await
+                .unwrap_or(CommandOutcome::Cancelled);
+            let outcome = cx
+                .update(|cx| {
+                    if !cx.windows().contains(&target.window) {
+                        return CommandOutcome::InvalidTarget;
+                    }
+                    if let Err(invalid) = target
+                        .validate_tab(cx)
+                        .and_then(|()| target.validate_view(cx))
+                    {
+                        return invalid;
+                    }
+                    let Some(host) = this.upgrade() else {
+                        return CommandOutcome::Cancelled;
+                    };
+                    let host = host.read(cx);
+                    if !host
+                        .lifecycles
+                        .contains(&ExtensionKey::new(handler.extension, handler.lifecycle))
+                        || host.commands.catalog().borrow().resolve(name.as_ref())
+                            != Ok(CommandTargetKind::Extension(handler))
+                    {
+                        CommandOutcome::Cancelled
+                    } else {
+                        outcome
+                    }
+                })
+                .unwrap_or(CommandOutcome::InvalidTarget);
+            completion.complete(outcome);
+        })
+        .detach();
+        Ok(())
     }
 
     fn start_view_command(

@@ -1,6 +1,6 @@
 # D003a: Focused command routing
 
-Status: checkpoint 1 approved; checkpoint 2 implemented, awaiting review.
+Status: checkpoints 1–2 approved; checkpoint 3 in progress.
 
 Source: D003, promoted from the [deferred-work register](../roadmap.md).
 This plan establishes the command behavior needed by the
@@ -102,6 +102,10 @@ line merely to force a claim.
   that no tree-specific command rule leaked into the public contract.
 
 ### 3. Product integration and architecture record ⬜
+
+Progress: ✅ global extension commands, tree item actions, and top-level script
+invocations now enter the product window route. The remaining nested extension
+composition path and complete command inventory still need review.
 
 - Inventory every implemented command and move all remaining native view,
   workbench, application, and extension command paths onto window-first

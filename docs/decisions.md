@@ -153,6 +153,10 @@ Use one Knot-owned command namespace and dispatcher across invocation sources.
 The captured window focus path lets native views claim or decline before
 workbench and application behavior. Captured targets make palette and delayed
 execution preserve user intent across focus changes.
+Extensions may handle an existing command for a declared view kind without
+owning another public command name. Each live view instance is bound and
+validated by Knot; the application participant handles global extension
+commands only after the focused view and workbench decline.
 
 Awaited command composition runs one root tree at a time. Nested same-extension
 frames avoid self-queue deadlock; ancestry checks and one unfinished child per

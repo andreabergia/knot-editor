@@ -589,6 +589,20 @@ impl EditorView {
         use super::product_commands::CommandClaim;
         use crate::host::protocol::CommandOutcome;
 
+        let name = command.name.as_ref();
+        if (name == commands::COPY_COMMAND
+            || (name.starts_with("editor.")
+                && !matches!(
+                    name,
+                    commands::FIND_COMMAND
+                        | commands::FIND_NEXT_COMMAND
+                        | commands::FIND_PREVIOUS_COMMAND
+                        | commands::SHOW_COMPLETIONS_COMMAND
+                )))
+            && let Err(claim) = super::product_commands::validate_native_arguments(command)
+        {
+            return claim;
+        }
         if self.execute_editing_command(command.name.as_ref(), window, cx) {
             CommandClaim::Finished(CommandOutcome::Completed)
         } else {

@@ -2340,6 +2340,22 @@ impl ProductShell {
             return CommandClaim::Finished(CommandOutcome::InvalidTarget);
         }
         let name = command.name.as_ref();
+        if matches!(
+            name,
+            NEW_COMMAND
+                | NEW_TERMINAL_COMMAND
+                | MOVE_TERMINAL_TO_NEW_WINDOW_COMMAND
+                | CLOSE_TAB_COMMAND
+                | SPLIT_HORIZONTAL_COMMAND
+                | SPLIT_VERTICAL_COMMAND
+                | OPEN_COMMAND
+                | SAVE_COMMAND
+                | SAVE_AS_COMMAND
+                | SHOW_COMPLETIONS_COMMAND
+        ) && let Err(claim) = super::product_commands::validate_native_arguments(command)
+        {
+            return claim;
+        }
         let result = match name {
             NEW_COMMAND => {
                 if self.new_document_in_pane(target.pane, window, cx) {
@@ -2421,6 +2437,16 @@ impl ProductShell {
     ) -> CommandClaim {
         use crate::host::protocol::CommandOutcome;
 
+        if matches!(
+            command.name.as_ref(),
+            SHOW_EXTENSION_REPORT_COMMAND
+                | NEW_WINDOW_COMMAND
+                | CLOSE_WINDOW_COMMAND
+                | QUIT_COMMAND
+        ) && let Err(claim) = super::product_commands::validate_native_arguments(command)
+        {
+            return claim;
+        }
         match command.name.as_ref() {
             SHOW_EXTENSION_REPORT_COMMAND => {
                 super::product_commands::break_captured_history_group(target, cx);
@@ -2444,7 +2470,20 @@ impl ProductShell {
                     dispatch_close_to_captured_target(&target, kind, completion, cx)
                 }))
             }
-            _ => CommandClaim::Declined,
+            _ => {
+                let catalog = Self::command_dispatcher(cx).read(cx).catalog();
+                let handler = match catalog.borrow().resolve(command.name.as_ref()) {
+                    Ok(super::model::CommandTargetKind::Extension(handler)) => handler,
+                    _ => return CommandClaim::Declined,
+                };
+                let command = command.clone();
+                let target = target.clone();
+                CommandClaim::Pending(Box::new(move |cx| {
+                    super::extension_host::start_global_command(
+                        command, target, handler, completion, cx,
+                    )
+                }))
+            }
         }
     }
 
@@ -4517,9 +4556,10 @@ mod tests {
         }
     }
 
-    fn dispatch_tree_copy(
+    fn dispatch_tree_command(
         shell: &Entity<ProductShell>,
         window: gpui::AnyWindowHandle,
+        name: &'static str,
         cx: &mut TestAppContext,
     ) -> crate::app::CommandExecution {
         let target = cx
@@ -4533,13 +4573,21 @@ mod tests {
         dispatcher.update(cx, |dispatcher, cx| {
             dispatcher.dispatch(
                 Command {
-                    name: super::COPY_COMMAND.into(),
+                    name: name.into(),
                     arguments: CommandArgumentValue::Null,
                 },
                 target,
                 cx,
             )
         })
+    }
+
+    fn dispatch_tree_copy(
+        shell: &Entity<ProductShell>,
+        window: gpui::AnyWindowHandle,
+        cx: &mut TestAppContext,
+    ) -> crate::app::CommandExecution {
+        dispatch_tree_command(shell, window, super::COPY_COMMAND, cx)
     }
 
     #[gpui::test]
@@ -4561,6 +4609,10 @@ const viewCopy = await commands.registerForView("outline", "copy", async () => {
   if (text === "Fail") throw new Error("copy failed");
   await workbench.writeClipboardText(text);
 });
+await commands.register("test.view-first", async () => {
+  throw new Error("global handler ran");
+});
+await commands.registerForView("outline", "test.view-first", async () => {});
 await commands.register("test.dispose-view-copy", async () => viewCopy.dispose());
 "#;
 
@@ -4612,6 +4664,8 @@ await commands.register("test.dispose-view-copy", async () => viewCopy.dispose()
         .unwrap();
         let declined = dispatch_tree_copy(&shell, window, cx);
         assert_eq!(wait_for_command(declined, cx), CommandOutcome::Unavailable);
+        let view_first = dispatch_tree_command(&shell, window, "test.view-first", cx);
+        assert_eq!(wait_for_command(view_first, cx), CommandOutcome::Completed);
         cx.update(|cx| tree.update(cx, |tree, cx| assert!(tree.select_item("first", cx))));
         let copy = dispatch_tree_copy(&shell, window, cx);
         assert_eq!(wait_for_command(copy, cx), CommandOutcome::Completed);
@@ -4694,6 +4748,71 @@ await commands.register("test.dispose-view-copy", async () => viewCopy.dispose()
         cx.read(|cx| {
             assert!(!tree.read(cx).has_provider());
             assert!(!second_tree.read(cx).has_provider());
+        });
+    }
+
+    #[gpui::test]
+    fn startup_script_command_uses_the_focused_product_window(cx: &mut TestAppContext) {
+        use crate::host::lifecycle::ExtensionKey;
+
+        let documents = install_globals(cx);
+        let host = cx.update(super::super::extension_host::install);
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        let (shell, window) = product_window(document, model, cx);
+        cx.update_window(window, |_, window, cx| {
+            shell.read(cx).focus_active_editor(window, cx);
+        })
+        .unwrap();
+
+        let key = ExtensionKey::new(ExtensionId::new(89), ExtensionLifecycleId::new(1));
+        let (done, mut result) = tokio::sync::oneshot::channel();
+        host.update(cx, |host, cx| {
+            let execution = host
+                .load_test_source(
+                    key,
+                    r#"
+import { commands } from "knot:editor";
+const outcome = await commands.invoke("file.new");
+if (outcome.kind !== "completed") throw new Error(`file.new: ${outcome.kind}`);
+"#,
+                )
+                .unwrap();
+            cx.spawn(async move |_, _| {
+                let _ = done.send(execution.await);
+            })
+            .detach();
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            cx.run_until_parked();
+            match result.try_recv() {
+                Ok(outcome) => {
+                    outcome.unwrap();
+                    break;
+                }
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "script command did not settle"
+                    );
+                    std::thread::yield_now();
+                }
+                Err(error) => panic!("script completion closed: {error}"),
+            }
+        }
+        cx.read(|cx| {
+            assert_eq!(
+                shell
+                    .read(cx)
+                    .workbench
+                    .read(cx)
+                    .focused_pane()
+                    .unwrap()
+                    .tabs()
+                    .len(),
+                2
+            );
         });
     }
 
