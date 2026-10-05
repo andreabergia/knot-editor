@@ -1,6 +1,7 @@
 # D003a: Focused command routing
 
-Status: checkpoints 1–3 approved; checkpoint 4 implemented, awaiting review.
+Status: complete. All four checkpoint review gates approved; the final package
+suite passed 427 tests with `cargo test --quiet -- --test-threads=1`.
 
 Source: D003, promoted from the [deferred-work register](../roadmap.md).
 This plan establishes the command behavior needed by the
@@ -136,7 +137,7 @@ invocations reuse the captured window and keep the bridge's composition rules.
 - **Review gate:** verify that every implemented command enters the window-first
   path, then review the regression evidence before D003b changes key bindings.
 
-### 4. Remove superseded command experiments and legacy paths 🔄
+### 4. Remove superseded command experiments and legacy paths ✅
 
 Removal audit: product keys, menus, palette, tree actions, and script requests
 enter the product dispatcher with a captured target. The editor, terminal,
@@ -164,6 +165,6 @@ separate terminal fixture exercises terminal behavior and remains available.
   names and paths. Verify that every remaining command entry point reaches the
   captured window focus path and that no old routing implementation remains
   reachable or compiled.
-- **Review gate:** approve the removal inventory and reference audit, then run
-  the full command, product, and extension regression suites before closing
-  D003a and starting D003b.
+- ✅ **Review gate:** removal inventory and reference audit approved; full
+  command, product, and extension regression suites passed before closing
+  D003a. D003b can start independently.
