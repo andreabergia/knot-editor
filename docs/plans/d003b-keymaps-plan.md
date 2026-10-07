@@ -11,36 +11,48 @@ See the current [command architecture](../architecture/commands.md),
 ## Outcome and design
 
 Personal config and installed extensions can add, change, and remove bindings
-while Knot runs. The common JavaScript form is
+while Knot runs. Scripts import the public root module with
+`import * as knot from 'knot'`. The common form is
 `knot.keybinding('Cmd-C', 'copy')`: an application-wide key invokes a semantic
 command, whose focused handler is selected by D003a. A binding may optionally
-target one named focused view when the key itself needs different meaning
-there. Tree has no special keymap category. Multi-keystroke sequences remain
+target one named focused view kind with `{ view: 'editor' }` when the key itself
+needs different meaning there. Native kinds include `editor`, `terminal`, and
+`workspace-tree`; extension-backed views use their declared kind. Native kind
+names are reserved. Tree has no special keymap category. Application-wide means
+product-window command surfaces; the command palette and config-error window
+retain their own input behavior. Multi-keystroke sequences remain
 supported through gpui's key input path. An optional command value carries
 explicit arguments through the existing dispatcher.
 
 One application-owned registry holds native defaults, extension bindings, and
-personal bindings as owned entries. Native defaults use the same registration
-and removal machinery as other sources; extension and config entries also
-carry lifecycle ownership. Effective binding
-resolution gives personal config priority over extensions and extensions over
+personal bindings as slots keyed by owner, key sequence, and optional view kind.
+Native defaults use the same set and remove machinery as other sources;
+extension and config owners are their lifecycles. Setting the same slot again
+replaces it, and `knot.removeKeybinding(key, { view })` removes that owner's
+slot. A null command sets an unbind rule in the slot, suppressing lower-priority
+bindings in its scope; removing it reveals them. These calls return nothing.
+Unload and failed startup remove every slot owned by that lifecycle. Effective
+binding resolution gives personal config priority over extensions and extensions over
 native defaults, including bindings added after post-init. Within a source,
 view-specific bindings win over application-wide bindings; later registrations
-resolve otherwise equal conflicts. A personal application-wide binding can
+from different owners resolve otherwise equal conflicts. A personal
+application-wide binding can
 therefore replace a more specific earlier-source binding without guessing its
-view selector. Knot compiles the effective map so this source priority is not
-reversed by gpui's view-depth matching. A binding resolves to one command; an
+view selector. gpui recognizes keys and contexts; Knot resolves the winning
+slot so gpui's view-depth matching cannot reverse source priority. A binding
+resolves to one command; an
 unavailable command does not retry a lower-priority binding. Command fallback
 is D003a's handler routing.
 
-A null command creates an unbind rule that suppresses lower-priority bindings
-for the key across views, optionally limited to one view. Disposing the rule reveals those
-bindings again. Registration returns a disposable handle; only its owner can
-dispose it. Unload and failed startup remove every entry from that lifecycle.
-The application rebuilds gpui's effective keymap from its authoritative
-registry after changes, so removal, replacement, and multiple product windows
-stay in sync. Personal config can register in pre-init or post-init; post-init
-is where users can override all installed extensions after startup.
+JavaScript queues ordered set and remove operations during a V8 turn. After the
+turn, Knot validates and applies the batch atomically, then rebuilds gpui's
+keymap once if the effective bindings changed. An `await` may end a turn, so a
+later continuation is a later batch. Batch errors settle before the originating
+turn reports completion; config startup cannot become ready with a failed batch.
+The application rebuilds gpui's map from its authoritative registry, including
+fixed bindings for the config-error window, so removal, replacement, and multiple
+product windows stay in sync. Personal config can set bindings in pre-init or
+post-init; post-init can override all installed extensions after startup.
 
 ## Exclusions and deferred decisions
 
@@ -48,38 +60,55 @@ is where users can override all installed extensions after startup.
   context-expression language, modal layer system, or live config-file reload.
 - No key bindings for raw text insertion, IME composition, pointer events, or
   terminal byte protocols.
-- The exact JavaScript import/export shape, spelling of the optional view
-  selector, and command-argument syntax are settled at the API review gate.
-  The simple two-string call above is the required common case.
+- The exact command-argument syntax is settled at the API review gate. The
+  simple two-string call above is the required common case.
 
 ## Checkpoints
 
-### 1. Uniform binding registry and effective map ⬜
+### 1. Public root module ⬜
 
-- Model registrations, owner/lifecycle, view selector, unbind rules, precedence,
-  and disposal without special native-binding behavior. Migrate fixed defaults
-  into the registry, including editor and product shortcuts.
-- Rebuild the gpui map after mutations; validate key sequences and selectors
-  without panics. Preserve focus-specific matching and multi-keystroke input.
-- Test user replacement and removal of native and extension bindings, later
-  extension registration, same-source conflicts, view-specific bindings,
-  disposal revealing lower entries, and multi-window updates.
-- **Review gate:** inspect effective-map rules and the default-binding inventory.
+- Replace the `knot:editor` public facade with the sole public `knot` module.
+  Preserve the `editor`, `commands`, and `workbench` namespaces under a module
+  namespace import; migrate fixtures, tests, and documentation. Remove the old
+  specifier without a compatibility alias and keep `knot:bootstrap` private.
+- Test public import resolution and rejection of private and removed specifiers.
+- **Review gate:** inspect the root module surface and migrated imports.
 
-### 2. JavaScript registration and lifecycle ⬜
+### 2. Uniform binding registry and gpui adapter ⬜
 
-- Expose the simple `knot.keybinding(key, command)` call, optional view and
-  command arguments, null-command unbinding, and a disposable registration.
-  Route requests through Knot-owned transport; keep V8 values inside `host`.
-- Make changes effective at runtime and ensure config startup awaits or reports
-  registration errors before product readiness. Preserve fatal personal-config
-  errors and independent extension startup failures.
+- Model owner slots, view-kind selectors, unbind rules, precedence, replacement,
+  and removal without special native-binding behavior. Migrate fixed editor and
+  product shortcuts into the registry.
+- Give the command palette a semantic command routed through D003a and replace
+  its special gpui action. Keep palette focus and captured-origin behavior.
+- Bind keys to a Knot action that resolves the winning slot for the focused view.
+  Rebuild gpui's map after effective changes, including the separate fixed
+  config-error bindings. Validate sequences and selectors without panics;
+  preserve multi-keystroke input and avoid consuming keys outside their scope.
+- First verify that a personal global binding beats an editor-specific default
+  and an editor-only unbind leaves the terminal binding usable. Then test owner
+  replacement and removal, later extension registration, same-source conflicts,
+  view kinds, lifecycle cleanup, sequence prefixes, palette invocation, and
+  multi-window updates.
+- **Review gate:** inspect resolution rules, gpui behavior, and the default inventory.
+
+### 3. JavaScript mutations and lifecycle ⬜
+
+- Expose synchronous, void `knot.keybinding(key, command, options?)` and
+  `knot.removeKeybinding(key, options?)`, including null-command unbinding,
+  optional view kind, and command arguments. Queue ordered mutations in `host`;
+  transport one batch of Knot-owned data after each V8 turn.
+- Validate and apply each batch atomically, rebuild at most once per changed
+  batch, and settle errors before the turn completes. Make changes effective at
+  runtime while preserving fatal personal-config errors and independent extension
+  startup failures.
 - Test pre-init, extension, and post-init ordering; runtime replacement;
-  invalid input diagnostics; disposal; failed startup; and lifecycle unload.
-- **Review gate:** approve the JavaScript API and startup/error behavior using
-  a small real configuration example.
+  same-turn coalescing; await boundaries; invalid-input diagnostics and rollback;
+  explicit removal; unbinds; failed startup; and lifecycle unload.
+- **Review gate:** approve the JavaScript API and turn/error behavior using a
+  small real configuration example.
 
-### 3. Product validation and architecture record ⬜
+### 4. Product validation and architecture record ⬜
 
 - Verify remapping and unbinding native and extension commands from config in
   the product, including an application-wide `copy` binding routed to different
