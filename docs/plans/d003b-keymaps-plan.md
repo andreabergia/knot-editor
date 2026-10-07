@@ -1,6 +1,6 @@
 # D003b: JavaScript-configurable keymaps
 
-Status: proposed. Design agreed; implementation has not started.
+Status: in progress. Checkpoint 1 implementation is ready for review.
 
 Source: D003, promoted from the [deferred-work register](../roadmap.md).
 Depends on the [D003a focused command-routing plan](../archive/plans/d003a-command-routing-plan.md).
@@ -65,14 +65,14 @@ post-init; post-init can override all installed extensions after startup.
 
 ## Checkpoints
 
-### 1. Public root module ⬜
+### 1. Public root module 🟡
 
-- Replace the `knot:editor` public facade with the sole public `knot` module.
+- ✅ Replace the `knot:editor` public facade with the sole public `knot` module.
   Preserve the `editor`, `commands`, and `workbench` namespaces under a module
   namespace import; migrate fixtures, tests, and documentation. Remove the old
   specifier without a compatibility alias and keep `knot:bootstrap` private.
-- Test public import resolution and rejection of private and removed specifiers.
-- **Review gate:** inspect the root module surface and migrated imports.
+- ✅ Test public import resolution and rejection of private and removed specifiers.
+- ⏳ **Review gate:** inspect the root module surface and migrated imports.
 
 ### 2. Uniform binding registry and gpui adapter ⬜
 

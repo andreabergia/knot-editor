@@ -1,4 +1,5 @@
-import { commands } from "knot:editor";
+import * as knot from "knot";
+const { commands } = knot;
 import { commandName } from "./names.js";
 
 await commands.register("example.greet", async () => {

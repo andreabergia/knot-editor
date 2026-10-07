@@ -3622,12 +3622,12 @@ mod tests {
         let extensions = tempfile::tempdir().unwrap();
         std::fs::write(
             config.path().join("pre-init.js"),
-            "import { commands } from 'knot:editor'; await commands.register('config.pre', () => {});",
+            "import * as knot from 'knot'; const { commands } = knot; await commands.register('config.pre', () => {});",
         )
         .unwrap();
         std::fs::write(
             config.path().join("post-init.js"),
-            "import { commands } from 'knot:editor'; await commands.register('config.post', () => {});",
+            "import * as knot from 'knot'; const { commands } = knot; await commands.register('config.post', () => {});",
         )
         .unwrap();
         install_extension(
@@ -3636,7 +3636,7 @@ mod tests {
             &[],
             &[(
                 "main.js",
-                "import { commands } from 'knot:editor'; await commands.register('extension.good', () => {});",
+                "import * as knot from 'knot'; const { commands } = knot; await commands.register('extension.good', () => {});",
             )],
         );
         install_extension(
@@ -3733,7 +3733,7 @@ mod tests {
     fn pre_init_failure_skips_extensions_and_opens_only_the_error_window(cx: &mut TestAppContext) {
         let config = tempfile::tempdir().unwrap();
         let extensions = tempfile::tempdir().unwrap();
-        std::fs::write(config.path().join("pre-init.js"), "import { commands } from 'knot:editor'; await commands.register('config.before-failure', () => {}); throw new Error('pre failed');").unwrap();
+        std::fs::write(config.path().join("pre-init.js"), "import * as knot from 'knot'; const { commands } = knot; await commands.register('config.before-failure', () => {}); throw new Error('pre failed');").unwrap();
         install_extension(
             extensions.path(),
             "@example/skipped",
@@ -3812,7 +3812,7 @@ mod tests {
         let extensions = tempfile::tempdir().unwrap();
         std::fs::write(
             config.path().join("pre-init.js"),
-            "import { commands, editor } from 'knot:editor'; await commands.register('config.before', () => {}); await editor.registerCompletionProvider('config-provider', { provideCompletions() { return []; } });",
+            "import * as knot from 'knot'; const { commands, editor } = knot; await commands.register('config.before', () => {}); await editor.registerCompletionProvider('config-provider', { provideCompletions() { return []; } });",
         )
         .unwrap();
         std::fs::write(
@@ -3826,7 +3826,7 @@ mod tests {
             &[],
             &[(
                 "main.js",
-                "import { commands } from 'knot:editor'; await commands.register('extension.before', () => {});",
+                "import * as knot from 'knot'; const { commands } = knot; await commands.register('extension.before', () => {});",
             )],
         );
         install_globals(cx);
@@ -3917,7 +3917,7 @@ mod tests {
                 (
                     "dist/main.js",
                     r#"
-                import { commands, editor } from 'knot:editor';
+                import * as knot from 'knot'; const { commands, editor } = knot;
                 import { prefix } from './words.js';
                 await commands.register('example.base', async ({ buffer }) => {
                     const snapshot = await buffer.snapshot();
@@ -3941,7 +3941,7 @@ mod tests {
             &[(
                 "main.js",
                 r#"
-                import { commands } from 'knot:editor';
+                import * as knot from 'knot'; const { commands } = knot;
                 await commands.register('example.dependent', async () => {
                     await commands.invoke('example.base', null);
                 });
@@ -3955,7 +3955,7 @@ mod tests {
             &[(
                 "main.js",
                 r#"
-                import { commands, editor } from 'knot:editor';
+                import * as knot from 'knot'; const { commands, editor } = knot;
                 await commands.register('example.shared', async () => {});
                 await commands.registerForView('outline', 'copy', async () => {});
                 await editor.registerCompletionProvider('broken-provider', {
@@ -3978,7 +3978,7 @@ mod tests {
             &[(
                 "main.js",
                 r#"
-                import { commands } from 'knot:editor';
+                import * as knot from 'knot'; const { commands } = knot;
                 await commands.register('example.shared', async () => {});
             "#,
             )],
@@ -4163,7 +4163,7 @@ mod tests {
             &[(
                 "main.js",
                 r#"
-                import { commands, editor } from 'knot:editor';
+                import * as knot from 'knot'; const { commands, editor } = knot;
                 await commands.register('example.old', async () => {});
                 await editor.registerCompletionProvider('old-provider', {
                     provideCompletions() { return []; }
@@ -4195,7 +4195,7 @@ mod tests {
             &[(
                 "main.js",
                 r#"
-                import { commands } from 'knot:editor';
+                import * as knot from 'knot'; const { commands } = knot;
                 await commands.register('example.new', async () => {});
             "#,
             )],
@@ -4463,7 +4463,7 @@ mod tests {
         use crate::host::lifecycle::ExtensionKey;
 
         const SOURCE: &str = r#"
-import { commands, workbench } from "knot:editor";
+import * as knot from "knot"; const { commands, workbench } = knot;
 await workbench.registerTreeDataProvider("outline", {
   getChildren(parentId) {
     return parentId === null ? [
@@ -4717,7 +4717,7 @@ await commands.register("test.dispose-view-copy", async () => viewCopy.dispose()
                 .load_test_source(
                     key,
                     r#"
-import { commands } from "knot:editor";
+import * as knot from "knot"; const { commands } = knot;
 const outcome = await commands.invoke("file.new");
 if (outcome.kind !== "completed") throw new Error(`file.new: ${outcome.kind}`);
 "#,
@@ -4776,7 +4776,7 @@ if (outcome.kind !== "completed") throw new Error(`file.new: ${outcome.kind}`);
                 .load_test_source(
                     key,
                     r#"
-import { commands } from "knot:editor";
+import * as knot from "knot"; const { commands } = knot;
 await commands.register("editor.custom", async ({ arguments: args }) => {
   if (args?.value !== 42) throw new Error("missing command arguments");
 });
@@ -4851,7 +4851,7 @@ await commands.register("editor.custom", async ({ arguments: args }) => {
                 .load_test_source(
                     key,
                     r#"
-import { commands } from "knot:editor";
+import * as knot from "knot"; const { commands } = knot;
 await commands.register("test.nested-open", async () => {
   const outcome = await commands.invoke("file.open");
   if (outcome.kind !== "cancelled") throw new Error(`open: ${outcome.kind}`);
@@ -4894,7 +4894,7 @@ await commands.register("test.nested-open", async () => {
         use crate::host::lifecycle::ExtensionKey;
 
         const SOURCE: &str = r#"
-import { commands, workbench } from "knot:editor";
+import * as knot from "knot"; const { commands, workbench } = knot;
 await workbench.registerTreeDataProvider("outline", {
   getChildren(parentId) {
     return parentId === null

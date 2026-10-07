@@ -44,10 +44,10 @@ const TERMINATED: u8 = 1;
 const HEAP_LIMIT_EXCEEDED: u8 = 2;
 const DISPOSED: u8 = 3;
 const PRIVATE_BOOTSTRAP_SPECIFIER: &str = "knot:bootstrap";
-const PUBLIC_FACADE_SPECIFIER: &str = "knot:editor";
+const PUBLIC_FACADE_SPECIFIER: &str = "knot";
 const NATIVE_BINDINGS_GLOBAL: &str = "__knotNativeBindings";
 const PRIVATE_BOOTSTRAP_SOURCE: &str = include_str!("js/bootstrap.js");
-const PUBLIC_FACADE_SOURCE: &str = include_str!("js/editor.js");
+const PUBLIC_FACADE_SOURCE: &str = include_str!("js/knot.js");
 
 type ResultSender<T> = tokio::sync::oneshot::Sender<Result<T, RuntimeError>>;
 type ResultReceiver<T> = tokio::sync::oneshot::Receiver<Result<T, RuntimeError>>;
@@ -3104,7 +3104,7 @@ fn resolve_module_specifier(
             || (!request.starts_with("./") && !request.starts_with("../"))
         {
             return Err(format!(
-                "extension import must be relative or knot:editor: {request}"
+                "extension import must be relative or knot: {request}"
             ));
         }
         let resolved = Url::parse(referrer)
@@ -4166,7 +4166,7 @@ mod tests {
                 ),
                 (
                     "pre-init.js",
-                    "import { commands } from 'knot:editor'; import { increment } from './counter.mjs'; globalThis.phaseOrder = ['pre']; increment(); await Promise.resolve(); globalThis.configCommand = await commands.register('knot.config.test', () => {});",
+                    "import * as knot from 'knot'; const { commands } = knot; import { increment } from './counter.mjs'; globalThis.phaseOrder = ['pre']; increment(); await Promise.resolve(); globalThis.configCommand = await commands.register('knot.config.test', () => {});",
                 ),
                 (
                     "post-init.js",
@@ -4361,7 +4361,7 @@ mod tests {
             &[
                 (
                     "dist/main.js",
-                    "import { editor } from 'knot:editor'; import { value } from './helper.js'; import { suffix } from '../suffix.mjs'; await Promise.resolve(); globalThis.packageValue = value + suffix + ':' + typeof editor.activeBuffer;",
+                    "import * as knot from 'knot'; const { editor } = knot; import { value } from './helper.js'; import { suffix } from '../suffix.mjs'; await Promise.resolve(); globalThis.packageValue = value + suffix + ':' + typeof editor.activeBuffer;",
                 ),
                 ("dist/helper.js", "export const value = 'ready';"),
                 ("suffix.mjs", "export const suffix = '!';"),
@@ -4453,14 +4453,15 @@ mod tests {
     fn package_module_imports_stay_within_the_supplied_graph() {
         let pool = RuntimePool::new(PoolConfig::single_worker());
         for (index, (source, expected)) in [
-            ("import 'bare-package';", "relative or knot:editor"),
+            ("import 'bare-package';", "relative or knot"),
             ("import '../other/secret.js';", "escapes package"),
             (
                 "import 'file:///extensions/%40example/other/secret.js';",
-                "relative or knot:editor",
+                "relative or knot",
             ),
             ("import './missing.js';", "package module not found"),
             ("import 'knot:bootstrap';", "not importable"),
+            ("import 'knot:editor';", "relative or knot"),
         ]
         .into_iter()
         .enumerate()
@@ -4654,7 +4655,7 @@ mod tests {
                 runtime,
                 module,
                 r#"
-                import { editor } from "knot:editor";
+                import * as knot from "knot"; const { editor } = knot;
                 const buffer = await editor.activeBuffer();
                 globalThis.editorApi = editor;
                 globalThis.events = [];
@@ -4770,20 +4771,23 @@ mod tests {
             runtime,
             "file:///fixtures/facade.js",
             r#"
-                import { editor, commands, workbench } from "knot:editor";
+                import * as knot from "knot";
                 if (typeof Deno !== "undefined") throw new Error("Deno is exposed");
                 if (typeof globalThis.__knotNativeBindings !== "undefined") {
                     throw new Error("private native bindings are exposed");
                 }
-                if (!Object.isFrozen(editor) || !Object.isFrozen(commands) || !Object.isFrozen(workbench)) {
+                if (Object.keys(knot).sort().join(",") !== "commands,editor,workbench") {
+                    throw new Error("unexpected public exports");
+                }
+                if (!Object.isFrozen(knot.editor) || !Object.isFrozen(knot.commands) || !Object.isFrozen(knot.workbench)) {
                     throw new Error("facade objects are mutable");
                 }
-                if (typeof editor.activeBuffer !== "function"
-                    || typeof editor.registerCompletionProvider !== "function"
-                    || typeof commands.invalidArguments !== "function"
-                    || typeof commands.invoke !== "function"
-                    || typeof commands.register !== "function"
-                    || typeof workbench.registerTreeDataProvider !== "function") {
+                if (typeof knot.editor.activeBuffer !== "function"
+                    || typeof knot.editor.registerCompletionProvider !== "function"
+                    || typeof knot.commands.invalidArguments !== "function"
+                    || typeof knot.commands.invoke !== "function"
+                    || typeof knot.commands.register !== "function"
+                    || typeof knot.workbench.registerTreeDataProvider !== "function") {
                     throw new Error("facade shape is incomplete");
                 }
             "#,
@@ -4797,7 +4801,7 @@ mod tests {
                 runtime,
                 "file:///fixtures/unsupported.js",
                 r#"
-                    import { editor } from "knot:editor";
+                    import * as knot from "knot"; const { editor } = knot;
                     await editor.activeBuffer();
                 "#,
             )
@@ -4826,7 +4830,7 @@ mod tests {
                 runtime,
                 "file:///fixtures/buffers.js",
                 r#"
-                    import { editor } from "knot:editor";
+                    import * as knot from "knot"; const { editor } = knot;
                     const buffer = await editor.activeBuffer();
                     globalThis.snapshot = await buffer.snapshot({ startByteOffset: 1, endByteOffset: 7 });
                     globalThis.edit = await buffer.applyEdits([{
@@ -4989,7 +4993,7 @@ mod tests {
                     runtime,
                     format!("file:///fixtures/external-{}.js", runtime.extension.value()),
                     r#"
-                        import { editor } from "knot:editor";
+                        import * as knot from "knot"; const { editor } = knot;
                         const buffer = await editor.activeBuffer();
                         globalThis.heldSnapshot = await buffer.snapshot();
                     "#,
@@ -5303,7 +5307,7 @@ mod tests {
                 runtime,
                 "file:///fixtures/request.js",
                 r#"
-                    import { editor } from "knot:editor";
+                    import * as knot from "knot"; const { editor } = knot;
                     const buffer = await editor.activeBuffer();
                     await Promise.resolve();
                     globalThis.responseValue = buffer !== null;
@@ -5344,7 +5348,7 @@ mod tests {
             .execute_fixture_module(
                 runtime,
                 "file:///fixtures/request-error.js",
-                "import { editor } from 'knot:editor'; await editor.activeBuffer();",
+                "import * as knot from 'knot'; const { editor } = knot; await editor.activeBuffer();",
             )
             .unwrap();
         let request = pool.receive_request().unwrap();
@@ -5381,7 +5385,7 @@ mod tests {
                 runtime,
                 "file:///fixtures/concurrent-requests.js",
                 r#"
-                    import { editor } from "knot:editor";
+                    import * as knot from "knot"; const { editor } = knot;
                     const [first, second] = await Promise.all([
                       editor.activeBuffer(),
                       editor.activeBuffer(),
@@ -5449,7 +5453,7 @@ mod tests {
                 runtime,
                 "file:///fixtures/rejected-siblings.js",
                 r#"
-                    import { editor } from "knot:editor";
+                    import * as knot from "knot"; const { editor } = knot;
                     await Promise.all([editor.activeBuffer(), editor.activeBuffer()]);
                 "#,
             )
@@ -5488,7 +5492,7 @@ mod tests {
             .execute_fixture_module(
                 runtime,
                 "file:///fixtures/identity.js",
-                "import { editor } from 'knot:editor'; await editor.activeBuffer();",
+                "import * as knot from 'knot'; const { editor } = knot; await editor.activeBuffer();",
             )
             .unwrap();
         let request = pool.receive_request().unwrap();
@@ -5536,7 +5540,7 @@ mod tests {
             .execute_fixture_module(
                 waiting,
                 "file:///fixtures/delayed.js",
-                "import { editor } from 'knot:editor'; await editor.activeBuffer();",
+                "import * as knot from 'knot'; const { editor } = knot; await editor.activeBuffer();",
             )
             .unwrap();
         let request = pool.receive_request().unwrap();
@@ -5570,7 +5574,7 @@ mod tests {
                 runtime,
                 "file:///fixtures/sequential.js",
                 r#"
-                    import { editor } from "knot:editor";
+                    import * as knot from "knot"; const { editor } = knot;
                     await Promise.resolve();
                     await editor.activeBuffer();
                     globalThis.firstResponse = true;
@@ -5623,7 +5627,7 @@ mod tests {
             .execute_fixture_module(
                 runtime,
                 "file:///fixtures/mismatched-response.js",
-                "import { editor } from 'knot:editor'; await editor.activeBuffer();",
+                "import * as knot from 'knot'; const { editor } = knot; await editor.activeBuffer();",
             )
             .unwrap();
         let request = pool.receive_request().unwrap();
@@ -5650,7 +5654,7 @@ mod tests {
                 first,
                 "file:///fixtures/unload-pending.js",
                 r#"
-                    import { editor } from "knot:editor";
+                    import * as knot from "knot"; const { editor } = knot;
                     await Promise.all([editor.activeBuffer(), editor.activeBuffer()]);
                 "#,
             )
@@ -5677,7 +5681,7 @@ mod tests {
             .execute_fixture_module(
                 replacement,
                 "file:///fixtures/replacement.js",
-                "import { editor } from 'knot:editor'; await editor.activeBuffer();",
+                "import * as knot from 'knot'; const { editor } = knot; await editor.activeBuffer();",
             )
             .unwrap();
         let replacement_request = pool.receive_request().unwrap();
@@ -5711,7 +5715,7 @@ mod tests {
             .execute_fixture_module(
                 runtime,
                 "file:///fixtures/shutdown-pending.js",
-                "import { editor } from 'knot:editor'; await editor.activeBuffer();",
+                "import * as knot from 'knot'; const { editor } = knot; await editor.activeBuffer();",
             )
             .unwrap();
         pool.receive_request().unwrap();
@@ -5729,7 +5733,7 @@ mod tests {
             .execute_fixture_module(
                 runtime,
                 "file:///fixtures/terminated-pending.js",
-                "import { editor } from 'knot:editor'; await editor.activeBuffer();",
+                "import * as knot from 'knot'; const { editor } = knot; await editor.activeBuffer();",
             )
             .unwrap();
         let request = pool.receive_request().unwrap();
@@ -5760,7 +5764,7 @@ mod tests {
             .execute_fixture_module(
                 runtime,
                 "file:///fixtures/awaited-queued.js",
-                "import { editor } from 'knot:editor'; await editor.activeBuffer();",
+                "import * as knot from 'knot'; const { editor } = knot; await editor.activeBuffer();",
             )
             .unwrap();
         pool.receive_request().unwrap();
@@ -5820,7 +5824,7 @@ mod tests {
             .execute_fixture_module(
                 runtime,
                 "file:///fixtures/awaited-shutdown.js",
-                "import { editor } from 'knot:editor'; await editor.activeBuffer();",
+                "import * as knot from 'knot'; const { editor } = knot; await editor.activeBuffer();",
             )
             .unwrap();
         pool.receive_request().unwrap();
@@ -5843,7 +5847,7 @@ mod tests {
             .execute_fixture_module(
                 runtime,
                 "file:///fixtures/awaited-fatal.js",
-                "import { editor } from 'knot:editor'; await editor.activeBuffer();",
+                "import * as knot from 'knot'; const { editor } = knot; await editor.activeBuffer();",
             )
             .unwrap();
         pool.receive_request().unwrap();
@@ -5905,7 +5909,7 @@ mod tests {
                 .execute_fixture_module(
                     &format!("file:///fixtures/host-error-{index}.js"),
                     r#"
-                        import { editor } from "knot:editor";
+                        import * as knot from "knot"; const { editor } = knot;
                         try {
                             await editor.activeBuffer();
                         } catch (error) {
@@ -5929,7 +5933,7 @@ mod tests {
             .execute_fixture_module(
                 "file:///fixtures/unknown-host-error.js",
                 r#"
-                    import { editor } from "knot:editor";
+                    import * as knot from "knot"; const { editor } = knot;
                     try { await editor.activeBuffer(); }
                     catch (error) { globalThis.hostErrorName = error.name; }
                 "#,
@@ -5947,7 +5951,7 @@ mod tests {
             .execute_fixture_module(
                 "file:///fixtures/invalid-arguments.js",
                 r#"
-                    import { commands } from "knot:editor";
+                    import * as knot from "knot"; const { commands } = knot;
                     try { commands.invalidArguments("expected"); }
                     catch (error) { globalThis.hostErrorName = error.name; }
                 "#,
@@ -5999,6 +6003,15 @@ mod tests {
             .unwrap_err();
         assert_eq!(private.kind(), RuntimeErrorKind::ModuleResolution);
         assert!(private.message().contains("not importable by extensions"));
+
+        let removed = capsule
+            .execute_fixture_module(
+                "file:///fixtures/removed-import.js",
+                "import 'knot:editor';",
+            )
+            .unwrap_err();
+        assert_eq!(removed.kind(), RuntimeErrorKind::ModuleResolution);
+        assert!(removed.message().contains("module not found"));
 
         let syntax = capsule
             .execute_fixture_module("file:///fixtures/syntax.js", "export const = 1;")
@@ -6313,7 +6326,7 @@ mod tests {
                 runtime,
                 "file:///fixtures/semantic-providers.js",
                 r#"
-                    import { editor, workbench } from "knot:editor";
+                    import * as knot from "knot"; const { editor, workbench } = knot;
                     globalThis.providerEvents = [];
                     globalThis.treeProvider = await workbench.registerTreeDataProvider(
                       "outline",
@@ -6789,7 +6802,7 @@ mod tests {
                 runtime,
                 "file:///fixtures/command-registration.js",
                 r#"
-                    import { commands } from "knot:editor";
+                    import * as knot from "knot"; const { commands } = knot;
                     globalThis.commandRegistration = await commands.register(
                       "knot.fixture.arguments",
                       async (context) => {
@@ -6903,7 +6916,7 @@ mod tests {
                 runtime,
                 "file:///fixtures/duplicate-command.js",
                 r#"
-                    import { commands } from "knot:editor";
+                    import * as knot from "knot"; const { commands } = knot;
                     await commands.register("fixture.copy", () => {});
                 "#,
             )
@@ -6928,7 +6941,7 @@ mod tests {
                 runtime,
                 "file:///fixtures/disposable-command.js",
                 r#"
-                    import { commands } from "knot:editor";
+                    import * as knot from "knot"; const { commands } = knot;
                     globalThis.disposableCommand = await commands.register(
                       "knot.fixture.disposable",
                       () => { globalThis.disposedHandlerRan = true; },
@@ -7010,7 +7023,7 @@ mod tests {
                 runtime,
                 "file:///fixtures/nested-commands.js",
                 r#"
-                    import { commands, editor } from "knot:editor";
+                    import * as knot from "knot"; const { commands, editor } = knot;
                     globalThis.commandEvents = [];
                     await commands.register("knot.fixture.outer", async () => {
                       globalThis.commandEvents.push("outer-before");
@@ -7162,7 +7175,7 @@ mod tests {
                 runtime,
                 "file:///fixtures/cancelled-command.js",
                 r#"
-                    import { commands } from "knot:editor";
+                    import * as knot from "knot"; const { commands } = knot;
                     await commands.register("knot.fixture.cancelled", async (context) => {
                       await context.buffer.snapshot();
                       globalThis.cancelledCommandResumed = true;
@@ -7241,7 +7254,7 @@ mod tests {
                 runtime,
                 "file:///fixtures/command-failures.js",
                 r#"
-                    import { commands } from "knot:editor";
+                    import * as knot from "knot"; const { commands } = knot;
                     await commands.register("knot.fixture.invalid", () => {
                       commands.invalidArguments("expected object argument");
                     });
@@ -7318,7 +7331,7 @@ mod tests {
             runtime,
             "file:///fixtures/invalid-command-arguments.js",
             r#"
-                import { commands } from "knot:editor";
+                import * as knot from "knot"; const { commands } = knot;
                 const cyclic = {};
                 cyclic.self = cyclic;
                 for (const value of [NaN, () => {}, cyclic]) {
@@ -7355,7 +7368,7 @@ mod tests {
                 runaway,
                 "file:///fixtures/runaway-command.js",
                 r#"
-                    import { commands } from "knot:editor";
+                    import * as knot from "knot"; const { commands } = knot;
                     await commands.register("knot.fixture.runaway", () => {
                       __knotTestEntered();
                       while (true) {}

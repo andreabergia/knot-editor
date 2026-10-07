@@ -1,4 +1,5 @@
-import { commands } from "knot:editor";
+import * as knot from "knot";
+const { commands } = knot;
 
 await commands.register("example.insert-greeting", async ({ buffer }) => {
   const snapshot = await buffer.snapshot();

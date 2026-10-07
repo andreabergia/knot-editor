@@ -44,7 +44,7 @@ use super::{
 
 #[cfg(test)]
 const PRIMARY_FIXTURE: &str = r#"
-import { commands, editor, workbench } from "knot:editor";
+import * as knot from "knot"; const { commands, editor, workbench } = knot;
 
 globalThis.knotFixtureBuffer = await editor.activeBuffer();
 await commands.register("knot.fixture.primary", async ({ buffer }) => {
@@ -70,7 +70,7 @@ await workbench.registerTreeDataProvider("outline", {
 
 #[cfg(test)]
 const SECONDARY_FIXTURE: &str = r#"
-import { commands, editor } from "knot:editor";
+import * as knot from "knot"; const { commands, editor } = knot;
 
 globalThis.knotFixtureBuffer = await editor.activeBuffer();
 await commands.register("knot.fixture.secondary", async () => ({ status: "handled" }));

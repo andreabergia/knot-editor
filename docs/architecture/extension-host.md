@@ -22,7 +22,7 @@ Part of the [architecture](../architecture.md). Design rationale is recorded in
   captured directory-local sources without V8 or filesystem access.
 
 A package load binds its immutable source graph to one isolate before scheduling
-entry as a root turn. Static imports may resolve only `knot:editor` or relative
+entry as a root turn. Static imports may resolve only `knot` or relative
 URLs that remain within the package root and name a captured source. Dynamic
 imports reject. Compilation and runtime failures carry generated source URL,
 line, and column as Knot-owned data. Package entry failure remains a failed
@@ -67,7 +67,7 @@ immutable in-memory source graph and persistent compiled-module cache. Static
 imports use URL resolution and can reach only sources already embedded in that
 graph; bare, missing, and private-bootstrap imports fail resolution. The engine
 eagerly evaluates a private `knot:bootstrap` module and the public
-`knot:editor` facade when it creates the capsule. Bootstrap captures the native
+`knot` module when it creates the capsule. Bootstrap captures the native
 request callback and removes its temporary global before extension work can
 run, leaving only the semantic `editor`, `commands`, and `workbench` exports.
 The facade's buffer API crosses a pool-owned typed request inbox. Its native
