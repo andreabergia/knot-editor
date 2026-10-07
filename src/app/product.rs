@@ -5186,7 +5186,7 @@ await commands.registerForView("outline", "copy", async () => {
     }
 
     #[gpui::test]
-    fn menu_action_enters_the_captured_window_dispatcher(cx: &mut TestAppContext) {
+    fn menu_action_reaches_the_captured_window_in_its_dispatch_turn(cx: &mut TestAppContext) {
         let documents = install_globals(cx);
         let document = cx.update(|cx| create_untitled_document(&documents, cx));
         let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
@@ -5198,7 +5198,6 @@ await commands.registerForView("outline", "copy", async () => {
         cx.refresh().unwrap();
 
         cx.dispatch_action(window, ProductCommandSource::new(NEW_COMMAND));
-        cx.run_until_parked();
 
         cx.read(|cx| {
             assert_eq!(

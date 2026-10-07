@@ -18,6 +18,8 @@ then the application. A participant declines, finishes with an outcome, or
 starts pending work. If all decline, the command is unavailable. Focus changes
 cannot redirect an admitted command; closed or replaced targets are invalid.
 Pending work revalidates its captured target before applying results.
+GPUI enters the captured window after the current update releases it, during
+that update's effect cycle and before the invocation turn returns.
 
 The catalog retains one public definition per command name. An extension can
 register a handler for an existing name and a declared view kind. The foreground

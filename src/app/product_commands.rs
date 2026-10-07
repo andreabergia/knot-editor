@@ -302,6 +302,7 @@ impl ProductCommandDispatcher {
 
         let admitted = self.catalog.borrow().resolve(command.name.as_ref()).is_ok();
         let dispatcher = cx.entity();
+        // Release any window on the update stack before reentering it in this turn's effect cycle.
         cx.defer(move |cx| {
             let claim = if !admitted {
                 CommandClaim::Declined
