@@ -24,8 +24,9 @@ retain their own input behavior. Multi-keystroke sequences remain
 supported through gpui's key input path. An optional command value carries
 explicit arguments through the existing dispatcher.
 
-One application-owned registry holds native defaults, extension bindings, and
-personal bindings as slots keyed by owner, key sequence, and optional view kind.
+One application-owned registry keeps native defaults, extension bindings, and
+personal bindings as owner records keyed by key sequence and optional view kind.
+Mutations update one merged effective map; key dispatch reads that map directly.
 Native defaults use the same set and remove machinery as other sources;
 extension and config owners are their lifecycles. Setting the same slot again
 replaces it, and `knot.removeKeybinding(key, { view })` removes that owner's
@@ -38,8 +39,8 @@ view-specific bindings win over application-wide bindings; later registrations
 from different owners resolve otherwise equal conflicts. A personal
 application-wide binding can
 therefore replace a more specific earlier-source binding without guessing its
-view selector. gpui recognizes keys and contexts; Knot resolves the winning
-slot so gpui's view-depth matching cannot reverse source priority. A binding
+view selector. gpui recognizes keys and contexts; Knot reads the merged result
+so gpui's view-depth matching cannot reverse source priority. A binding
 resolves to one command; an
 unavailable command does not retry a lower-priority binding. Command fallback
 is D003a's handler routing.
@@ -79,6 +80,8 @@ post-init; post-init can override all installed extensions after startup.
 - ✅ Model owner slots, view-kind selectors, unbind rules, precedence, replacement,
   and removal without special native-binding behavior. Migrate fixed editor and
   product shortcuts into the registry.
+- ✅ Maintain one merged effective map for key dispatch and gpui binding generation;
+  retain owner records only to recompute affected keys after changes or unload.
 - ✅ Give the command palette a semantic command routed through D003a and replace
   its special gpui action. Keep palette focus and captured-origin behavior.
 - ✅ Bind keys to a Knot action that resolves the winning slot for the focused view.

@@ -58,6 +58,23 @@ pub(crate) enum BindingResolution {
     Unbound,
 }
 
+#[derive(Clone, Debug, Default, PartialEq)]
+struct EffectiveKey {
+    global: Option<BindingResolution>,
+    views: HashMap<String, BindingResolution>,
+}
+
+impl EffectiveKey {
+    fn resolve(&self, view: Option<&str>) -> Option<&BindingResolution> {
+        view.and_then(|view| self.views.get(view))
+            .or(self.global.as_ref())
+    }
+
+    fn is_empty(&self) -> bool {
+        self.global.is_none() && self.views.is_empty()
+    }
+}
+
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum BindingError {
     InvalidKey,
@@ -67,6 +84,7 @@ pub(crate) enum BindingError {
 #[derive(Default)]
 pub(crate) struct BindingRegistry {
     slots: HashMap<SlotKey, Slot>,
+    active: HashMap<String, EffectiveKey>,
     kinds: HashSet<String>,
     next_order: u64,
 }
@@ -102,16 +120,21 @@ impl BindingRegistry {
     ) -> Result<bool, BindingError> {
         let key = canonical_key(key)?;
         let view = self.validate_view(view)?;
-        let before = self.effective();
+        let before = self.active.get(&key).cloned();
         self.next_order += 1;
         self.slots.insert(
-            SlotKey { owner, key, view },
+            SlotKey {
+                owner,
+                key: key.clone(),
+                view,
+            },
             Slot {
                 command,
                 order: self.next_order,
             },
         );
-        Ok(before != self.effective())
+        self.refresh_key(&key);
+        Ok(before != self.active.get(&key).cloned())
     }
 
     pub(crate) fn remove(
@@ -122,61 +145,57 @@ impl BindingRegistry {
     ) -> Result<bool, BindingError> {
         let key = canonical_key(key)?;
         let view = self.validate_view(view)?;
-        let before = self.effective();
-        self.slots.remove(&SlotKey { owner, key, view });
-        Ok(before != self.effective())
+        let before = self.active.get(&key).cloned();
+        self.slots.remove(&SlotKey {
+            owner,
+            key: key.clone(),
+            view,
+        });
+        self.refresh_key(&key);
+        Ok(before != self.active.get(&key).cloned())
     }
 
     pub(crate) fn remove_owner(&mut self, owner: BindingOwner) -> bool {
-        let before = self.effective();
+        let keys = self
+            .slots
+            .keys()
+            .filter(|key| key.owner == owner)
+            .map(|key| key.key.clone())
+            .collect::<HashSet<_>>();
         self.slots.retain(|key, _| key.owner != owner);
-        before != self.effective()
+        let mut changed = false;
+        for key in keys {
+            let before = self.active.get(&key).cloned();
+            self.refresh_key(&key);
+            changed |= before != self.active.get(&key).cloned();
+        }
+        changed
     }
 
+    /// Reads a canonical key sequence from the merged map.
     pub(crate) fn resolve(&self, key: &str, view: Option<&str>) -> Option<BindingResolution> {
-        let key = canonical_key(key).ok()?;
-        self.slots
-            .iter()
-            .filter(|(slot_key, _)| {
-                slot_key.key == key && (slot_key.view.is_none() || slot_key.view.as_deref() == view)
-            })
-            .max_by_key(|(slot_key, slot)| {
-                (
-                    slot_key.owner.priority(),
-                    slot_key.view.is_some(),
-                    slot.order,
-                )
-            })
-            .map(|(_, slot)| match &slot.command {
-                Some(command) => BindingResolution::Command(command.clone()),
-                None => BindingResolution::Unbound,
-            })
+        self.active.get(key)?.resolve(view).cloned()
     }
 
     pub(crate) fn keys(&self) -> Vec<String> {
-        let mut keys = self
-            .slots
-            .keys()
-            .map(|slot| slot.key.clone())
-            .collect::<Vec<_>>();
+        let mut keys = self.active.keys().cloned().collect::<Vec<_>>();
         keys.sort();
-        keys.dedup();
         keys
     }
 
     fn gpui_bindings(&self) -> Vec<(String, String)> {
-        let mut kinds = self.kinds.iter().cloned().collect::<Vec<_>>();
-        kinds.sort();
         self.keys()
             .into_iter()
             .flat_map(|key| {
-                if self.resolve(&key, None).is_some() {
+                let effective = &self.active[&key];
+                if effective.global.is_some() {
                     return vec![(key, "product && !palette".to_owned())];
                 }
-                kinds
-                    .iter()
-                    .filter(|kind| self.resolve(&key, Some(kind)).is_some())
-                    .map(|kind| (key.clone(), format!("product > {}", view_context(kind))))
+                let mut views = effective.views.keys().collect::<Vec<_>>();
+                views.sort();
+                views
+                    .into_iter()
+                    .map(|view| (key.clone(), format!("product > {}", view_context(view))))
                     .collect()
             })
             .collect()
@@ -190,23 +209,43 @@ impl BindingRegistry {
         }
     }
 
-    fn effective(&self) -> Vec<(String, Option<String>, Option<BindingResolution>)> {
-        let keys = self.keys();
-        let mut kinds = self.kinds.iter().cloned().collect::<Vec<_>>();
-        kinds.sort();
-        keys.into_iter()
-            .flat_map(|key| {
-                let mut resolutions = vec![(key.clone(), None, self.resolve(&key, None))];
-                resolutions.extend(kinds.iter().map(|kind| {
+    fn refresh_key(&mut self, key: &str) {
+        let candidates = self
+            .slots
+            .iter()
+            .filter(|(slot_key, _)| slot_key.key == key)
+            .collect::<Vec<_>>();
+        let winner = |view: Option<&str>| {
+            candidates
+                .iter()
+                .filter(|(slot_key, _)| slot_key.view.is_none() || slot_key.view.as_deref() == view)
+                .max_by_key(|(slot_key, slot)| {
                     (
-                        key.clone(),
-                        Some(kind.clone()),
-                        self.resolve(&key, Some(kind)),
+                        slot_key.owner.priority(),
+                        slot_key.view.is_some(),
+                        slot.order,
                     )
-                }));
-                resolutions
+                })
+                .map(|(_, slot)| match &slot.command {
+                    Some(command) => BindingResolution::Command(command.clone()),
+                    None => BindingResolution::Unbound,
+                })
+        };
+        let global = winner(None);
+        let views = self
+            .kinds
+            .iter()
+            .filter_map(|kind| {
+                let resolution = winner(Some(kind))?;
+                (Some(&resolution) != global.as_ref()).then(|| (kind.clone(), resolution))
             })
-            .collect()
+            .collect();
+        let effective = EffectiveKey { global, views };
+        if effective.is_empty() {
+            self.active.remove(key);
+        } else {
+            self.active.insert(key.to_owned(), effective);
+        }
     }
 }
 
@@ -473,6 +512,40 @@ mod tests {
             Some("native")
         );
         assert!(!registry.remove_owner(extension));
+    }
+
+    #[test]
+    fn shadowed_source_changes_update_the_one_active_map_only_when_visible() {
+        let mut registry = BindingRegistry::new();
+        let extension = BindingOwner::Extension(ExtensionId::new(2), ExtensionLifecycleId::new(1));
+        let personal = BindingOwner::Personal(ExtensionId::new(3), ExtensionLifecycleId::new(1));
+        assert!(
+            registry
+                .set(extension, "cmd-a", None, Some(command("extension")))
+                .unwrap()
+        );
+        assert!(
+            registry
+                .set(personal, "cmd-a", None, Some(command("personal")))
+                .unwrap()
+        );
+        assert!(
+            !registry
+                .set(extension, "cmd-a", None, Some(command("updated")))
+                .unwrap()
+        );
+        assert_eq!(registry.keys(), vec!["cmd-a"]);
+        assert_eq!(
+            resolved(&registry, "cmd-a", Some("editor")).as_deref(),
+            Some("personal")
+        );
+        assert!(registry.remove_owner(personal));
+        assert_eq!(
+            resolved(&registry, "cmd-a", Some("editor")).as_deref(),
+            Some("updated")
+        );
+        assert!(registry.remove_owner(extension));
+        assert!(registry.keys().is_empty());
     }
 
     #[test]

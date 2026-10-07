@@ -46,12 +46,13 @@ binding slots. A slot contains an owner, key sequence, optional focused view
 kind, and a command or unbind rule. Personal slots outrank extension slots,
 which outrank native defaults. Within one source, a view-specific slot outranks
 an application-wide slot; later registrations break remaining ties. Unloading
-a lifecycle removes its slots. The registry resolves one binding before command
-routing; an unavailable command does not select another binding.
+a lifecycle removes its slots. Mutations refresh one merged effective map;
+command routing reads that map directly. An unavailable command does not
+select another binding.
 
 GPUI recognizes keys in product windows and invokes one Knot keymap action per
-effective key and scope. The action uses the focused view kind to resolve the
-registry and enters the captured command dispatcher. GPUI contexts limit scoped
+effective key and scope. The action uses the focused view kind to read the
+effective map and enters the captured command dispatcher. GPUI contexts limit scoped
 bindings to their views, so unrelated input and sequence prefixes reach their
 original view. The command palette retains its own input context. Every changed
 effective map rebuilds GPUI bindings from the registry, plus fixed bindings for
