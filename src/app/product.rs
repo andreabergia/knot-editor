@@ -19,6 +19,7 @@ use super::{
         FileSystemProviderRegistry, LocalFileSystemProvider, ResourceError, ResourceKind,
         ResourceStat, ResourceVersion,
     },
+    keymaps::{ApplicationKeymaps, BindingResolution, KeymapAction},
     model::BufferModel,
     open::{OpenResource, enumerate_directory, load_resource},
     product_commands::{
@@ -27,9 +28,9 @@ use super::{
         MOVE_TERMINAL_TO_NEW_WINDOW_COMMAND, NEW_COMMAND, NEW_TERMINAL_COMMAND, NEW_WINDOW_COMMAND,
         OPEN_COMMAND, PASTE_COMMAND, ProductCommandDispatcher, ProductCommandSource,
         ProductCommandTarget, QUIT_COMMAND, REDO_COMMAND, SAVE_AS_COMMAND, SAVE_COMMAND,
-        SELECT_ALL_COMMAND, SHOW_COMPLETIONS_COMMAND, SHOW_EXTENSION_REPORT_COMMAND,
-        SPLIT_HORIZONTAL_COMMAND, SPLIT_VERTICAL_COMMAND, ShowProductCommandPalette, UNDO_COMMAND,
-        dispatch_close_to_captured_target, dispatch_open_to_captured_target,
+        SELECT_ALL_COMMAND, SHOW_COMMAND_PALETTE_COMMAND, SHOW_COMPLETIONS_COMMAND,
+        SHOW_EXTENSION_REPORT_COMMAND, SPLIT_HORIZONTAL_COMMAND, SPLIT_VERTICAL_COMMAND,
+        UNDO_COMMAND, dispatch_close_to_captured_target, dispatch_open_to_captured_target,
         dispatch_save_to_captured_target,
     },
     terminal_session::TerminalSession,
@@ -469,10 +470,67 @@ impl ProductShell {
         self.dispatch_command(source.command(), target, cx);
     }
 
+    fn dispatch_keybinding(
+        &mut self,
+        action: &KeymapAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.command_palette.is_some() {
+            cx.propagate();
+            return;
+        }
+        let Some(target) = self.capture_command_target(window, cx) else {
+            cx.propagate();
+            return;
+        };
+        let view_kind = if self
+            .workspace_tree
+            .as_ref()
+            .is_some_and(|tree| Some(tree.focus_handle(cx)) == target.focus.upgrade())
+        {
+            Some("workspace-tree".to_owned())
+        } else if target.view.is_some() {
+            self.extension_tree.as_ref().and_then(|tree| {
+                (Some(tree.read(cx).instance_id()) == target.view
+                    && Some(tree.focus_handle(cx)) == target.focus.upgrade())
+                .then(|| tree.read(cx).kind().to_owned())
+            })
+        } else {
+            target.command_view(cx).and_then(|view| {
+                view.matches_focus(&target.focus, cx).then(|| match view {
+                    super::workbench::CommandView::Editor(_) => "editor".to_owned(),
+                    super::workbench::CommandView::Terminal(_) => "terminal".to_owned(),
+                    super::workbench::CommandView::Extension(view) => {
+                        view.read(cx).kind().to_owned()
+                    }
+                })
+            })
+        };
+        let resolution = cx
+            .global::<ApplicationKeymaps>()
+            .0
+            .resolve(&action.key, view_kind.as_deref());
+        match resolution {
+            Some(BindingResolution::Command(command)) => self.dispatch_command(command, target, cx),
+            Some(BindingResolution::Unbound) => {}
+            None => cx.propagate(),
+        }
+    }
+
     fn open_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(origin) = self.capture_command_target(window, cx) else {
             return;
         };
+        self.open_command_palette_from(origin, window, cx);
+    }
+
+    fn open_command_palette_from(
+        &mut self,
+        origin: ProductCommandTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let entries = Self::command_dispatcher(cx)
             .read(cx)
             .definitions()
@@ -2353,11 +2411,16 @@ impl ProductShell {
                 | SAVE_COMMAND
                 | SAVE_AS_COMMAND
                 | SHOW_COMPLETIONS_COMMAND
+                | SHOW_COMMAND_PALETTE_COMMAND
         ) && let Err(claim) = super::product_commands::validate_native_arguments(command)
         {
             return claim;
         }
         let result = match name {
+            SHOW_COMMAND_PALETTE_COMMAND => {
+                self.open_command_palette_from(target.clone(), window, cx);
+                CommandClaim::Finished(CommandOutcome::Completed)
+            }
             NEW_COMMAND => {
                 if self.new_document_in_pane(target.pane, window, cx) {
                     CommandClaim::Finished(CommandOutcome::Completed)
@@ -2661,11 +2724,7 @@ impl Render for ProductShell {
         div()
             .key_context("product")
             .on_action(cx.listener(Self::dispatch_source))
-            .on_action(
-                cx.listener(|this, _: &ShowProductCommandPalette, window, cx| {
-                    this.open_command_palette(window, cx)
-                }),
-            )
+            .on_action(cx.listener(Self::dispatch_keybinding))
             .flex()
             .flex_col()
             .size_full()
@@ -2715,7 +2774,7 @@ impl Render for ProductShell {
                         "commands",
                         "product-command-palette",
                         &entity,
-                        "",
+                        SHOW_COMMAND_PALETTE_COMMAND,
                     ))
                     .child(command_button(
                         extension_button_label,
@@ -2902,11 +2961,7 @@ fn command_button(
         .child(label)
         .on_click(move |_, window, cx| {
             shell.update(cx, |shell, cx| {
-                if command.is_empty() {
-                    shell.open_command_palette(window, cx);
-                } else {
-                    shell.dispatch_source(&ProductCommandSource::new(command), window, cx);
-                }
+                shell.dispatch_source(&ProductCommandSource::new(command), window, cx);
             })
         })
 }
@@ -3180,125 +3235,7 @@ pub(crate) fn run(initial_request: Option<OpenRequest>) {
 }
 
 pub(super) fn bind_product_keys(cx: &mut App) {
-    super::product_commands::bind_editing_keys(cx);
-    cx.bind_keys([
-        KeyBinding::new(
-            "cmd-n",
-            ProductCommandSource::new(NEW_COMMAND),
-            Some("product"),
-        ),
-        KeyBinding::new(
-            "cmd-t",
-            ProductCommandSource::new(NEW_COMMAND),
-            Some("product"),
-        ),
-        KeyBinding::new(
-            "cmd-shift-t",
-            ProductCommandSource::new(NEW_TERMINAL_COMMAND),
-            Some("product"),
-        ),
-        KeyBinding::new(
-            "cmd-ctrl-shift-n",
-            ProductCommandSource::new(MOVE_TERMINAL_TO_NEW_WINDOW_COMMAND),
-            Some("product"),
-        ),
-        KeyBinding::new(
-            "cmd-shift-n",
-            ProductCommandSource::new(NEW_WINDOW_COMMAND),
-            Some("product"),
-        ),
-        KeyBinding::new(
-            "cmd-o",
-            ProductCommandSource::new(OPEN_COMMAND),
-            Some("product"),
-        ),
-        KeyBinding::new(
-            "cmd-s",
-            ProductCommandSource::new(SAVE_COMMAND),
-            Some("product"),
-        ),
-        KeyBinding::new(
-            "cmd-shift-s",
-            ProductCommandSource::new(SAVE_AS_COMMAND),
-            Some("product"),
-        ),
-        KeyBinding::new(
-            "cmd-w",
-            ProductCommandSource::new(CLOSE_TAB_COMMAND),
-            Some("product"),
-        ),
-        KeyBinding::new(
-            "cmd-shift-w",
-            ProductCommandSource::new(CLOSE_WINDOW_COMMAND),
-            Some("product"),
-        ),
-        KeyBinding::new(
-            "cmd-k right",
-            ProductCommandSource::new(SPLIT_HORIZONTAL_COMMAND),
-            Some("product"),
-        ),
-        KeyBinding::new(
-            "cmd-k down",
-            ProductCommandSource::new(SPLIT_VERTICAL_COMMAND),
-            Some("product"),
-        ),
-        KeyBinding::new("cmd-shift-p", ShowProductCommandPalette, Some("product")),
-        KeyBinding::new(
-            "cmd-z",
-            ProductCommandSource::new(UNDO_COMMAND),
-            Some("product"),
-        ),
-        KeyBinding::new(
-            "cmd-shift-z",
-            ProductCommandSource::new(REDO_COMMAND),
-            Some("product"),
-        ),
-        KeyBinding::new(
-            "cmd-x",
-            ProductCommandSource::new(CUT_COMMAND),
-            Some("product"),
-        ),
-        KeyBinding::new(
-            "cmd-c",
-            ProductCommandSource::new(COPY_COMMAND),
-            Some("product"),
-        ),
-        KeyBinding::new(
-            "cmd-v",
-            ProductCommandSource::new(PASTE_COMMAND),
-            Some("product"),
-        ),
-        KeyBinding::new(
-            "cmd-a",
-            ProductCommandSource::new(SELECT_ALL_COMMAND),
-            Some("product"),
-        ),
-        KeyBinding::new(
-            "cmd-f",
-            ProductCommandSource::new(FIND_COMMAND),
-            Some("product"),
-        ),
-        KeyBinding::new(
-            "cmd-g",
-            ProductCommandSource::new(FIND_NEXT_COMMAND),
-            Some("product"),
-        ),
-        KeyBinding::new(
-            "cmd-shift-g",
-            ProductCommandSource::new(FIND_PREVIOUS_COMMAND),
-            Some("product"),
-        ),
-        KeyBinding::new(
-            "cmd-q",
-            ProductCommandSource::new(QUIT_COMMAND),
-            Some("product"),
-        ),
-        KeyBinding::new(
-            "cmd-q",
-            ProductCommandSource::new(QUIT_COMMAND),
-            Some("config-error"),
-        ),
-    ]);
+    super::keymaps::install(cx);
 }
 
 #[cfg(test)]
@@ -3307,10 +3244,10 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use gpui::{
-        AppContext, Focusable, KeyBinding, Modifiers, MouseButton, TestAppContext,
-        VisualTestContext, point, px,
+        AppContext, Focusable, Modifiers, MouseButton, TestAppContext, VisualTestContext, point, px,
     };
 
+    use super::super::keymaps::{ApplicationKeymaps, BindingOwner};
     use crate::host::protocol::{
         Command, CommandArgumentValue, CommandOutcome, ExtensionId, ExtensionLifecycleId,
     };
@@ -4495,6 +4432,7 @@ await commands.register("test.dispose-view-copy", async () => viewCopy.dispose()
 "#;
 
         let documents = install_globals(cx);
+        cx.update(super::bind_product_keys);
         let host = cx.update(super::super::extension_host::install);
         let document = cx.update(|cx| create_untitled_document(&documents, cx));
         let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
@@ -4592,6 +4530,41 @@ await commands.register("test.dispose-view-copy", async () => viewCopy.dispose()
         cx.update(|cx| tree.update(cx, |tree, cx| assert!(tree.select_item("first", cx))));
         let copy = dispatch_tree_copy(&shell, window, cx);
         assert_eq!(wait_for_command(copy, cx), CommandOutcome::Completed);
+        cx.update(|cx| {
+            assert!(
+                cx.global_mut::<ApplicationKeymaps>()
+                    .0
+                    .set(
+                        BindingOwner::Extension(key.extension, key.lifecycle),
+                        "cmd-j",
+                        Some("outline"),
+                        Some(Command {
+                            name: super::COPY_COMMAND.into(),
+                            arguments: CommandArgumentValue::Null,
+                        }),
+                    )
+                    .unwrap()
+            );
+            super::super::keymaps::rebuild(cx);
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string("untouched".into()));
+        });
+        cx.refresh().unwrap();
+        cx.simulate_keystrokes(window, "cmd-j");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            cx.run_until_parked();
+            if cx.read(|cx| {
+                cx.read_from_clipboard()
+                    .is_some_and(|item| item.text().as_deref() == Some("Selected tree item"))
+            }) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "view keybinding did not dispatch"
+            );
+            std::thread::yield_now();
+        }
         let nested = dispatch_tree_command(&shell, window, "test.nested-view-copy", cx);
         assert_eq!(wait_for_command(nested, cx), CommandOutcome::Completed);
         let nested_native = dispatch_tree_command(&shell, window, "test.nested-new", cx);
@@ -4685,6 +4658,14 @@ await commands.register("test.dispose-view-copy", async () => viewCopy.dispose()
         assert_eq!(wait_for_command(disposed, cx), CommandOutcome::Unavailable);
 
         host.update(cx, |host, cx| host.unload(key, cx).unwrap());
+        cx.read(|cx| {
+            assert!(
+                cx.global::<ApplicationKeymaps>()
+                    .0
+                    .resolve("cmd-j", Some("outline"))
+                    .is_none()
+            );
+        });
         let unavailable = dispatch_tree_copy(&second_shell, second_window, cx);
         assert_eq!(
             wait_for_command(unavailable, cx),
@@ -5145,13 +5126,7 @@ await commands.registerForView("outline", "copy", async () => {
     #[gpui::test]
     async fn keybinding_adapter_enters_the_product_dispatcher(cx: &mut TestAppContext) {
         let documents = install_globals(cx);
-        cx.update(|cx| {
-            cx.bind_keys([KeyBinding::new(
-                "cmd-n",
-                ProductCommandSource::new(NEW_COMMAND),
-                Some("product"),
-            )]);
-        });
+        cx.update(super::bind_product_keys);
         let document = cx.update(|cx| create_untitled_document(&documents, cx));
         let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
         let (shell, window_handle) = product_window(document, model, cx);
@@ -5181,6 +5156,151 @@ await commands.registerForView("outline", "copy", async () => {
                     .read(cx)
                     .last_outcome(),
                 Some(&CommandOutcome::Completed)
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn personal_global_binding_overrides_editor_default_in_every_window(cx: &mut TestAppContext) {
+        let documents = install_globals(cx);
+        cx.update(super::bind_product_keys);
+        let mut windows = Vec::new();
+        for _ in 0..2 {
+            let document = cx.update(|cx| create_untitled_document(&documents, cx));
+            let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+            let (shell, window) = product_window(document, model.clone(), cx);
+            cx.update_window(window, |_, window, cx| {
+                shell.read(cx).focus_active_editor(window, cx)
+            })
+            .unwrap();
+            windows.push((window, model));
+        }
+        cx.update(|cx| {
+            let changed = cx
+                .global_mut::<ApplicationKeymaps>()
+                .0
+                .set(
+                    BindingOwner::Personal(ExtensionId::new(0), ExtensionLifecycleId::new(1)),
+                    "Enter",
+                    None,
+                    Some(Command {
+                        name: super::super::product_commands::INSERT_TAB_COMMAND.into(),
+                        arguments: CommandArgumentValue::Null,
+                    }),
+                )
+                .unwrap();
+            assert!(changed);
+            super::super::keymaps::rebuild(cx);
+        });
+        cx.refresh().unwrap();
+        for (window, _) in &windows {
+            cx.simulate_keystrokes(*window, "enter");
+        }
+        cx.run_until_parked();
+        cx.read(|cx| {
+            for (_, model) in &windows {
+                assert_eq!(model.read(cx).text(), "\t");
+            }
+        });
+    }
+
+    #[gpui::test]
+    async fn editor_unbind_leaves_global_binding_available_in_terminal(cx: &mut TestAppContext) {
+        let documents = install_globals(cx);
+        cx.update(super::bind_product_keys);
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        let (shell, window) = product_window(document, model, cx);
+        cx.update_window(window, |_, window, cx| {
+            shell.read(cx).focus_active_editor(window, cx)
+        })
+        .unwrap();
+        cx.update(|cx| {
+            assert!(
+                cx.global_mut::<ApplicationKeymaps>()
+                    .0
+                    .set(
+                        BindingOwner::Personal(ExtensionId::new(0), ExtensionLifecycleId::new(1)),
+                        "cmd-n",
+                        Some("editor"),
+                        None,
+                    )
+                    .unwrap()
+            );
+            super::super::keymaps::rebuild(cx);
+        });
+        cx.refresh().unwrap();
+        cx.simulate_keystrokes(window, "cmd-n");
+        cx.run_until_parked();
+        cx.read(|cx| assert_eq!(shell.read(cx).workbench.read(cx).panes()[0].tabs().len(), 1));
+
+        let terminal = dispatch_product_command(&shell, window, NEW_TERMINAL_COMMAND, cx);
+        assert_eq!(
+            terminal.completion.await.unwrap(),
+            CommandOutcome::Completed
+        );
+        cx.refresh().unwrap();
+        cx.simulate_keystrokes(window, "cmd-n");
+        cx.run_until_parked();
+        cx.read(|cx| assert_eq!(shell.read(cx).workbench.read(cx).panes()[0].tabs().len(), 3));
+    }
+
+    #[gpui::test]
+    fn sequence_prefix_dispatches_the_product_command(cx: &mut TestAppContext) {
+        let documents = install_globals(cx);
+        cx.update(super::bind_product_keys);
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        let (shell, window) = product_window(document, model, cx);
+        cx.update_window(window, |_, window, cx| {
+            shell.read(cx).focus_active_editor(window, cx)
+        })
+        .unwrap();
+        cx.refresh().unwrap();
+        cx.simulate_keystrokes(window, "cmd-k right");
+        cx.run_until_parked();
+        cx.read(|cx| assert_eq!(shell.read(cx).workbench.read(cx).panes().len(), 2));
+    }
+
+    #[gpui::test]
+    fn unavailable_high_priority_binding_does_not_invoke_native_default(cx: &mut TestAppContext) {
+        let documents = install_globals(cx);
+        cx.update(super::bind_product_keys);
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        let (shell, window) = product_window(document, model, cx);
+        cx.update_window(window, |_, window, cx| {
+            shell.read(cx).focus_active_editor(window, cx)
+        })
+        .unwrap();
+        cx.update(|cx| {
+            assert!(
+                cx.global_mut::<ApplicationKeymaps>()
+                    .0
+                    .set(
+                        BindingOwner::Personal(ExtensionId::new(0), ExtensionLifecycleId::new(1)),
+                        "cmd-n",
+                        None,
+                        Some(Command {
+                            name: "missing.command".into(),
+                            arguments: CommandArgumentValue::Null,
+                        }),
+                    )
+                    .unwrap()
+            );
+            super::super::keymaps::rebuild(cx);
+        });
+        cx.refresh().unwrap();
+        cx.simulate_keystrokes(window, "cmd-n");
+        cx.run_until_parked();
+        cx.read(|cx| {
+            assert_eq!(shell.read(cx).workbench.read(cx).panes()[0].tabs().len(), 1);
+            assert_eq!(
+                cx.global::<ApplicationProductCommands>()
+                    .0
+                    .read(cx)
+                    .last_outcome(),
+                Some(&CommandOutcome::Unavailable),
             );
         });
     }
@@ -5224,6 +5344,7 @@ await commands.registerForView("outline", "copy", async () => {
     #[gpui::test]
     async fn palette_discovers_commands_and_keeps_its_opening_target(cx: &mut TestAppContext) {
         let documents = install_globals(cx);
+        cx.update(super::bind_product_keys);
         let document = cx.update(|cx| create_untitled_document(&documents, cx));
         let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
         let (shell, window_handle) = product_window(document, model, cx);
@@ -5246,7 +5367,12 @@ await commands.registerForView("outline", "copy", async () => {
         });
         cx.update_window(window_handle, |_, window, cx| {
             first_editor.focus_handle(cx).focus(window);
-            shell.update(cx, |shell, cx| shell.open_command_palette(window, cx));
+        })
+        .unwrap();
+        cx.simulate_keystrokes(window_handle, "cmd-shift-p");
+        cx.run_until_parked();
+        cx.update_window(window_handle, |_, _, cx| {
+            assert!(shell.read(cx).command_palette.is_some());
             let workbench = shell.read(cx).workbench.clone();
             workbench.update(cx, |workbench, _| {
                 workbench.focus_pane(second_pane);

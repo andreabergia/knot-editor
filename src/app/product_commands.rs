@@ -30,6 +30,7 @@ pub(crate) const FIND_NEXT_COMMAND: &str = "editor.find-next";
 pub(crate) const FIND_PREVIOUS_COMMAND: &str = "editor.find-previous";
 pub(crate) const SHOW_COMPLETIONS_COMMAND: &str = "editor.show-completions";
 pub(crate) const SHOW_EXTENSION_REPORT_COMMAND: &str = "extensions.show-startup-report";
+pub(crate) const SHOW_COMMAND_PALETTE_COMMAND: &str = "workbench.show-command-palette";
 pub(crate) const EDITOR_MOVE_PREFIX: &str = "editor.move-";
 pub(crate) const EDITOR_SELECT_PREFIX: &str = "editor.select-";
 
@@ -120,6 +121,7 @@ const PRODUCT_COMMANDS: &[(&str, &str)] = &[
         SHOW_EXTENSION_REPORT_COMMAND,
         "Show Extension Startup Report",
     ),
+    (SHOW_COMMAND_PALETTE_COMMAND, "Show Command Palette"),
 ];
 
 #[derive(Clone, PartialEq, Action)]
@@ -140,10 +142,6 @@ impl ProductCommandSource {
         }
     }
 }
-
-#[derive(Clone, PartialEq, Action)]
-#[action(namespace = knot, no_json)]
-pub(crate) struct ShowProductCommandPalette;
 
 #[derive(Clone, PartialEq)]
 pub(crate) struct ProductCommandTarget {
@@ -522,57 +520,4 @@ pub(crate) fn dispatch_to_captured_target(
 #[cfg(test)]
 pub(crate) fn product_command_names() -> impl Iterator<Item = &'static str> {
     PRODUCT_COMMANDS.iter().map(|(name, _)| *name)
-}
-
-/// Editing bindings share the captured product command path.
-pub(crate) fn bind_editing_keys(cx: &mut App) {
-    cx.bind_keys(
-        [
-            ("left", MOVE_LEFT_COMMAND),
-            ("shift-left", SELECT_LEFT_COMMAND),
-            ("right", MOVE_RIGHT_COMMAND),
-            ("shift-right", SELECT_RIGHT_COMMAND),
-            ("up", MOVE_UP_COMMAND),
-            ("shift-up", SELECT_UP_COMMAND),
-            ("down", MOVE_DOWN_COMMAND),
-            ("shift-down", SELECT_DOWN_COMMAND),
-            ("alt-left", MOVE_WORD_LEFT_COMMAND),
-            ("shift-alt-left", SELECT_WORD_LEFT_COMMAND),
-            ("alt-right", MOVE_WORD_RIGHT_COMMAND),
-            ("shift-alt-right", SELECT_WORD_RIGHT_COMMAND),
-            ("cmd-left", MOVE_LINE_START_COMMAND),
-            ("shift-cmd-left", SELECT_LINE_START_COMMAND),
-            ("cmd-right", MOVE_LINE_END_COMMAND),
-            ("shift-cmd-right", SELECT_LINE_END_COMMAND),
-            ("home", MOVE_LINE_START_COMMAND),
-            ("shift-home", SELECT_LINE_START_COMMAND),
-            ("end", MOVE_LINE_END_COMMAND),
-            ("shift-end", SELECT_LINE_END_COMMAND),
-            ("pageup", MOVE_PAGE_UP_COMMAND),
-            ("shift-pageup", SELECT_PAGE_UP_COMMAND),
-            ("pagedown", MOVE_PAGE_DOWN_COMMAND),
-            ("shift-pagedown", SELECT_PAGE_DOWN_COMMAND),
-            ("cmd-up", MOVE_DOCUMENT_START_COMMAND),
-            ("shift-cmd-up", SELECT_DOCUMENT_START_COMMAND),
-            ("cmd-down", MOVE_DOCUMENT_END_COMMAND),
-            ("shift-cmd-down", SELECT_DOCUMENT_END_COMMAND),
-            ("enter", INSERT_NEWLINE_COMMAND),
-            ("tab", INSERT_TAB_COMMAND),
-            ("backspace", DELETE_BACKWARD_COMMAND),
-            ("delete", DELETE_FORWARD_COMMAND),
-        ]
-        .into_iter()
-        .map(|(key, command)| {
-            KeyBinding::new(
-                key,
-                ProductCommandSource::new(command),
-                Some("product > editor"),
-            )
-        }),
-    );
-    cx.bind_keys([KeyBinding::new(
-        "ctrl-space",
-        ProductCommandSource::new(SHOW_COMPLETIONS_COMMAND),
-        Some("product > editor"),
-    )]);
 }

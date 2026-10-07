@@ -1407,6 +1407,21 @@ impl ProductExtensionHost {
         if !self.lifecycles.remove(&key) {
             return;
         }
+        let personal = self.personal_config_key == Some(key);
+        if cx.has_global::<super::keymaps::ApplicationKeymaps>() {
+            let owner = if personal {
+                super::keymaps::BindingOwner::Personal(key.extension, key.lifecycle)
+            } else {
+                super::keymaps::BindingOwner::Extension(key.extension, key.lifecycle)
+            };
+            if cx
+                .global_mut::<super::keymaps::ApplicationKeymaps>()
+                .0
+                .remove_owner(owner)
+            {
+                super::keymaps::rebuild(cx);
+            }
+        }
         if self.personal_config_key == Some(key) {
             self.personal_config_key = None;
         }

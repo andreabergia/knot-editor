@@ -1,6 +1,6 @@
 # D003b: JavaScript-configurable keymaps
 
-Status: in progress. Checkpoint 1 implementation is ready for review.
+Status: in progress. Checkpoint 2 implementation is ready for review.
 
 Source: D003, promoted from the [deferred-work register](../roadmap.md).
 Depends on the [D003a focused command-routing plan](../archive/plans/d003a-command-routing-plan.md).
@@ -65,32 +65,32 @@ post-init; post-init can override all installed extensions after startup.
 
 ## Checkpoints
 
-### 1. Public root module 🟡
+### 1. Public root module ✅
 
 - ✅ Replace the `knot:editor` public facade with the sole public `knot` module.
   Preserve the `editor`, `commands`, and `workbench` namespaces under a module
   namespace import; migrate fixtures, tests, and documentation. Remove the old
   specifier without a compatibility alias and keep `knot:bootstrap` private.
 - ✅ Test public import resolution and rejection of private and removed specifiers.
-- ⏳ **Review gate:** inspect the root module surface and migrated imports.
+- ✅ **Review gate:** inspected the root module surface and migrated imports.
 
-### 2. Uniform binding registry and gpui adapter ⬜
+### 2. Uniform binding registry and gpui adapter 🟡
 
-- Model owner slots, view-kind selectors, unbind rules, precedence, replacement,
+- ✅ Model owner slots, view-kind selectors, unbind rules, precedence, replacement,
   and removal without special native-binding behavior. Migrate fixed editor and
   product shortcuts into the registry.
-- Give the command palette a semantic command routed through D003a and replace
+- ✅ Give the command palette a semantic command routed through D003a and replace
   its special gpui action. Keep palette focus and captured-origin behavior.
-- Bind keys to a Knot action that resolves the winning slot for the focused view.
+- ✅ Bind keys to a Knot action that resolves the winning slot for the focused view.
   Rebuild gpui's map after effective changes, including the separate fixed
   config-error bindings. Validate sequences and selectors without panics;
   preserve multi-keystroke input and avoid consuming keys outside their scope.
-- First verify that a personal global binding beats an editor-specific default
+- ✅ First verify that a personal global binding beats an editor-specific default
   and an editor-only unbind leaves the terminal binding usable. Then test owner
   replacement and removal, later extension registration, same-source conflicts,
   view kinds, lifecycle cleanup, sequence prefixes, palette invocation, and
   multi-window updates.
-- **Review gate:** inspect resolution rules, gpui behavior, and the default inventory.
+- ⏳ **Review gate:** inspect resolution rules, gpui behavior, and the default inventory.
 
 ### 3. JavaScript mutations and lifecycle ⬜
 

@@ -78,6 +78,10 @@ pub(crate) struct TreeView {
 }
 
 impl TreeView {
+    pub(crate) fn kind(&self) -> &str {
+        &self.view_id
+    }
+
     pub(crate) fn new(view_id: impl Into<String>, cx: &mut Context<Self>) -> Self {
         Self {
             view_id: view_id.into(),
@@ -483,6 +487,9 @@ impl Render for TreeView {
         let selected = self.selected.clone();
         let expanded = self.expanded.clone();
         let entity = cx.entity();
+        let mut key_context = KeyContext::default();
+        key_context.add(TREE_KEY_CONTEXT);
+        key_context.add(super::keymaps::view_context(&self.view_id));
         uniform_list("extension-tree", rows.len(), move |range, _, _| {
             range
                 .map(|index| match &rows[index] {
@@ -540,7 +547,7 @@ impl Render for TreeView {
         .h_full()
         .track_scroll(self.scroll.clone())
         .track_focus(&self.focus)
-        .key_context(TREE_KEY_CONTEXT)
+        .key_context(key_context)
         .on_key_down(cx.listener(Self::on_key_down))
     }
 }

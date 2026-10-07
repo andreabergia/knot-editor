@@ -45,6 +45,7 @@ mod extension_semantics;
 )]
 mod filesystem;
 mod history;
+mod keymaps;
 #[allow(
     dead_code,
     reason = "retained application boundary outside the current product surface"

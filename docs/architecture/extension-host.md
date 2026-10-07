@@ -27,6 +27,8 @@ URLs that remain within the package root and name a captured source. Dynamic
 imports reject. Compilation and runtime failures carry generated source URL,
 line, and column as Knot-owned data. Package entry failure remains a failed
 startup attempt for the application to roll back through lifecycle unload.
+The application also removes every keymap slot owned by that lifecycle during
+unload, including after failed startup.
 
 The scheduler owns a V8-independent state machine and a fixed worker pool of
 `min(available_parallelism, 4)` threads by default. Tests and diagnostics may
