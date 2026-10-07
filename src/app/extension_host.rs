@@ -1031,6 +1031,8 @@ impl ProductExtensionHost {
                                 .await
                                 .unwrap_or(crate::host::protocol::CommandOutcome::Cancelled);
                             let _ = this.update(cx, |this, cx| {
+                                let outcome =
+                                    this.validate_view_command_outcome(id, root, outcome, cx);
                                 this.commands.complete(id, outcome);
                                 if id == root {
                                     this.command_targets.remove(&root);
@@ -1046,6 +1048,47 @@ impl ProductExtensionHost {
         }
         self.view_command_handlers
             .retain(|invocation, _| self.commands.contains_invocation(*invocation));
+    }
+
+    fn validate_view_command_outcome(
+        &self,
+        invocation: CommandInvocationId,
+        root: CommandInvocationId,
+        outcome: crate::host::protocol::CommandOutcome,
+        cx: &App,
+    ) -> crate::host::protocol::CommandOutcome {
+        use crate::host::protocol::CommandOutcome;
+
+        if invocation == root {
+            return outcome;
+        }
+        let Some((handler, name)) = self.view_command_handlers.get(&invocation) else {
+            return outcome;
+        };
+        let Some(target) = self.command_targets.get(&root) else {
+            return CommandOutcome::InvalidTarget;
+        };
+        if let Err(invalid) = target
+            .validate_tab(cx)
+            .and_then(|()| target.validate_view(cx))
+        {
+            return invalid;
+        }
+        if !self
+            .lifecycles
+            .contains(&ExtensionKey::new(handler.extension, handler.lifecycle))
+            || target.view.is_none_or(|view| {
+                self.commands
+                    .catalog()
+                    .borrow()
+                    .resolve_view(view, name.as_ref())
+                    != Some(*handler)
+            })
+        {
+            CommandOutcome::Cancelled
+        } else {
+            outcome
+        }
     }
 
     fn handle_tree_event(&mut self, event: &TreeViewEvent, cx: &mut Context<Self>) {
@@ -1463,6 +1506,36 @@ mod tests {
             }),
             RequestRoute::Semantic
         );
+    }
+
+    #[gpui::test]
+    fn nested_view_result_rejects_a_detached_captured_target(cx: &mut TestAppContext) {
+        use crate::host::protocol::{CommandOutcome, CommandRegistrationId};
+
+        cx.update(|cx| {
+            let commands = cx.new(super::super::product_commands::ProductCommandDispatcher::new);
+            cx.set_global(ApplicationProductCommands(commands));
+            let host = install(cx);
+            let root = CommandInvocationId::new(1);
+            let child = CommandInvocationId::new(2);
+            host.update(cx, |host, cx| {
+                host.view_command_handlers.insert(
+                    child,
+                    (
+                        CommandTarget {
+                            registration: CommandRegistrationId::new(1),
+                            extension: ExtensionId::new(1),
+                            lifecycle: ExtensionLifecycleId::new(1),
+                        },
+                        "copy".into(),
+                    ),
+                );
+                assert_eq!(
+                    host.validate_view_command_outcome(child, root, CommandOutcome::Completed, cx),
+                    CommandOutcome::InvalidTarget
+                );
+            });
+        });
     }
 
     #[gpui::test]
