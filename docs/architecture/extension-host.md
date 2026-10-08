@@ -128,6 +128,15 @@ drains microtasks before the root is inspected again. Multiple requests may be
 pending and may settle out of order; unrelated roots remain queued until the
 active root and its detached native requests have all settled.
 
+Synchronous JavaScript keybinding calls queue Knot-owned mutations in the
+runtime. After the current V8 turn, the engine sends one ordered batch and
+waits for the foreground to validate and apply it atomically. Responses to
+earlier host requests wait until the batch settles, so an `await` continuation
+cannot run before its preceding keybindings take effect. A batch error fails
+the current script turn; a command handler receives a handler-failure outcome.
+Config startup treats the error as fatal, while an installed extension failure
+is isolated to that lifecycle.
+
 Unload first marks the scheduler lifecycle stopping and terminates any running
 JavaScript through a thread-safe control handle. Startup rollback, unload,
 fatal termination, heap failure, caught worker panic, and pool shutdown all

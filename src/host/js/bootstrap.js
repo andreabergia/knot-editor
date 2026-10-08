@@ -1,6 +1,22 @@
 const nativeBindings = globalThis.__knotNativeBindings;
 delete globalThis.__knotNativeBindings;
 
+export function keybinding(key, command, options) {
+  if (command !== null && typeof command === "object" && !Array.isArray(command)) {
+    try {
+      if (command.arguments !== undefined) validateCommandArguments(command.arguments);
+    } catch (error) {
+      nativeBindings.keybinding("invalid", String(error));
+      return;
+    }
+  }
+  nativeBindings.keybinding("set", key, command, options);
+}
+
+export function removeKeybinding(key, options) {
+  nativeBindings.keybinding("remove", key, undefined, options);
+}
+
 const hostErrorNames = Object.freeze({
   UnsupportedOperation: "UnsupportedOperationError",
   BufferClosed: "BufferClosedError",

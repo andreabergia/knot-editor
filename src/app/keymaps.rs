@@ -4,7 +4,9 @@ use std::collections::{HashMap, HashSet};
 
 use gpui::{App, DummyKeyboardMapper, Global, KeyBinding, KeyBindingContextPredicate, Keystroke};
 
-use crate::host::protocol::{Command, CommandArgumentValue, ExtensionId, ExtensionLifecycleId};
+use crate::host::protocol::{
+    Command, CommandArgumentValue, ExtensionId, ExtensionLifecycleId, KeybindingMutation,
+};
 
 use super::product_commands::{
     CLOSE_TAB_COMMAND, CLOSE_WINDOW_COMMAND, COPY_COMMAND, CUT_COMMAND, DELETE_BACKWARD_COMMAND,
@@ -81,7 +83,7 @@ pub(crate) enum BindingError {
     InvalidView,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct BindingRegistry {
     slots: HashMap<SlotKey, Slot>,
     active: HashMap<String, EffectiveKey>,
@@ -170,6 +172,46 @@ impl BindingRegistry {
             changed |= before != self.active.get(&key).cloned();
         }
         changed
+    }
+
+    pub(crate) fn apply_batch(
+        &mut self,
+        owner: BindingOwner,
+        mutations: &[KeybindingMutation],
+    ) -> Result<bool, String> {
+        let mut candidate = self.clone();
+        for (index, mutation) in mutations.iter().enumerate() {
+            let result = match mutation {
+                KeybindingMutation::Set { key, view, command } => {
+                    if command
+                        .as_ref()
+                        .is_some_and(|command| command.name.as_ref().is_empty())
+                    {
+                        return Err(format!(
+                            "keybinding operation {}: command name is empty",
+                            index + 1
+                        ));
+                    }
+                    candidate.set(owner, key, view.as_deref(), command.clone())
+                }
+                KeybindingMutation::Remove { key, view } => {
+                    candidate.remove(owner, key, view.as_deref())
+                }
+                KeybindingMutation::Invalid(message) => {
+                    return Err(format!("keybinding operation {}: {message}", index + 1));
+                }
+            };
+            if let Err(error) = result {
+                let message = match error {
+                    BindingError::InvalidKey => "invalid key sequence",
+                    BindingError::InvalidView => "unknown view kind",
+                };
+                return Err(format!("keybinding operation {}: {message}", index + 1));
+            }
+        }
+        let changed = self.active != candidate.active;
+        *self = candidate;
+        Ok(changed)
     }
 
     /// Reads a canonical key sequence from the merged map.
@@ -743,5 +785,60 @@ mod tests {
                     .is::<super::super::product_commands::ProductCommandSource>()
             );
         });
+    }
+
+    #[test]
+    fn batch_is_ordered_atomic_and_reports_only_effective_changes() {
+        let mut registry = BindingRegistry::new();
+        let owner = BindingOwner::Personal(ExtensionId::new(0), ExtensionLifecycleId::new(1));
+        let set = |name: &str| KeybindingMutation::Set {
+            key: "cmd-c".into(),
+            view: None,
+            command: Some(command(name)),
+        };
+        assert!(
+            registry
+                .apply_batch(owner, &[set("first"), set("second")])
+                .unwrap()
+        );
+        assert_eq!(
+            resolved(&registry, "cmd-c", None).as_deref(),
+            Some("second")
+        );
+        assert!(
+            !registry
+                .apply_batch(owner, &[set("temporary"), set("second")])
+                .unwrap()
+        );
+        let error = registry
+            .apply_batch(
+                owner,
+                &[
+                    set("uncommitted"),
+                    KeybindingMutation::Set {
+                        key: "bad-modifier-key".into(),
+                        view: None,
+                        command: Some(command("invalid")),
+                    },
+                ],
+            )
+            .unwrap_err();
+        assert!(error.contains("operation 2"));
+        assert_eq!(
+            resolved(&registry, "cmd-c", None).as_deref(),
+            Some("second")
+        );
+        assert!(
+            registry
+                .apply_batch(
+                    owner,
+                    &[KeybindingMutation::Remove {
+                        key: "cmd-c".into(),
+                        view: None,
+                    }],
+                )
+                .unwrap()
+        );
+        assert_eq!(resolved(&registry, "cmd-c", None), None);
     }
 }

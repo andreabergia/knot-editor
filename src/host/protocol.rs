@@ -196,6 +196,21 @@ pub struct Command {
     pub arguments: CommandArgumentValue,
 }
 
+/// One ordered keymap change captured from a JavaScript turn.
+#[derive(Clone, Debug, PartialEq)]
+pub enum KeybindingMutation {
+    Set {
+        key: String,
+        view: Option<String>,
+        command: Option<Command>,
+    },
+    Remove {
+        key: String,
+        view: Option<String>,
+    },
+    Invalid(String),
+}
+
 /// The stable result of attempting to invoke a command.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
@@ -369,6 +384,9 @@ pub struct HostRequest {
 /// Editor operations available to the initial buffer API boundary.
 #[derive(Clone, Debug, PartialEq)]
 pub enum HostOperation {
+    MutateKeybindings {
+        mutations: Vec<KeybindingMutation>,
+    },
     ActiveBuffer,
     Snapshot {
         buffer: BufferHandle,
@@ -445,6 +463,9 @@ pub struct HostResponse {
 /// Successful values returned by [`HostOperation`].
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum HostResponseValue {
+    KeybindingsApplied {
+        error: Option<String>,
+    },
     ActiveBuffer(Option<BufferHandle>),
     Snapshot(TextSnapshot),
     AppliedEdits {

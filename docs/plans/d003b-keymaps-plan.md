@@ -1,6 +1,6 @@
 # D003b: JavaScript-configurable keymaps
 
-Status: in progress. Checkpoint 2 implementation is ready for review.
+Status: in progress. Checkpoint 3 implementation is ready for review.
 
 Source: D003, promoted from the [deferred-work register](../roadmap.md).
 Depends on the [D003a focused command-routing plan](../archive/plans/d003a-command-routing-plan.md).
@@ -61,8 +61,8 @@ post-init; post-init can override all installed extensions after startup.
   context-expression language, modal layer system, or live config-file reload.
 - No key bindings for raw text insertion, IME composition, pointer events, or
   terminal byte protocols.
-- The exact command-argument syntax is settled at the API review gate. The
-  simple two-string call above is the required common case.
+- The command-argument syntax is reviewed at checkpoint 3. The simple
+  two-string call above is the required common case.
 
 ## Checkpoints
 
@@ -75,7 +75,7 @@ post-init; post-init can override all installed extensions after startup.
 - ✅ Test public import resolution and rejection of private and removed specifiers.
 - ✅ **Review gate:** inspected the root module surface and migrated imports.
 
-### 2. Uniform binding registry and gpui adapter 🟡
+### 2. Uniform binding registry and gpui adapter ✅
 
 - ✅ Model owner slots, view-kind selectors, unbind rules, precedence, replacement,
   and removal without special native-binding behavior. Migrate fixed editor and
@@ -93,23 +93,41 @@ post-init; post-init can override all installed extensions after startup.
   replacement and removal, later extension registration, same-source conflicts,
   view kinds, lifecycle cleanup, sequence prefixes, palette invocation, and
   multi-window updates.
-- ⏳ **Review gate:** inspect resolution rules, gpui behavior, and the default inventory.
+- ✅ **Review gate:** inspected resolution rules, gpui behavior, and the default inventory.
 
-### 3. JavaScript mutations and lifecycle ⬜
+### 3. JavaScript mutations and lifecycle 🟡
 
-- Expose synchronous, void `knot.keybinding(key, command, options?)` and
+- ✅ Expose synchronous, void `knot.keybinding(key, command, options?)` and
   `knot.removeKeybinding(key, options?)`, including null-command unbinding,
   optional view kind, and command arguments. Queue ordered mutations in `host`;
   transport one batch of Knot-owned data after each V8 turn.
-- Validate and apply each batch atomically, rebuild at most once per changed
+- ✅ Validate and apply each batch atomically, rebuild at most once per changed
   batch, and settle errors before the turn completes. Make changes effective at
   runtime while preserving fatal personal-config errors and independent extension
   startup failures.
-- Test pre-init, extension, and post-init ordering; runtime replacement;
+- ✅ Test pre-init, extension, and post-init ordering; runtime replacement;
   same-turn coalescing; await boundaries; invalid-input diagnostics and rollback;
   explicit removal; unbinds; failed startup; and lifecycle unload.
-- **Review gate:** approve the JavaScript API and turn/error behavior using a
+- ⏳ **Review gate:** approve the JavaScript API and turn/error behavior using a
   small real configuration example.
+
+Example config:
+
+```js
+import * as knot from 'knot';
+
+knot.keybinding('cmd-shift-l', 'file.new');
+knot.keybinding('cmd-k right',
+  { name: 'my.command', arguments: { direction: 'right' } },
+  { view: 'editor' });
+knot.keybinding('cmd-x', null); // Leave the key to the focused view.
+knot.removeKeybinding('cmd-x'); // Reveal the previous binding.
+```
+
+Each call returns `undefined`. A turn sends one ordered atomic batch. An
+invalid operation fails that turn with its operation number; a runtime command
+reports a handler failure, config startup fails, and another extension can
+still load. An `await` continuation starts a later batch.
 
 ### 4. Product validation and architecture record ⬜
 

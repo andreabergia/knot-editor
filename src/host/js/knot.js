@@ -1,6 +1,8 @@
 import {
   activeBuffer,
   invalidCommandArguments,
+  keybinding,
+  removeKeybinding,
   invokeCommand,
   registerCommand,
   registerViewCommand,
@@ -9,6 +11,8 @@ import {
   registerCompletionProvider,
   registerTreeDataProvider,
 } from "knot:bootstrap";
+
+export { keybinding, removeKeybinding };
 
 export const editor = Object.freeze({
   activeBuffer,

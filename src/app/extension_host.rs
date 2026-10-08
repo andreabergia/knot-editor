@@ -819,11 +819,54 @@ impl ProductExtensionHost {
             }
             RequestRoute::View => self.dispatch_view_request(request, cx),
             RequestRoute::Semantic => Some(self.semantics.dispatch(request, cx)),
+            RequestRoute::Keymap => Some(self.apply_keybinding_batch(request, cx)),
         };
         if let Some(response) = response {
             let _ = self.pool.respond(response);
         }
         self.drain_command_events(cx);
+    }
+
+    fn apply_keybinding_batch(
+        &mut self,
+        request: HostRequest,
+        cx: &mut Context<Self>,
+    ) -> crate::host::protocol::HostResponse {
+        use crate::host::protocol::{HostRequestError, HostResponse, HostResponseValue};
+
+        let key = ExtensionKey::new(request.extension, request.lifecycle);
+        let result = if !self.lifecycles.contains(&key) {
+            Err(HostRequestError::Cancelled)
+        } else if !cx.has_global::<super::keymaps::ApplicationKeymaps>() {
+            Ok(HostResponseValue::KeybindingsApplied {
+                error: Some("application keymap is unavailable".into()),
+            })
+        } else {
+            let owner = if self.personal_config_key == Some(key) {
+                super::keymaps::BindingOwner::Personal(key.extension, key.lifecycle)
+            } else {
+                super::keymaps::BindingOwner::Extension(key.extension, key.lifecycle)
+            };
+            let HostOperation::MutateKeybindings { mutations } = &request.operation else {
+                unreachable!("only keymap mutations enter this route");
+            };
+            let result = cx
+                .global_mut::<super::keymaps::ApplicationKeymaps>()
+                .0
+                .apply_batch(owner, mutations);
+            if matches!(result, Ok(true)) {
+                super::keymaps::rebuild(cx);
+            }
+            Ok(HostResponseValue::KeybindingsApplied {
+                error: result.err(),
+            })
+        };
+        HostResponse {
+            extension: request.extension,
+            lifecycle: request.lifecycle,
+            id: request.id,
+            result,
+        }
     }
 
     fn dispatch_script_command(
@@ -1444,10 +1487,12 @@ enum RequestRoute {
     Command,
     View,
     Semantic,
+    Keymap,
 }
 
 fn request_route(operation: &HostOperation) -> RequestRoute {
     match operation {
+        HostOperation::MutateKeybindings { .. } => RequestRoute::Keymap,
         HostOperation::ActiveBuffer
         | HostOperation::Snapshot { .. }
         | HostOperation::ApplyEdits { .. }

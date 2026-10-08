@@ -28,8 +28,9 @@ use super::{
         CommandRegistrationId, CompletionProviderError, CompletionProviderRegistrationId,
         CompletionRequest, CompletionResponse, CompletionResultItem, DecorationToken,
         EditorContribution, ExtensionId, GutterToken, HostOperation, HostRequest, HostResponse,
-        HostResponseValue, RequestId, SnapshotText, TextEdit, TextSnapshot, TreeChildrenRequest,
-        TreeChildrenResponse, TreeItem, TreeProviderError, TreeProviderRegistrationId,
+        HostResponseValue, KeybindingMutation, RequestId, SnapshotText, TextEdit, TextSnapshot,
+        TreeChildrenRequest, TreeChildrenResponse, TreeItem, TreeProviderError,
+        TreeProviderRegistrationId,
     },
     scheduler::{
         CompletionOutcome, CompletionReceiver, PoolConfig, RootId, SchedulerError, SchedulerHandle,
@@ -231,6 +232,9 @@ struct RuntimeLocalState {
     modules: Mutex<ModuleRegistry>,
     buffer_changes: Mutex<BufferChangeQueueState>,
     cancelled_commands: Mutex<HashSet<CommandInvocationId>>,
+    keybinding_mutations: Mutex<Vec<KeybindingMutation>>,
+    keybinding_batch_pending: Mutex<Option<RequestId>>,
+    deferred_responses: Mutex<Vec<HostResponse>>,
     #[cfg(test)]
     host_error: Mutex<Option<String>>,
     #[cfg(test)]
@@ -252,6 +256,9 @@ impl RuntimeLocalState {
             modules: Mutex::new(ModuleRegistry::new(graph)),
             buffer_changes: Mutex::new(BufferChangeQueueState::default()),
             cancelled_commands: Mutex::new(HashSet::new()),
+            keybinding_mutations: Mutex::new(Vec::new()),
+            keybinding_batch_pending: Mutex::new(None),
+            deferred_responses: Mutex::new(Vec::new()),
             #[cfg(test)]
             host_error: Mutex::new(None),
             #[cfg(test)]
@@ -290,12 +297,13 @@ struct PendingRequest {
     root: RootId,
     invocation: Option<CommandInvocationId>,
     operation: HostOperationKind,
-    resolver: v8::Global<v8::PromiseResolver>,
+    resolver: Option<v8::Global<v8::PromiseResolver>>,
     response_queued: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum HostOperationKind {
+    KeybindingBatch,
     ActiveBuffer,
     Snapshot,
     ApplyEdits,
@@ -1327,6 +1335,16 @@ impl RuntimeCapsule {
         let mut scope = scope.init();
         let context = v8::Local::new(&scope, &data.context);
         let scope = &mut v8::ContextScope::new(&mut scope, context);
+        let batch_id = *self.local_state.keybinding_batch_pending.lock().unwrap();
+        if batch_id.is_some() && batch_id != Some(response.id) {
+            self.local_state
+                .deferred_responses
+                .lock()
+                .unwrap()
+                .push(response);
+            *self.local_state.current_root.lock().unwrap() = None;
+            return TurnOutcome::AwaitingHostWork;
+        }
         let pending = self
             .local_state
             .pending
@@ -1337,7 +1355,74 @@ impl RuntimeCapsule {
             *self.local_state.current_root.lock().unwrap() = None;
             return TurnOutcome::Fatal(Failure::new("host response lost its pending request"));
         };
-        let resolver = v8::Local::new(scope, &pending.resolver);
+        if pending.operation == HostOperationKind::KeybindingBatch {
+            *self.local_state.keybinding_batch_pending.lock().unwrap() = None;
+            let error = match response.result {
+                Ok(HostResponseValue::KeybindingsApplied { error }) => error,
+                Err(error) => Some(format!("keybinding batch was rejected: {error:?}")),
+                _ => Some("invalid keybinding batch response".into()),
+            };
+            if let Some(message) = error {
+                let source = self
+                    .local_state
+                    .active
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .map(|active| active.source.clone());
+                let error = RuntimeError {
+                    kind: RuntimeErrorKind::Exception,
+                    message: message.into(),
+                    source,
+                    line: None,
+                    column: None,
+                    stack: None,
+                };
+                self.local_state.deferred_responses.lock().unwrap().clear();
+                self.local_state
+                    .keybinding_mutations
+                    .lock()
+                    .unwrap()
+                    .clear();
+                self.fail_active_with_command_failure(error.clone());
+                return fatal_or_completed(&error);
+            }
+            let deferred =
+                std::mem::take(&mut *self.local_state.deferred_responses.lock().unwrap());
+            for response in deferred {
+                let Some(pending) = self
+                    .local_state
+                    .pending
+                    .lock()
+                    .unwrap()
+                    .remove(&response.id)
+                else {
+                    let error = RuntimeError::fatal(
+                        RuntimeErrorKind::Engine,
+                        "deferred host response lost its pending request",
+                    );
+                    self.fail_active(error.clone());
+                    return fatal_or_completed(&error);
+                };
+                Self::settle_host_response(scope, pending, response);
+            }
+        } else {
+            Self::settle_host_response(scope, pending, response);
+        }
+        scope.perform_microtask_checkpoint();
+        *self.local_state.current_root.lock().unwrap() = None;
+        self.inspect_active(scope, root)
+    }
+
+    fn settle_host_response(
+        scope: &mut v8::PinScope<'_, '_>,
+        pending: PendingRequest,
+        response: HostResponse,
+    ) {
+        let Some(resolver) = pending.resolver else {
+            return;
+        };
+        let resolver = v8::Local::new(scope, &resolver);
         match response.result {
             Ok(value) => match host_response_to_v8(scope, pending.operation, value) {
                 Ok(value) => {
@@ -1357,9 +1442,6 @@ impl RuntimeCapsule {
                 resolver.reject(scope, value.into());
             }
         }
-        scope.perform_microtask_checkpoint();
-        *self.local_state.current_root.lock().unwrap() = None;
-        self.inspect_active(scope, root)
     }
 
     fn finish_termination_turn(&self, root: RootId) -> TurnOutcome {
@@ -1381,6 +1463,23 @@ impl RuntimeCapsule {
             self.reject_pending_for_root(scope, root);
             self.fail_active(error.clone());
             return TurnOutcome::Fatal(Failure::new(error.to_string()));
+        }
+        if self
+            .local_state
+            .keybinding_batch_pending
+            .lock()
+            .unwrap()
+            .is_some()
+        {
+            return TurnOutcome::AwaitingHostWork;
+        }
+        match self.flush_keybinding_mutations(root) {
+            Ok(true) => return TurnOutcome::AwaitingHostWork,
+            Ok(false) => {}
+            Err(error) => {
+                self.fail_active(error.clone());
+                return fatal_or_completed(&error);
+            }
         }
         let mut active = self.local_state.active.lock().unwrap();
         let Some(execution) = active.as_mut() else {
@@ -1537,6 +1636,55 @@ impl RuntimeCapsule {
         }
     }
 
+    fn flush_keybinding_mutations(&self, root: RootId) -> Result<bool, RuntimeError> {
+        let mutations = std::mem::take(&mut *self.local_state.keybinding_mutations.lock().unwrap());
+        if mutations.is_empty() {
+            return Ok(false);
+        }
+        let request_value = self
+            .local_state
+            .next_request
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
+                next.checked_add(1)
+            })
+            .map_err(|_| {
+                RuntimeError::fatal(RuntimeErrorKind::Engine, "request identity exhausted")
+            })?;
+        let id = RequestId::new(request_value);
+        self.local_state.pending.lock().unwrap().insert(
+            id,
+            PendingRequest {
+                root,
+                invocation: None,
+                operation: HostOperationKind::KeybindingBatch,
+                resolver: None,
+                response_queued: false,
+            },
+        );
+        *self.local_state.keybinding_batch_pending.lock().unwrap() = Some(id);
+        let sender = self.local_state.event_sender.lock().unwrap().clone();
+        let sent = sender.is_some_and(|sender| {
+            sender
+                .send(EngineEvent::Request(HostRequest {
+                    extension: self.key.extension,
+                    lifecycle: self.key.lifecycle,
+                    id,
+                    invocation: None,
+                    operation: HostOperation::MutateKeybindings { mutations },
+                }))
+                .is_ok()
+        });
+        if !sent {
+            self.local_state.pending.lock().unwrap().remove(&id);
+            *self.local_state.keybinding_batch_pending.lock().unwrap() = None;
+            return Err(RuntimeError::fatal(
+                RuntimeErrorKind::Engine,
+                "keybinding batch could not reach the application",
+            ));
+        }
+        Ok(true)
+    }
+
     fn reject_pending_for_root(&self, scope: &mut v8::PinScope<'_, '_>, root: RootId) {
         let pending = {
             let mut requests = self.local_state.pending.lock().unwrap();
@@ -1549,9 +1697,11 @@ impl RuntimeCapsule {
                 .collect::<Vec<_>>()
         };
         for pending in pending {
-            let resolver = v8::Local::new(scope, &pending.resolver);
-            let cancelled = v8::String::new(scope, "Cancelled").unwrap();
-            resolver.reject(scope, cancelled.into());
+            if let Some(resolver) = pending.resolver {
+                let resolver = v8::Local::new(scope, &resolver);
+                let cancelled = v8::String::new(scope, "Cancelled").unwrap();
+                resolver.reject(scope, cancelled.into());
+            }
         }
         scope.perform_microtask_checkpoint();
     }
@@ -1570,9 +1720,11 @@ impl RuntimeCapsule {
                 .collect::<Vec<_>>()
         };
         for pending in pending {
-            let resolver = v8::Local::new(scope, &pending.resolver);
-            let cancelled = v8::String::new(scope, "Cancelled").unwrap();
-            resolver.reject(scope, cancelled.into());
+            if let Some(resolver) = pending.resolver {
+                let resolver = v8::Local::new(scope, &resolver);
+                let cancelled = v8::String::new(scope, "Cancelled").unwrap();
+                resolver.reject(scope, cancelled.into());
+            }
         }
         scope.perform_microtask_checkpoint();
     }
@@ -1605,13 +1757,28 @@ impl RuntimeCapsule {
     }
 
     fn fail_active(&self, error: RuntimeError) {
+        self.fail_active_with_error(error, false);
+    }
+
+    fn fail_active_with_command_failure(&self, error: RuntimeError) {
+        self.fail_active_with_error(error, true);
+    }
+
+    fn fail_active_with_error(&self, error: RuntimeError, command_failure: bool) {
         if let Some(active) = self.local_state.active.lock().unwrap().take() {
             match active.completion {
                 ActiveCompletion::Report(result) => {
                     let _ = result.send(Err(error));
                 }
                 ActiveCompletion::Command(result) => {
-                    let _ = result.send(Err(error));
+                    let outcome = if command_failure {
+                        Ok(CommandOutcome::HandlerFailure {
+                            message: error.to_string(),
+                        })
+                    } else {
+                        Err(error)
+                    };
+                    let _ = result.send(outcome);
                 }
                 ActiveCompletion::Tree {
                     result, completed, ..
@@ -1629,6 +1796,13 @@ impl RuntimeCapsule {
             }
         }
         self.local_state.pending.lock().unwrap().clear();
+        self.local_state
+            .keybinding_mutations
+            .lock()
+            .unwrap()
+            .clear();
+        *self.local_state.keybinding_batch_pending.lock().unwrap() = None;
+        self.local_state.deferred_responses.lock().unwrap().clear();
         *self.local_state.current_root.lock().unwrap() = None;
     }
 
@@ -1698,9 +1872,11 @@ impl RuntimeCapsule {
                 let scope = &mut v8::ContextScope::new(&mut scope, context);
                 let pending = std::mem::take(&mut *self.local_state.pending.lock().unwrap());
                 for pending in pending.into_values() {
-                    let resolver = v8::Local::new(scope, &pending.resolver);
-                    let cancelled = v8::String::new(scope, "Cancelled").unwrap();
-                    resolver.reject(scope, cancelled.into());
+                    if let Some(resolver) = pending.resolver {
+                        let resolver = v8::Local::new(scope, &resolver);
+                        let cancelled = v8::String::new(scope, "Cancelled").unwrap();
+                        resolver.reject(scope, cancelled.into());
+                    }
                 }
                 scope.perform_microtask_checkpoint();
             }
@@ -2774,7 +2950,12 @@ fn initialize_extension_context(
     let request_name = v8::String::new(scope, "request").ok_or_else(RuntimeError::disposed)?;
     let request =
         v8::Function::new(scope, host_request_callback).ok_or_else(RuntimeError::disposed)?;
+    let keybinding_name =
+        v8::String::new(scope, "keybinding").ok_or_else(RuntimeError::disposed)?;
+    let keybinding =
+        v8::Function::new(scope, keybinding_callback).ok_or_else(RuntimeError::disposed)?;
     if bindings.set(scope, request_name.into(), request.into()) != Some(true)
+        || bindings.set(scope, keybinding_name.into(), keybinding.into()) != Some(true)
         || scope.get_current_context().global(scope).set(
             scope,
             bindings_name.into(),
@@ -3256,7 +3437,7 @@ fn host_request_callback<'s, 'i>(
             root,
             invocation,
             operation: kind,
-            resolver: v8::Global::new(scope, resolver),
+            resolver: Some(v8::Global::new(scope, resolver)),
             response_queued: false,
         },
     );
@@ -3275,6 +3456,79 @@ fn host_request_callback<'s, 'i>(
         resolver.reject(scope, message.into());
     }
     result.set(resolver.get_promise(scope).into());
+}
+
+fn keybinding_callback<'s, 'i>(
+    scope: &mut v8::PinnedRef<'s, v8::HandleScope<'i>>,
+    arguments: v8::FunctionCallbackArguments<'s>,
+    _result: v8::ReturnValue,
+) {
+    let Some(state) = scope.get_slot::<Arc<RuntimeLocalState>>().cloned() else {
+        return;
+    };
+    let mutation = parse_keybinding_mutation(scope, &arguments)
+        .unwrap_or_else(|message| KeybindingMutation::Invalid(message.to_owned()));
+    state.keybinding_mutations.lock().unwrap().push(mutation);
+}
+
+fn parse_keybinding_mutation<'s, 'i>(
+    scope: &mut v8::PinnedRef<'s, v8::HandleScope<'i>>,
+    arguments: &v8::FunctionCallbackArguments<'s>,
+) -> Result<KeybindingMutation, &'static str> {
+    let operation = required_string(scope, arguments.get(0), "invalid keybinding operation")?;
+    let key = required_string(scope, arguments.get(1), "key must be a string")?;
+    if operation == "invalid" {
+        return Ok(KeybindingMutation::Invalid(key));
+    }
+    let options = arguments.get(3);
+    let view = if options.is_null_or_undefined() {
+        None
+    } else {
+        if options.is_array() || options.is_function() {
+            return Err("options must be an object");
+        }
+        let object =
+            v8::Local::<v8::Object>::try_from(options).map_err(|_| "options must be an object")?;
+        let view = property(scope, object, "view", "invalid view selector")?;
+        optional_string(scope, view, "view must be a string")?
+    };
+    match operation.as_str() {
+        "remove" => Ok(KeybindingMutation::Remove { key, view }),
+        "set" => {
+            let value = arguments.get(2);
+            let command = if value.is_null() {
+                None
+            } else if value.is_string() {
+                Some(Command {
+                    name: required_string(scope, value, "command must be a string or object")?
+                        .into(),
+                    arguments: CommandArgumentValue::Null,
+                })
+            } else {
+                if value.is_array() || value.is_function() {
+                    return Err("command must be a string or object");
+                }
+                let object = v8::Local::<v8::Object>::try_from(value)
+                    .map_err(|_| "command must be a string or object")?;
+                let name = property(scope, object, "name", "invalid command name")?;
+                let name = required_string(scope, name, "command name must be a string")?;
+                let arguments_value =
+                    property(scope, object, "arguments", "invalid command arguments")?;
+                let command_arguments = if arguments_value.is_undefined() {
+                    CommandArgumentValue::Null
+                } else {
+                    command_argument_from_v8(scope, arguments_value)
+                        .map_err(|_| "command arguments must be JSON-compatible")?
+                };
+                Some(Command {
+                    name: name.into(),
+                    arguments: command_arguments,
+                })
+            };
+            Ok(KeybindingMutation::Set { key, view, command })
+        }
+        _ => Err("invalid keybinding operation"),
+    }
 }
 
 fn parse_host_operation<'s, 'i>(
@@ -3941,6 +4195,21 @@ fn execute_engine_turn(turn: Turn<EngineTurn>, finalizer: &LifecycleFinalizer) -
             "extension engine panicked while executing a turn",
         ))
     });
+    if matches!(outcome, TurnOutcome::Completed | TurnOutcome::Fatal(_)) {
+        capsule
+            .local_state
+            .keybinding_mutations
+            .lock()
+            .unwrap()
+            .clear();
+        *capsule.local_state.keybinding_batch_pending.lock().unwrap() = None;
+        capsule
+            .local_state
+            .deferred_responses
+            .lock()
+            .unwrap()
+            .clear();
+    }
     match &outcome {
         TurnOutcome::Fatal(failure) => {
             finalizer.finalize(
@@ -4150,6 +4419,202 @@ mod tests {
                 .collect(),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn keybinding_calls_are_void_and_one_turn_sends_one_ordered_batch() {
+        let pool = RuntimePool::new(PoolConfig::single_worker());
+        let runtime = key(180);
+        pool.load(runtime, IsolateConfig::default()).unwrap();
+        let execution = pool
+            .execute_fixture_module(
+                runtime,
+                "file:///fixtures/keybindings.js",
+                r#"
+                    import * as knot from "knot";
+                    if (knot.keybinding("Cmd-C", "copy") !== undefined) throw new Error("set returned a value");
+                    if (knot.keybinding("Cmd-C", { name: "copy", arguments: { format: "plain" } }, { view: "editor" }) !== undefined) throw new Error("set returned a value");
+                    if (knot.removeKeybinding("Cmd-C", { view: "editor" }) !== undefined) throw new Error("remove returned a value");
+                "#,
+            )
+            .unwrap();
+        let request = pool
+            .receive_request_timeout(Duration::from_secs(1))
+            .unwrap();
+        let HostOperation::MutateKeybindings { mutations } = request.operation else {
+            panic!("expected keybinding batch");
+        };
+        assert_eq!(mutations.len(), 3);
+        assert!(
+            matches!(&mutations[0], KeybindingMutation::Set { key, view: None, command: Some(command) } if key == "Cmd-C" && command.name.as_ref() == "copy")
+        );
+        assert!(
+            matches!(&mutations[1], KeybindingMutation::Set { view: Some(view), command: Some(command), .. } if view == "editor" && command.arguments != CommandArgumentValue::Null)
+        );
+        assert!(
+            matches!(&mutations[2], KeybindingMutation::Remove { view: Some(view), .. } if view == "editor")
+        );
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: request.id,
+            result: Ok(HostResponseValue::KeybindingsApplied { error: None }),
+        })
+        .unwrap();
+        execution.wait().unwrap();
+        assert!(
+            pool.receive_request_timeout(Duration::from_millis(20))
+                .is_none()
+        );
+        pool.shutdown();
+    }
+
+    #[test]
+    fn keybinding_batch_settles_before_await_continuation_and_rejects_turn_errors() {
+        let pool = RuntimePool::new(PoolConfig::single_worker());
+        let runtime = key(181);
+        pool.load(runtime, IsolateConfig::default()).unwrap();
+        let execution = pool
+            .execute_fixture_module(
+                runtime,
+                "file:///fixtures/keybinding-await.js",
+                r#"
+                    import * as knot from "knot";
+                    knot.keybinding("cmd-a", "file.new");
+                    await knot.editor.activeBuffer();
+                    knot.keybinding("cmd-b", "file.open");
+                "#,
+            )
+            .unwrap();
+        let first = pool
+            .receive_request_timeout(Duration::from_secs(1))
+            .unwrap();
+        let second = pool
+            .receive_request_timeout(Duration::from_secs(1))
+            .unwrap();
+        let (host_request, batch) = if matches!(first.operation, HostOperation::ActiveBuffer) {
+            (first, second)
+        } else {
+            (second, first)
+        };
+        assert!(matches!(
+            batch.operation,
+            HostOperation::MutateKeybindings { .. }
+        ));
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: host_request.id,
+            result: Ok(HostResponseValue::ActiveBuffer(None)),
+        })
+        .unwrap();
+        assert!(
+            pool.receive_request_timeout(Duration::from_millis(20))
+                .is_none()
+        );
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: batch.id,
+            result: Ok(HostResponseValue::KeybindingsApplied { error: None }),
+        })
+        .unwrap();
+        let next = pool
+            .receive_request_timeout(Duration::from_secs(1))
+            .unwrap();
+        assert!(
+            matches!(&next.operation, HostOperation::MutateKeybindings { mutations } if matches!(&mutations[..], [KeybindingMutation::Set { key, .. }] if key == "cmd-b"))
+        );
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: next.id,
+            result: Ok(HostResponseValue::KeybindingsApplied {
+                error: Some("invalid view kind".into()),
+            }),
+        })
+        .unwrap();
+        let error = execution.wait().unwrap_err();
+        assert!(error.message().contains("invalid view kind"));
+        pool.shutdown();
+    }
+
+    #[test]
+    fn invalid_keybinding_input_is_queued_for_batch_diagnostics() {
+        let pool = RuntimePool::new(PoolConfig::single_worker());
+        let runtime = key(182);
+        pool.load(runtime, IsolateConfig::default()).unwrap();
+        let execution = pool
+            .execute_fixture_module(
+                runtime,
+                "file:///fixtures/invalid-keybinding.js",
+                r#"
+                    import * as knot from "knot";
+                    knot.keybinding("cmd-r", "file.open");
+                    if (knot.keybinding("cmd-n", 42) !== undefined) throw new Error("invalid call returned a value");
+                "#,
+            )
+            .unwrap();
+        let request = pool
+            .receive_request_timeout(Duration::from_secs(1))
+            .unwrap();
+        assert!(
+            matches!(&request.operation, HostOperation::MutateKeybindings { mutations }
+            if matches!(&mutations[..], [KeybindingMutation::Set { .. }, KeybindingMutation::Invalid(message)]
+                if message.contains("command must be a string or object")))
+        );
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: request.id,
+            result: Ok(HostResponseValue::KeybindingsApplied {
+                error: Some("keybinding operation 2: command must be a string or object".into()),
+            }),
+        })
+        .unwrap();
+        let error = execution.wait().unwrap_err();
+        assert_eq!(
+            error.source(),
+            Some("file:///fixtures/invalid-keybinding.js")
+        );
+        assert!(error.message().contains("operation 2"));
+        let execution = pool
+            .execute_fixture_module(
+                runtime,
+                "file:///fixtures/invalid-binding-arguments.js",
+                r#"
+                    import * as knot from "knot";
+                    knot.keybinding("cmd-r", { name: "file.open", arguments: { marker: Infinity } });
+                "#,
+            )
+            .unwrap();
+        let request = pool
+            .receive_request_timeout(Duration::from_secs(1))
+            .unwrap();
+        assert!(
+            matches!(&request.operation, HostOperation::MutateKeybindings { mutations }
+            if matches!(&mutations[..], [KeybindingMutation::Invalid(message)]
+                if message.contains("finite numbers")))
+        );
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: request.id,
+            result: Ok(HostResponseValue::KeybindingsApplied {
+                error: Some(
+                    "keybinding operation 1: command arguments require finite numbers".into(),
+                ),
+            }),
+        })
+        .unwrap();
+        assert!(
+            execution
+                .wait()
+                .unwrap_err()
+                .message()
+                .contains("finite numbers")
+        );
+        pool.shutdown();
     }
 
     #[test]
@@ -4776,13 +5241,15 @@ mod tests {
                 if (typeof globalThis.__knotNativeBindings !== "undefined") {
                     throw new Error("private native bindings are exposed");
                 }
-                if (Object.keys(knot).sort().join(",") !== "commands,editor,workbench") {
+                if (Object.keys(knot).sort().join(",") !== "commands,editor,keybinding,removeKeybinding,workbench") {
                     throw new Error("unexpected public exports");
                 }
                 if (!Object.isFrozen(knot.editor) || !Object.isFrozen(knot.commands) || !Object.isFrozen(knot.workbench)) {
                     throw new Error("facade objects are mutable");
                 }
                 if (typeof knot.editor.activeBuffer !== "function"
+                    || typeof knot.keybinding !== "function"
+                    || typeof knot.removeKeybinding !== "function"
                     || typeof knot.editor.registerCompletionProvider !== "function"
                     || typeof knot.commands.invalidArguments !== "function"
                     || typeof knot.commands.invoke !== "function"

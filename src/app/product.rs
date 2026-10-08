@@ -3247,7 +3247,7 @@ mod tests {
         AppContext, Focusable, Modifiers, MouseButton, TestAppContext, VisualTestContext, point, px,
     };
 
-    use super::super::keymaps::{ApplicationKeymaps, BindingOwner};
+    use super::super::keymaps::{ApplicationKeymaps, BindingOwner, BindingResolution};
     use crate::host::protocol::{
         Command, CommandArgumentValue, CommandOutcome, ExtensionId, ExtensionLifecycleId,
     };
@@ -3336,6 +3336,14 @@ mod tests {
         let commands = cx.new(ProductCommandDispatcher::new);
         cx.set_global(ApplicationProductCommands(commands));
         documents
+    }
+
+    fn keymap_command(cx: &gpui::App, key: &str, view: Option<&str>) -> Option<String> {
+        match cx.global::<ApplicationKeymaps>().0.resolve(key, view) {
+            Some(BindingResolution::Command(command)) => Some(command.name.to_string()),
+            Some(BindingResolution::Unbound) => Some("<unbound>".into()),
+            None => None,
+        }
     }
 
     fn install_launch_gate(cx: &mut TestAppContext) {
@@ -3621,6 +3629,309 @@ mod tests {
         }
         cx.update(|cx| super::dispatch_launch_request(None, cx));
         assert_eq!(cx.windows().len(), 2);
+    }
+
+    #[gpui::test]
+    fn script_keybindings_follow_config_phases_and_runtime_replacement(cx: &mut TestAppContext) {
+        let config = tempfile::tempdir().unwrap();
+        let extensions = tempfile::tempdir().unwrap();
+        std::fs::write(
+            config.path().join("pre-init.js"),
+            "import * as knot from 'knot'; knot.keybinding('cmd-n', 'file.open');",
+        )
+        .unwrap();
+        std::fs::write(
+            config.path().join("post-init.js"),
+            "import * as knot from 'knot'; knot.keybinding('cmd-n', 'file.save-as'); knot.keybinding('cmd-x', null); knot.keybinding('cmd-j', { name: 'test.args', arguments: { marker: 42 } });",
+        )
+        .unwrap();
+        install_extension(
+            extensions.path(),
+            "@example/good",
+            &[],
+            &[(
+                "main.js",
+                r#"
+                    import * as knot from 'knot';
+                    knot.keybinding('cmd-n', 'file.save');
+                    knot.keybinding('cmd-r', 'file.open');
+                    await knot.commands.register('test.remap', () => {
+                        knot.keybinding('cmd-r', 'file.new');
+                        knot.removeKeybinding('cmd-n');
+                    });
+                    await knot.commands.register('test.unbind', () => knot.keybinding('cmd-r', null, { view: 'editor' }));
+                    await knot.commands.register('test.restore', () => knot.removeKeybinding('cmd-r', { view: 'editor' }));
+                    await knot.commands.register('test.remove', () => knot.removeKeybinding('cmd-r'));
+                    await knot.commands.register('test.args', ({ arguments: args }) => {
+                        if (args.marker !== 42) throw new Error('wrong binding arguments');
+                    });
+                    await knot.commands.register('test.invalid', () => {
+                        knot.keybinding('cmd-r', 'file.save');
+                        knot.keybinding('bad-modifier-key', 'file.new');
+                    });
+                "#,
+            )],
+        );
+        install_extension(
+            extensions.path(),
+            "@example/bad",
+            &[],
+            &[(
+                "main.js",
+                "import * as knot from 'knot'; knot.keybinding('cmd-l', 'file.new'); await knot.editor.activeBuffer(); throw new Error('failed after binding');",
+            )],
+        );
+        install_globals(cx);
+        cx.update(super::bind_product_keys);
+        install_launch_gate(cx);
+        let host = cx.update(super::super::extension_host::install);
+        host.update(cx, |host, cx| {
+            host.start_product_startup(
+                Some(config.path().to_path_buf()),
+                Ok(extensions.path().to_path_buf()),
+                cx,
+            )
+        });
+        assert!(wait_for_product_startup(cx));
+        cx.read(|cx| {
+            assert_eq!(keymap_command(cx, "cmd-n", Some("editor")).as_deref(), Some("file.save-as"));
+            assert_eq!(keymap_command(cx, "cmd-r", Some("editor")).as_deref(), Some("file.open"));
+            assert_eq!(keymap_command(cx, "cmd-x", Some("editor")).as_deref(), Some("<unbound>"));
+            assert_eq!(keymap_command(cx, "cmd-l", Some("editor")), None);
+            assert!(matches!(
+                cx.global::<ApplicationKeymaps>().0.resolve("cmd-j", Some("editor")),
+                Some(BindingResolution::Command(Command { arguments: CommandArgumentValue::Object(arguments), .. }))
+                    if arguments.get("marker") == Some(&CommandArgumentValue::Number(42.0))
+            ));
+        });
+        let report = cx
+            .read(super::super::extension_host::startup_report)
+            .unwrap();
+        assert!(report.report.entries.iter().any(|entry| {
+            entry.name.as_deref() == Some("@example/bad")
+                && matches!(&entry.result, super::super::extension_load::LoadResult::Failed(cause) if cause.contains("failed after binding"))
+        }));
+        assert!(cx.read(|cx| {
+            cx.global::<ApplicationProductCommands>()
+                .0
+                .read(cx)
+                .definitions()
+                .any(|definition| definition.name.as_ref() == "test.args")
+        }));
+        let documents = cx.read(|cx| cx.global::<ApplicationDocuments>().0.clone());
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        let (shell, window) = product_window(document, model, cx);
+        let target = cx
+            .update_window(window, |_, window, cx| {
+                shell.update(cx, |shell, cx| {
+                    shell.focus_active_surface(window, cx);
+                    shell.capture_command_target(window, cx).unwrap()
+                })
+            })
+            .unwrap();
+        let command = cx.read(|cx| {
+            let Some(BindingResolution::Command(command)) = cx
+                .global::<ApplicationKeymaps>()
+                .0
+                .resolve("cmd-j", Some("editor"))
+            else {
+                panic!("expected command binding");
+            };
+            command
+        });
+        let execution = cx.update(|cx| {
+            let dispatcher = cx.global::<ApplicationProductCommands>().0.clone();
+            dispatcher.update(cx, |dispatcher, cx| {
+                dispatcher.dispatch(command, target, cx)
+            })
+        });
+        assert_eq!(wait_for_command(execution, cx), CommandOutcome::Completed);
+        let execution = dispatch_product_command(&shell, window, "test.remap", cx);
+        assert_eq!(wait_for_command(execution, cx), CommandOutcome::Completed);
+        cx.read(|cx| {
+            assert_eq!(
+                keymap_command(cx, "cmd-r", Some("editor")).as_deref(),
+                Some("file.new")
+            );
+            assert_eq!(
+                keymap_command(cx, "cmd-n", Some("editor")).as_deref(),
+                Some("file.save-as")
+            );
+        });
+        let invalid = wait_for_command(
+            dispatch_product_command(&shell, window, "test.invalid", cx),
+            cx,
+        );
+        assert!(
+            matches!(invalid, CommandOutcome::HandlerFailure { message } if message.contains("keybinding operation 2"))
+        );
+        cx.read(|cx| {
+            assert_eq!(
+                keymap_command(cx, "cmd-r", Some("editor")).as_deref(),
+                Some("file.new")
+            )
+        });
+        assert_eq!(
+            wait_for_command(
+                dispatch_product_command(&shell, window, "test.unbind", cx),
+                cx
+            ),
+            CommandOutcome::Completed
+        );
+        cx.read(|cx| {
+            assert_eq!(
+                keymap_command(cx, "cmd-r", Some("editor")).as_deref(),
+                Some("<unbound>")
+            );
+            assert_eq!(
+                keymap_command(cx, "cmd-r", Some("terminal")).as_deref(),
+                Some("file.new")
+            );
+        });
+        assert_eq!(
+            wait_for_command(
+                dispatch_product_command(&shell, window, "test.restore", cx),
+                cx
+            ),
+            CommandOutcome::Completed
+        );
+        cx.read(|cx| {
+            assert_eq!(
+                keymap_command(cx, "cmd-r", Some("editor")).as_deref(),
+                Some("file.new")
+            )
+        });
+        assert_eq!(
+            wait_for_command(
+                dispatch_product_command(&shell, window, "test.remove", cx),
+                cx
+            ),
+            CommandOutcome::Completed
+        );
+        cx.read(|cx| assert_eq!(keymap_command(cx, "cmd-r", Some("editor")), None));
+    }
+
+    #[gpui::test]
+    fn invalid_config_keybinding_batch_rolls_back_before_product_readiness(
+        cx: &mut TestAppContext,
+    ) {
+        let config = tempfile::tempdir().unwrap();
+        let extensions = tempfile::tempdir().unwrap();
+        std::fs::write(
+            config.path().join("pre-init.js"),
+            "import * as knot from 'knot'; knot.keybinding('cmd-r', 'file.open'); knot.keybinding('bad-modifier-key', 'file.new');",
+        )
+        .unwrap();
+        install_globals(cx);
+        cx.update(super::bind_product_keys);
+        install_launch_gate(cx);
+        let host = cx.update(super::super::extension_host::install);
+        host.update(cx, |host, cx| {
+            host.start_product_startup(
+                Some(config.path().to_path_buf()),
+                Ok(extensions.path().to_path_buf()),
+                cx,
+            )
+        });
+        assert!(!wait_for_product_startup(cx));
+        cx.read(|cx| {
+            assert_eq!(keymap_command(cx, "cmd-r", Some("editor")), None);
+            assert_eq!(host.read(cx).lifecycle_count(), 0);
+            assert!(cx.global::<ApplicationWorkbenches>().0.borrow().is_empty());
+        });
+        assert_eq!(cx.windows().len(), 1);
+    }
+
+    #[gpui::test]
+    fn invalid_extension_keybinding_batch_does_not_block_other_extensions(cx: &mut TestAppContext) {
+        let extensions = tempfile::tempdir().unwrap();
+        install_extension(
+            extensions.path(),
+            "@example/good",
+            &[],
+            &[(
+                "main.js",
+                "import * as knot from 'knot'; knot.keybinding('cmd-r', 'file.new');",
+            )],
+        );
+        install_extension(
+            extensions.path(),
+            "@example/bad",
+            &[],
+            &[(
+                "main.js",
+                "import * as knot from 'knot'; knot.keybinding('cmd-l', 'file.new'); knot.keybinding('bad-modifier-key', 'file.open');",
+            )],
+        );
+        install_globals(cx);
+        cx.update(super::bind_product_keys);
+        install_launch_gate(cx);
+        let host = cx.update(super::super::extension_host::install);
+        host.update(cx, |host, cx| {
+            host.start_product_startup(None, Ok(extensions.path().to_path_buf()), cx)
+        });
+        assert!(wait_for_product_startup(cx));
+        let report = cx
+            .read(super::super::extension_host::startup_report)
+            .unwrap();
+        assert!(report.report.entries.iter().any(|entry| {
+            entry.name.as_deref() == Some("@example/good")
+                && entry.result == super::super::extension_load::LoadResult::Loaded
+        }));
+        assert!(report.report.entries.iter().any(|entry| {
+            entry.name.as_deref() == Some("@example/bad")
+                && matches!(&entry.result, super::super::extension_load::LoadResult::Failed(cause) if cause.contains("keybinding operation 2"))
+        }));
+        cx.read(|cx| {
+            assert_eq!(
+                keymap_command(cx, "cmd-r", Some("editor")).as_deref(),
+                Some("file.new")
+            );
+            assert_eq!(keymap_command(cx, "cmd-l", Some("editor")), None);
+        });
+    }
+
+    #[gpui::test]
+    fn unloading_a_script_lifecycle_removes_its_keybindings(cx: &mut TestAppContext) {
+        use crate::host::lifecycle::ExtensionKey;
+
+        install_globals(cx);
+        cx.update(super::bind_product_keys);
+        let host = cx.update(super::super::extension_host::install);
+        let key = ExtensionKey::new(ExtensionId::new(91), ExtensionLifecycleId::new(1));
+        let loaded = Arc::new(Mutex::new(false));
+        let done = loaded.clone();
+        host.update(cx, |host, cx| {
+            let execution = host
+                .load_test_source(
+                    key,
+                    "import * as knot from 'knot'; knot.keybinding('cmd-r', 'file.open');",
+                )
+                .unwrap();
+            cx.spawn(async move |_, _| {
+                execution.await.unwrap();
+                *done.lock().unwrap() = true;
+            })
+            .detach();
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while !*loaded.lock().unwrap() {
+            cx.run_until_parked();
+            assert!(
+                std::time::Instant::now() < deadline,
+                "extension keybinding did not load"
+            );
+            std::thread::yield_now();
+        }
+        cx.read(|cx| {
+            assert_eq!(
+                keymap_command(cx, "cmd-r", None).as_deref(),
+                Some("file.open")
+            )
+        });
+        host.update(cx, |host, cx| host.unload(key, cx).unwrap());
+        cx.read(|cx| assert_eq!(keymap_command(cx, "cmd-r", None), None));
     }
 
     #[gpui::test]

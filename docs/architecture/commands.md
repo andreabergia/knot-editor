@@ -50,6 +50,13 @@ a lifecycle removes its slots. Mutations refresh one merged effective map;
 command routing reads that map directly. An unavailable command does not
 select another binding.
 
+The public `knot` module exposes synchronous, void `keybinding` and
+`removeKeybinding` calls. Bindings accept a command name or a command with
+JSON-compatible arguments, plus an optional view kind. A null command unbinds
+the key in that scope. JavaScript sends ordered mutations after each V8 turn;
+the application validates and applies each batch atomically, rebuilding GPUI
+bindings only when the merged map changes.
+
 GPUI recognizes keys in product windows and invokes one Knot keymap action per
 effective key and scope. The action uses the focused view kind to read the
 effective map and enters the captured command dispatcher. GPUI contexts limit scoped
@@ -68,5 +75,4 @@ registrations and pending work are tied to their lifecycle.
 
 Command outcomes report execution status, not semantic values. Direct JavaScript
 functions remain available when command lookup and focus routing are unnecessary.
-JavaScript keymap mutation, argument schemas, aliases, and general handler
-priorities remain deferred.
+Command argument schemas, aliases, and general handler priorities remain deferred.
