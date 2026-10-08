@@ -5954,6 +5954,44 @@ await commands.registerForView("outline", "copy", async () => {
     }
 
     #[gpui::test]
+    fn personal_config_ctrl_shift_p_opens_command_palette(cx: &mut TestAppContext) {
+        let config = tempfile::tempdir().unwrap();
+        let extensions = tempfile::tempdir().unwrap();
+        std::fs::write(
+            config.path().join("post-init.js"),
+            "import * as knot from 'knot'; knot.keybinding('ctrl-shift-p', 'workbench.show-command-palette');",
+        )
+        .unwrap();
+        install_globals(cx);
+        cx.update(super::bind_product_keys);
+        install_launch_gate(cx);
+        let host = cx.update(super::super::extension_host::install);
+        host.update(cx, |host, cx| {
+            host.start_product_startup(
+                Some(config.path().to_path_buf()),
+                Ok(extensions.path().to_path_buf()),
+                cx,
+            )
+        });
+        assert!(wait_for_product_startup(cx));
+        let window = cx.windows()[0];
+        let shell = cx
+            .update_window(window, |_, window, _| {
+                window.root::<ProductShell>().flatten()
+            })
+            .unwrap()
+            .unwrap();
+        cx.update_window(window, |_, window, cx| {
+            shell.read(cx).focus_active_editor(window, cx);
+        })
+        .unwrap();
+        cx.refresh().unwrap();
+        cx.simulate_keystrokes(window, "ctrl-shift-p");
+        cx.run_until_parked();
+        cx.read(|cx| assert!(shell.read(cx).command_palette.is_some()));
+    }
+
+    #[gpui::test]
     async fn palette_discovers_commands_and_keeps_its_opening_target(cx: &mut TestAppContext) {
         let documents = install_globals(cx);
         cx.update(super::bind_product_keys);

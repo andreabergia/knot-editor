@@ -1,6 +1,6 @@
 # D028: Linux framework checkpoint
 
-Status: checkpoint 1 implementation verified; awaiting review. Native launch
+Status: checkpoint 1 approved. Checkpoint 2 in progress; native user checks
 and smoke-test gates remain open.
 
 Source: D028, promoted from the [deferred-work register](../roadmap.md).
@@ -52,7 +52,7 @@ work require design review before proceeding.
 
 ## Checkpoints
 
-### 1. Linux build and personal-config contract 🟡 (implementation ✅; review pending)
+### 1. Linux build and personal-config contract ✅
 
 - ✅ Establish a reproducible build/test recipe on this machine. Record the
   distribution, compositor/session, Rust and gpui versions, and required native
@@ -74,7 +74,7 @@ work require design review before proceeding.
 - **Review gate:** inspect actual directory values, precedence, source capture,
   and the build/test recipe before native launch work.
 
-### 2. Native startup and one shortcut ⬜
+### 2. Native startup and one shortcut 🟡
 
 - Launch the actual product in this machine's Wayland session with isolated
   test configuration and extension directories, keeping the user's real config
@@ -168,5 +168,32 @@ work require design review before proceeding.
   Preserve the existing suspended-request/late-response test and add a barrier
   regression forcing cancellation before publication. Both pass in the full
   suite. This is a contained lifecycle fix; no dependency direction changes.
-- Review gate: pending inspection of directory values, capture coverage, and
-  the build/test recipe. Native startup has not been attempted.
+- ✅ Review gate: user approved checkpoint 1 on 2026-10-08.
+
+## Checkpoint 2 evidence (in progress)
+
+- Empty-config native launch uses `/tmp/knot-d028-native-mw8dgrrf` with
+  HOME set to its `home`, XDG_CONFIG_HOME to its `config`, and XDG_DATA_HOME
+  to its `data`. The existing `config/knot` selects the isolated config root;
+  ProjectDirs selects `data/knot/extensions` for installed extensions. Real
+  config and installed extensions remain intact.
+- Launch: execute `target/debug/knot` with those environment values while
+  retaining the real Wayland and session-bus environment. Hyprland reported
+  a mapped, visible, input-accepting window titled Knot, PID 177761,
+  `xwayland=false`. The native process remains under exec session 19325.
+  User visual confirmation is pending.
+- D003b's integrated personal API supports the required shortcut. Minimal
+  `post-init.js`:
+
+  ```js
+  import * as knot from 'knot';
+  knot.keybinding('ctrl-shift-p', 'workbench.show-command-palette');
+  ```
+
+- Added a focused gpui regression loading that actual post-init configuration,
+  simulating Ctrl-Shift-P, and asserting the palette is open. ✅ Focused test
+  passed; all 455 library tests and the binary target passed; Clippy with
+  warnings denied passed. Formatting and diff whitespace checks completed.
+- Remaining: config/local-import startup across extension initialization,
+  malformed-source and phase-evaluation diagnostic windows with Copy and Quit,
+  user shortcut check, and checkpoint 2 review approval.
