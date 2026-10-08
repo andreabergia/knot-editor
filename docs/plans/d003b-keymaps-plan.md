@@ -1,6 +1,6 @@
 # D003b: JavaScript-configurable keymaps
 
-Status: in progress. Checkpoint 3 implementation is ready for review.
+Status: in progress. Checkpoint 3 is approved; checkpoint 4 is next.
 
 Source: D003, promoted from the [deferred-work register](../roadmap.md).
 Depends on the [D003a focused command-routing plan](../archive/plans/d003a-command-routing-plan.md).
@@ -63,6 +63,8 @@ post-init; post-init can override all installed extensions after startup.
   terminal byte protocols.
 - The command-argument syntax is reviewed at checkpoint 3. The simple
   two-string call above is the required common case.
+- Revisit extracting keybinding parsing and mutation state from `host::engine`
+  after product validation. The engine still owns V8 turn scheduling.
 
 ## Checkpoints
 
@@ -95,7 +97,7 @@ post-init; post-init can override all installed extensions after startup.
   multi-window updates.
 - ✅ **Review gate:** inspected resolution rules, gpui behavior, and the default inventory.
 
-### 3. JavaScript mutations and lifecycle 🟡
+### 3. JavaScript mutations and lifecycle ✅
 
 - ✅ Expose synchronous, void `knot.keybinding(key, command, options?)` and
   `knot.removeKeybinding(key, options?)`, including null-command unbinding,
@@ -108,7 +110,7 @@ post-init; post-init can override all installed extensions after startup.
 - ✅ Test pre-init, extension, and post-init ordering; runtime replacement;
   same-turn coalescing; await boundaries; invalid-input diagnostics and rollback;
   explicit removal; unbinds; failed startup; and lifecycle unload.
-- ⏳ **Review gate:** approve the JavaScript API and turn/error behavior using a
+- ✅ **Review gate:** approved the JavaScript API and turn/error behavior using a
   small real configuration example.
 
 Example config:
