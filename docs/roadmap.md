@@ -166,13 +166,6 @@ the item is removed from this register.
     then add Developer ID signing, hardened runtime validation for V8,
     notarization, and an install/update path.
 
-- **D028 — Linux framework checkpoint**
-  - Deferred: Initial product dogfooding targets macOS.
-  - Reconsider: The macOS editing slice is usable; Linux remains required
-    before broader production claims. Verify the actual Linux personal config
-    directory values and XDG precedence with Linux tests, then test source
-    capture and a product launch on Linux.
-
 - **D029 — Windows product polish**
   - Deferred: The framework path passed its portability checkpoint, not product
     validation.
