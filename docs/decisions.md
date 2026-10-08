@@ -182,7 +182,7 @@ focused view. Raw input protocols stay outside registered commands.
 Apply JavaScript mutations as one ordered batch per V8 turn so invalid input
 cannot leave a partial keymap and startup readiness follows foreground state.
 
-Reference: [commands](architecture/commands.md). Evidence: [D003b keymap plan](plans/d003b-keymaps-plan.md).
+Reference: [commands](architecture/commands.md). Evidence: [D003b keymap plan](archive/plans/d003b-keymaps-plan.md).
 
 ## Views and extension UI
 

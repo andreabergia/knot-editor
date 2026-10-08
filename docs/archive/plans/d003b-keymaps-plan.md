@@ -1,12 +1,12 @@
 # D003b: JavaScript-configurable keymaps
 
-Status: in progress. Checkpoint 4 implementation is ready for review.
+Status: complete. All four checkpoints and review gates are approved.
 
-Source: D003, promoted from the [deferred-work register](../roadmap.md).
-Depends on the [D003a focused command-routing plan](../archive/plans/d003a-command-routing-plan.md).
-See the current [command architecture](../architecture/commands.md),
-[personal config plan](../archive/plans/d036-personal-config-plan.md), and
-[architecture decisions](../decisions.md).
+Source: D003, promoted from the [deferred-work register](../../roadmap.md).
+Depends on the [D003a focused command-routing plan](d003a-command-routing-plan.md).
+See the current [command architecture](../../architecture/commands.md),
+[personal config plan](d036-personal-config-plan.md), and
+[architecture decisions](../../decisions.md).
 
 ## Outcome and design
 
@@ -131,12 +131,12 @@ invalid operation fails that turn with its operation number; a runtime command
 reports a handler failure, config startup fails, and another extension can
 still load. An `await` continuation starts a later batch.
 
-### 4. Product validation and architecture record 🟡
+### 4. Product validation and architecture record ✅
 
 - ✅ Verify remapping and unbinding native and extension commands from config in
   the product, including an application-wide `copy` binding routed to different
   focused views. Cover menu and palette invocation independently of keymaps.
 - ✅ Update the command and extension-host architecture references and record
   validated precedence and ownership choices in `docs/decisions.md`.
-- ⏳ **Review gate:** inspect end-to-end behavior and regression coverage before
+- ✅ **Review gate:** inspected end-to-end behavior and regression coverage before
   marking D003 complete.
