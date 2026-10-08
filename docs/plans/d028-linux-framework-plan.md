@@ -1,6 +1,7 @@
 # D028: Linux framework checkpoint
 
-Status: checkpoint 1 in progress. Native launch and smoke-test gates remain open.
+Status: checkpoint 1 implementation verified; awaiting review. Native launch
+and smoke-test gates remain open.
 
 Source: D028, promoted from the [deferred-work register](../roadmap.md).
 Current boundaries: [architecture](../architecture.md),
@@ -51,7 +52,7 @@ work require design review before proceeding.
 
 ## Checkpoints
 
-### 1. Linux build and personal-config contract 🟡
+### 1. Linux build and personal-config contract 🟡 (implementation ✅; review pending)
 
 - ✅ Establish a reproducible build/test recipe on this machine. Record the
   distribution, compositor/session, Rust and gpui versions, and required native
@@ -68,7 +69,7 @@ work require design review before proceeding.
 - ✅ Exercise selection followed by source capture for optional phases, local
   imports, selected-root symlinks, and rejected escaping imports. Reuse existing
   capture coverage where it already proves the behavior; add tests for gaps.
-- Run focused tests, then the relevant existing Linux suite and Clippy. Record
+- ✅ Run focused tests, then the relevant existing Linux suite and Clippy. Record
   any platform corrections and their regression coverage.
 - **Review gate:** inspect actual directory values, precedence, source capture,
   and the build/test recipe before native launch work.
@@ -150,12 +151,22 @@ work require design review before proceeding.
   `cargo clippy --locked --all-targets -- -D warnings`,
   `cargo build --locked --bin knot`.
   Run `cargo fmt` once after Rust edits and before committing.
-- Focused personal-config tests passed (17 tests). The full suite exposed
-  platform-specific keymap test assumptions (corrected below) and a shared
-  command-cancellation hang. Final suite validation remains pending that fix.
+- ✅ Automated results: focused personal-config tests passed (17 tests, including
+  15 isolated HOME/XDG child cases); final `cargo test --locked --all-targets`
+  passed all 454 library tests and the binary target. Clippy with warnings denied
+  and the separate product binary build passed. `cargo fmt` and `git diff --check`
+  completed. The dependency proc-macro-error2 2.0.1 emits Cargo's existing
+  future-incompatibility notice; it does not fail these checks.
 - Linux suite corrections: keymap tests now look up gpui's canonical key spelling
   (`cmd` on macOS, `super` on Linux) rather than hardcoding macOS output. The
   normalization test explicitly asserts each platform's spelling. Mark the
   test-only palette helper accordingly so the product build passes Clippy.
+- The suite also exposed a shared command-cancellation race: a host request could
+  be observed before active-command publication, leaving cancellation suspended
+  indefinitely. Coordinate publication and cancellation under the existing
+  cancellation mutex; consume earlier cancellation in the initial command turn.
+  Preserve the existing suspended-request/late-response test and add a barrier
+  regression forcing cancellation before publication. Both pass in the full
+  suite. This is a contained lifecycle fix; no dependency direction changes.
 - Review gate: pending inspection of directory values, capture coverage, and
   the build/test recipe. Native startup has not been attempted.

@@ -235,7 +235,10 @@ palette and keybinding discovery, while the application bridge retains the captu
 target for the whole root tree. Each parent has at most one unfinished child,
 and ancestry cycles are rejected as unavailable. Cancellation marks the tree,
 wakes a suspended isolate turn, aborts its JavaScript signal, rejects its
-pending host requests, and rejects late responses. Forced V8 interruption
+pending host requests, and rejects late responses. Cancellation also covers
+the interval between a command issuing host work and publishing its active
+execution: publication consumes an earlier cancellation, while later
+cancellation wakes the recorded execution. Forced V8 interruption
 remains fatal only to the affected lifecycle.
 
 The foreground buffer bridge owns active-buffer lookup, lifecycle-scoped

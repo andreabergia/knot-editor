@@ -232,6 +232,8 @@ struct RuntimeLocalState {
     modules: Mutex<ModuleRegistry>,
     buffer_changes: Mutex<BufferChangeQueueState>,
     cancelled_commands: Mutex<HashSet<CommandInvocationId>>,
+    #[cfg(test)]
+    command_start_gate: Mutex<Option<Arc<std::sync::Barrier>>>,
     keybinding_mutations: Mutex<Vec<KeybindingMutation>>,
     keybinding_batch_pending: Mutex<Option<RequestId>>,
     deferred_responses: Mutex<Vec<HostResponse>>,
@@ -256,6 +258,8 @@ impl RuntimeLocalState {
             modules: Mutex::new(ModuleRegistry::new(graph)),
             buffer_changes: Mutex::new(BufferChangeQueueState::default()),
             cancelled_commands: Mutex::new(HashSet::new()),
+            #[cfg(test)]
+            command_start_gate: Mutex::new(None),
             keybinding_mutations: Mutex::new(Vec::new()),
             keybinding_batch_pending: Mutex::new(None),
             deferred_responses: Mutex::new(Vec::new()),
@@ -986,12 +990,25 @@ impl RuntimeCapsule {
             resolver.get_promise(try_catch)
         };
         promise.mark_as_handled();
-        *self.local_state.active.lock().unwrap() = Some(ActiveExecution {
-            root,
-            promise: v8::Global::new(try_catch, promise),
-            source: "knot:command".into(),
-            completion: ActiveCompletion::Command(result),
-        });
+        #[cfg(test)]
+        if let Some(gate) = self.local_state.command_start_gate.lock().unwrap().take() {
+            gate.wait();
+            gate.wait();
+        }
+        let cancelled = {
+            // Cancellation either sees the published command or is consumed here.
+            let mut cancelled = self.local_state.cancelled_commands.lock().unwrap();
+            *self.local_state.active.lock().unwrap() = Some(ActiveExecution {
+                root,
+                promise: v8::Global::new(try_catch, promise),
+                source: "knot:command".into(),
+                completion: ActiveCompletion::Command(result),
+            });
+            cancelled.remove(&invocation.id)
+        };
+        if cancelled {
+            self.cancel_command_in_scope(try_catch, root, invocation.id);
+        }
         try_catch.perform_microtask_checkpoint();
         *self.local_state.current_root.lock().unwrap() = None;
         self.inspect_active(try_catch, root)
@@ -1164,6 +1181,18 @@ impl RuntimeCapsule {
         let mut scope = scope.init();
         let context = v8::Local::new(&scope, &data.context);
         let scope = &mut v8::ContextScope::new(&mut scope, context);
+        self.cancel_command_in_scope(scope, root, invocation);
+        *self.local_state.current_root.lock().unwrap() = None;
+        self.inspect_active(scope, root)
+    }
+
+    fn cancel_command_in_scope(
+        &self,
+        scope: &mut v8::PinScope<'_, '_>,
+        root: RootId,
+        invocation: CommandInvocationId,
+    ) {
+        let context = scope.get_current_context();
         let name = v8::String::new(scope, "__knotCancelCommand").unwrap();
         if let Some(function) = context.global(scope).get(scope, name.into())
             && let Ok(function) = v8::Local::<v8::Function>::try_from(function)
@@ -1176,8 +1205,6 @@ impl RuntimeCapsule {
         }
         self.reject_pending_for_command(scope, root);
         scope.perform_microtask_checkpoint();
-        *self.local_state.current_root.lock().unwrap() = None;
-        self.inspect_active(scope, root)
     }
 
     fn run_root_turn(
@@ -2717,12 +2744,8 @@ impl RuntimePool {
         invocation: CommandInvocationId,
     ) -> Result<(), RuntimePoolError> {
         let capsule = self.capsule(key)?;
-        capsule
-            .local_state
-            .cancelled_commands
-            .lock()
-            .unwrap()
-            .insert(invocation);
+        let mut cancelled = capsule.local_state.cancelled_commands.lock().unwrap();
+        cancelled.insert(invocation);
         let root = capsule
             .local_state
             .active
@@ -2732,6 +2755,7 @@ impl RuntimePool {
             .and_then(|active| {
                 matches!(&active.completion, ActiveCompletion::Command(_)).then_some(active.root)
             });
+        drop(cancelled);
         if let Some(root) = root {
             self.scheduler_handle.enqueue_continuation(
                 key,
@@ -7633,6 +7657,15 @@ mod tests {
 
     #[test]
     fn command_cancellation_rejects_suspended_host_work_and_prevents_late_resume() {
+        assert_command_cancellation(false);
+    }
+
+    #[test]
+    fn command_cancellation_before_active_publication_is_not_lost() {
+        assert_command_cancellation(true);
+    }
+
+    fn assert_command_cancellation(cancel_before_publication: bool) {
         let pool = RuntimePool::new(PoolConfig::single_worker());
         let runtime = key(54);
         pool.load(runtime, IsolateConfig::default()).unwrap();
@@ -7662,6 +7695,16 @@ mod tests {
         .unwrap();
         setup.wait().unwrap();
 
+        let gate = Arc::new(std::sync::Barrier::new(2));
+        if cancel_before_publication {
+            *pool
+                .capsule(runtime)
+                .unwrap()
+                .local_state
+                .command_start_gate
+                .lock()
+                .unwrap() = Some(gate.clone());
+        }
         let invocation = CommandInvocationId::new(905);
         let execution = pool
             .invoke_command(
@@ -7680,7 +7723,13 @@ mod tests {
             .receive_request_timeout(Duration::from_secs(1))
             .unwrap();
         assert_eq!(suspended.invocation, Some(invocation));
+        if cancel_before_publication {
+            gate.wait();
+        }
         pool.cancel_command(runtime, invocation).unwrap();
+        if cancel_before_publication {
+            gate.wait();
+        }
         assert_eq!(execution.wait().unwrap(), CommandOutcome::Cancelled);
         assert_eq!(
             pool.respond(HostResponse {
