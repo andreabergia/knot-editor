@@ -188,10 +188,28 @@ impl BindingRegistry {
             .into_iter()
             .flat_map(|key| {
                 let effective = &self.active[&key];
-                if effective.global.is_some() {
-                    return vec![(key, "product && !palette".to_owned())];
+                if matches!(effective.global, Some(BindingResolution::Command(_))) {
+                    let mut context = "product && !palette".to_owned();
+                    let mut unbound_views = effective
+                        .views
+                        .iter()
+                        .filter_map(|(view, resolution)| {
+                            matches!(resolution, BindingResolution::Unbound).then_some(view)
+                        })
+                        .collect::<Vec<_>>();
+                    unbound_views.sort();
+                    for view in unbound_views {
+                        context.push_str(&format!(" && !{}", view_context(view)));
+                    }
+                    return vec![(key, context)];
                 }
-                let mut views = effective.views.keys().collect::<Vec<_>>();
+                let mut views = effective
+                    .views
+                    .iter()
+                    .filter_map(|(view, resolution)| {
+                        matches!(resolution, BindingResolution::Command(_)).then_some(view)
+                    })
+                    .collect::<Vec<_>>();
                 views.sort();
                 views
                     .into_iter()
@@ -676,6 +694,25 @@ mod tests {
         assert_eq!(
             registry.gpui_bindings()[1],
             ("cmd-k right".into(), "product && !palette".into())
+        );
+    }
+
+    #[test]
+    fn unbound_keys_do_not_install_actions_in_their_scope() {
+        let mut registry = BindingRegistry::new();
+        let personal = BindingOwner::Personal(ExtensionId::new(0), ExtensionLifecycleId::new(1));
+        registry.set(personal, "a", Some("editor"), None).unwrap();
+        assert!(registry.gpui_bindings().is_empty());
+
+        registry
+            .set(BindingOwner::Native, "cmd-n", None, Some(command("new")))
+            .unwrap();
+        registry
+            .set(personal, "cmd-n", Some("editor"), None)
+            .unwrap();
+        assert_eq!(
+            registry.gpui_bindings(),
+            vec![("cmd-n".into(), "product && !palette && !editor".into())]
         );
     }
 

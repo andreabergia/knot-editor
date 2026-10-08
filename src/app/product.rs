@@ -513,7 +513,7 @@ impl ProductShell {
             .resolve(&action.key, view_kind.as_deref());
         match resolution {
             Some(BindingResolution::Command(command)) => self.dispatch_command(command, target, cx),
-            Some(BindingResolution::Unbound) => {}
+            Some(BindingResolution::Unbound) => cx.propagate(),
             None => cx.propagate(),
         }
     }
@@ -5202,6 +5202,33 @@ await commands.registerForView("outline", "copy", async () => {
                 assert_eq!(model.read(cx).text(), "\t");
             }
         });
+    }
+
+    #[gpui::test]
+    fn unbinding_an_unmapped_letter_preserves_editor_input(cx: &mut TestAppContext) {
+        let documents = install_globals(cx);
+        cx.update(super::bind_product_keys);
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        let (shell, window) = product_window(document, model.clone(), cx);
+        cx.update_window(window, |_, window, cx| {
+            shell.read(cx).focus_active_editor(window, cx)
+        })
+        .unwrap();
+        cx.update(|cx| {
+            let owner = BindingOwner::Personal(ExtensionId::new(0), ExtensionLifecycleId::new(1));
+            assert!(
+                cx.global_mut::<ApplicationKeymaps>()
+                    .0
+                    .set(owner, "a", Some("editor"), None)
+                    .unwrap()
+            );
+            super::super::keymaps::rebuild(cx);
+        });
+        cx.refresh().unwrap();
+        cx.simulate_keystrokes(window, "a");
+        cx.run_until_parked();
+        cx.read(|cx| assert_eq!(model.read(cx).text(), "a"));
     }
 
     #[gpui::test]
