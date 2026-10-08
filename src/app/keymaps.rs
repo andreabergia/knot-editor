@@ -271,7 +271,12 @@ fn canonical_key(source: &str) -> Result<String, BindingError> {
     let canonical = source
         .split_whitespace()
         .map(|stroke| {
-            Keystroke::parse(&stroke.to_ascii_lowercase())
+            let stroke = if stroke.contains('-') {
+                stroke.to_ascii_lowercase()
+            } else {
+                stroke.to_owned()
+            };
+            Keystroke::parse(&stroke)
                 .map(|stroke| stroke.unparse())
                 .map_err(|_| BindingError::InvalidKey)
         })
@@ -618,6 +623,20 @@ mod tests {
             Some("split")
         );
         assert_eq!(resolved(&registry, "cmd-k right", Some("editor")), None);
+    }
+
+    #[test]
+    fn bare_uppercase_key_preserves_implicit_shift() {
+        let mut registry = BindingRegistry::new();
+        registry
+            .set(BindingOwner::Native, "A", None, Some(command("shifted")))
+            .unwrap();
+        assert_eq!(registry.keys(), vec!["shift-a"]);
+        assert_eq!(
+            resolved(&registry, "shift-a", Some("editor")).as_deref(),
+            Some("shifted")
+        );
+        assert_eq!(resolved(&registry, "a", Some("editor")), None);
     }
 
     #[test]
