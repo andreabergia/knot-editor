@@ -71,7 +71,8 @@ graph; bare, missing, and private-bootstrap imports fail resolution. The engine
 eagerly evaluates a private `knot:bootstrap` module and the public
 `knot` module when it creates the capsule. Bootstrap captures the native
 request callback and removes its temporary global before extension work can
-run, leaving only the semantic `editor`, `commands`, and `workbench` exports.
+run, leaving the semantic `editor`, `commands`, and `workbench` namespaces and
+the `keybinding` and `removeKeybinding` functions.
 The facade's buffer API crosses a pool-owned typed request inbox. Its native
 callback allocates a lifecycle-scoped request identity, retains only a
 persistent V8 promise resolver, and returns the promise without waiting on the
@@ -97,6 +98,10 @@ phase; pre-init errors stop startup before extension loading. A config
 failure unloads the config and every installed lifecycle admitted during that
 launch and removes their foreground registrations. Installed-package failures
 retain their independent report outcomes and do not interrupt post-init.
+Config and installed extensions retain their own keybinding slots across these
+phases. Personal slots outrank extension slots in the foreground merged map,
+including when an extension later registers the same key; failed startup or
+unload removes the affected lifecycle's slots.
 
 Command handlers remain persistent JavaScript functions keyed by opaque
 foreground-issued registrations. Native-to-extension invocation enters as

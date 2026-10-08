@@ -1,6 +1,6 @@
 # D003b: JavaScript-configurable keymaps
 
-Status: in progress. Checkpoint 3 is approved; checkpoint 4 is next.
+Status: in progress. Checkpoint 4 implementation is ready for review.
 
 Source: D003, promoted from the [deferred-work register](../roadmap.md).
 Depends on the [D003a focused command-routing plan](../archive/plans/d003a-command-routing-plan.md).
@@ -131,12 +131,12 @@ invalid operation fails that turn with its operation number; a runtime command
 reports a handler failure, config startup fails, and another extension can
 still load. An `await` continuation starts a later batch.
 
-### 4. Product validation and architecture record ⬜
+### 4. Product validation and architecture record 🟡
 
-- Verify remapping and unbinding native and extension commands from config in
+- ✅ Verify remapping and unbinding native and extension commands from config in
   the product, including an application-wide `copy` binding routed to different
   focused views. Cover menu and palette invocation independently of keymaps.
-- Update the command and extension-host architecture references and record
+- ✅ Update the command and extension-host architecture references and record
   validated precedence and ownership choices in `docs/decisions.md`.
-- **Review gate:** inspect end-to-end behavior and regression coverage before
+- ⏳ **Review gate:** inspect end-to-end behavior and regression coverage before
   marking D003 complete.

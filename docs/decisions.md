@@ -168,10 +168,21 @@ parent bound composition without introducing a general task scheduler. Commands
 return structured execution outcomes, not semantic values; ordinary JavaScript
 functions remain preferable when command lookup and routing are unnecessary.
 
-Fixed gpui bindings and semantic key contexts cover the validated keymap cases.
-Raw input protocols stay outside registered commands.
+Keep one application-owned keymap registry with a merged effective map. Native,
+extension, and personal registrations retain owner records so replacement,
+unbinding, failed startup, and unload can reveal lower-priority bindings.
+Personal config outranks extensions, which outrank native defaults. Within one
+source, view-specific bindings outrank global bindings, and later registrations
+win remaining ties. This order is resolved by Knot because gpui's context
+depth cannot express source priority. gpui recognizes keys and scopes, while
+the command dispatcher handles the selected semantic command. A null unbind
+leaves raw view input available. Menus and the palette invoke commands without
+consulting the keymap; a global `copy` binding routes to different handlers by
+focused view. Raw input protocols stay outside registered commands.
+Apply JavaScript mutations as one ordered batch per V8 turn so invalid input
+cannot leave a partial keymap and startup readiness follows foreground state.
 
-Reference: [commands](architecture/commands.md). Evidence: [command keymap plan](archive/exploration/step11-command-keymap-plan.md).
+Reference: [commands](architecture/commands.md). Evidence: [D003b keymap plan](plans/d003b-keymaps-plan.md).
 
 ## Views and extension UI
 

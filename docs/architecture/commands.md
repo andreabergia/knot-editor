@@ -53,15 +53,19 @@ select another binding.
 The public `knot` module exposes synchronous, void `keybinding` and
 `removeKeybinding` calls. Bindings accept a command name or a command with
 JSON-compatible arguments, plus an optional view kind. A null command unbinds
-the key in that scope. JavaScript sends ordered mutations after each V8 turn;
+the key in that scope and leaves input available to the focused view. JavaScript
+sends ordered mutations after each V8 turn;
 the application validates and applies each batch atomically, rebuilding GPUI
 bindings only when the merged map changes.
 
 GPUI recognizes keys in product windows and invokes one Knot keymap action per
 effective key and scope. The action uses the focused view kind to read the
-effective map and enters the captured command dispatcher. GPUI contexts limit scoped
-bindings to their views, so unrelated input and sequence prefixes reach their
-original view. The command palette retains its own input context. Every changed
+effective map and enters the captured command dispatcher. The same global
+`copy` binding reaches the editor's native handler or an extension view's
+handler according to focus. GPUI contexts limit scoped bindings to their views,
+so unrelated input and sequence prefixes reach their original view. The command
+palette retains its own input context; palette and menu command invocation do
+not consult keymaps. Every changed
 effective map rebuilds GPUI bindings from the registry, plus fixed bindings for
 the config-error window, across all windows.
 
