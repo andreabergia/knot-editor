@@ -3813,6 +3813,271 @@ mod tests {
     }
 
     #[gpui::test]
+    fn config_remaps_product_keys_without_changing_menu_or_palette_dispatch(
+        cx: &mut TestAppContext,
+    ) {
+        let config = tempfile::tempdir().unwrap();
+        let extensions = tempfile::tempdir().unwrap();
+        std::fs::write(
+            config.path().join("pre-init.js"),
+            "import * as knot from 'knot'; knot.keybinding('cmd-n', null); knot.keybinding('cmd-g', 'file.new');",
+        )
+        .unwrap();
+        std::fs::write(
+            config.path().join("post-init.js"),
+            "import * as knot from 'knot'; knot.keybinding('cmd-r', 'test.mark');",
+        )
+        .unwrap();
+        install_extension(
+            extensions.path(),
+            "@example/mark",
+            &[],
+            &[(
+                "main.js",
+                "import * as knot from 'knot'; await knot.commands.register('test.mark', () => knot.keybinding('cmd-y', 'file.new'));",
+            )],
+        );
+        install_globals(cx);
+        cx.update(super::bind_product_keys);
+        install_launch_gate(cx);
+        let host = cx.update(super::super::extension_host::install);
+        host.update(cx, |host, cx| {
+            host.start_product_startup(
+                Some(config.path().to_path_buf()),
+                Ok(extensions.path().to_path_buf()),
+                cx,
+            )
+        });
+        assert!(wait_for_product_startup(cx));
+        let window = cx.windows()[0];
+        let shell = cx
+            .update_window(window, |_, window, _| {
+                window.root::<ProductShell>().flatten()
+            })
+            .unwrap()
+            .unwrap();
+        cx.update_window(window, |_, window, cx| {
+            shell.read(cx).focus_active_editor(window, cx)
+        })
+        .unwrap();
+        cx.refresh().unwrap();
+
+        cx.simulate_keystrokes(window, "cmd-n");
+        cx.run_until_parked();
+        cx.read(|cx| {
+            assert_eq!(
+                shell
+                    .read(cx)
+                    .workbench
+                    .read(cx)
+                    .focused_pane()
+                    .unwrap()
+                    .tabs()
+                    .len(),
+                1
+            )
+        });
+        cx.simulate_keystrokes(window, "cmd-g");
+        cx.run_until_parked();
+        cx.read(|cx| {
+            assert_eq!(
+                shell
+                    .read(cx)
+                    .workbench
+                    .read(cx)
+                    .focused_pane()
+                    .unwrap()
+                    .tabs()
+                    .len(),
+                2
+            )
+        });
+
+        cx.simulate_keystrokes(window, "cmd-r");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            cx.run_until_parked();
+            if cx.read(|cx| {
+                keymap_command(cx, "cmd-y", Some("editor")).as_deref() == Some("file.new")
+            }) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "config binding did not invoke the extension command"
+            );
+            std::thread::yield_now();
+        }
+
+        cx.dispatch_action(window, ProductCommandSource::new(NEW_COMMAND));
+        cx.read(|cx| {
+            assert_eq!(
+                shell
+                    .read(cx)
+                    .workbench
+                    .read(cx)
+                    .focused_pane()
+                    .unwrap()
+                    .tabs()
+                    .len(),
+                3
+            )
+        });
+        cx.update_window(window, |_, window, cx| {
+            shell.update(cx, |shell, cx| shell.open_command_palette(window, cx));
+        })
+        .unwrap();
+        cx.refresh().unwrap();
+        cx.simulate_keystrokes(window, "f i l e . n e w enter");
+        cx.run_until_parked();
+        cx.read(|cx| {
+            assert_eq!(
+                shell
+                    .read(cx)
+                    .workbench
+                    .read(cx)
+                    .focused_pane()
+                    .unwrap()
+                    .tabs()
+                    .len(),
+                4
+            )
+        });
+    }
+
+    #[gpui::test]
+    fn config_global_copy_binding_routes_to_editor_and_extension_view(cx: &mut TestAppContext) {
+        use gpui::EntityInputHandler;
+
+        let config = tempfile::tempdir().unwrap();
+        let extensions = tempfile::tempdir().unwrap();
+        std::fs::write(
+            config.path().join("post-init.js"),
+            "import * as knot from 'knot'; knot.keybinding('cmd-j', 'copy');",
+        )
+        .unwrap();
+        install_extension(
+            extensions.path(),
+            "@example/outline-copy",
+            &[],
+            &[(
+                "main.js",
+                r#"
+                    import * as knot from 'knot';
+                    await knot.workbench.registerTreeDataProvider('outline', {
+                        getChildren(parentId) {
+                            return parentId === null
+                                ? [{ id: 'first', label: 'Tree item', collapsibleState: 'none' }]
+                                : [];
+                        },
+                    });
+                    await knot.commands.registerForView('outline', 'copy', async () => {
+                        const text = await knot.workbench.selectedText();
+                        await knot.workbench.writeClipboardText(text);
+                    });
+                    knot.keybinding('cmd-j', 'file.new', { view: 'outline' });
+                "#,
+            )],
+        );
+        let documents = install_globals(cx);
+        cx.update(super::bind_product_keys);
+        install_launch_gate(cx);
+        let host = cx.update(super::super::extension_host::install);
+        host.update(cx, |host, cx| {
+            host.start_product_startup(
+                Some(config.path().to_path_buf()),
+                Ok(extensions.path().to_path_buf()),
+                cx,
+            )
+        });
+        assert!(wait_for_product_startup(cx));
+        cx.read(|cx| {
+            assert_eq!(
+                keymap_command(cx, "cmd-j", Some("editor")).as_deref(),
+                Some("copy")
+            );
+            assert_eq!(
+                keymap_command(cx, "cmd-j", Some("outline")).as_deref(),
+                Some("copy")
+            );
+        });
+        let window = cx.windows()[0];
+        let shell = cx
+            .update_window(window, |_, window, _| {
+                window.root::<ProductShell>().flatten()
+            })
+            .unwrap()
+            .unwrap();
+        let tree = cx.read(|cx| shell.read(cx).extension_tree.clone().unwrap());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            cx.run_until_parked();
+            if cx.read(|cx| tree.read(cx).root_labels() == ["Tree item"]) {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "outline did not load");
+            std::thread::yield_now();
+        }
+
+        cx.update_window(window, |_, window, cx| {
+            let editor = shell
+                .read(cx)
+                .workbench
+                .read(cx)
+                .focused_pane()
+                .unwrap()
+                .active_tab()
+                .editor()
+                .unwrap()
+                .clone();
+            editor.update(cx, |editor, cx| {
+                editor.replace_text_in_range(None, "Editor selection", window, cx);
+                editor.execute_editing_command("editor.select-all", window, cx);
+            });
+            editor.focus_handle(cx).focus(window);
+        })
+        .unwrap();
+        cx.refresh().unwrap();
+        cx.simulate_keystrokes(window, "cmd-j");
+        cx.run_until_parked();
+        cx.read(|cx| {
+            assert_eq!(
+                cx.read_from_clipboard()
+                    .and_then(|item| item.text())
+                    .as_deref(),
+                Some("Editor selection")
+            );
+        });
+
+        cx.update_window(window, |_, window, cx| {
+            tree.update(cx, |tree, cx| assert!(tree.select_item("first", cx)));
+            tree.focus_handle(cx).focus(window);
+        })
+        .unwrap();
+        cx.update(|cx| cx.write_to_clipboard(gpui::ClipboardItem::new_string("untouched".into())));
+        cx.refresh().unwrap();
+        cx.simulate_keystrokes(window, "cmd-j");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            cx.run_until_parked();
+            if cx.read(|cx| {
+                cx.read_from_clipboard()
+                    .and_then(|item| item.text())
+                    .as_deref()
+                    == Some("Tree item")
+            }) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "global copy binding did not route to the outline"
+            );
+            std::thread::yield_now();
+        }
+        cx.read(|cx| assert_eq!(documents.read(cx).documents().count(), 1));
+    }
+
+    #[gpui::test]
     fn invalid_config_keybinding_batch_rolls_back_before_product_readiness(
         cx: &mut TestAppContext,
     ) {
