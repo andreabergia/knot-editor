@@ -1,13 +1,12 @@
 # D028: Linux framework checkpoint
 
-Status: planned. Design agreed; no checkpoint implemented.
+Status: checkpoint 1 in progress. Native launch and smoke-test gates remain open.
 
 Source: D028, promoted from the [deferred-work register](../roadmap.md).
 Current boundaries: [architecture](../architecture.md),
 [workbench lifecycle](../architecture/workbench-and-lifecycle.md), and
 [personal configuration decisions](../decisions.md#personal-configuration).
-Related work: [D003b configurable keymaps](d003b-keymaps-plan.md), being
-implemented in a separate worktree.
+Related work: [D003b configurable keymaps](../archive/plans/d003b-keymaps-plan.md), now integrated.
 
 ## Outcome and design
 
@@ -52,21 +51,21 @@ work require design review before proceeding.
 
 ## Checkpoints
 
-### 1. Linux build and personal-config contract ⬜
+### 1. Linux build and personal-config contract 🟡
 
-- Establish a reproducible build/test recipe on this machine. Record the
+- ✅ Establish a reproducible build/test recipe on this machine. Record the
   distribution, compositor/session, Rust and gpui versions, and required native
   libraries. Existing Ubuntu CI provides build/test coverage, not desktop
   validation; avoid duplicating it without a demonstrated gap.
-- Add Linux tests exercising the real `ProjectDirs`, `BaseDirs`, and
+- ✅ Add Linux tests exercising the real `ProjectDirs`, `BaseDirs`, and
   `user_config_root` path under controlled HOME/XDG environments. Use isolated
   subprocesses rather than mutating the environment of parallel tests.
-- Cover unset, absolute, empty, and relative XDG values; existing-root
+- ✅ Cover unset, absolute, empty, and relative XDG values; existing-root
   precedence; fallback when preferred roots are absent; and an existing invalid
   preferred root producing a capture error rather than loading a lower root.
   Assert the concrete Linux directory spelling, including application-name
   casing. Preserve the validated selection policy.
-- Exercise selection followed by source capture for optional phases, local
+- ✅ Exercise selection followed by source capture for optional phases, local
   imports, selected-root symlinks, and rejected escaping imports. Reuse existing
   capture coverage where it already proves the behavior; add tests for gaps.
 - Run focused tests, then the relevant existing Linux suite and Clippy. Record
@@ -113,3 +112,50 @@ work require design review before proceeding.
   checkpoints with ✅.
 - **Review gate:** approve the observed Wayland checkpoint and regression
   coverage, with no broader Linux support claim.
+
+## Checkpoint 1 evidence (2026-10-08)
+
+- Environment: Omarchy 4.0.4 (Arch family), Hyprland 0.56.2-2,
+  `XDG_SESSION_TYPE=wayland`, `WAYLAND_DISPLAY=wayland-1`.
+  Rust 1.99.0 (`b940084d7`), Cargo 1.99.0 (`5f94df478`), locked gpui 0.2.2,
+  directories 6.0.0, V8 152.2.0.
+- Native build prerequisites present: GCC 16.2.1, Clang 22.1.8, pkgconf 3.0.7,
+  fontconfig 2.18.3, FreeType 2.14.3, Vulkan loader 1.4.357.0,
+  Wayland 1.26.0, libX11 1.8.13, libxcb 1.17.0, libxkbcommon and
+  libxkbcommon-x11 1.13.2. Arch packages provide headers alongside libraries.
+  Ubuntu CI already installs the corresponding development libraries; no new
+  CI job is needed.
+- Observed build correction: gpui's transitive xattr 0.2.3 references Linux
+  `libc::ENOATTR`, removed in libc 0.2.190. Lock libc to 0.2.189 with
+  `cargo update -p libc --precise 0.2.189`; no framework patch is required.
+  Use `--locked` for subsequent builds to preserve this compatibility choice.
+- Enable gpui's public `wayland` feature for the Linux product dependency.
+  Its `test-support` feature already enables Wayland and X11 for tests, so
+  a passing test build alone did not establish the product backend.
+- Linux config contract: the real ProjectDirs fallback is
+  `$HOME/.config/knot`, or `$XDG_CONFIG_HOME/knot` for an absolute XDG value.
+  Empty and relative values are ignored. An existing default root outranks
+  a missing absolute XDG root; an existing absolute root outranks the default.
+  Missing roots remain optional. File and dangling-symlink preferred roots
+  must fail capture rather than load a lower root.
+- New subprocess coverage calls real BaseDirs, ProjectDirs, user_config_root,
+  and capture with isolated HOME/XDG values. It covers optional phases, local
+  imports, a selected-root symlink, and an escaping static import. Existing
+  capture tests additionally cover source immutability, malformed imports,
+  escaping source symlinks, unsupported directory symlinks, and deferred
+  post-init errors.
+- Reproduction from the repository root:
+  `cargo test --locked personal_config --lib`,
+  `cargo test --locked --all-targets`,
+  `cargo clippy --locked --all-targets -- -D warnings`,
+  `cargo build --locked --bin knot`.
+  Run `cargo fmt` once after Rust edits and before committing.
+- Focused personal-config tests passed (17 tests). The full suite exposed
+  platform-specific keymap test assumptions (corrected below) and a shared
+  command-cancellation hang. Final suite validation remains pending that fix.
+- Linux suite corrections: keymap tests now look up gpui's canonical key spelling
+  (`cmd` on macOS, `super` on Linux) rather than hardcoding macOS output. The
+  normalization test explicitly asserts each platform's spelling. Mark the
+  test-only palette helper accordingly so the product build passes Clippy.
+- Review gate: pending inspection of directory values, capture coverage, and
+  the build/test recipe. Native startup has not been attempted.

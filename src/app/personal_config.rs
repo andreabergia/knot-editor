@@ -421,6 +421,157 @@ fn collect(
 mod tests {
     use super::*;
 
+    /// Each child reads HOME/XDG through the real directories implementation.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_environment_contract() {
+        const CHILD: &str = "KNOT_CONFIG_CONTRACT_CHILD";
+        if let Ok(case) = std::env::var(CHILD) {
+            let home = PathBuf::from(std::env::var_os("HOME").unwrap());
+            let default = home.join(".config/knot");
+            let xdg = home.join("xdg/knot");
+            assert_eq!(BaseDirs::new().unwrap().home_dir(), home);
+            let native = if case.starts_with("absolute") {
+                &xdg
+            } else {
+                &default
+            };
+            assert_eq!(
+                ProjectDirs::from("", "", "Knot").unwrap().config_dir(),
+                native
+            );
+            let selected = user_config_root().unwrap();
+            let expected = if case == "absolute-default" {
+                &default
+            } else {
+                native
+            };
+            assert_eq!(&selected, expected);
+            if case == "absolute-invalid" || case == "absolute-dangling" {
+                let error = capture(&selected).unwrap_err();
+                assert_eq!(error.path, selected);
+                return;
+            }
+            if case == "absolute-escape" {
+                let error = capture(&selected).unwrap_err();
+                assert_eq!(error.phase, Some(ConfigPhase::PreInit));
+                assert!(error.cause.contains("escapes configuration"));
+                return;
+            }
+            let captured = capture(&selected).unwrap();
+            match case.as_str() {
+                "absolute-import" | "absolute-symlink" => {
+                    assert!(captured.pre_init && !captured.post_init);
+                    assert_eq!(captured.sources.len(), 2);
+                    assert_eq!(captured.sources["helper.mjs"].as_ref(), "export {};");
+                }
+                "absolute-post" => assert!(!captured.pre_init && captured.post_init),
+                _ => assert!(!captured.pre_init && !captured.post_init),
+            }
+            return;
+        }
+        for case in [
+            "unset",
+            "empty",
+            "relative",
+            "unset-existing",
+            "empty-existing",
+            "relative-existing",
+            "absolute-missing",
+            "absolute-default",
+            "absolute-both",
+            "absolute-invalid",
+            "absolute-dangling",
+            "absolute-import",
+            "absolute-symlink",
+            "absolute-post",
+            "absolute-escape",
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let home = temp.path();
+            let default = home.join(".config/knot");
+            let xdg_home = home.join("xdg");
+            let xdg = xdg_home.join("knot");
+            if matches!(
+                case,
+                "unset-existing"
+                    | "empty-existing"
+                    | "relative-existing"
+                    | "absolute-default"
+                    | "absolute-both"
+                    | "absolute-invalid"
+                    | "absolute-dangling"
+            ) {
+                fs::create_dir_all(&default).unwrap();
+                // A lower root must never be captured after selecting an invalid root.
+                if case == "absolute-invalid" || case == "absolute-dangling" {
+                    fs::write(default.join(PRE_INIT), "export {};").unwrap();
+                }
+            }
+            if case == "absolute-invalid" {
+                fs::create_dir_all(&xdg_home).unwrap();
+                fs::write(&xdg, "invalid root").unwrap();
+            } else if case == "absolute-dangling" {
+                fs::create_dir_all(&xdg_home).unwrap();
+                std::os::unix::fs::symlink(home.join("missing"), &xdg).unwrap();
+            } else if case == "absolute-symlink" {
+                let target = home.join("dotfiles");
+                fs::create_dir_all(&target).unwrap();
+                fs::create_dir_all(&xdg_home).unwrap();
+                fs::write(target.join(PRE_INIT), "import './helper.mjs';").unwrap();
+                fs::write(target.join("helper.mjs"), "export {};").unwrap();
+                std::os::unix::fs::symlink(&target, &xdg).unwrap();
+            } else if matches!(
+                case,
+                "absolute-both" | "absolute-import" | "absolute-post" | "absolute-escape"
+            ) {
+                fs::create_dir_all(&xdg).unwrap();
+                if case == "absolute-import" {
+                    fs::write(xdg.join(PRE_INIT), "import './helper.mjs';").unwrap();
+                    fs::write(xdg.join("helper.mjs"), "export {};").unwrap();
+                } else if case == "absolute-escape" {
+                    fs::write(home.join("outside.js"), "export {};").unwrap();
+                    fs::write(xdg.join(PRE_INIT), "import '../../outside.js';").unwrap();
+                } else if case == "absolute-post" {
+                    fs::write(xdg.join(POST_INIT), "export {};").unwrap();
+                }
+            }
+            let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+            child
+                .args([
+                    "--exact",
+                    "app::personal_config::tests::linux_environment_contract",
+                    "--nocapture",
+                ])
+                .env(CHILD, case)
+                .env("HOME", home)
+                .env_remove("XDG_CONFIG_HOME");
+            match case {
+                "unset" | "unset-existing" => {}
+                "empty" | "empty-existing" => {
+                    child.env("XDG_CONFIG_HOME", "");
+                }
+                "relative" | "relative-existing" => {
+                    child.env("XDG_CONFIG_HOME", "relative");
+                }
+                _ => {
+                    child.env("XDG_CONFIG_HOME", &xdg_home);
+                }
+            }
+            let output = child.output().unwrap();
+            assert!(
+                String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+                "child test did not run for {case}"
+            );
+            assert!(
+                output.status.success(),
+                "{case}: {}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
+
     #[test]
     fn selects_one_existing_xdg_root_before_native_root() {
         let temp = tempfile::tempdir().unwrap();

@@ -23,6 +23,9 @@ v8 = "152.2"
 [dev-dependencies]
 gpui = { version = "0.2", default-features = false, features = ["font-kit", "test-support", "windows-manifest"] }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+gpui = { version = "0.2", default-features = false, features = ["wayland"] }
+
 [lib]
 name = "knot"
 path = "src/lib.rs"

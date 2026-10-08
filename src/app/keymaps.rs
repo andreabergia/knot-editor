@@ -495,7 +495,7 @@ mod tests {
     }
 
     fn resolved(registry: &BindingRegistry, key: &str, view: Option<&str>) -> Option<String> {
-        match registry.resolve(key, view) {
+        match registry.resolve(&canonical_key(key).unwrap(), view) {
             Some(BindingResolution::Command(command)) => Some(command.name.to_string()),
             Some(BindingResolution::Unbound) => Some("<unbound>".into()),
             None => None,
@@ -599,7 +599,7 @@ mod tests {
                 .set(extension, "cmd-a", None, Some(command("updated")))
                 .unwrap()
         );
-        assert_eq!(registry.keys(), vec!["cmd-a"]);
+        assert_eq!(registry.keys(), vec![canonical_key("cmd-a").unwrap()]);
         assert_eq!(
             resolved(&registry, "cmd-a", Some("editor")).as_deref(),
             Some("personal")
@@ -677,7 +677,14 @@ mod tests {
                 Some(command("split")),
             )
             .unwrap();
-        assert_eq!(registry.keys(), vec!["cmd-k right"]);
+        assert_eq!(
+            registry.keys(),
+            vec![if cfg!(target_os = "macos") {
+                "cmd-k right"
+            } else {
+                "super-k right"
+            }]
+        );
         assert_eq!(
             resolved(&registry, "cmd-k right", Some("outline")).as_deref(),
             Some("split")
@@ -723,10 +730,13 @@ mod tests {
             registry.gpui_bindings(),
             vec![
                 (
-                    "cmd-j".into(),
+                    canonical_key("cmd-j").unwrap(),
                     format!("product > {}", view_context("outline"))
                 ),
-                ("cmd-k right".into(), "product > editor".into()),
+                (
+                    canonical_key("cmd-k right").unwrap(),
+                    "product > editor".into()
+                ),
             ]
         );
         let personal = BindingOwner::Personal(ExtensionId::new(0), ExtensionLifecycleId::new(1));
@@ -735,7 +745,10 @@ mod tests {
             .unwrap();
         assert_eq!(
             registry.gpui_bindings()[1],
-            ("cmd-k right".into(), "product && !palette".into())
+            (
+                canonical_key("cmd-k right").unwrap(),
+                "product && !palette".into()
+            )
         );
     }
 
@@ -754,7 +767,10 @@ mod tests {
             .unwrap();
         assert_eq!(
             registry.gpui_bindings(),
-            vec![("cmd-n".into(), "product && !palette && !editor".into())]
+            vec![(
+                canonical_key("cmd-n").unwrap(),
+                "product && !palette && !editor".into()
+            )]
         );
     }
 

@@ -518,6 +518,7 @@ impl ProductShell {
         }
     }
 
+    #[cfg(test)]
     fn open_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(origin) = self.capture_command_target(window, cx) else {
             return;
@@ -3339,7 +3340,11 @@ mod tests {
     }
 
     fn keymap_command(cx: &gpui::App, key: &str, view: Option<&str>) -> Option<String> {
-        match cx.global::<ApplicationKeymaps>().0.resolve(key, view) {
+        match cx
+            .global::<ApplicationKeymaps>()
+            .0
+            .resolve(&gpui::Keystroke::parse(key).unwrap().unparse(), view)
+        {
             Some(BindingResolution::Command(command)) => Some(command.name.to_string()),
             Some(BindingResolution::Unbound) => Some("<unbound>".into()),
             None => None,
@@ -3699,7 +3704,7 @@ mod tests {
             assert_eq!(keymap_command(cx, "cmd-x", Some("editor")).as_deref(), Some("<unbound>"));
             assert_eq!(keymap_command(cx, "cmd-l", Some("editor")), None);
             assert!(matches!(
-                cx.global::<ApplicationKeymaps>().0.resolve("cmd-j", Some("editor")),
+                cx.global::<ApplicationKeymaps>().0.resolve(&gpui::Keystroke::parse("cmd-j").unwrap().unparse(), Some("editor")),
                 Some(BindingResolution::Command(Command { arguments: CommandArgumentValue::Object(arguments), .. }))
                     if arguments.get("marker") == Some(&CommandArgumentValue::Number(42.0))
             ));
@@ -3731,10 +3736,11 @@ mod tests {
             })
             .unwrap();
         let command = cx.read(|cx| {
-            let Some(BindingResolution::Command(command)) = cx
-                .global::<ApplicationKeymaps>()
-                .0
-                .resolve("cmd-j", Some("editor"))
+            let Some(BindingResolution::Command(command)) =
+                cx.global::<ApplicationKeymaps>().0.resolve(
+                    &gpui::Keystroke::parse("cmd-j").unwrap().unparse(),
+                    Some("editor"),
+                )
             else {
                 panic!("expected command binding");
             };
@@ -5238,7 +5244,10 @@ await commands.register("test.dispose-view-copy", async () => viewCopy.dispose()
             assert!(
                 cx.global::<ApplicationKeymaps>()
                     .0
-                    .resolve("cmd-j", Some("outline"))
+                    .resolve(
+                        &gpui::Keystroke::parse("cmd-j").unwrap().unparse(),
+                        Some("outline")
+                    )
                     .is_none()
             );
         });

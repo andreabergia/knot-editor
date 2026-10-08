@@ -132,7 +132,8 @@ not outlive a failed entry.
 
 Use two optional JavaScript entry modules in one selected per-user config
 directory. Prefer an existing `XDG_CONFIG_HOME/knot`, then an existing
-`~/.config/knot`, then the platform `Knot` config directory, so a launch has one
+`~/.config/knot`, then the platform config directory for `Knot` (spelled `knot`
+on Linux), so a launch has one
 unambiguous source root on every platform. Keep config separate from installed
 packages: it has no manifest, has its own lifecycle identity, and its pre-init
 and post-init turns share JavaScript state across extension startup.
