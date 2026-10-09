@@ -131,38 +131,7 @@ impl TerminalView {
         if self.session.read(cx).status() != TerminalStatus::Running {
             return;
         }
-        let keystroke = &event.keystroke;
-        if keystroke.modifiers.platform {
-            return;
-        }
-
-        let key = keystroke.key.to_lowercase();
-        let mut bytes = match key.as_str() {
-            "enter" => b"\r".to_vec(),
-            "backspace" => vec![0x7f],
-            "tab" => b"\t".to_vec(),
-            "escape" => vec![0x1b],
-            "up" => b"\x1b[A".to_vec(),
-            "down" => b"\x1b[B".to_vec(),
-            "right" => b"\x1b[C".to_vec(),
-            "left" => b"\x1b[D".to_vec(),
-            "home" => b"\x1b[H".to_vec(),
-            "end" => b"\x1b[F".to_vec(),
-            "delete" => b"\x1b[3~".to_vec(),
-            "pageup" => b"\x1b[5~".to_vec(),
-            "pagedown" => b"\x1b[6~".to_vec(),
-            _ if keystroke.modifiers.control => control_byte(&key).into_iter().collect(),
-            _ => keystroke
-                .key_char
-                .as_deref()
-                .unwrap_or_default()
-                .as_bytes()
-                .to_vec(),
-        };
-
-        if keystroke.modifiers.alt && !bytes.is_empty() {
-            bytes.insert(0, 0x1b);
-        }
+        let bytes = terminal_key_bytes(&event.keystroke);
         if !bytes.is_empty() {
             if let Some(terminal) = self.session.read(cx).terminal() {
                 terminal.lock().scroll_display(Scroll::Bottom);
@@ -232,6 +201,42 @@ impl TerminalView {
     }
 }
 
+fn terminal_key_bytes(keystroke: &Keystroke) -> Vec<u8> {
+    if keystroke.modifiers.platform {
+        return Vec::new();
+    }
+
+    let key = keystroke.key.to_lowercase();
+    let mut bytes = match key.as_str() {
+        "enter" => b"\r".to_vec(),
+        "backspace" => vec![0x7f],
+        "tab" => b"\t".to_vec(),
+        "escape" => vec![0x1b],
+        "up" => b"\x1b[A".to_vec(),
+        "down" => b"\x1b[B".to_vec(),
+        "right" => b"\x1b[C".to_vec(),
+        "left" => b"\x1b[D".to_vec(),
+        "home" => b"\x1b[H".to_vec(),
+        "end" => b"\x1b[F".to_vec(),
+        "delete" => b"\x1b[3~".to_vec(),
+        "pageup" => b"\x1b[5~".to_vec(),
+        "pagedown" => b"\x1b[6~".to_vec(),
+        _ if keystroke.modifiers.control => control_byte(&key).into_iter().collect(),
+        "space" => vec![b' '],
+        _ => keystroke
+            .key_char
+            .as_deref()
+            .unwrap_or_default()
+            .as_bytes()
+            .to_vec(),
+    };
+
+    if keystroke.modifiers.alt && !bytes.is_empty() {
+        bytes.insert(0, 0x1b);
+    }
+    bytes
+}
+
 fn control_byte(key: &str) -> Option<u8> {
     let byte = key.as_bytes().first().copied()?;
     match byte {
@@ -239,6 +244,23 @@ fn control_byte(key: &str) -> Option<u8> {
         b'a'..=b'z' => Some(byte - b'a' + 1),
         b'?' => Some(0x7f),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui::{Keystroke, Modifiers, TestAppContext};
+
+    use super::terminal_key_bytes;
+
+    #[gpui::test]
+    fn windows_space_key_without_key_char_reaches_terminal(_cx: &mut TestAppContext) {
+        let space = Keystroke {
+            key: "space".into(),
+            key_char: None,
+            modifiers: Modifiers::default(),
+        };
+        assert_eq!(terminal_key_bytes(&space), b" ");
     }
 }
 

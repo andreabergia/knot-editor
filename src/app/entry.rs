@@ -108,21 +108,27 @@ mod tests {
 
     #[test]
     fn launch_accepts_exactly_one_path_and_normalizes_it_at_the_boundary() {
+        let directory = tempfile::tempdir().unwrap();
         let configuration = LaunchConfiguration::parse(
             ["knot".into(), "project/../notes ü.md".into()],
-            Path::new("/tmp"),
+            directory.path(),
         )
         .unwrap();
         let LaunchConfiguration::Product(Some(request)) = configuration else {
             panic!("expected a product open request");
         };
 
-        assert_eq!(request.uri().to_string(), "file:///tmp/notes%20%C3%BC.md");
+        assert_eq!(
+            request.uri().to_string(),
+            Url::from_file_path(directory.path().join("notes ü.md"))
+                .unwrap()
+                .to_string()
+        );
         assert_eq!(request.title(), "notes ü.md");
         assert!(
             LaunchConfiguration::parse(
                 ["knot".into(), "one".into(), "two".into()],
-                Path::new("/tmp")
+                directory.path()
             )
             .is_err()
         );

@@ -398,7 +398,7 @@ pub(crate) fn dispatch_open_to_captured_target(
         target.validate_tab(cx)?;
         break_captured_history_group(&target, cx);
         shell.update(cx, |shell, cx| {
-            shell.start_open_dialog(target, completion, cx);
+            shell.start_open_dialog(target, completion, window, cx);
         });
         Ok(())
     })

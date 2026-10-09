@@ -1226,6 +1226,92 @@ impl ProductShell {
         &mut self,
         target: ProductCommandTarget,
         completion: CommandCompletion,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.target_is_live(&target, cx) {
+            self.finish_open_command(
+                completion,
+                crate::host::protocol::CommandOutcome::InvalidTarget,
+                cx,
+            );
+            return;
+        }
+        if cx.try_global::<ApplicationOpenDialog>().is_none()
+            && !cx.can_select_mixed_files_and_dirs()
+        {
+            let prompt = window.prompt(
+                PromptLevel::Info,
+                "What would you like to open?",
+                None,
+                &[
+                    PromptButton::new("File"),
+                    PromptButton::new("Folder"),
+                    PromptButton::cancel("Cancel"),
+                ],
+                cx,
+            );
+            self.status = "choosing what to open".into();
+            cx.notify();
+            let task = cx.spawn(async move |this, cx| {
+                let answer = prompt.await.unwrap_or(2);
+                let fallback = completion.clone();
+                if this
+                    .update(cx, |this, cx| match answer {
+                        0 | 1 => this.start_open_dialog_with_options(
+                            target,
+                            completion,
+                            PathPromptOptions {
+                                files: answer == 0,
+                                directories: answer == 1,
+                                multiple: false,
+                                prompt: Some(
+                                    if answer == 0 {
+                                        "Open File"
+                                    } else {
+                                        "Open Folder"
+                                    }
+                                    .into(),
+                                ),
+                            },
+                            cx,
+                        ),
+                        _ => {
+                            this.status = "open cancelled".into();
+                            this.finish_open_command(
+                                completion,
+                                crate::host::protocol::CommandOutcome::Cancelled,
+                                cx,
+                            );
+                            cx.notify();
+                        }
+                    })
+                    .is_err()
+                {
+                    fallback.complete(crate::host::protocol::CommandOutcome::InvalidTarget);
+                }
+            });
+            self.tasks.push(task);
+            return;
+        }
+        self.start_open_dialog_with_options(
+            target,
+            completion,
+            PathPromptOptions {
+                files: true,
+                directories: true,
+                multiple: false,
+                prompt: Some("Open".into()),
+            },
+            cx,
+        );
+    }
+
+    fn start_open_dialog_with_options(
+        &mut self,
+        target: ProductCommandTarget,
+        completion: CommandCompletion,
+        options: PathPromptOptions,
         cx: &mut Context<Self>,
     ) {
         if !self.target_is_live(&target, cx) {
@@ -1241,12 +1327,7 @@ impl ProductShell {
             if let Some(dialog) = cx.try_global::<ApplicationOpenDialog>() {
                 dialog.0.select()
             } else {
-                let selection = cx.prompt_for_paths(PathPromptOptions {
-                    files: true,
-                    directories: true,
-                    multiple: false,
-                    prompt: Some("Open".into()),
-                });
+                let selection = cx.prompt_for_paths(options);
                 Box::pin(async move {
                     match selection.await {
                         Ok(Ok(Some(paths))) => paths
@@ -6140,8 +6221,21 @@ await commands.registerForView("outline", "copy", async () => {
 
     #[gpui::test]
     async fn copy_requires_focused_selection_and_declines_on_terminal(cx: &mut TestAppContext) {
-        use alacritty_terminal::vte::ansi::Handler;
+        use alacritty_terminal::tty::{Options, Shell};
+        use alacritty_terminal::{
+            index::{Column, Line, Point as TermPoint, Side},
+            selection::{Selection, SelectionType},
+            vte::ansi::Handler,
+        };
         use gpui::EntityInputHandler;
+
+        #[cfg(windows)]
+        let quiet_shell = Shell::new(
+            "cmd.exe".into(),
+            vec!["/C".into(), "ping -n 3 127.0.0.1 >nul".into()],
+        );
+        #[cfg(not(windows))]
+        let quiet_shell = Shell::new("/bin/sh".into(), vec!["-c".into(), "sleep 2".into()]);
 
         let documents = install_globals(cx);
         let document = cx.update(|cx| create_untitled_document(&documents, cx));
@@ -6229,10 +6323,34 @@ await commands.registerForView("outline", "copy", async () => {
             );
         });
 
+        let terminal_session = cx.update(|cx| {
+            cx.new(|cx| {
+                crate::app::terminal_session::TerminalSession::new_with_options(
+                    Options {
+                        shell: Some(quiet_shell),
+                        drain_on_exit: true,
+                        ..Default::default()
+                    },
+                    cx,
+                )
+            })
+        });
         let target = cx
             .update_window(window, |_, window, cx| {
                 shell.update(cx, |shell, cx| {
-                    let (session, view) = shell.create_terminal(cx);
+                    let session = cx
+                        .global::<ApplicationTerminalSessions>()
+                        .0
+                        .borrow_mut()
+                        .allocate_id();
+                    cx.global::<ApplicationTerminalSessions>()
+                        .0
+                        .borrow_mut()
+                        .sessions
+                        .insert(session, terminal_session.clone());
+                    let view = cx.new(|cx| {
+                        crate::app::terminal_view::TerminalView::new(terminal_session.clone(), cx)
+                    });
                     let pane = shell.workbench.read(cx).focused_pane_id().unwrap();
                     let tab = shell.workbench.update(cx, |workbench, _| {
                         workbench.open_terminal_tab(pane, session, view).unwrap()
@@ -6294,32 +6412,14 @@ await commands.registerForView("outline", "copy", async () => {
             for ch in "selected terminal text".chars() {
                 terminal.input(ch);
             }
+            let mut selection = Selection::new(
+                SelectionType::Simple,
+                TermPoint::new(Line(0), Column(0)),
+                Side::Left,
+            );
+            selection.update(TermPoint::new(Line(0), Column(21)), Side::Right);
+            terminal.selection = Some(selection);
         });
-        cx.refresh().unwrap();
-        let bounds = cx.read(|cx| {
-            shell
-                .read(cx)
-                .workbench
-                .read(cx)
-                .focused_pane()
-                .unwrap()
-                .active_tab()
-                .terminal_view()
-                .unwrap()
-                .read(cx)
-                .interaction_bounds()
-        });
-        let start = point(bounds.origin.x + px(1.), bounds.origin.y + px(5.));
-        let end = point(
-            bounds.origin.x + px(21. * 8. + 1.),
-            bounds.origin.y + px(5.),
-        );
-        {
-            let mut window_cx = VisualTestContext::from_window(window, cx);
-            window_cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
-            window_cx.simulate_mouse_move(end, MouseButton::Left, Modifiers::default());
-            window_cx.simulate_mouse_up(end, MouseButton::Left, Modifiers::default());
-        }
         let selected_text = cx.read(|cx| {
             let session_id = match target.surface {
                 TabSurfaceId::Terminal(id) => id,
@@ -9346,7 +9446,24 @@ await commands.registerForView("outline", "copy", async () => {
     #[gpui::test]
     async fn process_exit_during_terminal_handoff_keeps_final_grid(cx: &mut TestAppContext) {
         use alacritty_terminal::tty::{Options, Shell};
-        use std::{thread, time::Duration};
+        use std::{
+            thread,
+            time::{Duration, Instant},
+        };
+
+        #[cfg(windows)]
+        let shell = Shell::new(
+            "cmd.exe".into(),
+            vec!["/C".into(), "echo handoff-output & exit /b 7".into()],
+        );
+        #[cfg(not(windows))]
+        let shell = Shell::new(
+            "/bin/sh".into(),
+            vec![
+                "-c".into(),
+                "printf 'handoff-output\\n'; sleep 0.05; exit 7".into(),
+            ],
+        );
 
         let documents = install_globals(cx);
         let document = cx.update(|cx| create_untitled_document(&documents, cx));
@@ -9356,13 +9473,7 @@ await commands.registerForView("outline", "copy", async () => {
             cx.new(|cx| {
                 crate::app::terminal_session::TerminalSession::new_with_options(
                     Options {
-                        shell: Some(Shell::new(
-                            "/bin/sh".into(),
-                            vec![
-                                "-c".into(),
-                                "printf 'handoff-output\\n'; sleep 0.05; exit 7".into(),
-                            ],
-                        )),
+                        shell: Some(shell),
                         drain_on_exit: true,
                         ..Default::default()
                     },
@@ -9402,7 +9513,23 @@ await commands.registerForView("outline", "copy", async () => {
             })
             .unwrap();
         assert_eq!(outcome, CommandOutcome::Completed);
-        cx.run_until_parked();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            cx.run_until_parked();
+            if cx.read(|cx| {
+                matches!(
+                    session.read(cx).status(),
+                    crate::app::terminal_session::TerminalStatus::Exited(_)
+                )
+            }) {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "terminal did not exit after handoff"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
         cx.read(|cx| {
             assert!(matches!(
                 session.read(cx).status(),
