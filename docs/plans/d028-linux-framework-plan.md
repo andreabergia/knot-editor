@@ -226,3 +226,10 @@ work require design review before proceeding.
   `@d028/startup` logged successful loading. The local-import shared-state
   assertion completed, otherwise startup would have been fatal. User palette
   confirmation of all three registrations and Ctrl-Shift-P remains pending.
+- ✅ Malformed-source native case: isolated root
+  `/tmp/knot-d028-malformed-25o7kn89`, using the same HOME/XDG layout,
+  contains `pre-init.js` with `export const = ;`. Launch logged a Pre-init
+  SyntaxError at line 1, column 14. Hyprland reports PID 11657 with only a
+  mapped native `Knot configuration error` window; no product window belongs
+  to that process. Exec session 30632 remains live. Copy/Quit and review
+  confirmation remain pending, as for the phase-evaluation case.
