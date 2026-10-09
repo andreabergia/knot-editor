@@ -180,8 +180,10 @@ work require design review before proceeding.
 - Launch: execute `target/debug/knot` with those environment values while
   retaining the real Wayland and session-bus environment. Hyprland reported
   a mapped, visible, input-accepting window titled Knot, PID 177761,
-  `xwayland=false`. The native process remains under exec session 19325.
-  User visual confirmation is pending.
+  `xwayland=false`. That historical exec handle is no longer relied on.
+  ✅ On 2026-10-09 the user confirmed “I’ve tested, it works” and reported
+  poor terminal fonts. This confirms usability of their tested window; the
+  specific shortcut and full smoke matrix still require explicit evidence.
 - D003b's integrated personal API supports the required shortcut. Minimal
   `post-init.js`:
 
@@ -197,3 +199,30 @@ work require design review before proceeding.
 - Remaining: config/local-import startup across extension initialization,
   malformed-source and phase-evaluation diagnostic windows with Copy and Quit,
   user shortcut check, and checkpoint 2 review approval.
+
+### Native continuation, 2026-10-09
+
+- Previous temporary fixture root is absent after the session change. A current
+  Knot window exists (PID 4772); it is not assumed to be the old isolated launch
+  and is left intact.
+- New isolated root: `/tmp/knot-d028-startup-krrraf8p`, with HOME=`home`,
+  XDG_CONFIG_HOME=`config`, XDG_DATA_HOME=`data` relative to that root.
+  `state.mjs` exports a phase array; pre-init imports it, adds `pre`, and registers
+  `d028.pre-init-ready`. Extension `@d028/startup` registers
+  `d028.extension-ready`. Post-init imports the same array, asserts it contains
+  `pre`, registers `d028.post-init-ready`, and installs Ctrl-Shift-P.
+- The first version of that test fixture additionally invoked the extension
+  command during post-init. It returned `invalidTarget` because product windows
+  are unavailable during startup. This fixture error produced the expected
+  Post-init diagnostic after the log confirmed extension loading. Remove the
+  invocation for the next successful-config launch; use the three visible
+  palette registrations as observable results. No product correction is needed.
+- User Copy/Quit verification of the phase-evaluation diagnostic is pending.
+- Terminal font quality is a user-reported limitation. Broader font polish
+  remains deferred; no desktop configuration changes are authorized by this plan.
+- ✅ Compositor verification: failed launch PID 11425 has only a mapped native
+  `Knot configuration error` window; no product window belongs to that PID.
+  Corrected launch PID 11535 has a mapped native `Knot` product window after
+  `@d028/startup` logged successful loading. The local-import shared-state
+  assertion completed, otherwise startup would have been fatal. User palette
+  confirmation of all three registrations and Ctrl-Shift-P remains pending.
