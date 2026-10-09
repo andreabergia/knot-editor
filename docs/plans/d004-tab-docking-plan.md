@@ -1,8 +1,6 @@
 # D004: Tab dragging and docking
 
-Status: checkpoint 1 diagnostic includes source-window coordination; its five
-automated tests pass. Native cross-window drops work in both directions;
-review of the corrected drag-label preview and desktop release remains open.
+Status: ✅ checkpoint 1 approved. Checkpoint 2 implementation in progress.
 
 Source: D004, promoted from the [deferred-work register](../roadmap.md).
 Current boundaries: [architecture](../architecture.md),
@@ -49,7 +47,7 @@ requires a new attachment; the session remains registered and running.
 
 ## Checkpoints
 
-### 1. Validate drag delivery across window boundaries
+### ✅ 1. Validate drag delivery across window boundaries
 
 - Prove the gpui 0.2.2 event path for reorder, inter-pane, inter-window, and
   outside-window release on macOS, including cancellation. Its in-window
@@ -108,9 +106,11 @@ requires a new attachment; the session remains registered and running.
   test proves the destination label retains the grab offset and follows two
   source-delivered positions within the same target. Drop and cancellation
   clear the shared pointer and feedback.
-- ⏳ Re-run cross-window preview tracking, desktop release, and Escape after
-  crossing, using the corrected diagnostic. Approve the
-  coordinator path after those results. Checkpoints 2–4 remain open.
+- ✅ The user approved the corrected diagnostic on 2026-10-09 ("perfect now")
+  following the requested preview-tracking, Escape, and desktop-release retest.
+  The coordinator is selected for product integration. The retained log confirms
+  center drops in both directions; desktop/cancellation acceptance also relies
+  on the user's manual review. Checkpoints 2–4 remain open.
 
 Run `cargo run --example tab_drag_delivery 2> /tmp/knot-tab-drag-delivery.log`
 on macOS. Place the two windows side by side (or reposition them if needed).
@@ -128,25 +128,24 @@ Retain the log and record actual receiver, feedback, and outcome for each row.
 
 | Manual gesture | Evidence required | Result |
 | --- | --- | --- |
-| Tab to each insertion slot in its window | One matching `DROP`; correct highlight | ⏳ |
-| Tab to center and each edge in its window | One matching `DROP`; correct highlight | ⏳ |
-| Window 1 tab to Window 2 center/insert/edge | Source `MOVE`/`UP`, destination `COORDINATED_DROP`, visible feedback | ◐ Top/left drops confirmed; corrected label review pending |
-| Window 2 tab to Window 1 | Same evidence in the reverse direction | ◐ Center drop confirmed; corrected label review pending |
-| Tab to desktop; release | Delivered `UP`, `TEAR_OUT_READY`, no `DROP` | ⏳ Adapter retest |
-| Tab to empty non-target space; release | `UP` and `NO_TARGET`, no `DROP` | ⏳ |
-| Escape over an in-window target, then release | `CANCEL stopped=true`; no `DROP` | ⏳ |
-| Escape after crossing to the other window or desktop | Cancellation receiver, `stopped=true`; no `DROP` | ⏳ |
-| Drag after each cancel/invalid release | New `START` and exactly one valid `DROP`; no stuck preview | ⏳ |
+| Tab to each insertion slot in its window | One matching `DROP`; correct highlight | ✅ User review |
+| Tab to center and each edge in its window | One matching `DROP`; correct highlight | ✅ User review |
+| Window 1 tab to Window 2 center/insert/edge | Source `MOVE`/`UP`, destination `COORDINATED_DROP`, visible feedback | ✅ Drops logged; corrected preview approved |
+| Window 2 tab to Window 1 | Same evidence in the reverse direction | ✅ Drop logged; corrected preview approved |
+| Tab to desktop; release | Delivered `UP`, `TEAR_OUT_READY`, no `DROP` | ✅ User review |
+| Tab to empty non-target space; release | `UP` and `NO_TARGET`, no `DROP` | ✅ User review |
+| Escape over an in-window target, then release | `CANCEL stopped=true`; no `DROP` | ✅ User review |
+| Escape after crossing to the other window or desktop | Cancellation receiver, `stopped=true`; no `DROP` | ✅ User review |
+| Drag after each cancel/invalid release | New `START` and exactly one valid `DROP`; no stuck preview | ✅ User review |
 
 The selected adapter candidate is the foreground product-shell coordinator,
 using gpui's delivered source events without adding a native event monitor.
 Native source release over another window is confirmed in both directions;
-desktop release still needs evidence. If that release is missing, a narrow
-macOS event-delivery adapter will also be necessary. The diagnostic currently
+desktop release is accepted through the user's manual review. No native event
+monitor is required for the selected path. The diagnostic currently
 targets side-by-side windows on one
 display; native geometry across displays requires validation before relying
-on gpui window bounds for that case. Review must confirm the observed event
-path and preview before product relocation work begins.
+on gpui window bounds for that case. The event path and corrected preview passed the checkpoint 1 review gate.
 
 ### 2. Add atomic tab relocation to the workbench
 
