@@ -1,6 +1,7 @@
 # D004: Tab dragging and docking
 
-Status: planned. Design agreed; no checkpoint implemented.
+Status: checkpoint 1 diagnostic implemented; its three automated tests pass.
+Native macOS drag matrix and event-path/affordance approval remain open.
 
 Source: D004, promoted from the [deferred-work register](../roadmap.md).
 Current boundaries: [architecture](../architecture.md),
@@ -59,6 +60,59 @@ requires a new attachment; the session remains registered and running.
 - Validate with a focused diagnostic and a manual drag matrix. Do not narrow
   the agreed window or tear-out outcome at this gate without review.
 - **Review gate:** approve the event path and visible drag/drop affordance.
+
+#### Checkpoint 1 evidence and manual gate
+
+- ✅ Added `examples/tab_drag_delivery.rs`, a standalone two-window probe using
+  the pinned gpui 0.2.2 `on_drag`, `on_drop`, and typed hover feedback. It exposes
+  insertion, center, and all four edge targets. It reports delivery only and
+  does not mutate product tabs or create tear-out windows.
+- ✅ Inspected the resolved gpui source: `app.rs` owns the application-wide
+  `active_drag` and exposes `stop_active_drag`; `elements/div.rs` commits typed
+  drops only when a mouse-up reaches a hovered target in that window;
+  `window.rs` clears an unconsumed drag after mouse-up dispatch. The macOS
+  `platform/mac/window.rs::handle_view_event` forwards native events through
+  the receiving window and synthesizes repeated movement for pressed drags.
+  These are source observations, **not proof of native cross-window delivery**.
+- ✅ `cargo check --example tab_drag_delivery` and
+  `cargo test --example tab_drag_delivery` pass (three tests). Probe validation
+  checks target payloads, explicit Escape
+  cancellation, an injected outside release, and an injected destination-window
+  release. Injected events establish gpui dispatch behavior only; they cannot
+  establish which window macOS delivers real events to.
+- ⏳ Manual native delivery and affordance review; no interaction adapter is
+  selected until the matrix below has evidence. Checkpoints 2–4 remain open.
+
+Run `cargo run --example tab_drag_delivery 2> /tmp/knot-tab-drag-delivery.log`
+on macOS. Place the two windows side by side (or reposition them if needed).
+Each gesture gets a `START` sequence; `MOVE` records its receiver, local
+position, whether that position is within the receiver's content, pressed
+button, and native content bounds. `UP` is logged in capture before a target
+can consume it; `DROP` identifies the receiver/target; `NO_TARGET` records an
+unconsumed release after dispatch. `CANCEL` reports whether Escape actually
+cleared gpui's active drag. Hovered targets turn blue with a light border.
+Retain the log and record actual receiver, feedback, and outcome for each row.
+
+| Manual gesture | Evidence required | Result |
+| --- | --- | --- |
+| Tab to each insertion slot in its window | One matching `DROP`; correct highlight | ⏳ |
+| Tab to center and each edge in its window | One matching `DROP`; correct highlight | ⏳ |
+| Window 1 tab to Window 2 center/insert/edge | Receiver of `MOVE`/`UP`, destination `DROP`, visible feedback | ⏳ |
+| Window 2 tab to Window 1 | Same evidence in the reverse direction | ⏳ |
+| Tab to desktop; release | Delivered `UP`, receiver and out-of-content position, no `DROP` | ⏳ |
+| Tab to empty non-target space; release | `UP` and `NO_TARGET`, no `DROP` | ⏳ |
+| Escape over an in-window target, then release | `CANCEL stopped=true`; no `DROP` | ⏳ |
+| Escape after crossing to the other window or desktop | Cancellation receiver, `stopped=true`; no `DROP` | ⏳ |
+| Drag after each cancel/invalid release | New `START` and exactly one valid `DROP`; no stuck preview | ⏳ |
+
+If native movement/release remains with the source window, the candidate
+smallest adapter is a foreground product-shell coordinator: convert source
+content coordinates to screen coordinates, hit-test registered destination
+pane/tab bounds, paint destination feedback, and commit on the source release.
+An out-of-window release can then request tear-out. If the release itself is
+missing, a narrow macOS event-delivery adapter will also be necessary. These
+are conditional candidates, not validated selections. Review must confirm
+the observed event path and preview before product relocation work begins.
 
 ### 2. Add atomic tab relocation to the workbench
 
