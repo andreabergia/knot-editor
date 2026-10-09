@@ -1,7 +1,6 @@
 # D028: Linux framework checkpoint
 
-Status: checkpoints 1 and 2 approved. Checkpoint 3 smoke test passed; final
-review of evidence and regression coverage pending.
+Status: complete. All checkpoints, native smoke tests, and review gates passed.
 
 Source: D028, promoted from the [deferred-work register](../roadmap.md).
 Current boundaries: [architecture](../architecture.md),
@@ -92,7 +91,7 @@ work require design review before proceeding.
 - **Review gate:** user confirms native startup, the diagnostic path, and the
   single shortcut before completing the product smoke test.
 
-### 3. Small product smoke test and evidence 🟡 (smoke ✅; final review pending)
+### 3. Small product smoke test and evidence ✅
 
 - ✅ Use the palette and visible controls to check text entry and navigation,
   representative Unicode rendering, selection and clipboard, Open, Save,
@@ -378,5 +377,5 @@ font polish, other platforms/compositors and packaging remain deferred. One
 shared provider-cancellation test intermittently failed during development, then
 passed independently and in the full suite; no unrelated host behavior was changed.
 
-Final review gate: smoke results and regression coverage above are ready for
-approval. Keep this plan active until that review passes; archive separately afterward.
+✅ Final review gate: user approved the observed Wayland checkpoint and
+regression coverage on 2026-10-09. Archive this completed plan separately.

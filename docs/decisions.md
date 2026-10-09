@@ -14,8 +14,10 @@ path passed the fixture corpus; incomplete public bidirectional-text ergonomics
 require Knot's RTL alignment and logical-index mapping over glyph data.
 
 Initial product dogfooding targets macOS. Windows passed the framework
-portability checkpoint; Linux validation remains required before broader
-production claims.
+portability checkpoint. Linux passed a limited framework and native product
+smoke checkpoint on Omarchy/Hyprland Wayland, using personal clipboard and
+palette bindings. Broader Linux production claims still require validation.
+Evidence: [Linux framework checkpoint](plans/d028-linux-framework-plan.md).
 
 Local macOS builds package the Rust binary as `Knot.app` with the supplied
 application icon and a plain-text document declaration. A small repository
