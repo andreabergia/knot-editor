@@ -37,13 +37,34 @@ impl TerminalView {
         cx: &mut Context<Self>,
     ) -> super::product_commands::CommandClaim {
         use super::product_commands::CommandClaim;
-        if command.name.as_ref() != super::product_commands::COPY_COMMAND
+        use super::product_commands::{COPY_COMMAND, PASTE_COMMAND};
+        if !matches!(command.name.as_ref(), COPY_COMMAND | PASTE_COMMAND)
             || self.attachment.is_none()
         {
             return CommandClaim::Declined;
         }
         if let Err(claim) = super::product_commands::validate_native_arguments(command) {
             return claim;
+        }
+        if command.name.as_ref() == PASTE_COMMAND {
+            if self.session.read(cx).status() != TerminalStatus::Running {
+                return CommandClaim::Declined;
+            }
+            if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
+                let bracketed = self.session.read(cx).terminal().is_some_and(|terminal| {
+                    terminal
+                        .lock()
+                        .mode()
+                        .contains(alacritty_terminal::term::TermMode::BRACKETED_PASTE)
+                });
+                let text = if bracketed {
+                    format!("\x1b[200~{}\x1b[201~", text.replace('\x1b', ""))
+                } else {
+                    text.replace("\r\n", "\r").replace('\n', "\r")
+                };
+                self.session.read(cx).send(text.into_bytes());
+            }
+            return CommandClaim::Finished(crate::host::protocol::CommandOutcome::Completed);
         }
         let selected = self
             .session

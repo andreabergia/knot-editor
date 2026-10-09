@@ -294,3 +294,22 @@ work require design review before proceeding.
   and `copy.txt` is absent at the instructed path. Ask for actual Save/Save As
   destinations rather than assuming persistence verification passed.
 - Restarted the same isolated fixture for the requested terminal smoke test.
+
+### Terminal smoke blockers and corrections
+
+- User reported Super-V did not paste in the terminal and Open from the palette
+  did not show a picker when the terminal was active.
+- Terminal handled Copy but declined Paste. Add Paste to the existing native
+  command path, using the session's PTY input channel, respecting bracketed-paste
+  mode, preserving Unicode, and normalizing plain newlines. Regression reads
+  actual PTY bytes in both modes.
+- Open rejected a terminal's captured surface before starting a dialog.
+  Capture and revalidate the tab surface for Open; preserve the terminal and
+  open a document in its pane. Keep Save and Save As document-specific.
+  Regression dispatches Open from a terminal through a selected-file dialog,
+  checks the opened content, and verifies the terminal tab survives.
+- Native retries and automated verification after fixes are pending.
+- ✅ Terminal paste regression passes for real PTY input in plain and bracketed
+  modes. Shared provider-cancellation test failed once (`Terminated` versus
+  `Cancelled`) during parallel validation; isolated rerun passed. Record this
+  intermittent observation without changing unrelated host behavior.

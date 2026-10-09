@@ -277,3 +277,57 @@ fn sustained_output_keeps_foreground_updates_responsive(cx: &mut TestAppContext)
             && output(session).contains("stream-complete")
     });
 }
+
+#[gpui::test]
+fn paste_command_delivers_plain_and_bracketed_clipboard_bytes(cx: &mut TestAppContext) {
+    use super::product_commands::{CommandClaim, PASTE_COMMAND};
+    use crate::host::protocol::{Command as EditorCommand, CommandArgumentValue, CommandOutcome};
+    for bracketed in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        let destination = temp.path().join("input.hex");
+        let clipboard = "café\r\nnext\x1b";
+        let expected = if bracketed {
+            "\x1b[200~café\r\nnext\x1b[201~"
+        } else {
+            "café\rnext\x1b"
+        };
+        let enable = if bracketed {
+            "printf '\\033[?2004h';"
+        } else {
+            ""
+        };
+        let script = format!(
+            "stty raw -echo; {enable} printf ready; dd bs=1 count={} 2>/dev/null | od -An -tx1 > '{}'",
+            expected.len(),
+            destination.display()
+        );
+        let session = cx.new(|cx| TerminalSession::new_with_options(shell(&script), cx));
+        let view = cx.new(|cx| TerminalView::new(session.clone(), cx));
+        wait_for(cx, &session, |session| output(session).contains("ready"));
+        cx.update(|cx| cx.write_to_clipboard(gpui::ClipboardItem::new_string(clipboard.into())));
+        let claim = view.update(cx, |view, cx| {
+            view.handle_command(
+                &EditorCommand {
+                    name: PASTE_COMMAND.into(),
+                    arguments: CommandArgumentValue::Null,
+                },
+                cx,
+            )
+        });
+        assert!(matches!(
+            claim,
+            CommandClaim::Finished(CommandOutcome::Completed)
+        ));
+        wait_for(cx, &session, |session| {
+            matches!(session.status(), TerminalStatus::Exited(_))
+        });
+        let bytes: Vec<u8> = fs::read_to_string(destination)
+            .unwrap()
+            .split_whitespace()
+            .map(|hex| u8::from_str_radix(hex, 16).unwrap())
+            .collect();
+        assert_eq!(bytes, expected.as_bytes());
+        view.update(cx, |view, cx| view.detach(cx));
+        session.update(cx, |session, cx| session.close(cx));
+    }
+}

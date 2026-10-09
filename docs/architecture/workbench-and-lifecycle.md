@@ -122,3 +122,9 @@ input belong to the new view. On macOS the destination stays hidden until its
 terminal content has been laid out, then becomes the active window.
 The diagnostic window continues to exercise view rebuilding; see the
 [D024 plan](../plans/d024-terminal-session-plan.md).
+
+The terminal claims the shared Paste command while its session is running and
+sends clipboard text through the existing PTY input channel. Plain paste
+normalizes newlines to carriage returns; bracketed paste preserves newlines,
+removes embedded escape characters, and adds the terminal's bracketed-paste
+markers. A detached or stopped terminal cannot accept paste.
