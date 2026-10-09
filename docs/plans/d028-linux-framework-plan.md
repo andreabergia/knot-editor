@@ -1,7 +1,6 @@
 # D028: Linux framework checkpoint
 
-Status: checkpoint 1 approved. Checkpoint 2 in progress; native user checks
-and smoke-test gates remain open.
+Status: checkpoints 1 and 2 approved. Checkpoint 3 smoke test in progress.
 
 Source: D028, promoted from the [deferred-work register](../roadmap.md).
 Current boundaries: [architecture](../architecture.md),
@@ -74,7 +73,7 @@ work require design review before proceeding.
 - **Review gate:** inspect actual directory values, precedence, source capture,
   and the build/test recipe before native launch work.
 
-### 2. Native startup and one shortcut 🟡 (verification ready; review pending)
+### 2. Native startup and one shortcut ✅
 
 - Launch the actual product in this machine's Wayland session with isolated
   test configuration and extension directories, keeping the user's real config
@@ -92,7 +91,7 @@ work require design review before proceeding.
 - **Review gate:** user confirms native startup, the diagnostic path, and the
   single shortcut before completing the product smoke test.
 
-### 3. Small product smoke test and evidence ⬜
+### 3. Small product smoke test and evidence 🟡
 
 - Use the palette and visible controls to check text entry and navigation,
   representative Unicode rendering, selection and clipboard, Open, Save,
@@ -268,3 +267,22 @@ work require design review before proceeding.
   existing automated tests and this native malformed-source check.
 - Checkpoint 2 implementation and native observations are ready for review.
   User review approval remains pending before checkpoint 3 begins.
+- ✅ User confirmed Quit closed the diagnostic and approved checkpoint 2.
+
+## Checkpoint 3 evidence (in progress)
+
+- Smoke test uses a fresh isolated HOME/XDG config and extension root, with
+  only the personal Ctrl-Shift-P palette binding. Disposable `source.txt`
+  contains ASCII, accented and combining text, Japanese, and emoji.
+- Check text entry/navigation, Unicode, selection/clipboard, Open, Save, Save As,
+  dirty-close cancellation and successful closure through visible controls or
+  the command palette. Saved bytes and preservation after cancellation require
+  explicit evidence; the earlier general usability report does not cover them.
+- Check terminal command entry, resize and closure. Record font-quality issue
+  as deferred polish; verify a terminal child PID is reaped after closure.
+- Current root `/tmp/knot-d028-smoke-ht6y53ey`; product exec session 92044.
+  User instructed to save `source.txt`, Save As `copy.txt`, cancel dirty close
+  after adding `KEEP UNSAVED`, then discard and close. Terminal command writes
+  its shell PID to `terminal.pid` for process-exit verification.
+- ✅ Final automated rerun before native smoke results: all 455 library tests
+  and the binary target passed; Clippy with warnings denied passed.
