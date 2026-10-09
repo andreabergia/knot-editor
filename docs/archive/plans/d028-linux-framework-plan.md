@@ -2,11 +2,11 @@
 
 Status: complete. All checkpoints, native smoke tests, and review gates passed.
 
-Source: D028, promoted from the [deferred-work register](../roadmap.md).
-Current boundaries: [architecture](../architecture.md),
-[workbench lifecycle](../architecture/workbench-and-lifecycle.md), and
-[personal configuration decisions](../decisions.md#personal-configuration).
-Related work: [D003b configurable keymaps](../archive/plans/d003b-keymaps-plan.md), now integrated.
+Source: D028, promoted from the [deferred-work register](../../roadmap.md).
+Current boundaries: [architecture](../../architecture.md),
+[workbench lifecycle](../../architecture/workbench-and-lifecycle.md), and
+[personal configuration decisions](../../decisions.md#personal-configuration).
+Related work: [D003b configurable keymaps](d003b-keymaps-plan.md), now integrated.
 
 ## Outcome and design
 
