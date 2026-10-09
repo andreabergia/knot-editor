@@ -2,12 +2,12 @@
 
 Status: complete
 
-Source task: [D029 — Windows product polish](../roadmap.md#platforms-and-accessibility)
+Source task: D029 — Windows product polish, retired from the deferred roadmap.
 
-Relevant boundaries: [architecture](../architecture.md),
-[workbench and lifecycle](../architecture/workbench-and-lifecycle.md),
-[extension host](../architecture/extension-host.md), and
-[decisions](../decisions.md).
+Relevant boundaries: [architecture](../../architecture.md),
+[workbench and lifecycle](../../architecture/workbench-and-lifecycle.md),
+[extension host](../../architecture/extension-host.md), and
+[decisions](../../decisions.md).
 
 ## User-visible outcome
 
@@ -276,7 +276,7 @@ Checkpoint 2 review follow-up (2026-10-09):
   references only if boundaries or behavioral contracts changed. Once the
   evidence validates Windows dogfooding, update `docs/decisions.md` and retire
   D029 from the deferred roadmap.
-- Archive the completed plan in a separate final commit.
+- ✅ Archive the completed plan in a separate final commit.
 - ✅ **Review gate:** approve the observed Windows 11 dogfooding target and its
   regression coverage without broadening the claim to Windows distribution or
   general platform certification. The user reported successful hands-on use and
