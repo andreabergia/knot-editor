@@ -249,3 +249,6 @@ work require design review before proceeding.
   Dismissed the palette for a fresh physical-key retry. This proves actual
   Wayland dispatch for the configured fixture; user keypress confirmation remains
   pending. No code or desktop configuration correction was needed or applied.
+- ✅ User physical-key retry: “works”, confirming Ctrl-Shift-P opens the
+  palette in the sole configured native fixture. The manual shortcut gate now
+  passes. Diagnostic Copy/Quit confirmation and checkpoint review remain open.
