@@ -332,3 +332,7 @@ work require design review before proceeding.
   personal config alongside Ctrl-Shift-P. This uses the integrated D003b API;
   general Linux default-keymap changes and desktop config edits remain excluded.
   Native confirmation of editor and terminal paste remains required.
+- ✅ User native retry confirms both Ctrl-V and Super-V now paste with the
+  isolated personal Ctrl-V binding. This establishes the compositor-remapping
+  correction; no additional default bindings or desktop changes were introduced.
+  Terminal command/resize/closure and persistence-byte evidence remain open.
