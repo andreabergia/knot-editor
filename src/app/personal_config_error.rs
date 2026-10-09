@@ -159,7 +159,7 @@ mod tests {
         let window = cx.windows()[0]
             .downcast::<PersonalConfigErrorView>()
             .unwrap();
-        cx.simulate_keystrokes(*window, "cmd-q");
+        cx.simulate_keystrokes(*window, if cfg!(windows) { "ctrl-q" } else { "cmd-q" });
         cx.read(|cx| assert!(window.read(cx).unwrap().quit_requested));
     }
 

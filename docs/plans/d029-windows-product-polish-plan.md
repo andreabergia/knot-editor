@@ -176,8 +176,9 @@ Checkpoint 1 evidence (2026-10-09):
   windows alive.
 - ✅ Fix Windows launch, path, runtime, or lifecycle blockers within the selected
   boundaries and add automated regression coverage wherever native observation
-  alone would not make the behavior durable. No production blocker appeared in
-  this checkpoint; existing lifecycle and diagnostic tests passed on Windows.
+  alone would not make the behavior durable. Existing lifecycle and diagnostic
+  tests passed on Windows; manual review exposed a native default shortcut
+  blocker, corrected below.
 - **Review gate:** user confirms the successful configured launch, physical
   shortcut, and diagnostic Copy/Quit behavior before the broader product smoke.
 
@@ -224,8 +225,30 @@ Checkpoint 2 evidence (2026-10-09):
   phase state, launch-gate, shortcut, diagnostic Copy, and diagnostic Quit
   tests. The focused pre-init failure, post-init failure/unload, and post-init
   validation-order tests each passed. No production runtime or lifecycle code
-  needed correction. The three unrelated full-suite Windows baseline failures
-  recorded in checkpoint 1 remain for checkpoint 3.
+  needed correction.
+
+Checkpoint 2 review follow-up (2026-10-09):
+
+- The user reported that physical Ctrl-Shift-P failed in a normal Knot launch.
+  The smoke fixture's personal binding had masked the native default:
+  `cmd-shift-p` resolves to the Windows key on this platform. Native Windows
+  defaults now use Ctrl for product commands and ordinary Windows editor
+  navigation, while the non-Windows table keeps its existing bindings. The
+  diagnostic window's fixed Quit shortcut is Ctrl-Q on Windows.
+- A Windows-only registry test verifies palette, Open, Save, Save As, clipboard,
+  close, Quit, redo, and navigation mappings. A product-window test opens the
+  palette through the native Ctrl-Shift-P default without personal config.
+  `cargo test --locked windows_native -- --nocapture`: 2 passed.
+- After `cargo build --locked --bin knot`, an empty isolated native launch
+  (PID 26836) opened the command palette when Ctrl-Shift-P was sent to its
+  focused editor; the palette displayed product commands and the process closed
+  normally. The user still needs to repeat the physical shortcut for this
+  review gate.
+- The full-suite rerun after updating platform-specific test expectations had
+  441 passed and 3 failed. The entry-path and terminal handoff failures are
+  Windows baseline issues for checkpoint 3. A terminal-selection copy test
+  failed in the parallel suite but passed in isolation; this intermittent
+  result remains open for checkpoint 3 and is not counted as a clean pass.
 
 ### 3. Windows dogfooding smoke and regression closeout
 

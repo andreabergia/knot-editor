@@ -49,6 +49,10 @@ an application-wide slot; later registrations break remaining ties. Unloading
 a lifecycle removes its slots. Mutations refresh one merged effective map;
 command routing reads that map directly. An unavailable command does not
 select another binding.
+Native product defaults use Control shortcuts on Windows and Command shortcuts
+on macOS; Windows editor navigation uses Control with arrows for words and
+Control with Home/End for document boundaries. Personal and extension bindings
+can still override those defaults through the same registry.
 
 The public `knot` module exposes synchronous, void `keybinding` and
 `removeKeybinding` calls. Bindings accept a command name or a command with

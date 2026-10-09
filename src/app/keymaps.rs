@@ -370,12 +370,12 @@ pub(crate) struct ApplicationKeymaps(pub(crate) BindingRegistry);
 
 impl Global for ApplicationKeymaps {}
 
-pub(crate) fn install(cx: &mut App) {
+fn native_registry() -> BindingRegistry {
     let mut registry = BindingRegistry::new();
     registry
         .declare_extension_kind("outline")
         .expect("product view kind is valid");
-    for &(key, command, view) in DEFAULT_BINDINGS {
+    for &(key, command, view) in COMMON_BINDINGS.iter().chain(PLATFORM_BINDINGS) {
         registry
             .set(
                 BindingOwner::Native,
@@ -388,6 +388,11 @@ pub(crate) fn install(cx: &mut App) {
             )
             .expect("native keybindings are valid");
     }
+    registry
+}
+
+pub(crate) fn install(cx: &mut App) {
+    let registry = native_registry();
     cx.set_global(ApplicationKeymaps(registry));
     rebuild(cx);
 }
@@ -405,13 +410,13 @@ pub(crate) fn rebuild(cx: &mut App) {
         )
     }));
     cx.bind_keys([KeyBinding::new(
-        "cmd-q",
+        if cfg!(windows) { "ctrl-q" } else { "cmd-q" },
         super::product_commands::ProductCommandSource::new(QUIT_COMMAND),
         Some("config-error"),
     )]);
 }
 
-const DEFAULT_BINDINGS: &[(&str, &str, Option<&str>)] = &[
+const COMMON_BINDINGS: &[(&str, &str, Option<&str>)] = &[
     ("left", MOVE_LEFT_COMMAND, Some("editor")),
     ("shift-left", SELECT_LEFT_COMMAND, Some("editor")),
     ("right", MOVE_RIGHT_COMMAND, Some("editor")),
@@ -420,14 +425,6 @@ const DEFAULT_BINDINGS: &[(&str, &str, Option<&str>)] = &[
     ("shift-up", SELECT_UP_COMMAND, Some("editor")),
     ("down", MOVE_DOWN_COMMAND, Some("editor")),
     ("shift-down", SELECT_DOWN_COMMAND, Some("editor")),
-    ("alt-left", MOVE_WORD_LEFT_COMMAND, Some("editor")),
-    ("shift-alt-left", SELECT_WORD_LEFT_COMMAND, Some("editor")),
-    ("alt-right", MOVE_WORD_RIGHT_COMMAND, Some("editor")),
-    ("shift-alt-right", SELECT_WORD_RIGHT_COMMAND, Some("editor")),
-    ("cmd-left", MOVE_LINE_START_COMMAND, Some("editor")),
-    ("shift-cmd-left", SELECT_LINE_START_COMMAND, Some("editor")),
-    ("cmd-right", MOVE_LINE_END_COMMAND, Some("editor")),
-    ("shift-cmd-right", SELECT_LINE_END_COMMAND, Some("editor")),
     ("home", MOVE_LINE_START_COMMAND, Some("editor")),
     ("shift-home", SELECT_LINE_START_COMMAND, Some("editor")),
     ("end", MOVE_LINE_END_COMMAND, Some("editor")),
@@ -436,6 +433,23 @@ const DEFAULT_BINDINGS: &[(&str, &str, Option<&str>)] = &[
     ("shift-pageup", SELECT_PAGE_UP_COMMAND, Some("editor")),
     ("pagedown", MOVE_PAGE_DOWN_COMMAND, Some("editor")),
     ("shift-pagedown", SELECT_PAGE_DOWN_COMMAND, Some("editor")),
+    ("enter", INSERT_NEWLINE_COMMAND, Some("editor")),
+    ("tab", INSERT_TAB_COMMAND, Some("editor")),
+    ("backspace", DELETE_BACKWARD_COMMAND, Some("editor")),
+    ("delete", DELETE_FORWARD_COMMAND, Some("editor")),
+    ("ctrl-space", SHOW_COMPLETIONS_COMMAND, Some("editor")),
+];
+
+#[cfg(not(windows))]
+const PLATFORM_BINDINGS: &[(&str, &str, Option<&str>)] = &[
+    ("alt-left", MOVE_WORD_LEFT_COMMAND, Some("editor")),
+    ("shift-alt-left", SELECT_WORD_LEFT_COMMAND, Some("editor")),
+    ("alt-right", MOVE_WORD_RIGHT_COMMAND, Some("editor")),
+    ("shift-alt-right", SELECT_WORD_RIGHT_COMMAND, Some("editor")),
+    ("cmd-left", MOVE_LINE_START_COMMAND, Some("editor")),
+    ("shift-cmd-left", SELECT_LINE_START_COMMAND, Some("editor")),
+    ("cmd-right", MOVE_LINE_END_COMMAND, Some("editor")),
+    ("shift-cmd-right", SELECT_LINE_END_COMMAND, Some("editor")),
     ("cmd-up", MOVE_DOCUMENT_START_COMMAND, Some("editor")),
     (
         "shift-cmd-up",
@@ -448,11 +462,6 @@ const DEFAULT_BINDINGS: &[(&str, &str, Option<&str>)] = &[
         SELECT_DOCUMENT_END_COMMAND,
         Some("editor"),
     ),
-    ("enter", INSERT_NEWLINE_COMMAND, Some("editor")),
-    ("tab", INSERT_TAB_COMMAND, Some("editor")),
-    ("backspace", DELETE_BACKWARD_COMMAND, Some("editor")),
-    ("delete", DELETE_FORWARD_COMMAND, Some("editor")),
-    ("ctrl-space", SHOW_COMPLETIONS_COMMAND, Some("editor")),
     ("cmd-n", NEW_COMMAND, None),
     ("cmd-t", NEW_COMMAND, None),
     ("cmd-shift-t", NEW_TERMINAL_COMMAND, None),
@@ -482,10 +491,98 @@ const DEFAULT_BINDINGS: &[(&str, &str, Option<&str>)] = &[
     ("cmd-q", QUIT_COMMAND, None),
 ];
 
+#[cfg(windows)]
+const PLATFORM_BINDINGS: &[(&str, &str, Option<&str>)] = &[
+    ("ctrl-left", MOVE_WORD_LEFT_COMMAND, Some("editor")),
+    ("shift-ctrl-left", SELECT_WORD_LEFT_COMMAND, Some("editor")),
+    ("ctrl-right", MOVE_WORD_RIGHT_COMMAND, Some("editor")),
+    (
+        "shift-ctrl-right",
+        SELECT_WORD_RIGHT_COMMAND,
+        Some("editor"),
+    ),
+    ("ctrl-home", MOVE_DOCUMENT_START_COMMAND, Some("editor")),
+    (
+        "shift-ctrl-home",
+        SELECT_DOCUMENT_START_COMMAND,
+        Some("editor"),
+    ),
+    ("ctrl-end", MOVE_DOCUMENT_END_COMMAND, Some("editor")),
+    (
+        "shift-ctrl-end",
+        SELECT_DOCUMENT_END_COMMAND,
+        Some("editor"),
+    ),
+    ("ctrl-n", NEW_COMMAND, None),
+    ("ctrl-t", NEW_COMMAND, None),
+    ("ctrl-shift-t", NEW_TERMINAL_COMMAND, None),
+    (
+        "ctrl-alt-shift-n",
+        MOVE_TERMINAL_TO_NEW_WINDOW_COMMAND,
+        None,
+    ),
+    ("ctrl-shift-n", NEW_WINDOW_COMMAND, None),
+    ("ctrl-o", OPEN_COMMAND, None),
+    ("ctrl-s", SAVE_COMMAND, None),
+    ("ctrl-shift-s", SAVE_AS_COMMAND, None),
+    ("ctrl-w", CLOSE_TAB_COMMAND, None),
+    ("ctrl-shift-w", CLOSE_WINDOW_COMMAND, None),
+    ("ctrl-k right", SPLIT_HORIZONTAL_COMMAND, None),
+    ("ctrl-k down", SPLIT_VERTICAL_COMMAND, None),
+    ("ctrl-shift-p", SHOW_COMMAND_PALETTE_COMMAND, None),
+    ("ctrl-z", UNDO_COMMAND, None),
+    ("ctrl-y", REDO_COMMAND, None),
+    ("ctrl-shift-z", REDO_COMMAND, None),
+    ("ctrl-x", CUT_COMMAND, None),
+    ("ctrl-c", COPY_COMMAND, None),
+    ("ctrl-v", PASTE_COMMAND, None),
+    ("ctrl-a", SELECT_ALL_COMMAND, None),
+    ("ctrl-f", FIND_COMMAND, None),
+    ("ctrl-g", FIND_NEXT_COMMAND, None),
+    ("ctrl-shift-g", FIND_PREVIOUS_COMMAND, None),
+    ("ctrl-q", QUIT_COMMAND, None),
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use gpui::{KeyContext, TestAppContext};
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_native_defaults_use_control_shortcuts() {
+        let registry = native_registry();
+        for (key, command_name) in [
+            ("ctrl-shift-p", SHOW_COMMAND_PALETTE_COMMAND),
+            ("ctrl-o", OPEN_COMMAND),
+            ("ctrl-s", SAVE_COMMAND),
+            ("ctrl-shift-s", SAVE_AS_COMMAND),
+            ("ctrl-c", COPY_COMMAND),
+            ("ctrl-x", CUT_COMMAND),
+            ("ctrl-v", PASTE_COMMAND),
+            ("ctrl-w", CLOSE_TAB_COMMAND),
+            ("ctrl-shift-w", CLOSE_WINDOW_COMMAND),
+            ("ctrl-q", QUIT_COMMAND),
+            ("ctrl-y", REDO_COMMAND),
+        ] {
+            assert_eq!(
+                resolved(&registry, key, Some("editor")).as_deref(),
+                Some(command_name)
+            );
+        }
+        for (key, command_name) in [
+            ("ctrl-left", MOVE_WORD_LEFT_COMMAND),
+            ("ctrl-right", MOVE_WORD_RIGHT_COMMAND),
+            ("ctrl-home", MOVE_DOCUMENT_START_COMMAND),
+            ("ctrl-end", MOVE_DOCUMENT_END_COMMAND),
+        ] {
+            assert_eq!(
+                resolved(&registry, key, Some("editor")).as_deref(),
+                Some(command_name)
+            );
+        }
+        assert_eq!(resolved(&registry, "win-shift-p", Some("editor")), None);
+    }
 
     fn command(name: &str) -> Command {
         Command {
@@ -681,6 +778,8 @@ mod tests {
             registry.keys(),
             vec![if cfg!(target_os = "macos") {
                 "cmd-k right"
+            } else if cfg!(windows) {
+                "win-k right"
             } else {
                 "super-k right"
             }]
@@ -777,12 +876,13 @@ mod tests {
     #[gpui::test]
     fn rebuilt_map_retains_fixed_config_error_binding(cx: &mut TestAppContext) {
         cx.update(install);
+        let quit_key = if cfg!(windows) { "ctrl-q" } else { "cmd-q" };
         cx.update(|cx| {
             let owner = BindingOwner::Personal(ExtensionId::new(0), ExtensionLifecycleId::new(1));
             assert!(
                 cx.global_mut::<ApplicationKeymaps>()
                     .0
-                    .set(owner, "cmd-q", None, None)
+                    .set(owner, quit_key, None, None)
                     .unwrap()
             );
             rebuild(cx);
@@ -790,7 +890,7 @@ mod tests {
         cx.read(|cx| {
             let keymap = cx.key_bindings();
             let keymap = keymap.borrow();
-            let input = [Keystroke::parse("cmd-q").unwrap()];
+            let input = [Keystroke::parse(quit_key).unwrap()];
             let contexts = [KeyContext::parse("config-error").unwrap()];
             let (bindings, _) = keymap.bindings_for_input(&input, &contexts);
             assert_eq!(bindings.len(), 1);

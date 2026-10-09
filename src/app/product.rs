@@ -5708,7 +5708,10 @@ await commands.registerForView("outline", "copy", async () => {
         })
         .unwrap();
 
-        cx.simulate_keystrokes(window_handle, "cmd-n");
+        cx.simulate_keystrokes(
+            window_handle,
+            if cfg!(windows) { "ctrl-n" } else { "cmd-n" },
+        );
         cx.run_until_parked();
 
         cx.read(|cx| {
@@ -5821,7 +5824,7 @@ await commands.registerForView("outline", "copy", async () => {
                     .0
                     .set(
                         BindingOwner::Personal(ExtensionId::new(0), ExtensionLifecycleId::new(1)),
-                        "cmd-n",
+                        if cfg!(windows) { "ctrl-n" } else { "cmd-n" },
                         Some("editor"),
                         None,
                     )
@@ -5830,7 +5833,7 @@ await commands.registerForView("outline", "copy", async () => {
             super::super::keymaps::rebuild(cx);
         });
         cx.refresh().unwrap();
-        cx.simulate_keystrokes(window, "cmd-n");
+        cx.simulate_keystrokes(window, if cfg!(windows) { "ctrl-n" } else { "cmd-n" });
         cx.run_until_parked();
         cx.read(|cx| assert_eq!(shell.read(cx).workbench.read(cx).panes()[0].tabs().len(), 1));
 
@@ -5840,7 +5843,7 @@ await commands.registerForView("outline", "copy", async () => {
             CommandOutcome::Completed
         );
         cx.refresh().unwrap();
-        cx.simulate_keystrokes(window, "cmd-n");
+        cx.simulate_keystrokes(window, if cfg!(windows) { "ctrl-n" } else { "cmd-n" });
         cx.run_until_parked();
         cx.read(|cx| assert_eq!(shell.read(cx).workbench.read(cx).panes()[0].tabs().len(), 3));
     }
@@ -5857,7 +5860,14 @@ await commands.registerForView("outline", "copy", async () => {
         })
         .unwrap();
         cx.refresh().unwrap();
-        cx.simulate_keystrokes(window, "cmd-k right");
+        cx.simulate_keystrokes(
+            window,
+            if cfg!(windows) {
+                "ctrl-k right"
+            } else {
+                "cmd-k right"
+            },
+        );
         cx.run_until_parked();
         cx.read(|cx| assert_eq!(shell.read(cx).workbench.read(cx).panes().len(), 2));
     }
@@ -5879,7 +5889,7 @@ await commands.registerForView("outline", "copy", async () => {
                     .0
                     .set(
                         BindingOwner::Personal(ExtensionId::new(0), ExtensionLifecycleId::new(1)),
-                        "cmd-n",
+                        if cfg!(windows) { "ctrl-n" } else { "cmd-n" },
                         None,
                         Some(Command {
                             name: "missing.command".into(),
@@ -5891,7 +5901,7 @@ await commands.registerForView("outline", "copy", async () => {
             super::super::keymaps::rebuild(cx);
         });
         cx.refresh().unwrap();
-        cx.simulate_keystrokes(window, "cmd-n");
+        cx.simulate_keystrokes(window, if cfg!(windows) { "ctrl-n" } else { "cmd-n" });
         cx.run_until_parked();
         cx.read(|cx| {
             assert_eq!(shell.read(cx).workbench.read(cx).panes()[0].tabs().len(), 1);
@@ -5939,6 +5949,24 @@ await commands.registerForView("outline", "copy", async () => {
                 Some(&CommandOutcome::Completed),
             );
         });
+    }
+
+    #[cfg(windows)]
+    #[gpui::test]
+    fn windows_native_ctrl_shift_p_opens_command_palette(cx: &mut TestAppContext) {
+        let documents = install_globals(cx);
+        cx.update(super::bind_product_keys);
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        let (shell, window) = product_window(document, model, cx);
+        cx.update_window(window, |_, window, cx| {
+            shell.read(cx).focus_active_editor(window, cx);
+        })
+        .unwrap();
+        cx.refresh().unwrap();
+        cx.simulate_keystrokes(window, "ctrl-shift-p");
+        cx.run_until_parked();
+        cx.read(|cx| assert!(shell.read(cx).command_palette.is_some()));
     }
 
     #[gpui::test]
@@ -6007,7 +6035,14 @@ await commands.registerForView("outline", "copy", async () => {
             first_editor.focus_handle(cx).focus(window);
         })
         .unwrap();
-        cx.simulate_keystrokes(window_handle, "cmd-shift-p");
+        cx.simulate_keystrokes(
+            window_handle,
+            if cfg!(windows) {
+                "ctrl-shift-p"
+            } else {
+                "cmd-shift-p"
+            },
+        );
         cx.run_until_parked();
         cx.update_window(window_handle, |_, _, cx| {
             assert!(shell.read(cx).command_palette.is_some());
@@ -6442,10 +6477,24 @@ await commands.registerForView("outline", "copy", async () => {
         cx.simulate_input(window_handle, ">");
         cx.simulate_keystrokes(window_handle, "end");
         cx.simulate_input(window_handle, "<");
-        cx.simulate_keystrokes(window_handle, "shift-home cmd-c");
+        cx.simulate_keystrokes(
+            window_handle,
+            if cfg!(windows) {
+                "shift-home ctrl-c"
+            } else {
+                "shift-home cmd-c"
+            },
+        );
         cx.run_until_parked();
         cx.update(|cx| assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), ">tail<"));
-        cx.simulate_keystrokes(window_handle, "cmd-a cmd-c");
+        cx.simulate_keystrokes(
+            window_handle,
+            if cfg!(windows) {
+                "ctrl-a ctrl-c"
+            } else {
+                "cmd-a cmd-c"
+            },
+        );
         cx.run_until_parked();
         cx.update(|cx| {
             assert_eq!(
@@ -6453,7 +6502,14 @@ await commands.registerForView("outline", "copy", async () => {
                 "\tcafé👩‍💻\n>tail<"
             )
         });
-        cx.simulate_keystrokes(window_handle, "cmd-x cmd-v");
+        cx.simulate_keystrokes(
+            window_handle,
+            if cfg!(windows) {
+                "ctrl-x ctrl-v"
+            } else {
+                "cmd-x cmd-v"
+            },
+        );
         cx.run_until_parked();
         cx.read(|cx| assert_eq!(model.read(cx).text(), "\tcafé👩‍💻\n>tail<"));
     }
@@ -6792,11 +6848,21 @@ await commands.registerForView("outline", "copy", async () => {
         cx.run_until_parked();
         cx.simulate_input(window_handle, "b");
         cx.refresh().unwrap();
-        cx.simulate_keystrokes(window_handle, "cmd-z");
+        cx.simulate_keystrokes(
+            window_handle,
+            if cfg!(windows) { "ctrl-z" } else { "cmd-z" },
+        );
         cx.run_until_parked();
         cx.read(|cx| assert_eq!(model.read(cx).text(), "a"));
 
-        cx.simulate_keystrokes(window_handle, "cmd-shift-z");
+        cx.simulate_keystrokes(
+            window_handle,
+            if cfg!(windows) {
+                "ctrl-shift-z"
+            } else {
+                "cmd-shift-z"
+            },
+        );
         cx.run_until_parked();
         cx.update_window(window_handle, |_, window, cx| {
             second.focus_handle(cx).focus(window)
@@ -6810,7 +6876,10 @@ await commands.registerForView("outline", "copy", async () => {
         })
         .unwrap();
         cx.refresh().unwrap();
-        cx.simulate_keystrokes(window_handle, "cmd-z");
+        cx.simulate_keystrokes(
+            window_handle,
+            if cfg!(windows) { "ctrl-z" } else { "cmd-z" },
+        );
         cx.run_until_parked();
         cx.read(|cx| assert_eq!(model.read(cx).text(), "ab"));
     }
