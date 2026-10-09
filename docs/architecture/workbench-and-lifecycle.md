@@ -88,6 +88,11 @@ requests containing normalized resource identities and workspace generations
 to the shell. It has no extension provider identity and does not share the
 extension-owned `TreeView` protocol.
 
+Open keeps its captured product target while the user chooses a path. Where the
+native picker cannot select files and folders together, the shell first asks
+which kind to open and then uses the corresponding picker. Cancelling either
+choice leaves the workbench intact.
+
 ## Terminal sessions and views
 
 `TerminalSession` is a stable gpui foreground model that owns one local PTY,
@@ -106,6 +111,8 @@ input and size changes to its session, and the session retains the final grid
 and exit status after natural process exit. Startup failure remains visible as
 a status and can be retried by restarting. Restart is a view-local action that
 replaces the session's process and grid while keeping its registry identity.
+Physical Space input is sent as a space byte even when the platform key event
+has no text character.
 New Terminal creates a registered
 session and one tab presentation in the captured pane. Tab switching retains
 both; splitting a terminal allocates an independent session. A successful

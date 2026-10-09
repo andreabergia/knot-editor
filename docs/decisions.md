@@ -13,11 +13,20 @@ renderer despite Skia's stronger standalone rendering result. Its macOS text
 path passed the fixture corpus; incomplete public bidirectional-text ergonomics
 require Knot's RTL alignment and logical-index mapping over glyph data.
 
-Initial product dogfooding targets macOS. Windows passed the framework
-portability checkpoint. Linux passed a limited framework and native product
-smoke checkpoint on Omarchy/Hyprland Wayland, using personal clipboard and
-palette bindings. Broader Linux production claims still require validation.
-Evidence: [Linux framework checkpoint](archive/plans/d028-linux-framework-plan.md).
+Initial product dogfooding targets macOS. Windows 11 is also a local dogfooding
+target after native startup, personal configuration, editor, persistence,
+command, terminal, and protected-closure checks on one desktop session. This
+does not establish a Windows distribution or broad hardware certification.
+Linux passed a limited framework and native product smoke checkpoint on
+Omarchy/Hyprland Wayland, using personal clipboard and palette bindings.
+Broader Linux production claims still require validation.
+Evidence: [Windows product checkpoint](archive/plans/d029-windows-product-polish-plan.md)
+and [Linux framework checkpoint](archive/plans/d028-linux-framework-plan.md).
+
+Use ordinary Windows Control shortcuts for product defaults. When a platform's
+native picker cannot select files and folders together, ask which kind the user
+wants before opening its single-kind picker. This preserves both Open flows
+through gpui's public platform capability without replacing the picker.
 
 Local macOS builds package the Rust binary as `Knot.app` with the supplied
 application icon and a plain-text document declaration. A small repository

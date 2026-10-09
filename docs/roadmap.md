@@ -166,13 +166,6 @@ the item is removed from this register.
     then add Developer ID signing, hardened runtime validation for V8,
     notarization, and an install/update path.
 
-- **D029 — Windows product polish**
-  - Deferred: The framework path passed its portability checkpoint, not product
-    validation.
-  - Reconsider: Windows becomes a supported dogfooding platform. Verify the
-    actual Windows personal config directory values and XDG precedence with
-    Windows tests, then test source capture and a product launch on Windows.
-
 - **D030 — Accessibility bridge**
   - Deferred: gpui lacks the public platform bridge required by the semantic
     state already retained.

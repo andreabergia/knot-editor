@@ -1,6 +1,6 @@
 # D029 Windows product polish plan
 
-Status: checkpoint 2 ready for review
+Status: complete
 
 Source task: [D029 — Windows product polish](../roadmap.md#platforms-and-accessibility)
 
@@ -179,8 +179,9 @@ Checkpoint 1 evidence (2026-10-09):
   alone would not make the behavior durable. Existing lifecycle and diagnostic
   tests passed on Windows; manual review exposed a native default shortcut
   blocker, corrected below.
-- **Review gate:** user confirms the successful configured launch, physical
-  shortcut, and diagnostic Copy/Quit behavior before the broader product smoke.
+- ✅ **Review gate:** user confirmed the physical Ctrl-Shift-P shortcut in the
+  rebuilt empty-config window and the diagnostic Copy/Quit behavior before the
+  broader product smoke.
 
 Checkpoint 2 evidence (2026-10-09):
 
@@ -242,8 +243,8 @@ Checkpoint 2 review follow-up (2026-10-09):
 - After `cargo build --locked --bin knot`, an empty isolated native launch
   (PID 26836) opened the command palette when Ctrl-Shift-P was sent to its
   focused editor; the palette displayed product commands and the process closed
-  normally. The user still needs to repeat the physical shortcut for this
-  review gate.
+  normally. The user subsequently confirmed the physical shortcut in a new
+  empty-config window (PID 22780).
 - The full-suite rerun after updating platform-specific test expectations had
   441 passed and 3 failed. The entry-path and terminal handoff failures are
   Windows baseline issues for checkpoint 3. A terminal-selection copy test
@@ -252,29 +253,85 @@ Checkpoint 2 review follow-up (2026-10-09):
 
 ### 3. Windows dogfooding smoke and regression closeout
 
-- In a disposable workspace, exercise text entry and navigation,
+- ✅ In a disposable workspace, exercise text entry and navigation,
   representative Unicode rendering, selection and clipboard, command palette,
   Open, Save, Save As, dirty-close cancellation, and successful tab/window/app
   closure. Verify saved bytes and that cancellation preserves the edited view.
-- Open a terminal, run a simple command, paste text, resize it, and close its
+- ✅ Open a terminal, run a simple command, paste text, resize it, and close its
   tab and the application. Verify the process/session shuts down through the
   existing lifecycle and no child is orphaned.
-- Check expected Windows Ctrl shortcuts directly. Personal-config bindings may
+- ✅ Check expected Windows Ctrl shortcuts directly. Personal-config bindings may
   expose fixture marker commands but must not replace product defaults during
   this portion of the smoke test.
-- Correct in-scope blockers and cover each durable behavior at the lowest
+- ✅ Correct in-scope blockers and cover each durable behavior at the lowest
   effective boundary, adding UI or integration coverage when the failure cannot
   be established below the native surface. Record any intermittent or deferred
   issue without treating an unexplained retry as a pass.
-- Run final focused tests, `cargo test --locked --all-targets`,
+- ✅ Run final focused tests, `cargo test --locked --all-targets`,
   `cargo clippy --locked --all-targets -- -D warnings`, and
   `cargo build --locked --bin knot`. After all Rust edits, run `cargo fmt` once
   and check the final diff.
-- Record the final Windows smoke matrix, machine/session details, commands,
+- ✅ Record the final Windows smoke matrix, machine/session details, commands,
   results, fixes, and remaining limitations in this plan. Update architecture
   references only if boundaries or behavioral contracts changed. Once the
   evidence validates Windows dogfooding, update `docs/decisions.md` and retire
-  D029 from the deferred roadmap; archive the completed plan separately.
-- **Review gate:** approve the observed Windows 11 dogfooding target and its
+  D029 from the deferred roadmap.
+- Archive the completed plan in a separate final commit.
+- ✅ **Review gate:** approve the observed Windows 11 dogfooding target and its
   regression coverage without broadening the claim to Windows distribution or
-  general platform certification.
+  general platform certification. The user reported successful hands-on use and
+  explicitly asked to complete the remaining fixes and open plan tasks.
+
+Checkpoint 3 native evidence (2026-10-09):
+
+- The product smoke used an empty disposable `XDG_CONFIG_HOME`, the unmodified
+  missing installed-extension root, and a separate temporary workspace at
+  `C:\Users\andre\AppData\Local\Temp\knot-d029-workspace-a10289274c5f49cd9b1f1af303677ce0`.
+  The launcher removed each disposable config fixture after its process exited.
+- In PID 30104, ordinary typing, Enter, and Ctrl-V rendered two lines including
+  `café 👩‍💻 漢字`. Ctrl-Home then Shift-End selected the first line; Ctrl-C put
+  `D029D029 Windows editor` on the Windows clipboard. Ctrl-S used the native
+  Save dialog to create `primary.txt`; Ctrl-Shift-S created `secondary.txt`.
+  Both files contained the same 48 UTF-8 bytes. Ctrl-W on an edited document
+  showed Save / Don't Save / Cancel; Escape cancelled closure, kept the dirty
+  view and `dirty cancellation` text visible, and left the saved file unchanged.
+  A subsequent Don't Save closed the tab and installed a clean untitled view.
+  The earlier empty-config run also exercised native window-close confirmation,
+  while Ctrl-Q exited this run cleanly.
+- Ctrl-Shift-T opened a PowerShell-backed terminal in PID 30104. Pasting
+  `Write-Output d029-terminal-ok` with Ctrl-V ran it and displayed the output.
+  Resizing the Knot window reflowed the visible grid. Ctrl-W closed the terminal
+  tab; its PowerShell child PID 17628 exited, and Ctrl-Q ended Knot without
+  remaining children. Direct typing exposed a dropped Space key: gpui's Windows
+  key event names it `space` and leaves `key_char` empty. The terminal now sends
+  the space byte, with a focused regression test.
+- The first Ctrl-O attempt exposed a gpui 0.2.2 Windows limitation: the mixed
+  file/folder request displayed a folder-only picker. Knot now uses gpui's
+  mixed-selection capability and asks File or Folder where needed. In rebuilt
+  PID 26724, Ctrl-O offered both choices, File opened the saved `primary.txt`
+  with its Unicode text, and Folder opened the disposable workspace with both
+  saved files in the tree. A directly typed
+  `Write-Output d029-terminal-space` then produced the expected output in the
+  terminal. Closing that terminal tab reaped PowerShell child PID 28792;
+  Ctrl-Q ended Knot and left no children.
+- The initial Windows baseline failures were test assumptions, not product
+  regressions: the launch-path test now uses a native temporary directory, and
+  the terminal-handoff test uses `cmd.exe` with a bounded exit wait on Windows.
+  The parallel-suite terminal Copy failure came from simulated mouse selection
+  over a live shell grid. That command test now uses a quiet session and an
+  explicit selection; the full suite passes without relying on a retry.
+- All native product checks used Windows Ctrl defaults without personal
+  bindings. The user also played with the built app and reported that it works
+  well. GPU and driver remain unrecorded because the available WMI/PnP query
+  was denied; the Windows claim is limited to this machine and desktop session.
+- Final validation: `cargo test --locked --all-targets` passed 445 tests with
+  no failures; `cargo clippy --locked --all-targets -- -D warnings` passed;
+  `cargo build --locked --bin knot` passed. `cargo fmt` ran once after the Rust
+  edits, and the final diff had no whitespace errors. The locked dependency set
+  still emits LNK4098 during linking and a `proc-macro-error2 2.0.1`
+  future-incompatibility warning; neither blocked this local dogfooding build.
+- The Windows behavior contract is reflected in the workbench/lifecycle
+  architecture reference, the dogfooding decision is recorded in
+  `docs/decisions.md`, and D029 is retired from `docs/roadmap.md`. The remaining
+  distribution, accessibility, and broader compatibility work stays outside
+  this Windows 11 local dogfooding claim.
