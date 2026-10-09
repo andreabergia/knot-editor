@@ -225,20 +225,17 @@ struct OpenTarget {
     workbench: WeakEntity<Workbench>,
     pane: PaneId,
     tab: TabId,
-    document: DocumentId,
+    surface: TabSurfaceId,
 }
 
 impl OpenTarget {
-    fn from_command(target: &ProductCommandTarget) -> Option<Self> {
-        let TabSurfaceId::Document(document) = target.surface else {
-            return None;
-        };
-        Some(Self {
+    fn from_command(target: &ProductCommandTarget) -> Self {
+        Self {
             workbench: target.workbench.clone(),
             pane: target.pane,
             tab: target.tab,
-            document,
-        })
+            surface: target.surface,
+        }
     }
 }
 
@@ -1239,14 +1236,7 @@ impl ProductShell {
             );
             return;
         }
-        let Some(open_target) = OpenTarget::from_command(&target) else {
-            self.finish_open_command(
-                completion,
-                crate::host::protocol::CommandOutcome::Unavailable,
-                cx,
-            );
-            return;
-        };
+        let open_target = OpenTarget::from_command(&target);
         let selection: OpenDialogFuture =
             if let Some(dialog) = cx.try_global::<ApplicationOpenDialog>() {
                 dialog.0.select()
@@ -1358,7 +1348,7 @@ impl ProductShell {
             || !self
                 .workbench
                 .read(cx)
-                .contains_tab(target.pane, target.tab, target.document)
+                .contains_surface(target.pane, target.tab, target.surface)
         {
             if let Some(completion) = completion {
                 self.finish_open_command(
@@ -1380,10 +1370,10 @@ impl ProductShell {
                 .update(cx, |this, cx| {
                     let outcome = if this.open_generation != generation
                         || target.workbench.upgrade() != Some(this.workbench.clone())
-                        || !this.workbench.read(cx).contains_tab(
+                        || !this.workbench.read(cx).contains_surface(
                             target.pane,
                             target.tab,
-                            target.document,
+                            target.surface,
                         ) {
                         crate::host::protocol::CommandOutcome::InvalidTarget
                     } else {
@@ -1483,13 +1473,13 @@ impl ProductShell {
 
         let documents = Self::documents(cx);
         let model = documents.read(cx).get(document).unwrap().model().clone();
-        if replace_target {
+        if replace_target && let TabSurfaceId::Document(previous) = target.surface {
             let replaced = self.workbench.update(cx, |workbench, cx| {
                 workbench.replace_tab_document(target.pane, target.tab, document, model, cx)
             });
-            if replaced && target.document != document {
+            if replaced && previous != document {
                 documents.update(cx, |documents, _| {
-                    documents.remove(target.document);
+                    documents.remove(previous);
                 });
             }
         } else {
@@ -1551,7 +1541,7 @@ impl ProductShell {
                     workbench: self.workbench.downgrade(),
                     pane: pane.id(),
                     tab: tab.id(),
-                    document,
+                    surface: TabSurfaceId::Document(document),
                 };
                 self.start_open_request(
                     OpenRequest::from_uri_for_product(uri),
@@ -3052,9 +3042,7 @@ pub(crate) fn open_product_window(request: Option<OpenRequest>, cx: &mut App) {
                     workbench: shell.read(cx).workbench.downgrade(),
                     pane: pane.id(),
                     tab: tab.id(),
-                    document: tab
-                        .document_id()
-                        .expect("initial product tab is a document"),
+                    surface: tab.surface_id(),
                 };
                 shell.update(cx, |shell, cx| {
                     shell.start_open_request(request, target, true, None, cx);
@@ -3489,7 +3477,7 @@ mod tests {
             workbench: shell.workbench.downgrade(),
             pane: pane.id(),
             tab: tab.id(),
-            document: tab.document_id().unwrap(),
+            surface: tab.surface_id(),
         }
     }
 
@@ -8311,6 +8299,50 @@ await commands.registerForView("outline", "copy", async () => {
             );
             assert!(shell.workspace_tree.is_some());
             assert_eq!(documents.read(cx).documents().count(), 1);
+        });
+    }
+
+    #[gpui::test]
+    fn open_from_terminal_requests_picker_and_preserves_terminal(cx: &mut TestAppContext) {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), "opened from terminal").unwrap();
+        let documents = install_globals(cx);
+        cx.set_global(ApplicationOpenDialog(Arc::new(FixedOpenDialog(
+            OpenDialogOutcome::Selected(file.path().to_path_buf()),
+        ))));
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        let (shell, window) = product_window(document, model, cx);
+        let terminal_tab = shell.update(cx, |shell, cx| {
+            let (session, view) = shell.create_terminal(cx);
+            let pane = shell.workbench.read(cx).focused_pane_id().unwrap();
+            shell.workbench.update(cx, |workbench, _| {
+                workbench.open_terminal_tab(pane, session, view).unwrap()
+            })
+        });
+        cx.update_window(window, |_, window, cx| {
+            shell.update(cx, |shell, cx| shell.focus_active_surface(window, cx));
+        })
+        .unwrap();
+        let execution = dispatch_product_command(&shell, window, super::OPEN_COMMAND, cx);
+        assert_eq!(wait_for_command(execution, cx), CommandOutcome::Completed);
+        cx.read(|cx| {
+            let pane = shell.read(cx).workbench.read(cx).focused_pane().unwrap();
+            assert!(
+                pane.tabs()
+                    .iter()
+                    .any(|tab| tab.id() == terminal_tab && tab.terminal_view().is_some())
+            );
+            assert_eq!(
+                pane.active_tab()
+                    .editor()
+                    .unwrap()
+                    .read(cx)
+                    .model()
+                    .read(cx)
+                    .text(),
+                "opened from terminal"
+            );
         });
     }
 

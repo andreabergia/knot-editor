@@ -395,7 +395,7 @@ pub(crate) fn dispatch_open_to_captured_target(
         if window.root::<ProductShell>().flatten().as_ref() != Some(&shell) {
             return Err(CommandOutcome::InvalidTarget);
         }
-        target.document_id(cx)?;
+        target.validate_tab(cx)?;
         break_captured_history_group(&target, cx);
         shell.update(cx, |shell, cx| {
             shell.start_open_dialog(target, completion, cx);

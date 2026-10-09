@@ -313,3 +313,7 @@ work require design review before proceeding.
   modes. Shared provider-cancellation test failed once (`Terminated` versus
   `Cancelled`) during parallel validation; isolated rerun passed. Record this
   intermittent observation without changing unrelated host behavior.
+- ✅ Open-from-terminal regression passes. Final all-targets rerun passed all
+  457 library tests and the binary target; Clippy with warnings denied and the
+  product build passed. `cargo fmt` and diff whitespace checks completed.
+  Native retry remains required before the terminal smoke can pass.

@@ -87,7 +87,10 @@ loading, selection, expansion, and error state.
 
 Opening a file awaits normalization, stat, versioned byte read, and UTF-8
 decoding before creating or selecting any model. A later open or captured-tab
-replacement rejects the stale result. Documents retain the observed provider
+replacement rejects the stale result. Open accepts document or terminal surfaces
+and revalidates the captured surface identity before presenting results. From a
+terminal it opens a document tab in the captured pane and preserves the terminal.
+Save and Save As still require a document target. Documents retain the observed provider
 version with their persisted revision. Save captures document, model, resource,
 text, revision, version, and a persistence generation. A successful create or
 conditional replacement commits the new version and only the captured model
