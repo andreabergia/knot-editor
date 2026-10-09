@@ -286,3 +286,11 @@ work require design review before proceeding.
   its shell PID to `terminal.pid` for process-exit verification.
 - ✅ Final automated rerun before native smoke results: all 455 library tests
   and the binary target passed; Clippy with warnings denied passed.
+- User reported “editing smoke passed” and closed the app. Hyprland confirms
+  no Knot windows remained before restart. Record editor interaction checks as
+  user-passed; saved-byte verification is still open: `source.txt` remains the
+  original 82-byte UTF-8 fixture (SHA-256
+  `c41a80e82200eb1f4a46ec62f754e3ba05f4ef041ae5a8eb3561f5e2a8465536`),
+  and `copy.txt` is absent at the instructed path. Ask for actual Save/Save As
+  destinations rather than assuming persistence verification passed.
+- Restarted the same isolated fixture for the requested terminal smoke test.
