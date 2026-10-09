@@ -317,3 +317,18 @@ work require design review before proceeding.
   457 library tests and the binary target; Clippy with warnings denied and the
   product build passed. `cargo fmt` and diff whitespace checks completed.
   Native retry remains required before the terminal smoke can pass.
+
+### Native terminal retry: Open passes; clipboard remapping discovered
+
+- ✅ User confirmed Open works after the captured-terminal correction.
+- User reported paste failed throughout Knot, including the text editor. Actual
+  symptom and behavior outside Knot are being clarified; do not mark paste passed.
+- Read-only inspection of Omarchy's installed universal clipboard binding shows
+  Super-V is intercepted and sends Ctrl-V to non-terminal-tagged windows.
+  Knot is not compositor-tagged as a terminal; its native `cmd-v` becomes
+  `super-v` on Linux, so the injected Ctrl-V does not invoke Paste. No terminal
+  code change altered the editor's paste handler or compositor bindings.
+- Add only `knot.keybinding('ctrl-v', 'editor.paste')` to the isolated smoke
+  personal config alongside Ctrl-Shift-P. This uses the integrated D003b API;
+  general Linux default-keymap changes and desktop config edits remain excluded.
+  Native confirmation of editor and terminal paste remains required.
