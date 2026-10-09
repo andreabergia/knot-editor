@@ -14,13 +14,37 @@ struct TabDrag {
     sequence: usize,
 }
 
-impl Render for TabDrag {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .p_2()
-            .bg(rgb(0x405e90))
-            .text_color(rgb(0xffffff))
-            .child(format!("Window {} / tab {}", self.source, self.tab))
+struct DragPreview {
+    drag: TabDrag,
+    trace: Rc<RefCell<Trace>>,
+}
+
+impl Render for DragPreview {
+    fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let trace = self.trace.borrow();
+        let content = content_bounds(window);
+        let pointer = trace
+            .pointer
+            .filter(|pointer| trace.active.is_some() && content.contains(pointer));
+        div().when_some(pointer, |element, pointer| {
+            // gpui places this root at its window-local mouse position minus
+            // the grab offset. Correct that position with the delivered pointer.
+            let correction = pointer - content.origin - window.mouse_position();
+            element.child(
+                div()
+                    .debug_selector(|| "drag-preview".to_owned())
+                    .relative()
+                    .left(correction.x)
+                    .top(correction.y)
+                    .p_2()
+                    .bg(rgb(0x405e90))
+                    .text_color(rgb(0xffffff))
+                    .child(format!(
+                        "Window {} / tab {}",
+                        self.drag.source, self.drag.tab
+                    )),
+            )
+        })
     }
 }
 
@@ -33,6 +57,7 @@ struct Trace {
     frames: BTreeMap<usize, Bounds<Pixels>>,
     targets: BTreeMap<(usize, &'static str), Bounds<Pixels>>,
     highlighted: Option<(usize, &'static str)>,
+    pointer: Option<Point<Pixels>>,
 }
 
 fn content_bounds(window: &Window) -> Bounds<Pixels> {
@@ -148,6 +173,7 @@ impl Probe {
                 ));
                 trace.active = None;
                 trace.highlighted = None;
+                trace.pointer = None;
                 cx.refresh_windows();
             })
     }
@@ -169,10 +195,16 @@ impl Render for Probe {
                 window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
                     if phase == DispatchPhase::Capture && cx.has_active_drag() {
                         let mut trace = moves.borrow_mut();
+                        let pointer = trace.windows.get(&id).map(|bounds| bounds.origin + event.position);
+                        let pointer_changed = trace.pointer != pointer;
+                        trace.pointer = pointer;
                         let next = trace.target_at(id, event.position);
                         if trace.highlighted != next {
                             trace.highlighted = next;
                             eprintln!("PREVIEW seq={:?} receiver={id} destination={next:?}", trace.active.as_ref().map(|drag| drag.sequence));
+                            cx.refresh_windows();
+                        }
+                        if pointer_changed {
                             cx.refresh_windows();
                         }
                         let bounds = Bounds::new(point(px(0.), px(0.)), window.viewport_size());
@@ -193,6 +225,7 @@ impl Render for Probe {
                                     trace.drops.push((drag, destination, label));
                                     trace.active = None;
                                     trace.highlighted = None;
+                                    trace.pointer = None;
                                     cx.stop_active_drag(window);
                                     cx.stop_propagation();
                                     cx.refresh_windows();
@@ -210,6 +243,7 @@ impl Render for Probe {
                                 if trace.active.as_ref().is_some_and(|active| active.sequence == drag.sequence) {
                                     trace.active = None;
                                     trace.highlighted = None;
+                                    trace.pointer = None;
                                     eprintln!("NO_TARGET seq={} gpui_active={}", drag.sequence, cx.has_active_drag());
                                     cx.refresh_windows();
                                 }
@@ -235,6 +269,7 @@ impl Render for Probe {
                     let stopped = cx.stop_active_drag(window);
                     let active = cancel_trace.borrow_mut().active.take();
                     cancel_trace.borrow_mut().highlighted = None;
+                    cancel_trace.borrow_mut().pointer = None;
                     cx.refresh_windows();
                     eprintln!("CANCEL receiver={id} seq={:?} stopped={stopped}", active.map(|drag| drag.sequence));
                     cx.stop_propagation();
@@ -254,13 +289,17 @@ impl Render for Probe {
                     .bg(rgb(0x384252))
                     .cursor_move()
                     .child(format!("Tab {tab}"))
-                    .on_drag(TabDrag { source: id, tab, sequence: 0 }, move |drag, _, _, cx| {
-                        let mut trace = trace.borrow_mut();
-                        trace.sequence += 1;
-                        let drag = TabDrag { sequence: trace.sequence, ..drag.clone() };
-                        eprintln!("START seq={} source={id} tab={tab}", drag.sequence);
-                        trace.active = Some(drag.clone());
-                        cx.new(|_| drag)
+                    .on_drag(TabDrag { source: id, tab, sequence: 0 }, move |drag, _, window, cx| {
+                        let drag = {
+                            let mut trace = trace.borrow_mut();
+                            trace.sequence += 1;
+                            let drag = TabDrag { sequence: trace.sequence, ..drag.clone() };
+                            eprintln!("START seq={} source={id} tab={tab}", drag.sequence);
+                            trace.active = Some(drag.clone());
+                            trace.pointer = Some(content_bounds(window).origin + window.mouse_position());
+                            drag
+                        };
+                        cx.new(|_| DragPreview { drag, trace: trace.clone() })
                     })
             })))
             .child(div().flex().gap_2().children([
@@ -399,6 +438,8 @@ mod tests {
             trace.windows[&2].origin - trace.windows[&1].origin
         };
         let mut source = VisualTestContext::from_window(*windows[0], cx);
+        let tab_bounds = source.debug_bounds("tab0").unwrap();
+        let grab_offset = tab_bounds.center() - tab_bounds.origin + point(px(12.), px(0.));
         start_drag(&mut source);
         source.simulate_mouse_move(
             destination_center + offset,
@@ -407,6 +448,23 @@ mod tests {
         );
         source.run_until_parked();
         assert_eq!(trace.borrow().highlighted, Some((2, "center")));
+        assert!(source.debug_bounds("drag-preview").is_none());
+        let first_preview = VisualTestContext::from_window(*windows[1], cx)
+            .debug_bounds("drag-preview")
+            .unwrap();
+        assert_eq!(first_preview.origin, destination_center - grab_offset);
+        let delta = point(px(10.), px(8.));
+        source.simulate_mouse_move(
+            destination_center + offset + delta,
+            MouseButton::Left,
+            Modifiers::default(),
+        );
+        source.run_until_parked();
+        assert_eq!(trace.borrow().highlighted, Some((2, "center")));
+        let second_preview = VisualTestContext::from_window(*windows[1], cx)
+            .debug_bounds("drag-preview")
+            .unwrap();
+        assert_eq!(second_preview.origin - first_preview.origin, delta);
         // Commit uses the release position rather than the last preview.
         source.simulate_mouse_up(
             destination_right + offset,
@@ -420,6 +478,7 @@ mod tests {
             (2, "right")
         );
         assert!(trace.borrow().highlighted.is_none());
+        assert!(trace.borrow().pointer.is_none());
         source.read(|cx| assert!(!cx.has_active_drag()));
 
         start_drag(&mut source);
@@ -438,6 +497,7 @@ mod tests {
         assert_eq!(trace.borrow().drops.len(), 1);
         assert!(trace.borrow().highlighted.is_none());
         assert!(trace.borrow().active.is_none());
+        assert!(trace.borrow().pointer.is_none());
     }
 
     #[test]

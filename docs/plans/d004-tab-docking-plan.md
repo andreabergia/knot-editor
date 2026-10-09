@@ -1,8 +1,8 @@
 # D004: Tab dragging and docking
 
 Status: checkpoint 1 diagnostic includes source-window coordination; its five
-automated tests pass. In-window interaction reviewed; native cross-window and
-desktop-release validation of the adapter remain open.
+automated tests pass. Native cross-window drops work in both directions;
+review of the corrected drag-label preview and desktop release remains open.
 
 Source: D004, promoted from the [deferred-work register](../roadmap.md).
 Current boundaries: [architecture](../architecture.md),
@@ -95,8 +95,21 @@ requires a new attachment; the session remains registered and running.
   Additional tests cover actual source-listener dispatch into another target,
   cancellation, release-position revalidation, content-origin offsets, invalid
   space, and a missing destination.
-- ⏳ Re-run native cross-window dragging in both directions, desktop release,
-  and Escape after crossing, using the adapted diagnostic. Approve the
+- ✅ Native adapter retest: the user confirmed cross-window dragging is
+  possible. The log contains source-window releases and coordinated drops
+  from window 1 to window 2 (top and left), and from window 2 to window 1
+  (center). The user identified a stuck drag label in the destination:
+  gpui positions its shared preview using each window's own mouse position,
+  while only the source receives continued native movement.
+- ✅ The preview now uses the coordinator's latest screen pointer, compensates
+  for each window's stale local mouse position, and renders its label only in
+  the content under that pointer. Every pointer change requests repaint,
+  including movement within one unchanged target. A rendered-bounds regression
+  test proves the destination label retains the grab offset and follows two
+  source-delivered positions within the same target. Drop and cancellation
+  clear the shared pointer and feedback.
+- ⏳ Re-run cross-window preview tracking, desktop release, and Escape after
+  crossing, using the corrected diagnostic. Approve the
   coordinator path after those results. Checkpoints 2–4 remain open.
 
 Run `cargo run --example tab_drag_delivery 2> /tmp/knot-tab-drag-delivery.log`
@@ -117,8 +130,8 @@ Retain the log and record actual receiver, feedback, and outcome for each row.
 | --- | --- | --- |
 | Tab to each insertion slot in its window | One matching `DROP`; correct highlight | ⏳ |
 | Tab to center and each edge in its window | One matching `DROP`; correct highlight | ⏳ |
-| Window 1 tab to Window 2 center/insert/edge | Source `MOVE`/`UP`, destination `COORDINATED_DROP`, visible feedback | ⏳ Adapter retest |
-| Window 2 tab to Window 1 | Same evidence in the reverse direction | ⏳ |
+| Window 1 tab to Window 2 center/insert/edge | Source `MOVE`/`UP`, destination `COORDINATED_DROP`, visible feedback | ◐ Top/left drops confirmed; corrected label review pending |
+| Window 2 tab to Window 1 | Same evidence in the reverse direction | ◐ Center drop confirmed; corrected label review pending |
 | Tab to desktop; release | Delivered `UP`, `TEAR_OUT_READY`, no `DROP` | ⏳ Adapter retest |
 | Tab to empty non-target space; release | `UP` and `NO_TARGET`, no `DROP` | ⏳ |
 | Escape over an in-window target, then release | `CANCEL stopped=true`; no `DROP` | ⏳ |
@@ -127,9 +140,10 @@ Retain the log and record actual receiver, feedback, and outcome for each row.
 
 The selected adapter candidate is the foreground product-shell coordinator,
 using gpui's delivered source events without adding a native event monitor.
-Native source release over another window and the desktop still need evidence;
-if release is missing, a narrow macOS event-delivery adapter will also be
-necessary. The diagnostic currently targets side-by-side windows on one
+Native source release over another window is confirmed in both directions;
+desktop release still needs evidence. If that release is missing, a narrow
+macOS event-delivery adapter will also be necessary. The diagnostic currently
+targets side-by-side windows on one
 display; native geometry across displays requires validation before relying
 on gpui window bounds for that case. Review must confirm the observed event
 path and preview before product relocation work begins.
