@@ -74,7 +74,7 @@ work require design review before proceeding.
 - **Review gate:** inspect actual directory values, precedence, source capture,
   and the build/test recipe before native launch work.
 
-### 2. Native startup and one shortcut 🟡
+### 2. Native startup and one shortcut 🟡 (verification ready; review pending)
 
 - Launch the actual product in this machine's Wayland session with isolated
   test configuration and extension directories, keeping the user's real config
@@ -252,3 +252,19 @@ work require design review before proceeding.
 - ✅ User physical-key retry: “works”, confirming Ctrl-Shift-P opens the
   palette in the sole configured native fixture. The manual shortcut gate now
   passes. Diagnostic Copy/Quit confirmation and checkpoint review remain open.
+
+### Diagnostic verification, 2026-10-09
+
+- Relaunched the malformed-source case with fresh isolated root
+  `/tmp/knot-d028-diagnostic-_nyzs1ca`; native log reports Pre-init SyntaxError
+  at `pre-init.js:1:14`.
+- ✅ User clicked Copy and pasted the complete diagnostic: phase Pre-init,
+  selected-root file path, line 1, column 14, and `Unexpected token '='`.
+- ✅ After the requested Quit check, Hyprland reports no Knot windows and
+  exec session 68542 completed with exit code 0. This establishes successful
+  diagnostic-process closure; user confirmation of using Quit remains part of
+  checkpoint review. The same diagnostic view handles the earlier observed
+  post-init evaluation failure; its shared Copy/Quit behavior is covered by
+  existing automated tests and this native malformed-source check.
+- Checkpoint 2 implementation and native observations are ready for review.
+  User review approval remains pending before checkpoint 3 begins.
