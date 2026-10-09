@@ -336,3 +336,18 @@ work require design review before proceeding.
   isolated personal Ctrl-V binding. This establishes the compositor-remapping
   correction; no additional default bindings or desktop changes were introduced.
   Terminal command/resize/closure and persistence-byte evidence remain open.
+
+### Repeated paste failure: normal launch lacks smoke config
+
+- User reported paste stopped again after restart. Inspected running Knot PID
+  28591: HOME=`/home/andry`, XDG_CONFIG_HOME=`/home/andry/.config`,
+  XDG_DATA_HOME=`/home/andry/.local/share`. Its selected post-init entry is
+  absent. This is a normal launch, not the isolated smoke fixture; it does not
+  load the personal Ctrl-V or Ctrl-Shift-P bindings. The isolated fixture still
+  contains both bindings. Do not mistake this for a regression in Paste.
+- Add `scripts/linux-framework-smoke.sh` as a repeatable launcher. It uses
+  disposable HOME/XDG roots, preserves the real session environment, and writes
+  the two test bindings only under the smoke root. Run it after
+  `cargo build --locked --bin knot`; optional `KNOT_LINUX_SMOKE_ROOT` selects
+  another disposable root. Ordinary launches do not gain these bindings;
+  persistent personal setup and general Linux defaults remain outside D028.
