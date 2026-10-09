@@ -233,3 +233,19 @@ work require design review before proceeding.
   mapped native `Knot configuration error` window; no product window belongs
   to that process. Exec session 30632 remains live. Copy/Quit and review
   confirmation remain pending, as for the phase-evaluation case.
+
+### Shortcut investigation, 2026-10-09
+
+- User reported Ctrl-Shift-P did nothing. Record this as a failed manual check;
+  the earlier automated test alone does not establish native usability.
+- Compositor bindings contain no Ctrl-Shift-P interception. Two differently
+  configured product instances had been open, so window ambiguity is possible
+  but is not established as the cause of the user's failure.
+- All prior Knot windows were subsequently closed. Reopened only the isolated
+  configured fixture (PID 12956, exec session 47862).
+- ✅ Targeted native dispatch through Hyprland's `hl.dsp.send_key_state` with
+  CTRL SHIFT / P opened the palette in that PID. A cropped native-window capture
+  `/tmp/d028-shortcut-after.png` shows all three `d028` startup registrations.
+  Dismissed the palette for a fresh physical-key retry. This proves actual
+  Wayland dispatch for the configured fixture; user keypress confirmation remains
+  pending. No code or desktop configuration correction was needed or applied.
