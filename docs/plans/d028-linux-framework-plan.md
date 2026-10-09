@@ -1,6 +1,7 @@
 # D028: Linux framework checkpoint
 
-Status: checkpoints 1 and 2 approved. Checkpoint 3 smoke test in progress.
+Status: checkpoints 1 and 2 approved. Checkpoint 3 smoke test passed; final
+review of evidence and regression coverage pending.
 
 Source: D028, promoted from the [deferred-work register](../roadmap.md).
 Current boundaries: [architecture](../architecture.md),
@@ -91,22 +92,22 @@ work require design review before proceeding.
 - **Review gate:** user confirms native startup, the diagnostic path, and the
   single shortcut before completing the product smoke test.
 
-### 3. Small product smoke test and evidence 🟡
+### 3. Small product smoke test and evidence 🟡 (smoke ✅; final review pending)
 
-- Use the palette and visible controls to check text entry and navigation,
+- ✅ Use the palette and visible controls to check text entry and navigation,
   representative Unicode rendering, selection and clipboard, Open, Save,
   Save As, dirty-close cancellation, and successful closure. Use disposable
   files; verify saved bytes and that cancellation preserves the edited view.
-- Open one terminal, type a command, resize it, and close it. Check the process
+- ✅ Open one terminal, type a command, resize it, and close it. Check the process
   shuts down through the existing session lifecycle. This does not expand into
   terminal compatibility work.
-- Fix blockers within the agreed scope and cover durable behavior at the
+- ✅ Fix blockers within the agreed scope and cover durable behavior at the
   model, lifecycle, command, or persistence boundary; use UI/integration tests
   where lower-level tests cannot establish the behavior. Record other gaps
   explicitly for later work.
-- Run required automated checks after fixes. Run `cargo fmt` once at the end
+- ✅ Run required automated checks after fixes. Run `cargo fmt` once at the end
   of Rust work before committing; keep implementation in logical commits.
-- Record the smoke-test matrix, environment, commands, results, and remaining
+- ✅ Record the smoke-test matrix, environment, commands, results, and remaining
   limitations in this plan. Update architecture references only if boundaries
   or behavior change, and decisions only for validated choices. Mark completed
   checkpoints with ✅.
@@ -351,3 +352,31 @@ work require design review before proceeding.
   `cargo build --locked --bin knot`; optional `KNOT_LINUX_SMOKE_ROOT` selects
   another disposable root. Ordinary launches do not gain these bindings;
   persistent personal setup and general Linux defaults remain outside D028.
+
+## Final smoke matrix, 2026-10-09
+
+User's latest result: “done all seems to work”, after the complete checklist and
+repeatable isolated launcher. This supersedes the earlier partial smoke reports.
+
+| Requirement | Evidence | Result |
+| --- | --- | --- |
+| Text entry/navigation, Unicode, selection/clipboard | User editing smoke passed; native paste retry confirms Ctrl-V and Super-V; saved fixture retains accents, combining mark, Japanese and emoji | ✅ |
+| Open while terminal focused | User confirmed Open works after correction; regression exercises selected-file dialog and terminal preservation | ✅ |
+| Save and Save As | `source.txt` and `copy.txt` are byte-identical, 87 bytes, with original Unicode text plus `saved`; SHA-256 `c1fe63c11119b987bdc386aa89e8d9ceb29c85a4a5efb08feb9da92082fefec9` | ✅ |
+| Dirty-close cancellation | User passed instructed Cancel-and-preserve check, then discarded; neither saved file contains `KEEP UNSAVED` | ✅ |
+| Successful editor/application closure | User reported closure; current compositor lists no Knot windows | ✅ |
+| Terminal input/output, resize, tab closure | User completed checklist; `terminal.pid` contains 29701, and `/proc/29701` is absent after closure | ✅ |
+| Native palette shortcut and startup phases | Physical Ctrl-Shift-P confirmed; native capture shows pre-init, extension and post-init marker commands | ✅ |
+| Fatal config diagnostics | Native malformed-source and post-init-evaluation launches show only diagnostic windows; user pasted complete Copy result and confirmed Quit | ✅ |
+| Durable regressions and checks | Final 457 library tests plus binary target passed; Clippy with warnings denied and product build passed; terminal PTY paste and Open-from-terminal regressions included | ✅ |
+
+Limits: validated only this Omarchy/Hyprland Wayland session. Terminal fonts
+remain poor by user report. Ordinary launches still use existing native defaults;
+the smoke launcher's personal Ctrl-V and Ctrl-Shift-P bindings are required for
+this desktop's tested workflow. General Linux keymaps, desktop configuration,
+font polish, other platforms/compositors and packaging remain deferred. One
+shared provider-cancellation test intermittently failed during development, then
+passed independently and in the full suite; no unrelated host behavior was changed.
+
+Final review gate: smoke results and regression coverage above are ready for
+approval. Keep this plan active until that review passes; archive separately afterward.
