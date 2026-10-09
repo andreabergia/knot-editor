@@ -421,6 +421,194 @@ fn collect(
 mod tests {
     use super::*;
 
+    #[cfg(windows)]
+    #[test]
+    fn windows_directory_contract() {
+        const CHILD: &str = "KNOT_WINDOWS_CONFIG_CONTRACT_CHILD";
+        if let Some(case) = std::env::var_os(CHILD) {
+            let case = case.to_str().unwrap();
+            let base = BaseDirs::new().unwrap();
+            let native = ProjectDirs::from("", "", "Knot").unwrap();
+            let native_path = base.config_dir().join("Knot").join("config");
+            assert_eq!(
+                base.config_dir(),
+                Path::new(&std::env::var_os("APPDATA").unwrap())
+            );
+            assert_eq!(native.config_dir(), native_path);
+            assert_eq!(
+                base.home_dir(),
+                Path::new(&std::env::var_os("USERPROFILE").unwrap())
+            );
+            let selected = user_config_root().unwrap();
+            let default_xdg = base.home_dir().join(".config/knot");
+            let expected = match case {
+                "absolute-existing" | "absolute-invalid" => {
+                    PathBuf::from(std::env::var_os("XDG_CONFIG_HOME").unwrap()).join("knot")
+                }
+                "unset" | "empty" | "relative" | "absolute-missing" => {
+                    if default_xdg.exists() {
+                        default_xdg
+                    } else {
+                        native_path
+                    }
+                }
+                _ => panic!("unknown case: {case}"),
+            };
+            assert_eq!(selected, expected, "{case}");
+            if case == "absolute-invalid" {
+                let diagnostic = capture(&selected).unwrap_err();
+                assert_eq!(diagnostic.path, selected);
+                assert!(diagnostic.cause.contains("must be a directory"));
+            }
+            return;
+        }
+
+        let temp = tempfile::tempdir().unwrap();
+        let xdg_home = temp.path().join("Windows config ünicode");
+        let xdg_root = xdg_home.join("knot");
+        fs::create_dir_all(&xdg_home).unwrap();
+        for case in [
+            "unset",
+            "empty",
+            "relative",
+            "absolute-missing",
+            "absolute-existing",
+            "absolute-invalid",
+        ] {
+            if case == "absolute-existing" {
+                fs::create_dir(&xdg_root).unwrap();
+            } else if case == "absolute-invalid" {
+                fs::remove_dir(&xdg_root).unwrap();
+                fs::write(&xdg_root, "invalid root").unwrap();
+            }
+            let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+            child
+                .args([
+                    "--exact",
+                    "app::personal_config::tests::windows_directory_contract",
+                    "--nocapture",
+                ])
+                .env(CHILD, case)
+                .env_remove("XDG_CONFIG_HOME");
+            match case {
+                "empty" => {
+                    child.env("XDG_CONFIG_HOME", "");
+                }
+                "relative" => {
+                    child.env("XDG_CONFIG_HOME", "relative");
+                }
+                "absolute-missing" => {
+                    child.env("XDG_CONFIG_HOME", temp.path().join("missing"));
+                }
+                "absolute-existing" | "absolute-invalid" => {
+                    child.env("XDG_CONFIG_HOME", &xdg_home);
+                }
+                _ => {}
+            }
+            let output = child.output().unwrap();
+            assert!(
+                output.status.success(),
+                "{case}: {}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(
+                String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+                "child test did not run for {case}"
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_precedence_and_file_url_capture() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home ünicode");
+        let native = temp.path().join("Roaming/Knot/config");
+        let default = home.join(".config/knot");
+        let xdg_home = temp.path().join("XDG with spaces ünicode");
+        let xdg = xdg_home.join("knot");
+        fs::create_dir_all(&native).unwrap();
+        fs::create_dir_all(&home).unwrap();
+        assert_eq!(select_config_root(&native, Some(&home), None), native);
+        fs::create_dir_all(&default).unwrap();
+        assert_eq!(select_config_root(&native, Some(&home), None), default);
+        assert_eq!(
+            select_config_root(&native, Some(&home), Some(OsStr::new("relative"))),
+            default
+        );
+        assert_eq!(
+            select_config_root(&native, Some(&home), Some(xdg_home.as_os_str())),
+            default
+        );
+        fs::create_dir_all(&xdg).unwrap();
+        assert_eq!(
+            select_config_root(&native, Some(&home), Some(xdg_home.as_os_str())),
+            xdg
+        );
+
+        let entry = xdg.join(PRE_INIT);
+        fs::write(&entry, "import './lib/shared.mjs';").unwrap();
+        fs::create_dir(xdg.join("lib")).unwrap();
+        fs::write(xdg.join("lib/shared.mjs"), "export const value = 1;").unwrap();
+        let captured = capture(&xdg).unwrap();
+        assert!(captured.pre_init && !captured.post_init);
+        assert_eq!(
+            captured.sources["lib/shared.mjs"].as_ref(),
+            "export const value = 1;"
+        );
+        let file_url = captured
+            .clone()
+            .into_graph()
+            .unwrap()
+            .entry_url(PRE_INIT)
+            .unwrap()
+            .to_owned();
+        assert!(file_url.starts_with("file:///"));
+        assert!(file_url.contains("%20") && file_url.contains("%C3%BC"));
+        assert_eq!(
+            fs::canonicalize(url::Url::parse(&file_url).unwrap().to_file_path().unwrap()).unwrap(),
+            fs::canonicalize(&entry).unwrap()
+        );
+        fs::write(xdg.join("lib/shared.mjs"), "changed").unwrap();
+        assert_eq!(
+            captured.sources["lib/shared.mjs"].as_ref(),
+            "export const value = 1;"
+        );
+        assert_eq!(
+            capture(&xdg).unwrap().sources["lib/shared.mjs"].as_ref(),
+            "changed"
+        );
+
+        fs::write(xdg.join("lib/shared.mjs"), "export const value = 1;").unwrap();
+        fs::write(xdg.join(POST_INIT), "import './lib/shared.mjs';").unwrap();
+        let both = capture(&xdg).unwrap();
+        assert!(both.pre_init && both.post_init);
+        assert!(both.post_init_error.is_none());
+
+        fs::write(xdg.join(POST_INIT), "import './missing.mjs';").unwrap();
+        let missing = capture(&xdg).unwrap().post_init_error.unwrap();
+        assert_eq!(missing.phase, Some(ConfigPhase::PostInit));
+        assert_eq!(missing.path, xdg.join(POST_INIT));
+        assert!(missing.cause.contains("configuration module not found"));
+        fs::write(xdg.join(POST_INIT), "import './lib/bad.mjs';").unwrap();
+        fs::write(xdg.join("lib/bad.mjs"), "export const = ;").unwrap();
+        let malformed = capture(&xdg).unwrap().post_init_error.unwrap();
+        assert_eq!(malformed.path, xdg.join("lib/bad.mjs"));
+        fs::write(xdg.join(POST_INIT), "import '../outside.js';").unwrap();
+        let escaped = capture(&xdg).unwrap().post_init_error.unwrap();
+        assert!(escaped.cause.contains("escapes configuration"));
+
+        fs::remove_dir_all(&xdg).unwrap();
+        fs::write(&xdg, "invalid preferred root").unwrap();
+        fs::write(default.join(PRE_INIT), "export const lower = true;").unwrap();
+        assert_eq!(
+            select_config_root(&native, Some(&home), Some(xdg_home.as_os_str())),
+            xdg
+        );
+        assert_eq!(capture(&xdg).unwrap_err().path, xdg);
+    }
+
     /// Each child reads HOME/XDG through the real directories implementation.
     #[cfg(target_os = "linux")]
     #[test]

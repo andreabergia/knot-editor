@@ -1,6 +1,6 @@
 # D029 Windows product polish plan
 
-Status: planned
+Status: checkpoint 1 ready for review
 
 Source task: [D029 — Windows product polish](../roadmap.md#platforms-and-accessibility)
 
@@ -94,27 +94,66 @@ versions, hardware, accessibility configurations, or distribution channels.
 
 ### 1. Windows config and source-capture contract
 
-- Establish and record the Windows edition/build, Rust and Cargo versions,
+- ✅ Establish and record the Windows edition/build, Rust and Cargo versions,
   locked gpui and `directories` versions, graphics/session facts useful for
   reproduction, and the clean baseline build/test commands.
-- Add Windows-only tests that call the real `BaseDirs`, `ProjectDirs`, and Knot
+- ✅ Add Windows-only tests that call the real `BaseDirs`, `ProjectDirs`, and Knot
   config-root code. Assert the Windows native path shape and application-name
   casing, and cover unset, empty, relative, existing absolute, and missing
   absolute `XDG_CONFIG_HOME` behavior without depending on or altering the
   user's real `%USERPROFILE%\.config\knot` state.
-- Cover precedence among controlled existing candidates, including an invalid
+- ✅ Cover precedence among controlled existing candidates, including an invalid
   preferred root producing a capture diagnostic rather than silently loading a
   lower-priority root.
-- Exercise selection followed by source capture under a Windows temporary path
+- ✅ Exercise selection followed by source capture under a Windows temporary path
   with spaces or Unicode. Cover optional phases, a local import, immutable
   captured bytes, Windows file-URL resolution, malformed or missing imports,
   and an escaping import.
-- Run the focused personal-config tests and any lower-level graph tests affected
+- ✅ Run the focused personal-config tests and any lower-level graph tests affected
   by corrections. Document exact observed directory values and any code changes
   required to preserve the validated cross-platform policy.
 - **Review gate:** confirm the concrete Windows directory contract, precedence
   matrix, source-capture behavior, and focused regression coverage before native
   product testing.
+
+Checkpoint 1 evidence (2026-10-09):
+
+- The observed host reports Windows version `10.0.26200.9457`, display version
+  `25H2`, and Professional edition. The registry still labels its `ProductName`
+  `Windows 10 Pro`; the build and display version identify this Windows 11
+  session. Primary display bounds are 2560 × 1440. `SESSIONNAME` is unset in
+  the test shell. WMI/PnP graphics queries returned access denied, so the GPU
+  and driver remain unrecorded for the later native smoke.
+- `rustc 1.99.0 (b940084d7 2026-09-28)` and
+  `cargo 1.99.0 (5f94df478 2026-08-27)`; lockfile versions are
+  `gpui 0.2.2` and `directories 6.0.0`.
+- The real Windows directories observed by the test are
+  `BaseDirs::home_dir() = C:\Users\andre`,
+  `BaseDirs::config_dir() = C:\Users\andre\AppData\Roaming`, and
+  `ProjectDirs::from("", "", "Knot").config_dir() =
+  C:\Users\andre\AppData\Roaming\Knot\config`. The test asserts the actual
+  `USERPROFILE` and `APPDATA` values, the native path shape, and the `Knot`
+  casing. No profile directory was created or changed.
+- Subprocess tests cover unset, empty, relative, missing absolute, existing
+  absolute, and invalid preferred `XDG_CONFIG_HOME`. Controlled temporary
+  candidates verify native < `%USERPROFILE%\.config\knot` <
+  `XDG_CONFIG_HOME\knot` precedence. An existing file at the preferred root
+  produces a discovery diagnostic even when the lower root contains a valid
+  pre-init file. A temporary Unicode path with spaces verifies both optional
+  phases, `.mjs` import, immutable captured bytes, percent-encoded Windows file
+  URL resolution, missing and malformed imports, and import escape rejection.
+- `cargo test --locked app::personal_config::tests -- --nocapture`: 9 passed.
+  `cargo build --locked --bin knot`: passed. Both emit linker warning LNK4098;
+  the locked dependency set also reports a future-incompatibility warning for
+  `proc-macro-error2 2.0.1`.
+- `cargo test --locked --all-targets` provides the initial Windows baseline:
+  439 passed and 3 failed. The failures are
+  `app::entry::tests::launch_accepts_exactly_one_path_and_normalizes_it_at_the_boundary`,
+  `app::keymaps::tests::declared_kinds_and_sequences_are_validated_and_normalized`,
+  and `app::product::tests::process_exit_during_terminal_handoff_keeps_final_grid`.
+  These Windows path, keymap, and terminal findings are tracked for the product
+  regression closeout in checkpoint 3. No production config policy change was
+  needed for checkpoint 1.
 
 ### 2. Native launch, config phases, and fatal diagnostics
 
