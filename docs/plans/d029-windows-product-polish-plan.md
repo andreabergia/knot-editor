@@ -1,6 +1,6 @@
 # D029 Windows product polish plan
 
-Status: checkpoint 1 ready for review
+Status: checkpoint 2 ready for review
 
 Source task: [D029 — Windows product polish](../roadmap.md#platforms-and-accessibility)
 
@@ -112,9 +112,9 @@ versions, hardware, accessibility configurations, or distribution channels.
 - ✅ Run the focused personal-config tests and any lower-level graph tests affected
   by corrections. Document exact observed directory values and any code changes
   required to preserve the validated cross-platform policy.
-- **Review gate:** confirm the concrete Windows directory contract, precedence
+- ✅ **Review gate:** confirm the concrete Windows directory contract, precedence
   matrix, source-capture behavior, and focused regression coverage before native
-  product testing.
+  product testing. Approved by the user before checkpoint 2.
 
 Checkpoint 1 evidence (2026-10-09):
 
@@ -157,28 +157,75 @@ Checkpoint 1 evidence (2026-10-09):
 
 ### 2. Native launch, config phases, and fatal diagnostics
 
-- Build the locked product binary on Windows and add a small repeatable
+- ✅ Build the locked product binary on Windows and add a small repeatable
   PowerShell smoke launcher if it can isolate personal config without modifying
   real user data. The launcher may create disposable config fixtures and report
   the real installed-extension root, but must not move, replace, or populate
   that root.
-- Launch once with an empty isolated config and verify that a visible,
+- ✅ Launch once with an empty isolated config and verify that a visible,
   input-accepting product window opens. Record the executable, process, selected
   paths, and relevant native environment.
-- Launch with pre-init and post-init entries plus a local shared module. Make
+- ✅ Launch with pre-init and post-init entries plus a local shared module. Make
   phase ordering and shared JavaScript state observable through registered
   commands, and use a temporary Ctrl-Shift-P binding to verify that applied
   foreground state is available when the product window opens.
-- Exercise a malformed pre-init source and a post-init evaluation failure.
+- ✅ Exercise a malformed pre-init source and a post-init evaluation failure.
   Verify each launch shows only the dedicated configuration diagnostic, reports
   the selected Windows path and useful source location, copies the full
   diagnostic, exits through Quit, and never leaves startup lifecycles or product
   windows alive.
-- Fix Windows launch, path, runtime, or lifecycle blockers within the selected
+- ✅ Fix Windows launch, path, runtime, or lifecycle blockers within the selected
   boundaries and add automated regression coverage wherever native observation
-  alone would not make the behavior durable.
+  alone would not make the behavior durable. No production blocker appeared in
+  this checkpoint; existing lifecycle and diagnostic tests passed on Windows.
 - **Review gate:** user confirms the successful configured launch, physical
   shortcut, and diagnostic Copy/Quit behavior before the broader product smoke.
+
+Checkpoint 2 evidence (2026-10-09):
+
+- `cargo build --locked --bin knot` produced
+  `D:\src\knot-editor\target\debug\knot.exe`. The repeatable launcher is
+  `scripts/windows-product-smoke.ps1`; run it with `-Mode Empty`, `Configured`,
+  `BadPre`, or `BadPost` after building. It creates a uniquely named temporary
+  `XDG_CONFIG_HOME`, writes UTF-8 config fixtures only under its `knot` child,
+  waits for the product process, and removes that exact fixture after exit. It
+  reports the executable, PID, selected config root, log paths, and the
+  installed-extension root. The actual extension root was
+  `C:\Users\andre\AppData\Local\Knot\data\extensions` and was missing in
+  every run; the launcher never created or modified it. The observed desktop
+  uses a 2560 × 1440 primary display at 144 DPI (150% scaling).
+- Empty fixture: the launcher selected
+  `C:\Users\andre\AppData\Local\Temp\knot-d029-3a8b3c80a47e4d898607b1a1ccc2aa3f\xdg\knot`.
+  PID 1696 opened a responsive `Knot` window. Native keyboard input rendered
+  `D029 input ok` in the untitled editor. A window-close request with this
+  dirty buffer showed the expected Save / Don't Save / Cancel alert; choosing
+  Don't Save exited the process. An earlier empty run (PID 7936) also opened
+  and closed normally.
+- Configured fixture: pre-init imported `shared.mjs`, set shared state, and
+  registered `d029.pre-ready`. Post-init observed that state, registered
+  `d029.post-saw-pre`, and bound Ctrl-Shift-P to the command palette. PID 20740
+  opened a responsive `Knot` window. Sending Ctrl-Shift-P to the focused editor
+  opened the palette; both marker commands were visible there before the
+  window closed normally. This is native evidence that both awaited phases and
+  their foreground command/binding state completed before the product window
+  became usable. The physical shortcut remains for the review gate.
+- Bad pre-init fixture: PID 25980 showed a `Knot configuration error` window,
+  with no titled product window, for the selected temporary
+  `pre-init.js:1:14` and `SyntaxError: Unexpected token '='`. Copy placed the
+  full phase, path, location, cause, and stack text on the Windows clipboard.
+  Clicking Quit ended the process. Bad post-init fixture: PID 27516 showed the
+  same dedicated window, with no titled product window, for the selected
+  `post-init.js:1:7` and `Uncaught Error: D029 post-init failure`; Copy included
+  the full diagnostic and Quit ended the process. The window scan found one
+  titled diagnostic and one untitled support window in the failed process,
+  with no `Knot` product window. All sampled temporary fixtures were removed
+  after process exit.
+- `cargo test --locked personal_config -- --nocapture`: 17 passed, including
+  phase state, launch-gate, shortcut, diagnostic Copy, and diagnostic Quit
+  tests. The focused pre-init failure, post-init failure/unload, and post-init
+  validation-order tests each passed. No production runtime or lifecycle code
+  needed correction. The three unrelated full-suite Windows baseline failures
+  recorded in checkpoint 1 remain for checkpoint 3.
 
 ### 3. Windows dogfooding smoke and regression closeout
 
