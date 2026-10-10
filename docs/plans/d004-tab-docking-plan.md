@@ -1,7 +1,6 @@
 # D004: Tab dragging and docking
 
-Status: ✅ checkpoint 1 approved. Checkpoint 2 implementation and automated
-coverage are complete; ⏳ ownership/atomicity review remains open.
+Status: ✅ checkpoints 1 and 2 approved. Checkpoint 3 is in progress.
 
 Source: D004, promoted from the [deferred-work register](../roadmap.md).
 Current boundaries: [architecture](../architecture.md),
@@ -148,7 +147,7 @@ targets side-by-side windows on one
 display; native geometry across displays requires validation before relying
 on gpui window bounds for that case. The event path and corrected preview passed the checkpoint 1 review gate.
 
-### 2. Add atomic tab relocation to the workbench
+### ✅ 2. Add atomic tab relocation to the workbench
 
 - ✅ Add typed transitions for reorder, move into a pane, and move into a new edge
   split. Preserve the tab payload and view state; collapse emptied panes and
@@ -160,7 +159,8 @@ on gpui window bounds for that case. The event path and corrected preview passed
 - ✅ Cover model invariants, same-pane index changes, all four split edges,
   cross-window document and terminal identity, dirty documents, cancelled or
   failed moves, and captured-command invalidation with focused automated tests.
-- ⏳ **Review gate:** inspect ownership and atomicity before adding drag UI.
+- ✅ **Review gate:** ownership and atomicity approved by the user on
+  2026-10-10 ("ok looks good to me").
 
 Checkpoint 2 model evidence: seven focused tests pass, including all twenty
 same-pane source/insertion combinations, all four edges, pane collapse,
