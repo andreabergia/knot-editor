@@ -80,6 +80,35 @@ closure removes the final-view document and immediately installs a new
 untitled document and workbench; dirty final views remain pending for the
 protected-closure flow.
 
+## Tab relocation
+
+`Workbench` owns typed reorder, insertion, and four-edge split transitions.
+Relocation captures exact pane, tab, surface, and presentation entity identities;
+the destination captures an existing tab as an insertion or split anchor.
+Both captures are checked before mutation. Moving into the same pane preserves
+its tab identity and adjusts insertion indices after removal. Moving to another
+pane preserves the payload and collapses an emptied source pane, including a
+single-tab edge move whose original pane disappears.
+
+The product shell coordinates transfers between distinct workbenches in one
+foreground operation. It validates the source shell, both workbench entities,
+the destination window and root, captured tabs/presentations, and the registered
+document or attached terminal session. Documents retain their `EditorView`
+entity and buffer ownership; each destination workbench allocates its own tab
+identity and any new pane identity. Cross-window moves and moves to another
+pane invalidate old captured command targets; reordering within the same pane
+retains an exact target to the same view. Capturing and abandoning a move
+changes neither ownership nor focus.
+
+Moves do not enter protected closure or remove documents or sessions. The
+application-wide document view count is unchanged after a transfer. A source
+that becomes empty receives the ordinary untitled-workbench replacement. A
+new-window transfer opens an empty destination shell before removing the source;
+creation failure or a stale endpoint leaves the source intact and removes any
+newly created unused destination. Existing windows are retained on failure.
+The destination activates and focuses the moved tab. The shell's tab relocation
+coordinator supplies the transition boundary used by Move Terminal to New Window.
+
 ## Native resource tree
 
 `WorkspaceTree` is a separate native surface for application-owned filesystem
@@ -119,9 +148,11 @@ both; splitting a terminal allocates an independent session. A successful
 protected tab, window, or application close removes the affected registry
 entries and shuts their sessions down after dirty-document decisions complete.
 Move Terminal to New Window opens an empty destination shell, then revalidates
-the captured source tab, view, and registered session. In one foreground
-transition it detaches the source view, attaches a destination view to the same
-session and grid, removes the source tab, and focuses the new view. Failure to
+the captured source tab, view, and registered session through the common tab
+relocation coordinator. In one foreground transition it moves the payload,
+releases the source attachment, attaches a destination view to the same session
+and grid, and focuses the new view. Same-window terminal relocation retains its
+view and attachment. Failure to
 create or validate the destination leaves the source attached. The source
 workbench applies its ordinary empty-workbench replacement policy. Subsequent
 window closure sees only the tabs still in that window; destination resize and

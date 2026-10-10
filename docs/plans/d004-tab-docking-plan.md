@@ -1,6 +1,7 @@
 # D004: Tab dragging and docking
 
-Status: ✅ checkpoint 1 approved. Checkpoint 2 implementation in progress.
+Status: ✅ checkpoint 1 approved. Checkpoint 2 implementation and automated
+coverage are complete; ⏳ ownership/atomicity review remains open.
 
 Source: D004, promoted from the [deferred-work register](../roadmap.md).
 Current boundaries: [architecture](../architecture.md),
@@ -153,19 +154,30 @@ on gpui window bounds for that case. The event path and corrected preview passed
   split. Preserve the tab payload and view state; collapse emptied panes and
   maintain active/focused identities. Support moves between distinct
   workbenches without treating them as protected closure.
-- Coordinate cross-window moves in the application, including document view
+- ✅ Coordinate cross-window moves in the application, including document view
   counts, terminal attachment, empty-workbench replacement, stale targets,
   and destination creation failure.
-- Cover model invariants, same-pane index changes, all four split edges,
+- ✅ Cover model invariants, same-pane index changes, all four split edges,
   cross-window document and terminal identity, dirty documents, cancelled or
   failed moves, and captured-command invalidation with focused automated tests.
-- **Review gate:** inspect ownership and atomicity before adding drag UI.
+- ⏳ **Review gate:** inspect ownership and atomicity before adding drag UI.
 
 Checkpoint 2 model evidence: seven focused tests pass, including all twenty
 same-pane source/insertion combinations, all four edges, pane collapse,
 presentation preservation, exact stale captures, and cross-workbench payload
-identity. Application coordination and its coverage are recorded with the
-coordinator delivery below.
+identity. Six application-boundary tests cover dirty last-view transfer and replacement,
+shared-document view counts, abandoned inactive-tab captures, failed creation,
+stale presentations, closed destinations, source replacement during creation,
+terminal attachment handoff into an existing window, and final-terminal source
+replacement. The existing terminal command now uses the common coordinator;
+its continuity, detached-view resize, process-exit, failure, and protected
+closure tests remain green.
+
+✅ Validation: `cargo test --all-targets --quiet` passes (470 library tests plus
+5 drag-probe tests); `cargo check --quiet` passes; Rust was formatted with
+`cargo fmt`. Architecture and decision references describe the relocation
+boundary. Review the workbench relocation model and product coordinator before
+checkpoint 3.
 
 ### 3. Add in-window drag targets and feedback
 

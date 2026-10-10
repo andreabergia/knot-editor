@@ -102,6 +102,10 @@ impl TerminalView {
         cx.notify();
     }
 
+    pub(crate) fn is_attached_to(&self, session: &Entity<TerminalSession>) -> bool {
+        self.attachment.is_some() && &self.session == session
+    }
+
     fn close(&mut self, cx: &mut Context<Self>) {
         if self.attachment.is_none() {
             return;

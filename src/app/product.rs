@@ -11,6 +11,8 @@ use std::{
 
 use gpui::{prelude::FluentBuilder, *};
 
+mod relocate;
+
 use super::{
     CommandCompletion, CommandPalette, CommandPaletteEntry, CommandPaletteEvent,
     documents::{ApplicationDocuments, DocumentCollection, DocumentId, DocumentState},
@@ -2356,100 +2358,16 @@ impl ProductShell {
         create_destination: impl FnOnce(&mut App) -> anyhow::Result<WindowHandle<ProductShell>>,
     ) -> crate::host::protocol::CommandOutcome {
         use crate::host::protocol::CommandOutcome;
-
-        let TabSurfaceId::Terminal(session_id) = target.surface else {
+        if !matches!(target.surface, TabSurfaceId::Terminal(_)) {
             return CommandOutcome::Unavailable;
-        };
-        let source_view = self
-            .workbench
-            .read(cx)
-            .pane(target.pane)
-            .and_then(|pane| pane.tabs().iter().find(|tab| tab.id() == target.tab))
-            .and_then(|tab| tab.terminal_view().cloned());
-        let Some(source_view) = source_view else {
-            return CommandOutcome::InvalidTarget;
-        };
-        let session = cx
-            .global::<ApplicationTerminalSessions>()
-            .0
-            .borrow()
-            .sessions
-            .get(&session_id)
-            .cloned();
-        let Some(session) = session else {
-            return CommandOutcome::InvalidTarget;
-        };
-
-        let Ok(destination) = create_destination(cx) else {
-            self.status = "could not create terminal window".into();
-            cx.notify();
-            return CommandOutcome::HandlerFailure {
-                message: "could not create terminal window".into(),
-            };
-        };
-        let destination_handle = destination.into();
-        let result = cx.update_window(destination_handle, |_, destination_window, cx| {
-            let Some(destination_shell) = destination_window.root::<ProductShell>().flatten()
-            else {
-                return CommandOutcome::InvalidTarget;
-            };
-            let still_live = self.target_is_live(target, cx)
-                && cx
-                    .global::<ApplicationTerminalSessions>()
-                    .0
-                    .borrow()
-                    .sessions
-                    .get(&session_id)
-                    == Some(&session)
-                && self
-                    .workbench
-                    .read(cx)
-                    .pane(target.pane)
-                    .and_then(|pane| pane.tabs().iter().find(|tab| tab.id() == target.tab))
-                    .and_then(|tab| tab.terminal_view())
-                    == Some(&source_view);
-            if !still_live {
-                return CommandOutcome::InvalidTarget;
-            }
-
-            source_view.update(cx, |view, cx| view.detach(cx));
-            let destination_view = cx.new(|cx| TerminalView::new(session, cx));
-            let destination_workbench =
-                cx.new(|_| Workbench::new_for_terminal(session_id, destination_view));
-            cx.global::<ApplicationWorkbenches>()
-                .register(&destination_workbench);
-            let transition = self
-                .workbench
-                .update(cx, |workbench, _| {
-                    workbench.request_close_terminal_tab(target.pane, target.tab, session_id)
-                })
-                .expect("validated source terminal remains until transfer");
-            if transition.workbench_is_empty() {
-                self.replace_empty_workbench(cx);
-            } else {
-                self.status = "moved terminal to new window".into();
-            }
-            destination_shell.update(cx, |shell, cx| {
-                shell.workbench = destination_workbench;
-                shell.status = "terminal moved here".into();
-                shell.focus_active_surface(destination_window, cx);
-                cx.notify();
-            });
-            #[cfg(target_os = "macos")]
-            {
-                let clear = destination_window.draw(cx);
-                clear.clear();
-                destination_window.activate_window();
-            }
-            CommandOutcome::Completed
-        });
-        if !matches!(result, Ok(CommandOutcome::Completed)) {
-            let _ = cx.update_window(destination_handle, |_, window, _| window.remove_window());
+        }
+        if !self.target_is_live(target, cx) {
             return CommandOutcome::InvalidTarget;
         }
-        self.focus_active_surface(window, cx);
-        cx.notify();
-        CommandOutcome::Completed
+        let Some(source) = self.capture_tab_relocation(target.pane, target.tab, cx) else {
+            return CommandOutcome::InvalidTarget;
+        };
+        self.relocate_tab_to_new_window_with(&source, window, cx, create_destination)
     }
 
     pub(crate) fn handle_workbench_command(
@@ -2507,14 +2425,9 @@ impl ProductShell {
                     CommandClaim::Finished(CommandOutcome::InvalidTarget)
                 }
             }
-            MOVE_TERMINAL_TO_NEW_WINDOW_COMMAND => {
-                CommandClaim::Finished(self.move_terminal_to_new_window_with(
-                    target,
-                    window,
-                    cx,
-                    open_terminal_transfer_window,
-                ))
-            }
+            MOVE_TERMINAL_TO_NEW_WINDOW_COMMAND => CommandClaim::Finished(
+                self.move_terminal_to_new_window_with(target, window, cx, open_tab_transfer_window),
+            ),
             CLOSE_TAB_COMMAND => {
                 let target = target.clone();
                 CommandClaim::Pending(Box::new(move |cx| {
@@ -3135,7 +3048,7 @@ pub(crate) fn open_product_window(request: Option<OpenRequest>, cx: &mut App) {
     .expect("product window must open");
 }
 
-fn open_terminal_transfer_window(cx: &mut App) -> anyhow::Result<WindowHandle<ProductShell>> {
+fn open_tab_transfer_window(cx: &mut App) -> anyhow::Result<WindowHandle<ProductShell>> {
     let bounds = Bounds::centered(None, size(px(1000.), px(720.)), cx);
     cx.open_window(
         WindowOptions {
@@ -3333,7 +3246,7 @@ mod tests {
         SAVE_AS_COMMAND, SAVE_COMMAND, SHOW_EXTENSION_REPORT_COMMAND, SPLIT_HORIZONTAL_COMMAND,
         SaveDialogFuture, SaveDialogOutcome, SplitDirection, TerminalSessions, UNDO_COMMAND,
         Workbench, WorkbenchLayout, create_untitled_document, install_protected_window_close,
-        open_terminal_transfer_window, product_filesystems,
+        open_tab_transfer_window, product_filesystems,
     };
     use crate::app::{
         documents::DocumentState,
@@ -3394,7 +3307,7 @@ mod tests {
         }
     }
 
-    fn install_globals(cx: &mut TestAppContext) -> Entity<DocumentCollection> {
+    pub(super) fn install_globals(cx: &mut TestAppContext) -> Entity<DocumentCollection> {
         let documents = cx.new(|_| DocumentCollection::new());
         cx.set_global(ApplicationDocuments(documents.clone()));
         cx.set_global(ApplicationWorkbenches(RefCell::new(Vec::new())));
@@ -3472,7 +3385,7 @@ mod tests {
         assert_eq!(empty.complete(), vec![None]);
     }
 
-    fn product_window(
+    pub(super) fn product_window(
         document: super::DocumentId,
         model: Entity<super::BufferModel>,
         cx: &mut TestAppContext,
@@ -9366,7 +9279,7 @@ await commands.registerForView("outline", "copy", async () => {
                 shell.update(cx, |shell, cx| {
                     let target = shell.capture_command_target(window, cx).unwrap();
                     shell.move_terminal_to_new_window_with(&target, window, cx, |cx| {
-                        let destination = open_terminal_transfer_window(cx)?;
+                        let destination = open_tab_transfer_window(cx)?;
                         cx.update_window(destination.into(), |_, window, _| {
                             window.remove_window()
                         })?;
@@ -9507,7 +9420,7 @@ await commands.registerForView("outline", "copy", async () => {
                     let target = shell.capture_command_target(window, cx).unwrap();
                     shell.move_terminal_to_new_window_with(&target, window, cx, |cx| {
                         thread::sleep(Duration::from_millis(100));
-                        open_terminal_transfer_window(cx)
+                        open_tab_transfer_window(cx)
                     })
                 })
             })

@@ -43,7 +43,9 @@ dispatch. A document owns its buffer model and persistence identity; a buffer
 model owns text, session-local edit history, anchored geometry, and semantic
 contributions. Each window owns
 a workbench whose typed tabs own document editor views or terminal views and
-identify their respective surfaces. Terminal tabs do not own document models.
+identify their respective surfaces. The workbench owns ordered tab relocation
+and split transitions; the product shell coordinates transfers and window
+creation on the foreground thread. Terminal tabs do not own document models.
 An application-owned terminal session owns its
 PTY, emulator grid, process, and event delivery independently of its view.
 

@@ -222,6 +222,16 @@ Defer presentation changes until all decisions and saves succeed, preventing
 partial closure on cancellation or failure. Empty-workbench replacement is
 product-shell policy, not a layout invariant.
 
+Relocate tabs through typed workbench transitions and an application foreground
+coordinator. Capture the presentation entity as well as pane, tab, and surface
+identities so replacement under unchanged document identity is still stale.
+Revalidate and prepare the destination before mutation, keeping transfer
+independent of protected closure. Retain document editor entities to preserve
+their view state; hand off terminal attachments across windows while preserving
+the registered session. Destination-local identities keep captured commands
+from retargeting a transferred tab. Creating a destination window first keeps
+creation failure from removing the source presentation.
+
 Reference: [workbench and lifecycle](architecture/workbench-and-lifecycle.md).
 
 ## Terminal
