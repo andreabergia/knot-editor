@@ -762,6 +762,12 @@ struct RemovedTab {
 }
 
 mod close;
+mod relocate;
+
+#[allow(unused_imports, reason = "typed workbench relocation contract")]
+pub(crate) use relocate::{
+    SplitEdge, TabMoveCapture, TabMoveDestination, TabMovePlacement, TabMoveTransition,
+};
 
 #[allow(unused_imports, reason = "these form the checkpoint 2 workbench API")]
 pub(crate) use close::{

@@ -149,7 +149,7 @@ on gpui window bounds for that case. The event path and corrected preview passed
 
 ### 2. Add atomic tab relocation to the workbench
 
-- Add typed transitions for reorder, move into a pane, and move into a new edge
+- ✅ Add typed transitions for reorder, move into a pane, and move into a new edge
   split. Preserve the tab payload and view state; collapse emptied panes and
   maintain active/focused identities. Support moves between distinct
   workbenches without treating them as protected closure.
@@ -160,6 +160,12 @@ on gpui window bounds for that case. The event path and corrected preview passed
   cross-window document and terminal identity, dirty documents, cancelled or
   failed moves, and captured-command invalidation with focused automated tests.
 - **Review gate:** inspect ownership and atomicity before adding drag UI.
+
+Checkpoint 2 model evidence: seven focused tests pass, including all twenty
+same-pane source/insertion combinations, all four edges, pane collapse,
+presentation preservation, exact stale captures, and cross-workbench payload
+identity. Application coordination and its coverage are recorded with the
+coordinator delivery below.
 
 ### 3. Add in-window drag targets and feedback
 
