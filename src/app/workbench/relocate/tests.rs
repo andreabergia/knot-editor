@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::app::{
     documents::{DocumentCollection, DocumentId},

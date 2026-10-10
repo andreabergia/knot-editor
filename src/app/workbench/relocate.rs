@@ -14,7 +14,6 @@ pub(crate) struct TabMoveCapture {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[allow(dead_code, reason = "relocation destinations include all pane edges")]
 pub(crate) enum SplitEdge {
     Left,
     Right,
@@ -34,7 +33,6 @@ impl SplitEdge {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[allow(dead_code, reason = "typed pane relocation placements")]
 pub(crate) enum TabMovePlacement {
     /// Insert immediately before the captured destination tab.
     Before,
@@ -45,7 +43,6 @@ pub(crate) enum TabMovePlacement {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum TabMoveDestination {
-    #[allow(dead_code, reason = "pane drop destinations")]
     At {
         anchor: TabMoveCapture,
         placement: TabMovePlacement,

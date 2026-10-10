@@ -12,6 +12,7 @@ use std::{
 use gpui::{prelude::FluentBuilder, *};
 
 mod relocate;
+mod tab_drag;
 
 use super::{
     CommandCompletion, CommandPalette, CommandPaletteEntry, CommandPaletteEvent,
@@ -251,6 +252,7 @@ fn target_document(target: &ProductCommandTarget) -> Option<DocumentId> {
 pub(crate) struct ProductShell {
     workbench: Entity<Workbench>,
     status: SharedString,
+    tab_drag: std::rc::Rc<RefCell<tab_drag::TabDragState>>,
     command_palette: Option<Entity<CommandPalette<ProductCommandTarget>>>,
     command_palette_subscription: Option<Subscription>,
     workspace: Option<WorkspaceState>,
@@ -272,6 +274,7 @@ impl ProductShell {
         Self {
             workbench,
             status: "ready".into(),
+            tab_drag: Default::default(),
             command_palette: None,
             command_palette_subscription: None,
             workspace: None,
@@ -2620,8 +2623,15 @@ impl ProductShell {
                     }
                     TabSurfaceId::Terminal(_) => "Terminal".to_owned(),
                 };
+                let capture = workbench.capture_tab_move(pane_id, tab_id).unwrap();
+                let source = self.capture_tab_relocation(pane_id, tab_id, cx).unwrap();
+                let drag_label = self.tab_drag_label(title.clone().into());
                 div()
                     .id(("tab", tab_id.value()))
+                    .debug_selector(move || format!("tab-{}", tab_id.value()))
+                    .relative()
+                    .on_drag(source, drag_label)
+                    .child(self.tab_drag_geometry(pane_id, capture))
                     .px_3()
                     .py_1()
                     .cursor_pointer()
@@ -2645,6 +2655,9 @@ impl ProductShell {
 
         div()
             .id(("pane", pane_id.value()))
+            .debug_selector(move || format!("pane-{}", pane_id.value()))
+            .relative()
+            .child(self.pane_drag_geometry(pane_id))
             .flex()
             .flex_col()
             .size_full()
@@ -2657,6 +2670,9 @@ impl ProductShell {
                     .flex_row()
                     .flex_none()
                     .h(px(30.))
+                    .relative()
+                    .debug_selector(move || format!("tab-bar-{}", pane_id.value()))
+                    .child(self.tab_bar_drag_geometry(pane_id))
                     .overflow_hidden()
                     .bg(rgb(0x2d2d2d))
                     .children(tabs),
@@ -2674,6 +2690,7 @@ impl ProductShell {
 
 impl Render for ProductShell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.tab_drag.borrow_mut().begin_frame();
         let layout = self.workbench.read(cx).layout().cloned();
         let entity = cx.entity();
         let command_palette = self.command_palette.clone();
@@ -2707,7 +2724,9 @@ impl Render for ProductShell {
         window.set_window_title("Knot");
 
         div()
+            .relative()
             .key_context("product")
+            .capture_key_down(cx.listener(Self::cancel_tab_drag))
             .on_action(cx.listener(Self::dispatch_source))
             .on_action(cx.listener(Self::dispatch_keybinding))
             .flex()
@@ -2809,6 +2828,7 @@ impl Render for ProductShell {
                         )
                     }),
             )
+            .child(self.drag_listener(cx))
             .when_some(command_palette, |root, palette| {
                 root.child(
                     div()

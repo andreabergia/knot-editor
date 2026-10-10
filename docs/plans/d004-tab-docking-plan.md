@@ -1,6 +1,7 @@
 # D004: Tab dragging and docking
 
-Status: ✅ checkpoints 1 and 2 approved. Checkpoint 3 is in progress.
+Status: ✅ checkpoints 1 and 2 approved. Checkpoint 3 implementation and
+automated coverage are complete; ⏳ macOS interaction review remains open.
 
 Source: D004, promoted from the [deferred-work register](../roadmap.md).
 Current boundaries: [architecture](../architecture.md),
@@ -181,13 +182,45 @@ checkpoint 3.
 
 ### 3. Add in-window drag targets and feedback
 
-- Make tab labels draggable; expose ordered tab-bar insertion targets, pane
+- ✅ Make tab labels draggable; expose ordered tab-bar insertion targets, pane
   center targets, and four edge targets. Show a clear preview and active drop
   target, and apply the checkpoint 2 transition only on a valid drop.
-- Test target selection and drop dispatch at the product boundary. Manually
-  review reorder, center, edges, cancellation, focus, and pane collapse on
-  macOS without UI automation.
-- **Review gate:** approve the in-window interaction and feedback.
+- ✅ Test target selection and drop dispatch at the product boundary.
+- ⏳ Manually review reorder, center, edges, cancellation, focus, and pane
+  collapse on macOS without UI automation.
+- ⏳ **Review gate:** approve the in-window interaction and feedback.
+
+Checkpoint 3 uses shell-owned painted geometry and the selected source-event
+coordinator for in-window release dispatch. Tab-bar midpoints choose ordered
+insertion slots; the remaining pane body uses a center append target and the
+nearest normalized edge within its outer 22% band. The preview paints a line,
+full body, or destination half-body alongside a floating tab title. Captured
+source and rendered destination identities pass through checkpoint 2's exact
+validation; pointer movement never changes model order or activation. Escape
+runs on the root capture path so focused editors and terminals cannot consume
+it before cancellation.
+
+Four product-boundary gpui tests exercise actual mouse/key dispatch: reorder
+with a different release position, all four split previews and transitions,
+center insertion with source collapse and editor focus, Escape/outside/toolbar
+release and stale-source rejection, and live terminal view/session/attachment
+preservation with destination focus. These tests do not establish native macOS
+interaction quality.
+
+✅ Validation: `cargo test --all-targets --quiet` passes (474 library tests
+plus 5 drag-probe tests); `cargo check --quiet` passes; Rust was formatted
+with `cargo fmt`.
+
+Run `cargo run --bin knot` and check:
+
+- reorder before the first tab, between tabs, and after the last tab;
+- center and all four edge drops, including an emptied source pane;
+- floating label, insertion line, and destination region tracking;
+- Escape with editor or terminal focus, and release over the toolbar;
+- destination focus and unchanged source state after cancellation.
+
+Cross-window gestures and desktop tear-out remain checkpoint 4. Record the
+manual result here before starting that checkpoint.
 
 ### 4. Complete cross-window moves and tear-out
 

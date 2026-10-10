@@ -82,6 +82,17 @@ protected-closure flow.
 
 ## Tab relocation
 
+The product shell owns tab drag state and painted pane/tab-bar geometry. Tab
+labels carry exact relocation captures without activating an inactive source.
+Bar midpoints select insertion slots; the pane body accepts append in its
+center and a split along the nearest normalized edge in its outer band. A
+floating title and a painted insertion line or destination region show the
+pending drop without changing the workbench. Left-button release hit-tests
+its delivered position and commits through the relocation coordinator. Escape
+is captured above editor and terminal input; cancellation or a release outside
+pane targets clears feedback without model mutation. Drag interaction currently
+accepts destinations within its source product window.
+
 `Workbench` owns typed reorder, insertion, and four-edge split transitions.
 Relocation captures exact pane, tab, surface, and presentation entity identities;
 the destination captures an existing tab as an insertion or split anchor.
