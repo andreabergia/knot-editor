@@ -1,7 +1,6 @@
 # D004: Tab dragging and docking
 
-Status: ✅ checkpoints 1 and 2 approved. Checkpoint 3 implementation and
-automated coverage are complete; ⏳ macOS interaction review remains open.
+Status: ✅ checkpoints 1–3 approved. Checkpoint 4 is in progress.
 
 Source: D004, promoted from the [deferred-work register](../roadmap.md).
 Current boundaries: [architecture](../architecture.md),
@@ -180,15 +179,15 @@ closure tests remain green.
 boundary. Review the workbench relocation model and product coordinator before
 checkpoint 3.
 
-### 3. Add in-window drag targets and feedback
+### ✅ 3. Add in-window drag targets and feedback
 
 - ✅ Make tab labels draggable; expose ordered tab-bar insertion targets, pane
   center targets, and four edge targets. Show a clear preview and active drop
   target, and apply the checkpoint 2 transition only on a valid drop.
 - ✅ Test target selection and drop dispatch at the product boundary.
-- ⏳ Manually review reorder, center, edges, cancellation, focus, and pane
-  collapse on macOS without UI automation.
-- ⏳ **Review gate:** approve the in-window interaction and feedback.
+- ✅ Manual in-window review approved by the user on 2026-10-11
+  ("within a window, it works really well").
+- ✅ **Review gate:** in-window interaction and feedback approved.
 
 Checkpoint 3 uses shell-owned painted geometry and the selected source-event
 coordinator for in-window release dispatch. Tab-bar midpoints choose ordered
@@ -219,8 +218,8 @@ Run `cargo run --bin knot` and check:
 - Escape with editor or terminal focus, and release over the toolbar;
 - destination focus and unchanged source state after cancellation.
 
-Cross-window gestures and desktop tear-out remain checkpoint 4. Record the
-manual result here before starting that checkpoint.
+The user also reported that dragging between windows does not yet work;
+checkpoint 4 connects that interaction to the validated event path.
 
 ### 4. Complete cross-window moves and tear-out
 
