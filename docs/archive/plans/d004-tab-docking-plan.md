@@ -3,10 +3,10 @@
 Status: ✅ Complete. All four checkpoints and their review gates passed.
 Final macOS acceptance: 2026-10-11 ("ok works really well").
 
-Source: D004, promoted from the [deferred-work register](../roadmap.md).
-Current boundaries: [architecture](../architecture.md),
-[workbench lifecycle](../architecture/workbench-and-lifecycle.md), and
-[workbench decisions](../decisions.md#workbench-layout-and-view-lifetime).
+Source: D004, promoted from the [deferred-work register](../../roadmap.md).
+Current boundaries: [architecture](../../architecture.md),
+[workbench lifecycle](../../architecture/workbench-and-lifecycle.md), and
+[workbench decisions](../../decisions.md#workbench-layout-and-view-lifetime).
 
 ## Outcome and design
 
@@ -37,10 +37,10 @@ requires a new attachment; the session remains registered and running.
 
 ## Exclusions and deferred decisions
 
-- [D037](../roadmap.md): dragging whole panes or split branches and arbitrary
+- [D037](../../roadmap.md): dragging whole panes or split branches and arbitrary
   split-tree reshaping.
-- [D005](../roadmap.md): saving and restoring layouts and tab placement.
-- [D006](../roadmap.md): dragging files into Knot or tabs out as OS files.
+- [D005](../../roadmap.md): saving and restoring layouts and tab placement.
+- [D006](../../roadmap.md): dragging files into Knot or tabs out as OS files.
 - No copy gesture or duplicate-tab drop. Existing explicit split commands keep
   their current new-view or new-session semantics.
 - Broader platform product validation remains under its existing roadmap items;
