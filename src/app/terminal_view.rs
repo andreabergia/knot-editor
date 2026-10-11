@@ -2,7 +2,7 @@ use alacritty_terminal::{
     grid::{Dimensions, Scroll},
     index::{Column, Line, Point as TermPoint, Side},
     selection::{Selection, SelectionType},
-    term::{cell::Flags, point_to_viewport},
+    term::{TermMode, cell::Flags, point_to_viewport},
     vte::ansi::CursorShape,
 };
 use gpui::*;
@@ -12,11 +12,13 @@ use super::{
     terminal_colors::{BACKGROUND, FOREGROUND, dim, resolve_color},
     terminal_input::terminal_key_bytes,
     terminal_layout::TerminalLayout,
+    terminal_mouse::{
+        PointerOwner, PointerState, WheelRoute, button_code, interaction_modes, modifier_code,
+        mouse_bytes, wheel_route,
+    },
     terminal_session::{TerminalAttachment, TerminalSession, TerminalSize, TerminalStatus},
     typography::{TEXT_SIZE, text_font},
 };
-
-const SCROLL_PIXELS_PER_LINE: f32 = 4.;
 
 /// Native terminal presentation attached to one stable session.
 pub(crate) struct TerminalView {
@@ -24,8 +26,12 @@ pub(crate) struct TerminalView {
     attachment: Option<TerminalAttachment>,
     _session_subscription: Subscription,
     focus: FocusHandle,
-    scroll_delta_y: f32,
-    selecting: bool,
+    pointer: PointerState,
+    pointer_epoch: Option<(u64, u64, TermMode)>,
+    local_dragged: bool,
+    pointer_position: Option<Point<Pixels>>,
+    pointer_modifiers: Modifiers,
+    reported_cell: Option<(usize, usize)>,
     interaction_bounds: Bounds<Pixels>,
     layout: Option<TerminalLayout>,
     focus_subscriptions: Vec<Subscription>,
@@ -85,15 +91,26 @@ impl TerminalView {
         let attachment = session
             .update(cx, |session, _| session.attach())
             .expect("terminal session already has a view");
-        let subscription = cx.observe(&session, |_, _, cx| cx.notify());
-        cx.on_release(|view, cx| view.release_focus(cx)).detach();
+        let subscription = cx.observe(&session, |this, _, cx| {
+            this.sync_pointer(cx);
+            cx.notify();
+        });
+        cx.on_release(|view, cx| {
+            view.cancel_pointer(cx);
+            view.release_focus(cx);
+        })
+        .detach();
         Self {
             session,
             attachment: Some(attachment),
             _session_subscription: subscription,
             focus: cx.focus_handle(),
-            scroll_delta_y: 0.,
-            selecting: false,
+            pointer: PointerState::default(),
+            pointer_epoch: None,
+            local_dragged: false,
+            pointer_position: None,
+            pointer_modifiers: Modifiers::default(),
+            reported_cell: None,
             interaction_bounds: Bounds::default(),
             layout: None,
             focus_subscriptions: Vec::new(),
@@ -102,10 +119,11 @@ impl TerminalView {
 
     /// Release the sole presentation before replacing or moving this view.
     pub(crate) fn detach(&mut self, cx: &mut Context<Self>) {
+        self.cancel_pointer(cx);
         self.release_focus(cx);
         self.attachment = None;
         self.layout = None;
-        self.selecting = false;
+        self.reset_pointer();
         cx.notify();
     }
 
@@ -124,13 +142,17 @@ impl TerminalView {
         if self.attachment.is_none() {
             return;
         }
+        self.cancel_pointer(cx);
         self.session.update(cx, |session, cx| session.restart(cx));
-        self.scroll_delta_y = 0.;
+        self.reset_pointer();
     }
 
     pub(crate) fn resize(&mut self, size: TerminalSize, cx: &mut Context<Self>) {
         if self.attachment.is_none() {
             return;
+        }
+        if self.session.read(cx).size() != size {
+            self.cancel_pointer(cx);
         }
         self.session.update(cx, |session, _| session.resize(size));
     }
@@ -163,8 +185,12 @@ impl TerminalView {
     }
 
     fn sync_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(attachment) = &self.attachment {
+        if self.attachment.is_some() {
             let focused = self.focus.is_focused(window) && window.is_window_active();
+            if !focused {
+                self.cancel_pointer(cx);
+            }
+            let attachment = self.attachment.as_ref().unwrap();
             self.session
                 .update(cx, |session, _| session.set_focus(attachment, focused));
             cx.notify();
@@ -172,38 +198,294 @@ impl TerminalView {
     }
 
     fn send_user_input(&mut self, bytes: Vec<u8>, cx: &mut Context<Self>) {
-        let Some(attachment) = &self.attachment else {
+        if self.attachment.is_none() {
             return;
-        };
+        }
         if bytes.is_empty() || self.session.read(cx).status() != TerminalStatus::Running {
             return;
         }
+        self.cancel_pointer(cx);
+        let attachment = self.attachment.as_ref().unwrap();
         let session = self.session.read(cx);
         if let Some(terminal) = session.terminal() {
             terminal.lock().scroll_display(Scroll::Bottom);
         }
         session.send_input(attachment, session.generation(), bytes);
-        self.scroll_delta_y = 0.;
+        self.reset_pointer();
         cx.notify();
     }
 
-    fn scroll(&mut self, delta: ScrollDelta, cx: &mut Context<Self>) {
-        if self.attachment.is_none() {
-            return;
-        }
-        let Some(layout) = self.layout else {
-            return;
-        };
-        let delta = delta.pixel_delta(layout.cell_height);
-        self.scroll_delta_y += f32::from(delta.y);
-        let rows = (self.scroll_delta_y / SCROLL_PIXELS_PER_LINE).trunc() as i32;
-        if rows != 0 {
-            self.scroll_delta_y -= rows as f32 * SCROLL_PIXELS_PER_LINE;
-            if let Some(terminal) = self.session.read(cx).terminal() {
-                terminal.lock().scroll_display(Scroll::Delta(rows));
+    fn reset_pointer(&mut self) {
+        self.pointer.clear();
+        self.pointer_epoch = None;
+        self.local_dragged = false;
+        self.pointer_position = None;
+        self.pointer_modifiers = Modifiers::default();
+        self.reported_cell = None;
+    }
+
+    fn cancel_pointer(&mut self, cx: &App) {
+        if let Some(position) = self.pointer_position {
+            let session = self.session.read(cx);
+            let mode = session
+                .terminal()
+                .map(|terminal| *terminal.lock().mode())
+                .unwrap_or_default();
+            if self.pointer_epoch.is_some_and(|epoch| {
+                epoch.0 == session.generation()
+                    && epoch.1 == session.pointer_revision()
+                    && epoch.2 == interaction_modes(mode)
+            }) && mode.intersects(TermMode::MOUSE_MODE)
+            {
+                if let Some((column, row)) = self.viewport_cell(position, cx) {
+                    for button in self.pointer.application_buttons() {
+                        self.send_pointer(
+                            self.release_bytes(
+                                mode,
+                                button_code(button) + modifier_code(self.pointer_modifiers),
+                                column,
+                                row,
+                            ),
+                            cx,
+                        );
+                    }
+                }
             }
-            cx.notify();
         }
+        self.reset_pointer();
+    }
+
+    fn sync_pointer(&mut self, cx: &App) -> Option<TermMode> {
+        if self.attachment.is_none() {
+            self.reset_pointer();
+            return None;
+        }
+        let session = self.session.read(cx);
+        let mode = if session.status() == TerminalStatus::Running {
+            session
+                .terminal()
+                .map(|terminal| *terminal.lock().mode())
+                .unwrap_or_default()
+        } else {
+            TermMode::NONE
+        };
+        let epoch = (
+            session.generation(),
+            session.pointer_revision(),
+            interaction_modes(mode),
+        );
+        if let Some(previous) = self.pointer_epoch {
+            if previous.0 != epoch.0 || previous.2 != epoch.2 {
+                self.pointer.clear();
+                self.reported_cell = None;
+                self.local_dragged = false;
+            } else if previous.1 != epoch.1 {
+                self.pointer.clear_gestures();
+                self.reported_cell = None;
+                self.local_dragged = false;
+            }
+        }
+        self.pointer_epoch = Some(epoch);
+        Some(mode)
+    }
+
+    fn viewport_cell(&self, position: Point<Pixels>, cx: &App) -> Option<(usize, usize)> {
+        let layout = self.layout?;
+        let size = self.session.read(cx).size();
+        Some(layout.cell_at(position, self.interaction_bounds, size.columns, size.lines))
+    }
+
+    fn release_bytes(&self, mode: TermMode, code: u8, column: usize, row: usize) -> Vec<u8> {
+        let bytes = mouse_bytes(mode, code, column, row, true);
+        if bytes.is_empty() {
+            // Balance the press at its last representable cell when the pointer exceeds wire limits.
+            self.reported_cell
+                .map(|(column, row)| mouse_bytes(mode, code, column, row, true))
+                .unwrap_or_default()
+        } else {
+            bytes
+        }
+    }
+
+    fn send_pointer(&self, bytes: Vec<u8>, cx: &App) {
+        if let Some(attachment) = &self.attachment {
+            let session = self.session.read(cx);
+            session.send_input(attachment, session.generation(), bytes);
+        }
+    }
+
+    fn mouse_down(
+        &mut self,
+        event: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(mode) = self.sync_pointer(cx) else {
+            return false;
+        };
+        let Some((column, row)) = self.viewport_cell(event.position, cx) else {
+            return false;
+        };
+        self.pointer_position = Some(event.position);
+        self.pointer_modifiers = event.modifiers;
+        self.focus.focus(window);
+        if mode.intersects(TermMode::MOUSE_MODE) && !event.modifiers.shift {
+            let code = button_code(event.button) + modifier_code(event.modifiers);
+            let bytes = mouse_bytes(mode, code, column, row, false);
+            if !bytes.is_empty() {
+                self.reported_cell = Some((column, row));
+                self.pointer.press(event.button, PointerOwner::Application);
+                self.pointer.motion_changed(column, row, code + 32);
+                self.send_pointer(bytes, cx);
+            }
+            return true;
+        }
+        if event.button == MouseButton::Left {
+            self.pointer.press(event.button, PointerOwner::Local);
+            self.local_dragged = false;
+            self.select_at(event.position, self.interaction_bounds, true, cx);
+            return true;
+        }
+        false
+    }
+
+    fn mouse_move(
+        &mut self,
+        event: &MouseMoveEvent,
+        hovered: bool,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(mode) = self.sync_pointer(cx) else {
+            return false;
+        };
+        self.pointer_position = Some(event.position);
+        self.pointer_modifiers = event.modifiers;
+        if let Some(button) = event.pressed_button {
+            match self.pointer.owner(button) {
+                Some(PointerOwner::Local) if button == MouseButton::Left => {
+                    self.local_dragged = true;
+                    self.select_at(event.position, self.interaction_bounds, false, cx);
+                    return true;
+                }
+                Some(PointerOwner::Application) => {
+                    if mode.intersects(TermMode::MOUSE_DRAG | TermMode::MOUSE_MOTION) {
+                        if let Some((column, row)) = self.viewport_cell(event.position, cx) {
+                            let code = button_code(button) + 32 + modifier_code(event.modifiers);
+                            if self.pointer.motion_changed(column, row, code) {
+                                let bytes = mouse_bytes(mode, code, column, row, false);
+                                if !bytes.is_empty() {
+                                    self.reported_cell = Some((column, row));
+                                }
+                                self.send_pointer(bytes, cx);
+                            }
+                        }
+                    }
+                    return true;
+                }
+                _ => return false,
+            }
+        }
+        if !hovered {
+            self.pointer.leave();
+            return false;
+        }
+        if mode.contains(TermMode::MOUSE_MOTION) && !event.modifiers.shift {
+            if let Some((column, row)) = self.viewport_cell(event.position, cx) {
+                let code = 35 + modifier_code(event.modifiers);
+                if self.pointer.motion_changed(column, row, code) {
+                    let bytes = mouse_bytes(mode, code, column, row, false);
+                    if !bytes.is_empty() {
+                        self.reported_cell = Some((column, row));
+                    }
+                    self.send_pointer(bytes, cx);
+                }
+            }
+            return true;
+        }
+        false
+    }
+
+    fn mouse_up(&mut self, event: &MouseUpEvent, cx: &mut Context<Self>) -> bool {
+        let Some(mode) = self.sync_pointer(cx) else {
+            return false;
+        };
+        self.pointer_position = Some(event.position);
+        self.pointer_modifiers = event.modifiers;
+        match self.pointer.release(event.button) {
+            Some(PointerOwner::Application) => {
+                if let Some((column, row)) = self.viewport_cell(event.position, cx) {
+                    self.send_pointer(
+                        self.release_bytes(
+                            mode,
+                            button_code(event.button) + modifier_code(event.modifiers),
+                            column,
+                            row,
+                        ),
+                        cx,
+                    );
+                }
+                true
+            }
+            Some(PointerOwner::Local) => {
+                if self.local_dragged {
+                    self.select_at(event.position, self.interaction_bounds, false, cx);
+                }
+                self.local_dragged = false;
+                true
+            }
+            None => false,
+        }
+    }
+
+    fn scroll(&mut self, event: &ScrollWheelEvent, cx: &mut Context<Self>) -> bool {
+        let Some(mode) = self.sync_pointer(cx) else {
+            return false;
+        };
+        let Some(layout) = self.layout else {
+            return false;
+        };
+        let route = wheel_route(mode, event.modifiers.shift);
+        let (horizontal, vertical) =
+            self.pointer
+                .wheel_steps(event.delta, layout.cell_width, layout.cell_height, route);
+        match route {
+            WheelRoute::Local => {
+                if vertical != 0 {
+                    if let Some(terminal) = self.session.read(cx).terminal() {
+                        terminal.lock().scroll_display(Scroll::Delta(vertical));
+                    }
+                    cx.notify();
+                }
+            }
+            WheelRoute::Application => {
+                if let Some((column, row)) = self.viewport_cell(event.position, cx) {
+                    let mut bytes = Vec::new();
+                    for (steps, positive, negative) in [(vertical, 64, 65), (horizontal, 66, 67)] {
+                        let code = if steps > 0 { positive } else { negative }
+                            + modifier_code(event.modifiers);
+                        bytes.extend(
+                            mouse_bytes(mode, code, column, row, false)
+                                .repeat(steps.unsigned_abs() as usize),
+                        );
+                    }
+                    self.send_pointer(bytes, cx);
+                }
+            }
+            WheelRoute::Alternate => {
+                let mut bytes = Vec::new();
+                for (steps, positive, negative) in
+                    [(vertical, "up", "down"), (horizontal, "left", "right")]
+                {
+                    let key =
+                        Keystroke::parse(if steps > 0 { positive } else { negative }).unwrap();
+                    bytes.extend(
+                        terminal_key_bytes(&key, mode).repeat(steps.unsigned_abs() as usize),
+                    );
+                }
+                self.send_pointer(bytes, cx);
+            }
+        }
+        true
     }
 
     fn select_at(
@@ -235,7 +517,6 @@ impl TerminalView {
         );
         if start {
             terminal.selection = Some(Selection::new(SelectionType::Simple, point, Side::Left));
-            self.selecting = true;
         } else if let Some(selection) = terminal.selection.as_mut() {
             selection.update(point, Side::Right);
         }
@@ -555,6 +836,9 @@ impl Element for TerminalElement {
         let layout = TerminalLayout::measure(window);
         let size = layout.grid_size(bounds);
         self.entity.update(cx, |terminal, cx| {
+            if terminal.interaction_bounds != bounds || terminal.layout != Some(layout) {
+                terminal.cancel_pointer(cx);
+            }
             terminal.interaction_bounds = bounds;
             terminal.layout = Some(layout);
             terminal.resize(size, cx);
@@ -572,45 +856,40 @@ impl Element for TerminalElement {
         window: &mut Window,
         cx: &mut App,
     ) {
-        let hitbox = hitbox.clone();
+        let scroll_hitbox = hitbox.clone();
         let entity = self.entity.clone();
         window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
-            if phase == DispatchPhase::Bubble && hitbox.should_handle_scroll(window) {
-                entity.update(cx, |terminal, cx| {
-                    terminal.scroll(event.delta, cx);
-                });
-                cx.stop_propagation();
+            if phase == DispatchPhase::Bubble && scroll_hitbox.should_handle_scroll(window) {
+                if entity.update(cx, |terminal, cx| terminal.scroll(event, cx)) {
+                    cx.stop_propagation();
+                }
             }
         });
-
+        let press_hitbox = hitbox.clone();
         let entity = self.entity.clone();
         window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
-            if phase == DispatchPhase::Bubble
-                && event.button == MouseButton::Left
-                && bounds.contains(&event.position)
-            {
-                entity.update(cx, |terminal, cx| {
-                    if terminal.attachment.is_some() {
-                        terminal.focus.focus(window);
-                    }
-                    terminal.select_at(event.position, bounds, true, cx);
-                });
+            if phase == DispatchPhase::Bubble && press_hitbox.is_hovered(window) {
+                if entity.update(cx, |terminal, cx| terminal.mouse_down(event, window, cx)) {
+                    cx.stop_propagation();
+                }
             }
         });
+        let motion_hitbox = hitbox.clone();
         let entity = self.entity.clone();
-        window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
-            if phase == DispatchPhase::Bubble && event.dragging() {
-                entity.update(cx, |terminal, cx| {
-                    if terminal.selecting {
-                        terminal.select_at(event.position, bounds, false, cx);
-                    }
-                });
+        window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+            if phase == DispatchPhase::Bubble {
+                let hovered = motion_hitbox.is_hovered(window);
+                if entity.update(cx, |terminal, cx| terminal.mouse_move(event, hovered, cx)) {
+                    cx.stop_propagation();
+                }
             }
         });
         let entity = self.entity.clone();
         window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
-            if phase == DispatchPhase::Bubble && event.button == MouseButton::Left {
-                entity.update(cx, |terminal, _| terminal.selecting = false);
+            if phase == DispatchPhase::Bubble {
+                if entity.update(cx, |terminal, cx| terminal.mouse_up(event, cx)) {
+                    cx.stop_propagation();
+                }
             }
         });
 
@@ -737,3 +1016,7 @@ impl Element for TerminalElement {
         });
     }
 }
+
+#[cfg(all(test, unix))]
+#[path = "terminal_mouse_tests.rs"]
+mod mouse_tests;

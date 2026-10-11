@@ -229,6 +229,42 @@ terminal content has been laid out, then becomes the active window.
 The diagnostic window continues to exercise view rebuilding; see the
 [D024 plan](../plans/d024-terminal-session-plan.md).
 
+Terminal pointer input honors Alacritty click (1000), drag (1002), and all-motion
+(1003) tracking with legacy, UTF-8 (1005), or SGR (1006) encoding. The view
+clamps reporting to measured viewport cells without applying scrollback offsets;
+selection uses grid coordinates separately. Reports beyond the legacy or UTF-8
+wire coordinate limit are suppressed instead of wrapping to another cell. A
+release beyond that limit balances an owned press at its last representable cell. Wide
+spacers retain their distinct reporting columns; local selection expands them
+through the emulator's selection logic.
+
+A press chooses one gesture owner. Shift or no tracking starts local left-button
+selection; an application press owns its motion/release even if modifiers change
+later. Unowned drags/releases never reach the PTY. Motion reports deduplicate
+cell/button/modifier state; drag and all-motion modes permit motion while click
+tracking only reports buttons and wheels. Reported drags and local selections
+retain release ownership outside the view, with coordinates clamped to its grid.
+
+Wheels honor the current tracking request and Shift override. Fractional line
+or pixel deltas accumulate separately for the current route; route changes,
+mode changes, and restart clear residual movement. Application wheels report
+vertical and horizontal button codes. With no tracking, alternate-screen scroll
+mode emits mode-aware cursor keys; disabling it or holding Shift uses local
+scrolling. Local line deltas scroll rows directly; precise local scrolling
+retains four logical pixels per row. Terminal grids have no local horizontal
+scroll. Mouse reports preserve displayed scrollback rather than revealing the
+live grid.
+
+The session tracks a per-generation pointer revision from emulator mouse-dirty
+notifications so a tracking disable/re-enable cannot preserve an old drag through
+coalesced repaint. Each event revalidates generation, current interaction modes,
+and revision; geometry, focus loss, detach, and restart clear view gestures.
+When cancelling a still-current reported gesture, the view balances its press
+with a release through the old attachment before relinquishing it. Old process
+or changed-mode gestures never emit releases into a replacement. The deterministic
+`scripts/terminal-mouse-fixture.py` exposes report codes, viewport cells, and wire
+bytes for native acceptance without an external TUI configuration.
+
 The terminal claims the shared Paste command while its session is running and
 sends clipboard text through the existing PTY input channel. Plain paste
 normalizes newlines to carriage returns; bracketed paste preserves newlines,

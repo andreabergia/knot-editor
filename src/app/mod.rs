@@ -74,6 +74,7 @@ mod terminal_colors;
 mod terminal_fixture;
 mod terminal_input;
 mod terminal_layout;
+mod terminal_mouse;
 #[allow(
     dead_code,
     reason = "session helpers also serve the diagnostic terminal fixture"

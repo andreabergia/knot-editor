@@ -270,6 +270,14 @@ and native window activation. Physical application-keypad support remains
 [D040](roadmap.md) until gpui retains its native identity; the user chose this
 bounded limitation over vendoring the framework.
 
+Choose a mouse gesture's recipient on press and retain it through release.
+Shift chooses local selection; ongoing application gestures retain their paired
+release even if modifiers change. Wheels use their current route independently.
+This gives each pointer gesture one owner and prevents a modifier change or
+attachment handoff from leaving a reported button pressed. Report viewport
+cells separately from scrollback selection coordinates, and suppress coordinates
+that a requested legacy encoding cannot represent.
+
 The existing Alacritty adapter supplied the required session and product
 behavior without copying Zed code. Zed's GPL-compatible implementation remains
 an attributed reference for concrete input, rendering, or event behavior if

@@ -71,6 +71,7 @@ impl Dimensions for TerminalSize {
 pub(crate) struct TerminalEventListener {
     wakeups: tokio::sync::mpsc::Sender<()>,
     events: Arc<Mutex<Vec<Event>>>,
+    pointer_revision: Arc<AtomicU64>,
 }
 
 impl EventListener for TerminalEventListener {
@@ -85,8 +86,10 @@ impl EventListener for TerminalEventListener {
                     .expect("terminal event queue poisoned")
                     .push(event);
             }
-            Event::Wakeup | Event::CursorBlinkingChange | Event::MouseCursorDirty | Event::Exit => {
+            Event::MouseCursorDirty => {
+                self.pointer_revision.fetch_add(1, Ordering::AcqRel);
             }
+            Event::Wakeup | Event::CursorBlinkingChange | Event::Exit => {}
             // OSC 52, title, and bell have no application behavior here.
             _ => return,
         }
@@ -175,6 +178,7 @@ pub(crate) struct TerminalSession {
     attachment: Arc<AtomicU64>,
     next_attachment: u64,
     focused: bool,
+    pointer_revision: Arc<AtomicU64>,
 }
 
 pub(crate) struct TerminalAttachment {
@@ -215,6 +219,7 @@ impl TerminalSession {
             attachment: Arc::new(AtomicU64::new(0)),
             next_attachment: 0,
             focused: false,
+            pointer_revision: Arc::new(AtomicU64::new(0)),
         };
         this.start(cx);
         this
@@ -225,10 +230,13 @@ impl TerminalSession {
         let generation = self.generation;
         let (wakeup_tx, mut wakeup_rx) = tokio::sync::mpsc::channel(1);
         let events = Arc::new(Mutex::new(Vec::new()));
+        let pointer_revision = Arc::new(AtomicU64::new(0));
         let listener = TerminalEventListener {
             wakeups: wakeup_tx,
             events: events.clone(),
+            pointer_revision: pointer_revision.clone(),
         };
+        self.pointer_revision = pointer_revision;
         self.state = match RunningTerminal::start(listener, self.size, &self.options) {
             Ok(running) => TerminalState::Running(running),
             Err(error) => TerminalState::Failed(error.to_string()),
@@ -275,6 +283,10 @@ impl TerminalSession {
                 _ => {}
             }
         }
+    }
+
+    pub(crate) fn pointer_revision(&self) -> u64 {
+        self.pointer_revision.load(Ordering::Acquire)
     }
 
     pub(crate) fn generation(&self) -> u64 {
@@ -404,9 +416,11 @@ mod compatibility_tests {
     fn parser_replies_remain_ordered_when_repaint_wakeup_is_full() {
         let (wakeups, mut receiver) = tokio::sync::mpsc::channel(1);
         let events = Arc::new(Mutex::new(Vec::new()));
+        let pointer_revision = Arc::new(AtomicU64::new(0));
         let listener = TerminalEventListener {
             wakeups,
             events: events.clone(),
+            pointer_revision: pointer_revision.clone(),
         };
         let mut terminal = Term::new(
             Config::default(),
@@ -461,9 +475,11 @@ mod compatibility_tests {
     fn parser_color_queries_use_display_palette_without_clipboard_or_keyboard_protocols() {
         let (wakeups, _) = tokio::sync::mpsc::channel(1);
         let events = Arc::new(Mutex::new(Vec::new()));
+        let pointer_revision = Arc::new(AtomicU64::new(0));
         let listener = TerminalEventListener {
             wakeups,
             events: events.clone(),
+            pointer_revision: pointer_revision.clone(),
         };
         let mut terminal = Term::new(Config::default(), &TerminalSize::initial(), listener);
         let mut parser: Processor = Processor::new();

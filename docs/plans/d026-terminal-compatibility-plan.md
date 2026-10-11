@@ -1,6 +1,6 @@
 # D026: Terminal Compatibility, Typography, Mouse, and Links
 
-Status: 🚧 checkpoint 1 accepted; checkpoint 2 implemented, native review pending.
+Status: 🚧 checkpoints 1–2 accepted; checkpoint 3 implemented, native review pending.
 
 Promoted from D026 in the [roadmap](../roadmap.md). This slice makes the local
 terminal usable with ordinary shells and representative TUIs: Vim, less, and
@@ -202,26 +202,78 @@ Checkpoint 2 implementation choices and evidence:
   host, so no tmux or native Linux/Windows acceptance is claimed.
 - ✅ `cargo test --lib -- --test-threads=1` passed all 500 tests on macOS.
   `cargo fmt` ran once after Rust work; `git diff --check` passed.
-- ⏳ Native review gate: shell, Vim, less, and tmux navigation, function keys,
+- ✅ User accepted checkpoint 2 on 2026-10-11 (“all seems good”). Native
+  checklist: shell, Vim, less, and tmux navigation, function keys,
   paste, alternate-screen entry/exit, and focus changes. Record the actual
-  versions and gaps from that review before checkpoint 3.
+  versions and gaps. No additional application versions were supplied.
 
 ## Checkpoint 3: Application mouse reporting and local override
 
-- [ ] Add mode-aware button, release, motion, and wheel routing, including
+- [x] ✅ Add mode-aware button, release, motion, and wheel routing, including
   required legacy and SGR encoding and coordinate limits. Keep viewport
   reporting coordinates distinct from scrollback selection coordinates.
-- [ ] Implement Shift local override, local interaction without tracking, and
+- [x] ✅ Implement Shift local override, local interaction without tracking, and
   alternate-screen scrolling. Reset transient pressed/drag state on lifecycle
   and mode transitions so stale gestures cannot affect a new attachment.
-- [ ] Test encoding and routing across tracking modes, modifiers, cell edges,
+- [x] ✅ Test encoding and routing across tracking modes, modifiers, cell edges,
   scrollback, wide cells, and wheel accumulation. Add gpui event tests for
   press/drag/release ownership and override behavior, including detach/restart.
-- [ ] Update the terminal interaction reference.
+- [x] ✅ Update the terminal interaction reference.
 
 Review gate: user exercises a mouse-enabled Vim/tmux session and a deterministic
 mouse-report fixture. Confirm clicks, drags, wheel events, Shift selection and
 copy, and local scrolling; review that each event has one intended recipient.
+
+Checkpoint 3 implementation choices and evidence:
+
+| Request / interaction | Behavior |
+| --- | --- |
+| 1000 click tracking | Buttons and wheel; no motion |
+| 1002 drag tracking | Buttons/wheel plus motion for presses owned by this view |
+| 1003 all-motion tracking | Drag behavior plus unpressed hover motion |
+| Legacy encoding | CSI M with byte coordinates; maximum one-based coordinate 223 |
+| UTF-8 1005 | CSI M with UTF-8 button and coordinates; maximum one-based coordinate 2015 |
+| SGR 1006 | CSI <code;column;row M/m; preserves button on release; grid bounds limit coordinates |
+| Button/modifier codes | Left/middle/right 0/1/2; navigation 128/129; Shift/Alt/Control add 4/8/16; motion adds 32 |
+| Wheel codes | Up/down/left/right 64/65/66/67; one packet per accumulated step |
+| Shift press / no tracking | Local left selection, including scrollback and wide/combining content |
+| Modifier changes during drag | Original recipient retains ownership through release; reported gestures remain paired |
+| Shift wheel | Local scroll, even when tracking or alternate scrolling is enabled |
+| Alternate screen without tracking | With ALTERNATE_SCROLL, emit current-mode cursor keys; otherwise local scrolling |
+| Unknown or unowned drag/release | No PTY report or local selection mutation |
+| Outside drag/release | Original owner receives clamped viewport/grid coordinates |
+| Cancellation | Balance current application presses before geometry/focus/attachment changes; discard stale generations or modes |
+
+- Motion deduplicates cell/button/modifier state. Reporting uses viewport cells,
+  including each wide-cell spacer; selection alone applies display offset and
+  emulator wide-cell expansion. Unrepresentable legacy/UTF-8 coordinates never
+  wrap; an owned release beyond the limit uses its last representable cell to
+  avoid a stuck button. Repeated tracking transitions advance a per-process pointer revision
+  even when repaint wakeups coalesce and final flags match the old flags.
+- Line-wheel deltas represent rows/steps directly. Precise application and
+  alternate scrolling accumulate one measured cell per step; precise local
+  scrolling retains four logical pixels per row. A route change clears residue;
+  opposite direction drops the old fractional residue. Local horizontal scroll
+  has no grid presentation effect. Mouse packets preserve scrollback position.
+- Automated coverage: byte tables for buttons, wheel, releases, every modifier,
+  encoding limits, and UTF-8 extended button values; fractional wheels and route
+  changes; gpui event-to-PTY cases for click/drag/all-motion modes, outside and
+  foreign drags, Shift selection/copy and scrolling in scrollback, wide spacers,
+  alternate-screen cursor keys, mode disable/re-enable, resize/focus cancellation,
+  detach/handoff, and restart. The manual fixture also passed gpui-to-real-PTY
+  tests for SGR, legacy, and UTF-8 decoding and mode restoration on quit.
+- Native fixture (Python 3): `python3 scripts/terminal-mouse-fixture.py` defaults
+  to SGR drag tracking. Use `--tracking clicks|drag|motion`,
+  `--encoding legacy|utf8|sgr`, and `--alternate` to check other paths. Hold Shift
+  before pressing to start local selection; changing modifiers mid-drag retains
+  the original owner. `q` quits and restores terminal modes.
+- ✅ macOS verification: `cargo test --lib -- --test-threads=1` passed all
+  517 tests. Rust formatting and `git diff --check` completed.
+- ⏳ Native gate remains open: exercise clicks, drags, wheel, Shift selection and
+  copy, and local scrolling in mouse-enabled Vim/tmux and the fixture. Existing
+  host versions are Vim 9.1 and Python 3.14.8; tmux is unavailable on this host.
+  Record native outcomes before hyperlink work. No Linux/Windows certification
+  is claimed.
 
 ## Checkpoint 4: Hyperlinks and complete slice acceptance
 

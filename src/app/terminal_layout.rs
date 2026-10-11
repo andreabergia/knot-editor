@@ -7,7 +7,7 @@ use super::{
     typography::{TEXT_SIZE, text_font},
 };
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct TerminalLayout {
     pub(crate) cell_width: Pixels,
     pub(crate) cell_height: Pixels,
