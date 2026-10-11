@@ -65,6 +65,22 @@ impl ProductShell {
         }
     }
 
+    fn focus_relocated_surface(&self, window: &mut Window, cx: &mut App) {
+        let editor = self
+            .workbench
+            .read(cx)
+            .focused_pane()
+            .and_then(|pane| pane.active_tab().editor())
+            .cloned();
+        if let Some(editor) = editor {
+            editor.update(cx, |editor, cx| {
+                editor.preserve_scroll_for_relocation();
+                cx.notify();
+            });
+        }
+        self.focus_active_surface(window, cx);
+    }
+
     pub(super) fn relocate_tab_to(
         &mut self,
         source: &TabRelocationSource,
@@ -91,7 +107,7 @@ impl ProductShell {
             if moved.is_none() {
                 return CommandOutcome::InvalidTarget;
             }
-            self.focus_active_surface(window, cx);
+            self.focus_relocated_surface(window, cx);
             cx.notify();
             return CommandOutcome::Completed;
         }
@@ -153,7 +169,7 @@ impl ProductShell {
                     cx.global::<ApplicationWorkbenches>()
                         .register(&destination_workbench);
                 }
-                shell.focus_active_surface(destination_window, cx);
+                shell.focus_relocated_surface(destination_window, cx);
                 if !matches!(destination.tab, TabMoveDestination::Empty) {
                     destination_window.activate_window();
                 }

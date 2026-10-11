@@ -120,6 +120,7 @@ pub struct EditorView {
     scroll_x: f32,
     drag_anchor: Option<(usize, usize)>,
     reveal_caret: bool,
+    preserve_scroll_on_layout: bool,
     /// Last measured editor pane height in pixels; written by the element
     /// during paint and read by the key/scroll handlers so
     /// `ensure_cursor_visible` and `clamp_scroll` can clamp against the real
@@ -196,6 +197,12 @@ impl EditorView {
         self.selection_range().map(|(start, end)| {
             self.to_flat_byte(start.0, start.1)..self.to_flat_byte(end.0, end.1)
         })
+    }
+
+    /// Retain deliberate scrolling when this view receives a relocated viewport.
+    /// Pending caret reveals from editing still take precedence.
+    pub(crate) fn preserve_scroll_for_relocation(&mut self) {
+        self.preserve_scroll_on_layout = true;
     }
 
     #[cfg(test)]
@@ -324,6 +331,7 @@ impl EditorView {
             scroll_x: 0.,
             drag_anchor: None,
             reveal_caret: true,
+            preserve_scroll_on_layout: false,
             viewport_h: 0.,
             bounds: Bounds::default(),
             anchor_line: 0,
@@ -1932,7 +1940,7 @@ impl Element for EditorElement {
             let resized = view.bounds.size != bounds.size;
             view.bounds = bounds;
             view.viewport_h = f32::from(bounds.size.height);
-            if view.reveal_caret || resized {
+            if view.reveal_caret || (resized && !view.preserve_scroll_on_layout) {
                 view.ensure_cursor_visible(view.viewport_h);
                 let x = f32::from(view.caret_x(window));
                 let width = f32::from(bounds.size.width);
@@ -1944,6 +1952,7 @@ impl Element for EditorElement {
                 }
                 view.reveal_caret = false;
             }
+            view.preserve_scroll_on_layout = false;
             view.clamp_scroll();
         });
         let drag_listener = window.listener_for(&self.entity, EditorView::on_mouse_move);

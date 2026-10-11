@@ -2625,7 +2625,7 @@ impl ProductShell {
                 };
                 let capture = workbench.capture_tab_move(pane_id, tab_id).unwrap();
                 let source = self.capture_tab_relocation(pane_id, tab_id, cx).unwrap();
-                let drag_label = self.tab_drag_label(title.clone().into());
+                let drag_label = self.tab_drag_label(title.clone().into(), cx);
                 div()
                     .id(("tab", tab_id.value()))
                     .debug_selector(move || format!("tab-{}", tab_id.value()))
@@ -2690,6 +2690,7 @@ impl ProductShell {
 
 impl Render for ProductShell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        tab_drag::coordinator(cx);
         self.tab_drag.borrow_mut().begin_frame();
         let layout = self.workbench.read(cx).layout().cloned();
         let entity = cx.entity();
@@ -3070,6 +3071,43 @@ pub(crate) fn open_product_window(request: Option<OpenRequest>, cx: &mut App) {
 
 fn open_tab_transfer_window(cx: &mut App) -> anyhow::Result<WindowHandle<ProductShell>> {
     let bounds = Bounds::centered(None, size(px(1000.), px(720.)), cx);
+    open_tab_transfer_window_with_bounds(bounds, cx)
+}
+
+fn open_tab_tear_out_window(
+    pointer: Point<Pixels>,
+    cx: &mut App,
+) -> anyhow::Result<WindowHandle<ProductShell>> {
+    let mut bounds = Bounds::new(
+        pointer - point(px(140.), px(40.)),
+        size(px(1000.), px(720.)),
+    );
+    if let Some(display) = cx
+        .displays()
+        .into_iter()
+        .find(|display| display.bounds().contains(&pointer))
+    {
+        let display = display.bounds();
+        bounds.size.width = bounds.size.width.min(display.size.width).max(px(480.));
+        bounds.size.height = bounds.size.height.min(display.size.height).max(px(320.));
+        bounds.origin.x = bounds
+            .origin
+            .x
+            .max(display.left())
+            .min((display.right() - bounds.size.width).max(display.left()));
+        bounds.origin.y = bounds
+            .origin
+            .y
+            .max(display.top())
+            .min((display.bottom() - bounds.size.height).max(display.top()));
+    }
+    open_tab_transfer_window_with_bounds(bounds, cx)
+}
+
+fn open_tab_transfer_window_with_bounds(
+    bounds: Bounds<Pixels>,
+    cx: &mut App,
+) -> anyhow::Result<WindowHandle<ProductShell>> {
     cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),

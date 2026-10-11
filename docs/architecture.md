@@ -45,7 +45,9 @@ contributions. Each window owns
 a workbench whose typed tabs own document editor views or terminal views and
 identify their respective surfaces. The workbench owns ordered tab relocation
 and split transitions; the product shell coordinates transfers and window
-creation on the foreground thread. Terminal tabs do not own document models.
+creation on the foreground thread. A transient application-wide drag coordinator
+retains weak shell/workbench targets and window-local painted geometry for
+release dispatch and previews. Terminal tabs do not own document models.
 An application-owned terminal session owns its
 PTY, emulator grid, process, and event delivery independently of its view.
 

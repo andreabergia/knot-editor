@@ -1,12 +1,12 @@
-//! Window-local tab drag geometry, feedback, and release dispatch.
+//! Foreground tab drag coordination across native product windows.
 
 use super::relocate::{TabRelocationDestination, TabRelocationSource};
 use super::*;
 use crate::app::workbench::{SplitEdge, TabMoveCapture, TabMoveDestination, TabMovePlacement};
+use std::rc::Rc;
 
 #[derive(Default)]
 pub(super) struct TabDragState {
-    source: Option<TabRelocationSource>,
     panes: Vec<PaneGeometry>,
     preview: Option<DropTarget>,
 }
@@ -99,23 +99,261 @@ impl TabDragState {
     pub(super) fn begin_frame(&mut self) {
         self.panes.clear();
     }
+}
 
+struct ApplicationTabDrag(Rc<RefCell<TabDragCoordinator>>);
+impl Global for ApplicationTabDrag {}
+
+#[derive(Default)]
+pub(super) struct TabDragCoordinator {
+    windows: Vec<DragWindow>,
+    active: Option<ActiveTabDrag>,
+    pointer: Option<Point<Pixels>>,
+    pointer_window: Option<AnyWindowHandle>,
+}
+
+struct DragWindow {
+    window: AnyWindowHandle,
+    shell: WeakEntity<ProductShell>,
+    workbench: WeakEntity<Workbench>,
+    state: Rc<RefCell<TabDragState>>,
+    accepts_drop: bool,
+}
+
+#[derive(Clone)]
+struct ActiveTabDrag {
+    shell: WeakEntity<ProductShell>,
+    window: AnyWindowHandle,
+    source: TabRelocationSource,
+}
+
+enum DropAction {
+    Target(TabRelocationDestination),
+    TearOut(Point<Pixels>),
+    Invalid,
+}
+
+struct WindowGeometry {
+    window: AnyWindowHandle,
+    frame: Bounds<Pixels>,
+    content: Bounds<Pixels>,
+}
+
+fn content_bounds(window: &Window) -> Bounds<Pixels> {
+    let frame = window.bounds();
+    let content = window.viewport_size();
+    Bounds::new(
+        frame.origin + point(px(0.), frame.size.height - content.height),
+        content,
+    )
+}
+
+// Query current native bounds in platform stacking order. Geometry of the
+// receiving window is read directly while its foreground update is borrowed.
+fn window_geometries(receiver: &Window, cx: &mut App) -> Vec<WindowGeometry> {
+    let stack = cx.window_stack().unwrap_or_else(|| {
+        let mut windows = cx.windows();
+        windows.retain(|handle| *handle != receiver.window_handle());
+        windows.insert(0, receiver.window_handle());
+        windows
+    });
+    stack
+        .into_iter()
+        .filter_map(|handle| {
+            if handle == receiver.window_handle() {
+                Some(WindowGeometry {
+                    window: handle,
+                    frame: receiver.bounds(),
+                    content: content_bounds(receiver),
+                })
+            } else {
+                cx.update_window(handle, |_, window, _| WindowGeometry {
+                    window: handle,
+                    frame: window.bounds(),
+                    content: content_bounds(window),
+                })
+                .ok()
+            }
+        })
+        .collect()
+}
+
+impl TabDragCoordinator {
     fn clear(&mut self) {
-        self.source = None;
-        self.preview = None;
+        self.active = None;
+        self.pointer = None;
+        self.pointer_window = None;
+        for window in &self.windows {
+            window.state.borrow_mut().preview = None;
+        }
+    }
+
+    fn prune(&mut self, live: &[AnyWindowHandle]) -> bool {
+        self.windows
+            .retain(|entry| live.contains(&entry.window) && entry.shell.upgrade().is_some());
+        if self.active.as_ref().is_some_and(|active| {
+            !live.contains(&active.window) || active.shell.upgrade().is_none()
+        }) {
+            self.clear();
+            return true;
+        }
+        if self
+            .pointer_window
+            .is_some_and(|window| !live.contains(&window))
+        {
+            self.pointer_window = None;
+            for entry in &self.windows {
+                entry.state.borrow_mut().preview = None;
+            }
+        }
+        false
+    }
+
+    fn action_at(&self, pointer: Point<Pixels>, geometry: &[WindowGeometry]) -> DropAction {
+        let Some(front) = geometry
+            .iter()
+            .find(|window| window.frame.contains(&pointer))
+        else {
+            return DropAction::TearOut(pointer);
+        };
+        if !front.content.contains(&pointer) {
+            return DropAction::Invalid;
+        }
+        let Some(entry) = self
+            .windows
+            .iter()
+            .find(|entry| entry.window == front.window)
+        else {
+            return DropAction::Invalid;
+        };
+        if !entry.accepts_drop {
+            return DropAction::Invalid;
+        }
+        let Some(target) = entry
+            .state
+            .borrow()
+            .target_at(pointer - front.content.origin)
+        else {
+            return DropAction::Invalid;
+        };
+        DropAction::Target(TabRelocationDestination {
+            window: entry.window,
+            workbench: entry.workbench.clone(),
+            tab: target.tab,
+        })
+    }
+
+    fn move_pointer(&mut self, pointer: Point<Pixels>, geometry: &[WindowGeometry]) {
+        self.pointer = Some(pointer);
+        self.pointer_window = geometry
+            .iter()
+            .find(|window| window.frame.contains(&pointer))
+            .map(|window| window.window);
+        for entry in &self.windows {
+            let target = geometry
+                .iter()
+                .find(|window| {
+                    Some(window.window) == self.pointer_window
+                        && window.window == entry.window
+                        && entry.accepts_drop
+                        && window.content.contains(&pointer)
+                })
+                .and_then(|window| {
+                    entry
+                        .state
+                        .borrow()
+                        .target_at(pointer - window.content.origin)
+                });
+            entry.state.borrow_mut().preview = target;
+        }
     }
 }
 
-pub(super) struct TabDragLabel(SharedString);
+pub(super) fn coordinator(cx: &mut App) -> Rc<RefCell<TabDragCoordinator>> {
+    if !cx.has_global::<ApplicationTabDrag>() {
+        let state = Rc::new(RefCell::new(TabDragCoordinator::default()));
+        cx.set_global(ApplicationTabDrag(state.clone()));
+        let closed = state.clone();
+        cx.on_window_closed(move |cx| {
+            let live = cx.windows();
+            let cancelled = closed.borrow_mut().prune(&live);
+            if cancelled {
+                if let Some(window) = live.first() {
+                    let _ = cx.update_window(*window, |_, window, cx| {
+                        cx.stop_active_drag(window);
+                    });
+                }
+            }
+            cx.refresh_windows();
+        })
+        .detach();
+    }
+    cx.global::<ApplicationTabDrag>().0.clone()
+}
+
+fn commit_drop_with(
+    active: ActiveTabDrag,
+    action: DropAction,
+    cx: &mut App,
+    create: impl FnOnce(Point<Pixels>, &mut App) -> anyhow::Result<WindowHandle<ProductShell>>,
+) {
+    let _ = cx.update_window(active.window, |_, window, cx| {
+        if window
+            .root::<ProductShell>()
+            .flatten()
+            .map(|shell| shell.downgrade())
+            != Some(active.shell.clone())
+        {
+            return;
+        }
+        let Some(shell) = active.shell.upgrade() else {
+            return;
+        };
+        shell.update(cx, |shell, cx| match action {
+            DropAction::Target(destination) => {
+                shell.relocate_tab_to(&active.source, &destination, window, cx);
+            }
+            DropAction::TearOut(pointer) => {
+                shell.relocate_tab_to_new_window_with(&active.source, window, cx, |cx| {
+                    create(pointer, cx)
+                });
+            }
+            DropAction::Invalid => {}
+        });
+    });
+}
+
+pub(super) struct TabDragLabel {
+    title: SharedString,
+    coordinator: Rc<RefCell<TabDragCoordinator>>,
+}
 impl Render for TabDragLabel {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .px_3()
-            .py_1()
-            .text_sm()
-            .bg(rgb(0x405e90))
-            .text_color(rgb(0xffffff))
-            .child(self.0.clone())
+    fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let state = self.coordinator.borrow();
+        let content = content_bounds(window);
+        let pointer = state.pointer.filter(|pointer| {
+            state.active.is_some()
+                && state.pointer_window == Some(window.window_handle())
+                && content.contains(pointer)
+        });
+        div().when_some(pointer, |element, pointer| {
+            // gpui positions the shared preview using each window's local
+            // mouse position. Only the event receiver has a current position.
+            let correction = pointer - content.origin - window.mouse_position();
+            element.child(
+                div()
+                    .relative()
+                    .left(correction.x)
+                    .top(correction.y)
+                    .debug_selector(|| "tab-drag-label".to_owned())
+                    .px_3()
+                    .py_1()
+                    .text_sm()
+                    .bg(rgb(0x405e90))
+                    .text_color(rgb(0xffffff))
+                    .child(self.title.clone()),
+            )
+        })
     }
 }
 
@@ -123,14 +361,30 @@ impl ProductShell {
     pub(super) fn tab_drag_label(
         &self,
         title: SharedString,
+        cx: &Context<Self>,
     ) -> impl Fn(&TabRelocationSource, Point<Pixels>, &mut Window, &mut App) -> Entity<TabDragLabel>
     + use<> {
-        let state = self.tab_drag.clone();
-        move |source, _, _, cx| {
-            let mut state = state.borrow_mut();
-            state.source = Some(source.clone());
-            state.preview = None;
-            cx.new(|_| TabDragLabel(title.clone()))
+        let coordinator = cx.global::<ApplicationTabDrag>().0.clone();
+        let shell = cx.entity().downgrade();
+        move |source, _, window, cx| {
+            let geometry = window_geometries(window, cx);
+            let mut state = coordinator.borrow_mut();
+            state.clear();
+            state.active = Some(ActiveTabDrag {
+                shell: shell.clone(),
+                window: window.window_handle(),
+                source: source.clone(),
+            });
+            state.move_pointer(
+                content_bounds(window).origin + window.mouse_position(),
+                &geometry,
+            );
+            drop(state);
+            cx.refresh_windows();
+            cx.new(|_| TabDragLabel {
+                title: title.clone(),
+                coordinator: coordinator.clone(),
+            })
         }
     }
 
@@ -205,56 +459,72 @@ impl ProductShell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if event.keystroke.key == "escape" && self.tab_drag.borrow().source.is_some() {
-            self.tab_drag.borrow_mut().clear();
+        let coordinator = cx.global::<ApplicationTabDrag>().0.clone();
+        if event.keystroke.key == "escape" && coordinator.borrow().active.is_some() {
+            coordinator.borrow_mut().clear();
             cx.stop_active_drag(window);
             cx.stop_propagation();
-            cx.notify();
+            cx.refresh_windows();
         }
     }
 
     pub(super) fn drag_listener(&self, cx: &Context<Self>) -> impl IntoElement + use<> {
         let state = self.tab_drag.clone();
+        let coordinator = cx.global::<ApplicationTabDrag>().0.clone();
         let shell = cx.entity().downgrade();
+        let workbench = self.workbench.downgrade();
+        let accepts_drop = self.command_palette.is_none() && !self.extension_report_open;
         canvas(
             |_, _, _| (),
             move |_, _, window, _| {
+                let handle = window.window_handle();
+                let mut shared = coordinator.borrow_mut();
+                shared.windows.retain(|entry| entry.window != handle);
+                shared.windows.push(DragWindow {
+                    window: handle,
+                    shell: shell.clone(),
+                    workbench: workbench.clone(),
+                    state: state.clone(),
+                    accepts_drop,
+                });
+                drop(shared);
                 if let Some(preview) = state.borrow().preview {
                     window.paint_quad(fill(preview.bounds, rgba(0x7fb5ff55)));
                 }
-                let moves = state.clone();
-                window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
+                let moves = coordinator.clone();
+                window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
                     if phase == DispatchPhase::Capture
                         && cx.has_active_drag()
-                        && moves.borrow().source.is_some()
+                        && moves.borrow().active.is_some()
                     {
-                        let next = moves.borrow().target_at(event.position);
-                        moves.borrow_mut().preview = next;
+                        let geometry = window_geometries(window, cx);
+                        moves.borrow_mut().move_pointer(
+                            content_bounds(window).origin + event.position,
+                            &geometry,
+                        );
                         cx.refresh_windows();
                     }
                 });
-                let releases = state.clone();
+                let releases = coordinator.clone();
                 window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
                     if phase != DispatchPhase::Capture || event.button != MouseButton::Left {
                         return;
                     }
-                    let source = releases.borrow_mut().source.take();
-                    if let Some(source) = source {
-                        let target = releases.borrow().target_at(event.position);
+                    let active = releases.borrow_mut().active.take();
+                    if let Some(active) = active {
+                        let geometry = window_geometries(window, cx);
+                        let action = releases
+                            .borrow()
+                            .action_at(content_bounds(window).origin + event.position, &geometry);
                         releases.borrow_mut().clear();
                         if cx.has_active_drag() {
                             cx.stop_active_drag(window);
-                            if let (Some(target), Some(shell)) = (target, shell.upgrade()) {
-                                shell.update(cx, |shell, cx| {
-                                    let destination = TabRelocationDestination {
-                                        window: window.window_handle(),
-                                        workbench: shell.workbench.downgrade(),
-                                        tab: target.tab,
-                                    };
-                                    shell.relocate_tab_to(&source, &destination, window, cx);
-                                });
-                            }
                             cx.stop_propagation();
+                            // Release can arrive in the destination window. Commit
+                            // after dispatch so neither endpoint is borrowed here.
+                            cx.defer(move |cx| {
+                                commit_drop_with(active, action, cx, open_tab_tear_out_window)
+                            });
                         }
                         cx.refresh_windows();
                     }
@@ -270,3 +540,6 @@ impl ProductShell {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod cross_window_tests;

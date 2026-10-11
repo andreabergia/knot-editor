@@ -33,7 +33,7 @@ fn fixture(cx: &mut TestAppContext) -> (Entity<ProductShell>, AnyWindowHandle) {
     (shell, window)
 }
 
-fn tab_selector(id: u64) -> &'static str {
+pub(super) fn tab_selector(id: u64) -> &'static str {
     match id {
         1 => "tab-1",
         2 => "tab-2",
@@ -43,7 +43,7 @@ fn tab_selector(id: u64) -> &'static str {
     }
 }
 
-fn start_drag(cx: &mut VisualTestContext, id: u64) {
+pub(super) fn start_drag(cx: &mut VisualTestContext, id: u64) {
     let from = cx.debug_bounds(tab_selector(id)).unwrap().center();
     cx.simulate_mouse_down(from, MouseButton::Left, Modifiers::default());
     cx.simulate_mouse_move(
@@ -96,7 +96,13 @@ fn tab_bar_reorder_and_release_position_drive_product_transition(cx: &mut TestAp
             workbench.focused_pane().unwrap().active_tab_id(),
             before[0].tab_id
         );
-        assert!(shell.tab_drag.borrow().source.is_none());
+        assert!(
+            cx.global::<super::ApplicationTabDrag>()
+                .0
+                .borrow()
+                .active
+                .is_none()
+        );
         assert!(!cx.has_active_drag());
     });
 }
@@ -170,11 +176,11 @@ fn all_edges_split_then_center_move_collapses_source_and_focuses_editor(cx: &mut
 }
 
 #[gpui::test]
-fn escape_outside_release_and_stale_source_leave_model_unchanged(cx: &mut TestAppContext) {
+fn escape_invalid_release_and_stale_source_leave_model_unchanged(cx: &mut TestAppContext) {
     let (shell, window) = fixture(cx);
     let before = cx.read(|cx| shell.read(cx).workbench.read(cx).tab_snapshots());
     let mut visual = VisualTestContext::from_window(window, cx);
-    for scenario in 0..3 {
+    for scenario in 0..2 {
         let escape = scenario == 0;
         start_drag(&mut visual, before[0].tab_id.value());
         let pane = visual.debug_bounds("pane-1").unwrap();
@@ -184,7 +190,6 @@ fn escape_outside_release_and_stale_source_leave_model_unchanged(cx: &mut TestAp
         }
         let destination = match scenario {
             0 => pane.center(),
-            1 => point(px(-30.), px(-30.)),
             _ => point(pane.center().x, pane.top() - px(5.)),
         };
         visual.simulate_mouse_up(destination, MouseButton::Left, Modifiers::default());
@@ -192,7 +197,13 @@ fn escape_outside_release_and_stale_source_leave_model_unchanged(cx: &mut TestAp
         visual.read(|cx| {
             let shell = shell.read(cx);
             assert_eq!(shell.workbench.read(cx).tab_snapshots(), before);
-            assert!(shell.tab_drag.borrow().source.is_none());
+            assert!(
+                cx.global::<super::ApplicationTabDrag>()
+                    .0
+                    .borrow()
+                    .active
+                    .is_none()
+            );
             assert!(shell.tab_drag.borrow().preview.is_none());
             assert!(!cx.has_active_drag());
         });

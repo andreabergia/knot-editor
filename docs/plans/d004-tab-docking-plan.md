@@ -1,6 +1,7 @@
 # D004: Tab dragging and docking
 
-Status: ✅ checkpoints 1–3 approved. Checkpoint 4 is in progress.
+Status: ✅ checkpoints 1–3 approved. Checkpoint 4 implementation and
+automated coverage are complete; ⏳ end-to-end macOS review remains open.
 
 Source: D004, promoted from the [deferred-work register](../roadmap.md).
 Current boundaries: [architecture](../architecture.md),
@@ -223,12 +224,64 @@ checkpoint 4 connects that interaction to the validated event path.
 
 ### 4. Complete cross-window moves and tear-out
 
-- Connect drops into other Knot windows and outside-window tear-out to the
+- ✅ Connect drops into other Knot windows and outside-window tear-out to the
   selected event path. Create a destination window before removing the source;
   preserve its document editor or terminal session and focus the destination.
-- Test destination failure, stale or closed windows, last-tab replacement,
-  dirty document transfer without prompts, and terminal continuity. Manually
-  review both window gestures and a live terminal transfer on macOS.
-- Update the workbench architecture reference and decisions with validated
+- ✅ Test destination failure, stale or closed windows, last-tab replacement,
+  dirty document transfer without prompts, and terminal continuity.
+- ⏳ Manually review both window gestures and a live terminal transfer on macOS.
+- ✅ Update the workbench architecture reference and decisions with validated
   behavior and rationale; mark completed checkpoints with ✅.
-- **Review gate:** approve the end-to-end D004 slice and automated coverage.
+- ⏳ **Review gate:** approve the end-to-end D004 slice and automated coverage.
+
+#### Checkpoint 4 implementation and review evidence
+
+- ✅ Product windows share a transient foreground drag coordinator. It retains
+  weak endpoints and painted pane/tab-bar geometry, reads current native bounds
+  and platform stacking order, and converts events from either receiver into
+  a screen pointer. Release-position hit testing selects the final target;
+  exact endpoint checks precede a deferred foreground transfer.
+- ✅ The destination paints insertion or docking feedback. The floating title
+  follows the shared pointer with the diagnostic's nested preview correction;
+  updates within one unchanged target still repaint. Escape in either window
+  clears all state, and source closure cancels the shared drag. A closed
+  destination cannot consume a captured transfer.
+- ✅ A release outside Knot frames creates a destination near the pointer,
+  constrained to its display. Window creation occurs before source mutation;
+  existing toolbar/title-bar/sidebar space, non-product windows, and product
+  overlays reject drops. Failure or stale captures preserve the source.
+- ✅ Destination layout retains deliberate editor scrolling through relocation,
+  including a caret outside the scrolled viewport; normal viewport clamping
+  and pending edit-driven caret reveals still apply. The dirty last-view test
+  checks cursor, selection, scroll, view entity, view counts, command invalidation,
+  and source replacement after actual dispatched tear-out.
+- ✅ Eight additional product-boundary tests cover source-delivered cross-window
+  insertion, center, and all four edges; bidirectional moves; destination-delivered
+  release; compensated label bounds and movement; Escape across windows and on
+  desktop; failed tear-out creation; stale presentation and closed destinations;
+  source closure cleanup; overlays and title-bar occlusion; negative display
+  origins; dirty last-view replacement; and two live terminal attachment handoffs
+  through an existing window and desktop tear-out. Checkpoint 2 retains its
+  failed/stale creation and terminal lifecycle regression coverage.
+
+✅ Validation: `cargo test --all-targets --quiet` passes (482 library tests
+plus 5 drag-probe tests); `cargo check --quiet` passes; Rust was formatted
+with `cargo fmt`.
+
+Run `cargo run --bin knot`, open a second window with **File → New Window**, and
+position them side by side. Review without UI automation:
+
+| Gesture | Expected result | Result |
+| --- | --- | --- |
+| Document to other window's bar, center, and each edge | Accurate preview; one moved view; destination focused | ⏳ |
+| Reverse window direction; move label within one target | Label follows pointer; one successful drop | ⏳ |
+| Dirty final document tab to desktop | New focused window; cursor/selection/scroll retained; source replaced with untitled; no save prompt | ⏳ |
+| Live terminal to other window, then desktop | Same process and grid; input/resize works; one attached presentation | ⏳ |
+| Escape over other window or desktop, then drag again | No mutation/new window; no stuck preview; next drag succeeds | ⏳ |
+| Release over toolbar or title bar | No mutation/new window; feedback cleared | ⏳ |
+| Overlapping windows and, if available, different displays | Foremost window receives drop; geometry and label remain correct | ⏳ |
+
+The automated bounds checks establish coordinate math and gpui dispatch only.
+Native macOS behavior and the end-to-end acceptance gate still require the
+user's manual review. Archive this plan in a separate final commit after that
+gate passes.

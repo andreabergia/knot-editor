@@ -232,6 +232,17 @@ the registered session. Destination-local identities keep captured commands
 from retargeting a transferred tab. Creating a destination window first keeps
 creation failure from removing the source presentation.
 
+Coordinate drag delivery with a transient application-wide foreground state.
+macOS continues delivering pressed drag events to the originating window, so
+map its content coordinates to the screen pointer and hit-test painted targets
+in the foremost Knot window. Compensate the shared gpui preview for stale mouse
+positions in other windows. Clear visual state before deferring the transfer
+past input dispatch, allowing either endpoint to receive the release without
+borrowing a destination during its own update. Outside-frame releases create
+a destination near the pointer before moving the source; invalid space inside
+Knot frames does not create a window. Exact endpoint validation remains the
+relocation coordinator's responsibility.
+
 Reference: [workbench and lifecycle](architecture/workbench-and-lifecycle.md).
 
 ## Terminal

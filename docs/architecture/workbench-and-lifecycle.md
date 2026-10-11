@@ -89,9 +89,30 @@ center and a split along the nearest normalized edge in its outer band. A
 floating title and a painted insertion line or destination region show the
 pending drop without changing the workbench. Left-button release hit-tests
 its delivered position and commits through the relocation coordinator. Escape
-is captured above editor and terminal input; cancellation or a release outside
-pane targets clears feedback without model mutation. Drag interaction currently
-accepts destinations within its source product window.
+is captured above editor and terminal input in either product window.
+
+A transient application-wide coordinator retains weak source and destination
+identities and each shell's painted geometry. It maps delivered window-local
+events through the current native content origin into screen coordinates and
+selects the foremost Knot window frame using platform stacking order. It
+hit-tests that window's pane geometry for insertion or docking. Title bars,
+toolbars, sidebars, non-product windows, and product overlays reject drops.
+A release outside all Knot window frames tears the tab into a new window near
+the pointer, constrained to the containing display. Each release recomputes
+its destination from the delivered position; the transfer runs after input
+dispatch so both endpoint windows are available for exact revalidation.
+
+The floating title uses the shared screen pointer and compensates for each
+window's stale local mouse position. Every pointer update repaints feedback,
+including movement within one unchanged target. Completion, invalid release,
+or Escape clears the pointer and all previews. Closing a source window cancels
+the shared drag; closing a destination removes its geometry. The coordinator
+owns neither shell nor workbench lifetime. When platform stacking order is
+unavailable, the receiving window is checked first.
+
+A relocated editor keeps deliberate scroll offsets through its first destination
+layout, subject to viewport clamping. Pending caret reveals from editing still
+apply; later ordinary resizes resume caret reveal behavior.
 
 `Workbench` owns typed reorder, insertion, and four-edge split transitions.
 Relocation captures exact pane, tab, surface, and presentation entity identities;
