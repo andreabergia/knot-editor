@@ -261,6 +261,15 @@ and shuts them down after dirty-document decisions; natural exit leaves the
 final grid visible until the tab is closed or restarted. PTY shutdown and child
 reaping run away from the foreground thread.
 
+Use Alacritty's parser-produced device, cursor, color, and size replies through
+an ordered generation-scoped foreground queue; coalesce only repaint wakeups.
+This keeps terminal protocol interpretation in the emulator and PTY writes in
+the session's existing asynchronous channel. Keyboard encoding reads emulator
+modes after product command precedence. Focus reports follow both view focus
+and native window activation. Physical application-keypad support remains
+[D040](roadmap.md) until gpui retains its native identity; the user chose this
+bounded limitation over vendoring the framework.
+
 The existing Alacritty adapter supplied the required session and product
 behavior without copying Zed code. Zed's GPL-compatible implementation remains
 an attributed reference for concrete input, rendering, or event behavior if

@@ -70,23 +70,27 @@ impl Dimensions for TerminalSize {
 #[derive(Clone)]
 pub(crate) struct TerminalEventListener {
     wakeups: tokio::sync::mpsc::Sender<()>,
-    child_exit: Arc<Mutex<Option<String>>>,
+    events: Arc<Mutex<Vec<Event>>>,
 }
 
 impl EventListener for TerminalEventListener {
     fn send_event(&self, event: Event) {
-        if let Event::ChildExit(status) = &event {
-            *self
-                .child_exit
-                .lock()
-                .expect("terminal exit state poisoned") = Some(status.to_string());
+        match event {
+            Event::PtyWrite(_)
+            | Event::ColorRequest(..)
+            | Event::TextAreaSizeRequest(_)
+            | Event::ChildExit(_) => {
+                self.events
+                    .lock()
+                    .expect("terminal event queue poisoned")
+                    .push(event);
+            }
+            Event::Wakeup | Event::CursorBlinkingChange | Event::MouseCursorDirty | Event::Exit => {
+            }
+            // OSC 52, title, and bell have no application behavior here.
+            _ => return,
         }
-        if matches!(
-            event,
-            Event::Wakeup | Event::CursorBlinkingChange | Event::Exit | Event::ChildExit(_)
-        ) {
-            let _ = self.wakeups.try_send(());
-        }
+        let _ = self.wakeups.try_send(());
     }
 }
 
@@ -170,6 +174,7 @@ pub(crate) struct TerminalSession {
     _wakeup_task: Option<Task<()>>,
     attachment: Arc<AtomicU64>,
     next_attachment: u64,
+    focused: bool,
 }
 
 pub(crate) struct TerminalAttachment {
@@ -209,6 +214,7 @@ impl TerminalSession {
             _wakeup_task: None,
             attachment: Arc::new(AtomicU64::new(0)),
             next_attachment: 0,
+            focused: false,
         };
         this.start(cx);
         this
@@ -218,29 +224,25 @@ impl TerminalSession {
         self.generation += 1;
         let generation = self.generation;
         let (wakeup_tx, mut wakeup_rx) = tokio::sync::mpsc::channel(1);
-        let child_exit = Arc::new(Mutex::new(None));
+        let events = Arc::new(Mutex::new(Vec::new()));
         let listener = TerminalEventListener {
             wakeups: wakeup_tx,
-            child_exit: child_exit.clone(),
+            events: events.clone(),
         };
         self.state = match RunningTerminal::start(listener, self.size, &self.options) {
             Ok(running) => TerminalState::Running(running),
             Err(error) => TerminalState::Failed(error.to_string()),
         };
+        if let Some(terminal) = self.terminal() {
+            terminal.lock().is_focused = self.focused;
+        }
         self._wakeup_task = Some(cx.spawn(async move |this, cx| {
             while wakeup_rx.recv().await.is_some() {
-                let status = child_exit
-                    .lock()
-                    .expect("terminal exit state poisoned")
-                    .take();
+                let pending =
+                    std::mem::take(&mut *events.lock().expect("terminal event queue poisoned"));
                 if this
                     .update(cx, |session, cx| {
-                        if session.generation != generation {
-                            return;
-                        }
-                        if let Some(status) = status {
-                            session.finish_exit(status);
-                        }
+                        session.apply_events(generation, pending);
                         cx.notify();
                     })
                     .is_err()
@@ -250,6 +252,66 @@ impl TerminalSession {
             }
         }));
         cx.notify();
+    }
+
+    fn apply_events(&mut self, generation: u64, events: Vec<Event>) {
+        if self.generation != generation {
+            return;
+        }
+        for event in events {
+            match event {
+                Event::PtyWrite(text) => self.send(text.into_bytes()),
+                Event::ColorRequest(index, format) => {
+                    if let Some(terminal) = self.terminal() {
+                        let color =
+                            super::terminal_colors::query_color(index, terminal.lock().colors());
+                        self.send(format(color).into_bytes());
+                    }
+                }
+                Event::TextAreaSizeRequest(format) => {
+                    self.send(format(self.size.window_size()).into_bytes())
+                }
+                Event::ChildExit(status) => self.finish_exit(status.to_string()),
+                _ => {}
+            }
+        }
+    }
+
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    fn owns_attachment(&self, attachment: &TerminalAttachment) -> bool {
+        Arc::ptr_eq(&self.attachment, &attachment.active)
+            && self.attachment.load(Ordering::Acquire) == attachment.id
+    }
+
+    pub(crate) fn send_input(
+        &self,
+        attachment: &TerminalAttachment,
+        generation: u64,
+        bytes: Vec<u8>,
+    ) {
+        if self.generation == generation && self.owns_attachment(attachment) {
+            self.send(bytes);
+        }
+    }
+
+    pub(crate) fn set_focus(&mut self, attachment: &TerminalAttachment, focused: bool) {
+        if !self.owns_attachment(attachment) || self.focused == focused {
+            return;
+        }
+        self.focused = focused;
+        let report = self.terminal().is_some_and(|terminal| {
+            let mut terminal = terminal.lock();
+            terminal.is_focused = focused;
+            terminal
+                .mode()
+                .contains(alacritty_terminal::term::TermMode::FOCUS_IN_OUT)
+        });
+        if report {
+            self.send(if focused { b"\x1b[I" } else { b"\x1b[O" }.to_vec());
+        }
     }
 
     fn finish_exit(&mut self, status: String) {
@@ -330,5 +392,130 @@ impl TerminalSession {
     pub(crate) fn restart(&mut self, cx: &mut Context<Self>) {
         self.close(cx);
         self.start(cx);
+    }
+}
+
+#[cfg(test)]
+mod compatibility_tests {
+    use super::*;
+    use alacritty_terminal::{term::TermMode, vte::ansi::Processor};
+
+    #[test]
+    fn parser_replies_remain_ordered_when_repaint_wakeup_is_full() {
+        let (wakeups, mut receiver) = tokio::sync::mpsc::channel(1);
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let listener = TerminalEventListener {
+            wakeups,
+            events: events.clone(),
+        };
+        let mut terminal = Term::new(
+            Config::default(),
+            &TerminalSize::initial(),
+            listener.clone(),
+        );
+        let mut parser: Processor = Processor::new();
+        for _ in 0..100 {
+            listener.send_event(Event::Wakeup);
+            parser.advance(&mut terminal, b"\x1b[5n\x1b[6n\x1b[c\x1b[18t");
+        }
+        assert!(receiver.try_recv().is_ok());
+        assert!(receiver.try_recv().is_err());
+        let replies: Vec<_> = events
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|event| match event {
+                Event::PtyWrite(text) => text.clone(),
+                _ => panic!("unexpected event: {event:?}"),
+            })
+            .collect();
+        assert_eq!(
+            replies,
+            ["\x1b[0n", "\x1b[1;1R", "\x1b[?6c", "\x1b[8;11;80t"].repeat(100)
+        );
+        parser.advance(
+            &mut terminal,
+            b"\x1b[?1h\x1b=\x1b[?1004h\x1b[?2004h\x1b[?1049h",
+        );
+        assert!(terminal.mode().contains(
+            TermMode::APP_CURSOR
+                | TermMode::APP_KEYPAD
+                | TermMode::FOCUS_IN_OUT
+                | TermMode::BRACKETED_PASTE
+                | TermMode::ALT_SCREEN
+        ));
+        parser.advance(
+            &mut terminal,
+            b"\x1b[?1049l\x1b[?1l\x1b>\x1b[?1004l\x1b[?2004l",
+        );
+        assert!(!terminal.mode().intersects(
+            TermMode::APP_CURSOR
+                | TermMode::APP_KEYPAD
+                | TermMode::FOCUS_IN_OUT
+                | TermMode::BRACKETED_PASTE
+                | TermMode::ALT_SCREEN
+        ));
+    }
+
+    #[test]
+    fn parser_color_queries_use_display_palette_without_clipboard_or_keyboard_protocols() {
+        let (wakeups, _) = tokio::sync::mpsc::channel(1);
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let listener = TerminalEventListener {
+            wakeups,
+            events: events.clone(),
+        };
+        let mut terminal = Term::new(Config::default(), &TerminalSize::initial(), listener);
+        let mut parser: Processor = Processor::new();
+        parser.advance(&mut terminal, b"\x1b]4;1;#112233\x1b\\\x1b]4;1;?\x1b\\\x1b]10;?\x1b\\\x1b]52;c;?\x1b\\\x1b]52;c;YQ==\x1b\\\x1b[?u");
+        let replies: Vec<_> = events
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|event| match event {
+                Event::ColorRequest(index, format) => format(
+                    super::super::terminal_colors::query_color(*index, terminal.colors()),
+                ),
+                _ => panic!("unexpected event: {event:?}"),
+            })
+            .collect();
+        assert_eq!(
+            replies,
+            [
+                "\x1b]4;1;rgb:1111/2222/3333\x1b\\",
+                "\x1b]10;rgb:d4d4/d4d4/d4d4\x1b\\"
+            ]
+        );
+    }
+
+    #[gpui::test]
+    fn old_generation_events_cannot_format_replies_for_the_replacement(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use gpui::AppContext;
+        let session = cx.new(|cx| {
+            TerminalSession::new_with_options(
+                Options {
+                    shell: Some(tty::Shell::new("/missing/knot-shell".into(), vec![])),
+                    ..Default::default()
+                },
+                cx,
+            )
+        });
+        session.update(cx, |session, cx| {
+            let generation = session.generation;
+            session.restart(cx);
+            let status = session.status();
+            session.apply_events(
+                generation,
+                vec![
+                    Event::PtyWrite("stale".into()),
+                    Event::TextAreaSizeRequest(Arc::new(|_| panic!("stale size formatter ran"))),
+                    Event::ColorRequest(0, Arc::new(|_| panic!("stale color formatter ran"))),
+                ],
+            );
+            assert_eq!(session.status(), status);
+            session.close(cx);
+        });
     }
 }

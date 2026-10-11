@@ -2,21 +2,21 @@ use alacritty_terminal::{
     grid::{Dimensions, Scroll},
     index::{Column, Line, Point as TermPoint, Side},
     selection::{Selection, SelectionType},
-    term::{cell::Flags, color::Colors, point_to_viewport},
-    vte::ansi::{Color, CursorShape, NamedColor, Rgb},
+    term::{cell::Flags, point_to_viewport},
+    vte::ansi::CursorShape,
 };
 use gpui::*;
 
 use super::{
     TERMINAL_KEY_CONTEXT,
+    terminal_colors::{BACKGROUND, FOREGROUND, dim, resolve_color},
+    terminal_input::terminal_key_bytes,
     terminal_layout::TerminalLayout,
     terminal_session::{TerminalAttachment, TerminalSession, TerminalSize, TerminalStatus},
     typography::{TEXT_SIZE, text_font},
 };
 
 const SCROLL_PIXELS_PER_LINE: f32 = 4.;
-const BACKGROUND: u32 = 0x181818;
-const FOREGROUND: u32 = 0xd4d4d4;
 
 /// Native terminal presentation attached to one stable session.
 pub(crate) struct TerminalView {
@@ -28,6 +28,7 @@ pub(crate) struct TerminalView {
     selecting: bool,
     interaction_bounds: Bounds<Pixels>,
     layout: Option<TerminalLayout>,
+    focus_subscriptions: Vec<Subscription>,
 }
 
 impl TerminalView {
@@ -62,7 +63,7 @@ impl TerminalView {
                 } else {
                     text.replace("\r\n", "\r").replace('\n', "\r")
                 };
-                self.session.read(cx).send(text.into_bytes());
+                self.send_user_input(text.into_bytes(), cx);
             }
             return CommandClaim::Finished(crate::host::protocol::CommandOutcome::Completed);
         }
@@ -85,6 +86,7 @@ impl TerminalView {
             .update(cx, |session, _| session.attach())
             .expect("terminal session already has a view");
         let subscription = cx.observe(&session, |_, _, cx| cx.notify());
+        cx.on_release(|view, cx| view.release_focus(cx)).detach();
         Self {
             session,
             attachment: Some(attachment),
@@ -94,11 +96,13 @@ impl TerminalView {
             selecting: false,
             interaction_bounds: Bounds::default(),
             layout: None,
+            focus_subscriptions: Vec::new(),
         }
     }
 
     /// Release the sole presentation before replacing or moving this view.
     pub(crate) fn detach(&mut self, cx: &mut Context<Self>) {
+        self.release_focus(cx);
         self.attachment = None;
         self.layout = None;
         self.selecting = false;
@@ -138,15 +142,49 @@ impl TerminalView {
         if self.session.read(cx).status() != TerminalStatus::Running {
             return;
         }
-        let bytes = terminal_key_bytes(&event.keystroke);
+        let mode = self
+            .session
+            .read(cx)
+            .terminal()
+            .map(|terminal| *terminal.lock().mode())
+            .unwrap_or_default();
+        let bytes = terminal_key_bytes(&event.keystroke, mode);
         if !bytes.is_empty() {
-            if let Some(terminal) = self.session.read(cx).terminal() {
-                terminal.lock().scroll_display(Scroll::Bottom);
-            }
-            self.scroll_delta_y = 0.;
-            self.session.read(cx).send(bytes);
+            self.send_user_input(bytes, cx);
             cx.stop_propagation();
         }
+    }
+
+    fn release_focus(&mut self, cx: &mut App) {
+        if let Some(attachment) = &self.attachment {
+            self.session
+                .update(cx, |session, _| session.set_focus(attachment, false));
+        }
+    }
+
+    fn sync_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(attachment) = &self.attachment {
+            let focused = self.focus.is_focused(window) && window.is_window_active();
+            self.session
+                .update(cx, |session, _| session.set_focus(attachment, focused));
+            cx.notify();
+        }
+    }
+
+    fn send_user_input(&mut self, bytes: Vec<u8>, cx: &mut Context<Self>) {
+        let Some(attachment) = &self.attachment else {
+            return;
+        };
+        if bytes.is_empty() || self.session.read(cx).status() != TerminalStatus::Running {
+            return;
+        }
+        let session = self.session.read(cx);
+        if let Some(terminal) = session.terminal() {
+            terminal.lock().scroll_display(Scroll::Bottom);
+        }
+        session.send_input(attachment, session.generation(), bytes);
+        self.scroll_delta_y = 0.;
+        cx.notify();
     }
 
     fn scroll(&mut self, delta: ScrollDelta, cx: &mut Context<Self>) {
@@ -211,52 +249,6 @@ impl TerminalView {
     }
 }
 
-fn terminal_key_bytes(keystroke: &Keystroke) -> Vec<u8> {
-    if keystroke.modifiers.platform {
-        return Vec::new();
-    }
-
-    let key = keystroke.key.to_lowercase();
-    let mut bytes = match key.as_str() {
-        "enter" => b"\r".to_vec(),
-        "backspace" => vec![0x7f],
-        "tab" => b"\t".to_vec(),
-        "escape" => vec![0x1b],
-        "up" => b"\x1b[A".to_vec(),
-        "down" => b"\x1b[B".to_vec(),
-        "right" => b"\x1b[C".to_vec(),
-        "left" => b"\x1b[D".to_vec(),
-        "home" => b"\x1b[H".to_vec(),
-        "end" => b"\x1b[F".to_vec(),
-        "delete" => b"\x1b[3~".to_vec(),
-        "pageup" => b"\x1b[5~".to_vec(),
-        "pagedown" => b"\x1b[6~".to_vec(),
-        _ if keystroke.modifiers.control => control_byte(&key).into_iter().collect(),
-        "space" => vec![b' '],
-        _ => keystroke
-            .key_char
-            .as_deref()
-            .unwrap_or_default()
-            .as_bytes()
-            .to_vec(),
-    };
-
-    if keystroke.modifiers.alt && !bytes.is_empty() {
-        bytes.insert(0, 0x1b);
-    }
-    bytes
-}
-
-fn control_byte(key: &str) -> Option<u8> {
-    let byte = key.as_bytes().first().copied()?;
-    match byte {
-        b'@'..=b'_' => Some(byte & 0x1f),
-        b'a'..=b'z' => Some(byte - b'a' + 1),
-        b'?' => Some(0x7f),
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use gpui::{Keystroke, Modifiers, TestAppContext};
@@ -270,7 +262,10 @@ mod tests {
             key_char: None,
             modifiers: Modifiers::default(),
         };
-        assert_eq!(terminal_key_bytes(&space), b" ");
+        assert_eq!(
+            terminal_key_bytes(&space, alacritty_terminal::term::TermMode::NONE),
+            b" "
+        );
     }
 
     #[cfg(unix)]
@@ -368,7 +363,15 @@ impl Focusable for TerminalView {
 }
 
 impl Render for TerminalView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.focus_subscriptions.is_empty() {
+            self.focus_subscriptions = vec![
+                cx.on_focus(&self.focus.clone(), window, Self::sync_focus),
+                cx.on_blur(&self.focus.clone(), window, Self::sync_focus),
+                cx.observe_window_activation(window, Self::sync_focus),
+            ];
+            self.sync_focus(window, cx);
+        }
         let entity = cx.entity();
         div()
             .size_full()
@@ -581,12 +584,15 @@ impl Element for TerminalElement {
         });
 
         let entity = self.entity.clone();
-        window.on_mouse_event(move |event: &MouseDownEvent, phase, _, cx| {
+        window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
             if phase == DispatchPhase::Bubble
                 && event.button == MouseButton::Left
                 && bounds.contains(&event.position)
             {
                 entity.update(cx, |terminal, cx| {
+                    if terminal.attachment.is_some() {
+                        terminal.focus.focus(window);
+                    }
                     terminal.select_at(event.position, bounds, true, cx);
                 });
             }
@@ -730,72 +736,4 @@ impl Element for TerminalElement {
             }
         });
     }
-}
-
-fn resolve_color(color: Color, overrides: &Colors, default: u32) -> u32 {
-    let rgb = match color {
-        Color::Spec(rgb) => rgb,
-        Color::Named(named) => overrides[named].unwrap_or_else(|| named_color(named, default)),
-        Color::Indexed(index) => overrides[index as usize].unwrap_or_else(|| indexed_color(index)),
-    };
-    (u32::from(rgb.r) << 16) | (u32::from(rgb.g) << 8) | u32::from(rgb.b)
-}
-
-fn named_color(color: NamedColor, default: u32) -> Rgb {
-    if color == NamedColor::Foreground || color == NamedColor::BrightForeground {
-        return hex_rgb(default);
-    }
-    if color == NamedColor::Background {
-        return hex_rgb(BACKGROUND);
-    }
-    let index = color as usize;
-    if index < 16 {
-        indexed_color(index as u8)
-    } else if (NamedColor::DimBlack as usize..=NamedColor::DimWhite as usize).contains(&index) {
-        indexed_color((index - NamedColor::DimBlack as usize) as u8)
-    } else {
-        hex_rgb(default)
-    }
-}
-
-fn indexed_color(index: u8) -> Rgb {
-    const ANSI: [u32; 16] = [
-        0x000000, 0xcd3131, 0x0dbc79, 0xe5e510, 0x2472c8, 0xbc3fbc, 0x11a8cd, 0xe5e5e5, 0x666666,
-        0xf14c4c, 0x23d18b, 0xf5f543, 0x3b8eea, 0xd670d6, 0x29b8db, 0xffffff,
-    ];
-    match index {
-        0..=15 => hex_rgb(ANSI[index as usize]),
-        16..=231 => {
-            let value = index - 16;
-            let component = |part: u8| if part == 0 { 0 } else { 55 + part * 40 };
-            Rgb {
-                r: component(value / 36),
-                g: component((value % 36) / 6),
-                b: component(value % 6),
-            }
-        }
-        232..=255 => {
-            let level = 8 + (index - 232) * 10;
-            Rgb {
-                r: level,
-                g: level,
-                b: level,
-            }
-        }
-    }
-}
-
-fn hex_rgb(color: u32) -> Rgb {
-    Rgb {
-        r: (color >> 16) as u8,
-        g: (color >> 8) as u8,
-        b: color as u8,
-    }
-}
-
-fn dim(color: u32) -> u32 {
-    let rgb = hex_rgb(color);
-    ((u32::from(rgb.r) * 2 / 3) << 16)
-        | ((u32::from(rgb.g) * 2 / 3) << 8)
-        | (u32::from(rgb.b) * 2 / 3)
 }

@@ -138,6 +138,13 @@ the item is removed from this register.
 
 ## Terminals and generated surfaces
 
+- **D040 — Physical application-keypad input**
+  - Deferred: gpui 0.2.2 merges numeric-keypad keys with ordinary key identities.
+    D026 retains numeric input but cannot emit distinct application-keypad
+    sequences. The user chose deferral over vendoring gpui for a platform patch.
+  - Reconsider: gpui exposes keypad identity, or a concrete TUI workflow requires
+    a framework patch and its platform maintenance cost.
+
 - **D038 — Remote PTYs**
   - Deferred: Local interactive sessions cover current terminal workflows.
   - Reconsider: Daily use requires remote shells; select transport,

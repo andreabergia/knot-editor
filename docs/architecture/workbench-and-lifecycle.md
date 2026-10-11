@@ -160,8 +160,13 @@ choice leaves the workbench intact.
 `TerminalSession` is a stable gpui foreground model that owns one local PTY,
 Alacritty emulator grid, process status, authoritative grid size, and one
 coalesced wakeup path. Alacritty's event loop reads, parses, and writes on a
-background thread. Its child-exit and repaint events reach the session; the
-view observes session changes for repaint. A session survives release or
+background thread. Repaint wakeups coalesce, while emulator writes, color and
+size requests, and child exit stay in an ordered semantic queue. The foreground
+session drains that queue against the captured process generation and sends
+replies through its live PTY channel. Color replies share the drawing palette;
+size replies use the authoritative grid and physical cell dimensions. Title,
+bell, and OSC 52 events do not access application features or the clipboard.
+The view observes session changes for repaint. A session survives release or
 reconstruction of that view. Shutdown sends the event-loop signal and joins its thread on a
 background thread; restart replaces the process and grid. Generation checks
 prevent old process events from changing the replacement.
@@ -187,8 +192,24 @@ input and size changes to its session, and the session retains the final grid
 and exit status after natural process exit. Startup failure remains visible as
 a status and can be retried by restarting. Restart is a view-local action that
 replaces the session's process and grid while keeping its registry identity.
+Keyboard input reads current emulator modes after command/keymap precedence.
+Normal cursor/Home/End keys use CSI; application cursor mode uses SS3.
+Function keys F1–F12, Insert/Delete/Page keys, and Shift/Alt/Control combinations
+use legacy xterm encodings. Alt uses an Escape prefix for text/control keys;
+on ASCII keys it sends the key identity rather than an Option-composed glyph.
 Physical Space input is sent as a space byte even when the platform key event
-has no text character.
+has no text character. Physical application-keypad input is deferred because
+gpui does not retain numeric-keypad identity. Advanced keyboard protocols are
+disabled. Nonempty keyboard and paste input reveal the live grid; focus reports
+and emulator replies preserve the displayed scrollback position.
+
+Terminal focus is the conjunction of its exact focus handle and native window
+activation. Focus/blur and activation subscriptions update emulator focus and
+send CSI I/O only on actual transitions when reporting is requested. Detach or
+release reports focus loss before relinquishing the lease; a new attachment
+reports its own focus. Restart retains actual focus without inventing a new
+transition. View input checks the current attachment and process generation;
+stopped or detached views cannot write input.
 New Terminal creates a registered
 session and one tab presentation in the captured pane. Tab switching retains
 both; splitting a terminal allocates an independent session. A successful

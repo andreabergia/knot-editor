@@ -70,7 +70,9 @@ mod resource;
     reason = "retained native generated-text surface outside the current product shell"
 )]
 mod search_results;
+mod terminal_colors;
 mod terminal_fixture;
+mod terminal_input;
 mod terminal_layout;
 #[allow(
     dead_code,

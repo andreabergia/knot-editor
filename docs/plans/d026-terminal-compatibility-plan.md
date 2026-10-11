@@ -1,6 +1,6 @@
 # D026: Terminal Compatibility, Typography, Mouse, and Links
 
-Status: 🚧 checkpoint 1 implemented; automated verification passed; native review pending.
+Status: 🚧 checkpoint 1 accepted; checkpoint 2 implemented, native review pending.
 
 Promoted from D026 in the [roadmap](../roadmap.md). This slice makes the local
 terminal usable with ordinary shells and representative TUIs: Vim, less, and
@@ -24,7 +24,7 @@ References: [architecture](../architecture.md),
   coordinates, grid dimensions, and PTY pixel sizing use the same geometry;
   fallback glyphs retain the emulator's one- or two-cell allocation.
 - Define and test the shell/TUI compatibility contract: ordinary text and
-  control input, cursor and keypad application modes, common function and
+  control input, cursor application mode (physical keypad deferred below), common function and
   modified navigation keys, bracketed paste, alternate-screen interaction,
   requested focus reporting, and emulator replies needed by the selected
   workflows. Audit the adapter first; preserve behavior already handled by
@@ -51,7 +51,8 @@ References: [architecture](../architecture.md),
 
 ## Exclusions and deferred choices
 
-No general settings system, advanced keyboard protocols (including Kitty and
+No physical application-keypad input ([D040](../roadmap.md)), general settings
+system, advanced keyboard protocols (including Kitty and
 modifyOtherKeys), terminal graphics, arbitrary URI handlers, filesystem-path
 links, remote PTYs (D038), shell integration (D039), session persistence, or
 simultaneous views. Do not broaden clipboard access through OSC 52 as part of
@@ -123,32 +124,87 @@ Checkpoint 1 implementation choices and evidence:
   regression coverage verifies full glyph height and baseline containment for
   negative descent at every tested scale. Native Core Graphics inspection of
   Menlo confirmed ascent 1901 and descent −483 at 2048 units/em, giving a
-  16.296875 logical-pixel height at 14px. Native acceptance must be repeated.
-- ⏳ Native macOS gate remains open: check ASCII, Arabic, CJK, emoji, combining
+  16.296875 logical-pixel height at 14px.
+- ✅ User accepted the corrected native rendering on 2026-10-11 (“ok seems
+  good now”). Checkpoint 1 review gate passed. Original acceptance checklist:
+  ASCII, Arabic, CJK, emoji, combining
   marks, and box drawing for baseline/clipping; resize and transfer a live
-  terminal. No native Linux/Windows acceptance is claimed. Do not start
-  checkpoint 2 until this review passes.
+  terminal. No native Linux/Windows acceptance is claimed.
 
 ## Checkpoint 2: Shell and TUI input/output compatibility
 
-- [ ] Audit the installed Alacritty adapter's mode and event contracts; record
+- [x] ✅ Audit the installed Alacritty adapter's mode and event contracts; record
   the bounded input/reply matrix required by shells, Vim, less, and tmux.
-- [ ] Implement mode-aware keyboard encoding and actual focus transitions.
+- [x] ✅ Implement mode-aware keyboard encoding and actual focus transitions.
   Route required emulator write/reply events through the live PTY channel
   without losing semantic events in repaint coalescing or applying stale
   generation events after restart.
-- [ ] Preserve command precedence, plain/bracketed paste, stopped-session
+- [x] ✅ Preserve command precedence, plain/bracketed paste, stopped-session
   behavior, and scroll-to-bottom policy for user input.
-- [ ] Test byte-level mode/modifier cases and parser-driven reply behavior.
+- [x] ✅ Test byte-level mode/modifier cases and parser-driven reply behavior.
   Use PTY integration coverage for input/reply delivery and gpui tests for
   command precedence and focus transitions. Cover restart/detach/transfer
   boundaries and regress existing Copy/Paste behavior.
-- [ ] Document the supported contract and validated adapter decisions.
+- [x] ✅ Document the supported contract and validated adapter decisions.
 
 Review gate: review the compatibility matrix and lifecycle routing. User runs
 a shell, Vim, less, and tmux through navigation, function keys, paste,
 alternate-screen entry/exit, and focus changes; record application versions
 and reproducible gaps. Resolve contract failures before mouse work.
+
+Checkpoint 2 implementation choices and evidence:
+
+- Audited installed `alacritty_terminal` 0.26.0 and gpui 0.2.2 from dependency
+  source. The emulator owns parsing, cursor/keypad/paste/focus modes, primary
+  and alternate grids, device/status/mode replies, and color/size query formatters.
+  Knot owns keyboard bytes and generation-checked semantic delivery. Repaint
+  notifications coalesce independently; semantic events remain ordered.
+- The user explicitly deferred physical application-keypad support rather than
+  vendor gpui (2026-10-11). macOS merges keypad Enter/digits into ordinary keys;
+  Linux strips keypad prefixes, and Windows similarly loses physical identity.
+  Alacritty still tracks APP_KEYPAD; ordinary numeric input is preserved. D040
+  records the remaining requirement. No framework fork was introduced.
+
+| Input / event | Supported bytes or behavior |
+| --- | --- |
+| Text / Space | UTF-8 text; physical Space sends `20` even without text metadata |
+| Enter / Tab / Escape / Backspace | CR / HT / ESC / DEL; Control-Backspace sends BS |
+| Control letters and punctuation | C0 mappings, including Space/@/2 → NUL and bracket, slash, caret, underscore aliases |
+| Arrows / Home / End | CSI A/B/C/D/H/F normally; SS3 equivalents with APP_CURSOR |
+| F1–F4 | SS3 P/Q/R/S; modified keys use CSI 1;m P/Q/R/S |
+| Insert / Delete / Page Up / Page Down | CSI 2/3/5/6~; modifiers add `;m` |
+| F5–F12 | CSI 15/17/18/19/20/21/23/24~; modifiers add `;m` |
+| Modified cursor / Home / End | CSI 1;m final, in either cursor mode |
+| Modifier parameter | m = 1 + Shift(1) + Alt(2) + Control(4) |
+| Shift-Tab | CSI Z; additional modifiers use CSI 1;m Z |
+| Alt text/control | ESC prefix; ASCII key identity preserves Meta shortcuts instead of Option-composed text |
+| Platform shortcuts | Product command/keymap precedence; unmatched Command/Super input produces no terminal bytes |
+| Paste | Shared command; plain CR normalization or emulator-requested bracketed framing with embedded ESC removed |
+| Focus | CSI I/O for actual terminal focus + window activation transitions, only with FOCUS_IN_OUT |
+| Device / status / cursor / mode queries | Emulator PtyWrite replies, unchanged, through the live generation |
+| Color queries | Emulator formatter with drawing palette and current emulator overrides; no clipboard access |
+| Size queries | Emulator formatter with authoritative rows/columns and physical cell dimensions |
+| Alternate screen | Emulator entry/exit and grid restoration; mouse/alternate scrolling remain checkpoint 3 |
+| Physical keypad / advanced keyboard / OSC 52 | Physical keypad deferred by user; Kitty disabled; no new clipboard access |
+
+- Automated coverage includes every Shift/Alt/Control combination for supported
+  navigation/function keys; parser-driven modes and ordered replies under
+  saturated repaint wakeups; palette replies and OSC 52 exclusion; real PTY
+  reply bytes; gpui command precedence, UTF-8/control delivery, focus and window
+  activation, and cross-window attachment handoff; stale parser/input generations
+  after restart; paste scroll-to-bottom, stopped Copy/Paste, detached commands;
+  existing session/product transfer, protected closure, and command regressions.
+- Real application fixtures passed on this macOS host: Vim 9.1 (patches 1–1752)
+  with clean config edited a file and exited; less 668 paged to the end and
+  exited. Both entered alternate screen and restored the primary grid. Fixture
+  tests report unavailable executables on hosts lacking them. Host shell is
+  zsh 5.9; PTY protocol fixtures use `/bin/sh`. tmux is not installed on this
+  host, so no tmux or native Linux/Windows acceptance is claimed.
+- ✅ `cargo test --lib -- --test-threads=1` passed all 500 tests on macOS.
+  `cargo fmt` ran once after Rust work; `git diff --check` passed.
+- ⏳ Native review gate: shell, Vim, less, and tmux navigation, function keys,
+  paste, alternate-screen entry/exit, and focus changes. Record the actual
+  versions and gaps from that review before checkpoint 3.
 
 ## Checkpoint 3: Application mouse reporting and local override
 
