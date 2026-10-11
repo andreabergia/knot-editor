@@ -138,10 +138,15 @@ the item is removed from this register.
 
 ## Terminals and generated surfaces
 
-- **D025 — Terminal persistence, simultaneous views, remote PTYs, and shell
-  integration**
-  - Deferred: These exceed the validated local interactive-session use case.
-  - Reconsider: Real terminal workflows require them.
+- **D038 — Remote PTYs**
+  - Deferred: Local interactive sessions cover current terminal workflows.
+  - Reconsider: Daily use requires remote shells; select transport,
+    authentication, and disconnect behavior for a concrete workflow.
+
+- **D039 — Shell integration**
+  - Deferred: Ordinary terminal input and output cover current shell workflows.
+  - Reconsider: Daily use requires working-directory tracking, command
+    boundaries, or exit status; select supported shells and integration setup.
 
 - **D027 — Additional generated text surfaces**
   - Deferred: Search did not expose another architectural boundary.
