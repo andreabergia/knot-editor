@@ -2148,7 +2148,8 @@ impl ProductShell {
                     .filter(|(document, count)| total_counts.get(document) == Some(count))
                     .map(|(document, _)| *document)
                     .collect::<Vec<_>>();
-                match cx.update_window(plan.request.origin.window, |_, window, _| {
+                match cx.update_window(plan.request.origin.window, |_, window, cx| {
+                    tab_drag::cancel_source_window(window, cx);
                     window.remove_window();
                 }) {
                     Ok(()) => {

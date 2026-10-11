@@ -106,7 +106,8 @@ The floating title uses the shared screen pointer and compensates for each
 window's stale local mouse position. Every pointer update repaints feedback,
 including movement within one unchanged target. Completion, invalid release,
 or Escape clears the pointer and all previews. Closing a source window cancels
-the shared drag; closing a destination removes its geometry. The coordinator
+the shared and framework drag before removal, including when it is the final
+window. Closing a destination removes its geometry. The coordinator
 owns neither shell nor workbench lifetime. When platform stacking order is
 unavailable, the receiving window is checked first.
 

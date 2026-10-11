@@ -291,6 +291,25 @@ pub(super) fn coordinator(cx: &mut App) -> Rc<RefCell<TabDragCoordinator>> {
     cx.global::<ApplicationTabDrag>().0.clone()
 }
 
+pub(super) fn cancel_source_window(window: &mut Window, cx: &mut App) {
+    let Some(shared) = cx
+        .try_global::<ApplicationTabDrag>()
+        .map(|global| global.0.clone())
+    else {
+        return;
+    };
+    let is_source = shared
+        .borrow()
+        .active
+        .as_ref()
+        .is_some_and(|active| active.window == window.window_handle());
+    if is_source {
+        shared.borrow_mut().clear();
+        cx.stop_active_drag(window);
+        cx.refresh_windows();
+    }
+}
+
 fn commit_drop_with(
     active: ActiveTabDrag,
     action: DropAction,

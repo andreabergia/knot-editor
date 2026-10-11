@@ -255,16 +255,17 @@ checkpoint 4 connects that interaction to the validated event path.
   and pending edit-driven caret reveals still apply. The dirty last-view test
   checks cursor, selection, scroll, view entity, view counts, command invalidation,
   and source replacement after actual dispatched tear-out.
-- ✅ Eight additional product-boundary tests cover source-delivered cross-window
+- ✅ Nine additional product-boundary tests cover source-delivered cross-window
   insertion, center, and all four edges; bidirectional moves; destination-delivered
   release; compensated label bounds and movement; Escape across windows and on
   desktop; failed tear-out creation; stale presentation and closed destinations;
-  source closure cleanup; overlays and title-bar occlusion; negative display
-  origins; dirty last-view replacement; and two live terminal attachment handoffs
+  source closure cleanup, including final-window closure and reopening;
+  overlays and title-bar occlusion; negative display origins; dirty last-view
+  replacement; and two live terminal attachment handoffs
   through an existing window and desktop tear-out. Checkpoint 2 retains its
   failed/stale creation and terminal lifecycle regression coverage.
 
-✅ Validation: `cargo test --all-targets --quiet` passes (482 library tests
+✅ Validation: `cargo test --all-targets --quiet` passes (483 library tests
 plus 5 drag-probe tests); `cargo check --quiet` passes; Rust was formatted
 with `cargo fmt`.
 

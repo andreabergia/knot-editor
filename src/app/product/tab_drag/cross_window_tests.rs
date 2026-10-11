@@ -716,3 +716,48 @@ fn destination_overlay_and_desktop_escape_do_not_move_or_create_windows(cx: &mut
     drop(visual);
     assert_cleared(cx);
 }
+
+#[gpui::test]
+fn closing_final_source_window_clears_framework_drag_before_reopening(cx: &mut TestAppContext) {
+    let documents = install_globals(cx);
+    let document = cx.update(|cx| create_untitled_document(&documents, cx));
+    let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+    let (shell, window) = crate::app::product::tests::product_window(document, model, cx);
+    let target = cx
+        .update_window(window, |_, window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.focus_active_surface(window, cx);
+                shell.capture_command_target(window, cx).unwrap()
+            })
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let mut visual = VisualTestContext::from_window(window, cx);
+    start_drag(&mut visual, 1);
+    drop(visual);
+    cx.update(|cx| {
+        ProductShell::begin_protected_close(
+            super::super::ProtectedCloseKind::Window,
+            target,
+            None,
+            cx,
+        );
+    });
+    cx.run_until_parked();
+    assert!(cx.windows().is_empty());
+    assert_cleared(cx);
+    let document = cx.update(|cx| create_untitled_document(&documents, cx));
+    let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+    let (shell, window) = crate::app::product::tests::product_window(document, model, cx);
+    cx.update_window(window, |_, window, cx| {
+        shell.read(cx).focus_active_surface(window, cx)
+    })
+    .unwrap();
+    cx.run_until_parked();
+    let mut visual = VisualTestContext::from_window(window, cx);
+    start_drag(&mut visual, 1);
+    visual.simulate_keystrokes("escape");
+    visual.run_until_parked();
+    drop(visual);
+    assert_cleared(cx);
+}
