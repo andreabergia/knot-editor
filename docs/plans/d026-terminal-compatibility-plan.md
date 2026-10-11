@@ -102,7 +102,7 @@ Checkpoint 1 implementation choices and evidence:
   pixels with Geeza Pro, PingFang SC, and Apple Color Emoji fallbacks. Editor
   line height remains 20 logical pixels. Missing fonts use gpui's platform font
   resolution; these macOS families do not imply Linux/Windows font availability.
-- Terminal cells use the resolved primary font's `M` advance and ascent + descent,
+- Terminal cells use the resolved primary font's `M` advance and ascent + absolute descent,
   rounded upward to whole physical pixels, then converted to logical pixels.
   The primary baseline is centered in that height; fallback glyphs share it and
   are clipped to their emulator allocation. Fractional viewport remainders do
@@ -116,7 +116,14 @@ Checkpoint 1 implementation choices and evidence:
   text beside a wide CJK cell; existing child-PTY resize and terminal transfer,
   attachment, shutdown, restart, and clipboard regressions.
 - ✅ Verification on macOS: `cargo test --lib -- --test-threads=1` passed
-  all 486 tests. `cargo fmt` ran once after Rust work; `git diff --check` passed.
+  all 487 tests after the signed-descent correction. `cargo fmt` ran once after Rust work; `git diff --check` passed.
+- 🛠️ Native review reported vertically clipped shell output. gpui's raw font
+  metrics expose signed descent, whereas shaped lines use a positive descent
+  distance. Normalize the raw descent before measuring height and baseline;
+  regression coverage verifies full glyph height and baseline containment for
+  negative descent at every tested scale. Native Core Graphics inspection of
+  Menlo confirmed ascent 1901 and descent −483 at 2048 units/em, giving a
+  16.296875 logical-pixel height at 14px. Native acceptance must be repeated.
 - ⏳ Native macOS gate remains open: check ASCII, Arabic, CJK, emoji, combining
   marks, and box drawing for baseline/clipping; resize and transfer a live
   terminal. No native Linux/Windows acceptance is claimed. Do not start

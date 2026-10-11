@@ -32,6 +32,8 @@ impl TerminalLayout {
     }
 
     fn from_metrics(width: Pixels, ascent: Pixels, descent: Pixels, scale_factor: f32) -> Self {
+        // Font metrics use a signed descent; shaped lines expose its positive distance.
+        let descent = px(f32::from(descent).abs());
         let round =
             |value: Pixels| px((f32::from(value) * scale_factor).ceil().max(1.) / scale_factor);
         let cell_height = round(ascent + descent);
@@ -149,6 +151,21 @@ mod tests {
             let baseline = painted.y + (layout.cell_height - ascent - descent) / 2. + ascent;
             assert!((f32::from(baseline - origin.y - layout.baseline)).abs() < 0.001);
             assert_eq!(painted.x, origin.x);
+        }
+    }
+
+    #[test]
+    fn signed_font_descent_preserves_the_full_glyph_height() {
+        for scale in [1., 1.25, 1.5, 2.] {
+            let layout = TerminalLayout::from_metrics(px(8.1), px(11.2), px(-3.3), scale);
+            let shaped_ascent = px(11.2);
+            let shaped_descent = px(3.3);
+            assert!(layout.cell_height >= shaped_ascent + shaped_descent);
+            let origin = point(px(0.), px(0.));
+            let painted = layout.text_origin(origin, shaped_ascent, shaped_descent);
+            assert!(f32::from(painted.y).abs() < 0.001);
+            assert!(layout.baseline >= shaped_ascent);
+            assert!(layout.baseline + shaped_descent <= layout.cell_height);
         }
     }
 }

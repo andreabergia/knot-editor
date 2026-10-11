@@ -169,8 +169,9 @@ prevent old process events from changing the replacement.
 `TerminalView` owns focus, scroll interaction, layout, and gpui drawing.
 The editor and terminal share application font defaults: 14 logical pixels,
 Menlo, and the Arabic/CJK/emoji fallback cascade. Each terminal layout measures
-the resolved primary font's advance, ascent, and descent, rounding cell width
-and height up to whole physical pixels for the destination window's scale.
+the resolved primary font's advance, ascent, and absolute descent distance,
+rounding cell width and height up to whole physical pixels for the destination
+window's scale.
 This view-owned geometry supplies drawing, baseline, pointer-to-cell conversion,
 viewport dimensions, and PTY physical cell dimensions. Fallback glyphs align to
 the primary baseline and remain clipped to the emulator's one- or two-cell
