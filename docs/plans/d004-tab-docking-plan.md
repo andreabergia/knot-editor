@@ -1,7 +1,7 @@
 # D004: Tab dragging and docking
 
-Status: ✅ checkpoints 1–3 approved. Checkpoint 4 implementation and
-automated coverage are complete; ⏳ end-to-end macOS review remains open.
+Status: ✅ Complete. All four checkpoints and their review gates passed.
+Final macOS acceptance: 2026-10-11 ("ok works really well").
 
 Source: D004, promoted from the [deferred-work register](../roadmap.md).
 Current boundaries: [architecture](../architecture.md),
@@ -50,16 +50,16 @@ requires a new attachment; the session remains registered and running.
 
 ### ✅ 1. Validate drag delivery across window boundaries
 
-- Prove the gpui 0.2.2 event path for reorder, inter-pane, inter-window, and
+- ✅ Prove the gpui 0.2.2 event path for reorder, inter-pane, inter-window, and
   outside-window release on macOS, including cancellation. Its in-window
   `on_drag`/`on_drop` API is present, but cross-window and desktop release
   delivery must be established before choosing the interaction adapter.
-- If gpui cannot deliver a required gesture, define the smallest native or
+- ✅ If gpui cannot deliver a required gesture, define the smallest native or
   framework adapter needed while keeping drop semantics in the product shell.
   Record the actual event behavior and selected path in this plan.
-- Validate with a focused diagnostic and a manual drag matrix. Do not narrow
+- ✅ Validate with a focused diagnostic and a manual drag matrix. Do not narrow
   the agreed window or tear-out outcome at this gate without review.
-- **Review gate:** approve the event path and visible drag/drop affordance.
+- ✅ **Review gate:** approve the event path and visible drag/drop affordance.
 
 #### Checkpoint 1 evidence and manual gate
 
@@ -219,20 +219,21 @@ Run `cargo run --bin knot` and check:
 - Escape with editor or terminal focus, and release over the toolbar;
 - destination focus and unchanged source state after cancellation.
 
-The user also reported that dragging between windows does not yet work;
-checkpoint 4 connects that interaction to the validated event path.
+At this gate the user also reported that dragging between windows did not
+yet work; checkpoint 4 connected that interaction to the validated event path.
 
-### 4. Complete cross-window moves and tear-out
+### ✅ 4. Complete cross-window moves and tear-out
 
 - ✅ Connect drops into other Knot windows and outside-window tear-out to the
   selected event path. Create a destination window before removing the source;
   preserve its document editor or terminal session and focus the destination.
 - ✅ Test destination failure, stale or closed windows, last-tab replacement,
   dirty document transfer without prompts, and terminal continuity.
-- ⏳ Manually review both window gestures and a live terminal transfer on macOS.
+- ✅ Manual macOS review accepted by the user on 2026-10-11
+  ("ok works really well").
 - ✅ Update the workbench architecture reference and decisions with validated
   behavior and rationale; mark completed checkpoints with ✅.
-- ⏳ **Review gate:** approve the end-to-end D004 slice and automated coverage.
+- ✅ **Review gate:** end-to-end D004 slice and automated coverage accepted.
 
 #### Checkpoint 4 implementation and review evidence
 
@@ -274,15 +275,19 @@ position them side by side. Review without UI automation:
 
 | Gesture | Expected result | Result |
 | --- | --- | --- |
-| Document to other window's bar, center, and each edge | Accurate preview; one moved view; destination focused | ⏳ |
-| Reverse window direction; move label within one target | Label follows pointer; one successful drop | ⏳ |
-| Dirty final document tab to desktop | New focused window; cursor/selection/scroll retained; source replaced with untitled; no save prompt | ⏳ |
-| Live terminal to other window, then desktop | Same process and grid; input/resize works; one attached presentation | ⏳ |
-| Escape over other window or desktop, then drag again | No mutation/new window; no stuck preview; next drag succeeds | ⏳ |
-| Release over toolbar or title bar | No mutation/new window; feedback cleared | ⏳ |
-| Overlapping windows and, if available, different displays | Foremost window receives drop; geometry and label remain correct | ⏳ |
+| Document to other window's bar, center, and each edge | Accurate preview; one moved view; destination focused | ✅ User acceptance |
+| Reverse window direction; move label within one target | Label follows pointer; one successful drop | ✅ User acceptance |
+| Dirty final document tab to desktop | New focused window; cursor/selection/scroll retained; source replaced with untitled; no save prompt | ✅ User acceptance |
+| Live terminal to other window, then desktop | Same process and grid; input/resize works; one attached presentation | ✅ User acceptance |
+| Escape over other window or desktop, then drag again | No mutation/new window; no stuck preview; next drag succeeds | ✅ User acceptance |
+| Release over toolbar or title bar | No mutation/new window; feedback cleared | ✅ User acceptance |
+| Overlapping windows and, if available, different displays | Foremost window receives drop; geometry and label remain correct | ✅ User acceptance |
 
-The automated bounds checks establish coordinate math and gpui dispatch only.
-Native macOS behavior and the end-to-end acceptance gate still require the
-user's manual review. Archive this plan in a separate final commit after that
-gate passes.
+The automated bounds checks establish coordinate math and gpui dispatch.
+The user accepted the final macOS review on 2026-10-11 ("ok works really well")
+after the requested cross-window, desktop, cancellation, and terminal checks.
+Native acceptance relies on that overall report, without separately logged
+gesture results. The display configuration was not reported; synthetic tests
+cover negative origins and distinct content offsets without claiming a native
+multi-display test. All required implementation, documentation, automated
+coverage, and review gates are complete.
