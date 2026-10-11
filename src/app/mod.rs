@@ -71,6 +71,7 @@ mod resource;
 )]
 mod search_results;
 mod terminal_fixture;
+mod terminal_layout;
 #[allow(
     dead_code,
     reason = "session helpers also serve the diagnostic terminal fixture"
@@ -84,6 +85,7 @@ mod terminal_session_tests;
 )]
 mod terminal_view;
 mod tree_view;
+mod typography;
 mod workbench;
 #[allow(
     dead_code,

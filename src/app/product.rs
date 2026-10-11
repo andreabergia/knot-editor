@@ -9192,11 +9192,20 @@ await commands.registerForView("outline", "copy", async () => {
             );
         })
         .unwrap();
-        let destination_size =
-            crate::app::terminal_session::TerminalSize::from_pixels(640., 320., 1.);
+        let destination_size = crate::app::terminal_session::TerminalSize {
+            columns: 80,
+            lines: 20,
+            cell_width: 9,
+            cell_height: 18,
+        };
         destination_view.update(cx, |view, cx| view.resize(destination_size, cx));
         cx.read(|cx| assert_eq!(session.read(cx).size(), destination_size));
-        let stale_size = crate::app::terminal_session::TerminalSize::from_pixels(320., 160., 1.);
+        let stale_size = crate::app::terminal_session::TerminalSize {
+            columns: 40,
+            lines: 10,
+            cell_width: 9,
+            cell_height: 18,
+        };
         source_view.update(cx, |view, cx| view.resize(stale_size, cx));
         cx.read(|cx| assert_eq!(session.read(cx).size(), destination_size));
         cx.read(|cx| {

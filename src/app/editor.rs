@@ -18,6 +18,7 @@ use crate::host::protocol::{
 };
 
 use super::product_commands as commands;
+use super::typography::{TEXT_SIZE as FONT_SIZE, text_font as make_font};
 
 use super::{
     CompletionAccept, CompletionDismiss, CompletionNext, CompletionPrevious, EDITOR_KEY_CONTEXT,
@@ -2383,25 +2384,6 @@ fn runs_for(line: &str, segs: &[Seg]) -> Vec<TextRun> {
     out
 }
 
-fn make_font(bold: bool, italic: bool) -> Font {
-    let mut font = gpui::font("Menlo");
-    if bold {
-        font = font.bold();
-    }
-    if italic {
-        font = font.italic();
-    }
-    // Menlo has no Arabic/CJK/emoji glyphs; add fallbacks so Core Text
-    // substitutes the system fonts for those ranges. The cascade order is
-    // Geeza Pro (Arabic), PingFang SC (CJK), then Apple Color Emoji.
-    font.fallbacks = Some(FontFallbacks::from_fonts(vec![
-        "Geeza Pro".into(),
-        "PingFang SC".into(),
-        "Apple Color Emoji".into(),
-    ]));
-    font
-}
-
 /// Heuristic: is this line's base direction right-to-left? Scans for the
 /// first strong directional character (a letter) and checks whether it
 /// falls in an RTL Unicode block (Arabic or Hebrew). Lines starting with
@@ -2502,7 +2484,6 @@ fn x_for_index_dir(s: &ShapedLine, index: usize, line_str: &str) -> Pixels {
     best.unwrap_or(if rtl_base { px(0.) } else { s.width })
 }
 
-const FONT_SIZE: f32 = 14.0;
 const LINE_HEIGHT: f32 = 20.0;
 
 type EditorPaintState = (

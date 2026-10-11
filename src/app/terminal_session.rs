@@ -19,8 +19,6 @@ use gpui::{Context, Task};
 
 const INITIAL_COLUMNS: usize = 80;
 const INITIAL_LINES: usize = 11;
-const CELL_WIDTH: f32 = 8.;
-const CELL_HEIGHT: f32 = 16.;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct TerminalSize {
@@ -35,26 +33,13 @@ impl TerminalSize {
         Self {
             columns: INITIAL_COLUMNS,
             lines: INITIAL_LINES,
-            cell_width: CELL_WIDTH as u16,
-            cell_height: CELL_HEIGHT as u16,
+            // The attached view supplies measured pixel dimensions on first layout.
+            cell_width: 1,
+            cell_height: 1,
         }
     }
 
-    pub(crate) fn from_pixels(width: f32, height: f32, scale_factor: f32) -> Self {
-        Self {
-            columns: (width / CELL_WIDTH).floor() as usize,
-            lines: (height / CELL_HEIGHT).floor() as usize,
-            cell_width: (CELL_WIDTH * scale_factor)
-                .round()
-                .clamp(1., u16::MAX as f32) as u16,
-            cell_height: (CELL_HEIGHT * scale_factor)
-                .round()
-                .clamp(1., u16::MAX as f32) as u16,
-        }
-        .clamped()
-    }
-
-    fn clamped(mut self) -> Self {
+    pub(crate) fn clamped(mut self) -> Self {
         self.columns = self.columns.clamp(MIN_COLUMNS, u16::MAX as usize);
         self.lines = self.lines.clamp(MIN_SCREEN_LINES, u16::MAX as usize);
         self

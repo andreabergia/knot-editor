@@ -9,12 +9,11 @@ use gpui::*;
 
 use super::{
     TERMINAL_KEY_CONTEXT,
+    terminal_layout::TerminalLayout,
     terminal_session::{TerminalAttachment, TerminalSession, TerminalSize, TerminalStatus},
+    typography::{TEXT_SIZE, text_font},
 };
 
-const CELL_WIDTH: f32 = 8.;
-const CELL_HEIGHT: f32 = 16.;
-const FONT_SIZE: f32 = 13.;
 const SCROLL_PIXELS_PER_LINE: f32 = 4.;
 const BACKGROUND: u32 = 0x181818;
 const FOREGROUND: u32 = 0xd4d4d4;
@@ -28,6 +27,7 @@ pub(crate) struct TerminalView {
     scroll_delta_y: f32,
     selecting: bool,
     interaction_bounds: Bounds<Pixels>,
+    layout: Option<TerminalLayout>,
 }
 
 impl TerminalView {
@@ -93,12 +93,15 @@ impl TerminalView {
             scroll_delta_y: 0.,
             selecting: false,
             interaction_bounds: Bounds::default(),
+            layout: None,
         }
     }
 
     /// Release the sole presentation before replacing or moving this view.
     pub(crate) fn detach(&mut self, cx: &mut Context<Self>) {
         self.attachment = None;
+        self.layout = None;
+        self.selecting = false;
         cx.notify();
     }
 
@@ -150,7 +153,10 @@ impl TerminalView {
         if self.attachment.is_none() {
             return;
         }
-        let delta = delta.pixel_delta(px(CELL_HEIGHT));
+        let Some(layout) = self.layout else {
+            return;
+        };
+        let delta = delta.pixel_delta(layout.cell_height);
         self.scroll_delta_y += f32::from(delta.y);
         let rows = (self.scroll_delta_y / SCROLL_PIXELS_PER_LINE).trunc() as i32;
         if rows != 0 {
@@ -176,18 +182,18 @@ impl TerminalView {
             return;
         };
         let mut terminal = terminal.lock();
-        let column = (f32::from(position.x - bounds.origin.x) / CELL_WIDTH)
-            .floor()
-            .max(0.) as usize;
-        let line = (f32::from(position.y - bounds.origin.y) / CELL_HEIGHT)
-            .floor()
-            .max(0.) as usize;
+        let Some(layout) = self.layout else {
+            return;
+        };
+        let (column, line) = layout.cell_at(
+            position,
+            bounds,
+            terminal.columns(),
+            terminal.screen_lines(),
+        );
         let point = TermPoint::new(
-            Line(
-                line.min(terminal.screen_lines().saturating_sub(1)) as i32
-                    - terminal.grid().display_offset() as i32,
-            ),
-            Column(column.min(terminal.columns().saturating_sub(1))),
+            Line(line as i32 - terminal.grid().display_offset() as i32),
+            Column(column),
         );
         if start {
             terminal.selection = Some(Selection::new(SelectionType::Simple, point, Side::Left));
@@ -265,6 +271,93 @@ mod tests {
             modifiers: Modifiers::default(),
         };
         assert_eq!(terminal_key_bytes(&space), b" ");
+    }
+
+    #[cfg(unix)]
+    #[gpui::test]
+    fn measured_layout_drives_grid_and_unicode_selection(cx: &mut TestAppContext) {
+        use super::*;
+        use alacritty_terminal::{tty, vte::ansi::Processor};
+
+        let session = cx.new(|cx| {
+            TerminalSession::new_with_options(
+                tty::Options {
+                    shell: Some(tty::Shell::new(
+                        "/bin/sh".into(),
+                        vec!["-c".into(), "read line".into()],
+                    )),
+                    ..Default::default()
+                },
+                cx,
+            )
+        });
+        let (view, cx) = cx.add_window_view(|_, cx| TerminalView::new(session.clone(), cx));
+        cx.refresh().unwrap();
+        let initial = cx.read(|cx| session.read(cx).size());
+        cx.simulate_resize(size(px(403.5), px(257.25)));
+        cx.refresh().unwrap();
+        cx.read(|cx| assert_ne!(session.read(cx).size(), initial));
+        let (layout, bounds) = cx.update(|window, cx| {
+            let view = view.read(cx);
+            let layout = view.layout.unwrap();
+            let measured = TerminalLayout::measure(window);
+            assert_eq!(layout.cell_width, measured.cell_width);
+            assert_eq!(layout.cell_height, measured.cell_height);
+            assert_eq!(
+                session.read(cx).size(),
+                layout.grid_size(view.interaction_bounds)
+            );
+            (layout, view.interaction_bounds)
+        });
+        cx.update(|_, cx| {
+            let terminal = session.read(cx).terminal().unwrap();
+            let mut parser: Processor = Processor::new();
+            parser.advance(
+                &mut *terminal.lock(),
+                "\x1b[2J\x1b[HA界e\u{301}Z".as_bytes(),
+            );
+            let snapshot = TerminalSnapshot::capture(view.read(cx), cx);
+            let wide = snapshot
+                .cells
+                .iter()
+                .find(|cell| cell.text == "界")
+                .unwrap();
+            assert_eq!(wide.column, 1);
+            assert!(wide.flags.contains(Flags::WIDE_CHAR));
+            assert!(
+                !snapshot
+                    .cells
+                    .iter()
+                    .any(|cell| cell.line == 0 && cell.column == 2)
+            );
+            assert!(
+                snapshot
+                    .cells
+                    .iter()
+                    .any(|cell| cell.column == 3 && cell.text == "e\u{301}")
+            );
+        });
+        let start = layout.origin(bounds, 3, 0) + point(px(0.1), px(0.1));
+        cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+        cx.simulate_mouse_move(
+            start + point(layout.cell_width / 2., px(0.)),
+            MouseButton::Left,
+            Modifiers::default(),
+        );
+        cx.simulate_mouse_up(start, MouseButton::Left, Modifiers::default());
+        cx.read(|cx| {
+            assert_eq!(
+                session
+                    .read(cx)
+                    .terminal()
+                    .unwrap()
+                    .lock()
+                    .selection_to_string()
+                    .as_deref(),
+                Some("e\u{301}")
+            );
+        });
+        cx.update(|_, cx| session.update(cx, |session, cx| session.close(cx)));
     }
 }
 
@@ -456,13 +549,11 @@ impl Element for TerminalElement {
         window: &mut Window,
         cx: &mut App,
     ) -> Self::PrepaintState {
-        let size = TerminalSize::from_pixels(
-            f32::from(bounds.size.width),
-            f32::from(bounds.size.height),
-            window.scale_factor(),
-        );
+        let layout = TerminalLayout::measure(window);
+        let size = layout.grid_size(bounds);
         self.entity.update(cx, |terminal, cx| {
             terminal.interaction_bounds = bounds;
+            terminal.layout = Some(layout);
             terminal.resize(size, cx);
         });
         window.insert_hitbox(bounds, HitboxBehavior::Normal)
@@ -518,15 +609,15 @@ impl Element for TerminalElement {
         });
 
         let snapshot = TerminalSnapshot::capture(self.entity.read(cx), cx);
-        let cell_width = px(CELL_WIDTH);
-        let cell_height = px(CELL_HEIGHT);
+        let Some(layout) = self.entity.read(cx).layout else {
+            return;
+        };
+        let cell_width = layout.cell_width;
+        let cell_height = layout.cell_height;
         let mask = Some(ContentMask { bounds });
         window.with_content_mask(mask, |window| {
             for cell in &snapshot.cells {
-                let origin = point(
-                    bounds.origin.x + cell_width * cell.column,
-                    bounds.origin.y + cell_height * cell.line,
-                );
+                let origin = layout.origin(bounds, cell.column, cell.line);
                 if cell.background != BACKGROUND || cell.selected {
                     let width = if cell.flags.contains(Flags::WIDE_CHAR) {
                         cell_width * 2
@@ -550,10 +641,7 @@ impl Element for TerminalElement {
             if let Some((line, column, shape)) = snapshot.cursor
                 && shape != CursorShape::Hidden
             {
-                let origin = point(
-                    bounds.origin.x + cell_width * column,
-                    bounds.origin.y + cell_height * line,
-                );
+                let origin = layout.origin(bounds, column, line);
                 let cursor_bounds = match shape {
                     CursorShape::Beam => Bounds {
                         origin,
@@ -595,13 +683,10 @@ impl Element for TerminalElement {
                 if cell.flags.contains(Flags::HIDDEN) || cell.text == " " {
                     continue;
                 }
-                let mut font = gpui::font("Menlo");
-                if cell.flags.contains(Flags::BOLD) {
-                    font = font.bold();
-                }
-                if cell.flags.contains(Flags::ITALIC) {
-                    font = font.italic();
-                }
+                let font = text_font(
+                    cell.flags.contains(Flags::BOLD),
+                    cell.flags.contains(Flags::ITALIC),
+                );
                 let run = TextRun {
                     len: cell.text.len(),
                     font,
@@ -622,15 +707,26 @@ impl Element for TerminalElement {
                 };
                 let shaped = window.text_system().shape_line(
                     SharedString::from(cell.text.clone()),
-                    px(FONT_SIZE),
+                    px(TEXT_SIZE),
                     &[run],
                     None,
                 );
-                let origin = point(
-                    bounds.origin.x + cell_width * cell.column,
-                    bounds.origin.y + cell_height * cell.line,
+                let origin = layout.origin(bounds, cell.column, cell.line);
+                let width = cell_width
+                    * if cell.flags.contains(Flags::WIDE_CHAR) {
+                        2
+                    } else {
+                        1
+                    };
+                window.with_content_mask(
+                    Some(ContentMask {
+                        bounds: Bounds::new(origin, size(width, cell_height)),
+                    }),
+                    |window| {
+                        let origin = layout.text_origin(origin, shaped.ascent, shaped.descent);
+                        let _ = shaped.paint(origin, cell_height, window, cx);
+                    },
                 );
-                let _ = shaped.paint(origin, cell_height, window, cx);
             }
         });
     }

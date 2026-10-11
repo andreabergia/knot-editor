@@ -466,9 +466,19 @@ fn terminal_moves_within_window_then_hands_off_into_existing_window(cx: &mut Tes
             1
         );
     });
-    let size = crate::app::terminal_session::TerminalSize::from_pixels(640., 320., 1.);
+    let size = crate::app::terminal_session::TerminalSize {
+        columns: 80,
+        lines: 20,
+        cell_width: 9,
+        cell_height: 18,
+    };
     moved_view.update(cx, |view, cx| view.resize(size, cx));
-    let stale_size = crate::app::terminal_session::TerminalSize::from_pixels(320., 160., 1.);
+    let stale_size = crate::app::terminal_session::TerminalSize {
+        columns: 40,
+        lines: 10,
+        cell_width: 9,
+        cell_height: 18,
+    };
     source_view.update(cx, |view, cx| view.resize(stale_size, cx));
     cx.read(|cx| assert_eq!(session.read(cx).size(), size));
     session.update(cx, |session, cx| session.close(cx));

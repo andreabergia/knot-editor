@@ -1,6 +1,6 @@
 # D026: Terminal Compatibility, Typography, Mouse, and Links
 
-Status: 📝 planned; design agreed, implementation not started.
+Status: 🚧 checkpoint 1 implemented; automated verification passed; native review pending.
 
 Promoted from D026 in the [roadmap](../roadmap.md). This slice makes the local
 terminal usable with ordinary shells and representative TUIs: Vim, less, and
@@ -80,21 +80,47 @@ lifecycle behavior.
 
 ## Checkpoint 1: Consistent terminal typography and geometry
 
-- [ ] Extract shared font defaults/fallbacks without changing editor text
+- [x] ✅ Extract shared font defaults/fallbacks without changing editor text
   semantics; use the shared size in the terminal.
-- [ ] Replace duplicated fixed 8×16 geometry with one measured terminal layout
+- [x] ✅ Replace duplicated fixed 8×16 geometry with one measured terminal layout
   contract, including baseline, wide cells, scale-factor changes, and minimum
   grid bounds. Keep PTY sizing consistent after resize or cross-window transfer.
-- [ ] Validate layout and coordinate conversion with automated coverage for
+- [x] ✅ Validate layout and coordinate conversion with automated coverage for
   fractional bounds, scale factors, cell edges, and wide/combining content.
   Add gpui coverage where needed to prove the view uses the measured geometry
   for resize and interaction; retain existing session resize/transfer tests.
-- [ ] Update the terminal runtime reference for the new geometry contract.
+- [x] ✅ Update the terminal runtime reference for the new geometry contract.
 
 Review gate: inspect geometry ownership and editor regressions. User checks
 ASCII, Arabic, CJK, emoji, combining marks, and box drawing for baseline or
 clipping issues, then resizes and transfers a live terminal. Record any font
 availability or platform limitations before proceeding.
+
+Checkpoint 1 implementation choices and evidence:
+
+- Shared application defaults preserve editor semantics: Menlo at 14 logical
+  pixels with Geeza Pro, PingFang SC, and Apple Color Emoji fallbacks. Editor
+  line height remains 20 logical pixels. Missing fonts use gpui's platform font
+  resolution; these macOS families do not imply Linux/Windows font availability.
+- Terminal cells use the resolved primary font's `M` advance and ascent + descent,
+  rounded upward to whole physical pixels, then converted to logical pixels.
+  The primary baseline is centered in that height; fallback glyphs share it and
+  are clipped to their emulator allocation. Fractional viewport remainders do
+  not create extra cells. Emulator minimum grid bounds still apply.
+- The view measures on every prepaint, including destination layout after
+  transfer. PTY cells use the same integral physical dimensions. The session's
+  initial 80×11 grid uses placeholder pixel metrics until its first layout.
+- Automated coverage: metric rounding at scales 1, 1.25, 1.5, and 2; fractional
+  bounds, cell edges and out-of-bounds coordinates, minimum grids, fallback
+  baseline alignment; gpui measured resize and pointer selection of combining
+  text beside a wide CJK cell; existing child-PTY resize and terminal transfer,
+  attachment, shutdown, restart, and clipboard regressions.
+- ✅ Verification on macOS: `cargo test --lib -- --test-threads=1` passed
+  all 486 tests. `cargo fmt` ran once after Rust work; `git diff --check` passed.
+- ⏳ Native macOS gate remains open: check ASCII, Arabic, CJK, emoji, combining
+  marks, and box drawing for baseline/clipping; resize and transfer a live
+  terminal. No native Linux/Windows acceptance is claimed. Do not start
+  checkpoint 2 until this review passes.
 
 ## Checkpoint 2: Shell and TUI input/output compatibility
 

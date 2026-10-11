@@ -166,8 +166,21 @@ reconstruction of that view. Shutdown sends the event-loop signal and joins its 
 background thread; restart replaces the process and grid. Generation checks
 prevent old process events from changing the replacement.
 
-`TerminalView` owns focus, scroll interaction, layout, and gpui drawing. An
-attachment lease permits one view per session and can be released explicitly
+`TerminalView` owns focus, scroll interaction, layout, and gpui drawing.
+The editor and terminal share application font defaults: 14 logical pixels,
+Menlo, and the Arabic/CJK/emoji fallback cascade. Each terminal layout measures
+the resolved primary font's advance, ascent, and descent, rounding cell width
+and height up to whole physical pixels for the destination window's scale.
+This view-owned geometry supplies drawing, baseline, pointer-to-cell conversion,
+viewport dimensions, and PTY physical cell dimensions. Fallback glyphs align to
+the primary baseline and remain clipped to the emulator's one- or two-cell
+allocation; combining marks stay with their base cell. Selection converts
+viewport rows to grid rows using the current scrollback offset. Every prepaint
+remeasures geometry, including after resize or cross-window attachment. Before
+first layout a session uses an 80×11 bootstrap grid with placeholder pixel
+metrics; the sole attached view supplies the measured size.
+
+An attachment lease permits one view per session and can be released explicitly
 before a handoff; releasing the view also releases its lease. The view sends
 input and size changes to its session, and the session retains the final grid
 and exit status after natural process exit. Startup failure remains visible as
