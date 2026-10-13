@@ -49,7 +49,8 @@ creation on the foreground thread. A transient application-wide drag coordinator
 retains weak shell/workbench targets and window-local painted geometry for
 release dispatch and previews. Terminal tabs do not own document models.
 An application-owned terminal session owns its
-PTY, emulator grid, process, and event delivery independently of its view.
+PTY, emulator grid, process, session-local terminal preferences, and event
+delivery independently of its view.
 
 Views own presentation and interaction. Extension runtimes communicate through
 Knot-owned typed messages and opaque identities. Asynchronous results revalidate

@@ -32,7 +32,8 @@ References: [architecture](../architecture.md),
 - Preserve command/keymap precedence over raw terminal input. Copy and Paste
   continue through shared commands; raw terminal protocols stay outside the
   command registry. Focus reports describe actual terminal focus transitions.
-- Honor application-requested mouse tracking and encoding modes. Route button,
+- Honor application-requested mouse tracking and encoding modes when the
+  per-terminal mouse-reporting preference is enabled (the default). Route button,
   motion, release, and wheel events according to those modes. Shift overrides
   reporting for local selection and scrolling. With no tracking request, use
   local interaction; apply alternate-screen scroll behavior consistently with
@@ -236,7 +237,7 @@ Checkpoint 3 implementation choices and evidence:
 | SGR 1006 | CSI <code;column;row M/m; preserves button on release; grid bounds limit coordinates |
 | Button/modifier codes | Left/middle/right 0/1/2; navigation 128/129; Shift/Alt/Control add 4/8/16; motion adds 32 |
 | Wheel codes | Up/down/left/right 64/65/66/67; one packet per accumulated step |
-| Shift press / no tracking | Local left selection, including scrollback and wide/combining content |
+| Shift press / reporting disabled / no tracking | Local left selection, including scrollback and wide/combining content |
 | Modifier changes during drag | Original recipient retains ownership through release; reported gestures remain paired |
 | Shift wheel | Local scroll, even when tracking or alternate scrolling is enabled |
 | Alternate screen without tracking | With ALTERNATE_SCROLL, emit current-mode cursor keys; otherwise local scrolling |
@@ -268,8 +269,21 @@ Checkpoint 3 implementation choices and evidence:
   before pressing to start local selection; changing modifiers mid-drag retains
   the original owner. `q` quits and restores terminal modes.
 - ✅ macOS verification: `cargo test --lib -- --test-threads=1` passed all
-  517 tests. Rust formatting and `git diff --check` completed.
-- ⏳ Native gate remains open: exercise clicks, drags, wheel, Shift selection and
+  520 tests after the mouse-reporting toggle addition. Rust formatting and `git diff --check` completed.
+- 🛠️ Native review confirmed Shift-drag + Cmd+C works in Vim. Ordinary Vim
+  dragging selected within the application and therefore supplied no terminal
+  selection to Copy. On 2026-10-13 the user agreed to an enabled-by-default
+  per-terminal mouse-reporting toggle. `terminal.toggle-mouse-reporting` appears
+  in the command palette as **Toggle Terminal Mouse Reporting**; the header shows
+  `mouse: on/off`. Disabling it balances an active reported gesture, permits
+  ordinary selection and Copy, and retains emulator modes for re-enabling.
+  Session-local preference survives restart and cross-window view reconstruction;
+  new sessions start enabled. Alternate scrolling is independent of reporting.
+  Tests cover disabling during a reported drag, ordinary selection/Copy,
+  re-enabling, detached rejection, restart/handoff retention, and native Copy
+  shortcut dispatch through the product command router.
+- ⏳ Native gate remains open: verify the toggle and ordinary drag + Copy in Vim,
+  alongside clicks, drags, wheel, Shift selection and
   copy, and local scrolling in mouse-enabled Vim/tmux and the fixture. Existing
   host versions are Vim 9.1 and Python 3.14.8; tmux is unavailable on this host.
   Record native outcomes before hyperlink work. No Linux/Windows certification

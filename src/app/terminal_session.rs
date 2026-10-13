@@ -178,6 +178,7 @@ pub(crate) struct TerminalSession {
     attachment: Arc<AtomicU64>,
     next_attachment: u64,
     focused: bool,
+    mouse_reporting_enabled: bool,
     pointer_revision: Arc<AtomicU64>,
 }
 
@@ -219,6 +220,7 @@ impl TerminalSession {
             attachment: Arc::new(AtomicU64::new(0)),
             next_attachment: 0,
             focused: false,
+            mouse_reporting_enabled: true,
             pointer_revision: Arc::new(AtomicU64::new(0)),
         };
         this.start(cx);
@@ -283,6 +285,15 @@ impl TerminalSession {
                 _ => {}
             }
         }
+    }
+
+    pub(crate) fn mouse_reporting_enabled(&self) -> bool {
+        self.mouse_reporting_enabled
+    }
+
+    pub(crate) fn toggle_mouse_reporting(&mut self, cx: &mut Context<Self>) {
+        self.mouse_reporting_enabled = !self.mouse_reporting_enabled;
+        cx.notify();
     }
 
     pub(crate) fn pointer_revision(&self) -> u64 {

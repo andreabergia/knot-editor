@@ -270,6 +270,11 @@ and native window activation. Physical application-keypad support remains
 [D040](roadmap.md) until gpui retains its native identity; the user chose this
 bounded limitation over vendoring the framework.
 
+Provide an enabled-by-default, per-terminal mouse-reporting toggle through the
+shared command system. Disabling reporting supports ordinary drag + native Copy
+inside TUIs, while preserving application-requested modes for re-enabling.
+Keep this session-local preference across restart and attachment handoff.
+
 Choose a mouse gesture's recipient on press and retain it through release.
 Shift chooses local selection; ongoing application gestures retain their paired
 release even if modifiers change. Wheels use their current route independently.

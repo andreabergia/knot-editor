@@ -238,7 +238,17 @@ release beyond that limit balances an owned press at its last representable cell
 spacers retain their distinct reporting columns; local selection expands them
 through the emulator's selection logic.
 
-A press chooses one gesture owner. Shift or no tracking starts local left-button
+Each session retains an enabled-by-default mouse-reporting preference.
+`terminal.toggle-mouse-reporting` is a shared native command claimed by the
+captured attached terminal view; the terminal header shows its state. Disabling
+it balances active reports before switching ordinary drags to local selection
+and shared Copy. The emulator still retains application-requested modes for
+re-enabling. The preference survives restart and view handoff, is independent
+between sessions, and is not persisted. Alternate-screen cursor-key scrolling
+remains available when mouse reporting is disabled; Shift still forces local
+wheel scrolling.
+
+A press chooses one gesture owner. Shift, disabled reporting, or no tracking starts local left-button
 selection; an application press owns its motion/release even if modifiers change
 later. Unowned drags/releases never reach the PTY. Motion reports deduplicate
 cell/button/modifier state; drag and all-motion modes permit motion while click

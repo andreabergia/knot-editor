@@ -8,6 +8,7 @@ use super::{CommandCompletion, CommandExecution};
 use crate::host::protocol::{Command, CommandArgumentValue, CommandOutcome, ViewId};
 
 pub(crate) const NEW_COMMAND: &str = "file.new";
+pub(crate) const TOGGLE_TERMINAL_MOUSE_REPORTING_COMMAND: &str = "terminal.toggle-mouse-reporting";
 pub(crate) const NEW_TERMINAL_COMMAND: &str = "terminal.new";
 pub(crate) const MOVE_TERMINAL_TO_NEW_WINDOW_COMMAND: &str = "terminal.move-to-new-window";
 pub(crate) const OPEN_COMMAND: &str = "file.open";
@@ -94,6 +95,10 @@ const PRODUCT_COMMANDS: &[(&str, &str)] = &[
     (DELETE_FORWARD_COMMAND, "Delete Forward"),
     (NEW_COMMAND, "New Document"),
     (NEW_TERMINAL_COMMAND, "New Terminal"),
+    (
+        TOGGLE_TERMINAL_MOUSE_REPORTING_COMMAND,
+        "Toggle Terminal Mouse Reporting",
+    ),
     (
         MOVE_TERMINAL_TO_NEW_WINDOW_COMMAND,
         "Move Terminal to New Window",

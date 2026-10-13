@@ -6191,6 +6191,130 @@ await commands.registerForView("outline", "copy", async () => {
         });
     }
 
+    #[cfg(unix)]
+    #[gpui::test]
+    async fn terminal_mouse_reporting_toggle_routes_to_the_focused_session_and_plain_drag_copies(
+        cx: &mut TestAppContext,
+    ) {
+        use crate::app::{
+            product_commands::TOGGLE_TERMINAL_MOUSE_REPORTING_COMMAND,
+            terminal_session::TerminalSession, terminal_view::TerminalView,
+        };
+        use alacritty_terminal::{tty, vte::ansi::Processor};
+        let documents = install_globals(cx);
+        cx.update(super::bind_product_keys);
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        let (shell, window_handle) = product_window(document, model, cx);
+        assert_eq!(
+            dispatch_product_command(
+                &shell,
+                window_handle,
+                TOGGLE_TERMINAL_MOUSE_REPORTING_COMMAND,
+                cx
+            )
+            .completion
+            .await
+            .unwrap(),
+            CommandOutcome::Unavailable
+        );
+        let session = cx.new(|cx| {
+            TerminalSession::new_with_options(
+                tty::Options {
+                    shell: Some(tty::Shell::new(
+                        "/bin/sh".into(),
+                        vec!["-c".into(), "read line".into()],
+                    )),
+                    drain_on_exit: true,
+                    ..Default::default()
+                },
+                cx,
+            )
+        });
+        let view = cx
+            .update_window(window_handle, |_, window, cx| {
+                let id = cx
+                    .global::<ApplicationTerminalSessions>()
+                    .0
+                    .borrow_mut()
+                    .allocate_id();
+                cx.global::<ApplicationTerminalSessions>()
+                    .0
+                    .borrow_mut()
+                    .sessions
+                    .insert(id, session.clone());
+                let view = cx.new(|cx| TerminalView::new(session.clone(), cx));
+                shell.update(cx, |shell, cx| {
+                    let pane = shell.workbench.read(cx).focused_pane_id().unwrap();
+                    let tab = shell.workbench.update(cx, |workbench, _| {
+                        workbench.open_terminal_tab(pane, id, view.clone()).unwrap()
+                    });
+                    shell.activate_tab(pane, tab, window, cx);
+                });
+                view
+            })
+            .unwrap();
+        cx.refresh().unwrap();
+        assert_eq!(
+            dispatch_product_command(
+                &shell,
+                window_handle,
+                TOGGLE_TERMINAL_MOUSE_REPORTING_COMMAND,
+                cx
+            )
+            .completion
+            .await
+            .unwrap(),
+            CommandOutcome::Completed
+        );
+        cx.read(|cx| assert!(!session.read(cx).mouse_reporting_enabled()));
+        let (start, end) = cx
+            .update_window(window_handle, |_, window, cx| {
+                let mut parser: Processor = Processor::new();
+                parser.advance(
+                    &mut *session.read(cx).terminal().unwrap().lock(),
+                    b"\x1b[?1002h\x1b[?1006h\x1b[2J\x1b[3J\x1b[Hcopy me",
+                );
+                let bounds = view.read(cx).interaction_bounds();
+                let width = px(session.read(cx).size().cell_width as f32 / window.scale_factor());
+                (
+                    bounds.origin + point(px(0.1), px(0.1)),
+                    bounds.origin + point(width * 3 + px(0.1), px(0.1)),
+                )
+            })
+            .unwrap();
+        let mut window_cx = VisualTestContext::from_window(window_handle, cx);
+        window_cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+        window_cx.simulate_mouse_move(end, MouseButton::Left, Modifiers::default());
+        window_cx.simulate_mouse_up(end, MouseButton::Left, Modifiers::default());
+        cx.simulate_keystrokes(
+            window_handle,
+            if cfg!(windows) { "ctrl-c" } else { "cmd-c" },
+        );
+        cx.run_until_parked();
+        cx.update(|cx| {
+            assert_eq!(
+                cx.read_from_clipboard().unwrap().text().as_deref(),
+                Some("copy")
+            );
+            assert!(!session.read(cx).mouse_reporting_enabled());
+        });
+        assert_eq!(
+            dispatch_product_command(
+                &shell,
+                window_handle,
+                TOGGLE_TERMINAL_MOUSE_REPORTING_COMMAND,
+                cx
+            )
+            .completion
+            .await
+            .unwrap(),
+            CommandOutcome::Completed
+        );
+        cx.read(|cx| assert!(session.read(cx).mouse_reporting_enabled()));
+        session.update(cx, |session, cx| session.close(cx));
+    }
+
     #[gpui::test]
     async fn copy_requires_focused_selection_and_declines_on_terminal(cx: &mut TestAppContext) {
         use alacritty_terminal::tty::{Options, Shell};

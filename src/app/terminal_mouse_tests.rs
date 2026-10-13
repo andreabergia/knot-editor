@@ -659,3 +659,87 @@ fn legacy_wire_limit_ignores_unrepresentable_presses_and_balances_owned_releases
     cx.simulate_mouse_up(invalid, MouseButton::Left, Modifiers::default());
     finish(&fixture, expected, cx);
 }
+
+#[gpui::test]
+fn mouse_reporting_toggle_balances_drag_then_supports_ordinary_selection_and_copy(
+    cx: &mut TestAppContext,
+) {
+    use super::super::product_commands::{
+        COPY_COMMAND, CommandClaim, TOGGLE_TERMINAL_MOUSE_REPORTING_COMMAND,
+    };
+    use crate::host::protocol::{Command, CommandArgumentValue, CommandOutcome};
+    let expected = b"\x1b[<0;2;1M\x1b[<0;2;1m\x1b[<2;2;1M\x1b[<2;2;1m";
+    let fixture = fixture(cx, "\\033[?1002h\\033[?1006h", expected.len());
+    let (view, cx) = cx.add_window_view(|_, cx| TerminalView::new(fixture.session.clone(), cx));
+    cx.refresh().unwrap();
+    let toggle = Command {
+        name: TOGGLE_TERMINAL_MOUSE_REPORTING_COMMAND.into(),
+        arguments: CommandArgumentValue::Null,
+    };
+    let position = cx.read(|cx| cell(&view, cx, 1, 0));
+    cx.simulate_mouse_down(position, MouseButton::Left, Modifiers::default());
+    cx.update(|_, cx| {
+        assert!(fixture.session.read(cx).mouse_reporting_enabled());
+        assert!(matches!(
+            view.update(cx, |view, cx| view.handle_command(&toggle, cx)),
+            CommandClaim::Finished(CommandOutcome::Completed)
+        ));
+        assert!(!fixture.session.read(cx).mouse_reporting_enabled());
+        parse(&fixture, b"\x1b[2J\x1b[3J\x1b[Hcopy me", cx);
+    });
+    cx.simulate_mouse_up(position, MouseButton::Left, Modifiers::default());
+    let (start, end) = cx.read(|cx| (cell(&view, cx, 0, 0), cell(&view, cx, 3, 0)));
+    cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_move(end, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(end, MouseButton::Left, Modifiers::default());
+    cx.update(|_, cx| {
+        assert!(matches!(
+            view.update(cx, |view, cx| view.handle_command(
+                &Command {
+                    name: COPY_COMMAND.into(),
+                    arguments: CommandArgumentValue::Null
+                },
+                cx
+            )),
+            CommandClaim::Finished(CommandOutcome::Completed)
+        ));
+        assert_eq!(
+            cx.read_from_clipboard().unwrap().text().as_deref(),
+            Some("copy")
+        );
+        view.update(cx, |view, cx| {
+            view.handle_command(&toggle, cx);
+        });
+        assert!(fixture.session.read(cx).mouse_reporting_enabled());
+    });
+    cx.simulate_mouse_down(position, MouseButton::Right, Modifiers::default());
+    cx.simulate_mouse_up(position, MouseButton::Right, Modifiers::default());
+    finish(&fixture, expected, cx);
+}
+
+#[gpui::test]
+fn mouse_reporting_preference_survives_view_handoff_and_restart_and_rejects_detached_toggle(
+    cx: &mut TestAppContext,
+) {
+    use super::super::product_commands::{CommandClaim, TOGGLE_TERMINAL_MOUSE_REPORTING_COMMAND};
+    use crate::host::protocol::{Command, CommandArgumentValue};
+    let fixture = fixture(cx, "\\033[?1002h\\033[?1006h", 0);
+    let view = cx.new(|cx| TerminalView::new(fixture.session.clone(), cx));
+    let toggle = Command {
+        name: TOGGLE_TERMINAL_MOUSE_REPORTING_COMMAND.into(),
+        arguments: CommandArgumentValue::Null,
+    };
+    view.update(cx, |view, cx| {
+        view.handle_command(&toggle, cx);
+        view.detach(cx);
+    });
+    assert!(matches!(
+        view.update(cx, |view, cx| view.handle_command(&toggle, cx)),
+        CommandClaim::Declined
+    ));
+    let rebuilt = cx.new(|cx| TerminalView::new(fixture.session.clone(), cx));
+    cx.read(|cx| assert!(!fixture.session.read(cx).mouse_reporting_enabled()));
+    rebuilt.update(cx, |view, cx| view.restart(cx));
+    cx.read(|cx| assert!(!fixture.session.read(cx).mouse_reporting_enabled()));
+    fixture.session.update(cx, |session, cx| session.close(cx));
+}

@@ -44,14 +44,25 @@ impl TerminalView {
         cx: &mut Context<Self>,
     ) -> super::product_commands::CommandClaim {
         use super::product_commands::CommandClaim;
-        use super::product_commands::{COPY_COMMAND, PASTE_COMMAND};
-        if !matches!(command.name.as_ref(), COPY_COMMAND | PASTE_COMMAND)
-            || self.attachment.is_none()
+        use super::product_commands::{
+            COPY_COMMAND, PASTE_COMMAND, TOGGLE_TERMINAL_MOUSE_REPORTING_COMMAND,
+        };
+        if !matches!(
+            command.name.as_ref(),
+            COPY_COMMAND | PASTE_COMMAND | TOGGLE_TERMINAL_MOUSE_REPORTING_COMMAND
+        ) || self.attachment.is_none()
         {
             return CommandClaim::Declined;
         }
         if let Err(claim) = super::product_commands::validate_native_arguments(command) {
             return claim;
+        }
+        if command.name.as_ref() == TOGGLE_TERMINAL_MOUSE_REPORTING_COMMAND {
+            self.cancel_pointer(cx);
+            self.session
+                .update(cx, |session, cx| session.toggle_mouse_reporting(cx));
+            cx.notify();
+            return CommandClaim::Finished(crate::host::protocol::CommandOutcome::Completed);
         }
         if command.name.as_ref() == PASTE_COMMAND {
             if self.session.read(cx).status() != TerminalStatus::Running {
@@ -268,6 +279,11 @@ impl TerminalView {
                 .unwrap_or_default()
         } else {
             TermMode::NONE
+        };
+        let mode = if session.mouse_reporting_enabled() {
+            mode
+        } else {
+            mode & !TermMode::MOUSE_MODE
         };
         let epoch = (
             session.generation(),
@@ -672,12 +688,17 @@ impl Render for TerminalView {
                     .text_color(rgb(0x8f8f8f))
                     .bg(rgb(0x202020))
                     .child(format!(
-                        "TERMINAL · {}",
+                        "TERMINAL · {} · mouse: {}",
                         match self.session.read(cx).status() {
                             TerminalStatus::Running => "running".to_owned(),
                             TerminalStatus::Exited(status) => format!("exited: {status}"),
                             TerminalStatus::Failed(error) => format!("failed: {error}"),
                             TerminalStatus::Closed => "closed".to_owned(),
+                        },
+                        if self.session.read(cx).mouse_reporting_enabled() {
+                            "on"
+                        } else {
+                            "off"
                         }
                     ))
                     .child(
