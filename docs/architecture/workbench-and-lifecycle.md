@@ -275,6 +275,24 @@ or changed-mode gestures never emit releases into a replacement. The determinist
 `scripts/terminal-mouse-fixture.py` exposes report codes, viewport cells, and wire
 bytes for native acceptance without an external TUI configuration.
 
+Terminal link lookup captures the displayed emulator cells and scrollback offset,
+including OSC 8 identity. Explicit HTTP(S) destinations override detected text;
+unsupported explicit schemes suppress detection on their labels. Detection joins
+soft-wrapped rows, keeps hard lines separate, maps wide/combining text to cells,
+and trims sentence punctuation and unmatched closing delimiters. A detected URL
+whose continuation is clipped below the viewport is not actionable.
+
+Hover underlines the destination's displayed cells. Command-click on macOS or
+Control-click elsewhere owns a recognized link gesture before application mouse
+reporting; Shift retains local selection. The native opener receives only HTTP(S)
+URLs with a host and without control characters. Activation occurs on release,
+with at most four logical pixels of movement, and revalidates the complete
+captured grid, scrollback offset, destination identity, process generation, and
+measured geometry. Output notifications, scrolling, geometry/focus changes,
+detach, and restart clear hover and armed targets. A cancelled link gesture
+retains its recipient until release and produces no application mouse packets.
+The opener is injected in programmatic event tests.
+
 The terminal claims the shared Paste command while its session is running and
 sends clipboard text through the existing PTY input channel. Plain paste
 normalizes newlines to carriage returns; bracketed paste preserves newlines,

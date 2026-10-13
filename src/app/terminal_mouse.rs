@@ -7,6 +7,7 @@ use gpui::{Modifiers, MouseButton, NavigationDirection, Pixels, Point, ScrollDel
 pub(crate) enum PointerOwner {
     Local,
     Application,
+    Link,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -743,3 +743,251 @@ fn mouse_reporting_preference_survives_view_handoff_and_restart_and_rejects_deta
     cx.read(|cx| assert!(!fixture.session.read(cx).mouse_reporting_enabled()));
     fixture.session.update(cx, |session, cx| session.close(cx));
 }
+
+fn link_modifiers() -> Modifiers {
+    if cfg!(target_os = "macos") {
+        Modifiers {
+            platform: true,
+            ..Default::default()
+        }
+    } else {
+        Modifiers {
+            control: true,
+            ..Default::default()
+        }
+    }
+}
+
+#[gpui::test]
+fn modifier_link_click_owns_gesture_and_opens_fresh_explicit_destination(cx: &mut TestAppContext) {
+    let expected = b"\x1b[<0;2;1M\x1b[<0;2;1m";
+    let fixture = fixture(cx, "\\033[?1003h\\033[?1006h", expected.len());
+    let (view, cx) = cx.add_window_view(|_, cx| TerminalView::new(fixture.session.clone(), cx));
+    cx.refresh().unwrap();
+    let opened = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    view.update(cx, |view, _| {
+        let opened = opened.clone();
+        view.open_link = std::rc::Rc::new(move |uri, _| opened.borrow_mut().push(uri.to_owned()));
+    });
+    cx.read(|cx| {
+        parse(
+            &fixture,
+            b"\x1b[H\x1b]8;id=click;https://destination.test/path\x1b\\label\x1b]8;;\x1b\\",
+            cx,
+        )
+    });
+    cx.refresh().unwrap();
+    let position = cx.read(|cx| cell(&view, cx, 1, 0));
+    cx.simulate_mouse_down(position, MouseButton::Left, link_modifiers());
+    cx.simulate_mouse_move(position, MouseButton::Left, link_modifiers());
+    cx.simulate_mouse_up(position, MouseButton::Left, link_modifiers());
+    assert_eq!(&*opened.borrow(), &["https://destination.test/path"]);
+    cx.read(|cx| {
+        assert!(
+            fixture
+                .session
+                .read(cx)
+                .terminal()
+                .unwrap()
+                .lock()
+                .selection
+                .is_none()
+        )
+    });
+    cx.simulate_mouse_down(position, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(position, MouseButton::Left, Modifiers::default());
+    assert_eq!(opened.borrow().len(), 1);
+    finish(&fixture, expected, cx);
+}
+
+#[gpui::test]
+fn link_click_rejects_changed_grid_and_shift_uses_local_selection(cx: &mut TestAppContext) {
+    let fixture = fixture(cx, "\\033[?1002h\\033[?1006h", 0);
+    let (view, cx) = cx.add_window_view(|_, cx| TerminalView::new(fixture.session.clone(), cx));
+    cx.refresh().unwrap();
+    let opened = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    view.update(cx, |view, _| {
+        let opened = opened.clone();
+        view.open_link = std::rc::Rc::new(move |uri, _| opened.borrow_mut().push(uri.to_owned()));
+    });
+    cx.read(|cx| parse(&fixture, b"\x1b[Hhttps://example.test/path", cx));
+    cx.refresh().unwrap();
+    let start = cx.read(|cx| cell(&view, cx, 1, 0));
+    cx.simulate_mouse_down(start, MouseButton::Left, link_modifiers());
+    cx.read(|cx| parse(&fixture, b"\x1b[Hhttps://changed.test/path", cx));
+    cx.simulate_mouse_up(start, MouseButton::Left, link_modifiers());
+    assert!(opened.borrow().is_empty());
+    let shift = Modifiers {
+        shift: true,
+        ..link_modifiers()
+    };
+    let end = cx.read(|cx| cell(&view, cx, 5, 0));
+    cx.simulate_mouse_down(start, MouseButton::Left, shift);
+    cx.simulate_mouse_move(end, MouseButton::Left, shift);
+    cx.simulate_mouse_up(end, MouseButton::Left, shift);
+    assert!(opened.borrow().is_empty());
+    cx.read(|cx| {
+        assert!(
+            fixture
+                .session
+                .read(cx)
+                .terminal()
+                .unwrap()
+                .lock()
+                .selection_to_string()
+                .is_some()
+        )
+    });
+    finish(&fixture, b"", cx);
+}
+
+#[gpui::test]
+fn detected_link_activation_and_cancelled_lifecycle_gestures(cx: &mut TestAppContext) {
+    let fixture = fixture(cx, "", 0);
+    let (view, cx) = cx.add_window_view(|_, cx| TerminalView::new(fixture.session.clone(), cx));
+    cx.refresh().unwrap();
+    let opened = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    view.update(cx, |view, _| {
+        let opened = opened.clone();
+        view.open_link = std::rc::Rc::new(move |uri, _| opened.borrow_mut().push(uri.to_owned()));
+    });
+    cx.read(|cx| parse(&fixture, b"\x1b[Hhttps://example.test/path", cx));
+    cx.refresh().unwrap();
+    let start = cx.read(|cx| cell(&view, cx, 1, 0));
+    cx.simulate_mouse_move(start, None, link_modifiers());
+    cx.read(|cx| {
+        assert_eq!(
+            view.read(cx).hovered_link.as_ref().unwrap().uri,
+            "https://example.test/path"
+        )
+    });
+    cx.simulate_mouse_down(start, MouseButton::Left, link_modifiers());
+    cx.simulate_mouse_up(start, MouseButton::Left, link_modifiers());
+    assert_eq!(&*opened.borrow(), &["https://example.test/path"]);
+    opened.borrow_mut().clear();
+
+    // Repaint/output notifications invalidate even an unchanged destination.
+    cx.simulate_mouse_down(start, MouseButton::Left, link_modifiers());
+    fixture.session.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    cx.simulate_mouse_up(start, MouseButton::Left, link_modifiers());
+    assert!(opened.borrow().is_empty());
+
+    cx.simulate_mouse_down(start, MouseButton::Left, link_modifiers());
+    cx.simulate_event(ScrollWheelEvent {
+        position: start,
+        delta: ScrollDelta::Lines(point(0., 1.)),
+        ..Default::default()
+    });
+    cx.simulate_mouse_up(start, MouseButton::Left, link_modifiers());
+    assert!(opened.borrow().is_empty());
+
+    // An actual drag must never become an activation.
+    cx.simulate_mouse_down(start, MouseButton::Left, link_modifiers());
+    let moved = cx.read(|cx| cell(&view, cx, 4, 0));
+    cx.simulate_mouse_move(moved, MouseButton::Left, link_modifiers());
+    cx.simulate_mouse_up(start, MouseButton::Left, link_modifiers());
+    assert!(opened.borrow().is_empty());
+
+    cx.simulate_mouse_down(start, MouseButton::Left, link_modifiers());
+    view.update(cx, |view, cx| {
+        let mut size = view.session.read(cx).size();
+        size.columns += 1;
+        view.resize(size, cx);
+    });
+    cx.simulate_mouse_up(start, MouseButton::Left, link_modifiers());
+    assert!(opened.borrow().is_empty());
+
+    cx.refresh().unwrap();
+    cx.simulate_mouse_down(start, MouseButton::Left, link_modifiers());
+    view.update(cx, |view, cx| view.detach(cx));
+    cx.simulate_mouse_up(start, MouseButton::Left, link_modifiers());
+    assert!(opened.borrow().is_empty());
+    finish(&fixture, b"", cx);
+}
+
+#[gpui::test]
+fn hyperlink_state_cannot_cross_attachment_handoff_or_process_restart(cx: &mut TestAppContext) {
+    let fixture = fixture(cx, "", 0);
+    let (source, cx) = cx.add_window_view(|_, cx| TerminalView::new(fixture.session.clone(), cx));
+    cx.refresh().unwrap();
+    source.update(cx, |view, _| {
+        view.open_link = std::rc::Rc::new(|_, _| panic!("stale source opened"))
+    });
+    cx.read(|cx| parse(&fixture, b"\x1b[Hhttps://example.test/path", cx));
+    cx.refresh().unwrap();
+    let position = cx.read(|cx| cell(&source, cx, 1, 0));
+    cx.simulate_mouse_move(position, None, link_modifiers());
+    cx.simulate_mouse_down(position, MouseButton::Left, link_modifiers());
+    source.update(cx, |view, cx| view.detach(cx));
+    cx.simulate_mouse_up(position, MouseButton::Left, link_modifiers());
+    cx.read(|cx| {
+        assert!(source.read(cx).hovered_link.is_none());
+        assert!(source.read(cx).armed_link.is_none());
+    });
+    let (target, cx) = cx.add_window_view(|_, cx| TerminalView::new(fixture.session.clone(), cx));
+    target.update(cx, |view, _| {
+        view.open_link = std::rc::Rc::new(|_, _| panic!("stale target opened"))
+    });
+    cx.refresh().unwrap();
+    let position = cx.read(|cx| cell(&target, cx, 1, 0));
+    cx.simulate_mouse_up(position, MouseButton::Left, link_modifiers());
+    cx.simulate_mouse_down(position, MouseButton::Left, link_modifiers());
+    cx.read(|cx| assert!(target.read(cx).armed_link.is_some()));
+    target.update(cx, |view, cx| view.restart(cx));
+    cx.simulate_mouse_up(position, MouseButton::Left, link_modifiers());
+    cx.read(|cx| {
+        assert!(target.read(cx).hovered_link.is_none());
+        assert!(target.read(cx).armed_link.is_none());
+    });
+    fixture.session.update(cx, |session, cx| session.close(cx));
+}
+
+#[gpui::test]
+fn modifier_click_opens_current_scrollback_url(cx: &mut TestAppContext) {
+    let fixture = fixture(cx, "", 0);
+    let (view, cx) = cx.add_window_view(|_, cx| TerminalView::new(fixture.session.clone(), cx));
+    cx.refresh().unwrap();
+    let opened = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    view.update(cx, |view, _| {
+        let opened = opened.clone();
+        view.open_link = std::rc::Rc::new(move |uri, _| opened.borrow_mut().push(uri.to_owned()));
+    });
+    cx.read(|cx| {
+        let lines = fixture.session.read(cx).size().lines;
+        let output = format!(
+            "\x1b[Hhttps://history.test/path\r\n{}",
+            "next\r\n".repeat(lines + 3)
+        );
+        parse(&fixture, output.as_bytes(), cx);
+        fixture
+            .session
+            .read(cx)
+            .terminal()
+            .unwrap()
+            .lock()
+            .scroll_display(Scroll::Top);
+    });
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+    cx.read(|cx| assert!(view.read(cx).link_grid(cx).unwrap().at(1, 0).is_some()));
+    let position = cx.read(|cx| cell(&view, cx, 1, 0));
+    cx.simulate_mouse_down(position, MouseButton::Left, link_modifiers());
+    cx.read(|cx| assert!(view.read(cx).armed_link.is_some(), "press not armed"));
+    cx.simulate_mouse_up(position, MouseButton::Left, link_modifiers());
+    assert_eq!(&*opened.borrow(), &["https://history.test/path"]);
+    cx.read(|cx| {
+        assert!(
+            fixture
+                .session
+                .read(cx)
+                .terminal()
+                .unwrap()
+                .lock()
+                .grid()
+                .display_offset()
+                > 0
+        )
+    });
+    finish(&fixture, b"", cx);
+}

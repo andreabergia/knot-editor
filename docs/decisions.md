@@ -283,6 +283,15 @@ attachment handoff from leaving a reported button pressed. Report viewport
 cells separately from scrollback selection coordinates, and suppress coordinates
 that a requested legacy encoding cannot represent.
 
+Keep hyperlink recognition in the view's displayed-grid adapter. OSC 8 identity
+is authoritative; HTTP(S) detection follows soft wraps and emulator cell widths.
+Restrict the initial native opener to HTTP(S), normalize destinations with the
+existing URL parser, and trim sentence punctuation while retaining balanced path
+delimiters. Modifier-click owns the whole gesture before application reporting;
+release revalidates the captured grid and geometry so output or lifecycle changes
+cannot open an old destination. Visible-grid detection avoids inventing a
+truncated URL at the viewport edge; explicit OSC 8 destinations remain complete.
+
 The existing Alacritty adapter supplied the required session and product
 behavior without copying Zed code. Zed's GPL-compatible implementation remains
 an attributed reference for concrete input, rendering, or event behavior if

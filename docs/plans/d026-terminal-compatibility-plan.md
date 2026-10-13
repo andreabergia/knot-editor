@@ -1,6 +1,6 @@
 # D026: Terminal Compatibility, Typography, Mouse, and Links
 
-Status: 🚧 checkpoints 1–2 accepted; checkpoint 3 implemented, native review pending.
+Status: 🚧 checkpoints 1–3 accepted; checkpoint 4 implemented, final native review pending.
 
 Promoted from D026 in the [roadmap](../roadmap.md). This slice makes the local
 terminal usable with ordinary shells and representative TUIs: Vim, less, and
@@ -53,10 +53,10 @@ References: [architecture](../architecture.md),
 ## Exclusions and deferred choices
 
 No physical application-keypad input ([D040](../roadmap.md)), general settings
-system, advanced keyboard protocols (including Kitty and
-modifyOtherKeys), terminal graphics, arbitrary URI handlers, filesystem-path
-links, remote PTYs (D038), shell integration (D039), session persistence, or
-simultaneous views. Do not broaden clipboard access through OSC 52 as part of
+system (D045), advanced keyboard protocols (including Kitty and
+modifyOtherKeys) and terminal graphics (D041), arbitrary URI handlers and
+filesystem-path links (D042), remote PTYs (D038), shell integration (D039),
+session persistence (D043), or simultaneous views (D044). Do not broaden clipboard access through OSC 52 as part of
 the event audit. Title and bell product features are outside this contract.
 
 Concrete encoding tables, metric rounding, URL boundary rules, and fixture
@@ -282,29 +282,27 @@ Checkpoint 3 implementation choices and evidence:
   Tests cover disabling during a reported drag, ordinary selection/Copy,
   re-enabling, detached rejection, restart/handoff retention, and native Copy
   shortcut dispatch through the product command router.
-- ⏳ Native gate remains open: verify the toggle and ordinary drag + Copy in Vim,
-  alongside clicks, drags, wheel, Shift selection and
-  copy, and local scrolling in mouse-enabled Vim/tmux and the fixture. Existing
-  host versions are Vim 9.1 and Python 3.14.8; tmux is unavailable on this host.
-  Record native outcomes before hyperlink work. No Linux/Windows certification
+- ✅ User accepted checkpoint 3 on 2026-10-13 (“ok works”), including the
+  mouse-reporting toggle and ordinary drag + Copy. Existing host versions are
+  Vim 9.1 and Python 3.14.8; tmux is unavailable. No Linux/Windows certification
   is claimed.
 
 ## Checkpoint 4: Hyperlinks and complete slice acceptance
 
-- [ ] Carry OSC 8 link identity into the displayed snapshot and detect HTTP(S)
+- [x] ✅ Carry OSC 8 link identity into the displayed snapshot and detect HTTP(S)
   URLs across soft wraps without merging separate hard lines. Keep explicit
   destinations authoritative and define punctuation boundaries.
-- [ ] Add hover feedback and modifier-click activation through the native URL
+- [x] ✅ Add hover feedback and modifier-click activation through the native URL
   opener. Revalidate against current grid and geometry; clear transient state
   across output changes, scroll, resize, detach, transfer, and restart.
-- [ ] Test explicit links, detected URLs, precedence, wrapped/Unicode content,
+- [x] ✅ Test explicit links, detected URLs, precedence, wrapped/Unicode content,
   scheme filtering, stale targets, and pointer-policy conflicts. Inject or
   capture the opener in tests so event wiring is verified without launching
   external applications.
-- [ ] Run the complete terminal/lifecycle and affected editor/command regression
+- [x] ✅ Run the complete terminal/lifecycle and affected editor/command regression
   coverage. Record the compatibility matrix and acceptance evidence in this
   plan; document remaining gaps explicitly.
-- [ ] Update architecture references and validated decisions. Preserve any
+- [x] ✅ Update architecture references and validated decisions. Preserve any
   remaining deferred scope in the roadmap under stable IDs.
 
 Review gate: user checks links in live output and scrollback, including
@@ -312,3 +310,47 @@ mouse-enabled applications, then repeats the representative shell/TUI flows
 through resize, tab switching, cross-window transfer, restart, and protected
 closure. Complete D026 only when the agreed contract passes and remaining
 limitations are recorded.
+
+Checkpoint 4 implementation choices and evidence:
+
+| Link / interaction | Supported behavior |
+| --- | --- |
+| OSC 8 | Preserve identity and destination; explicit link labels override detection |
+| Detected HTTP(S) | Case-insensitive scheme, host required, visible grid including scrollback |
+| Soft / hard lines | Join emulator soft wraps; never join hard line breaks |
+| Unicode | Map UTF-8, wide cells/spacers, and combining marks to displayed cells |
+| Boundaries | Whitespace/control/quotes/angle brackets/backticks end detection; trim trailing `.,;:!?` and unmatched `)]}`; retain balanced delimiters |
+| Clipped continuation | Do not open a detected URL extending below the viewport; explicit OSC 8 remains complete |
+| Schemes | HTTP(S) only; reject control characters; unsupported explicit schemes suppress label detection |
+| Hover / activation | Underline hovered link; modifier shows pointing hand; Command-click on macOS / Control-click elsewhere opens on release |
+| Pointer precedence | Recognized modifier-click owns press/move/release before application reporting; Shift remains local; ordinary clicks retain existing routing |
+| Validation | At most 4 logical pixels of motion; recheck displayed cells, offset, identity, generation, bounds, layout, release location, and modifiers |
+| Cancellation | Output notifications, scroll, focus/geometry changes, detach, handoff, and restart discard hover/armed targets; cancelled link gestures send no mouse packets |
+
+- Added eight parser/grid tests and five gpui event-to-PTY/opener tests. Coverage
+  includes explicit destination/identity precedence, blocked schemes and controls,
+  punctuation, soft/hard lines, Unicode cell mapping, clipped continuations,
+  displayed scrollback lookup and activation, real mouse-report precedence,
+  ordinary clicks, Shift selection, movement cancellation, changed output,
+  repaint invalidation, wheel/resize/detach cancellation, cross-window attachment
+  handoff, and restart. Injected openers capture destinations without launching
+  external applications. Scrollback fixtures settle the emulator's scroll
+  notification before starting their activation gesture.
+- ✅ macOS verification: `cargo test --lib -- --test-threads=1` passed all 533
+  tests, including editor, command, protected-closure, terminal lifecycle,
+  real Vim/less, typography, keyboard, mouse, and link regressions. `cargo fmt`
+  ran once after Rust work; `git diff --check` passed.
+- Deferred contract extensions retain roadmap IDs: physical keypad D040,
+  additional protocols/events D041, additional link destinations D042, persistent
+  sessions D043, simultaneous views D044, general terminal settings D045,
+  remote PTYs D038, and shell integration D039. No tmux acceptance or
+  Linux/Windows certification is claimed; this host lacks tmux.
+- Native fixture: run `python3 scripts/terminal-links-fixture.py` in Knot.
+  Check detected, wrapped, Unicode, explicit-label, and unsupported-scheme links
+  with hover and Cmd-click. Scroll the output into history and repeat; use
+  mouse-enabled Vim to check recognized link precedence and Shift selection.
+- ⏳ Final native gate remains open: links in live output and scrollback,
+  mouse-enabled applications, then shell/TUI behavior through resize, tab
+  switching, cross-window transfer, restart, and protected closure. Keep the
+  plan active until the user accepts this gate; archive in a separate commit
+  only afterward.

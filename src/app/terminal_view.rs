@@ -6,12 +6,14 @@ use alacritty_terminal::{
     vte::ansi::CursorShape,
 };
 use gpui::*;
+use std::rc::Rc;
 
 use super::{
     TERMINAL_KEY_CONTEXT,
     terminal_colors::{BACKGROUND, FOREGROUND, dim, resolve_color},
     terminal_input::terminal_key_bytes,
     terminal_layout::TerminalLayout,
+    terminal_links::{LinkGrid, LinkTarget},
     terminal_mouse::{
         PointerOwner, PointerState, WheelRoute, button_code, interaction_modes, modifier_code,
         mouse_bytes, wheel_route,
@@ -35,6 +37,27 @@ pub(crate) struct TerminalView {
     interaction_bounds: Bounds<Pixels>,
     layout: Option<TerminalLayout>,
     focus_subscriptions: Vec<Subscription>,
+    hovered_link: Option<LinkTarget>,
+    armed_link: Option<ArmedLink>,
+    open_link: Rc<dyn Fn(&str, &mut App)>,
+}
+
+struct ArmedLink {
+    grid: LinkGrid,
+    target: LinkTarget,
+    generation: u64,
+    bounds: Bounds<Pixels>,
+    layout: TerminalLayout,
+    position: Point<Pixels>,
+}
+
+fn link_modifier(modifiers: Modifiers) -> bool {
+    !modifiers.shift
+        && if cfg!(target_os = "macos") {
+            modifiers.platform
+        } else {
+            modifiers.control
+        }
 }
 
 impl TerminalView {
@@ -103,6 +126,7 @@ impl TerminalView {
             .update(cx, |session, _| session.attach())
             .expect("terminal session already has a view");
         let subscription = cx.observe(&session, |this, _, cx| {
+            this.clear_links();
             this.sync_pointer(cx);
             cx.notify();
         });
@@ -125,6 +149,9 @@ impl TerminalView {
             interaction_bounds: Bounds::default(),
             layout: None,
             focus_subscriptions: Vec::new(),
+            hovered_link: None,
+            armed_link: None,
+            open_link: Rc::new(|uri, cx| cx.open_url(uri)),
         }
     }
 
@@ -226,7 +253,32 @@ impl TerminalView {
         cx.notify();
     }
 
+    fn clear_links(&mut self) {
+        self.hovered_link = None;
+        self.armed_link = None;
+    }
+
+    fn link_grid(&self, cx: &App) -> Option<LinkGrid> {
+        self.attachment.as_ref()?;
+        let terminal = self.session.read(cx).terminal()?;
+        Some(LinkGrid::capture(&terminal.lock()))
+    }
+
+    fn hover_link(&mut self, position: Point<Pixels>, hovered: bool, cx: &mut Context<Self>) {
+        let target = if hovered && self.interaction_bounds.contains(&position) {
+            self.viewport_cell(position, cx)
+                .and_then(|(column, row)| self.link_grid(cx)?.at(column, row).cloned())
+        } else {
+            None
+        };
+        if target != self.hovered_link {
+            self.hovered_link = target;
+            cx.notify();
+        }
+    }
+
     fn reset_pointer(&mut self) {
+        self.clear_links();
         self.pointer.clear();
         self.pointer_epoch = None;
         self.local_dragged = false;
@@ -292,10 +344,12 @@ impl TerminalView {
         );
         if let Some(previous) = self.pointer_epoch {
             if previous.0 != epoch.0 || previous.2 != epoch.2 {
+                self.clear_links();
                 self.pointer.clear();
                 self.reported_cell = None;
                 self.local_dragged = false;
             } else if previous.1 != epoch.1 {
+                self.clear_links();
                 self.pointer.clear_gestures();
                 self.reported_cell = None;
                 self.local_dragged = false;
@@ -345,6 +399,22 @@ impl TerminalView {
         self.pointer_position = Some(event.position);
         self.pointer_modifiers = event.modifiers;
         self.focus.focus(window);
+        if event.button == MouseButton::Left && link_modifier(event.modifiers) {
+            if let Some(grid) = self.link_grid(cx) {
+                if let Some(target) = grid.at(column, row).cloned() {
+                    self.armed_link = Some(ArmedLink {
+                        grid,
+                        target,
+                        generation: self.session.read(cx).generation(),
+                        bounds: self.interaction_bounds,
+                        layout: self.layout.unwrap(),
+                        position: event.position,
+                    });
+                    self.pointer.press(event.button, PointerOwner::Link);
+                    return true;
+                }
+            }
+        }
         if mode.intersects(TermMode::MOUSE_MODE) && !event.modifiers.shift {
             let code = button_code(event.button) + modifier_code(event.modifiers);
             let bytes = mouse_bytes(mode, code, column, row, false);
@@ -376,8 +446,20 @@ impl TerminalView {
         };
         self.pointer_position = Some(event.position);
         self.pointer_modifiers = event.modifiers;
+        self.hover_link(event.position, hovered, cx);
         if let Some(button) = event.pressed_button {
             match self.pointer.owner(button) {
+                Some(PointerOwner::Link) => {
+                    if !link_modifier(event.modifiers)
+                        || self.armed_link.as_ref().is_some_and(|armed| {
+                            (event.position.x - armed.position.x).abs() > px(4.)
+                                || (event.position.y - armed.position.y).abs() > px(4.)
+                        })
+                    {
+                        self.armed_link = None;
+                    }
+                    return true;
+                }
                 Some(PointerOwner::Local) if button == MouseButton::Left => {
                     self.local_dragged = true;
                     self.select_at(event.position, self.interaction_bounds, false, cx);
@@ -428,6 +510,28 @@ impl TerminalView {
         self.pointer_position = Some(event.position);
         self.pointer_modifiers = event.modifiers;
         match self.pointer.release(event.button) {
+            Some(PointerOwner::Link) => {
+                if let Some(armed) = self.armed_link.take() {
+                    let current = self.link_grid(cx);
+                    let cell = self.viewport_cell(event.position, cx);
+                    if link_modifier(event.modifiers)
+                        && self.interaction_bounds.contains(&event.position)
+                        && (event.position.x - armed.position.x).abs() <= px(4.)
+                        && (event.position.y - armed.position.y).abs() <= px(4.)
+                        && armed.generation == self.session.read(cx).generation()
+                        && armed.bounds == self.interaction_bounds
+                        && Some(armed.layout) == self.layout
+                        && current.as_ref() == Some(&armed.grid)
+                        && cell.is_some_and(|(column, row)| {
+                            current.as_ref().and_then(|grid| grid.at(column, row))
+                                == Some(&armed.target)
+                        })
+                    {
+                        (self.open_link)(&armed.target.uri, cx);
+                    }
+                }
+                true
+            }
             Some(PointerOwner::Application) => {
                 if let Some((column, row)) = self.viewport_cell(event.position, cx) {
                     self.send_pointer(
@@ -454,6 +558,7 @@ impl TerminalView {
     }
 
     fn scroll(&mut self, event: &ScrollWheelEvent, cx: &mut Context<Self>) -> bool {
+        self.clear_links();
         let Some(mode) = self.sync_pointer(cx) else {
             return false;
         };
@@ -761,6 +866,7 @@ struct RenderCell {
 struct TerminalSnapshot {
     cells: Vec<RenderCell>,
     cursor: Option<(usize, usize, CursorShape)>,
+    links: Option<LinkGrid>,
 }
 
 impl TerminalSnapshot {
@@ -769,12 +875,14 @@ impl TerminalSnapshot {
             return Self {
                 cells: Vec::new(),
                 cursor: None,
+                links: None,
             };
         }
         let Some(terminal) = view.session.read(cx).terminal() else {
             return Self {
                 cells: Vec::new(),
                 cursor: None,
+                links: None,
             };
         };
         let terminal = terminal.lock();
@@ -816,7 +924,11 @@ impl TerminalSnapshot {
             })
             .collect();
 
-        Self { cells, cursor }
+        Self {
+            cells,
+            cursor,
+            links: Some(LinkGrid::capture(&terminal)),
+        }
     }
 }
 
@@ -914,7 +1026,32 @@ impl Element for TerminalElement {
             }
         });
 
+        let modifier_entity = self.entity.clone();
+        window.on_modifiers_changed(move |event, _, cx| {
+            modifier_entity.update(cx, |terminal, cx| {
+                terminal.pointer_modifiers = event.modifiers;
+                if !link_modifier(event.modifiers) {
+                    terminal.armed_link = None;
+                }
+                cx.notify();
+            });
+        });
         let snapshot = TerminalSnapshot::capture(self.entity.read(cx), cx);
+        let hovered = self
+            .entity
+            .read(cx)
+            .hovered_link
+            .as_ref()
+            .filter(|target| {
+                snapshot
+                    .links
+                    .as_ref()
+                    .is_some_and(|grid| grid.links_contain(target))
+            })
+            .cloned();
+        if hovered.is_some() && link_modifier(window.modifiers()) {
+            window.set_cursor_style(CursorStyle::PointingHand, hitbox);
+        }
         let Some(layout) = self.entity.read(cx).layout else {
             return;
         };
@@ -998,11 +1135,13 @@ impl Element for TerminalElement {
                     font,
                     color: rgb(cell.foreground).into(),
                     background_color: None,
-                    underline: cell.flags.intersects(Flags::ALL_UNDERLINES).then(|| {
-                        UnderlineStyle {
-                            thickness: px(1.),
-                            ..Default::default()
-                        }
+                    underline: (cell.flags.intersects(Flags::ALL_UNDERLINES)
+                        || hovered
+                            .as_ref()
+                            .is_some_and(|link| link.contains(cell.column, cell.line)))
+                    .then(|| UnderlineStyle {
+                        thickness: px(1.),
+                        ..Default::default()
                     }),
                     strikethrough: cell.flags.contains(Flags::STRIKEOUT).then(|| {
                         StrikethroughStyle {

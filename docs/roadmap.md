@@ -145,6 +145,35 @@ the item is removed from this register.
   - Reconsider: gpui exposes keypad identity, or a concrete TUI workflow requires
     a framework patch and its platform maintenance cost.
 
+- **D041 — Additional terminal protocols and product events**
+  - Deferred: D026 covers legacy keyboard/mouse protocols and HTTP(S) links;
+    Kitty/modifyOtherKeys, graphics, OSC 52 clipboard access, titles, and bells
+    have no selected product contract.
+  - Reconsider: A daily shell/TUI workflow demonstrates a specific missing
+    protocol or event; define its compatibility and product behavior together.
+
+- **D042 — Additional terminal link destinations**
+  - Deferred: D026 supports explicit and detected HTTP(S) destinations only.
+    Arbitrary URI handlers and filesystem-path links require an opening policy.
+  - Reconsider: A concrete workflow needs file navigation or another URI scheme.
+
+- **D043 — Persistent terminal sessions**
+  - Deferred: Live local sessions survive view reconstruction, but not application
+    exit. Persistent processes/grid restoration need a separate lifecycle contract.
+  - Reconsider: Workbench restoration (D005) requires terminal continuity.
+
+- **D044 — Simultaneous terminal views**
+  - Deferred: A sole attachment keeps input ownership and PTY resize authority
+    unambiguous while supporting cross-window transfer.
+  - Reconsider: Daily use requires viewing one live session in multiple panes;
+    define independent viewport and shared resize/input policies.
+
+- **D045 — General terminal settings**
+  - Deferred: Shared typography and the session-local mouse toggle cover D026;
+    a persisted settings system has no selected contract.
+  - Reconsider: Daily use needs configurable fonts or terminal preferences;
+    define their scope and persistence with the application settings model.
+
 - **D038 — Remote PTYs**
   - Deferred: Local interactive sessions cover current terminal workflows.
   - Reconsider: Daily use requires remote shells; select transport,

@@ -74,6 +74,7 @@ mod terminal_colors;
 mod terminal_fixture;
 mod terminal_input;
 mod terminal_layout;
+mod terminal_links;
 mod terminal_mouse;
 #[allow(
     dead_code,
