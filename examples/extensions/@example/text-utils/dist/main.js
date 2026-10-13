@@ -2,6 +2,7 @@ import * as knot from "knot";
 const { commands } = knot;
 
 await commands.register("example.insert-greeting", async ({ buffer }) => {
+  if (buffer === null) return;
   const snapshot = await buffer.snapshot();
   await buffer.applyEdits([{
     range: { startByteOffset: 0, endByteOffset: 0 },

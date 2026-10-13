@@ -13,6 +13,8 @@ Current sources of truth:
   register of deferred work. The current initiative is
   [production extension APIs and JavaScript projects](plans/extension-platform-and-projects-plan.md).
 - [plans/](plans/) contains active executable slice plans.
+- [extension-api.md](extension-api.md) is the D046 draft author contract and
+  operation audit; runtime implementation and review are still pending.
 - [development.md](development.md) covers local checks, CI, and the Rust
   toolchain.
 

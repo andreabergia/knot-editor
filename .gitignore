@@ -1,2 +1,3 @@
 /target
 .DS_Store
+/scripts/extension-api/node_modules

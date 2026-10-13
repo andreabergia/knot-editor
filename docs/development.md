@@ -28,3 +28,11 @@ branch cancels an older run.
 The workflow has read-only repository permissions and pins external actions to
 commits. [Dependabot](../.github/dependabot.yml) checks for action updates
 weekly.
+
+The D046 draft extension contract has a separate authoring check:
+`scripts/check-extension-api.sh`. With Node/npm installed, it uses `npm ci` and a
+lockfile-pinned TypeScript compiler to check declarations, installed JavaScript
+examples, draft samples and positive/negative type fixtures without emitting code.
+It does not use a global `tsc`. Runtime contracts still require Rust/V8 tests;
+see the [draft guide](extension-api.md) for the current audit and implementation
+status. CI integration follows in D046 checkpoint 4.

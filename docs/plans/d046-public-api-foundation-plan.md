@@ -1,6 +1,7 @@
 # D046 — Production public API foundation
 
-Status: 📝 design agreed; implementation checkpoints have not started.
+Status: 🔎 checkpoint 1 artifact implemented and validated; contract review pending.
+Runtime checkpoints 2–4 have not started.
 
 Source: checkpoint 1 of the
 [extension platform and projects plan](extension-platform-and-projects-plan.md)
@@ -195,25 +196,56 @@ without conventional titles. Run `cargo fmt` once at the end of Rust work before
 committing. Architecture/decisions continue describing implemented behavior
 until the corresponding contracts land.
 
-### 1. Complete audit and freeze the contract — ⬜
+### 1. Complete audit and freeze the contract — 🔎 ready for review
 
-- Produce the complete operation/identity/context matrix in the author guide,
+- ✅ Produce the complete operation/identity/context matrix in the author guide,
   with each current mismatch assigned to subcheckpoint 2, 3, or 4, or explicitly
   linked to D047/D049. No unassigned prototype cleanup remains.
-- Draft complete declarations, context/target shapes, error representation,
+- ✅ Draft complete declarations, context/target shapes, error representation,
   disposal state transitions, and version diagnostics. Include the current
   provider item/contribution/keymap shapes and exact revision/offset units.
-- Inventory all consumers, including personal-config documentation, embedded
+- ✅ Inventory all consumers, including personal-config documentation, embedded
   product fixtures, pool/engine tests, and examples. Define replacements for
   context-free `activeBuffer()` test fixtures so transport tests retain coverage
   using explicit buffers or captured commands.
-- **Validation:** manually cross-check every declaration against facade exports,
+- ✅ **Validation:** manually cross-check every declaration against facade exports,
   native argument decoders and response/callback converters; run the initial
   declaration/example type check. Record intentional not-yet-implemented contract
   changes clearly so the guide does not claim they already ship.
-- **Review gate:** approve the complete contract and audit allocation before
+- ⬜ **Review gate:** approve the complete contract and audit allocation before
   changing runtime behavior. Commit audit, draft declarations, guide, and checker
   as one reviewable artifact.
+
+Checkpoint 1 delivery (2026-10-13):
+
+- ✅ [Author guide](../extension-api.md) inventories all public operations,
+  returned methods, callback payloads, identities, decoders/converters and
+  consumers, with explicit checkpoint 2/3/4 or D047–D049 allocation.
+- ✅ [Draft declarations](../../src/host/js/knot.d.ts) and checked JavaScript
+  samples cover the complete proposed version 1 surface. `CommandContext` fields
+  are `target`, `buffer`, `arguments`, `signal`; target is a host-issued opaque
+  `{ window, view }` object accepted only by contextual buffer/selection calls
+  within its originating invocation tree. Buffer proxies retain hidden identity.
+  D047 still owns top-level explicit-target invocation.
+- ✅ Error contract retains resource codes and adds context-unavailable, invalid
+  target, disposed ownership and read-only buffer codes. Recognized fields use
+  strict types/safe integers; unknown API record fields remain ignored. Provider
+  results require iterables; JSON arguments reject silent serialization changes.
+- ✅ `scripts/check-extension-api.sh` passed with lockfile-pinned TypeScript
+  5.7.3 (Node 25.9.0 / npm 11.12.1). Checks include declarations, both installed
+  JS packages, two draft JS examples, positive fixtures and 18 expected-error
+  fixtures. No global compiler or runtime transpilation is used.
+- ✅ Manual cross-check: `knot.js` exports; every `bootstrap.js` proxy method and
+  callback; protocol data/outcomes/errors; native operation/keybinding/numeric/
+  range/edit/contribution decoders; provider/command JSON and response/snapshot/
+  change conversion; foreground buffer/view/command/semantic routing and model
+  revision/ownership rules; package decoder/schema and consumer fixture searches.
+  Differences are documented as unimplemented draft contracts, not shipped claims.
+- No Rust or host runtime implementation was changed; Rust tests and formatting are not needed
+  for this documentation/declaration/tooling checkpoint. The installed greeting
+  example now handles the already-nullable command buffer before editing.
+- ⬜ Await approval of the contract and audit allocation before checkpoint 2.
+  Architecture and decisions retain their current implemented behavior.
 
 ### 2. Captured context from product routing through JavaScript — ⬜
 
