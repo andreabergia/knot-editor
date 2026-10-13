@@ -2,16 +2,16 @@
 
 Status: ✅ complete; all four checkpoints and native review gates accepted.
 
-Promoted from D026 in the [roadmap](../roadmap.md). This slice makes the local
+Promoted from D026 in the [roadmap](../../roadmap.md). This slice makes the local
 terminal usable with ordinary shells and representative TUIs: Vim, less, and
 tmux. Users get consistent typography, mode-aware keyboard and mouse input,
 and clickable links. “Full compatibility” means the explicit tested contract
 below; it does not promise every terminal protocol or application.
 
-References: [architecture](../architecture.md),
-[terminal ownership and lifecycle](../architecture/workbench-and-lifecycle.md#terminal-sessions-and-views),
-[command routing](../architecture/commands.md), and
-[validated terminal choice](../decisions.md#terminal).
+References: [architecture](../../architecture.md),
+[terminal ownership and lifecycle](../../architecture/workbench-and-lifecycle.md#terminal-sessions-and-views),
+[command routing](../../architecture/commands.md), and
+[validated terminal choice](../../decisions.md#terminal).
 
 ## Agreed design and boundaries
 
@@ -52,7 +52,7 @@ References: [architecture](../architecture.md),
 
 ## Exclusions and deferred choices
 
-No physical application-keypad input ([D040](../roadmap.md)), general settings
+No physical application-keypad input ([D040](../../roadmap.md)), general settings
 system (D045), advanced keyboard protocols (including Kitty and
 modifyOtherKeys) and terminal graphics (D041), arbitrary URI handlers and
 filesystem-path links (D042), remote PTYs (D038), shell integration (D039),
