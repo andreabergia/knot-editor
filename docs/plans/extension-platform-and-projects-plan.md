@@ -62,7 +62,16 @@ Publish a documented, typed JS API organized around application documents,
 workspaces/windows, workbench surfaces, commands, and storage. Exact method
 names are finalized at the first review gate; this plan specifies semantics.
 Ship TypeScript declarations for JavaScript authors without requiring a TS
-runtime. Audit the existing facade, not only the newly added operations.
+runtime. Audit the existing facade, not only the newly added operations. D046
+retains `editor`, `commands`, `workbench`, and the keybinding exports. D047 must
+introduce the document/window/workspace namespaces with its queries and operations;
+D048 introduces storage, and D049 finalizes native contribution APIs with real
+instance semantics. Do not publish empty namespaces or speculative operations.
+
+There is no backward-compatibility requirement. Change contracts directly and
+update all repository consumers together, without aliases, shims, or deprecation
+periods. Package API-version validation diagnoses unsupported contracts before
+evaluation; it does not promise support for older API versions.
 
 Distinguish runtime lifecycle identity, stable package identity, persistent
 document identity, live buffer handles, and live window/pane/tab/view identities.
@@ -74,7 +83,13 @@ Capture command context before UI changes focus. Host operations invoked by
 events/providers use explicit targets; top-level activation cannot accidentally
 borrow whichever window becomes active later. Operations with an optional
 active-window convenience capture it at admission and reject when unavailable.
-Opaque handles never grant access to gpui entities or V8 values.
+Opaque handles never grant access to gpui entities or V8 values. D046 exposes
+captured command context and removes global-focus fallback from existing
+context-dependent operations. D047 must supply explicit live window/view targets
+and admission-time active-window convenience for its application operations;
+D049 must supply window/instance context to native contribution providers and
+actions. Context-free activation may register features and use genuinely
+application-scoped operations, but may not implicitly select a product window.
 
 Document errors, cancellation, completion, and disposal. New asynchronous APIs
 report structured errors and settle exactly once. Commands retain execution
@@ -280,11 +295,13 @@ Run `cargo fmt` once at the end of Rust work, before committing.
 
 ### 1. Production public API foundation — D046 ⬜
 
+Detailed execution: [D046 public API foundation plan](d046-public-api-foundation-plan.md).
+
 - Audit all existing JS operations and identify prototype coupling, implicit
   context, swallowed asynchronous errors, and missing lifecycle contracts.
 - Publish the API contract/types and an identity/context matrix. Implement the
-  facade/bridge cleanup needed for current operations, with a documented policy
-  for API compatibility and package compatibility diagnostics.
+  facade/bridge cleanup needed for current operations, with an explicit absence
+  of backward compatibility and pre-evaluation package API-version diagnostics.
 - Keep host/protocol V8-free and semantic. Remove historical/prototype comments
   only in touched code; do not begin an unrelated module/crate restructuring.
 - **Validation:** JS boundary tests for arguments, error conversion, cancellation,
@@ -295,6 +312,9 @@ Run `cargo fmt` once at the end of Rust work, before committing.
 
 ### 2. Observable application state — D047 ⬜
 
+- Finalize and publish document/window/workspace namespaces and live-target
+  types with implemented operations; extend the D046 declarations and contract
+  tests rather than publishing speculative stubs.
 - Implement document/window/workspace/presentation queries and atomic initial
   observation with ordered post-commit events.
 - Introduce persistent document identity and ordered root records in the model
@@ -313,9 +333,10 @@ Run `cargo fmt` once at the end of Rust work, before committing.
 
 - Expose explicit file/folder opening, root-set replacement, untitled creation,
   document presentation, and protected closure through existing product flows.
-- Capture and validate window/pane/view targets; document active-target convenience
-  and activation-time unavailability. Support operations returning document data
-  independently from command execution outcomes.
+- Capture and validate window/pane/view targets; implement explicit-target
+  admission and active-window convenience captured at admission, including a
+  structured failure when activation has no available window. Support operations
+  returning document data independently from command execution outcomes.
 - **Validation:** native/JS parity, URI deduplication, missing destinations, invalid
   UTF-8/provider errors, focus changes, window closure during I/O, cancellation,
   and dirty documents shared by multiple windows.
@@ -324,6 +345,8 @@ Run `cargo fmt` once at the end of Rust work, before committing.
 
 ### 4. SQLite-backed extension storage — D048 ⬜
 
+- Finalize and publish the storage namespace with the implemented record API,
+  extending the public declarations, documentation, and contract tests.
 - Implement stable owner namespaces, async records, conditional updates, and
   atomic batches; persist application identity metadata behind a separate boundary.
 - Implement schema initialization/migration, committed-write acknowledgement,
@@ -337,6 +360,9 @@ Run `cargo fmt` once at the end of Rust work, before committing.
 
 ### 5. Production native UI contributions — D049 ⬜
 
+- Finalize native UI contribution APIs in `workbench`, with explicit originating
+  window/instance context for providers and actions. Extend declarations and test
+  isolation across windows, including contributions registered before windows exist.
 - Replace hardcoded extension-tree creation with namespaced contribution
   definitions, placement, and per-window instances. Implement the needed
   tree/list, picker, input, and confirmation contracts.

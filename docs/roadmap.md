@@ -30,6 +30,28 @@ has not started. Execute one checkpoint at a time and stop at its review gate.
 | 9 | Multiple workspace roots | D052 | Root collections supported throughout UI and opening flows |
 | 10 | Layout and startup restoration | D005, D051 | Project/session restoration of windows, panes, tabs, and view state |
 
+The [detailed D046 plan](plans/d046-public-api-foundation-plan.md) retains the
+current namespaces, exposes captured command context, and removes global-focus
+fallback. There is no backward-compatibility requirement: contracts and repository
+consumers change together, with unsupported package API versions diagnosed before
+evaluation.
+
+Explicit follow-up tasks within the selected initiative:
+
+- **D047, checkpoint 2:** finalize document/window/workspace namespaces and live
+  target types alongside application queries and observation.
+- **D047, checkpoint 3:** implement explicit window/pane/view targets and
+  admission-time active-window convenience; reject unavailable or stale targets,
+  including activation before product windows exist.
+- **D048, checkpoint 4:** publish the storage namespace with its implemented
+  record operations and ownership contracts.
+- **D049, checkpoint 5:** finalize native contribution APIs and pass originating
+  window/instance context to providers and actions, with cross-window isolation.
+
+Each task includes public declarations, documentation, and boundary tests. Do not
+publish speculative namespaces in D046 or use these deferrals to preserve its
+implicit global context.
+
 This initiative takes priority over the deferred register. The early project
 registry is an intermediate validation checkpoint, not the final scope. D005 is
 promoted into the plan. D012 retains persistent undo/history work; view-state
