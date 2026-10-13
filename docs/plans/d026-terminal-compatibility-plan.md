@@ -1,6 +1,6 @@
 # D026: Terminal Compatibility, Typography, Mouse, and Links
 
-Status: 🚧 checkpoints 1–3 accepted; checkpoint 4 implemented, final native review pending.
+Status: ✅ complete; all four checkpoints and native review gates accepted.
 
 Promoted from D026 in the [roadmap](../roadmap.md). This slice makes the local
 terminal usable with ordinary shells and representative TUIs: Vim, less, and
@@ -349,8 +349,11 @@ Checkpoint 4 implementation choices and evidence:
   Check detected, wrapped, Unicode, explicit-label, and unsupported-scheme links
   with hover and Cmd-click. Scroll the output into history and repeat; use
   mouse-enabled Vim to check recognized link precedence and Shift selection.
-- ⏳ Final native gate remains open: links in live output and scrollback,
-  mouse-enabled applications, then shell/TUI behavior through resize, tab
-  switching, cross-window transfer, restart, and protected closure. Keep the
-  plan active until the user accepts this gate; archive in a separate commit
-  only afterward.
+- ✅ User accepted the final native gate on 2026-10-13 (“all good”). The
+  supplied checklist covered fixture hover/Cmd-click and explicit destinations,
+  unsupported-scheme exclusion, wrapped output and scrollback, mouse-enabled Vim
+  link activation and Shift selection/Copy, shell typing/navigation/paste through
+  resize, tab switching, cross-window transfer and restart, and cancelled
+  protected window closure preserving both an unsaved document and its running
+  terminal. No additional application versions or platform evidence were supplied.
+  All D026 gates passed within the recorded contract and deferrals.
