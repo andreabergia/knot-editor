@@ -1,14 +1,43 @@
-# Deferred and Long-Term Work
+# Product Roadmap and Deferred Work
 
-This is an unordered register of known work that does not belong to the active
-vertical slice. An item moves into a slice plan only when a concrete use case
-requires it. Completed decisions remain in `decisions.md`; this document does
-not reopen them or imply implementation order.
+The selected initiative below has an explicit implementation order. The deferred
+register that follows remains unordered. Completed decisions remain in
+`decisions.md`; proposed architecture and checkpoint details live in active plans.
 
 Each item has a stable `D###` identifier, a reason for deferral, and a concrete
 trigger for reconsideration. IDs are never renumbered or reused. New items take
 the next unused ID. When an item is promoted, its slice plan retains the ID and
 the item is removed from this register.
+
+## Selected initiative: production extension APIs and JavaScript projects
+
+The [extension platform and project management plan](plans/extension-platform-and-projects-plan.md)
+uses a JavaScript project manager to establish production application APIs,
+native semantic UI contributions, durable extension storage, multi-root
+workspaces, and session restoration including unsaved documents. Implementation
+has not started. Execute one checkpoint at a time and stop at its review gate.
+
+| Priority | Checkpoint | Work identifiers | Outcome |
+| --- | --- | --- | --- |
+| 1 | Public API foundation | D046 | Documented and typed JS contracts; prototype coupling removed at the API boundary |
+| 2 | Application state and events | D047 | Window/document/workspace queries and race-free observation |
+| 3 | Resource and document operations | D047 | JS opens resources and manages documents through product flows |
+| 4 | Durable extension storage | D048 | Rust-owned SQLite and lifecycle-independent extension namespaces |
+| 5 | Native extension UI | D049 | Extension-created views and native picker/input surfaces |
+| 6 | Project registry validation | D051 | A usable JavaScript project manager with one root per workspace |
+| 7 | Unsaved-document recovery | D050 | Durable content recovery independent of extension health |
+| 8 | Safe project switching | D051, D050 | Durable suspension and document restoration without losing edits |
+| 9 | Multiple workspace roots | D052 | Root collections supported throughout UI and opening flows |
+| 10 | Layout and startup restoration | D005, D051 | Project/session restoration of windows, panes, tabs, and view state |
+
+This initiative takes priority over the deferred register. The early project
+registry is an intermediate validation checkpoint, not the final scope. D005 is
+promoted into the plan. D012 retains persistent undo/history work; view-state
+restoration belongs to D005. D034 may follow the multi-root work but is not
+required for a fuller file explorer. General widget UI/WebViews (D021), terminal
+restoration (D043), and broad scheduling policy (D019) remain deferred.
+
+## Deferred register
 
 ## Editing and workbench
 
@@ -29,11 +58,6 @@ the item is removed from this register.
     ownership.
   - Reconsider: The editing loop is trustworthy and source readability becomes
     the dominant problem.
-
-- **D005 — Workbench layout and session restoration**
-  - Deferred: Persistence semantics should follow a workbench people actually
-    use.
-  - Reconsider: Window and split behavior stabilizes through daily use.
 
 - **D006 — File drag and drop**
   - Deferred: Open and Save As establish workspace-independent documents first.
@@ -78,10 +102,10 @@ the item is removed from this register.
   - Deferred: The URI boundary is validated with local and memory providers.
   - Reconsider: A specific remote workflow is selected.
 
-- **D012 — Persistent undo, history trees, and persistent view-state restoration**
+- **D012 — Persistent undo and history trees**
   - Deferred: Session-local linear undo is sufficient for dogfooding.
-  - Reconsider: Users need history or view-state recovery across restarts, or
-    branching history.
+  - Reconsider: Users need edit history across restarts or branching history.
+    Persistent view-state restoration is selected under D005.
 
 - **D013 — Piece-table compaction and edit-log reclamation**
   - Deferred: Prototype storage is append-only and no real workload has shown

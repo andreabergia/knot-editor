@@ -9,10 +9,9 @@ Current sources of truth:
 - [decisions.md](decisions.md) records validated choices and rationale, with
   links to subsystem references and supporting evidence.
 - [design.md](design.md) describes product vision and long-term principles.
-- [product-slices.md](product-slices.md) records the high-level product
-  sequence.
-- [deferred.md](deferred.md) is the unordered register of known work outside
-  the active slice.
+- [roadmap.md](roadmap.md) records the prioritized initiative and the unordered
+  register of deferred work. The current initiative is
+  [production extension APIs and JavaScript projects](plans/extension-platform-and-projects-plan.md).
 - [plans/](plans/) contains active executable slice plans.
 - [development.md](development.md) covers local checks, CI, and the Rust
   toolchain.

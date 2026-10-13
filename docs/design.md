@@ -446,15 +446,24 @@ mechanisms are recorded in the archived
 
 # Session Persistence
 
-Session persistence is not a core editor concern.
+Session persistence does not belong to the storage-independent core model.
+Extensions own project membership and session restoration policy. The Rust
+application layer owns durable preservation and recovery of unsaved document
+contents, independently of extension health.
 
-The core exposes sufficient API for extensions to serialize and restore:
+The intended application API lets extensions serialize and restore:
 
 - open buffers;
 - window layouts;
 - view state.
 
-Extensions are responsible for deciding what to persist, when, and how. This allows users to choose their own persistence semantics, from minimal (reopen last files) to maximal (full workspace restoration).
+Extensions store persistent document references and presentation metadata rather
+than maintaining the sole recovery copy of unsaved text. Users can choose
+restoration policies from reopening recent files to full workspace restoration.
+Application-owned recovery remains available when an extension fails or its
+session metadata is unavailable. These APIs and guarantees are planned in the
+[extension platform and project management plan](plans/extension-platform-and-projects-plan.md);
+they are not yet implemented.
 
 ---
 
