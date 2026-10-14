@@ -154,6 +154,17 @@ runtime failures visible while independent packages continue. Reuse exact-once
 lifecycle teardown for startup rollback so commands and semantic providers do
 not outlive a failed entry.
 
+Require an explicit installed-package API version before entry evaluation. API
+version describes host contracts; package version and dependencies describe the
+package itself. Retain recoverable identity before field validation so version
+failures cannot conceal duplicates or turn a known rejected dependency into a
+missing package. Personal configuration deliberately stays manifest-free.
+
+Keep native dispatch functions in engine-owned persistent handles, outside the
+author's global namespace. Native callback context and buffer proxy construction
+must come from admitted native work, and replacing a global function must not
+redirect dispatch. Release those handles with the isolate's other owned state.
+
 ## Personal configuration
 
 Use two optional JavaScript entry modules in one selected per-user config

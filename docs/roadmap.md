@@ -14,12 +14,12 @@ the item is removed from this register.
 The [extension platform and project management plan](plans/extension-platform-and-projects-plan.md)
 uses a JavaScript project manager to establish production application APIs,
 native semantic UI contributions, durable extension storage, multi-root
-workspaces, and session restoration including unsaved documents. Implementation
-has not started. Execute one checkpoint at a time and stop at its review gate.
+workspaces, and session restoration including unsaved documents. D046 implementation
+is verified and awaiting review; subsequent checkpoints have not started. Execute one checkpoint at a time and stop at its review gate.
 
 | Priority | Checkpoint | Work identifiers | Outcome |
 | --- | --- | --- | --- |
-| 1 | Public API foundation | D046 | Documented and typed JS contracts; prototype coupling removed at the API boundary |
+| 1 | Public API foundation (implemented; review pending) | D046 | Documented and typed JS contracts; prototype coupling removed at the API boundary |
 | 2 | Application state and events | D047 | Window/document/workspace queries and race-free observation |
 | 3 | Resource and document operations | D047 | JS opens resources and manages documents through product flows |
 | 4 | Durable extension storage | D048 | Rust-owned SQLite and lifecycle-independent extension namespaces |

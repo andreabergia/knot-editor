@@ -24,7 +24,8 @@ gpui application and views        extension runtimes
 - `host::module_graph` validates Knot-owned, immutable package source graphs
   and personal-config source graphs before they enter an isolate.
 - `app::extension_package` owns installed-directory manifest discovery and
-  captures package-local JavaScript sources without entering V8.
+  admits installed API versions before capturing package-local JavaScript sources
+  without entering V8.
 - `app::personal_config` selects one per-user config directory, preferring an
   existing XDG location over the platform directory, and captures optional
   phase entries and contained JavaScript sources. The host validates reachable

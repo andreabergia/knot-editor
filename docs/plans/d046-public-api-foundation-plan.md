@@ -1,7 +1,7 @@
 # D046 — Public API foundation
 
 Status: ✅ checkpoint 1 approved; ✅ checkpoint 2 implemented, awaiting review;
-✅ checkpoint 3 implemented, awaiting review; checkpoint 4 not started.
+✅ checkpoint 3 implemented, awaiting review; ✅ checkpoint 4 implemented, awaiting final review.
 
 Source: [extension platform plan](extension-platform-and-projects-plan.md),
 [D046 roadmap entry](../roadmap.md).
@@ -124,17 +124,17 @@ checkpoint 4.
 ⏳ Review gate: verify contracts against declarations, no discarded cleanup/invalidation
 promises, and no deadlock or double release.
 
-## 4. Package admission and authoring baseline — ⬜
+## 4. Package admission and authoring baseline — ✅ implemented; ⏳ review pending
 
-- Enforce required positive integer `apiVersion`, exactly `1`, before installed
+- ✅ Enforce required positive integer `apiVersion`, exactly `1`, before installed
   entry evaluation. Preserve recoverable package identity for duplicate/dependency
   diagnostics; report expected and declared versions.
-- Update manifests, schema and every package fixture directly. Keep personal
+- ✅ Update manifests, schema and every package fixture directly. Keep personal
   config manifest-free and retain its fatal-startup policy.
-- Finalize guide, declarations and examples against runtime behavior; remove draft
+- ✅ Finalize guide, declarations and examples against runtime behavior; remove draft
   markers. Cover activation, captured commands, explicit-buffer callbacks,
   disposal/invalidation, coded errors and keybinding batching.
-- Integrate the authoring checker into continuous verification.
+- ✅ Integrate the authoring checker into continuous verification.
 
 Validation:
 
@@ -144,18 +144,32 @@ Validation:
   product host; run `cargo test --all-targets` and `scripts/check-extension-api.sh`.
 - Record results and confirm the parent plan/roadmap retain D047–D049 follow-ups.
 
-Review gate: review runtime imports/context/errors/cleanup/version admission against
+✅ Validation: `cargo test --all-targets` passed (559 library tests and 5 example
+tests), `cargo clippy --locked --all-targets -- -D warnings`,
+`scripts/check-extension-api.sh` and `git diff --check` passed. Tests prove missing,
+malformed and unsupported versions never evaluate entry code, preserve duplicate
+IDs and dependency causes, and do not skip independent packages. Checked authoring
+examples run as an installed version-1 package through commands, buffer callbacks,
+trees/completion, keybinding batching and cleanup. Personal-config startup suites
+remain green. CI runs the pinned authoring checker alongside Rust verification.
+
+The final import/context audit additionally moved private native dispatch hooks
+from author globals into engine-owned handles, with visibility/replacement tests.
+Requests attempted during teardown reject with `Cancelled` before native admission.
+Mechanical Clippy fixes preserve existing view/relocation behavior. The parent plan
+and roadmap retain D047–D049 application queries/events, live targets, real buffer
+removal, resource operations, storage and new contribution protocols.
+
+⏳ Review gate: review runtime imports/context/errors/cleanup/version admission against
 its documented contract. Only after all four gates pass, mark D046 complete in the
 parent plan and roadmap. Commit completion documentation separately; stop before D047.
 Delete this temporary plan after completion and fix links that pointed to it.
 
-## Outstanding audit gaps
+## Audit result
 
-Remove entries as implementation and regression coverage close them.
-
-| Checkpoint | Open gap / affected code |
-| --- | --- |
-| 4 | `extension_package.rs` lacks `apiVersion`; adapt discovery/loading, manifest constructors and JSON fixtures in package/load/host/product tests, example manifests and `docs/schemas/knot.schema.json`. |
+✅ All implementation audit gaps are closed. Review acceptance for checkpoints
+2–4 remains pending; completion bookkeeping and retirement of this temporary plan
+follow acceptance. D047 is not started.
 
 Completion requires all audit gaps closed, every public operation matched to its
 reference, automated coverage of important context/lifecycle/command/provider/keymap

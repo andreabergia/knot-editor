@@ -1,6 +1,7 @@
 # Production extension APIs and JavaScript project management
 
-Status: 📝 planned; no implementation checkpoints have started.
+Status: ⏳ D046 implementation verified, awaiting review gates; checkpoints 2–10
+not started.
 
 Source: the project-management design discussion of 2026-10-13 and the
 [prioritized roadmap](../roadmap.md). Work identifiers: D046–D052 and promoted
@@ -39,8 +40,8 @@ Read [architecture](../architecture.md), [decisions](../decisions.md), and the
   trees, completion, selected text, and clipboard writing. It does not expose
   the application document/workspace catalog, general lifecycle events,
   programmatic resource opening, or durable extension storage.
-- Active-buffer lookup retains prototype global context. The API needs explicit
-  window/view context and defined behavior outside a command invocation.
+- Contextual APIs use admitted command captures and reject missing/stale context.
+  Explicit live window/view targets and application queries remain D047.
 - Application document IDs and buffer/view transport handles are process-local.
   They cannot serve as persisted document references across restarts.
 - A shell has one optional workspace root. Workspace generations and directory
@@ -293,7 +294,7 @@ references as behavior lands; record validated rationale in decisions. Split
 coherent implementation work into logical commits without conventional titles.
 Run `cargo fmt` once at the end of Rust work, before committing.
 
-### 1. Production public API foundation — D046 ⬜
+### 1. Production public API foundation — D046 ⏳ implemented; review pending
 
 Detailed execution: [D046 public API foundation plan](d046-public-api-foundation-plan.md).
 

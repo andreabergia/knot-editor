@@ -1,13 +1,8 @@
 # Writing extensions for Knot
 
-**Draft author guide.** This is intended as official extension-author
-documentation once the foundation is implemented and validated. The proposed
-contracts below do not all ship yet.
-
-The [documented TypeScript declarations](../src/host/js/knot.d.ts) are the API
+The [TypeScript declarations](../src/host/js/knot.d.ts) are the API version 1
 reference: parameter meanings, defaults, errors, completion and lifetime rules
-live beside their types. Pending work is tracked in the
-[implementation plan](plans/d046-public-api-foundation-plan.md).
+live beside their types.
 
 ## Register a command
 
@@ -60,9 +55,9 @@ requiring the extension to await cleanup or receive a final callback.
 ## Package and check your code
 
 Installed packages use a `knot.jsonc` manifest and built `.js`/`.mjs` files.
-The proposed manifest requires `apiVersion: 1`, independent of the package’s
-`version` and dependency `requires`. Version admission is pending implementation;
-current manifests do not accept this field yet. Personal config has no manifest
+The manifest requires the positive integer `apiVersion: 1`, independent of the
+package’s `version` and dependency `requires`. The running host accepts exactly
+API version 1 before capturing/evaluating an installed entry. Personal config has no manifest
 and uses the running application’s API. Its optional `pre-init.js` and
 `post-init.js` entries share one lifecycle; configuration failure is fatal to
 startup.
@@ -76,9 +71,49 @@ Static relative imports stay within the package/config source graph; dynamic
 imports reject. TypeScript is optional authoring tooling, not a runtime.
 
 The [installed examples](../examples/extensions/) demonstrate package layout.
-The [checked draft examples](../scripts/extension-api/examples/) show captured
+The [checked examples](../scripts/extension-api/examples/) show captured
 commands, providers, cleanup, error handling and keybinding batching.
 
 Run `scripts/check-extension-api.sh` with Node/npm available to check the
 declarations and JavaScript examples using the lockfile-pinned compiler.
 Runtime correctness is validated separately by Rust/V8 tests.
+
+A minimal manifest is:
+
+```json
+{
+  "name": "@example/tools",
+  "apiVersion": 1,
+  "version": "1.0.0",
+  "main": "dist/main.js"
+}
+```
+
+Use the [manifest schema](schemas/knot.schema.json) for editor tooling.
+The authoring checker runs in CI alongside Rust verification. Its checked examples
+are also installed through the real product host in integration tests.
+
+## Acknowledge cleanup and handle failures
+
+A disposer makes its object inactive immediately; await its shared promise to
+observe native release. Repeated calls retain the same success or rejection.
+There is no automatic retry. Await tree invalidation to observe native acceptance;
+fetching and painting happen separately. Earlier accepted mutations/invalidation
+settle before cleanup acknowledgement. A callback can await its own disposal.
+
+Narrow an `Error` by `name === "KnotHostError"` and its `code`, as in the
+[error example](../scripts/extension-api/examples/errors.js). A `RevisionConflict`
+means the captured revision is no longer current; choose whether to abandon the
+operation or deliberately read a new snapshot. `Cancelled` does not roll back a
+commit that already succeeded. Invalid argument types use `TypeError`; invalid
+numeric limits and snapshot conversion coordinates use `RangeError`.
+
+The [activation example](../scripts/extension-api/examples/activation.js) combines
+captured commands, explicit-buffer callbacks, providers, awaitable cleanup and
+synchronous keybindings. Keybindings registered during one V8 turn form one atomic
+batch: invalid input fails that entire batch through its turn result.
+
+Current contextual selection supports admitted outline handlers. Application
+queries/events, live window/view targets, persistent document identity, resource
+operations, storage and new native contribution protocols remain follow-up work;
+retaining an ID does not expose those capabilities.

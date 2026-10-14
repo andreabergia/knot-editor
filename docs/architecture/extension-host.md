@@ -30,6 +30,14 @@ startup attempt for the application to roll back through lifecycle unload.
 The application also removes every keymap slot owned by that lifecycle during
 unload, including after failed startup.
 
+Installed admission requires positive integer `apiVersion`, exactly `1`, before
+entry capture/evaluation. Package semantic version and dependency names are
+independent. Discovery retains a recoverable manifest name when validation fails,
+so duplicate identities still invalidate every peer and dependencies report the
+rejected package's cause. Diagnostics include expected and declared API versions;
+independent packages remain eligible. Personal config stays manifest-free and
+uses the running API with its existing fatal-startup policy.
+
 The scheduler owns a V8-independent state machine and a fixed worker pool of
 `min(available_parallelism, 4)` threads by default. Tests and diagnostics may
 set the worker count explicitly.
@@ -71,8 +79,11 @@ graph; bare, missing, and private-bootstrap imports fail resolution. The engine
 eagerly evaluates a private `knot:bootstrap` module and the public
 `knot` module when it creates the capsule. Bootstrap captures the native
 request callback and removes its temporary global before extension work can
-run, leaving the semantic `editor`, `commands`, and `workbench` namespaces and
-the `keybinding` and `removeKeybinding` functions.
+run. The engine captures the command, cancellation, listener and provider dispatch
+functions as private persistent handles and removes their temporary globals.
+Extension code cannot invoke or replace native dispatch to fabricate contexts or
+buffer proxies. The public module exposes `editor`, `commands`, `workbench`,
+`keybinding` and `removeKeybinding`.
 The facade's buffer API crosses a pool-owned typed request inbox. Its native
 callback allocates a lifecycle-scoped request identity, retains only a
 persistent V8 promise resolver, and returns the promise without waiting on the
@@ -86,7 +97,8 @@ admission. Native decoding uses Knot-owned typed values without invoking JSON
 conversion hooks. Numeric boundaries reject coercion and precision loss; native
 numbers that cannot be represented exactly are rejected before reaching JavaScript.
 Native failures construct `KnotHostError` instances from typed codes, while
-argument types and numeric limits use `TypeError` and `RangeError`.
+argument types and numeric limits use `TypeError` and `RangeError`. New requests
+during runtime teardown reject with `Cancelled` before native admission.
 
 Registration and contribution disposers become locally inactive immediately and
 retain one cleanup promise, including its rejection. Native acknowledgement
