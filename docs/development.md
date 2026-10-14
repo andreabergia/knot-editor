@@ -35,4 +35,4 @@ lockfile-pinned TypeScript compiler to check declarations, installed JavaScript
 examples, draft samples and positive/negative type fixtures without emitting code.
 It does not use a global `tsc`. Runtime contracts still require Rust/V8 tests;
 see the [draft guide](extension-api.md) for authoring and the
-[D046 plan](plans/d046-public-api-foundation-plan.md) for the implementation audit. CI integration follows in D046 checkpoint 4.
+[D046 plan](plans/d046-public-api-foundation-plan.md) for pending implementation and checks. CI integration follows in D046 checkpoint 4.

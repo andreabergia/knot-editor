@@ -55,7 +55,11 @@ declare module "knot" {
     /** Stable category for handling a failure independently of its message. */
     readonly code: HostErrorCode;
   }
-  /** A lifecycle-owned registration, subscription or contribution set. */
+  /**
+   * A lifecycle-owned registration, subscription or contribution set; native IDs
+   * are hidden and must not be persisted. Unload/failed activation/shutdown release
+   * ownership independently of extension awaits or final JavaScript callbacks.
+   */
   export interface Disposable {
     /**
      * Mark inactive immediately and release native ownership.
@@ -138,7 +142,9 @@ declare module "knot" {
     /**
      * Atomically replace this lifecycle's entire set at the required revision.
      * Empty items clear it. Overlap is allowed; nonempty items on an empty buffer
-     * are invalid. Accepted replacements precede subsequent disposal in order.
+     * are invalid; empty ranges on a nonempty buffer follow anchored-range rules.
+     * Accepted replacements precede subsequent disposal in order; new calls after
+     * disposal starts reject with OwnershipDisposed.
      * Resolution acknowledges native replacement, not paint.
      * @throws HostError with BufferClosed, RevisionConflict or InvalidRange;
      * OwnershipDisposed after this object's disposal starts; Cancelled on teardown.

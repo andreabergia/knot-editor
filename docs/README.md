@@ -14,8 +14,8 @@ Current sources of truth:
   [production extension APIs and JavaScript projects](plans/extension-platform-and-projects-plan.md).
 - [plans/](plans/) contains active executable slice plans.
 - [extension-api.md](extension-api.md) is the draft extension-author guide; API reference
-  documentation lives beside the TypeScript declarations, and the internal audit
-  lives in the D046 plan. Runtime implementation and review are still pending.
+  documentation lives beside the TypeScript declarations. The D046 plan tracks
+  pending implementation and review.
 - [development.md](development.md) covers local checks, CI, and the Rust
   toolchain.
 
