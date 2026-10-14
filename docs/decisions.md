@@ -174,6 +174,18 @@ selection, then keeps the bridge's inline same-lifecycle execution and
 one-child ancestry rules. This preserves composition without a second window
 dispatch for native children.
 
+Contextual extension operations use the native-admitted command tree capture,
+including across awaits and inline or cross-lifecycle children. Keep explicit
+contextual target arguments as authority checks rather than a focus lookup:
+copying or retaining a target does not grant access outside its live tree.
+Validate the exact presentation as well as tab identity so replacing an editor
+under the same document or transferring it cannot retarget requests. Valid
+nontext captures have a null buffer; missing context, stale authority, unsupported
+selection and cancellation remain distinct failures. Activation and unrelated
+callbacks must use explicit buffers; clipboard writes are application-scoped.
+This preserves invocation intent without giving asynchronous roots ambient
+access to whichever window happens to be focused.
+
 Awaited command composition runs one root tree at a time. Nested same-extension
 frames avoid self-queue deadlock; ancestry checks and one unfinished child per
 parent bound composition without introducing a general task scheduler. Commands

@@ -387,7 +387,9 @@ pub enum HostOperation {
     MutateKeybindings {
         mutations: Vec<KeybindingMutation>,
     },
-    ActiveBuffer,
+    ActiveBuffer {
+        target: Option<CommandInvocationId>,
+    },
     Snapshot {
         buffer: BufferHandle,
         range: Option<ByteRange>,
@@ -405,7 +407,9 @@ pub enum HostOperation {
         view_kind: String,
         name: CommandName,
     },
-    SelectedViewText,
+    SelectedViewText {
+        target: Option<CommandInvocationId>,
+    },
     WriteClipboardText {
         text: String,
     },
@@ -511,6 +515,14 @@ pub enum HostResponseValue {
     },
 }
 
+/// Opaque presentation authority shared by one admitted command tree.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
+pub struct CommandCapture {
+    pub authority: CommandInvocationId,
+    pub window: String,
+    pub view: Option<String>,
+}
+
 /// A foreground-authorized command invocation routed to its extension owner.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CommandInvocation {
@@ -519,6 +531,7 @@ pub struct CommandInvocation {
     pub extension: ExtensionId,
     pub lifecycle: ExtensionLifecycleId,
     pub arguments: CommandArgumentValue,
+    pub capture: Option<CommandCapture>,
 }
 
 /// Immutable UTF-16 snapshot storage shared across isolates and externalized by V8.
@@ -557,6 +570,8 @@ pub struct BufferChange {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub enum HostRequestError {
+    ContextUnavailable,
+    InvalidTarget,
     UnsupportedOperation,
     BufferClosed,
     InvalidRange,
@@ -624,7 +639,7 @@ mod tests {
             lifecycle: ExtensionLifecycleId::new(3),
             id: RequestId::new(11),
             invocation: None,
-            operation: HostOperation::ActiveBuffer,
+            operation: HostOperation::ActiveBuffer { target: None },
         };
 
         let response = HostResponse {

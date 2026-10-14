@@ -105,9 +105,9 @@ unload removes the affected lifecycle's slots.
 
 Command handlers remain persistent JavaScript functions keyed by opaque
 foreground-issued registrations. Native-to-extension invocation enters as
-scheduler root work with explicit JSON-compatible arguments and its captured
-buffer. Handler outcomes cross back as Knot-owned structured results rather
-than V8 values.
+scheduler root work with explicit JSON-compatible arguments, captured buffer and
+opaque presentation authority. Handler outcomes cross back as Knot-owned
+structured results rather than V8 values.
 View-scoped handlers use the same JavaScript execution path. The foreground
 catalog binds a handler to live Knot-owned view instances; a focused view starts
 its handler only after it claims the command in the originating window. The
@@ -225,9 +225,9 @@ pool shutdown settles outstanding native callback completions during the
 ordinary lifecycle teardown.
 
 The foreground command bridge shares the application's lifecycle-scoped catalog
-and owns one serial invocation tree. It captures the active buffer on the root,
-inherits it through children, returns same-lifecycle children to JavaScript as inline
-continuations, and defers cross-lifecycle or native outcomes until their work
+and owns one serial invocation tree. It retains the admitted presentation and
+its buffer on the root, inherits both through children, returns same-lifecycle
+children to JavaScript as inline continuations, and defers cross-lifecycle or native outcomes until their work
 settles. Product nested commands are offered to the captured window before a
 child is admitted; the bridge then preserves one-child and ancestry checks for
 the selected handler. The shared catalog supplies lifecycle registrations for
@@ -241,7 +241,15 @@ execution: publication consumes an earlier cancellation, while later
 cancellation wakes the recorded execution. Forced V8 interruption
 remains fatal only to the affected lifecycle.
 
-The foreground buffer bridge owns active-buffer lookup, lifecycle-scoped
+The product host resolves contextual buffer and selection requests against the
+admitted tree capture, never request-delivery focus. It validates the calling
+frame, target authority and exact live presentation before returning contextual
+data. Nontext captures return a null buffer; unsupported selection surfaces,
+missing command context, invalid presentations and cancellation are distinct
+failures. Activation, buffer listeners and semantic providers have no implicit
+command context. Application clipboard access remains available to these roots.
+
+The foreground buffer bridge owns explicit-buffer access, lifecycle-scoped
 subscriptions, revision validation, model mutation, contribution ownership,
 and change fan-out. It revalidates cancellation inside the foreground update
 immediately before mutation. Model observers route committed changes back to

@@ -336,6 +336,44 @@ impl ExtensionCommandBridge {
         Ok(())
     }
 
+    pub(crate) fn captured_buffer(&self, invocation: CommandInvocationId) -> Option<BufferHandle> {
+        self.invocations
+            .get(&invocation)
+            .and_then(|node| node.buffer)
+    }
+
+    pub(crate) fn authorize_context(
+        &self,
+        request: &HostRequest,
+        explicit: Option<CommandInvocationId>,
+    ) -> Result<CommandInvocationId, HostRequestError> {
+        let invocation = request.invocation.ok_or(if explicit.is_some() {
+            HostRequestError::InvalidTarget
+        } else {
+            HostRequestError::ContextUnavailable
+        })?;
+        let node = self
+            .invocations
+            .get(&invocation)
+            .ok_or(HostRequestError::InvalidTarget)?;
+        if !matches!(node.target, InvocationTarget::Extension(handler)
+            if (handler.extension, handler.lifecycle) == (request.extension, request.lifecycle))
+        {
+            return Err(HostRequestError::InvalidTarget);
+        }
+        if node.cancelled {
+            return Err(HostRequestError::Cancelled);
+        }
+        if node.handler_outcome.is_some() {
+            return Err(HostRequestError::InvalidTarget);
+        }
+        let root = self.root_for(invocation);
+        if explicit.is_some_and(|authority| authority != root) {
+            return Err(HostRequestError::InvalidTarget);
+        }
+        Ok(root)
+    }
+
     pub(crate) fn is_cancelled(&self, invocation: Option<CommandInvocationId>) -> bool {
         invocation.is_some_and(|invocation| {
             self.invocations
@@ -490,6 +528,7 @@ impl ExtensionCommandBridge {
                             extension: target.extension,
                             lifecycle: target.lifecycle,
                             arguments: node.command.arguments.clone(),
+                            capture: None,
                         },
                         buffer: node.buffer,
                     });
@@ -760,6 +799,7 @@ mod tests {
                     extension: owner.0,
                     lifecycle: owner.1,
                     arguments: CommandArgumentValue::String("argument".into()),
+                    capture: None,
                 },
                 buffer,
             }]
@@ -965,6 +1005,93 @@ mod tests {
         assert_eq!(
             second.completion.try_recv().unwrap(),
             CommandOutcome::Cancelled
+        );
+    }
+
+    #[test]
+    fn context_authority_is_owned_by_the_live_invocation_tree() {
+        let mut bridge = ExtensionCommandBridge::new();
+        let first = key(1);
+        let second = key(2);
+        bridge.admit_lifecycle(first.0, first.1);
+        bridge.admit_lifecycle(second.0, second.1);
+        register(&mut bridge, first, "fixture.outer", 1);
+        register(&mut bridge, first, "fixture.inner", 2);
+        register(&mut bridge, second, "fixture.other", 3);
+        let root = enqueue_registered_root(
+            &mut bridge,
+            command("fixture.outer"),
+            Some(BufferHandle::new(4)),
+        );
+        let contextual = request(
+            first,
+            4,
+            Some(root.id),
+            HostOperation::ActiveBuffer { target: None },
+        );
+        assert_eq!(bridge.authorize_context(&contextual, None), Ok(root.id));
+        assert_eq!(
+            bridge.authorize_context(&contextual, Some(root.id)),
+            Ok(root.id)
+        );
+        assert_eq!(
+            bridge.authorize_context(&contextual, Some(CommandInvocationId::new(999))),
+            Err(HostRequestError::InvalidTarget)
+        );
+        let foreign = request(
+            second,
+            5,
+            Some(root.id),
+            HostOperation::ActiveBuffer { target: None },
+        );
+        assert_eq!(
+            bridge.authorize_context(&foreign, None),
+            Err(HostRequestError::InvalidTarget)
+        );
+        let unrelated = request(first, 6, None, HostOperation::ActiveBuffer { target: None });
+        assert_eq!(
+            bridge.authorize_context(&unrelated, None),
+            Err(HostRequestError::ContextUnavailable)
+        );
+        assert_eq!(
+            bridge.authorize_context(&unrelated, Some(root.id)),
+            Err(HostRequestError::InvalidTarget)
+        );
+        for (owner, name) in [(first, "fixture.inner"), (second, "fixture.other")] {
+            let nested = request(
+                first,
+                7,
+                Some(root.id),
+                HostOperation::InvokeCommand {
+                    command: command(name),
+                },
+            );
+            let (_, child) = routed(&mut bridge, &nested);
+            let child = child.unwrap();
+            let contextual = request(
+                owner,
+                8,
+                Some(child),
+                HostOperation::ActiveBuffer {
+                    target: Some(root.id),
+                },
+            );
+            assert_eq!(
+                bridge.authorize_context(&contextual, Some(root.id)),
+                Ok(root.id)
+            );
+            assert_eq!(bridge.captured_buffer(child), Some(BufferHandle::new(4)));
+            bridge.complete(child, CommandOutcome::Completed);
+        }
+        bridge.cancel(root.id);
+        assert_eq!(
+            bridge.authorize_context(&contextual, None),
+            Err(HostRequestError::Cancelled)
+        );
+        bridge.complete(root.id, CommandOutcome::Cancelled);
+        assert_eq!(
+            bridge.authorize_context(&contextual, Some(root.id)),
+            Err(HostRequestError::InvalidTarget)
         );
     }
 

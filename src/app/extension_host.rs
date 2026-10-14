@@ -46,7 +46,6 @@ use super::{
 const PRIMARY_FIXTURE: &str = r#"
 import * as knot from "knot"; const { commands, editor, workbench } = knot;
 
-globalThis.knotFixtureBuffer = await editor.activeBuffer();
 await commands.register("knot.fixture.primary", async ({ buffer }) => {
   const snapshot = await buffer.snapshot();
   await buffer.applyEdits([{
@@ -72,7 +71,6 @@ await workbench.registerTreeDataProvider("outline", {
 const SECONDARY_FIXTURE: &str = r#"
 import * as knot from "knot"; const { commands, editor } = knot;
 
-globalThis.knotFixtureBuffer = await editor.activeBuffer();
 await commands.register("knot.fixture.secondary", async () => ({ status: "handled" }));
 await editor.registerCompletionProvider("fixture-secondary", {
   provideCompletions(context) {
@@ -791,11 +789,6 @@ impl ProductExtensionHost {
     }
 
     fn handle_request(&mut self, request: HostRequest, cx: &mut Context<Self>) {
-        let active_target = capture_active_product_target(cx);
-        let active_buffer = active_target
-            .as_ref()
-            .and_then(|target| self.open_target_buffer(target, cx));
-        self.buffers.set_active_buffer(active_buffer);
         let response = match request_route(&request.operation) {
             RequestRoute::Buffer => {
                 let invocation = request.invocation;
@@ -809,7 +802,7 @@ impl ProductExtensionHost {
                 if matches!(&request.operation, HostOperation::InvokeCommand { .. })
                     && request.invocation.is_none()
                 {
-                    self.dispatch_script_command(request, active_target, cx)
+                    self.dispatch_script_command(request)
                 } else if matches!(&request.operation, HostOperation::InvokeCommand { .. }) {
                     cx.defer(move |cx| route_nested_command(request, cx));
                     None
@@ -870,67 +863,24 @@ impl ProductExtensionHost {
     }
 
     fn dispatch_script_command(
-        &mut self,
+        &self,
         request: HostRequest,
-        target: Option<ProductCommandTarget>,
-        cx: &mut Context<Self>,
     ) -> Option<crate::host::protocol::HostResponse> {
-        use crate::host::protocol::{
-            CommandInvokeDispatch, CommandOutcome, HostResponse, HostResponseValue,
-        };
-
-        let HostOperation::InvokeCommand { command } = request.operation.clone() else {
-            unreachable!("only root command invocations enter this route");
-        };
-        let immediate = if !self
+        use crate::host::protocol::{HostRequestError, HostResponse};
+        let error = if self
             .lifecycles
             .contains(&ExtensionKey::new(request.extension, request.lifecycle))
         {
-            Some(CommandOutcome::Cancelled)
-        } else if let Ok(CommandTargetKind::Extension(handler)) = self
-            .commands
-            .catalog()
-            .borrow()
-            .resolve(command.name.as_ref())
-            && (handler.extension, handler.lifecycle) == (request.extension, request.lifecycle)
-        {
-            Some(CommandOutcome::Unavailable)
-        } else if target.is_none() {
-            Some(CommandOutcome::InvalidTarget)
+            HostRequestError::ContextUnavailable
         } else {
-            None
+            HostRequestError::Cancelled
         };
-        if let Some(outcome) = immediate {
-            return Some(HostResponse {
-                extension: request.extension,
-                lifecycle: request.lifecycle,
-                id: request.id,
-                result: Ok(HostResponseValue::CommandInvoked {
-                    dispatch: CommandInvokeDispatch::Outcome { outcome },
-                }),
-            });
-        }
-        let dispatcher = cx.global::<ApplicationProductCommands>().0.clone();
-        let execution = dispatcher.update(cx, |dispatcher, cx| {
-            dispatcher.dispatch(command, target.expect("target was validated"), cx)
-        });
-        let pool = self.pool.clone();
-        cx.spawn(async move |_, _| {
-            let outcome = execution
-                .completion
-                .await
-                .unwrap_or(CommandOutcome::Cancelled);
-            let _ = pool.respond(HostResponse {
-                extension: request.extension,
-                lifecycle: request.lifecycle,
-                id: request.id,
-                result: Ok(HostResponseValue::CommandInvoked {
-                    dispatch: CommandInvokeDispatch::Outcome { outcome },
-                }),
-            });
+        Some(HostResponse {
+            extension: request.extension,
+            lifecycle: request.lifecycle,
+            id: request.id,
+            result: Err(error),
         })
-        .detach();
-        None
     }
 
     fn dispatch_view_request(
@@ -974,56 +924,64 @@ impl ProductExtensionHost {
     ) -> crate::host::protocol::HostResponse {
         use crate::host::protocol::{HostRequestError, HostResponseValue};
         let result = (|| {
-            let invocation = request.invocation.ok_or(HostRequestError::Cancelled)?;
-            let root = self
-                .commands
-                .root_of(invocation)
-                .ok_or(HostRequestError::Cancelled)?;
-            let (handler, name) = self
-                .view_command_handlers
-                .get(&invocation)
-                .ok_or(HostRequestError::Cancelled)?;
-            if (handler.extension, handler.lifecycle) != (request.extension, request.lifecycle)
-                || !self
-                    .lifecycles
-                    .contains(&ExtensionKey::new(handler.extension, handler.lifecycle))
+            if !self
+                .lifecycles
+                .contains(&ExtensionKey::new(request.extension, request.lifecycle))
             {
                 return Err(HostRequestError::Cancelled);
             }
+            if let HostOperation::WriteClipboardText { text } = &request.operation {
+                if self.commands.is_cancelled(request.invocation) {
+                    return Err(HostRequestError::Cancelled);
+                }
+                cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
+                return Ok(HostResponseValue::ClipboardTextWritten);
+            }
+            let explicit = match request.operation {
+                HostOperation::ActiveBuffer { target }
+                | HostOperation::SelectedViewText { target } => target,
+                _ => return Err(HostRequestError::UnsupportedOperation),
+            };
+            let root = self.commands.authorize_context(&request, explicit)?;
             let target = self
                 .command_targets
                 .get(&root)
-                .ok_or(HostRequestError::Cancelled)?;
+                .ok_or(HostRequestError::InvalidTarget)?;
             target
                 .validate_tab(cx)
-                .map_err(|_| HostRequestError::Cancelled)?;
-            target
-                .validate_view(cx)
-                .map_err(|_| HostRequestError::Cancelled)?;
-            let view = target.view.ok_or(HostRequestError::Cancelled)?;
-            if self
-                .commands
-                .catalog()
-                .borrow()
-                .resolve_view(view, name.as_ref())
-                != Some(*handler)
-            {
-                return Err(HostRequestError::Cancelled);
-            }
-            match request.operation {
-                HostOperation::SelectedViewText => {
-                    let shell = target.shell.upgrade().ok_or(HostRequestError::Cancelled)?;
+                .and_then(|()| target.validate_view(cx))
+                .map_err(|_| HostRequestError::InvalidTarget)?;
+            match &request.operation {
+                HostOperation::ActiveBuffer { .. } => Ok(HostResponseValue::ActiveBuffer(
+                    self.commands.captured_buffer(request.invocation.unwrap()),
+                )),
+                HostOperation::SelectedViewText { .. } => {
+                    let invocation = request.invocation.unwrap();
+                    let (handler, name) = self
+                        .view_command_handlers
+                        .get(&invocation)
+                        .ok_or(HostRequestError::UnsupportedOperation)?;
+                    let view = target.view.ok_or(HostRequestError::UnsupportedOperation)?;
+                    if self
+                        .commands
+                        .catalog()
+                        .borrow()
+                        .resolve_view(view, name.as_ref())
+                        != Some(*handler)
+                    {
+                        return Err(HostRequestError::InvalidTarget);
+                    }
+                    let shell = target
+                        .shell
+                        .upgrade()
+                        .ok_or(HostRequestError::InvalidTarget)?;
                     let tree = shell
                         .read(cx)
                         .extension_command_view(view, cx)
-                        .ok_or(HostRequestError::Cancelled)?;
+                        .ok_or(HostRequestError::InvalidTarget)?;
                     Ok(HostResponseValue::SelectedViewText(
                         tree.read(cx).selected_text(),
                     ))
-                }
-                HostOperation::WriteClipboardText { text } => {
-                    cx.write_to_clipboard(ClipboardItem::new_string(text));
-                    Ok(HostResponseValue::ClipboardTextWritten)
                 }
                 _ => Err(HostRequestError::UnsupportedOperation),
             }
@@ -1058,9 +1016,16 @@ impl ProductExtensionHost {
                     }
                     ExtensionCommandEvent::DispatchExtension {
                         root,
-                        invocation,
+                        mut invocation,
                         buffer,
                     } => {
+                        invocation.capture = self.command_targets.get(&root).map(|target| {
+                            crate::host::protocol::CommandCapture {
+                                authority: root,
+                                window: format!("{:?}", target.window.window_id()),
+                                view: target.view.map(|view| format!("{view:?}")),
+                            }
+                        });
                         let id = invocation.id;
                         let key = ExtensionKey::new(invocation.extension, invocation.lifecycle);
                         let Ok(execution) = self.pool.invoke_command(key, invocation, buffer)
@@ -1419,6 +1384,9 @@ impl ProductExtensionHost {
         target: &ProductCommandTarget,
         cx: &mut Context<Self>,
     ) -> Option<crate::host::protocol::BufferHandle> {
+        if target.view.is_some() {
+            return None;
+        }
         target.document_id(cx).ok()?;
         let workbench = target.workbench.upgrade()?;
         let model = workbench
@@ -1493,8 +1461,7 @@ enum RequestRoute {
 fn request_route(operation: &HostOperation) -> RequestRoute {
     match operation {
         HostOperation::MutateKeybindings { .. } => RequestRoute::Keymap,
-        HostOperation::ActiveBuffer
-        | HostOperation::Snapshot { .. }
+        HostOperation::Snapshot { .. }
         | HostOperation::ApplyEdits { .. }
         | HostOperation::SubscribeBufferChanges { .. }
         | HostOperation::UnsubscribeBufferChanges { .. }
@@ -1505,26 +1472,15 @@ fn request_route(operation: &HostOperation) -> RequestRoute {
         | HostOperation::UnregisterCommand { .. }
         | HostOperation::InvokeCommand { .. }
         | HostOperation::CompleteInlineCommand { .. } => RequestRoute::Command,
-        HostOperation::SelectedViewText | HostOperation::WriteClipboardText { .. } => {
-            RequestRoute::View
-        }
+        HostOperation::ActiveBuffer { .. }
+        | HostOperation::SelectedViewText { .. }
+        | HostOperation::WriteClipboardText { .. } => RequestRoute::View,
         HostOperation::RegisterTreeProvider { .. }
         | HostOperation::InvalidateTreeProvider { .. }
         | HostOperation::UnregisterTreeProvider { .. }
         | HostOperation::RegisterCompletionProvider { .. }
         | HostOperation::UnregisterCompletionProvider { .. } => RequestRoute::Semantic,
     }
-}
-
-fn capture_active_product_target(cx: &mut App) -> Option<ProductCommandTarget> {
-    let windows = cx.window_stack().unwrap_or_else(|| cx.windows());
-    for window_handle in windows {
-        let target = capture_product_target(window_handle, cx);
-        if target.is_some() {
-            return target;
-        }
-    }
-    None
 }
 
 fn capture_product_target(
@@ -1545,11 +1501,87 @@ mod tests {
     use crate::host::protocol::{Command, CommandArgumentValue};
     use gpui::TestAppContext;
 
+    #[gpui::test]
+    fn application_clipboard_and_context_failures_have_distinct_results(cx: &mut TestAppContext) {
+        use crate::host::protocol::{HostRequestError, HostResponseValue, RequestId};
+        cx.update(|cx| {
+            let commands = cx.new(super::super::product_commands::ProductCommandDispatcher::new);
+            cx.set_global(ApplicationProductCommands(commands));
+            let host = install(cx);
+            let key = ExtensionKey::new(ExtensionId::new(701), ExtensionLifecycleId::new(1));
+            host.update(cx, |host, cx| {
+                host.load(key, ExtensionConfig::default()).unwrap();
+                let request = |operation| HostRequest {
+                    extension: key.extension,
+                    lifecycle: key.lifecycle,
+                    id: RequestId::new(1),
+                    invocation: None,
+                    operation,
+                };
+                assert_eq!(
+                    host.handle_view_request(
+                        request(HostOperation::ActiveBuffer { target: None }),
+                        cx
+                    )
+                    .result,
+                    Err(HostRequestError::ContextUnavailable)
+                );
+                assert_eq!(
+                    host.handle_view_request(
+                        request(HostOperation::SelectedViewText { target: None }),
+                        cx
+                    )
+                    .result,
+                    Err(HostRequestError::ContextUnavailable)
+                );
+                assert_eq!(
+                    host.handle_view_request(
+                        request(HostOperation::ActiveBuffer {
+                            target: Some(CommandInvocationId::new(1))
+                        }),
+                        cx
+                    )
+                    .result,
+                    Err(HostRequestError::InvalidTarget)
+                );
+                assert_eq!(
+                    host.handle_view_request(
+                        request(HostOperation::WriteClipboardText {
+                            text: "application".into()
+                        }),
+                        cx
+                    )
+                    .result,
+                    Ok(HostResponseValue::ClipboardTextWritten)
+                );
+                assert_eq!(
+                    cx.read_from_clipboard().unwrap().text().unwrap(),
+                    "application"
+                );
+                host.unload(key, cx).unwrap();
+                assert_eq!(
+                    host.handle_view_request(
+                        request(HostOperation::WriteClipboardText {
+                            text: "late".into()
+                        }),
+                        cx
+                    )
+                    .result,
+                    Err(HostRequestError::Cancelled)
+                );
+                assert_eq!(
+                    cx.read_from_clipboard().unwrap().text().unwrap(),
+                    "application"
+                );
+            });
+        });
+    }
+
     #[test]
     fn every_host_operation_has_one_foreground_owner() {
         assert_eq!(
-            request_route(&HostOperation::ActiveBuffer),
-            RequestRoute::Buffer
+            request_route(&HostOperation::ActiveBuffer { target: None }),
+            RequestRoute::View
         );
         assert_eq!(
             request_route(&HostOperation::InvokeCommand {

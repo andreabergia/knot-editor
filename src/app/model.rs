@@ -742,7 +742,6 @@ pub(crate) enum BufferAccessError {
 pub struct BufferRegistry {
     next_handle: u64,
     buffers: HashMap<BufferHandle, WeakEntity<BufferModel>>,
-    active: Option<BufferHandle>,
 }
 
 impl BufferRegistry {
@@ -750,7 +749,6 @@ impl BufferRegistry {
         Self {
             next_handle: 1,
             buffers: HashMap::new(),
-            active: None,
         }
     }
 
@@ -769,14 +767,6 @@ impl BufferRegistry {
             .expect("buffer handle space exhausted");
         self.buffers.insert(handle, model);
         handle
-    }
-
-    pub fn set_active(&mut self, handle: Option<BufferHandle>) {
-        self.active = handle;
-    }
-
-    pub fn active_handle(&self) -> Option<BufferHandle> {
-        self.active
     }
 
     pub(crate) fn handle_for(&self, model: &Entity<BufferModel>) -> Option<BufferHandle> {
@@ -823,9 +813,6 @@ impl BufferRegistry {
 
     fn invalidate(&mut self, handle: BufferHandle) {
         self.buffers.remove(&handle);
-        if self.active == Some(handle) {
-            self.active = None;
-        }
     }
 }
 
@@ -1282,9 +1269,7 @@ mod tests {
         let second_handle = registry.register(WeakEntity::new_invalid());
         assert_ne!(first_handle, second_handle);
 
-        registry.set_active(Some(first_handle));
         registry.invalidate(first_handle);
-        assert_eq!(registry.active_handle(), None);
         assert!(registry.resolve(first_handle).is_err());
 
         let third_handle = registry.register(WeakEntity::new_invalid());

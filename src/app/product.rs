@@ -3724,7 +3724,7 @@ mod tests {
             &[],
             &[(
                 "main.js",
-                "import * as knot from 'knot'; knot.keybinding('cmd-l', 'file.new'); await knot.editor.activeBuffer(); throw new Error('failed after binding');",
+                "import * as knot from 'knot'; knot.keybinding('cmd-l', 'file.new'); await knot.workbench.writeClipboardText('startup'); throw new Error('failed after binding');",
             )],
         );
         install_globals(cx);
@@ -5018,6 +5018,372 @@ mod tests {
         dispatch_tree_command(shell, window, super::COPY_COMMAND, cx)
     }
 
+    fn wait_for_api_condition(cx: &mut TestAppContext, mut ready: impl FnMut(&gpui::App) -> bool) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            cx.run_until_parked();
+            if cx.read(&mut ready) {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "public API fixture did not settle"
+            );
+            std::thread::yield_now();
+        }
+    }
+
+    #[gpui::test]
+    fn public_api_capture_survives_focus_and_nested_handlers_without_leaking_to_callbacks(
+        cx: &mut TestAppContext,
+    ) {
+        use crate::host::lifecycle::ExtensionKey;
+        const SOURCE: &str = r#"
+import { commands, editor, workbench } from "knot";
+async function expectCode(operation, code) {
+  try { await operation(); } catch (error) { if (error.code === code) return; throw error; }
+  throw new Error(`expected ${code}`);
+}
+await expectCode(() => editor.activeBuffer(), "ContextUnavailable");
+await expectCode(() => workbench.selectedText(), "ContextUnavailable");
+await expectCode(() => commands.invoke("file.new"), "ContextUnavailable");
+await workbench.writeClipboardText("activation");
+let origin;
+let previous;
+await workbench.registerTreeDataProvider("outline", {
+  async getChildren(parentId) {
+    await expectCode(() => editor.activeBuffer(), "ContextUnavailable");
+    await expectCode(() => workbench.selectedText(), "ContextUnavailable");
+    return parentId === null ? [{ id: "provider", label: "context-free", collapsibleState: "none" }] : [];
+  },
+});
+await editor.registerCompletionProvider("context-free", {
+  async provideCompletions(context) {
+    await expectCode(() => editor.activeBuffer(), "ContextUnavailable");
+    await expectCode(() => workbench.selectedText(), "ContextUnavailable");
+    await expectCode(() => editor.activeBuffer(origin.target), "InvalidTarget");
+    await context.buffer.snapshot();
+    return [{ label: "context-free", insertText: "context-free" }];
+  },
+});
+await commands.register("api.inline", async (context) => {
+  if (context.buffer !== origin.buffer || context.target.window !== origin.target.window) throw new Error("inline capture");
+  if (await editor.activeBuffer(origin.target) !== origin.buffer) throw new Error("inherited authority");
+});
+await commands.register("api.capture", async (context) => {
+  if (!Object.isFrozen(context.target) || typeof context.target.window !== "string") throw new Error("capture shape");
+  if (previous) await expectCode(() => editor.activeBuffer(previous), "InvalidTarget");
+  previous = context.target;
+  origin = context;
+  await expectCode(() => editor.activeBuffer({ ...context.target }), "InvalidTarget");
+  await expectCode(() => workbench.selectedText(context.target), "UnsupportedOperation");
+  await workbench.writeClipboardText("awaiting");
+  if (await editor.activeBuffer() !== context.buffer || await editor.activeBuffer(context.target) !== context.buffer) throw new Error("focus redirected capture");
+  const snapshot = await context.buffer.snapshot();
+  if (snapshot.text !== "first") throw new Error(`wrong buffer: ${snapshot.text}`);
+  if ((await commands.invoke("api.inline")).kind !== "completed") throw new Error("inline failed");
+  if ((await commands.invoke("api.cross", { window: context.target.window })).kind !== "completed") throw new Error("cross failed");
+  await context.buffer.onDidChange(async (change) => {
+    await expectCode(() => editor.activeBuffer(), "ContextUnavailable");
+    await expectCode(() => editor.activeBuffer(context.target), "InvalidTarget");
+    await expectCode(() => workbench.selectedText(), "ContextUnavailable");
+    await workbench.writeClipboardText((await change.buffer.snapshot()).text);
+  });
+});
+"#;
+        const CROSS: &str = r#"
+import { commands, editor, workbench } from "knot";
+await commands.register("api.cross", async (context) => {
+  if (context.target.window !== context.arguments.window || await editor.activeBuffer(context.target) !== context.buffer) throw new Error("cross capture");
+  await workbench.writeClipboardText((await context.buffer.snapshot()).text);
+});
+"#;
+        let documents = install_globals(cx);
+        let host = cx.update(super::super::extension_host::install);
+        let first_document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let first_model = cx.read(|cx| {
+            documents
+                .read(cx)
+                .get(first_document)
+                .unwrap()
+                .model()
+                .clone()
+        });
+        first_model.update(cx, |model, _| model.replace(0..0, "first").unwrap());
+        let (first_shell, first_window) = product_window(first_document, first_model.clone(), cx);
+        let second_document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let second_model = cx.read(|cx| {
+            documents
+                .read(cx)
+                .get(second_document)
+                .unwrap()
+                .model()
+                .clone()
+        });
+        second_model.update(cx, |model, _| model.replace(0..0, "second").unwrap());
+        let (second_shell, second_window) = product_window(second_document, second_model, cx);
+        for (id, source) in [(701, SOURCE), (702, CROSS)] {
+            host.update(cx, |host, cx| {
+                let execution = host
+                    .load_test_source(
+                        ExtensionKey::new(ExtensionId::new(id), ExtensionLifecycleId::new(1)),
+                        source,
+                    )
+                    .unwrap();
+                cx.spawn(async move |_, _| {
+                    execution.await.unwrap();
+                })
+                .detach();
+            });
+        }
+        wait_for_api_condition(cx, |cx| {
+            let catalog = cx
+                .global::<ApplicationProductCommands>()
+                .0
+                .read(cx)
+                .catalog();
+            let catalog = catalog.borrow();
+            catalog.resolve("api.capture").is_ok() && catalog.resolve("api.cross").is_ok()
+        });
+        wait_for_api_condition(cx, |cx| {
+            first_shell
+                .read(cx)
+                .extension_tree
+                .as_ref()
+                .unwrap()
+                .read(cx)
+                .root_labels()
+                == ["context-free"]
+        });
+        // Capture before the palette takes focus, then admit the saved origin.
+        let origin = cx
+            .update_window(first_window, |_, window, cx| {
+                first_shell.update(cx, |shell, cx| {
+                    shell.focus_active_surface(window, cx);
+                    shell.open_command_palette(window, cx);
+                    shell.command_palette.as_ref().unwrap().read(cx).origin()
+                })
+            })
+            .unwrap();
+        for _ in 0..2 {
+            host.update(cx, |host, _| host.hold_clipboard_writes());
+            let dispatcher = cx.read(|cx| cx.global::<ApplicationProductCommands>().0.clone());
+            let execution = dispatcher.update(cx, |dispatcher, cx| {
+                dispatcher.dispatch(
+                    Command {
+                        name: "api.capture".into(),
+                        arguments: CommandArgumentValue::Null,
+                    },
+                    origin.clone(),
+                    cx,
+                )
+            });
+            wait_for_api_condition(cx, |cx| host.read(cx).pending_view_request_count() == 1);
+            cx.update_window(second_window, |_, window, cx| {
+                second_shell.read(cx).focus_active_surface(window, cx)
+            })
+            .unwrap();
+            host.update(cx, |host, cx| host.release_view_requests(cx));
+            assert_eq!(wait_for_command(execution, cx), CommandOutcome::Completed);
+            cx.read(|cx| assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), "first"));
+        }
+        let editor = cx.read(|cx| {
+            first_shell
+                .read(cx)
+                .workbench
+                .read(cx)
+                .focused_pane()
+                .unwrap()
+                .active_tab()
+                .editor()
+                .unwrap()
+                .clone()
+        });
+        let completion = dispatch_product_command(
+            &first_shell,
+            first_window,
+            super::SHOW_COMPLETIONS_COMMAND,
+            cx,
+        );
+        assert_eq!(wait_for_command(completion, cx), CommandOutcome::Completed);
+        wait_for_api_condition(cx, |cx| {
+            editor
+                .read(cx)
+                .completion_state()
+                .is_some_and(|(items, pending, failures, _, _)| {
+                    items == 1 && pending == 0 && failures == 0
+                })
+        });
+        let (_shared_shell, _shared_window) =
+            product_window(first_document, first_model.clone(), cx);
+        cx.update_window(first_window, |_, window, _| window.remove_window())
+            .unwrap();
+        drop(first_shell);
+        first_model.update(cx, |model, cx| {
+            model.replace(0..5, "shared callback").unwrap();
+            cx.notify();
+        });
+        wait_for_api_condition(cx, |cx| {
+            cx.read_from_clipboard()
+                .and_then(|item| item.text())
+                .as_deref()
+                == Some("shared callback")
+        });
+    }
+
+    #[gpui::test]
+    fn public_api_context_rejects_replaced_closed_and_transferred_presentations(
+        cx: &mut TestAppContext,
+    ) {
+        use crate::host::lifecycle::ExtensionKey;
+        const SOURCE: &str = r#"
+import { commands, editor, workbench } from "knot";
+await commands.register("api.stale", async (context) => {
+  await workbench.writeClipboardText("waiting");
+  for (const operation of [() => editor.activeBuffer(), () => editor.activeBuffer(context.target), () => workbench.selectedText(context.target)]) {
+    let rejected = false;
+    try { await operation(); } catch (error) { if (error.code !== "InvalidTarget") throw error; rejected = true; }
+    if (!rejected) throw new Error("stale presentation accepted");
+  }
+  // An explicit live buffer remains usable after its presentation changes.
+  await context.buffer.snapshot();
+  await workbench.writeClipboardText("InvalidTarget");
+});
+await commands.register("api.nontext", async (context) => {
+  if (context.buffer !== null || await editor.activeBuffer() !== null || await editor.activeBuffer(context.target) !== null) throw new Error("nontext buffer");
+  try { await workbench.selectedText(); } catch (error) { if (error.code === "UnsupportedOperation") return; throw error; }
+  throw new Error("unsupported selection accepted");
+});
+"#;
+        let documents = install_globals(cx);
+        let host = cx.update(super::super::extension_host::install);
+        host.update(cx, |host, cx| {
+            let execution = host
+                .load_test_source(
+                    ExtensionKey::new(ExtensionId::new(703), ExtensionLifecycleId::new(1)),
+                    SOURCE,
+                )
+                .unwrap();
+            cx.spawn(async move |_, _| {
+                execution.await.unwrap();
+            })
+            .detach();
+        });
+        wait_for_api_condition(cx, |cx| {
+            cx.global::<ApplicationProductCommands>()
+                .0
+                .read(cx)
+                .catalog()
+                .borrow()
+                .resolve("api.nontext")
+                .is_ok()
+        });
+        for change in ["replace", "close", "transfer"] {
+            let document = cx.update(|cx| create_untitled_document(&documents, cx));
+            let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+            let (shell, window) = product_window(document, model.clone(), cx);
+            host.update(cx, |host, _| host.hold_clipboard_writes());
+            let execution = dispatch_product_command(&shell, window, "api.stale", cx);
+            wait_for_api_condition(cx, |cx| host.read(cx).pending_view_request_count() == 1);
+            let target = cx
+                .update_window(window, |_, window, cx| {
+                    shell.update(cx, |shell, cx| {
+                        shell.capture_command_target(window, cx).unwrap()
+                    })
+                })
+                .unwrap();
+            match change {
+                "replace" => {
+                    let workbench = cx.read(|cx| shell.read(cx).workbench.clone());
+                    workbench.update(cx, |workbench, cx| {
+                        assert!(workbench.replace_tab_document(
+                            target.pane,
+                            target.tab,
+                            document,
+                            model.clone(),
+                            cx
+                        ))
+                    });
+                }
+                "close" => {
+                    cx.update_window(window, |_, window, _| window.remove_window())
+                        .unwrap();
+                }
+                "transfer" => {
+                    let destination_document =
+                        cx.update(|cx| create_untitled_document(&documents, cx));
+                    let destination_model = cx.read(|cx| {
+                        documents
+                            .read(cx)
+                            .get(destination_document)
+                            .unwrap()
+                            .model()
+                            .clone()
+                    });
+                    let (destination_shell, destination_window) =
+                        product_window(destination_document, destination_model, cx);
+                    let source = cx.read(|cx| {
+                        shell
+                            .read(cx)
+                            .capture_tab_relocation(target.pane, target.tab, cx)
+                            .unwrap()
+                    });
+                    let destination = cx.read(|cx| {
+                        let workbench = &destination_shell.read(cx).workbench;
+                        let pane = workbench.read(cx).focused_pane().unwrap();
+                        super::relocate::TabRelocationDestination {
+                            window: destination_window,
+                            workbench: workbench.downgrade(),
+                            tab: crate::app::workbench::TabMoveDestination::At {
+                                anchor: workbench
+                                    .read(cx)
+                                    .capture_tab_move(pane.id(), pane.active_tab().id())
+                                    .unwrap(),
+                                placement: crate::app::workbench::TabMovePlacement::End,
+                            },
+                        }
+                    });
+                    let outcome = cx
+                        .update_window(window, |_, window, cx| {
+                            shell.update(cx, |shell, cx| {
+                                shell.relocate_tab_to(&source, &destination, window, cx)
+                            })
+                        })
+                        .unwrap();
+                    assert_eq!(outcome, CommandOutcome::Completed);
+                }
+                _ => unreachable!(),
+            }
+            host.update(cx, |host, cx| host.release_view_requests(cx));
+            assert_eq!(
+                wait_for_command(execution, cx),
+                CommandOutcome::InvalidTarget
+            );
+            cx.read(|cx| {
+                assert_eq!(
+                    cx.read_from_clipboard().unwrap().text().unwrap(),
+                    "InvalidTarget"
+                )
+            });
+        }
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        let (shell, window) = product_window(document, model, cx);
+        cx.update_window(window, |_, window, cx| {
+            shell.update(cx, |shell, cx| {
+                let (session, view) = shell.create_terminal(cx);
+                let pane = shell.workbench.read(cx).focused_pane_id().unwrap();
+                let tab = shell.workbench.update(cx, |workbench, _| {
+                    workbench.open_terminal_tab(pane, session, view).unwrap()
+                });
+                shell.activate_tab(pane, tab, window, cx);
+            })
+        })
+        .unwrap();
+        let execution = dispatch_product_command(&shell, window, "api.nontext", cx);
+        assert_eq!(wait_for_command(execution, cx), CommandOutcome::Completed);
+    }
+
     #[gpui::test]
     fn focused_extension_tree_claims_copy_and_unload_removes_its_handler(cx: &mut TestAppContext) {
         use crate::host::lifecycle::ExtensionKey;
@@ -5032,8 +5398,9 @@ await workbench.registerTreeDataProvider("outline", {
     ] : [];
   },
 });
-const viewCopy = await commands.registerForView("outline", "copy", async () => {
-  const text = await workbench.selectedText();
+const viewCopy = await commands.registerForView("outline", "copy", async (context) => {
+  if (context.buffer !== null || await knot.editor.activeBuffer(context.target) !== null) throw new Error("outline has a text buffer");
+  const text = await workbench.selectedText(context.target);
   if (text === "Fail") throw new Error("copy failed");
   await workbench.writeClipboardText(text);
 });
@@ -5042,6 +5409,10 @@ await commands.register("test.view-first", async () => {
 });
 await commands.registerForView("outline", "test.view-first", async () => {
   await workbench.writeClipboardText("tree item");
+});
+await commands.register("test.view-null", () => { throw new Error("global null handler"); });
+await commands.registerForView("outline", "test.view-null", async (context) => {
+  if (context.target.view === null || await workbench.selectedText(context.target) !== null) throw new Error("missing selection is not null");
 });
 await commands.register("test.nested-view-copy", async () => {
   const outcome = await commands.invoke("copy");
@@ -5103,6 +5474,11 @@ await commands.register("test.dispose-view-copy", async () => viewCopy.dispose()
         .unwrap();
         let declined = dispatch_tree_copy(&shell, window, cx);
         assert_eq!(wait_for_command(declined, cx), CommandOutcome::Unavailable);
+        let empty_selection = dispatch_tree_command(&shell, window, "test.view-null", cx);
+        assert_eq!(
+            wait_for_command(empty_selection, cx),
+            CommandOutcome::Completed
+        );
         let view_first = dispatch_tree_command(&shell, window, "test.view-first", cx);
         assert_eq!(wait_for_command(view_first, cx), CommandOutcome::Completed);
         cx.update(|cx| cx.write_to_clipboard(gpui::ClipboardItem::new_string("untouched".into())));
@@ -5304,7 +5680,7 @@ await commands.register("test.dispose-view-copy", async () => viewCopy.dispose()
     }
 
     #[gpui::test]
-    fn startup_script_command_uses_the_focused_product_window(cx: &mut TestAppContext) {
+    fn startup_script_command_cannot_borrow_the_focused_product_window(cx: &mut TestAppContext) {
         use crate::host::lifecycle::ExtensionKey;
 
         let documents = install_globals(cx);
@@ -5325,8 +5701,10 @@ await commands.register("test.dispose-view-copy", async () => viewCopy.dispose()
                     key,
                     r#"
 import * as knot from "knot"; const { commands } = knot;
-const outcome = await commands.invoke("file.new");
-if (outcome.kind !== "completed") throw new Error(`file.new: ${outcome.kind}`);
+let rejected = false;
+try { await commands.invoke("file.new"); }
+catch (error) { if (error.code !== "ContextUnavailable") throw error; rejected = true; }
+if (!rejected) throw new Error("startup borrowed focus");
 "#,
                 )
                 .unwrap();
@@ -5363,7 +5741,7 @@ if (outcome.kind !== "completed") throw new Error(`file.new: ${outcome.kind}`);
                     .unwrap()
                     .tabs()
                     .len(),
-                2
+                1
             );
         });
     }
@@ -5497,7 +5875,9 @@ await commands.register("test.nested-open", async () => {
     }
 
     #[gpui::test]
-    fn delayed_extension_copy_rejects_a_closed_captured_view(cx: &mut TestAppContext) {
+    fn delayed_clipboard_write_survives_presentation_closure_but_not_unload(
+        cx: &mut TestAppContext,
+    ) {
         use crate::host::lifecycle::ExtensionKey;
 
         const SOURCE: &str = r#"
@@ -5581,7 +5961,7 @@ await commands.registerForView("outline", "copy", async () => {
         cx.read(|cx| {
             assert_eq!(
                 cx.read_from_clipboard().unwrap().text().unwrap(),
-                "untouched"
+                "Held selection"
             )
         });
         let closed_view = cx.read(|cx| tree.read(cx).instance_id());
@@ -5638,7 +6018,7 @@ await commands.registerForView("outline", "copy", async () => {
         cx.read(|cx| {
             assert_eq!(
                 cx.read_from_clipboard().unwrap().text().unwrap(),
-                "untouched"
+                "Held selection"
             );
             assert!(!second_tree.read(cx).has_provider());
         });

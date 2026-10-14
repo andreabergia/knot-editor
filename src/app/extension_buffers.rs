@@ -55,10 +55,6 @@ impl ExtensionBufferBridge {
         self.buffers.open(model)
     }
 
-    pub(crate) fn set_active_buffer(&mut self, buffer: Option<BufferHandle>) {
-        self.buffers.set_active(buffer);
-    }
-
     #[allow(
         dead_code,
         reason = "product document closure has no buffer-removal event"
@@ -125,9 +121,6 @@ impl ExtensionBufferBridge {
     {
         let identity = (request.extension, request.lifecycle);
         match &request.operation {
-            HostOperation::ActiveBuffer => Ok(HostResponseValue::ActiveBuffer(
-                self.buffers.active_handle(),
-            )),
             HostOperation::Snapshot { buffer, range } => self
                 .buffers
                 .resolve(*buffer)
@@ -335,7 +328,6 @@ mod tests {
             let mut bridge = ExtensionBufferBridge::new();
             bridge.admit_lifecycle(extension, lifecycle);
             let buffer = bridge.open_buffer(&model);
-            bridge.set_active_buffer(Some(buffer));
 
             let snapshot = bridge.dispatch(
                 request(
@@ -606,7 +598,12 @@ mod tests {
             assert!(bridge.drain_model_changes(&model, cx).is_empty());
 
             let stale = bridge.dispatch(
-                request(extension, lifecycle, 9, HostOperation::ActiveBuffer),
+                request(
+                    extension,
+                    lifecycle,
+                    9,
+                    HostOperation::ActiveBuffer { target: None },
+                ),
                 || false,
                 cx,
             );

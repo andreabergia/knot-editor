@@ -18,6 +18,8 @@ export function removeKeybinding(key, options) {
 }
 
 const hostErrorNames = Object.freeze({
+  ContextUnavailable: "KnotHostError",
+  InvalidTarget: "KnotHostError",
   UnsupportedOperation: "UnsupportedOperationError",
   BufferClosed: "BufferClosedError",
   InvalidRange: "RangeError",
@@ -40,6 +42,7 @@ function hostError(error) {
   }
   const exception = new Error(error);
   exception.name = hostErrorNames[error] ?? "KnotHostError";
+  exception.code = error;
   throw exception;
 }
 
@@ -70,6 +73,7 @@ const treeProviders = new Map();
 const completionProviders = new Map();
 const activeCommandFrames = [];
 const snapshotTables = new WeakMap();
+const targetAuthorities = new WeakMap();
 
 class KnotAbortSignal {
   #aborted = false;
@@ -206,8 +210,17 @@ function bufferFor(handle) {
   return buffer;
 }
 
-export async function activeBuffer() {
-  const handle = await request("activeBuffer");
+function contextualAuthority(target) {
+  if (target === undefined) return null;
+  const frame = activeCommandFrames.at(-1);
+  const authority = targetAuthorities.get(target);
+  if (authority === undefined || !frame?.target ||
+      authority !== targetAuthorities.get(frame.target)) hostError("InvalidTarget");
+  return authority;
+}
+
+export async function activeBuffer(target) {
+  const handle = await request("activeBuffer", contextualAuthority(target));
   return handle === null ? null : bufferFor(handle);
 }
 
@@ -262,8 +275,8 @@ export async function registerViewCommand(viewKind, name, handler) {
   });
 }
 
-export async function selectedViewText() {
-  return request("selectedViewText");
+export async function selectedViewText(target) {
+  return request("selectedViewText", contextualAuthority(target));
 }
 
 export async function writeClipboardText(text) {
@@ -287,6 +300,7 @@ export async function invokeCommand(name, commandArguments) {
     dispatch.registration,
     activeCommandFrames.at(-1)?.buffer ?? null,
     arguments_,
+    activeCommandFrames.at(-1)?.capture ?? null,
   );
   await requestForInvocation(
     dispatch.invocation,
@@ -327,6 +341,7 @@ async function invokeRegisteredCommand(
   registration,
   activeHandle,
   commandArguments,
+  capture,
 ) {
   const handler = commandHandlers.get(registration);
   if (!handler) {
@@ -336,11 +351,16 @@ async function invokeRegisteredCommand(
     };
   }
   const controller = new KnotAbortController();
-  const frame = { invocation, controller, buffer: activeHandle };
+  const target = capture === null ? null : Object.freeze({
+    window: capture.window, view: capture.view,
+  });
+  if (target) targetAuthorities.set(target, capture.authority);
+  const frame = { invocation, controller, buffer: activeHandle, capture, target };
   activeCommandFrames.push(frame);
   try {
     try {
       await handler(Object.freeze({
+        target,
         buffer: activeHandle === null ? null : bufferFor(activeHandle),
         arguments: commandArguments,
         signal: controller.signal,
@@ -369,11 +389,13 @@ globalThis.__knotInvokeCommand = (
   registration,
   activeHandle,
   commandArguments,
+  capture,
 ) => invokeRegisteredCommand(
   invocation,
   registration,
   activeHandle,
   commandArguments,
+  capture,
 );
 
 globalThis.__knotCancelCommand = (invocation) => {

@@ -208,7 +208,17 @@ impl ProductCommandTarget {
     }
 
     pub(crate) fn validate_view(&self, cx: &App) -> Result<(), CommandOutcome> {
-        let Some(view) = self.view else { return Ok(()) };
+        let Some(view) = self.view else {
+            if !cx.windows().contains(&self.window)
+                || self.shell.upgrade().is_none()
+                || self
+                    .command_view(cx)
+                    .is_none_or(|view| !view.matches_focus(&self.focus, cx))
+            {
+                return Err(CommandOutcome::InvalidTarget);
+            }
+            return Ok(());
+        };
         if !cx.windows().contains(&self.window) {
             return Err(CommandOutcome::InvalidTarget);
         }

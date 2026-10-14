@@ -53,7 +53,9 @@ PTY, emulator grid, process, session-local terminal preferences, and event
 delivery independently of its view.
 
 Views own presentation and interaction. Extension runtimes communicate through
-Knot-owned typed messages and opaque identities. Asynchronous results revalidate
+Knot-owned typed messages and opaque identities. Command trees retain admitted
+presentation authority; contextual requests resolve it in the product host,
+while explicit buffer access remains independent of presentation lifetime. Asynchronous results revalidate
 their captured target, revision or generation, and lifecycle before changing
 foreground state. Native I/O runs off the foreground thread.
 Each product window owns its extension-backed semantic tree surface; the

@@ -1,7 +1,7 @@
 # D046 — Public API foundation
 
-Status: ✅ checkpoint 1 approved; runtime checkpoints 2–4 not started.
-Checkpoint 2 implementation is deferred until requested.
+Status: ✅ checkpoint 1 approved; ✅ checkpoint 2 implemented, awaiting review;
+checkpoints 3–4 not started.
 
 Source: [extension platform plan](extension-platform-and-projects-plan.md),
 [D046 roadmap entry](../roadmap.md).
@@ -39,17 +39,17 @@ scheduling quotas, rendering changes, source maps or a generic command schema.
 
 Validation: `scripts/check-extension-api.sh` and `git diff --check` passed.
 
-## 2. Captured context — ⬜
+## 2. Captured context — ✅ implemented; ⏳ review pending
 
-- Convey opaque command capture through product roots, nested commands,
+- ✅ Convey opaque command capture through product roots, nested commands,
   same-lifecycle inline calls and cross-lifecycle handlers.
-- Resolve contextual buffer/selection requests against that capture; validate
+- ✅ Resolve contextual buffer/selection requests against that capture; validate
   explicit contextual targets. Remove request-delivery focus lookup and unused
   global active-buffer bridge state.
-- Remove top-level script invocation's focus fallback. Make clipboard requests
+- ✅ Remove top-level script invocation's focus fallback. Make clipboard requests
   application-scoped; keep selected text limited to supported captured views.
-- Update affected startup, transport, command, listener and provider fixtures.
-- Update command/extension-host references and validated rationale.
+- ✅ Update affected startup, transport, command, listener and provider fixtures.
+- ✅ Update command/extension-host references and validated rationale.
 
 Validation:
 
@@ -62,7 +62,21 @@ Validation:
 - Existing explicit buffer-close and lifecycle tests; do not claim product buffer
   removal is wired before D047.
 
-Review gate: inspect the JS command fixture, target validity and failure distinctions.
+✅ Automated evidence: `cargo test --all-targets` passed (537 library tests and
+5 example tests); `scripts/check-extension-api.sh` and `git diff --check` passed. Product regressions
+cover palette origin, two buffers, focus while awaiting, inline/cross-lifecycle
+inheritance, forged and previous-root targets, replaced/closed/transferred
+presentations, outline and terminal nontext captures, null selection, unsupported
+selection, activation/listener/provider context absence, clipboard access and
+explicit shared-buffer callbacks after presentation closure. Command bridge tests
+cover lifecycle authority and cancellation; existing explicit buffer-close and
+lifecycle suites remain green. Product buffer-removal wiring remains D047.
+
+Unused activation-time fixture proxies were removed; buffer-dependent runtime
+fixtures now acquire proxies in native-admitted setup commands. Context failures
+carry codes; full coded-error conversion and decoder alignment remain checkpoint 3.
+
+⏳ Review gate: inspect the JS command fixture, target validity and failure distinctions.
 
 ## 3. Failures and lifecycle acknowledgements — ⬜
 
@@ -123,9 +137,6 @@ Remove entries as implementation and regression coverage close them.
 
 | Checkpoint | Open gap / affected code |
 | --- | --- |
-| 2 | `extension_host.rs` captures focus per request; `extension_buffers.rs`/`model.rs` retain global active-buffer state. Replace with invocation capture. |
-| 2 | JS command frames expose only buffer; protocol/engine/command bridge need authorized target transport for root/inline/cross-lifecycle paths. View requests conflate missing/stale context with cancellation; clipboard is view-gated. |
-| 2 | `PRIMARY_FIXTURE`/`SECONDARY_FIXTURE` and product/engine tests use context-free `activeBuffer()`. Acquire proxies in native-admitted setup commands. Listener/completion waits use supplied buffers; generic transport/tree waits use application clipboard requests with typed acknowledgements. |
 | 3 | Numeric decoding coerces values; snapshot conversion accepts inherited/string indices; outgoing integers may lose precision. Required revision errors differ between edits/contributions; read-only buffers map to `UnsupportedOperation`. |
 | 3 | JSON stringify permits custom conversion/omission missed by facade validation; tree `Array.from` accepts accidental array-like results. Align recursive JSON, iterable/item and recognized-field validation; retain ignored unknown fields. |
 | 3 | Errors are string/name based; `invalidArguments` coerces its message. Most disposers/invalidation discard request promises, and repeated contribution disposal falsely succeeds during pending/failed cleanup. Add ownership/race assertions in engine and foreground tests. |

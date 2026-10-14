@@ -960,6 +960,14 @@ impl RuntimeCapsule {
                 || v8::null(try_catch).into(),
                 |buffer| v8::Number::new(try_catch, buffer.value() as f64).into(),
             );
+            let capture = match &invocation.capture {
+                Some(capture) => {
+                    let json = serde_json::to_string(capture).ok()?;
+                    let json = v8::String::new(try_catch, &json)?;
+                    v8::json::parse(try_catch, json)?
+                }
+                None => v8::null(try_catch).into(),
+            };
             let arguments = command_argument_to_v8(try_catch, &invocation.arguments).ok()?;
             function.call(
                 try_catch,
@@ -969,6 +977,7 @@ impl RuntimeCapsule {
                     v8::Number::new(try_catch, invocation.registration.value() as f64).into(),
                     active_buffer,
                     arguments,
+                    capture,
                 ],
             )
         })();
@@ -3555,6 +3564,18 @@ fn parse_keybinding_mutation<'s, 'i>(
     }
 }
 
+fn optional_invocation<'s, 'i>(
+    scope: &mut v8::PinnedRef<'s, v8::HandleScope<'i>>,
+    value: v8::Local<'s, v8::Value>,
+) -> Result<Option<CommandInvocationId>, &'static str> {
+    if value.is_null_or_undefined() {
+        return Ok(None);
+    }
+    value_u64(scope, value, "InvalidTarget")
+        .map(CommandInvocationId::new)
+        .map(Some)
+}
+
 fn parse_host_operation<'s, 'i>(
     scope: &mut v8::PinnedRef<'s, v8::HandleScope<'i>>,
     arguments: &v8::FunctionCallbackArguments<'s>,
@@ -3565,7 +3586,12 @@ fn parse_host_operation<'s, 'i>(
         .ok_or("UnsupportedOperation")?
         .to_rust_string_lossy(scope);
     match operation.as_str() {
-        "activeBuffer" => Ok((HostOperation::ActiveBuffer, HostOperationKind::ActiveBuffer)),
+        "activeBuffer" => Ok((
+            HostOperation::ActiveBuffer {
+                target: optional_invocation(scope, arguments.get(2))?,
+            },
+            HostOperationKind::ActiveBuffer,
+        )),
         "snapshot" => Ok((
             HostOperation::Snapshot {
                 buffer: BufferHandle::new(argument_u64(scope, arguments, 2)?),
@@ -3622,7 +3648,9 @@ fn parse_host_operation<'s, 'i>(
             HostOperationKind::RegisterViewCommand,
         )),
         "selectedViewText" => Ok((
-            HostOperation::SelectedViewText,
+            HostOperation::SelectedViewText {
+                target: optional_invocation(scope, arguments.get(2))?,
+            },
             HostOperationKind::SelectedViewText,
         )),
         "writeClipboardText" => Ok((
@@ -4505,7 +4533,7 @@ mod tests {
                 r#"
                     import * as knot from "knot";
                     knot.keybinding("cmd-a", "file.new");
-                    await knot.editor.activeBuffer();
+                    await knot.workbench.writeClipboardText("wait");
                     knot.keybinding("cmd-b", "file.open");
                 "#,
             )
@@ -4516,11 +4544,12 @@ mod tests {
         let second = pool
             .receive_request_timeout(Duration::from_secs(1))
             .unwrap();
-        let (host_request, batch) = if matches!(first.operation, HostOperation::ActiveBuffer) {
-            (first, second)
-        } else {
-            (second, first)
-        };
+        let (host_request, batch) =
+            if matches!(first.operation, HostOperation::WriteClipboardText { .. }) {
+                (first, second)
+            } else {
+                (second, first)
+            };
         assert!(matches!(
             batch.operation,
             HostOperation::MutateKeybindings { .. }
@@ -4529,7 +4558,7 @@ mod tests {
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: host_request.id,
-            result: Ok(HostResponseValue::ActiveBuffer(None)),
+            result: Ok(HostResponseValue::ClipboardTextWritten),
         })
         .unwrap();
         assert!(
@@ -5133,25 +5162,67 @@ mod tests {
         }
     }
 
+    fn execute_captured_fixture(
+        pool: &RuntimePool,
+        runtime: ExtensionKey,
+        module: impl AsRef<str>,
+        source: &str,
+    ) -> RuntimeCommandExecution {
+        let source = format!(
+            "import * as knot from 'knot'; const {{ editor, commands }} = knot; await commands.register('fixture.setup', async () => {{\n{source}\n}});"
+        );
+        let setup = pool
+            .execute_fixture_module(runtime, module.as_ref(), source.as_str())
+            .unwrap();
+        let registration_request = pool.receive_request().unwrap();
+        let registration = CommandRegistrationId::new(900);
+        assert!(matches!(
+            registration_request.operation,
+            HostOperation::RegisterCommand { .. }
+        ));
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: registration_request.id,
+            result: Ok(HostResponseValue::CommandRegistered { registration }),
+        })
+        .unwrap();
+        setup.wait().unwrap();
+        pool.invoke_command(
+            runtime,
+            CommandInvocation {
+                id: CommandInvocationId::new(900),
+                registration,
+                extension: runtime.extension,
+                lifecycle: runtime.lifecycle,
+                arguments: CommandArgumentValue::Null,
+                capture: Some(crate::host::protocol::CommandCapture {
+                    authority: CommandInvocationId::new(900),
+                    window: "fixture-window".into(),
+                    view: None,
+                }),
+            },
+            Some(BufferHandle::new(3)),
+        )
+        .unwrap()
+    }
+
     fn install_buffer_listener(
         pool: &RuntimePool,
         runtime: ExtensionKey,
         subscription: BufferSubscriptionId,
         module: &str,
     ) {
-        let execution = pool
-            .execute_fixture_module(
-                runtime,
-                module,
-                r#"
-                import * as knot from "knot"; const { editor } = knot;
+        let execution = execute_captured_fixture(
+            pool,
+            runtime,
+            module,
+            r#"
                 const buffer = await editor.activeBuffer();
-                globalThis.editorApi = editor;
                 globalThis.events = [];
                 await buffer.onDidChange(globalThis.listener);
             "#,
-            )
-            .unwrap();
+        );
         let active = pool.receive_request().unwrap();
         pool.respond(HostResponse {
             extension: runtime.extension,
@@ -5174,7 +5245,7 @@ mod tests {
             result: Ok(HostResponseValue::BufferChangesSubscribed { subscription }),
         })
         .unwrap();
-        execution.wait().unwrap();
+        assert_eq!(execution.wait().unwrap(), CommandOutcome::Completed);
     }
 
     #[test]
@@ -5292,8 +5363,8 @@ mod tests {
                 runtime,
                 "file:///fixtures/unsupported.js",
                 r#"
-                    import * as knot from "knot"; const { editor } = knot;
-                    await editor.activeBuffer();
+                    import * as knot from "knot"; const { workbench } = knot;
+                    await workbench.writeClipboardText("wait");
                 "#,
             )
             .unwrap();
@@ -5316,13 +5387,12 @@ mod tests {
         let pool = RuntimePool::new(PoolConfig::single_worker());
         let runtime = key(40);
         pool.load(runtime, IsolateConfig::default()).unwrap();
-        let execution = pool
-            .execute_fixture_module(
-                runtime,
-                "file:///fixtures/buffers.js",
-                r#"
-                    import * as knot from "knot"; const { editor } = knot;
-                    const buffer = await editor.activeBuffer();
+        let execution = execute_captured_fixture(
+            &pool,
+            runtime,
+            "file:///fixtures/buffers.js",
+            r#"
+                        const buffer = await editor.activeBuffer();
                     globalThis.snapshot = await buffer.snapshot({ startByteOffset: 1, endByteOffset: 7 });
                     globalThis.edit = await buffer.applyEdits([{
                       range: { startByteOffset: 2, endByteOffset: 5 }, text: "λ",
@@ -5335,8 +5405,7 @@ mod tests {
                     disposable.dispose();
                     await buffer.contributions.dispose();
                 "#,
-            )
-            .unwrap();
+        );
 
         let active = pool.receive_request().unwrap();
         pool.respond(HostResponse {
@@ -5462,7 +5531,7 @@ mod tests {
             result: Ok(HostResponseValue::EditorContributionsDisposed),
         })
         .unwrap();
-        execution.wait().unwrap();
+        assert_eq!(execution.wait().unwrap(), CommandOutcome::Completed);
         pool.execute(runtime, "verify-buffers.js", r#"
             if (snapshot.text !== "é中z" || snapshot.revision !== 7) throw new Error("snapshot");
             if (snapshot.byteOffsetAtUtf16(1) !== 2 || snapshot.utf16OffsetAtByte(5) !== 2) throw new Error("unicode");
@@ -5479,17 +5548,15 @@ mod tests {
         let weak = Arc::downgrade(&text);
         for runtime in runtimes {
             pool.load(runtime, IsolateConfig::default()).unwrap();
-            let execution = pool
-                .execute_fixture_module(
-                    runtime,
-                    format!("file:///fixtures/external-{}.js", runtime.extension.value()),
-                    r#"
-                        import * as knot from "knot"; const { editor } = knot;
-                        const buffer = await editor.activeBuffer();
+            let execution = execute_captured_fixture(
+                &pool,
+                runtime,
+                format!("file:///fixtures/external-{}.js", runtime.extension.value()),
+                r#"
+                                const buffer = await editor.activeBuffer();
                         globalThis.heldSnapshot = await buffer.snapshot();
                     "#,
-                )
-                .unwrap();
+            );
             let active = pool.receive_request().unwrap();
             pool.respond(HostResponse {
                 extension: runtime.extension,
@@ -5513,7 +5580,7 @@ mod tests {
                 })),
             })
             .unwrap();
-            execution.wait().unwrap();
+            assert_eq!(execution.wait().unwrap(), CommandOutcome::Completed);
         }
         drop(text);
         assert_eq!(weak.strong_count(), 2);
@@ -5590,7 +5657,7 @@ mod tests {
             "slow-listener.js",
             r#"
             globalThis.listener = async (event) => {
-              if (event.revision === 1) await editorApi.activeBuffer();
+              if (event.revision === 1) await event.buffer.snapshot();
               events.push(event.revision);
             };
         "#,
@@ -5627,7 +5694,14 @@ mod tests {
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: request.id,
-            result: Ok(HostResponseValue::ActiveBuffer(Some(BufferHandle::new(3)))),
+            result: Ok(HostResponseValue::Snapshot(TextSnapshot {
+                text: SnapshotText::from_utf8(""),
+                range: ByteRange {
+                    start_byte_offset: 0,
+                    end_byte_offset: 0,
+                },
+                revision: 1,
+            })),
         })
         .unwrap();
         pool.execute(
@@ -5659,7 +5733,7 @@ mod tests {
             "async-listener.js",
             r#"
             globalThis.listener = async (event) => {
-              await editorApi.activeBuffer();
+              await event.buffer.snapshot();
               events.push(event.revision);
             };
         "#,
@@ -5699,7 +5773,14 @@ mod tests {
             extension: waiting.extension,
             lifecycle: waiting.lifecycle,
             id: request.id,
-            result: Ok(HostResponseValue::ActiveBuffer(Some(BufferHandle::new(3)))),
+            result: Ok(HostResponseValue::Snapshot(TextSnapshot {
+                text: SnapshotText::from_utf8(""),
+                range: ByteRange {
+                    start_byte_offset: 0,
+                    end_byte_offset: 0,
+                },
+                revision: 1,
+            })),
         })
         .unwrap();
         pool.execute(
@@ -5724,7 +5805,7 @@ mod tests {
         pool.execute(
             runtime,
             "unload-listener.js",
-            "globalThis.listener = async () => { await editorApi.activeBuffer(); };",
+            "globalThis.listener = async (event) => { await event.buffer.snapshot(); };",
         )
         .unwrap()
         .wait()
@@ -5755,7 +5836,14 @@ mod tests {
                 extension: runtime.extension,
                 lifecycle: runtime.lifecycle,
                 id: request.id,
-                result: Ok(HostResponseValue::ActiveBuffer(None)),
+                result: Ok(HostResponseValue::Snapshot(TextSnapshot {
+                    text: SnapshotText::from_utf8(""),
+                    range: ByteRange {
+                        start_byte_offset: 0,
+                        end_byte_offset: 0
+                    },
+                    revision: 1
+                })),
             }),
             Err(RuntimeResponseError::WrongExtension)
         );
@@ -5798,10 +5886,10 @@ mod tests {
                 runtime,
                 "file:///fixtures/request.js",
                 r#"
-                    import * as knot from "knot"; const { editor } = knot;
-                    const buffer = await editor.activeBuffer();
+                    import * as knot from "knot"; const { workbench } = knot;
+                    const buffer = await workbench.writeClipboardText("wait");
                     await Promise.resolve();
-                    globalThis.responseValue = buffer !== null;
+                    globalThis.responseValue = buffer === undefined;
                 "#,
             )
             .unwrap();
@@ -5809,12 +5897,17 @@ mod tests {
         assert_eq!(request.extension, runtime.extension);
         assert_eq!(request.lifecycle, runtime.lifecycle);
         assert_eq!(request.id, RequestId::new(1));
-        assert_eq!(request.operation, HostOperation::ActiveBuffer);
+        assert_eq!(
+            request.operation,
+            HostOperation::WriteClipboardText {
+                text: "wait".into()
+            }
+        );
         pool.respond(HostResponse {
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: request.id,
-            result: Ok(HostResponseValue::ActiveBuffer(Some(BufferHandle::new(9)))),
+            result: Ok(HostResponseValue::ClipboardTextWritten),
         })
         .unwrap();
         execution.wait().unwrap();
@@ -5839,7 +5932,7 @@ mod tests {
             .execute_fixture_module(
                 runtime,
                 "file:///fixtures/request-error.js",
-                "import * as knot from 'knot'; const { editor } = knot; await editor.activeBuffer();",
+                "import * as knot from 'knot'; const { workbench } = knot; await workbench.writeClipboardText('wait');",
             )
             .unwrap();
         let request = pool.receive_request().unwrap();
@@ -5876,12 +5969,13 @@ mod tests {
                 runtime,
                 "file:///fixtures/concurrent-requests.js",
                 r#"
-                    import * as knot from "knot"; const { editor } = knot;
-                    const [first, second] = await Promise.all([
-                      editor.activeBuffer(),
-                      editor.activeBuffer(),
+                    import * as knot from "knot"; const { workbench } = knot;
+                    globalThis.responseOrder = [];
+                    await Promise.all([
+                      workbench.writeClipboardText("wait").then(() => responseOrder.push(1)),
+                      workbench.writeClipboardText("wait").then(() => responseOrder.push(2)),
                     ]);
-                    globalThis.responsesAreDistinct = first !== second;
+                    globalThis.responsesAreDistinct = responseOrder.join(",") === "2,1";
                 "#,
             )
             .unwrap();
@@ -5893,7 +5987,7 @@ mod tests {
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: second.id,
-            result: Ok(HostResponseValue::ActiveBuffer(Some(BufferHandle::new(2)))),
+            result: Ok(HostResponseValue::ClipboardTextWritten),
         })
         .unwrap();
         assert_eq!(
@@ -5901,7 +5995,7 @@ mod tests {
                 extension: runtime.extension,
                 lifecycle: runtime.lifecycle,
                 id: second.id,
-                result: Ok(HostResponseValue::ActiveBuffer(None)),
+                result: Ok(HostResponseValue::ClipboardTextWritten),
             }),
             Err(RuntimeResponseError::UnknownRequest)
         );
@@ -5909,7 +6003,7 @@ mod tests {
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: first.id,
-            result: Ok(HostResponseValue::ActiveBuffer(Some(BufferHandle::new(1)))),
+            result: Ok(HostResponseValue::ClipboardTextWritten),
         })
         .unwrap();
         execution.wait().unwrap();
@@ -5927,7 +6021,7 @@ mod tests {
                 extension: runtime.extension,
                 lifecycle: runtime.lifecycle,
                 id: first.id,
-                result: Ok(HostResponseValue::ActiveBuffer(None)),
+                result: Ok(HostResponseValue::ClipboardTextWritten),
             }),
             Err(RuntimeResponseError::UnknownRequest)
         );
@@ -5944,8 +6038,8 @@ mod tests {
                 runtime,
                 "file:///fixtures/rejected-siblings.js",
                 r#"
-                    import * as knot from "knot"; const { editor } = knot;
-                    await Promise.all([editor.activeBuffer(), editor.activeBuffer()]);
+                    import * as knot from "knot"; const { workbench } = knot;
+                    await Promise.all([workbench.writeClipboardText("wait"), workbench.writeClipboardText("wait")]);
                 "#,
             )
             .unwrap();
@@ -5967,7 +6061,7 @@ mod tests {
                 extension: runtime.extension,
                 lifecycle: runtime.lifecycle,
                 id: second.id,
-                result: Ok(HostResponseValue::ActiveBuffer(None)),
+                result: Ok(HostResponseValue::ClipboardTextWritten),
             }),
             Err(RuntimeResponseError::UnknownRequest)
         );
@@ -5983,7 +6077,7 @@ mod tests {
             .execute_fixture_module(
                 runtime,
                 "file:///fixtures/identity.js",
-                "import * as knot from 'knot'; const { editor } = knot; await editor.activeBuffer();",
+                "import * as knot from 'knot'; const { workbench } = knot; await workbench.writeClipboardText('wait');",
             )
             .unwrap();
         let request = pool.receive_request().unwrap();
@@ -5992,19 +6086,19 @@ mod tests {
                 extension: ExtensionId::new(99),
                 lifecycle: runtime.lifecycle,
                 id: request.id,
-                result: Ok(HostResponseValue::ActiveBuffer(None)),
+                result: Ok(HostResponseValue::ClipboardTextWritten),
             },
             HostResponse {
                 extension: runtime.extension,
                 lifecycle: ExtensionLifecycleId::new(99),
                 id: request.id,
-                result: Ok(HostResponseValue::ActiveBuffer(None)),
+                result: Ok(HostResponseValue::ClipboardTextWritten),
             },
             HostResponse {
                 extension: runtime.extension,
                 lifecycle: runtime.lifecycle,
                 id: RequestId::new(99),
-                result: Ok(HostResponseValue::ActiveBuffer(None)),
+                result: Ok(HostResponseValue::ClipboardTextWritten),
             },
         ] {
             assert!(pool.respond(response).is_err());
@@ -6013,7 +6107,7 @@ mod tests {
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: request.id,
-            result: Ok(HostResponseValue::ActiveBuffer(None)),
+            result: Ok(HostResponseValue::ClipboardTextWritten),
         })
         .unwrap();
         execution.wait().unwrap();
@@ -6031,7 +6125,7 @@ mod tests {
             .execute_fixture_module(
                 waiting,
                 "file:///fixtures/delayed.js",
-                "import * as knot from 'knot'; const { editor } = knot; await editor.activeBuffer();",
+                "import * as knot from 'knot'; const { workbench } = knot; await workbench.writeClipboardText('wait');",
             )
             .unwrap();
         let request = pool.receive_request().unwrap();
@@ -6048,7 +6142,7 @@ mod tests {
             extension: waiting.extension,
             lifecycle: waiting.lifecycle,
             id: request.id,
-            result: Ok(HostResponseValue::ActiveBuffer(None)),
+            result: Ok(HostResponseValue::ClipboardTextWritten),
         })
         .unwrap();
         delayed.wait().unwrap();
@@ -6065,11 +6159,11 @@ mod tests {
                 runtime,
                 "file:///fixtures/sequential.js",
                 r#"
-                    import * as knot from "knot"; const { editor } = knot;
+                    import * as knot from "knot"; const { workbench } = knot;
                     await Promise.resolve();
-                    await editor.activeBuffer();
+                    await workbench.writeClipboardText("wait");
                     globalThis.firstResponse = true;
-                    await editor.activeBuffer();
+                    await workbench.writeClipboardText("wait");
                     globalThis.secondResponse = true;
                 "#,
             )
@@ -6079,7 +6173,7 @@ mod tests {
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: first.id,
-            result: Ok(HostResponseValue::ActiveBuffer(None)),
+            result: Ok(HostResponseValue::ClipboardTextWritten),
         })
         .unwrap();
         let second = pool.receive_request().unwrap();
@@ -6089,7 +6183,7 @@ mod tests {
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: second.id,
-            result: Ok(HostResponseValue::ActiveBuffer(None)),
+            result: Ok(HostResponseValue::ClipboardTextWritten),
         })
         .unwrap();
         execution.wait().unwrap();
@@ -6118,7 +6212,7 @@ mod tests {
             .execute_fixture_module(
                 runtime,
                 "file:///fixtures/mismatched-response.js",
-                "import * as knot from 'knot'; const { editor } = knot; await editor.activeBuffer();",
+                "import * as knot from 'knot'; const { workbench } = knot; await workbench.writeClipboardText('wait');",
             )
             .unwrap();
         let request = pool.receive_request().unwrap();
@@ -6145,8 +6239,8 @@ mod tests {
                 first,
                 "file:///fixtures/unload-pending.js",
                 r#"
-                    import * as knot from "knot"; const { editor } = knot;
-                    await Promise.all([editor.activeBuffer(), editor.activeBuffer()]);
+                    import * as knot from "knot"; const { workbench } = knot;
+                    await Promise.all([workbench.writeClipboardText("wait"), workbench.writeClipboardText("wait")]);
                 "#,
             )
             .unwrap();
@@ -6161,7 +6255,7 @@ mod tests {
                 extension: first.extension,
                 lifecycle: first.lifecycle,
                 id: first_request.id,
-                result: Ok(HostResponseValue::ActiveBuffer(None)),
+                result: Ok(HostResponseValue::ClipboardTextWritten),
             }),
             Err(RuntimeResponseError::WrongExtension)
         );
@@ -6172,7 +6266,7 @@ mod tests {
             .execute_fixture_module(
                 replacement,
                 "file:///fixtures/replacement.js",
-                "import * as knot from 'knot'; const { editor } = knot; await editor.activeBuffer();",
+                "import * as knot from 'knot'; const { workbench } = knot; await workbench.writeClipboardText('wait');",
             )
             .unwrap();
         let replacement_request = pool.receive_request().unwrap();
@@ -6182,7 +6276,7 @@ mod tests {
                 extension: first.extension,
                 lifecycle: first.lifecycle,
                 id: replacement_request.id,
-                result: Ok(HostResponseValue::ActiveBuffer(None)),
+                result: Ok(HostResponseValue::ClipboardTextWritten),
             }),
             Err(RuntimeResponseError::WrongExtension)
         );
@@ -6190,7 +6284,7 @@ mod tests {
             extension: replacement.extension,
             lifecycle: replacement.lifecycle,
             id: replacement_request.id,
-            result: Ok(HostResponseValue::ActiveBuffer(None)),
+            result: Ok(HostResponseValue::ClipboardTextWritten),
         })
         .unwrap();
         replacement_execution.wait().unwrap();
@@ -6206,7 +6300,7 @@ mod tests {
             .execute_fixture_module(
                 runtime,
                 "file:///fixtures/shutdown-pending.js",
-                "import * as knot from 'knot'; const { editor } = knot; await editor.activeBuffer();",
+                "import * as knot from 'knot'; const { workbench } = knot; await workbench.writeClipboardText('wait');",
             )
             .unwrap();
         pool.receive_request().unwrap();
@@ -6224,7 +6318,7 @@ mod tests {
             .execute_fixture_module(
                 runtime,
                 "file:///fixtures/terminated-pending.js",
-                "import * as knot from 'knot'; const { editor } = knot; await editor.activeBuffer();",
+                "import * as knot from 'knot'; const { workbench } = knot; await workbench.writeClipboardText('wait');",
             )
             .unwrap();
         let request = pool.receive_request().unwrap();
@@ -6239,7 +6333,7 @@ mod tests {
                 extension: runtime.extension,
                 lifecycle: runtime.lifecycle,
                 id: request.id,
-                result: Ok(HostResponseValue::ActiveBuffer(None)),
+                result: Ok(HostResponseValue::ClipboardTextWritten),
             }),
             Err(RuntimeResponseError::WrongExtension)
         );
@@ -6255,7 +6349,7 @@ mod tests {
             .execute_fixture_module(
                 runtime,
                 "file:///fixtures/awaited-queued.js",
-                "import * as knot from 'knot'; const { editor } = knot; await editor.activeBuffer();",
+                "import * as knot from 'knot'; const { workbench } = knot; await workbench.writeClipboardText('wait');",
             )
             .unwrap();
         pool.receive_request().unwrap();
@@ -6271,6 +6365,7 @@ mod tests {
                     extension: runtime.extension,
                     lifecycle: runtime.lifecycle,
                     arguments: CommandArgumentValue::Null,
+                    capture: None,
                 },
                 None,
             )
@@ -6315,7 +6410,7 @@ mod tests {
             .execute_fixture_module(
                 runtime,
                 "file:///fixtures/awaited-shutdown.js",
-                "import * as knot from 'knot'; const { editor } = knot; await editor.activeBuffer();",
+                "import * as knot from 'knot'; const { workbench } = knot; await workbench.writeClipboardText('wait');",
             )
             .unwrap();
         pool.receive_request().unwrap();
@@ -6338,7 +6433,7 @@ mod tests {
             .execute_fixture_module(
                 runtime,
                 "file:///fixtures/awaited-fatal.js",
-                "import * as knot from 'knot'; const { editor } = knot; await editor.activeBuffer();",
+                "import * as knot from 'knot'; const { workbench } = knot; await workbench.writeClipboardText('wait');",
             )
             .unwrap();
         pool.receive_request().unwrap();
@@ -6360,6 +6455,8 @@ mod tests {
     fn facade_maps_every_host_error_to_a_stable_javascript_name() {
         let capsule = RuntimeCapsule::new(key(1), IsolateConfig::default()).unwrap();
         let cases = [
+            (HostRequestError::ContextUnavailable, "KnotHostError"),
+            (HostRequestError::InvalidTarget, "KnotHostError"),
             (
                 HostRequestError::UnsupportedOperation,
                 "UnsupportedOperationError",
@@ -6400,9 +6497,9 @@ mod tests {
                 .execute_fixture_module(
                     &format!("file:///fixtures/host-error-{index}.js"),
                     r#"
-                        import * as knot from "knot"; const { editor } = knot;
+                        import * as knot from "knot"; const { workbench } = knot;
                         try {
-                            await editor.activeBuffer();
+                            await workbench.writeClipboardText("wait");
                         } catch (error) {
                             globalThis.hostErrorName = error.name;
                         }
@@ -6424,8 +6521,8 @@ mod tests {
             .execute_fixture_module(
                 "file:///fixtures/unknown-host-error.js",
                 r#"
-                    import * as knot from "knot"; const { editor } = knot;
-                    try { await editor.activeBuffer(); }
+                    import * as knot from "knot"; const { workbench } = knot;
+                    try { await workbench.writeClipboardText("wait"); }
                     catch (error) { globalThis.hostErrorName = error.name; }
                 "#,
             )
@@ -6824,7 +6921,7 @@ mod tests {
                       {
                         async getChildren(parentId) {
                           globalThis.providerEvents.push(`tree-${parentId ?? "root"}-start`);
-                          if (parentId === "await") await editor.activeBuffer();
+                          if (parentId === "await") await workbench.writeClipboardText("tree wait");
                           if (parentId === "failure") throw new Error("expected tree failure");
                           globalThis.providerEvents.push(`tree-${parentId ?? "root"}-end`);
                           return [{
@@ -6842,7 +6939,7 @@ mod tests {
                       {
                         async provideCompletions(context) {
                           globalThis.providerEvents.push(`completion-${context.prefix}`);
-                          if (context.prefix === "await") await editor.activeBuffer();
+                          if (context.prefix === "await") await context.buffer.snapshot();
                           if (context.prefix === "failure") {
                             throw new Error("expected completion failure");
                           }
@@ -7038,7 +7135,12 @@ mod tests {
         let suspended = pool
             .receive_request_timeout(Duration::from_secs(1))
             .unwrap();
-        assert_eq!(suspended.operation, HostOperation::ActiveBuffer);
+        assert_eq!(
+            suspended.operation,
+            HostOperation::WriteClipboardText {
+                text: "tree wait".into()
+            }
+        );
         let completion = pool
             .request_completions(
                 runtime,
@@ -7065,7 +7167,7 @@ mod tests {
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: suspended.id,
-            result: Ok(HostResponseValue::ActiveBuffer(None)),
+            result: Ok(HostResponseValue::ClipboardTextWritten),
         })
         .unwrap();
         tree.wait().unwrap();
@@ -7126,7 +7228,7 @@ mod tests {
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: blocker_request.id,
-            result: Ok(HostResponseValue::ActiveBuffer(None)),
+            result: Ok(HostResponseValue::ClipboardTextWritten),
         })
         .unwrap();
         blocker.wait().unwrap();
@@ -7165,7 +7267,7 @@ mod tests {
                 extension: runtime.extension,
                 lifecycle: runtime.lifecycle,
                 id: pending.id,
-                result: Ok(HostResponseValue::ActiveBuffer(None)),
+                result: Ok(HostResponseValue::ClipboardTextWritten),
             }),
             Err(RuntimeResponseError::UnknownRequest)
         );
@@ -7275,7 +7377,14 @@ mod tests {
                 extension: unload_runtime.extension,
                 lifecycle: unload_runtime.lifecycle,
                 id: unload_request.id,
-                result: Ok(HostResponseValue::ActiveBuffer(None)),
+                result: Ok(HostResponseValue::Snapshot(TextSnapshot {
+                    text: SnapshotText::from_utf8(""),
+                    range: ByteRange {
+                        start_byte_offset: 0,
+                        end_byte_offset: 0
+                    },
+                    revision: 1
+                })),
             }),
             Err(RuntimeResponseError::WrongExtension)
         );
@@ -7345,6 +7454,7 @@ mod tests {
                     extension: runtime.extension,
                     lifecycle: runtime.lifecycle,
                     arguments,
+                    capture: None,
                 },
                 Some(BufferHandle::new(17)),
             )
@@ -7484,6 +7594,7 @@ mod tests {
                     extension: runtime.extension,
                     lifecycle: runtime.lifecycle,
                     arguments: CommandArgumentValue::Null,
+                    capture: None,
                 },
                 None,
             )
@@ -7556,6 +7667,7 @@ mod tests {
                     extension: runtime.extension,
                     lifecycle: runtime.lifecycle,
                     arguments: CommandArgumentValue::Null,
+                    capture: None,
                 },
                 Some(BufferHandle::new(23)),
             )
@@ -7630,7 +7742,10 @@ mod tests {
             .receive_request_timeout(Duration::from_secs(1))
             .unwrap();
         assert_eq!(active.invocation, Some(outer));
-        assert_eq!(active.operation, HostOperation::ActiveBuffer);
+        assert_eq!(
+            active.operation,
+            HostOperation::ActiveBuffer { target: None }
+        );
         pool.respond(HostResponse {
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
@@ -7715,6 +7830,7 @@ mod tests {
                     extension: runtime.extension,
                     lifecycle: runtime.lifecycle,
                     arguments: CommandArgumentValue::Null,
+                    capture: None,
                 },
                 Some(BufferHandle::new(29)),
             )
@@ -7803,6 +7919,7 @@ mod tests {
                     extension: runtime.extension,
                     lifecycle: runtime.lifecycle,
                     arguments: CommandArgumentValue::String("wrong".into()),
+                    capture: None,
                 },
                 None,
             )
@@ -7824,6 +7941,7 @@ mod tests {
                     extension: runtime.extension,
                     lifecycle: runtime.lifecycle,
                     arguments: CommandArgumentValue::Null,
+                    capture: None,
                 },
                 None,
             )
@@ -7918,6 +8036,7 @@ mod tests {
                     extension: runaway.extension,
                     lifecycle: runaway.lifecycle,
                     arguments: CommandArgumentValue::Null,
+                    capture: None,
                 },
                 None,
             )
