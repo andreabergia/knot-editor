@@ -69,6 +69,11 @@ impl DependencyPlan {
             .into_iter()
             .map(|package| (package.manifest.name.clone(), package))
             .collect::<BTreeMap<_, _>>();
+        let rejected = discovery
+            .diagnostics
+            .iter()
+            .filter_map(|diagnostic| diagnostic.name.clone())
+            .collect::<BTreeSet<_>>();
         let mut failures = BTreeMap::new();
         for (name, package) in &packages {
             if package
@@ -78,12 +83,9 @@ impl DependencyPlan {
                 .any(|dependency| dependency == name)
             {
                 failures.insert(name.clone(), format!("self-dependency: {name}"));
-            } else if let Some(missing) = package
-                .manifest
-                .requires
-                .iter()
-                .find(|dependency| !packages.contains_key(*dependency))
-            {
+            } else if let Some(missing) = package.manifest.requires.iter().find(|dependency| {
+                !packages.contains_key(*dependency) && !rejected.contains(*dependency)
+            }) {
                 failures.insert(
                     name.clone(),
                     format!("missing required extension {missing}"),
@@ -138,10 +140,16 @@ impl DependencyPlan {
             on_entry(&entry);
             entries.push(entry);
         };
+        let mut outcomes = BTreeMap::<String, Result<(), String>>::new();
         for diagnostic in self.diagnostics {
+            if let (Some(name), LoadResult::Failed(cause)) = (&diagnostic.name, &diagnostic.result)
+            {
+                outcomes
+                    .entry(name.clone())
+                    .or_insert_with(|| Err(cause.clone()));
+            }
             record(diagnostic);
         }
-        let mut outcomes = BTreeMap::<String, Result<(), String>>::new();
         for (name, cause) in self.failures {
             let package = &self.packages[&name];
             record(LoadEntry {
@@ -151,7 +159,11 @@ impl DependencyPlan {
             });
             outcomes.insert(name, Err(cause));
         }
-        while outcomes.len() < self.packages.len() {
+        while self
+            .packages
+            .keys()
+            .any(|name| !outcomes.contains_key(name))
+        {
             let (name, package) = self
                 .packages
                 .iter()
@@ -276,6 +288,7 @@ mod tests {
         InstalledPackage {
             directory: PathBuf::from(name),
             manifest: Manifest {
+                api_version: 1,
                 name: name.into(),
                 version: "1.0.0".into(),
                 main: "main.js".into(),
@@ -427,6 +440,44 @@ mod tests {
     }
 
     #[test]
+    fn rejected_version_causes_propagate_without_skipping_independent_admission() {
+        let mut rejected = Vec::new();
+        for name in ["@test/rejected", "@test/other", "@test/third"] {
+            rejected.push(crate::app::extension_package::PackageDiagnostic {
+                directory: PathBuf::from(name),
+                name: Some(name.into()),
+                cause: "unsupported apiVersion: expected 1, declared 2".into(),
+            });
+        }
+        let plan = DependencyPlan::new(DiscoveryReport {
+            packages: vec![
+                package("@test/dependent", &["@test/rejected"]),
+                package("@test/transitive", &["@test/dependent"]),
+                package("@test/independent", &[]),
+            ],
+            diagnostics: rejected,
+        });
+        let mut started = Vec::new();
+        let report = pollster::block_on(plan.execute(|package| {
+            started.push(package.manifest.name.clone());
+            StartupAttempt::new(ready(Ok(())), || {})
+        }));
+        assert_eq!(started, ["@test/independent"]);
+        assert_eq!(report.entries.len(), 6);
+        for name in ["@test/dependent", "@test/transitive"] {
+            let entry = report
+                .entries
+                .iter()
+                .find(|entry| entry.name.as_deref() == Some(name))
+                .unwrap();
+            assert!(
+                matches!(&entry.result, LoadResult::Failed(cause) if cause.contains("unsupported apiVersion") && cause.contains("expected 1, declared 2") && !cause.contains("missing required")),
+                "{entry:?}"
+            );
+        }
+    }
+
+    #[test]
     fn duplicate_dependency_declaration_is_a_discovery_failure() {
         let root = tempfile::tempdir().unwrap();
         let invalid = root.path().join("@test/invalid");
@@ -435,7 +486,7 @@ mod tests {
         std::fs::write(
             invalid.join("knot.jsonc"),
             r#"{
-            "name":"@test/invalid", "version":"1.0.0", "main":"main.js",
+            "name":"@test/invalid", "apiVersion": 1, "version":"1.0.0", "main":"main.js",
             "requires":["@test/base", "@test/base"]
         }"#,
         )

@@ -4,10 +4,26 @@
   "description": "knot.jsonc accepts JSON comments and trailing commas before schema validation.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["name", "version", "main"],
+  "required": [
+    "apiVersion",
+    "name",
+    "version",
+    "main"
+  ],
   "properties": {
-    "name": { "$ref": "#/$defs/packageName" },
-    "version": { "type": "string", "description": "A semantic version." },
+    "apiVersion": {
+      "type": "integer",
+      "minimum": 1,
+      "const": 1,
+      "description": "Required Knot public API version, independent of the package version."
+    },
+    "name": {
+      "$ref": "#/$defs/packageName"
+    },
+    "version": {
+      "type": "string",
+      "description": "A semantic version."
+    },
     "main": {
       "type": "string",
       "description": "A relative .js or .mjs file path inside the package; empty, dot, parent, and backslash segments are invalid."
@@ -16,19 +32,36 @@
       "type": "array",
       "default": [],
       "uniqueItems": true,
-      "items": { "$ref": "#/$defs/packageName" }
+      "items": {
+        "$ref": "#/$defs/packageName"
+      }
     },
-    "displayName": { "$ref": "#/$defs/nonEmpty" },
-    "description": { "$ref": "#/$defs/nonEmpty" },
-    "author": { "$ref": "#/$defs/nonEmpty" },
-    "website": { "type": "string", "format": "uri", "pattern": "^https?://" },
-    "license": { "$ref": "#/$defs/nonEmpty" }
+    "displayName": {
+      "$ref": "#/$defs/nonEmpty"
+    },
+    "description": {
+      "$ref": "#/$defs/nonEmpty"
+    },
+    "author": {
+      "$ref": "#/$defs/nonEmpty"
+    },
+    "website": {
+      "type": "string",
+      "format": "uri",
+      "pattern": "^https?://"
+    },
+    "license": {
+      "$ref": "#/$defs/nonEmpty"
+    }
   },
   "$defs": {
     "packageName": {
       "type": "string",
       "pattern": "^@(?!knot/)[a-z][a-z0-9._-]*/[a-z][a-z0-9._-]*$"
     },
-    "nonEmpty": { "type": "string", "pattern": "\\S" }
+    "nonEmpty": {
+      "type": "string",
+      "pattern": "\\S"
+    }
   }
 }

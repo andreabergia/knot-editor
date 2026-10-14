@@ -1,11 +1,18 @@
-// Draft API version 1 example; checked as JavaScript, not loaded by the product.
+// API version 1 authoring example.
 import { commands, editor, workbench, keybinding, removeKeybinding } from "knot";
 
+/** @type {Set<import("knot").Disposable>} */
+const bufferOwnership = new Set();
+let active = true;
+
 const command = await commands.register("guide.annotate", async (context) => {
+  if (!active) return;
   context.signal.throwIfAborted();
   const buffer = await editor.activeBuffer(context.target);
-  if (buffer === null) return;
+  if (buffer === null || !active) return;
   const snapshot = await buffer.snapshot();
+  if (!active) return;
+  bufferOwnership.add(buffer.contributions);
   const endByteOffset = snapshot.byteOffsetAtUtf16(snapshot.text.length);
   await buffer.contributions.replace(endByteOffset === 0 ? [] : [{
     range: { startByteOffset: 0, endByteOffset },
@@ -14,12 +21,16 @@ const command = await commands.register("guide.annotate", async (context) => {
     command: "guide.annotate",
   }], { ifRevision: snapshot.revision });
 
+  if (!active) return;
   const subscription = await buffer.onDidChange(async (event) => {
     // Explicit buffer access works even without a command context.
     await event.buffer.snapshot();
     // Cleanup is an ownership barrier, so self-disposal is safe.
     await subscription.dispose();
+    bufferOwnership.delete(subscription);
   });
+  bufferOwnership.add(subscription);
+  if (!active) await subscription.dispose();
 });
 
 const child = await commands.register("guide.compose", async () => {
@@ -58,7 +69,11 @@ removeKeybinding("cmd-alt-g", { view: "editor" });
 
 // Called by an author-controlled feature toggle, not a promised unload hook.
 export async function deactivateFeature() {
+  active = false;
+  removeKeybinding("cmd-g");
+  removeKeybinding("cmd-c", { view: "outline" });
   await Promise.all([
+    ...Array.from(bufferOwnership, (owner) => owner.dispose()),
     command.dispose(), child.dispose(), viewCommand.dispose(),
     completion.dispose(), tree.dispose(),
   ]);

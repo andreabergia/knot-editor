@@ -221,8 +221,18 @@ pub(crate) struct ExecutionReport {
     pub(crate) worker: ThreadId,
 }
 
+#[derive(Clone, Copy, Eq, Hash, PartialEq)]
+enum RuntimeCallback {
+    BufferChange,
+    Command,
+    CancelCommand,
+    Tree,
+    Completion,
+}
+
 struct RuntimeLocalState {
     key: ExtensionKey,
+    status: Arc<AtomicU8>,
     next_request: AtomicU64,
     event_sender: Mutex<Option<tokio::sync::mpsc::UnboundedSender<EngineEvent>>>,
     current_root: Mutex<Option<RootId>>,
@@ -230,6 +240,7 @@ struct RuntimeLocalState {
     active: Mutex<Option<ActiveExecution>>,
     rejections: Mutex<Vec<RejectionReport>>,
     modules: Mutex<ModuleRegistry>,
+    callbacks: Mutex<HashMap<RuntimeCallback, v8::Global<v8::Function>>>,
     buffer_changes: Mutex<BufferChangeQueueState>,
     cancelled_commands: Mutex<HashSet<CommandInvocationId>>,
     #[cfg(test)]
@@ -246,9 +257,10 @@ struct RuntimeLocalState {
 }
 
 impl RuntimeLocalState {
-    fn new(key: ExtensionKey, graph: Option<&ModuleGraph>) -> Self {
+    fn new(key: ExtensionKey, graph: Option<&ModuleGraph>, status: Arc<AtomicU8>) -> Self {
         Self {
             key,
+            status,
             next_request: AtomicU64::new(1),
             event_sender: Mutex::new(None),
             current_root: Mutex::new(None),
@@ -256,6 +268,7 @@ impl RuntimeLocalState {
             active: Mutex::new(None),
             rejections: Mutex::new(Vec::new()),
             modules: Mutex::new(ModuleRegistry::new(graph)),
+            callbacks: Mutex::new(HashMap::new()),
             buffer_changes: Mutex::new(BufferChangeQueueState::default()),
             cancelled_commands: Mutex::new(HashSet::new()),
             #[cfg(test)]
@@ -270,6 +283,18 @@ impl RuntimeLocalState {
             #[cfg(test)]
             entered: Mutex::new(None),
         }
+    }
+
+    fn callback<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        callback: RuntimeCallback,
+    ) -> Option<v8::Local<'s, v8::Function>> {
+        self.callbacks
+            .lock()
+            .unwrap()
+            .get(&callback)
+            .map(|function| v8::Local::new(scope, function))
     }
 
     fn buffer_change_enqueued(&self) {
@@ -612,7 +637,7 @@ impl RuntimeCapsule {
     ) -> Result<Self, RuntimeError> {
         initialize();
         let status = Arc::new(AtomicU8::new(ACTIVE));
-        let local_state = Arc::new(RuntimeLocalState::new(key, graph));
+        let local_state = Arc::new(RuntimeLocalState::new(key, graph, Arc::clone(&status)));
         let mut isolate =
             v8::Isolate::new(v8::CreateParams::default().heap_limits(0, config.heap_limit_bytes));
         isolate.set_microtasks_policy(v8::MicrotasksPolicy::Explicit);
@@ -881,9 +906,9 @@ impl RuntimeCapsule {
         let scope = &mut v8::ContextScope::new(&mut scope, context);
         v8::tc_scope!(let try_catch, scope);
         let evaluation = (|| {
-            let name = v8::String::new(try_catch, "__knotDispatchBufferChange")?;
-            let function = context.global(try_catch).get(try_catch, name.into())?;
-            let function = v8::Local::<v8::Function>::try_from(function).ok()?;
+            let function = self
+                .local_state
+                .callback(try_catch, RuntimeCallback::BufferChange)?;
             let subscription = v8::Number::new(try_catch, subscription.value() as f64);
             let change = buffer_change_to_v8(try_catch, change).ok()?;
             function.call(
@@ -971,9 +996,9 @@ impl RuntimeCapsule {
         let scope = &mut v8::ContextScope::new(&mut scope, context);
         v8::tc_scope!(let try_catch, scope);
         let evaluated = (|| {
-            let name = v8::String::new(try_catch, "__knotInvokeCommand")?;
-            let function = context.global(try_catch).get(try_catch, name.into())?;
-            let function = v8::Local::<v8::Function>::try_from(function).ok()?;
+            let function = self
+                .local_state
+                .callback(try_catch, RuntimeCallback::Command)?;
             let active_buffer = active_buffer.map_or_else(
                 || v8::null(try_catch).into(),
                 |buffer| v8::Number::new(try_catch, buffer.value() as f64).into(),
@@ -1092,9 +1117,9 @@ impl RuntimeCapsule {
             ProviderCall::Tree { request, .. } => {
                 let source = "knot:tree-provider";
                 let value = (|| {
-                    let name = v8::String::new(try_catch, "__knotRequestTreeChildren")?;
-                    let function = context.global(try_catch).get(try_catch, name.into())?;
-                    let function = v8::Local::<v8::Function>::try_from(function).ok()?;
+                    let function = self
+                        .local_state
+                        .callback(try_catch, RuntimeCallback::Tree)?;
                     let parent = request.parent_id.as_ref().map_or_else(
                         || Some(v8::null(try_catch).into()),
                         |parent| v8::String::new(try_catch, parent).map(Into::into),
@@ -1114,9 +1139,9 @@ impl RuntimeCapsule {
             ProviderCall::Completion { request, .. } => {
                 let source = "knot:completion-provider";
                 let value = (|| {
-                    let name = v8::String::new(try_catch, "__knotRequestCompletions")?;
-                    let function = context.global(try_catch).get(try_catch, name.into())?;
-                    let function = v8::Local::<v8::Function>::try_from(function).ok()?;
+                    let function = self
+                        .local_state
+                        .callback(try_catch, RuntimeCallback::Completion)?;
                     let prefix = v8::String::new(try_catch, &request.prefix)?;
                     function.call(
                         try_catch,
@@ -1239,10 +1264,9 @@ impl RuntimeCapsule {
         root: RootId,
         invocation: CommandInvocationId,
     ) {
-        let context = scope.get_current_context();
-        let name = v8::String::new(scope, "__knotCancelCommand").unwrap();
-        if let Some(function) = context.global(scope).get(scope, name.into())
-            && let Ok(function) = v8::Local::<v8::Function>::try_from(function)
+        if let Some(function) = self
+            .local_state
+            .callback(scope, RuntimeCallback::CancelCommand)
         {
             function.call(
                 scope,
@@ -1967,6 +1991,7 @@ impl RuntimeCapsule {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .clear();
+            self.local_state.callbacks.lock().unwrap().clear();
             clear_module_registry(&self.local_state);
             let _ = locker.remove_slot::<Arc<RuntimeLocalState>>();
             drop(data.context);
@@ -3097,7 +3122,36 @@ fn initialize_extension_context(
         ));
     }
 
-    evaluate_fixture_module(scope, state, PUBLIC_FACADE_SPECIFIER, None, true).map(|_| ())
+    evaluate_fixture_module(scope, state, PUBLIC_FACADE_SPECIFIER, None, true)?;
+    let global = scope.get_current_context().global(scope);
+    let mut callbacks = HashMap::new();
+    for (kind, name) in [
+        (RuntimeCallback::BufferChange, "__knotDispatchBufferChange"),
+        (RuntimeCallback::Command, "__knotInvokeCommand"),
+        (RuntimeCallback::CancelCommand, "__knotCancelCommand"),
+        (RuntimeCallback::Tree, "__knotRequestTreeChildren"),
+        (RuntimeCallback::Completion, "__knotRequestCompletions"),
+    ] {
+        let name = v8::String::new(scope, name).ok_or_else(RuntimeError::disposed)?;
+        let function = global
+            .get(scope, name.into())
+            .ok_or_else(RuntimeError::disposed)?;
+        let function = v8::Local::<v8::Function>::try_from(function).map_err(|_| {
+            RuntimeError::fatal(
+                RuntimeErrorKind::Engine,
+                "private runtime callback is missing",
+            )
+        })?;
+        callbacks.insert(kind, v8::Global::new(scope, function));
+        if global.delete(scope, name.into()) != Some(true) {
+            return Err(RuntimeError::fatal(
+                RuntimeErrorKind::Engine,
+                "private runtime callback could not be hidden",
+            ));
+        }
+    }
+    *state.callbacks.lock().unwrap() = callbacks;
+    Ok(())
 }
 
 fn validate_root_module_specifier(specifier: &str) -> Result<String, RuntimeError> {
@@ -3565,6 +3619,12 @@ fn host_request_callback<'s, 'i>(
         result.set(resolver.get_promise(scope).into());
         return;
     };
+    if state.status.load(Ordering::Acquire) != ACTIVE {
+        let exception = boundary_exception(scope, BoundaryError::Host(HostRequestError::Cancelled));
+        resolver.reject(scope, exception);
+        result.set(resolver.get_promise(scope).into());
+        return;
+    }
     let invocation = match optional_u64(scope, arguments.get(0), "UnsupportedOperation") {
         Ok(value) => value.map(CommandInvocationId::new),
         Err(error) => {
@@ -6666,6 +6726,93 @@ mod tests {
     }
 
     #[test]
+    fn native_dispatch_callbacks_are_not_available_to_extension_code() {
+        let capsule = RuntimeCapsule::new(key(201), IsolateConfig::default()).unwrap();
+        let report = capsule
+            .execute(
+                "private-dispatch.js",
+                r#"
+            ["__knotNativeBindings", "__knotDispatchBufferChange", "__knotInvokeCommand",
+             "__knotCancelCommand", "__knotRequestTreeChildren", "__knotRequestCompletions"]
+                .every((name) => !Object.hasOwn(globalThis, name))
+        "#,
+            )
+            .unwrap();
+        assert_eq!(&*report.value, "true");
+    }
+
+    #[test]
+    fn private_dispatch_handles_ignore_author_globals_and_teardown_rejects_new_requests() {
+        let pool = RuntimePool::new(PoolConfig::single_worker());
+        let runtime = key(202);
+        pool.load(runtime, IsolateConfig::default()).unwrap();
+        let first = execute_captured_fixture(
+            &pool,
+            runtime,
+            "file:///fixtures/dispatch-handles.js",
+            r#"
+            globalThis.commandCalls = (globalThis.commandCalls ?? 0) + 1;
+            globalThis.__knotInvokeCommand = () => { throw new Error("forged dispatch"); };
+        "#,
+        );
+        assert_eq!(first.wait().unwrap(), CommandOutcome::Completed);
+        let second = pool
+            .invoke_command(
+                runtime,
+                CommandInvocation {
+                    id: CommandInvocationId::new(901),
+                    registration: CommandRegistrationId::new(900),
+                    extension: runtime.extension,
+                    lifecycle: runtime.lifecycle,
+                    arguments: CommandArgumentValue::Null,
+                    capture: None,
+                },
+                None,
+            )
+            .unwrap();
+        assert_eq!(second.wait().unwrap(), CommandOutcome::Completed);
+        assert_eq!(
+            &*pool
+                .execute(runtime, "verify-private-dispatch.js", "commandCalls")
+                .unwrap()
+                .wait()
+                .unwrap()
+                .value,
+            "2"
+        );
+        pool.shutdown();
+
+        let capsule = RuntimeCapsule::new(key(203), IsolateConfig::default()).unwrap();
+        {
+            let data = capsule.data.lock().unwrap();
+            let data = data.as_ref().unwrap();
+            let mut locker = data.isolate.lock();
+            let scope = pin!(v8::HandleScope::new(&mut *locker));
+            let mut scope = scope.init();
+            let context = v8::Local::new(&scope, &data.context);
+            let scope = &mut v8::ContextScope::new(&mut scope, context);
+            capsule.status.store(DISPOSED, Ordering::Release);
+            let request = v8::Function::new(scope, host_request_callback).unwrap();
+            let operation = v8::String::new(scope, "writeClipboardText").unwrap();
+            let text = v8::String::new(scope, "cleanup").unwrap();
+            let result = request
+                .call(
+                    scope,
+                    v8::undefined(scope).into(),
+                    &[v8::null(scope).into(), operation.into(), text.into()],
+                )
+                .unwrap();
+            let promise = v8::Local::<v8::Promise>::try_from(result).unwrap();
+            promise.mark_as_handled();
+            assert_eq!(promise.state(), v8::PromiseState::Rejected);
+            let error = v8::Local::<v8::Object>::try_from(promise.result(scope)).unwrap();
+            assert_eq!(string_property(scope, error, "code").unwrap(), "Cancelled");
+            assert!(capsule.local_state.pending.lock().unwrap().is_empty());
+        }
+        capsule.dispose();
+    }
+
+    #[test]
     fn process_initialization_is_idempotent() {
         initialize();
         initialize();
@@ -8312,6 +8459,10 @@ mod tests {
                 "file:///fixtures/semantic-providers.js",
                 r#"
                     import * as knot from "knot"; const { editor, workbench } = knot;
+                    for (const name of ["__knotRequestTreeChildren", "__knotRequestCompletions"]) {
+                      if (Object.hasOwn(globalThis, name)) throw new Error("private provider dispatch exposed");
+                      globalThis[name] = () => { throw new Error("untrusted provider dispatch replacement"); };
+                    }
                     globalThis.providerEvents = [];
                     globalThis.treeProvider = await workbench.registerTreeDataProvider(
                       "outline",
@@ -9204,6 +9355,7 @@ mod tests {
                       await context.buffer.snapshot();
                       globalThis.cancelledCommandResumed = true;
                     });
+                    globalThis.__knotCancelCommand = () => { throw new Error("untrusted dispatch replacement"); };
                 "#,
             )
             .unwrap();

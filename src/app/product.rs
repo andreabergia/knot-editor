@@ -3571,7 +3571,7 @@ mod tests {
             directory.join("knot.jsonc"),
             serde_json::json!({
                 "name": name,
-                "version": "1.0.0",
+                "apiVersion": 1, "version": "1.0.0",
                 "main": main,
                 "requires": requires,
             })
@@ -4462,6 +4462,271 @@ mod tests {
         );
         assert_eq!(cx.read(|cx| host.read(cx).lifecycle_count()), 0);
         assert!(cx.read(|cx| cx.global::<ApplicationWorkbenches>().0.borrow().is_empty()));
+    }
+
+    #[gpui::test]
+    fn installed_api_version_rejection_prevents_evaluation_and_preserves_dependency_diagnostics(
+        cx: &mut TestAppContext,
+    ) {
+        let root = tempfile::tempdir().unwrap();
+        const PROBE: &str = "import {commands, workbench} from 'knot'; await workbench.writeClipboardText('rejected entry evaluated'); await commands.register('rejected-entry', () => {});";
+        for (suffix, version) in [
+            ("missing", None),
+            ("null", Some(serde_json::Value::Null)),
+            ("string", Some(serde_json::json!("1"))),
+            ("boolean", Some(serde_json::json!(true))),
+            ("zero", Some(serde_json::json!(0))),
+            ("fraction", Some(serde_json::json!(1.5))),
+            ("unsupported", Some(serde_json::json!(2))),
+        ] {
+            let name = format!("@example/api-{suffix}");
+            install_extension(root.path(), &name, &[], &[("main.js", PROBE)]);
+            let manifest_path = root.path().join(&name).join("knot.jsonc");
+            let mut manifest: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(&manifest_path).unwrap()).unwrap();
+            match version {
+                Some(version) => manifest["apiVersion"] = version,
+                None => {
+                    manifest.as_object_mut().unwrap().remove("apiVersion");
+                }
+            }
+            std::fs::write(manifest_path, manifest.to_string()).unwrap();
+            install_extension(
+                root.path(),
+                &format!("@example/dependent-{suffix}"),
+                &[&name],
+                &[("main.js", PROBE)],
+            );
+        }
+        install_extension(
+            root.path(),
+            "@example/duplicate",
+            &[],
+            &[("main.js", PROBE)],
+        );
+        install_extension(
+            root.path(),
+            "@example/duplicate-peer",
+            &[],
+            &[("main.js", PROBE)],
+        );
+        let duplicate_path = root.path().join("@example/duplicate-peer/knot.jsonc");
+        std::fs::write(
+            duplicate_path,
+            r#"{"name":"@example/duplicate","apiVersion":2,"version":"1.0.0","main":"main.js"}"#,
+        )
+        .unwrap();
+        install_extension(
+            root.path(),
+            "@example/independent",
+            &[],
+            &[(
+                "main.js",
+                "import {commands} from 'knot'; await commands.register('admission.independent', () => {});",
+            )],
+        );
+        let documents = install_globals(cx);
+        let host = cx.update(super::super::extension_host::install);
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        let (_shell, _window) = product_window(document, model, cx);
+        cx.update(|cx| {
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string("admission sentinel".into()))
+        });
+        host.update(cx, |host, cx| {
+            host.start_installed_extensions(root.path().to_path_buf(), cx)
+        });
+        let report = wait_for_extension_report(&host, cx);
+        assert_eq!(report.report.entries.len(), 17);
+        for suffix in [
+            "missing",
+            "null",
+            "string",
+            "boolean",
+            "zero",
+            "fraction",
+            "unsupported",
+        ] {
+            let rejected = format!("@example/api-{suffix}");
+            let dependent = format!("@example/dependent-{suffix}");
+            for name in [&rejected, &dependent] {
+                let entry = report
+                    .report
+                    .entries
+                    .iter()
+                    .find(|entry| entry.name.as_ref() == Some(name))
+                    .unwrap();
+                assert!(
+                    matches!(&entry.result, super::super::extension_load::LoadResult::Failed(cause) if cause.contains("apiVersion") && cause.contains("expected") && cause.contains("declared")),
+                    "{entry:?}"
+                );
+            }
+        }
+        let duplicates = report
+            .report
+            .entries
+            .iter()
+            .filter(|entry| entry.name.as_deref() == Some("@example/duplicate"))
+            .collect::<Vec<_>>();
+        assert_eq!(duplicates.len(), 2);
+        assert!(duplicates.iter().all(|entry| matches!(&entry.result, super::super::extension_load::LoadResult::Failed(cause) if cause.contains("duplicate package ID"))));
+        assert!(duplicates.iter().any(|entry| matches!(&entry.result, super::super::extension_load::LoadResult::Failed(cause) if cause.contains("unsupported apiVersion"))));
+        cx.read(|cx| {
+            assert_eq!(
+                cx.read_from_clipboard().unwrap().text().unwrap(),
+                "admission sentinel"
+            );
+            assert!(
+                cx.global::<ApplicationProductCommands>()
+                    .0
+                    .read(cx)
+                    .catalog()
+                    .borrow()
+                    .resolve("rejected-entry")
+                    .is_err()
+            );
+            assert!(
+                cx.global::<ApplicationProductCommands>()
+                    .0
+                    .read(cx)
+                    .catalog()
+                    .borrow()
+                    .resolve("admission.independent")
+                    .is_ok()
+            );
+            assert_eq!(host.read(cx).lifecycle_count(), 1);
+        });
+    }
+
+    #[gpui::test]
+    fn checked_authoring_examples_run_as_an_installed_version_one_package(cx: &mut TestAppContext) {
+        let root = tempfile::tempdir().unwrap();
+        install_extension(
+            root.path(),
+            "@example/guide",
+            &[],
+            &[
+                (
+                    "main.js",
+                    "import {deactivateFeature} from './activation.js'; import './errors.js'; import {commands} from 'knot'; await commands.register('guide.test-deactivate', deactivateFeature);",
+                ),
+                (
+                    "activation.js",
+                    include_str!("../../scripts/extension-api/examples/activation.js"),
+                ),
+                (
+                    "errors.js",
+                    include_str!("../../scripts/extension-api/examples/errors.js"),
+                ),
+            ],
+        );
+        let documents = install_globals(cx);
+        cx.update(super::bind_product_keys);
+        let original_binding = cx.read(|cx| keymap_command(cx, "cmd-g", Some("editor")));
+        let host = cx.update(super::super::extension_host::install);
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        model.update(cx, |model, _| model.replace(0..0, "text").unwrap());
+        let (shell, window) = product_window(document, model.clone(), cx);
+        host.update(cx, |host, cx| {
+            host.start_installed_extensions(root.path().to_path_buf(), cx)
+        });
+        let report = wait_for_extension_report(&host, cx);
+        assert_eq!(
+            report.report.entries[0].result,
+            super::super::extension_load::LoadResult::Loaded
+        );
+        cx.read(|cx| {
+            assert_eq!(
+                keymap_command(cx, "cmd-g", Some("editor")).as_deref(),
+                Some("guide.compose")
+            )
+        });
+        let annotate = dispatch_product_command(&shell, window, "guide.compose", cx);
+        assert_eq!(wait_for_command(annotate, cx), CommandOutcome::Completed);
+        cx.read(|cx| assert_eq!(model.read(cx).resolved_contributions().len(), 1));
+        let invalid = dispatch_product_command(&shell, window, "guide.insert", cx);
+        assert!(matches!(
+            wait_for_command(invalid, cx),
+            CommandOutcome::InvalidArgument { .. }
+        ));
+        let target = cx
+            .update_window(window, |_, window, cx| {
+                shell.update(cx, |shell, cx| {
+                    shell.focus_active_surface(window, cx);
+                    shell.capture_command_target(window, cx).unwrap()
+                })
+            })
+            .unwrap();
+        let dispatcher = cx.read(|cx| cx.global::<ApplicationProductCommands>().0.clone());
+        let insertion = dispatcher.update(cx, |dispatcher, cx| {
+            dispatcher.dispatch(
+                Command {
+                    name: "guide.insert".into(),
+                    arguments: CommandArgumentValue::String("!".into()),
+                },
+                target,
+                cx,
+            )
+        });
+        assert_eq!(wait_for_command(insertion, cx), CommandOutcome::Completed);
+        cx.read(|cx| assert_eq!(model.read(cx).text(), "!text"));
+        let tree = cx.read(|cx| shell.read(cx).extension_tree.as_ref().unwrap().clone());
+        wait_for_api_condition(cx, |cx| tree.read(cx).root_labels() == ["Guide"]);
+        cx.update_window(window, |_, window, cx| {
+            tree.update(cx, |tree, cx| assert!(tree.select_item("root", cx)));
+            tree.focus_handle(cx).focus(window);
+        })
+        .unwrap();
+        let copy = dispatch_tree_copy(&shell, window, cx);
+        assert_eq!(wait_for_command(copy, cx), CommandOutcome::Completed);
+        cx.read(|cx| assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), "Guide"));
+        let completion =
+            dispatch_product_command(&shell, window, super::SHOW_COMPLETIONS_COMMAND, cx);
+        assert_eq!(wait_for_command(completion, cx), CommandOutcome::Completed);
+        let editor = cx.read(|cx| {
+            shell
+                .read(cx)
+                .workbench
+                .read(cx)
+                .focused_pane()
+                .unwrap()
+                .active_tab()
+                .editor()
+                .unwrap()
+                .clone()
+        });
+        wait_for_api_condition(cx, |cx| {
+            editor
+                .read(cx)
+                .completion_state()
+                .is_some_and(|(items, pending, failures, _, _)| {
+                    items == 1 && pending == 0 && failures == 0
+                })
+        });
+        let cleanup = dispatch_product_command(&shell, window, "guide.test-deactivate", cx);
+        assert_eq!(wait_for_command(cleanup, cx), CommandOutcome::Completed);
+        cx.read(|cx| {
+            assert!(!tree.read(cx).has_provider());
+            assert!(model.read(cx).resolved_contributions().is_empty());
+            assert_eq!(
+                keymap_command(cx, "cmd-g", Some("editor")),
+                original_binding
+            );
+            assert_eq!(
+                super::super::extension_host::completion_provider_count(cx),
+                0
+            );
+            assert!(
+                cx.global::<ApplicationProductCommands>()
+                    .0
+                    .read(cx)
+                    .catalog()
+                    .borrow()
+                    .resolve("guide.compose")
+                    .is_err()
+            );
+        });
     }
 
     #[gpui::test]

@@ -8,9 +8,13 @@ use std::sync::Arc;
 use directories::ProjectDirs;
 use serde::Deserialize;
 
+pub(crate) const SUPPORTED_API_VERSION: u32 = 1;
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Manifest {
+    #[serde(deserialize_with = "deserialize_api_version")]
+    pub api_version: u32,
     pub name: String,
     pub version: String,
     pub main: String,
@@ -176,10 +180,16 @@ fn read_package(directory: &Path) -> Result<InstalledPackage, (Option<String>, S
     let canonical = fs::canonicalize(directory).map_err(|error| fail(error.to_string()))?;
     let manifest_path = directory.join("knot.jsonc");
     let manifest_text = read_contained_file(&canonical, &manifest_path).map_err(fail)?;
-    let manifest: Manifest =
+    let value: serde_json::Value =
         jsonc_parser::parse_to_serde_value(&manifest_text, &Default::default())
             .map_err(|error| fail(format!("invalid knot.jsonc: {error}")))?;
-    let name = Some(manifest.name.clone());
+    let name = value
+        .get("name")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned);
+    validate_api_version(value.get("apiVersion")).map_err(|cause| (name.clone(), cause))?;
+    let manifest: Manifest = serde_json::from_value(value)
+        .map_err(|error| (name.clone(), format!("invalid knot.jsonc: {error}")))?;
     validate_manifest(&manifest).map_err(|cause| (name.clone(), cause))?;
     let main_path = directory.join(&manifest.main);
     read_contained_file(&canonical, &main_path)
@@ -194,7 +204,41 @@ fn read_package(directory: &Path) -> Result<InstalledPackage, (Option<String>, S
     })
 }
 
+fn validate_api_version(value: Option<&serde_json::Value>) -> Result<u32, String> {
+    let Some(value) = value else {
+        return Err(format!(
+            "missing apiVersion: expected {SUPPORTED_API_VERSION}, declared <missing>"
+        ));
+    };
+    let valid = value
+        .as_f64()
+        .is_some_and(|number| number.is_finite() && number > 0.0 && number.fract() == 0.0);
+    if !valid {
+        return Err(format!(
+            "malformed apiVersion: expected positive integer {SUPPORTED_API_VERSION}, declared {value}"
+        ));
+    }
+    if value.as_f64() != Some(SUPPORTED_API_VERSION as f64) {
+        return Err(format!(
+            "unsupported apiVersion: expected {SUPPORTED_API_VERSION}, declared {value}"
+        ));
+    }
+    Ok(SUPPORTED_API_VERSION)
+}
+
+fn deserialize_api_version<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<u32, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    validate_api_version(Some(&value)).map_err(serde::de::Error::custom)
+}
+
+pub(crate) fn validate_package_api(manifest: &Manifest) -> Result<(), String> {
+    validate_api_version(Some(&serde_json::Value::from(manifest.api_version))).map(|_| ())
+}
+
 fn validate_manifest(manifest: &Manifest) -> Result<(), String> {
+    validate_package_api(manifest)?;
     validate_name(&manifest.name)?;
     semver::Version::parse(&manifest.version)
         .map_err(|error| format!("invalid version: {error}"))?;
@@ -334,7 +378,7 @@ mod tests {
     const VALID: &str = r#"{
         // Human-facing metadata is optional.
         "name": "@example/tools",
-        "version": "1.2.3",
+        "apiVersion": 1, "version": "1.2.3",
         "main": "dist/main.js",
         "requires": ["@example/base"],
         "displayName": "Tools",
@@ -343,6 +387,113 @@ mod tests {
         "website": "https://example.com/tools",
         "license": "MIT",
     }"#;
+
+    #[test]
+    fn api_version_diagnostics_preserve_identity_before_entry_capture() {
+        let root = tempfile::tempdir().unwrap();
+        let path = package(root.path(), "@example/tools", VALID);
+        // Unsupported admission must win over an unreadable entry.
+        fs::write(path.join("dist/main.js"), [0xff]).unwrap();
+        for (value, kind) in [
+            (None, "missing"),
+            (Some(serde_json::Value::Null), "malformed"),
+            (Some(serde_json::json!("1")), "malformed"),
+            (Some(serde_json::json!(true)), "malformed"),
+            (Some(serde_json::json!([])), "malformed"),
+            (Some(serde_json::json!({})), "malformed"),
+            (Some(serde_json::json!(0)), "malformed"),
+            (Some(serde_json::json!(-1)), "malformed"),
+            (Some(serde_json::json!(1.5)), "malformed"),
+            (Some(serde_json::json!(2)), "unsupported"),
+            (Some(serde_json::json!(2.0)), "unsupported"),
+            (Some(serde_json::json!(u64::MAX)), "unsupported"),
+        ] {
+            let mut manifest = serde_json::json!({"name":"@example/tools","version":"1.0.0","main":"dist/main.js"});
+            if let Some(value) = &value {
+                manifest["apiVersion"] = value.clone();
+            }
+            fs::write(path.join("knot.jsonc"), manifest.to_string()).unwrap();
+            let report = discover(root.path());
+            assert!(report.packages.is_empty());
+            let diagnostic = &report.diagnostics[0];
+            assert_eq!(diagnostic.name.as_deref(), Some("@example/tools"));
+            assert!(
+                diagnostic.cause.contains(&format!("{kind} apiVersion")),
+                "{diagnostic:?}"
+            );
+            assert!(diagnostic.cause.contains("expected"));
+            assert!(diagnostic.cause.contains("1"));
+            let declared = value
+                .as_ref()
+                .map(serde_json::Value::to_string)
+                .unwrap_or_else(|| "<missing>".into());
+            assert!(
+                diagnostic.cause.contains(&format!("declared {declared}")),
+                "{diagnostic:?}"
+            );
+            assert!(!diagnostic.cause.contains("main dist/main.js"));
+        }
+    }
+
+    #[test]
+    fn supported_version_accepts_json_integer_spellings_and_retains_other_validation() {
+        let root = tempfile::tempdir().unwrap();
+        let path = package(root.path(), "@example/tools", VALID);
+        for version in ["1", "1.0", "1e0"] {
+            let manifest = format!(
+                r#"{{"name":"@example/tools","version":"1.0.0","apiVersion":{version},"main":"dist/main.js"}}"#
+            );
+            fs::write(path.join("knot.jsonc"), manifest).unwrap();
+            let report = discover(root.path());
+            assert!(report.diagnostics.is_empty(), "{:?}", report.diagnostics);
+            assert_eq!(
+                report.packages[0].manifest.api_version,
+                SUPPORTED_API_VERSION
+            );
+        }
+        fs::write(path.join("knot.jsonc"), r#"{"name":"@example/tools","version":"1.0.0","apiVersion":1,"main":"dist/main.js","unknown":true}"#).unwrap();
+        let report = discover(root.path());
+        assert_eq!(
+            report.diagnostics[0].name.as_deref(),
+            Some("@example/tools")
+        );
+        assert!(report.diagnostics[0].cause.contains("unknown field"));
+    }
+
+    #[test]
+    fn duplicate_id_with_rejected_version_invalidates_all_peers() {
+        for version in [
+            None,
+            Some(serde_json::json!("1")),
+            Some(serde_json::json!(2)),
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            package(root.path(), "@example/tools", VALID);
+            let mut manifest = serde_json::json!({"name":"@example/tools","version":"1.0.0","main":"dist/main.js"});
+            if let Some(version) = version {
+                manifest["apiVersion"] = version;
+            }
+            package(root.path(), "@example/other", &manifest.to_string());
+            let report = discover(root.path());
+            assert!(report.packages.is_empty());
+            assert_eq!(report.diagnostics.len(), 2);
+            assert!(
+                report
+                    .diagnostics
+                    .iter()
+                    .all(
+                        |diagnostic| diagnostic.name.as_deref() == Some("@example/tools")
+                            && diagnostic.cause.contains("duplicate package ID")
+                    )
+            );
+            assert!(
+                report
+                    .diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.cause.contains("apiVersion"))
+            );
+        }
+    }
 
     #[test]
     fn discovers_jsonc_and_captures_local_modules() {
@@ -373,31 +524,31 @@ mod tests {
         let path = package(temp.path(), "@example/tools", VALID);
         for (manifest, expected) in [
             (
-                r#"{"name":"@example/tools","main":"dist/main.js"}"#,
+                r#"{"name":"@example/tools","apiVersion":1,"main":"dist/main.js"}"#,
                 "version",
             ),
             (
-                r#"{"name":"@example/tools","version":"nope","main":"dist/main.js"}"#,
+                r#"{"name":"@example/tools","apiVersion": 1, "version":"nope","main":"dist/main.js"}"#,
                 "version",
             ),
             (
-                r#"{"name":"@example/tools","version":"1.0.0","main":"../main.js"}"#,
+                r#"{"name":"@example/tools","apiVersion": 1, "version":"1.0.0","main":"../main.js"}"#,
                 "main path",
             ),
             (
-                r#"{"name":"@example/tools","version":"1.0.0","main":"dist/main.js","website":"file:///tmp/x"}"#,
+                r#"{"name":"@example/tools","apiVersion": 1, "version":"1.0.0","main":"dist/main.js","website":"file:///tmp/x"}"#,
                 "website",
             ),
             (
-                r#"{"name":"@example/tools","version":"1.0.0","main":"dist/main.js","author":" "}"#,
+                r#"{"name":"@example/tools","apiVersion": 1, "version":"1.0.0","main":"dist/main.js","author":" "}"#,
                 "author",
             ),
             (
-                r#"{"name":"@knot/tools","version":"1.0.0","main":"dist/main.js"}"#,
+                r#"{"name":"@knot/tools","apiVersion": 1, "version":"1.0.0","main":"dist/main.js"}"#,
                 "reserved",
             ),
             (
-                r#"{"name":"@Example/tools","version":"1.0.0","main":"dist/main.js"}"#,
+                r#"{"name":"@Example/tools","apiVersion": 1, "version":"1.0.0","main":"dist/main.js"}"#,
                 "lowercase",
             ),
             ("{ invalid", "invalid knot.jsonc"),
@@ -477,7 +628,7 @@ mod tests {
             temp.path(),
             "@example/tools",
             r#"{
-            "name": "@example/tools", "version": "1.0.0", "main": "dist/main.js"
+            "name": "@example/tools", "apiVersion": 1, "version": "1.0.0", "main": "dist/main.js"
         }"#,
         );
         let report = discover(temp.path());
@@ -487,7 +638,7 @@ mod tests {
         fs::write(
             path.join("knot.jsonc"),
             r#"{
-            "name": "@example/tools", "version": "1.0.0", "main": "dist/main.js",
+            "name": "@example/tools", "apiVersion": 1, "version": "1.0.0", "main": "dist/main.js",
             "requires": ["@example/base", "@example/base"]
         }"#,
         )
@@ -503,7 +654,7 @@ mod tests {
             temp.path(),
             "@example/tools",
             r#"{
-            "name": "@example/tools", "version": "1.0.0", "main": "dist/main.mjs"
+            "name": "@example/tools", "apiVersion": 1, "version": "1.0.0", "main": "dist/main.mjs"
         }"#,
         );
         fs::write(path.join("dist/main.mjs"), "import './helper.mjs';").unwrap();

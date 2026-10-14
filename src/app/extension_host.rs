@@ -80,6 +80,7 @@ await editor.registerCompletionProvider("fixture-secondary", {
 "#;
 
 fn graph_for_package(package: &InstalledPackage) -> Result<ModuleGraph, String> {
+    extension_package::validate_package_api(&package.manifest)?;
     let root = url::Url::from_directory_path(&package.directory)
         .map_err(|_| format!("invalid package directory: {}", package.directory.display()))?;
     ModuleGraph::new(
@@ -1634,6 +1635,29 @@ mod tests {
                 );
             });
         });
+    }
+
+    #[test]
+    fn installed_graph_admission_checks_constructed_manifest_versions() {
+        let mut manifest: extension_package::Manifest = serde_json::from_str(
+            r#"{"name":"@example/tools","apiVersion":1,"version":"1.0.0","main":"main.js"}"#,
+        )
+        .unwrap();
+        for version in [0, 2] {
+            manifest.api_version = version;
+            let package = InstalledPackage {
+                directory: PathBuf::from("/fixtures/tools"),
+                manifest: manifest.clone(),
+                sources: BTreeMap::new(),
+            };
+            let cause = graph_for_package(&package).unwrap_err();
+            assert!(
+                cause.contains("apiVersion")
+                    && cause.contains("expected")
+                    && cause.contains(&format!("declared {version}")),
+                "{cause}"
+            );
+        }
     }
 
     #[test]
