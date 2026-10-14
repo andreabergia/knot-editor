@@ -126,10 +126,6 @@ impl CompletionProviderRegistrationId {
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct BufferHandle(u64);
 
-#[allow(
-    dead_code,
-    reason = "the foreground buffer owner will allocate opaque handles in a later Step 7 slice"
-)]
 impl BufferHandle {
     pub(crate) const fn new(value: u64) -> Self {
         Self(value)
@@ -572,8 +568,10 @@ pub struct BufferChange {
 pub enum HostRequestError {
     ContextUnavailable,
     InvalidTarget,
+    OwnershipDisposed,
     UnsupportedOperation,
     BufferClosed,
+    BufferReadOnly,
     InvalidRange,
     InvalidEditBatch,
     RevisionConflict,
@@ -586,6 +584,31 @@ pub enum HostRequestError {
     CommandNameInUse,
     CommandNotFound,
     Cancelled,
+}
+
+impl HostRequestError {
+    pub(crate) const fn code(self) -> &'static str {
+        match self {
+            Self::ContextUnavailable => "ContextUnavailable",
+            Self::InvalidTarget => "InvalidTarget",
+            Self::OwnershipDisposed => "OwnershipDisposed",
+            Self::UnsupportedOperation => "UnsupportedOperation",
+            Self::BufferClosed => "BufferClosed",
+            Self::BufferReadOnly => "BufferReadOnly",
+            Self::InvalidRange => "InvalidRange",
+            Self::InvalidEditBatch => "InvalidEditBatch",
+            Self::RevisionConflict => "RevisionConflict",
+            Self::ContributionSetNotFound => "ContributionSetNotFound",
+            Self::TreeViewNotFound => "TreeViewNotFound",
+            Self::ViewNotFound => "ViewNotFound",
+            Self::TreeProviderInUse => "TreeProviderInUse",
+            Self::TreeProviderNotFound => "TreeProviderNotFound",
+            Self::CompletionProviderNotFound => "CompletionProviderNotFound",
+            Self::CommandNameInUse => "CommandNameInUse",
+            Self::CommandNotFound => "CommandNotFound",
+            Self::Cancelled => "Cancelled",
+        }
+    }
 }
 
 #[cfg(test)]

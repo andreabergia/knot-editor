@@ -27,10 +27,10 @@ use super::{
         CommandInvocation, CommandInvocationId, CommandInvokeDispatch, CommandOutcome,
         CommandRegistrationId, CompletionProviderError, CompletionProviderRegistrationId,
         CompletionRequest, CompletionResponse, CompletionResultItem, DecorationToken,
-        EditorContribution, ExtensionId, GutterToken, HostOperation, HostRequest, HostResponse,
-        HostResponseValue, KeybindingMutation, RequestId, SnapshotText, TextEdit, TextSnapshot,
-        TreeChildrenRequest, TreeChildrenResponse, TreeItem, TreeProviderError,
-        TreeProviderRegistrationId,
+        EditorContribution, ExtensionId, GutterToken, HostOperation, HostRequest, HostRequestError,
+        HostResponse, HostResponseValue, KeybindingMutation, RequestId, SnapshotText, TextEdit,
+        TextSnapshot, TreeChildrenRequest, TreeChildrenResponse, TreeCollapsibleState, TreeIcon,
+        TreeItem, TreeProviderError, TreeProviderRegistrationId,
     },
     scheduler::{
         CompletionOutcome, CompletionReceiver, PoolConfig, RootId, SchedulerError, SchedulerHandle,
@@ -238,7 +238,7 @@ struct RuntimeLocalState {
     keybinding_batch_pending: Mutex<Option<RequestId>>,
     deferred_responses: Mutex<Vec<HostResponse>>,
     #[cfg(test)]
-    host_error: Mutex<Option<String>>,
+    host_error: Mutex<Option<HostRequestError>>,
     #[cfg(test)]
     barrier: Mutex<Option<Arc<TestGate>>>,
     #[cfg(test)]
@@ -303,6 +303,7 @@ struct PendingRequest {
     operation: HostOperationKind,
     resolver: Option<v8::Global<v8::PromiseResolver>>,
     response_queued: bool,
+    provider_mutation: Option<ProviderIdentity>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -860,6 +861,10 @@ impl RuntimeCapsule {
         enqueued_at: Instant,
     ) -> TurnOutcome {
         self.local_state.buffer_change_started(enqueued_at);
+        if subscription.value() > MAX_JS_INTEGER || change.buffer.value() > MAX_JS_INTEGER {
+            eprintln!("[knot] buffer-change identity cannot be represented exactly");
+            return TurnOutcome::Completed;
+        }
         if self.status.load(Ordering::Acquire) != ACTIVE {
             return fatal_or_completed(&self.status_error());
         }
@@ -923,6 +928,19 @@ impl RuntimeCapsule {
         active_buffer: Option<BufferHandle>,
         result: ResultSender<CommandOutcome>,
     ) -> TurnOutcome {
+        if invocation.id.value() > MAX_JS_INTEGER
+            || invocation.registration.value() > MAX_JS_INTEGER
+            || active_buffer.is_some_and(|buffer| buffer.value() > MAX_JS_INTEGER)
+            || invocation
+                .capture
+                .as_ref()
+                .is_some_and(|capture| capture.authority.value() > MAX_JS_INTEGER)
+        {
+            let _ = result.send(Ok(CommandOutcome::HandlerFailure {
+                message: "native command identity cannot be represented exactly".into(),
+            }));
+            return TurnOutcome::Completed;
+        }
         if self
             .local_state
             .cancelled_commands
@@ -1024,6 +1042,26 @@ impl RuntimeCapsule {
     }
 
     fn start_provider_turn(&self, root: RootId, call: ProviderCall) -> TurnOutcome {
+        let exact = match &call {
+            ProviderCall::Tree { request, .. } => {
+                request.registration.value() <= MAX_JS_INTEGER
+                    && request.generation <= MAX_JS_INTEGER
+            }
+            ProviderCall::Completion { request, .. } => {
+                request.registration.value() <= MAX_JS_INTEGER
+                    && request.buffer.value() <= MAX_JS_INTEGER
+                    && request.revision <= MAX_JS_INTEGER
+                    && request.generation <= MAX_JS_INTEGER
+                    && request.cursor_byte_offset as u64 <= MAX_JS_INTEGER
+            }
+        };
+        if !exact {
+            call.complete_with_error(RuntimeError::fatal(
+                RuntimeErrorKind::Engine,
+                "native provider coordinate cannot be represented exactly",
+            ));
+            return TurnOutcome::Completed;
+        }
         if call.cancelled() {
             call.complete_with_error(RuntimeError::fatal(
                 RuntimeErrorKind::Cancelled,
@@ -1464,18 +1502,17 @@ impl RuntimeCapsule {
                 Ok(value) => {
                     resolver.resolve(scope, value);
                 }
-                Err(error) => {
-                    let value = v8::String::new(scope, error).unwrap();
-                    resolver.reject(scope, value.into());
+                Err(_) => {
+                    let value = boundary_exception(
+                        scope,
+                        BoundaryError::Host(HostRequestError::UnsupportedOperation),
+                    );
+                    resolver.reject(scope, value);
                 }
             },
             Err(error) => {
-                let wire = serde_json::to_value(error)
-                    .ok()
-                    .and_then(|value| value.as_str().map(str::to_owned))
-                    .unwrap_or_else(|| "UnsupportedOperation".to_owned());
-                let value = v8::String::new(scope, &wire).unwrap();
-                resolver.reject(scope, value.into());
+                let value = boundary_exception(scope, BoundaryError::Host(error));
+                resolver.reject(scope, value);
             }
         }
     }
@@ -1612,6 +1649,7 @@ impl RuntimeCapsule {
                     message: message.get(scope).to_rust_string_lossy(scope).into(),
                     source: message
                         .get_script_resource_name(scope)
+                        .filter(|value| !value.is_null_or_undefined())
                         .and_then(|value| value.to_string(scope))
                         .map(|value| value.to_rust_string_lossy(scope).into())
                         .or_else(|| Some(Arc::clone(&execution.source))),
@@ -1695,6 +1733,7 @@ impl RuntimeCapsule {
                 operation: HostOperationKind::KeybindingBatch,
                 resolver: None,
                 response_queued: false,
+                provider_mutation: None,
             },
         );
         *self.local_state.keybinding_batch_pending.lock().unwrap() = Some(id);
@@ -1735,8 +1774,9 @@ impl RuntimeCapsule {
         for pending in pending {
             if let Some(resolver) = pending.resolver {
                 let resolver = v8::Local::new(scope, &resolver);
-                let cancelled = v8::String::new(scope, "Cancelled").unwrap();
-                resolver.reject(scope, cancelled.into());
+                let cancelled =
+                    boundary_exception(scope, BoundaryError::Host(HostRequestError::Cancelled));
+                resolver.reject(scope, cancelled);
             }
         }
         scope.perform_microtask_checkpoint();
@@ -1758,8 +1798,9 @@ impl RuntimeCapsule {
         for pending in pending {
             if let Some(resolver) = pending.resolver {
                 let resolver = v8::Local::new(scope, &resolver);
-                let cancelled = v8::String::new(scope, "Cancelled").unwrap();
-                resolver.reject(scope, cancelled.into());
+                let cancelled =
+                    boundary_exception(scope, BoundaryError::Host(HostRequestError::Cancelled));
+                resolver.reject(scope, cancelled);
             }
         }
         scope.perform_microtask_checkpoint();
@@ -1910,8 +1951,11 @@ impl RuntimeCapsule {
                 for pending in pending.into_values() {
                     if let Some(resolver) = pending.resolver {
                         let resolver = v8::Local::new(scope, &resolver);
-                        let cancelled = v8::String::new(scope, "Cancelled").unwrap();
-                        resolver.reject(scope, cancelled.into());
+                        let cancelled = boundary_exception(
+                            scope,
+                            BoundaryError::Host(HostRequestError::Cancelled),
+                        );
+                        resolver.reject(scope, cancelled);
                     }
                 }
                 scope.perform_microtask_checkpoint();
@@ -1991,8 +2035,8 @@ impl RuntimeCapsule {
     }
 
     #[cfg(test)]
-    fn set_test_host_error(&self, error: impl Into<String>) {
-        *self.local_state.host_error.lock().unwrap() = Some(error.into());
+    fn set_test_host_error(&self, error: HostRequestError) {
+        *self.local_state.host_error.lock().unwrap() = Some(error);
     }
 }
 
@@ -2215,7 +2259,27 @@ pub(crate) struct RuntimeProviderExecution<T> {
 
 impl<T> Unpin for RuntimeProviderExecution<T> {}
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ProviderIdentity {
+    Tree(TreeProviderRegistrationId),
+    Completion(CompletionProviderRegistrationId),
+}
+
+fn provider_mutation(operation: &HostOperation) -> Option<ProviderIdentity> {
+    match operation {
+        HostOperation::InvalidateTreeProvider { registration, .. }
+        | HostOperation::UnregisterTreeProvider { registration } => {
+            Some(ProviderIdentity::Tree(*registration))
+        }
+        HostOperation::UnregisterCompletionProvider { registration } => {
+            Some(ProviderIdentity::Completion(*registration))
+        }
+        _ => None,
+    }
+}
+
 struct ProviderCancellation {
+    provider: ProviderIdentity,
     key: ExtensionKey,
     root: RootId,
     capsule: Arc<RuntimeCapsule>,
@@ -2307,6 +2371,22 @@ impl<T> Drop for RuntimeProviderExecution<T> {
             return;
         };
         if cancellation.completed.load(Ordering::Acquire) {
+            return;
+        }
+        // A native ownership mutation may discard its own callback receiver.
+        // Its host response must still settle the callback's awaited mutation.
+        let self_mutation = cancellation
+            .capsule
+            .local_state
+            .pending
+            .lock()
+            .unwrap()
+            .values()
+            .any(|pending| {
+                pending.root == cancellation.root
+                    && pending.provider_mutation == Some(cancellation.provider)
+            });
+        if self_mutation {
             return;
         }
         cancellation.cancelled.store(true, Ordering::Release);
@@ -2683,6 +2763,7 @@ impl RuntimePool {
         request: TreeChildrenRequest,
     ) -> Result<RuntimeProviderExecution<TreeChildrenResponse>, RuntimePoolError> {
         let capsule = self.capsule(key)?;
+        let registration = request.registration;
         let (result_sender, result) = tokio::sync::oneshot::channel();
         let cancelled = Arc::new(AtomicBool::new(false));
         let completed = Arc::new(AtomicBool::new(false));
@@ -2702,6 +2783,7 @@ impl RuntimePool {
             result: Some(result),
             completion,
             cancellation: Some(ProviderCancellation {
+                provider: ProviderIdentity::Tree(registration),
                 key,
                 root,
                 capsule,
@@ -2718,6 +2800,7 @@ impl RuntimePool {
         request: CompletionRequest,
     ) -> Result<RuntimeProviderExecution<CompletionResponse>, RuntimePoolError> {
         let capsule = self.capsule(key)?;
+        let registration = request.registration;
         let (result_sender, result) = tokio::sync::oneshot::channel();
         let cancelled = Arc::new(AtomicBool::new(false));
         let completed = Arc::new(AtomicBool::new(false));
@@ -2737,6 +2820,7 @@ impl RuntimePool {
             result: Some(result),
             completion,
             cancellation: Some(ProviderCancellation {
+                provider: ProviderIdentity::Completion(registration),
                 key,
                 root,
                 capsule,
@@ -2752,6 +2836,13 @@ impl RuntimePool {
         key: ExtensionKey,
         invocation: CommandInvocationId,
     ) -> Result<(), RuntimePoolError> {
+        if invocation.value() > MAX_JS_INTEGER {
+            return Err(RuntimeError::fatal(
+                RuntimeErrorKind::Engine,
+                "native command identity cannot be represented exactly",
+            )
+            .into());
+        }
         let capsule = self.capsule(key)?;
         let mut cancelled = capsule.local_state.cancelled_commands.lock().unwrap();
         cancelled.insert(invocation);
@@ -2987,8 +3078,13 @@ fn initialize_extension_context(
         v8::String::new(scope, "keybinding").ok_or_else(RuntimeError::disposed)?;
     let keybinding =
         v8::Function::new(scope, keybinding_callback).ok_or_else(RuntimeError::disposed)?;
+    let listener_failure_name = v8::String::new(scope, "reportCancellationListenerFailure")
+        .ok_or_else(RuntimeError::disposed)?;
+    let listener_failure = v8::Function::new(scope, cancellation_listener_failure_callback)
+        .ok_or_else(RuntimeError::disposed)?;
     if bindings.set(scope, request_name.into(), request.into()) != Some(true)
         || bindings.set(scope, keybinding_name.into(), keybinding.into()) != Some(true)
+        || bindings.set(scope, listener_failure_name.into(), listener_failure.into()) != Some(true)
         || scope.get_current_context().global(scope).set(
             scope,
             bindings_name.into(),
@@ -3400,6 +3496,48 @@ fn resolve_module_callback<'s>(
         .map(|record| v8::Local::new(scope, &record.module))
 }
 
+#[derive(Clone, Copy, Debug)]
+enum BoundaryError {
+    Type(&'static str),
+    Range(&'static str),
+    Host(HostRequestError),
+}
+
+impl From<&'static str> for BoundaryError {
+    fn from(message: &'static str) -> Self {
+        Self::Type(message)
+    }
+}
+
+impl fmt::Display for BoundaryError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Type(message) | Self::Range(message) => formatter.write_str(message),
+            Self::Host(error) => formatter.write_str(error.code()),
+        }
+    }
+}
+
+fn boundary_exception<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    error: BoundaryError,
+) -> v8::Local<'s, v8::Value> {
+    let message = v8::String::new(scope, &error.to_string()).expect("V8 error message");
+    match error {
+        BoundaryError::Type(_) => v8::Exception::type_error(scope, message),
+        BoundaryError::Range(_) => v8::Exception::range_error(scope, message),
+        BoundaryError::Host(code) => {
+            let exception = v8::Exception::error(scope, message);
+            let object = v8::Local::<v8::Object>::try_from(exception).expect("V8 Error object");
+            let name = v8::String::new(scope, "KnotHostError").unwrap();
+            let code = v8::String::new(scope, code.code()).unwrap();
+            set_property(scope, object, "name", name.into()).expect("V8 error name");
+            set_property(scope, object, "code", code.into()).expect("V8 error code");
+            exception
+        }
+    }
+}
+
 fn host_request_callback<'s, 'i>(
     scope: &mut v8::PinnedRef<'s, v8::HandleScope<'i>>,
     arguments: v8::FunctionCallbackArguments<'s>,
@@ -3410,25 +3548,28 @@ fn host_request_callback<'s, 'i>(
         .get_slot::<Arc<RuntimeLocalState>>()
         .and_then(|state| state.host_error.lock().ok()?.take());
     #[cfg(not(test))]
-    let configured_error: Option<String> = None;
+    let configured_error: Option<HostRequestError> = None;
     let resolver = v8::PromiseResolver::new(scope).unwrap();
     if let Some(error) = configured_error {
-        let message = v8::String::new(scope, &error).unwrap();
-        resolver.reject(scope, message.into());
+        let exception = boundary_exception(scope, BoundaryError::Host(error));
+        resolver.reject(scope, exception);
         result.set(resolver.get_promise(scope).into());
         return;
     }
     let Some(state) = scope.get_slot::<Arc<RuntimeLocalState>>().cloned() else {
-        let message = v8::String::new(scope, "UnsupportedOperation").unwrap();
-        resolver.reject(scope, message.into());
+        let exception = boundary_exception(
+            scope,
+            BoundaryError::Host(HostRequestError::UnsupportedOperation),
+        );
+        resolver.reject(scope, exception);
         result.set(resolver.get_promise(scope).into());
         return;
     };
     let invocation = match optional_u64(scope, arguments.get(0), "UnsupportedOperation") {
         Ok(value) => value.map(CommandInvocationId::new),
         Err(error) => {
-            let message = v8::String::new(scope, error).unwrap();
-            resolver.reject(scope, message.into());
+            let exception = boundary_exception(scope, error);
+            resolver.reject(scope, exception);
             result.set(resolver.get_promise(scope).into());
             return;
         }
@@ -3439,15 +3580,18 @@ fn host_request_callback<'s, 'i>(
     let (operation, kind) = match parsed {
         Ok(parsed) => parsed,
         Err(error) => {
-            let message = v8::String::new(scope, error).unwrap();
-            resolver.reject(scope, message.into());
+            let exception = boundary_exception(scope, error);
+            resolver.reject(scope, exception);
             result.set(resolver.get_promise(scope).into());
             return;
         }
     };
     let (Some(sender), Some(root)) = (sender, root) else {
-        let message = v8::String::new(scope, "UnsupportedOperation").unwrap();
-        resolver.reject(scope, message.into());
+        let exception = boundary_exception(
+            scope,
+            BoundaryError::Host(HostRequestError::UnsupportedOperation),
+        );
+        resolver.reject(scope, exception);
         result.set(resolver.get_promise(scope).into());
         return;
     };
@@ -3458,8 +3602,11 @@ fn host_request_callback<'s, 'i>(
                 next.checked_add(1)
             })
     else {
-        let message = v8::String::new(scope, "UnsupportedOperation").unwrap();
-        resolver.reject(scope, message.into());
+        let exception = boundary_exception(
+            scope,
+            BoundaryError::Host(HostRequestError::UnsupportedOperation),
+        );
+        resolver.reject(scope, exception);
         result.set(resolver.get_promise(scope).into());
         return;
     };
@@ -3472,6 +3619,7 @@ fn host_request_callback<'s, 'i>(
             operation: kind,
             resolver: Some(v8::Global::new(scope, resolver)),
             response_queued: false,
+            provider_mutation: provider_mutation(&operation),
         },
     );
     if sender
@@ -3485,10 +3633,23 @@ fn host_request_callback<'s, 'i>(
         .is_err()
     {
         state.pending.lock().unwrap().remove(&id);
-        let message = v8::String::new(scope, "Cancelled").unwrap();
-        resolver.reject(scope, message.into());
+        let exception = boundary_exception(scope, BoundaryError::Host(HostRequestError::Cancelled));
+        resolver.reject(scope, exception);
     }
     result.set(resolver.get_promise(scope).into());
+}
+
+fn cancellation_listener_failure_callback<'s, 'i>(
+    scope: &mut v8::PinnedRef<'s, v8::HandleScope<'i>>,
+    arguments: v8::FunctionCallbackArguments<'s>,
+    _result: v8::ReturnValue,
+) {
+    if arguments.get(0).is_string() {
+        eprintln!(
+            "[knot] cancellation listener failed: {}",
+            arguments.get(0).to_rust_string_lossy(scope)
+        );
+    }
 }
 
 fn keybinding_callback<'s, 'i>(
@@ -3500,14 +3661,14 @@ fn keybinding_callback<'s, 'i>(
         return;
     };
     let mutation = parse_keybinding_mutation(scope, &arguments)
-        .unwrap_or_else(|message| KeybindingMutation::Invalid(message.to_owned()));
+        .unwrap_or_else(|message| KeybindingMutation::Invalid(message.to_string()));
     state.keybinding_mutations.lock().unwrap().push(mutation);
 }
 
 fn parse_keybinding_mutation<'s, 'i>(
     scope: &mut v8::PinnedRef<'s, v8::HandleScope<'i>>,
     arguments: &v8::FunctionCallbackArguments<'s>,
-) -> Result<KeybindingMutation, &'static str> {
+) -> Result<KeybindingMutation, BoundaryError> {
     let operation = required_string(scope, arguments.get(0), "invalid keybinding operation")?;
     let key = required_string(scope, arguments.get(1), "key must be a string")?;
     if operation == "invalid" {
@@ -3518,7 +3679,7 @@ fn parse_keybinding_mutation<'s, 'i>(
         None
     } else {
         if options.is_array() || options.is_function() {
-            return Err("options must be an object");
+            return Err("options must be an object".into());
         }
         let object =
             v8::Local::<v8::Object>::try_from(options).map_err(|_| "options must be an object")?;
@@ -3539,7 +3700,7 @@ fn parse_keybinding_mutation<'s, 'i>(
                 })
             } else {
                 if value.is_array() || value.is_function() {
-                    return Err("command must be a string or object");
+                    return Err("command must be a string or object".into());
                 }
                 let object = v8::Local::<v8::Object>::try_from(value)
                     .map_err(|_| "command must be a string or object")?;
@@ -3560,14 +3721,14 @@ fn parse_keybinding_mutation<'s, 'i>(
             };
             Ok(KeybindingMutation::Set { key, view, command })
         }
-        _ => Err("invalid keybinding operation"),
+        _ => Err("invalid keybinding operation".into()),
     }
 }
 
 fn optional_invocation<'s, 'i>(
     scope: &mut v8::PinnedRef<'s, v8::HandleScope<'i>>,
     value: v8::Local<'s, v8::Value>,
-) -> Result<Option<CommandInvocationId>, &'static str> {
+) -> Result<Option<CommandInvocationId>, BoundaryError> {
     if value.is_null_or_undefined() {
         return Ok(None);
     }
@@ -3579,12 +3740,8 @@ fn optional_invocation<'s, 'i>(
 fn parse_host_operation<'s, 'i>(
     scope: &mut v8::PinnedRef<'s, v8::HandleScope<'i>>,
     arguments: &v8::FunctionCallbackArguments<'s>,
-) -> Result<(HostOperation, HostOperationKind), &'static str> {
-    let operation = arguments
-        .get(1)
-        .to_string(scope)
-        .ok_or("UnsupportedOperation")?
-        .to_rust_string_lossy(scope);
+) -> Result<(HostOperation, HostOperationKind), BoundaryError> {
+    let operation = required_string(scope, arguments.get(1), "operation must be text")?;
     match operation.as_str() {
         "activeBuffer" => Ok((
             HostOperation::ActiveBuffer {
@@ -3715,7 +3872,7 @@ fn parse_host_operation<'s, 'i>(
             },
             HostOperationKind::UnregisterCompletionProvider,
         )),
-        _ => Err("UnsupportedOperation"),
+        _ => Err(BoundaryError::Host(HostRequestError::UnsupportedOperation)),
     }
 }
 
@@ -3723,7 +3880,7 @@ fn optional_u64(
     scope: &mut v8::PinnedRef<'_, v8::HandleScope>,
     value: v8::Local<'_, v8::Value>,
     error: &'static str,
-) -> Result<Option<u64>, &'static str> {
+) -> Result<Option<u64>, BoundaryError> {
     if value.is_null_or_undefined() {
         Ok(None)
     } else {
@@ -3735,22 +3892,27 @@ fn argument_u64(
     scope: &mut v8::PinnedRef<'_, v8::HandleScope>,
     arguments: &v8::FunctionCallbackArguments,
     index: i32,
-) -> Result<u64, &'static str> {
+) -> Result<u64, BoundaryError> {
     value_u64(scope, arguments.get(index), "UnsupportedOperation")
 }
 
 fn value_u64(
     scope: &mut v8::PinnedRef<'_, v8::HandleScope>,
     value: v8::Local<'_, v8::Value>,
-    error: &'static str,
-) -> Result<u64, &'static str> {
-    let number = value.number_value(scope).ok_or(error)?;
+    _error: &'static str,
+) -> Result<u64, BoundaryError> {
+    if !value.is_number() {
+        return Err(BoundaryError::Type("expected a number"));
+    }
+    let number = value
+        .number_value(scope)
+        .ok_or(BoundaryError::Type("expected a number"))?;
     if !number.is_finite()
         || number < 0.0
         || number.fract() != 0.0
         || number > 9_007_199_254_740_991.0
     {
-        return Err(error);
+        return Err(BoundaryError::Range("expected a nonnegative safe integer"));
     }
     Ok(number as u64)
 }
@@ -3759,8 +3921,9 @@ fn value_usize(
     scope: &mut v8::PinnedRef<'_, v8::HandleScope>,
     value: v8::Local<'_, v8::Value>,
     error: &'static str,
-) -> Result<usize, &'static str> {
-    usize::try_from(value_u64(scope, value, error)?).map_err(|_| error)
+) -> Result<usize, BoundaryError> {
+    usize::try_from(value_u64(scope, value, error)?)
+        .map_err(|_| BoundaryError::Range("integer exceeds native coordinates"))
 }
 
 fn property<'s>(
@@ -3768,18 +3931,18 @@ fn property<'s>(
     object: v8::Local<'s, v8::Object>,
     name: &str,
     error: &'static str,
-) -> Result<v8::Local<'s, v8::Value>, &'static str> {
+) -> Result<v8::Local<'s, v8::Value>, BoundaryError> {
     let key = v8::String::new(scope, name).ok_or(error)?;
-    object.get(scope, key.into()).ok_or(error)
+    object.get(scope, key.into()).ok_or(error.into())
 }
 
 fn required_string(
     scope: &mut v8::PinnedRef<'_, v8::HandleScope>,
     value: v8::Local<'_, v8::Value>,
     error: &'static str,
-) -> Result<String, &'static str> {
+) -> Result<String, BoundaryError> {
     if !value.is_string() {
-        return Err(error);
+        return Err(error.into());
     }
     Ok(value.to_rust_string_lossy(scope))
 }
@@ -3788,7 +3951,7 @@ fn optional_string(
     scope: &mut v8::PinnedRef<'_, v8::HandleScope>,
     value: v8::Local<'_, v8::Value>,
     error: &'static str,
-) -> Result<Option<String>, &'static str> {
+) -> Result<Option<String>, BoundaryError> {
     if value.is_null_or_undefined() {
         Ok(None)
     } else {
@@ -3799,7 +3962,7 @@ fn optional_string(
 fn optional_byte_range<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
-) -> Result<Option<ByteRange>, &'static str> {
+) -> Result<Option<ByteRange>, BoundaryError> {
     if value.is_null_or_undefined() {
         return Ok(None);
     }
@@ -3809,12 +3972,15 @@ fn optional_byte_range<'s>(
 fn byte_range<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
-) -> Result<ByteRange, &'static str> {
+) -> Result<ByteRange, BoundaryError> {
     let object = v8::Local::<v8::Object>::try_from(value).map_err(|_| "InvalidRange")?;
     let start = property(scope, object, "startByteOffset", "InvalidRange")?;
     let start_byte_offset = value_usize(scope, start, "InvalidRange")?;
     let end = property(scope, object, "endByteOffset", "InvalidRange")?;
     let end_byte_offset = value_usize(scope, end, "InvalidRange")?;
+    if start_byte_offset > end_byte_offset {
+        return Err(BoundaryError::Range("range endpoints must be ordered"));
+    }
     Ok(ByteRange {
         start_byte_offset,
         end_byte_offset,
@@ -3824,14 +3990,14 @@ fn byte_range<'s>(
 fn text_edits(
     scope: &mut v8::PinnedRef<'_, v8::HandleScope>,
     value: v8::Local<'_, v8::Value>,
-) -> Result<Vec<TextEdit>, &'static str> {
+) -> Result<Vec<TextEdit>, BoundaryError> {
     let array = v8::Local::<v8::Array>::try_from(value).map_err(|_| "InvalidEditBatch")?;
     let mut edits = Vec::with_capacity(array.length() as usize);
     for index in 0..array.length() {
         let value = array.get_index(scope, index).ok_or("InvalidEditBatch")?;
         let object = v8::Local::<v8::Object>::try_from(value).map_err(|_| "InvalidEditBatch")?;
         let range = property(scope, object, "range", "InvalidEditBatch")?;
-        let range = byte_range(scope, range).map_err(|_| "InvalidEditBatch")?;
+        let range = byte_range(scope, range)?;
         let text = property(scope, object, "text", "InvalidEditBatch")?;
         edits.push(TextEdit {
             range,
@@ -3844,7 +4010,7 @@ fn text_edits(
 fn editor_contributions(
     scope: &mut v8::PinnedRef<'_, v8::HandleScope>,
     value: v8::Local<'_, v8::Value>,
-) -> Result<Vec<EditorContribution>, &'static str> {
+) -> Result<Vec<EditorContribution>, BoundaryError> {
     let error = "UnsupportedOperation";
     let array = v8::Local::<v8::Array>::try_from(value).map_err(|_| error)?;
     let mut contributions = Vec::with_capacity(array.length() as usize);
@@ -3859,7 +4025,7 @@ fn editor_contributions(
                 "info" => Ok(DecorationToken::Info),
                 "warning" => Ok(DecorationToken::Warning),
                 "error" => Ok(DecorationToken::Error),
-                _ => Err(error),
+                _ => Err(BoundaryError::Type(error)),
             })
             .transpose()?;
         let gutter_value = property(scope, object, "gutter", error)?;
@@ -3868,7 +4034,7 @@ fn editor_contributions(
                 "info" => Ok(GutterToken::Info),
                 "warning" => Ok(GutterToken::Warning),
                 "error" => Ok(GutterToken::Error),
-                _ => Err(error),
+                _ => Err(BoundaryError::Type(error)),
             })
             .transpose()?;
         let command_value = property(scope, object, "command", error)?;
@@ -3883,12 +4049,210 @@ fn editor_contributions(
     Ok(contributions)
 }
 
-fn command_argument_from_v8(
-    scope: &mut v8::PinScope<'_, '_>,
-    value: v8::Local<'_, v8::Value>,
-) -> Result<CommandArgumentValue, &'static str> {
-    let json = v8::json::stringify(scope, value).ok_or("UnsupportedOperation")?;
-    serde_json::from_str(&json.to_rust_string_lossy(scope)).map_err(|_| "UnsupportedOperation")
+enum JsonFrame<'s> {
+    Array {
+        object: v8::Local<'s, v8::Object>,
+        values: Vec<v8::Local<'s, v8::Value>>,
+        next: usize,
+        result: Vec<CommandArgumentValue>,
+    },
+    Object {
+        object: v8::Local<'s, v8::Object>,
+        keys: Vec<String>,
+        values: Vec<v8::Local<'s, v8::Value>>,
+        next: usize,
+        result: std::collections::BTreeMap<String, CommandArgumentValue>,
+    },
+}
+
+impl JsonFrame<'_> {
+    fn object(&self) -> v8::Local<'_, v8::Object> {
+        match self {
+            Self::Array { object, .. } | Self::Object { object, .. } => *object,
+        }
+    }
+}
+
+fn command_argument_from_v8<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Value>,
+) -> Result<CommandArgumentValue, BoundaryError> {
+    let mut frames: Vec<JsonFrame<'s>> = Vec::new();
+    let mut current = value;
+    loop {
+        let mut decoded = if current.is_null() {
+            CommandArgumentValue::Null
+        } else if current.is_boolean() {
+            CommandArgumentValue::Boolean(current.boolean_value(scope))
+        } else if current.is_string() {
+            CommandArgumentValue::String(current.to_rust_string_lossy(scope))
+        } else if current.is_number() {
+            let number = current
+                .number_value(scope)
+                .ok_or("expected a JSON number")?;
+            if !number.is_finite() {
+                return Err(BoundaryError::Type("JSON numbers must be finite"));
+            }
+            CommandArgumentValue::Number(number)
+        } else {
+            if current.is_function() || !current.is_object() {
+                return Err(BoundaryError::Type(
+                    "command arguments must be JSON-compatible",
+                ));
+            }
+            let object =
+                v8::Local::<v8::Object>::try_from(current).map_err(|_| "expected a JSON object")?;
+            if frames
+                .iter()
+                .any(|frame| frame.object().strict_equals(object.into()))
+            {
+                return Err(BoundaryError::Type(
+                    "command arguments cannot contain cycles",
+                ));
+            }
+            let array = v8::Local::<v8::Array>::try_from(current).ok();
+            let prototype = object
+                .get_prototype(scope)
+                .ok_or("invalid JSON prototype")?;
+            let expected = if array.is_some() {
+                v8::Array::new(scope, 0).get_prototype(scope)
+            } else {
+                v8::Object::new(scope).get_prototype(scope)
+            }
+            .ok_or("invalid JSON prototype")?;
+            if !prototype.is_null() && !prototype.strict_equals(expected) {
+                return Err(BoundaryError::Type(
+                    "command arguments require plain JSON objects",
+                ));
+            }
+            let to_json = property(scope, object, "toJSON", "invalid JSON conversion")?;
+            if to_json.is_function() {
+                return Err(BoundaryError::Type("custom JSON conversion is unavailable"));
+            }
+            let all_keys = object
+                .get_own_property_names(
+                    scope,
+                    v8::GetPropertyNamesArgs {
+                        property_filter: v8::PropertyFilter::ALL_PROPERTIES,
+                        ..Default::default()
+                    },
+                )
+                .ok_or("invalid JSON keys")?;
+            for index in 0..all_keys.length() {
+                let key = all_keys.get_index(scope, index).ok_or("invalid JSON key")?;
+                if key.is_symbol() {
+                    return Err(BoundaryError::Type("JSON keys must be strings"));
+                }
+                if let Some(array) = array {
+                    if key.is_number() {
+                        if value_u64(scope, key, "JSON index")? >= array.length() as u64 {
+                            return Err(BoundaryError::Type("invalid JSON array index"));
+                        }
+                    } else {
+                        let key = required_string(scope, key, "JSON keys must be strings")?;
+                        if key != "length" && !(key == "toJSON" && to_json.is_undefined()) {
+                            return Err(BoundaryError::Type(
+                                "JSON arrays must contain only indexed data",
+                            ));
+                        }
+                    }
+                }
+            }
+            if let Some(array) = array {
+                let mut values = Vec::with_capacity(array.length() as usize);
+                for index in 0..array.length() {
+                    let key =
+                        v8::String::new(scope, &index.to_string()).ok_or("invalid JSON index")?;
+                    if object.has_own_property(scope, key.into()) != Some(true) {
+                        return Err(BoundaryError::Type("command arrays must be dense"));
+                    }
+                    values.push(
+                        array
+                            .get_index(scope, index)
+                            .ok_or("invalid JSON array item")?,
+                    );
+                }
+                if values.is_empty() {
+                    CommandArgumentValue::Array(Vec::new())
+                } else {
+                    current = values[0];
+                    frames.push(JsonFrame::Array {
+                        object,
+                        result: Vec::with_capacity(values.len()),
+                        values,
+                        next: 0,
+                    });
+                    continue;
+                }
+            } else {
+                let names = object
+                    .get_own_property_names(
+                        scope,
+                        v8::GetPropertyNamesArgs {
+                            key_conversion: v8::KeyConversionMode::ConvertToString,
+                            ..Default::default()
+                        },
+                    )
+                    .ok_or("invalid JSON keys")?;
+                let mut keys = Vec::with_capacity(names.length() as usize);
+                let mut values = Vec::with_capacity(names.length() as usize);
+                for index in 0..names.length() {
+                    let key = names.get_index(scope, index).ok_or("invalid JSON key")?;
+                    keys.push(required_string(scope, key, "JSON keys must be strings")?);
+                    values.push(object.get(scope, key).ok_or("invalid JSON value")?);
+                }
+                if values.is_empty() {
+                    CommandArgumentValue::Object(Default::default())
+                } else {
+                    current = values[0];
+                    frames.push(JsonFrame::Object {
+                        object,
+                        keys,
+                        values,
+                        next: 0,
+                        result: Default::default(),
+                    });
+                    continue;
+                }
+            }
+        };
+        loop {
+            let Some(frame) = frames.last_mut() else {
+                return Ok(decoded);
+            };
+            let next_value = match frame {
+                JsonFrame::Array {
+                    result,
+                    values,
+                    next,
+                    ..
+                } => {
+                    result.push(decoded);
+                    *next += 1;
+                    values.get(*next).copied()
+                }
+                JsonFrame::Object {
+                    result,
+                    keys,
+                    values,
+                    next,
+                    ..
+                } => {
+                    result.insert(keys[*next].clone(), decoded);
+                    *next += 1;
+                    values.get(*next).copied()
+                }
+            };
+            if let Some(value) = next_value {
+                current = value;
+                break;
+            }
+            decoded = match frames.pop().unwrap() {
+                JsonFrame::Array { result, .. } => CommandArgumentValue::Array(result),
+                JsonFrame::Object { result, .. } => CommandArgumentValue::Object(result),
+            };
+        }
+    }
 }
 
 fn command_argument_to_v8<'s>(
@@ -3914,17 +4278,29 @@ fn command_argument_is_finite(value: &CommandArgumentValue) -> bool {
     }
 }
 
-fn command_outcome_from_v8(
-    scope: &mut v8::PinScope<'_, '_>,
-    value: v8::Local<'_, v8::Value>,
+fn command_outcome_from_v8<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Value>,
 ) -> Result<CommandOutcome, RuntimeError> {
-    let json = v8::json::stringify(scope, value).ok_or_else(|| {
-        RuntimeError::fatal(
-            RuntimeErrorKind::Engine,
-            "invalid command outcome from JavaScript",
-        )
-    })?;
-    serde_json::from_str(&json.to_rust_string_lossy(scope)).map_err(|error| {
+    let decoded = (|| -> Result<CommandOutcome, BoundaryError> {
+        let object = v8::Local::<v8::Object>::try_from(value)
+            .map_err(|_| "command outcome must be an object")?;
+        let kind = string_property(scope, object, "kind")?;
+        match kind.as_str() {
+            "completed" => Ok(CommandOutcome::Completed),
+            "unavailable" => Ok(CommandOutcome::Unavailable),
+            "invalidTarget" => Ok(CommandOutcome::InvalidTarget),
+            "cancelled" => Ok(CommandOutcome::Cancelled),
+            "invalidArgument" => Ok(CommandOutcome::InvalidArgument {
+                message: string_property(scope, object, "message")?,
+            }),
+            "handlerFailure" => Ok(CommandOutcome::HandlerFailure {
+                message: string_property(scope, object, "message")?,
+            }),
+            _ => Err(BoundaryError::Type("invalid command outcome kind")),
+        }
+    })();
+    decoded.map_err(|error| {
         RuntimeError::fatal(
             RuntimeErrorKind::Engine,
             format!("invalid command outcome from JavaScript: {error}"),
@@ -3932,50 +4308,118 @@ fn command_outcome_from_v8(
     })
 }
 
-fn provider_items_from_v8<T: serde::de::DeserializeOwned>(
-    scope: &mut v8::PinScope<'_, '_>,
-    value: v8::Local<'_, v8::Value>,
-) -> Result<Vec<T>, String> {
-    let json = v8::json::stringify(scope, value)
-        .ok_or_else(|| "semantic provider returned a non-serializable result".to_owned())?;
-    let value: serde_json::Value = serde_json::from_str(&json.to_rust_string_lossy(scope))
-        .map_err(|error| format!("invalid semantic provider result: {error}"))?;
-    if let Some(error) = value.get("error").and_then(serde_json::Value::as_str) {
-        return Err(error.to_owned());
-    }
-    let items = value
-        .get("items")
-        .cloned()
-        .ok_or_else(|| "semantic provider result is missing items".to_owned())?;
-    serde_json::from_value(items)
-        .map_err(|error| format!("invalid semantic provider items: {error}"))
+fn string_property<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    name: &str,
+) -> Result<String, BoundaryError> {
+    let value = property(scope, object, name, "invalid text property")?;
+    required_string(scope, value, "property must be text")
 }
 
-fn tree_response_from_v8(
-    scope: &mut v8::PinScope<'_, '_>,
+fn optional_text_property<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    name: &str,
+) -> Result<Option<String>, BoundaryError> {
+    let value = property(scope, object, name, "invalid optional text property")?;
+    optional_string(scope, value, "property must be text or null")
+}
+
+fn provider_items_from_v8<'s, T>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Value>,
+    mut convert: impl FnMut(
+        &mut v8::PinScope<'s, '_>,
+        v8::Local<'s, v8::Value>,
+    ) -> Result<T, BoundaryError>,
+) -> Result<Vec<T>, String> {
+    let object = v8::Local::<v8::Object>::try_from(value)
+        .map_err(|_| "semantic provider result must be an object".to_owned())?;
+    let error_key =
+        v8::String::new(scope, "error").ok_or_else(|| "invalid provider result".to_owned())?;
+    if object.has_own_property(scope, error_key.into()) == Some(true)
+        && let Some(error) =
+            optional_text_property(scope, object, "error").map_err(|error| error.to_string())?
+    {
+        return Err(error);
+    }
+    let values = property(scope, object, "items", "provider result is missing items")
+        .map_err(|error| error.to_string())?;
+    let values = v8::Local::<v8::Array>::try_from(values)
+        .map_err(|_| "semantic provider items must be an array".to_owned())?;
+    let mut items = Vec::with_capacity(values.length() as usize);
+    for index in 0..values.length() {
+        let value = values
+            .get_index(scope, index)
+            .ok_or_else(|| "invalid provider item".to_owned())?;
+        items.push(convert(scope, value).map_err(|error| error.to_string())?);
+    }
+    Ok(items)
+}
+
+fn tree_item_from_v8<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Value>,
+) -> Result<TreeItem, BoundaryError> {
+    let object =
+        v8::Local::<v8::Object>::try_from(value).map_err(|_| "tree item must be an object")?;
+    let collapsible_state = match string_property(scope, object, "collapsibleState")?.as_str() {
+        "none" => TreeCollapsibleState::None,
+        "collapsed" => TreeCollapsibleState::Collapsed,
+        "expanded" => TreeCollapsibleState::Expanded,
+        _ => return Err(BoundaryError::Type("invalid tree collapsible state")),
+    };
+    let icon = optional_text_property(scope, object, "icon")?
+        .map(|icon| match icon.as_str() {
+            "file" => Ok(TreeIcon::File),
+            "folder" => Ok(TreeIcon::Folder),
+            "symbol" => Ok(TreeIcon::Symbol),
+            _ => Err(BoundaryError::Type("invalid tree icon")),
+        })
+        .transpose()?;
+    Ok(TreeItem {
+        id: string_property(scope, object, "id")?,
+        label: string_property(scope, object, "label")?,
+        description: optional_text_property(scope, object, "description")?,
+        collapsible_state,
+        icon,
+        command: optional_text_property(scope, object, "command")?,
+    })
+}
+
+fn tree_response_from_v8<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     request: TreeChildrenRequest,
-    value: v8::Local<'_, v8::Value>,
+    value: v8::Local<'s, v8::Value>,
 ) -> TreeChildrenResponse {
     TreeChildrenResponse {
         registration: request.registration,
         parent_id: request.parent_id,
         generation: request.generation,
-        result: provider_items_from_v8::<TreeItem>(scope, value)
+        result: provider_items_from_v8(scope, value, tree_item_from_v8)
             .map_err(|message| TreeProviderError { message }),
     }
 }
 
-fn completion_response_from_v8(
-    scope: &mut v8::PinScope<'_, '_>,
+fn completion_response_from_v8<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     request: CompletionRequest,
-    value: v8::Local<'_, v8::Value>,
+    value: v8::Local<'s, v8::Value>,
 ) -> CompletionResponse {
     CompletionResponse {
         registration: request.registration,
         revision: request.revision,
         generation: request.generation,
-        result: provider_items_from_v8::<CompletionResultItem>(scope, value)
-            .map_err(|message| CompletionProviderError { message }),
+        result: provider_items_from_v8(scope, value, |scope, value| {
+            let object = v8::Local::<v8::Object>::try_from(value)
+                .map_err(|_| "completion item must be an object")?;
+            Ok(CompletionResultItem {
+                label: string_property(scope, object, "label")?,
+                insert_text: string_property(scope, object, "insertText")?,
+            })
+        })
+        .map_err(|message| CompletionProviderError { message }),
     }
 }
 
@@ -3983,9 +4427,29 @@ fn command_dispatch_to_v8<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     dispatch: &CommandInvokeDispatch,
 ) -> Result<v8::Local<'s, v8::Value>, &'static str> {
+    if let CommandInvokeDispatch::Inline {
+        invocation,
+        registration,
+    } = dispatch
+        && (invocation.value() > MAX_JS_INTEGER || registration.value() > MAX_JS_INTEGER)
+    {
+        return Err("native command identity cannot be represented exactly");
+    }
     let json = serde_json::to_string(dispatch).map_err(|_| "UnsupportedOperation")?;
     let json = v8::String::new(scope, &json).ok_or("UnsupportedOperation")?;
     v8::json::parse(scope, json).ok_or("UnsupportedOperation")
+}
+
+const MAX_JS_INTEGER: u64 = 9_007_199_254_740_991;
+
+fn exact_number<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: u64,
+) -> Result<v8::Local<'s, v8::Value>, &'static str> {
+    if value > MAX_JS_INTEGER {
+        return Err("native integer cannot be represented exactly");
+    }
+    Ok(v8::Number::new(scope, value as f64).into())
 }
 
 fn host_response_to_v8<'s>(
@@ -3998,18 +4462,18 @@ fn host_response_to_v8<'s>(
             Ok(v8::null(scope).into())
         }
         (HostOperationKind::ActiveBuffer, HostResponseValue::ActiveBuffer(Some(buffer))) => {
-            Ok(v8::Number::new(scope, buffer.value() as f64).into())
+            Ok(exact_number(scope, buffer.value() as u64)?)
         }
         (HostOperationKind::Snapshot, HostResponseValue::Snapshot(snapshot)) => {
             snapshot_to_v8(scope, snapshot)
         }
         (HostOperationKind::ApplyEdits, HostResponseValue::AppliedEdits { revision }) => {
-            Ok(v8::Number::new(scope, revision as f64).into())
+            Ok(exact_number(scope, revision as u64)?)
         }
         (
             HostOperationKind::SubscribeBufferChanges,
             HostResponseValue::BufferChangesSubscribed { subscription },
-        ) => Ok(v8::Number::new(scope, subscription.value() as f64).into()),
+        ) => Ok(exact_number(scope, subscription.value() as u64)?),
         (
             HostOperationKind::UnsubscribeBufferChanges,
             HostResponseValue::BufferChangesUnsubscribed { .. },
@@ -4029,7 +4493,7 @@ fn host_response_to_v8<'s>(
         | (
             HostOperationKind::RegisterViewCommand,
             HostResponseValue::ViewCommandRegistered { registration },
-        ) => Ok(v8::Number::new(scope, registration.value() as f64).into()),
+        ) => Ok(exact_number(scope, registration.value() as u64)?),
         (HostOperationKind::SelectedViewText, HostResponseValue::SelectedViewText(None)) => {
             Ok(v8::null(scope).into())
         }
@@ -4052,7 +4516,7 @@ fn host_response_to_v8<'s>(
         (
             HostOperationKind::RegisterTreeProvider,
             HostResponseValue::TreeProviderRegistered { registration },
-        ) => Ok(v8::Number::new(scope, registration.value() as f64).into()),
+        ) => Ok(exact_number(scope, registration.value() as u64)?),
         (HostOperationKind::InvalidateTreeProvider, HostResponseValue::TreeProviderInvalidated)
         | (
             HostOperationKind::UnregisterTreeProvider,
@@ -4065,9 +4529,19 @@ fn host_response_to_v8<'s>(
         (
             HostOperationKind::RegisterCompletionProvider,
             HostResponseValue::CompletionProviderRegistered { registration },
-        ) => Ok(v8::Number::new(scope, registration.value() as f64).into()),
+        ) => Ok(exact_number(scope, registration.value() as u64)?),
         _ => Err("UnsupportedOperation"),
     }
+}
+
+fn set_number_property<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    name: &str,
+    number: u64,
+) -> Result<(), &'static str> {
+    let number = exact_number(scope, number)?;
+    set_property(scope, object, name, number)
 }
 
 fn snapshot_to_v8<'s>(
@@ -4079,25 +4553,20 @@ fn snapshot_to_v8<'s>(
     set_property(scope, value, "text", text.into())?;
 
     let range = v8::Object::new(scope);
-    set_property(
+    set_number_property(
         scope,
         range,
         "startByteOffset",
-        v8::Number::new(scope, snapshot.range.start_byte_offset as f64).into(),
+        snapshot.range.start_byte_offset as u64,
     )?;
-    set_property(
+    set_number_property(
         scope,
         range,
         "endByteOffset",
-        v8::Number::new(scope, snapshot.range.end_byte_offset as f64).into(),
+        snapshot.range.end_byte_offset as u64,
     )?;
     set_property(scope, value, "range", range.into())?;
-    set_property(
-        scope,
-        value,
-        "revision",
-        v8::Number::new(scope, snapshot.revision as f64).into(),
-    )?;
+    set_number_property(scope, value, "revision", snapshot.revision as u64)?;
     Ok(value.into())
 }
 
@@ -4106,18 +4575,13 @@ fn buffer_change_to_v8<'s>(
     change: BufferChange,
 ) -> Result<v8::Local<'s, v8::Value>, &'static str> {
     let value = v8::Object::new(scope);
-    set_property(
+    set_number_property(
         scope,
         value,
         "beforeRevision",
-        v8::Number::new(scope, change.before_revision as f64).into(),
+        change.before_revision as u64,
     )?;
-    set_property(
-        scope,
-        value,
-        "revision",
-        v8::Number::new(scope, change.revision as f64).into(),
-    )?;
+    set_number_property(scope, value, "revision", change.revision as u64)?;
     let edits = v8::Array::new(
         scope,
         i32::try_from(change.edits.len()).map_err(|_| "InvalidEditBatch")?,
@@ -4125,17 +4589,17 @@ fn buffer_change_to_v8<'s>(
     for (index, edit) in change.edits.into_iter().enumerate() {
         let item = v8::Object::new(scope);
         let range = v8::Object::new(scope);
-        set_property(
+        set_number_property(
             scope,
             range,
             "startByteOffset",
-            v8::Number::new(scope, edit.range.start_byte_offset as f64).into(),
+            edit.range.start_byte_offset as u64,
         )?;
-        set_property(
+        set_number_property(
             scope,
             range,
             "endByteOffset",
-            v8::Number::new(scope, edit.range.end_byte_offset as f64).into(),
+            edit.range.end_byte_offset as u64,
         )?;
         set_property(scope, item, "range", range.into())?;
         let text = v8::String::new(scope, &edit.text).ok_or("InvalidEditBatch")?;
@@ -5249,6 +5713,964 @@ mod tests {
     }
 
     #[test]
+    fn facade_rejects_malformed_coordinates_revisions_and_json_before_transport() {
+        let pool = RuntimePool::new(PoolConfig::single_worker());
+        let runtime = key(190);
+        pool.load(runtime, IsolateConfig::default()).unwrap();
+        let execution = execute_captured_fixture(
+            &pool,
+            runtime,
+            "file:///fixtures/validation.js",
+            r#"
+          const buffer = await editor.activeBuffer();
+          async function expect(operation, name) {
+            try { await operation(); } catch (error) { if (error.name === name) return; throw error; }
+            throw new Error(`expected ${name}`);
+          }
+          for (const value of [undefined, null, "1", true, {}, 1n]) {
+            await expect(() => buffer.applyEdits([], { ifRevision: value }), "TypeError");
+            await expect(() => buffer.contributions.replace([], { ifRevision: value }), "TypeError");
+          }
+          for (const value of [-1, 1.5, Infinity, NaN, Number.MAX_SAFE_INTEGER + 1]) {
+            await expect(() => buffer.applyEdits([], { ifRevision: value }), "RangeError");
+            await expect(() => buffer.snapshot({ startByteOffset: 0, endByteOffset: value }), "RangeError");
+          }
+          await expect(() => buffer.applyEdits([]), "TypeError");
+          await expect(() => buffer.contributions.replace([]), "TypeError");
+          await expect(() => buffer.snapshot({ startByteOffset: 2, endByteOffset: 1 }), "RangeError");
+          await expect(() => buffer.applyEdits([{ range: { startByteOffset: 0, endByteOffset: 0 }, text: 4 }], { ifRevision: 0 }), "TypeError");
+          await expect(() => buffer.contributions.replace([{ range: { startByteOffset: 0, endByteOffset: 0 }, decoration: "other" }], { ifRevision: 0 }), "TypeError");
+          const cyclic = {}; cyclic.self = cyclic;
+          const custom = { toJSON() { return {}; } };
+          const sparse = new Array(2);
+          const symbolKey = { [Symbol()]: 1 };
+          const extra = []; extra.hidden = () => {};
+          for (const value of [undefined, () => {}, Symbol(), 1n, NaN, Infinity, new Date(), cyclic, custom, sparse, symbolKey, extra]) {
+            // Undefined at the root defaults to null, so use it in a record.
+            await expect(() => commands.invoke("never", { value }), "TypeError");
+          }
+          await expect(() => commands.invalidArguments(4), "TypeError");
+          const snapshot = await buffer.snapshot();
+          for (const value of ["0", {}, true, undefined]) {
+            await expect(() => snapshot.byteOffsetAtUtf16(value), "TypeError");
+            await expect(() => snapshot.utf16OffsetAtByte(value), "TypeError");
+          }
+          for (const value of [-1, 0.5, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+            await expect(() => snapshot.byteOffsetAtUtf16(value), "RangeError");
+            await expect(() => snapshot.utf16OffsetAtByte(value), "RangeError");
+          }
+          Array.prototype[1] = 99;
+          try { await expect(() => snapshot.byteOffsetAtUtf16(1), "RangeError"); }
+          finally { delete Array.prototype[1]; }
+          await expect(() => snapshot.utf16OffsetAtByte(1), "RangeError");
+        "#,
+        );
+        let active = pool.receive_request().unwrap();
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: active.id,
+            result: Ok(HostResponseValue::ActiveBuffer(Some(BufferHandle::new(3)))),
+        })
+        .unwrap();
+        let snapshot = pool.receive_request().unwrap();
+        assert!(matches!(snapshot.operation, HostOperation::Snapshot { .. }));
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: snapshot.id,
+            result: Ok(HostResponseValue::Snapshot(TextSnapshot {
+                text: SnapshotText::from_utf8("😀"),
+                range: ByteRange {
+                    start_byte_offset: 0,
+                    end_byte_offset: 4,
+                },
+                revision: 0,
+            })),
+        })
+        .unwrap();
+        assert_eq!(execution.wait().unwrap(), CommandOutcome::Completed);
+        assert!(
+            pool.receive_request_timeout(Duration::from_millis(20))
+                .is_none()
+        );
+        pool.shutdown();
+    }
+
+    #[test]
+    fn every_disposer_shares_native_acknowledgement_and_retains_failure() {
+        for failed in [false, true] {
+            let pool = RuntimePool::new(PoolConfig::single_worker());
+            let runtime = key(191);
+            pool.load(runtime, IsolateConfig::default()).unwrap();
+            let setup = execute_captured_fixture(
+                &pool,
+                runtime,
+                "file:///fixtures/owned.js",
+                r#"
+              const { workbench } = knot;
+              globalThis.buffer = await editor.activeBuffer();
+              globalThis.owned = [
+                await commands.register("owned", () => { throw new Error("disposed command ran"); }),
+                await buffer.onDidChange(() => { throw new Error("disposed listener ran"); }),
+                buffer.contributions,
+                await workbench.registerTreeDataProvider("outline", { getChildren() { throw new Error("disposed tree ran"); } }),
+                await editor.registerCompletionProvider("owned", { provideCompletions() { throw new Error("disposed completion ran"); } }),
+              ];
+            "#,
+            );
+            let responses = [
+                HostResponseValue::ActiveBuffer(Some(BufferHandle::new(3))),
+                HostResponseValue::CommandRegistered {
+                    registration: CommandRegistrationId::new(901),
+                },
+                HostResponseValue::BufferChangesSubscribed {
+                    subscription: BufferSubscriptionId::new(902),
+                },
+                HostResponseValue::TreeProviderRegistered {
+                    registration: TreeProviderRegistrationId::new(903),
+                },
+                HostResponseValue::CompletionProviderRegistered {
+                    registration: CompletionProviderRegistrationId::new(904),
+                },
+            ];
+            for value in responses {
+                let request = pool.receive_request().unwrap();
+                pool.respond(HostResponse {
+                    extension: runtime.extension,
+                    lifecycle: runtime.lifecycle,
+                    id: request.id,
+                    result: Ok(value),
+                })
+                .unwrap();
+            }
+            assert_eq!(setup.wait().unwrap(), CommandOutcome::Completed);
+            let disposal = pool.execute(runtime, "dispose.js", r#"
+              (async () => {
+                globalThis.cleanup = owned.map((owner) => {
+                  const promise = owner.dispose();
+                  if (promise !== owner.dispose()) throw new Error("cleanup promise changed");
+                  return promise;
+                });
+                for (const mutation of [() => buffer.contributions.replace([], { ifRevision: 0 }), () => owned[3].invalidate()]) {
+                  let inactive = false;
+                  try { await mutation(); } catch (error) { if (error.code !== "OwnershipDisposed") throw error; inactive = true; }
+                  if (!inactive) throw new Error("ownership still active");
+                }
+                globalThis.cleanupResults = await Promise.allSettled(cleanup);
+                for (let index = 0; index < owned.length; index++) {
+                  if (owned[index].dispose() !== cleanup[index]) throw new Error("settled cleanup promise changed");
+                }
+              })()
+            "#).unwrap();
+            let operations = [
+                (
+                    HostResponseValue::CommandUnregistered {
+                        registration: CommandRegistrationId::new(901),
+                    },
+                    HostRequestError::CommandNotFound,
+                ),
+                (
+                    HostResponseValue::BufferChangesUnsubscribed {
+                        subscription: BufferSubscriptionId::new(902),
+                    },
+                    HostRequestError::OwnershipDisposed,
+                ),
+                (
+                    HostResponseValue::EditorContributionsDisposed,
+                    HostRequestError::BufferClosed,
+                ),
+                (
+                    HostResponseValue::TreeProviderUnregistered {
+                        registration: TreeProviderRegistrationId::new(903),
+                    },
+                    HostRequestError::TreeProviderNotFound,
+                ),
+                (
+                    HostResponseValue::CompletionProviderUnregistered {
+                        registration: CompletionProviderRegistrationId::new(904),
+                    },
+                    HostRequestError::CompletionProviderNotFound,
+                ),
+            ];
+            for (value, error) in operations {
+                let request = pool.receive_request().unwrap();
+                pool.respond(HostResponse {
+                    extension: runtime.extension,
+                    lifecycle: runtime.lifecycle,
+                    id: request.id,
+                    result: if failed { Err(error) } else { Ok(value) },
+                })
+                .unwrap();
+            }
+            disposal.wait().unwrap();
+            let expected = if failed {
+                "rejected,rejected,rejected,rejected,rejected"
+            } else {
+                "fulfilled,fulfilled,fulfilled,fulfilled,fulfilled"
+            };
+            assert_eq!(
+                &*pool
+                    .execute(
+                        runtime,
+                        "verify-cleanup.js",
+                        "cleanupResults.map(result => result.status).join(',')"
+                    )
+                    .unwrap()
+                    .wait()
+                    .unwrap()
+                    .value,
+                expected
+            );
+            assert!(
+                pool.receive_request_timeout(Duration::from_millis(20))
+                    .is_none()
+            );
+            pool.dispatch_buffer_change(
+                runtime,
+                BufferSubscriptionId::new(902),
+                BufferChange {
+                    buffer: BufferHandle::new(3),
+                    before_revision: 0,
+                    revision: 1,
+                    edits: vec![],
+                },
+            )
+            .unwrap();
+            pool.execute(runtime, "listener-drained.js", "42")
+                .unwrap()
+                .wait()
+                .unwrap();
+            let tree = pool
+                .request_tree_children(
+                    runtime,
+                    TreeChildrenRequest {
+                        registration: TreeProviderRegistrationId::new(903),
+                        parent_id: None,
+                        generation: 1,
+                    },
+                )
+                .unwrap()
+                .wait()
+                .unwrap();
+            assert!(tree.result.unwrap_err().message.contains("disposed"));
+            let completion = pool
+                .request_completions(
+                    runtime,
+                    CompletionRequest {
+                        registration: CompletionProviderRegistrationId::new(904),
+                        buffer: BufferHandle::new(3),
+                        revision: 0,
+                        cursor_byte_offset: 0,
+                        prefix: "".into(),
+                        generation: 1,
+                    },
+                )
+                .unwrap()
+                .wait()
+                .unwrap();
+            assert!(completion.result.unwrap_err().message.contains("disposed"));
+            pool.shutdown();
+        }
+    }
+
+    #[test]
+    fn invalidation_cleanup_waits_for_earlier_native_acknowledgements() {
+        let pool = RuntimePool::new(PoolConfig::single_worker());
+        let runtime = key(192);
+        pool.load(runtime, IsolateConfig::default()).unwrap();
+        let setup = pool.execute_fixture_module(runtime, "file:///fixtures/ordering.js", r#"
+          import { workbench } from "knot";
+          globalThis.api = workbench;
+          globalThis.tree = await workbench.registerTreeDataProvider("outline", { getChildren() { return []; } });
+        "#).unwrap();
+        let request = pool.receive_request().unwrap();
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: request.id,
+            result: Ok(HostResponseValue::TreeProviderRegistered {
+                registration: TreeProviderRegistrationId::new(905),
+            }),
+        })
+        .unwrap();
+        setup.wait().unwrap();
+        let work = pool
+            .execute(
+                runtime,
+                "ordered-disposal.js",
+                r#"
+          (async () => {
+            const mutation = tree.invalidate("child");
+            const cleanup = tree.dispose();
+            const acknowledged = cleanup.then(() => api.writeClipboardText("cleanup acknowledged"));
+            await Promise.all([mutation, cleanup, acknowledged]);
+          })()
+        "#,
+            )
+            .unwrap();
+        let invalidate = pool.receive_request().unwrap();
+        let dispose = pool.receive_request().unwrap();
+        assert!(matches!(
+            invalidate.operation,
+            HostOperation::InvalidateTreeProvider { .. }
+        ));
+        assert!(matches!(
+            dispose.operation,
+            HostOperation::UnregisterTreeProvider { .. }
+        ));
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: dispose.id,
+            result: Ok(HostResponseValue::TreeProviderUnregistered {
+                registration: TreeProviderRegistrationId::new(905),
+            }),
+        })
+        .unwrap();
+        assert!(
+            pool.receive_request_timeout(Duration::from_millis(20))
+                .is_none()
+        );
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: invalidate.id,
+            result: Ok(HostResponseValue::TreeProviderInvalidated),
+        })
+        .unwrap();
+        let acknowledgement = pool.receive_request().unwrap();
+        assert_eq!(
+            acknowledgement.operation,
+            HostOperation::WriteClipboardText {
+                text: "cleanup acknowledged".into()
+            }
+        );
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: acknowledgement.id,
+            result: Ok(HostResponseValue::ClipboardTextWritten),
+        })
+        .unwrap();
+        work.wait().unwrap();
+        pool.shutdown();
+    }
+
+    #[test]
+    fn native_integers_are_checked_before_v8_conversion() {
+        let pool = RuntimePool::new(PoolConfig::single_worker());
+        let runtime = key(193);
+        pool.load(runtime, IsolateConfig::default()).unwrap();
+        let setup = execute_captured_fixture(
+            &pool,
+            runtime,
+            "file:///fixtures/exact-number.js",
+            r#"
+          const buffer = await editor.activeBuffer();
+          let rejected = false;
+          try { await buffer.snapshot(); } catch (error) { if (error.code !== "UnsupportedOperation") throw error; rejected = true; }
+          if (!rejected) throw new Error("rounded revision accepted");
+        "#,
+        );
+        let request = pool.receive_request().unwrap();
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: request.id,
+            result: Ok(HostResponseValue::ActiveBuffer(Some(BufferHandle::new(3)))),
+        })
+        .unwrap();
+        let request = pool.receive_request().unwrap();
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: request.id,
+            result: Ok(HostResponseValue::Snapshot(TextSnapshot {
+                text: SnapshotText::from_utf8(""),
+                range: ByteRange {
+                    start_byte_offset: 0,
+                    end_byte_offset: 0,
+                },
+                revision: MAX_JS_INTEGER + 1,
+            })),
+        })
+        .unwrap();
+        assert_eq!(setup.wait().unwrap(), CommandOutcome::Completed);
+        pool.shutdown();
+    }
+
+    #[test]
+    fn provider_self_disposal_acknowledges_without_waiting_for_its_callback() {
+        let pool = RuntimePool::new(PoolConfig::single_worker());
+        let runtime = key(194);
+        pool.load(runtime, IsolateConfig::default()).unwrap();
+        let setup = pool.execute_fixture_module(runtime, "file:///fixtures/self-disposal.js", r#"
+          import { editor, workbench } from "knot";
+          globalThis.treeCalls = 0;
+          globalThis.completionCalls = 0;
+          globalThis.tree = await workbench.registerTreeDataProvider("outline", {
+            async getChildren() { treeCalls++; await tree.dispose(); globalThis.treeReleased = true; return []; },
+          });
+          globalThis.completion = await editor.registerCompletionProvider("self", {
+            async provideCompletions() { completionCalls++; await completion.dispose(); globalThis.completionReleased = true; return []; },
+          });
+        "#).unwrap();
+        for value in [
+            HostResponseValue::TreeProviderRegistered {
+                registration: TreeProviderRegistrationId::new(906),
+            },
+            HostResponseValue::CompletionProviderRegistered {
+                registration: CompletionProviderRegistrationId::new(907),
+            },
+        ] {
+            let request = pool.receive_request().unwrap();
+            pool.respond(HostResponse {
+                extension: runtime.extension,
+                lifecycle: runtime.lifecycle,
+                id: request.id,
+                result: Ok(value),
+            })
+            .unwrap();
+        }
+        setup.wait().unwrap();
+        let tree = pool
+            .request_tree_children(
+                runtime,
+                TreeChildrenRequest {
+                    registration: TreeProviderRegistrationId::new(906),
+                    parent_id: None,
+                    generation: 1,
+                },
+            )
+            .unwrap();
+        let release = pool.receive_request().unwrap();
+        assert!(matches!(
+            release.operation,
+            HostOperation::UnregisterTreeProvider { .. }
+        ));
+        let queued = pool
+            .request_tree_children(
+                runtime,
+                TreeChildrenRequest {
+                    registration: TreeProviderRegistrationId::new(906),
+                    parent_id: None,
+                    generation: 2,
+                },
+            )
+            .unwrap();
+        drop(queued);
+        // Native unregistration drops its receiver before replying to self-disposal.
+        drop(tree);
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: release.id,
+            result: Ok(HostResponseValue::TreeProviderUnregistered {
+                registration: TreeProviderRegistrationId::new(906),
+            }),
+        })
+        .unwrap();
+        assert_eq!(
+            &*pool
+                .execute(
+                    runtime,
+                    "verify-tree-self-disposal.js",
+                    "`${treeReleased}:${treeCalls}`"
+                )
+                .unwrap()
+                .wait()
+                .unwrap()
+                .value,
+            "true:1"
+        );
+        let completion = pool
+            .request_completions(
+                runtime,
+                CompletionRequest {
+                    registration: CompletionProviderRegistrationId::new(907),
+                    buffer: BufferHandle::new(3),
+                    revision: 0,
+                    cursor_byte_offset: 0,
+                    prefix: "".into(),
+                    generation: 1,
+                },
+            )
+            .unwrap();
+        let release = pool.receive_request().unwrap();
+        assert!(matches!(
+            release.operation,
+            HostOperation::UnregisterCompletionProvider { .. }
+        ));
+        drop(completion);
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: release.id,
+            result: Ok(HostResponseValue::CompletionProviderUnregistered {
+                registration: CompletionProviderRegistrationId::new(907),
+            }),
+        })
+        .unwrap();
+        assert_eq!(
+            &*pool
+                .execute(
+                    runtime,
+                    "verify-completion-self-disposal.js",
+                    "`${completionReleased}:${completionCalls}`"
+                )
+                .unwrap()
+                .wait()
+                .unwrap()
+                .value,
+            "true:1"
+        );
+        assert!(
+            pool.capsule(runtime)
+                .unwrap()
+                .local_state
+                .pending
+                .lock()
+                .unwrap()
+                .is_empty()
+        );
+        pool.shutdown();
+    }
+
+    #[test]
+    fn provider_results_require_iterables_and_validate_only_recognized_item_fields() {
+        let pool = RuntimePool::new(PoolConfig::single_worker());
+        let runtime = key(195);
+        pool.load(runtime, IsolateConfig::default()).unwrap();
+        let setup = pool.execute_fixture_module(runtime, "file:///fixtures/provider-data.js", r#"
+          import { editor, workbench } from "knot";
+          await workbench.registerTreeDataProvider("outline", {
+            getChildren(parent) {
+              if (parent === "prototype") { Object.prototype.error = "ambient error"; Object.prototype.toJSON = () => { throw new Error("ambient toJSON evaluated"); }; }
+              if (parent === "arraylike") return { 0: {}, length: 1 };
+              if (parent === "string") return "children";
+              if (parent === "missing") return [{ id: "id", label: "label" }];
+              if (parent === "null-state") return [{ id: "id", label: "label", collapsibleState: null }];
+              if (parent === "wrong-description") return [{ id: "id", label: "label", collapsibleState: "none", description: 4 }];
+              if (parent === "bad-token") return [{ id: "id", label: "label", collapsibleState: "none", icon: "other" }];
+              return new Set([{ id: "id", label: "label", collapsibleState: "none", unknown: () => {}, toJSON() { throw new Error("unknown item field evaluated"); } }]);
+            },
+          });
+          await editor.registerCompletionProvider("data", {
+            provideCompletions(context) {
+              if (context.prefix === "arraylike") return { length: 1, 0: {} };
+              if (context.prefix === "string") return "candidates";
+              if (context.prefix === "missing") return [{ label: "label" }];
+              return new Set([{ label: "label", insertText: "label", unknown: () => {}, toJSON() { throw new Error("unknown item field evaluated"); } }]);
+            },
+          });
+        "#).unwrap();
+        for value in [
+            HostResponseValue::TreeProviderRegistered {
+                registration: TreeProviderRegistrationId::new(908),
+            },
+            HostResponseValue::CompletionProviderRegistered {
+                registration: CompletionProviderRegistrationId::new(909),
+            },
+        ] {
+            let request = pool.receive_request().unwrap();
+            pool.respond(HostResponse {
+                extension: runtime.extension,
+                lifecycle: runtime.lifecycle,
+                id: request.id,
+                result: Ok(value),
+            })
+            .unwrap();
+        }
+        setup.wait().unwrap();
+        for parent in [
+            "arraylike",
+            "string",
+            "missing",
+            "null-state",
+            "wrong-description",
+            "bad-token",
+            "valid",
+            "prototype",
+        ] {
+            let result = pool
+                .request_tree_children(
+                    runtime,
+                    TreeChildrenRequest {
+                        registration: TreeProviderRegistrationId::new(908),
+                        parent_id: Some(parent.into()),
+                        generation: 1,
+                    },
+                )
+                .unwrap()
+                .wait()
+                .unwrap()
+                .result;
+            assert_eq!(
+                result.is_ok(),
+                matches!(parent, "valid" | "prototype"),
+                "{parent}: {result:?}"
+            );
+        }
+        for prefix in ["arraylike", "string", "missing", "valid"] {
+            let result = pool
+                .request_completions(
+                    runtime,
+                    CompletionRequest {
+                        registration: CompletionProviderRegistrationId::new(909),
+                        buffer: BufferHandle::new(3),
+                        revision: 0,
+                        cursor_byte_offset: 0,
+                        prefix: prefix.into(),
+                        generation: 1,
+                    },
+                )
+                .unwrap()
+                .wait()
+                .unwrap()
+                .result;
+            assert_eq!(result.is_ok(), prefix == "valid", "{prefix}: {result:?}");
+        }
+        pool.execute(
+            runtime,
+            "restore-prototype.js",
+            "delete Object.prototype.toJSON; delete Object.prototype.error",
+        )
+        .unwrap()
+        .wait()
+        .unwrap();
+        pool.shutdown();
+    }
+
+    #[test]
+    fn registration_response_racing_unload_cannot_publish_late_ownership() {
+        for operation in [
+            "commands.register('late', () => {})",
+            "editor.registerCompletionProvider('late', { provideCompletions() { return []; } })",
+            "workbench.registerTreeDataProvider('outline', { getChildren() { return []; } })",
+        ] {
+            let pool = RuntimePool::new(PoolConfig::single_worker());
+            let runtime = key(196);
+            pool.load(runtime, IsolateConfig::default()).unwrap();
+            let source = format!(
+                "import {{commands, editor, workbench}} from 'knot'; await {operation}; globalThis.published = true;"
+            );
+            let registration = pool
+                .execute_fixture_module(runtime, "file:///fixtures/late-registration.js", source)
+                .unwrap();
+            let request = pool.receive_request().unwrap();
+            pool.unload(runtime).unwrap();
+            assert_eq!(
+                registration.wait().unwrap_err().kind(),
+                RuntimeErrorKind::Cancelled
+            );
+            let value = match request.operation {
+                HostOperation::RegisterCommand { .. } => HostResponseValue::CommandRegistered {
+                    registration: CommandRegistrationId::new(1),
+                },
+                HostOperation::RegisterCompletionProvider { .. } => {
+                    HostResponseValue::CompletionProviderRegistered {
+                        registration: CompletionProviderRegistrationId::new(1),
+                    }
+                }
+                HostOperation::RegisterTreeProvider { .. } => {
+                    HostResponseValue::TreeProviderRegistered {
+                        registration: TreeProviderRegistrationId::new(1),
+                    }
+                }
+                _ => unreachable!(),
+            };
+            assert_eq!(
+                pool.respond(HostResponse {
+                    extension: runtime.extension,
+                    lifecycle: runtime.lifecycle,
+                    id: request.id,
+                    result: Ok(value)
+                }),
+                Err(RuntimeResponseError::WrongExtension)
+            );
+            pool.shutdown();
+        }
+    }
+
+    #[test]
+    fn buffer_listener_self_disposal_rejects_queued_deliveries_without_deadlock() {
+        let pool = RuntimePool::new(PoolConfig::single_worker());
+        let runtime = key(197);
+        pool.load(runtime, IsolateConfig::default()).unwrap();
+        let setup = execute_captured_fixture(
+            &pool,
+            runtime,
+            "file:///fixtures/listener-self-disposal.js",
+            r#"
+          const buffer = await editor.activeBuffer();
+          globalThis.listenerCalls = 0;
+          globalThis.subscription = await buffer.onDidChange(async () => {
+            listenerCalls++;
+            await subscription.dispose();
+            globalThis.listenerReleased = true;
+          });
+        "#,
+        );
+        for value in [
+            HostResponseValue::ActiveBuffer(Some(BufferHandle::new(3))),
+            HostResponseValue::BufferChangesSubscribed {
+                subscription: BufferSubscriptionId::new(910),
+            },
+        ] {
+            let request = pool.receive_request().unwrap();
+            pool.respond(HostResponse {
+                extension: runtime.extension,
+                lifecycle: runtime.lifecycle,
+                id: request.id,
+                result: Ok(value),
+            })
+            .unwrap();
+        }
+        assert_eq!(setup.wait().unwrap(), CommandOutcome::Completed);
+        for revision in 1..=2 {
+            pool.dispatch_buffer_change(
+                runtime,
+                BufferSubscriptionId::new(910),
+                BufferChange {
+                    buffer: BufferHandle::new(3),
+                    before_revision: revision - 1,
+                    revision,
+                    edits: vec![],
+                },
+            )
+            .unwrap();
+        }
+        let release = pool.receive_request().unwrap();
+        assert!(matches!(
+            release.operation,
+            HostOperation::UnsubscribeBufferChanges { .. }
+        ));
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: release.id,
+            result: Ok(HostResponseValue::BufferChangesUnsubscribed {
+                subscription: BufferSubscriptionId::new(910),
+            }),
+        })
+        .unwrap();
+        assert_eq!(
+            &*pool
+                .execute(
+                    runtime,
+                    "verify-listener-disposal.js",
+                    "`${listenerReleased}:${listenerCalls}`"
+                )
+                .unwrap()
+                .wait()
+                .unwrap()
+                .value,
+            "true:1"
+        );
+        assert!(
+            pool.capsule(runtime)
+                .unwrap()
+                .local_state
+                .pending
+                .lock()
+                .unwrap()
+                .is_empty()
+        );
+        pool.shutdown();
+    }
+
+    #[test]
+    fn contribution_cleanup_waits_for_its_accepted_replacement_acknowledgement() {
+        let pool = RuntimePool::new(PoolConfig::single_worker());
+        let runtime = key(198);
+        pool.load(runtime, IsolateConfig::default()).unwrap();
+        let setup = execute_captured_fixture(
+            &pool,
+            runtime,
+            "file:///fixtures/contribution-order.js",
+            r#"
+          globalThis.buffer = await editor.activeBuffer();
+          globalThis.api = knot.workbench;
+        "#,
+        );
+        let request = pool.receive_request().unwrap();
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: request.id,
+            result: Ok(HostResponseValue::ActiveBuffer(Some(BufferHandle::new(3)))),
+        })
+        .unwrap();
+        assert_eq!(setup.wait().unwrap(), CommandOutcome::Completed);
+        let work = pool
+            .execute(
+                runtime,
+                "ordered-contribution-disposal.js",
+                r#"
+          (async () => {
+            const replacement = buffer.contributions.replace([], { ifRevision: 0 });
+            const cleanup = buffer.contributions.dispose();
+            const acknowledged = cleanup.then(() => api.writeClipboardText("contribution cleanup"));
+            await Promise.all([replacement, cleanup, acknowledged]);
+          })()
+        "#,
+            )
+            .unwrap();
+        let replace = pool.receive_request().unwrap();
+        let dispose = pool.receive_request().unwrap();
+        assert!(matches!(
+            replace.operation,
+            HostOperation::ReplaceEditorContributions { .. }
+        ));
+        assert!(matches!(
+            dispose.operation,
+            HostOperation::DisposeEditorContributions { .. }
+        ));
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: dispose.id,
+            result: Ok(HostResponseValue::EditorContributionsDisposed),
+        })
+        .unwrap();
+        assert!(
+            pool.receive_request_timeout(Duration::from_millis(20))
+                .is_none()
+        );
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: replace.id,
+            result: Ok(HostResponseValue::EditorContributionsReplaced),
+        })
+        .unwrap();
+        let acknowledged = pool.receive_request().unwrap();
+        assert_eq!(
+            acknowledged.operation,
+            HostOperation::WriteClipboardText {
+                text: "contribution cleanup".into()
+            }
+        );
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: acknowledged.id,
+            result: Ok(HostResponseValue::ClipboardTextWritten),
+        })
+        .unwrap();
+        work.wait().unwrap();
+        pool.shutdown();
+    }
+
+    #[test]
+    fn native_json_transport_preserves_deep_plain_data_without_custom_conversion() {
+        let pool = RuntimePool::new(PoolConfig::single_worker());
+        let runtime = key(199);
+        pool.load(runtime, IsolateConfig::default()).unwrap();
+        let execution = execute_captured_fixture(
+            &pool,
+            runtime,
+            "file:///fixtures/plain-json.js",
+            r#"
+          const items = [42];
+          Object.defineProperty(items, "0", { value: 42, enumerable: false });
+          let data = { toJSON: "literal field", items, plain: Object.assign(Object.create(null), { enabled: true }) };
+          for (let index = 0; index < 300; index++) data = { next: data };
+          if ((await commands.invoke("plain-child", data)).kind !== "completed") throw new Error("plain JSON failed");
+        "#,
+        );
+        let request = pool.receive_request().unwrap();
+        let HostOperation::InvokeCommand { command } = &request.operation else {
+            panic!("expected command data");
+        };
+        let mut data = &command.arguments;
+        for _ in 0..300 {
+            let CommandArgumentValue::Object(object) = data else {
+                panic!("lost JSON depth");
+            };
+            data = object.get("next").unwrap();
+        }
+        let CommandArgumentValue::Object(object) = data else {
+            panic!("lost JSON leaf");
+        };
+        assert_eq!(
+            object.get("toJSON"),
+            Some(&CommandArgumentValue::String("literal field".into()))
+        );
+        assert_eq!(
+            object.get("items"),
+            Some(&CommandArgumentValue::Array(vec![
+                CommandArgumentValue::Number(42.0)
+            ]))
+        );
+        assert_eq!(
+            object.get("plain"),
+            Some(&CommandArgumentValue::Object(
+                std::collections::BTreeMap::from([(
+                    "enabled".into(),
+                    CommandArgumentValue::Boolean(true)
+                )])
+            ))
+        );
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: request.id,
+            result: Ok(HostResponseValue::CommandInvoked {
+                dispatch: CommandInvokeDispatch::Outcome {
+                    outcome: CommandOutcome::Completed,
+                },
+            }),
+        })
+        .unwrap();
+        assert_eq!(execution.wait().unwrap(), CommandOutcome::Completed);
+        pool.shutdown();
+    }
+
+    #[test]
+    fn native_numeric_decoder_rejects_coercion_and_precision_loss() {
+        let capsule = RuntimeCapsule::new(key(200), IsolateConfig::default()).unwrap();
+        let data = capsule.data.lock().unwrap();
+        let data = data.as_ref().unwrap();
+        let mut locker = data.isolate.lock();
+        let scope = pin!(v8::HandleScope::new(&mut *locker));
+        let mut scope = scope.init();
+        let context = v8::Local::new(&scope, &data.context);
+        let scope = &mut v8::ContextScope::new(&mut scope, context);
+        let values = [
+            v8::String::new(scope, "1").unwrap().into(),
+            v8::Boolean::new(scope, true).into(),
+            v8::null(scope).into(),
+            v8::undefined(scope).into(),
+        ];
+        for value in values {
+            assert!(matches!(
+                value_u64(scope, value, "coordinate"),
+                Err(BoundaryError::Type(_))
+            ));
+        }
+        for number in [
+            -1.0,
+            0.5,
+            f64::NAN,
+            f64::INFINITY,
+            MAX_JS_INTEGER as f64 + 1.0,
+        ] {
+            let value = v8::Number::new(scope, number);
+            assert!(matches!(
+                value_u64(scope, value.into(), "coordinate"),
+                Err(BoundaryError::Range(_))
+            ));
+        }
+        let maximum = v8::Number::new(scope, MAX_JS_INTEGER as f64);
+        assert_eq!(
+            value_u64(scope, maximum.into(), "coordinate").unwrap(),
+            MAX_JS_INTEGER
+        );
+    }
+
+    #[test]
     fn process_initialization_is_idempotent() {
         initialize();
         initialize();
@@ -5378,7 +6800,7 @@ mod tests {
         .unwrap();
         let unsupported = unsupported.wait().unwrap_err();
         assert_eq!(unsupported.kind(), RuntimeErrorKind::Rejection);
-        assert!(unsupported.message().contains("UnsupportedOperationError"));
+        assert!(unsupported.message().contains("UnsupportedOperation"));
         pool.shutdown();
     }
 
@@ -5402,7 +6824,7 @@ mod tests {
                       decoration: "warning", gutter: "error", command: "fixture.command",
                     }], { ifRevision: 8 });
                     const disposable = await buffer.onDidChange(() => {});
-                    disposable.dispose();
+                    await disposable.dispose();
                     await buffer.contributions.dispose();
                 "#,
         );
@@ -5945,8 +7367,8 @@ mod tests {
         .unwrap();
         let error = execution.wait().unwrap_err();
         assert_eq!(error.kind(), RuntimeErrorKind::Rejection);
-        assert!(error.message().contains("RevisionConflictError"));
-        assert_eq!(error.source(), Some(PRIVATE_BOOTSTRAP_SPECIFIER));
+        assert!(error.message().contains("RevisionConflict"));
+        assert_eq!(error.source(), Some("file:///fixtures/request-error.js"));
         assert_eq!(
             &*pool
                 .execute(runtime, "recover-after-host-error.js", "6 * 7")
@@ -6055,7 +7477,7 @@ mod tests {
         .unwrap();
         let error = execution.wait().unwrap_err();
         assert_eq!(error.kind(), RuntimeErrorKind::Rejection);
-        assert!(error.message().contains("BufferClosedError"));
+        assert!(error.message().contains("BufferClosed"));
         assert_eq!(
             pool.respond(HostResponse {
                 extension: runtime.extension,
@@ -6225,7 +7647,7 @@ mod tests {
         .unwrap();
         let error = execution.wait().unwrap_err();
         assert_eq!(error.kind(), RuntimeErrorKind::Rejection);
-        assert!(error.message().contains("UnsupportedOperationError"));
+        assert!(error.message().contains("UnsupportedOperation"));
         pool.shutdown();
     }
 
@@ -6455,36 +7877,27 @@ mod tests {
     fn facade_maps_every_host_error_to_a_stable_javascript_name() {
         let capsule = RuntimeCapsule::new(key(1), IsolateConfig::default()).unwrap();
         let cases = [
+            (HostRequestError::ViewNotFound, "KnotHostError"),
+            (HostRequestError::OwnershipDisposed, "KnotHostError"),
+            (HostRequestError::BufferReadOnly, "KnotHostError"),
             (HostRequestError::ContextUnavailable, "KnotHostError"),
             (HostRequestError::InvalidTarget, "KnotHostError"),
-            (
-                HostRequestError::UnsupportedOperation,
-                "UnsupportedOperationError",
-            ),
-            (HostRequestError::BufferClosed, "BufferClosedError"),
-            (HostRequestError::InvalidRange, "RangeError"),
-            (HostRequestError::InvalidEditBatch, "InvalidEditBatchError"),
-            (HostRequestError::RevisionConflict, "RevisionConflictError"),
-            (
-                HostRequestError::ContributionSetNotFound,
-                "ContributionSetNotFoundError",
-            ),
-            (HostRequestError::TreeViewNotFound, "TreeViewNotFoundError"),
-            (
-                HostRequestError::TreeProviderInUse,
-                "TreeProviderInUseError",
-            ),
-            (
-                HostRequestError::TreeProviderNotFound,
-                "TreeProviderNotFoundError",
-            ),
+            (HostRequestError::UnsupportedOperation, "KnotHostError"),
+            (HostRequestError::BufferClosed, "KnotHostError"),
+            (HostRequestError::InvalidRange, "KnotHostError"),
+            (HostRequestError::InvalidEditBatch, "KnotHostError"),
+            (HostRequestError::RevisionConflict, "KnotHostError"),
+            (HostRequestError::ContributionSetNotFound, "KnotHostError"),
+            (HostRequestError::TreeViewNotFound, "KnotHostError"),
+            (HostRequestError::TreeProviderInUse, "KnotHostError"),
+            (HostRequestError::TreeProviderNotFound, "KnotHostError"),
             (
                 HostRequestError::CompletionProviderNotFound,
-                "CompletionProviderNotFoundError",
+                "KnotHostError",
             ),
-            (HostRequestError::CommandNameInUse, "CommandNameInUseError"),
-            (HostRequestError::CommandNotFound, "CommandNotFoundError"),
-            (HostRequestError::Cancelled, "AbortError"),
+            (HostRequestError::CommandNameInUse, "KnotHostError"),
+            (HostRequestError::CommandNotFound, "KnotHostError"),
+            (HostRequestError::Cancelled, "KnotHostError"),
         ];
         for (index, (error, expected_name)) in cases.into_iter().enumerate() {
             let wire_name = serde_json::to_value(error)
@@ -6492,7 +7905,7 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .to_owned();
-            capsule.set_test_host_error(wire_name);
+            capsule.set_test_host_error(error);
             let report = capsule
                 .execute_fixture_module(
                     &format!("file:///fixtures/host-error-{index}.js"),
@@ -6502,6 +7915,7 @@ mod tests {
                             await workbench.writeClipboardText("wait");
                         } catch (error) {
                             globalThis.hostErrorName = error.name;
+                            globalThis.hostErrorCode = error.code;
                         }
                     "#,
                 )
@@ -6514,26 +7928,14 @@ mod tests {
                     .value,
                 expected_name
             );
+            assert_eq!(
+                &*capsule
+                    .execute("host-error-code.js", "hostErrorCode")
+                    .unwrap()
+                    .value,
+                wire_name
+            );
         }
-
-        capsule.set_test_host_error("FutureHostFailure");
-        capsule
-            .execute_fixture_module(
-                "file:///fixtures/unknown-host-error.js",
-                r#"
-                    import * as knot from "knot"; const { workbench } = knot;
-                    try { await workbench.writeClipboardText("wait"); }
-                    catch (error) { globalThis.hostErrorName = error.name; }
-                "#,
-            )
-            .unwrap();
-        assert_eq!(
-            &*capsule
-                .execute("unknown-host-error-name.js", "hostErrorName")
-                .unwrap()
-                .value,
-            "KnotHostError"
-        );
 
         capsule
             .execute_fixture_module(
@@ -7276,7 +8678,7 @@ mod tests {
             .execute(
                 runtime,
                 "dispose-providers.js",
-                "globalThis.treeProvider.dispose(); globalThis.completionProvider.dispose()",
+                "Promise.all([globalThis.treeProvider.dispose(), globalThis.completionProvider.dispose()])",
             )
             .unwrap();
         for expected in [
@@ -7534,7 +8936,7 @@ mod tests {
         .unwrap();
         let error = duplicate.wait().unwrap_err();
         assert_eq!(error.kind(), RuntimeErrorKind::Rejection);
-        assert!(error.message().contains("CommandNameInUseError"), "{error}");
+        assert!(error.message().contains("CommandNameInUse"), "{error}");
 
         let registration = CommandRegistrationId::new(82);
         let setup = pool
@@ -7792,6 +9194,18 @@ mod tests {
                 r#"
                     import * as knot from "knot"; const { commands } = knot;
                     await commands.register("knot.fixture.cancelled", async (context) => {
+                      if (!Object.isFrozen(context.signal) || "abort" in context.signal) throw new Error("unsupported signal interface");
+                      let rejected = false;
+                      try { context.signal.addEventListener("abort", null); } catch (error) { if (!(error instanceof TypeError)) throw error; rejected = true; }
+                      if (!rejected) throw new Error("invalid listener accepted");
+                      context.signal.addEventListener("abort", () => {
+                        context.signal.addEventListener("abort", () => { globalThis.abortReplay = true; });
+                        throw new Error("isolated abort listener failure");
+                      });
+                      context.signal.addEventListener("abort", (event) => {
+                        if (!Object.isFrozen(event) || event.target !== context.signal || event.type !== "abort") throw new Error("invalid abort event");
+                        globalThis.abortListenerRan = true;
+                      });
                       await context.buffer.snapshot();
                       globalThis.cancelledCommandResumed = true;
                     });
@@ -7866,7 +9280,7 @@ mod tests {
         pool.execute(
             runtime,
             "verify-command-cancellation.js",
-            "if (globalThis.cancelledCommandResumed) throw new Error('cancelled command resumed')",
+            "if (globalThis.cancelledCommandResumed || !globalThis.abortListenerRan || globalThis.abortReplay) throw new Error('cancelled command or listener replay')",
         )
         .unwrap()
         .wait()

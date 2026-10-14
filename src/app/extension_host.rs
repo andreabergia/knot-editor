@@ -312,6 +312,7 @@ pub(crate) struct ProductExtensionHost {
     buffers: ExtensionBufferBridge,
     buffer_observers: HashMap<crate::host::protocol::BufferHandle, Subscription>,
     commands: ExtensionCommandBridge,
+    completion_editors: Vec<gpui::WeakEntity<super::editor::EditorView>>,
     command_targets: HashMap<CommandInvocationId, ProductCommandTarget>,
     view_command_handlers:
         HashMap<CommandInvocationId, (CommandTarget, crate::host::protocol::CommandName)>,
@@ -325,6 +326,7 @@ pub(crate) struct ProductExtensionHost {
     #[cfg(test)]
     _outline_tree_subscription: Subscription,
     _event_task: Task<()>,
+    _release_subscription: Subscription,
     startup_report: Option<StartupReportSnapshot>,
     _startup_task: Option<Task<()>>,
     _personal_startup_task: Option<Task<()>>,
@@ -354,6 +356,13 @@ impl ProductExtensionHost {
         let outline_tree_subscription = cx.subscribe(&outline_tree, |this, _, event, cx| {
             this.handle_tree_event(event, cx)
         });
+        let release_subscription = cx.on_release(|host, cx| {
+            let lifecycles = host.lifecycles.iter().copied().collect::<Vec<_>>();
+            for key in lifecycles {
+                let _ = host.pool.unload(key);
+                host.remove_foreground_lifecycle(key, cx);
+            }
+        });
         let event_task = cx.spawn(async move |this, cx| {
             while let Some(event) = inbox.receive().await {
                 if this
@@ -370,6 +379,7 @@ impl ProductExtensionHost {
             buffers: ExtensionBufferBridge::new(),
             buffer_observers: HashMap::new(),
             commands,
+            completion_editors: Vec::new(),
             command_targets: HashMap::new(),
             view_command_handlers: HashMap::new(),
             #[cfg(test)]
@@ -382,6 +392,7 @@ impl ProductExtensionHost {
             #[cfg(test)]
             _outline_tree_subscription: outline_tree_subscription,
             _event_task: event_task,
+            _release_subscription: release_subscription,
             startup_report: None,
             _startup_task: None,
             _personal_startup_task: None,
@@ -811,7 +822,21 @@ impl ProductExtensionHost {
                 }
             }
             RequestRoute::View => self.dispatch_view_request(request, cx),
-            RequestRoute::Semantic => Some(self.semantics.dispatch(request, cx)),
+            RequestRoute::Semantic => {
+                let removed = match &request.operation {
+                    HostOperation::UnregisterCompletionProvider { registration } => {
+                        Some(*registration)
+                    }
+                    _ => None,
+                };
+                let response = self.semantics.dispatch(request, cx);
+                if response.result.is_ok()
+                    && let Some(registration) = removed
+                {
+                    self.cancel_completion_provider(registration, cx);
+                }
+                Some(response)
+            }
             RequestRoute::Keymap => Some(self.apply_keybinding_batch(request, cx)),
         };
         if let Some(response) = response {
@@ -1335,6 +1360,15 @@ impl ProductExtensionHost {
         else {
             return crate::host::protocol::CommandOutcome::InvalidTarget;
         };
+        self.completion_editors
+            .retain(|editor| editor.upgrade().is_some());
+        if !self
+            .completion_editors
+            .iter()
+            .any(|candidate| candidate.upgrade().as_ref() == Some(&editor))
+        {
+            self.completion_editors.push(editor.downgrade());
+        }
         let requests = editor.update(cx, |editor, cx| {
             editor.start_completion(buffer, self.semantics.completion_snapshot(), cx)
         });
@@ -1379,6 +1413,22 @@ impl ProductExtensionHost {
         crate::host::protocol::CommandOutcome::Completed
     }
 
+    fn cancel_completion_provider(
+        &mut self,
+        registration: crate::host::protocol::CompletionProviderRegistrationId,
+        cx: &mut App,
+    ) {
+        self.completion_editors.retain(|editor| {
+            let Some(editor) = editor.upgrade() else {
+                return false;
+            };
+            editor.update(cx, |editor, cx| {
+                editor.cancel_completion_provider(registration, cx)
+            });
+            true
+        });
+    }
+
     fn open_target_buffer(
         &mut self,
         target: &ProductCommandTarget,
@@ -1415,6 +1465,11 @@ impl ProductExtensionHost {
     }
 
     fn remove_lifecycle(&mut self, key: ExtensionKey, cx: &mut Context<Self>) {
+        self.remove_foreground_lifecycle(key, cx);
+        self.drain_command_events(cx);
+    }
+
+    fn remove_foreground_lifecycle(&mut self, key: ExtensionKey, cx: &mut App) {
         if !self.lifecycles.remove(&key) {
             return;
         }
@@ -1443,9 +1498,13 @@ impl ProductExtensionHost {
             .retain(|root, _| self.commands.contains_invocation(*root));
         self.buffers
             .remove_lifecycle(key.extension, key.lifecycle, cx);
+        for provider in self.semantics.completion_snapshot() {
+            if (provider.extension, provider.lifecycle) == (key.extension, key.lifecycle) {
+                self.cancel_completion_provider(provider.id, cx);
+            }
+        }
         self.semantics
             .remove_lifecycle(key.extension, key.lifecycle, cx);
-        self.drain_command_events(cx);
     }
 }
 

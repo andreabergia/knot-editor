@@ -4,7 +4,10 @@ delete globalThis.__knotNativeBindings;
 export function keybinding(key, command, options) {
   if (command !== null && typeof command === "object" && !Array.isArray(command)) {
     try {
-      if (command.arguments !== undefined) validateCommandArguments(command.arguments);
+      command = {
+        name: command.name,
+        arguments: command.arguments === undefined ? null : validateCommandArguments(command.arguments),
+      };
     } catch (error) {
       nativeBindings.keybinding("invalid", String(error));
       return;
@@ -17,33 +20,101 @@ export function removeKeybinding(key, options) {
   nativeBindings.keybinding("remove", key, undefined, options);
 }
 
-const hostErrorNames = Object.freeze({
-  ContextUnavailable: "KnotHostError",
-  InvalidTarget: "KnotHostError",
-  UnsupportedOperation: "UnsupportedOperationError",
-  BufferClosed: "BufferClosedError",
-  InvalidRange: "RangeError",
-  InvalidEditBatch: "InvalidEditBatchError",
-  RevisionConflict: "RevisionConflictError",
-  ContributionSetNotFound: "ContributionSetNotFoundError",
-  TreeViewNotFound: "TreeViewNotFoundError",
-  ViewNotFound: "ViewNotFoundError",
-  TreeProviderInUse: "TreeProviderInUseError",
-  TreeProviderNotFound: "TreeProviderNotFoundError",
-  CompletionProviderNotFound: "CompletionProviderNotFoundError",
-  CommandNameInUse: "CommandNameInUseError",
-  CommandNotFound: "CommandNotFoundError",
-  Cancelled: "AbortError",
-});
-
-function hostError(error) {
-  if (error === "Cancelled") {
-    activeCommandFrames.at(-1)?.controller.abort(new Error("command cancelled"));
-  }
-  const exception = new Error(error);
-  exception.name = hostErrorNames[error] ?? "KnotHostError";
-  exception.code = error;
+function hostError(code) {
+  const exception = new Error(code);
+  exception.name = "KnotHostError";
+  exception.code = code;
   throw exception;
+}
+
+function ownership(removeLocal, release) {
+  let inactive = false;
+  let cleanup;
+  const pending = new Set();
+  return {
+    assertActive() { if (inactive) hostError("OwnershipDisposed"); },
+    track(promise) {
+      pending.add(promise);
+      promise.then(() => pending.delete(promise), () => pending.delete(promise));
+      return promise;
+    },
+    dispose() {
+      if (cleanup) return cleanup;
+      inactive = true;
+      removeLocal();
+      const releasePromise = release();
+      const earlier = [...pending];
+      cleanup = Promise.allSettled([...earlier, releasePromise]).then((results) => {
+        const releaseResult = results.at(-1);
+        if (releaseResult.status === "rejected") throw releaseResult.reason;
+      });
+      return cleanup;
+    },
+  };
+}
+
+function record(value, message) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) throw new TypeError(message);
+  return value;
+}
+function string(value, message) {
+  if (typeof value !== "string") throw new TypeError(message);
+  return value;
+}
+function safeInteger(value) {
+  if (typeof value !== "number") throw new TypeError("expected a number");
+  if (!Number.isSafeInteger(value) || value < 0) throw new RangeError("expected a nonnegative safe integer");
+  return value;
+}
+function byteRange(value) {
+  record(value, "range must be an object");
+  const startByteOffset = safeInteger(value.startByteOffset);
+  const endByteOffset = safeInteger(value.endByteOffset);
+  if (startByteOffset > endByteOffset) throw new RangeError("range endpoints must be ordered");
+  return { startByteOffset, endByteOffset };
+}
+function revision(options) {
+  return safeInteger(record(options, "revision options are required").ifRevision);
+}
+function arrayItems(items, convert) {
+  if (!Array.isArray(items)) throw new TypeError("items must be an array");
+  return Array.from(items, convert);
+}
+function optionalText(value) {
+  return value == null ? null : string(value, "expected text or null");
+}
+function token(value, allowed) {
+  if (value == null) return null;
+  if (!allowed.includes(value)) throw new TypeError("invalid semantic token");
+  return value;
+}
+function contribution(value) {
+  record(value, "contribution must be an object");
+  return {
+    range: byteRange(value.range),
+    decoration: token(value.decoration, ["info", "warning", "error"]),
+    gutter: token(value.gutter, ["info", "warning", "error"]),
+    command: optionalText(value.command),
+  };
+}
+function iterableItems(value, convert) {
+  if (value == null || typeof value === "string" || typeof value[Symbol.iterator] !== "function") {
+    throw new TypeError("provider result must be an iterable of items");
+  }
+  return Array.from(value, convert);
+}
+function treeItem(value) {
+  record(value, "tree item must be an object");
+  const collapsibleState = token(value.collapsibleState, ["none", "collapsed", "expanded"]);
+  if (collapsibleState === null) throw new TypeError("collapsibleState is required");
+  return {
+    id: string(value.id, "tree item ID must be text"),
+    label: string(value.label, "tree item label must be text"),
+    description: optionalText(value.description),
+    icon: token(value.icon, ["file", "folder", "symbol"]),
+    collapsibleState,
+    command: optionalText(value.command),
+  };
 }
 
 async function requestForInvocation(invocation, operation, ...arguments_) {
@@ -54,7 +125,8 @@ async function requestForInvocation(invocation, operation, ...arguments_) {
       ...arguments_,
     );
   } catch (error) {
-    hostError(String(error));
+    if (error?.code === "Cancelled") activeCommandFrames.at(-1)?.controller.abort(error);
+    throw error;
   }
 }
 
@@ -74,36 +146,46 @@ const completionProviders = new Map();
 const activeCommandFrames = [];
 const snapshotTables = new WeakMap();
 const targetAuthorities = new WeakMap();
+const invalidArgumentErrors = new WeakSet();
+const signalAborters = new WeakMap();
 
 class KnotAbortSignal {
   #aborted = false;
   #reason = undefined;
   #listeners = new Set();
+  constructor() { signalAborters.set(this, (reason) => this.#abort(reason)); }
   get aborted() { return this.#aborted; }
   get reason() { return this.#reason; }
   addEventListener(type, listener) {
-    if (type === "abort") this.#listeners.add(listener);
+    if (type !== "abort" || typeof listener !== "function") throw new TypeError("expected an abort listener");
+    if (!this.#aborted) this.#listeners.add(listener);
   }
   removeEventListener(type, listener) {
-    if (type === "abort") this.#listeners.delete(listener);
+    if (type !== "abort" || typeof listener !== "function") throw new TypeError("expected an abort listener");
+    this.#listeners.delete(listener);
   }
   throwIfAborted() {
     if (this.#aborted) throw this.#reason;
   }
-  abort(reason) {
+  #abort(reason) {
     if (this.#aborted) return;
     this.#aborted = true;
     this.#reason = reason;
     for (const listener of this.#listeners) {
-      listener.call(this, { type: "abort", target: this });
+      try { listener.call(this, Object.freeze({ type: "abort", target: this })); }
+      catch (error) {
+        let message;
+        try { message = String(error?.stack ?? error); } catch { message = "abort listener failed"; }
+        nativeBindings.reportCancellationListenerFailure(message);
+      }
     }
     this.#listeners.clear();
   }
 }
 
 class KnotAbortController {
-  signal = new KnotAbortSignal();
-  abort(reason = new Error("command cancelled")) { this.signal.abort(reason); }
+  signal = Object.freeze(new KnotAbortSignal());
+  abort(reason = new Error("command cancelled")) { signalAborters.get(this.signal)(reason); }
 }
 
 function byteLengthOfCodePoint(codePoint) {
@@ -138,13 +220,16 @@ function snapshotFromNative(snapshot) {
     }),
     revision: snapshot.revision,
     byteOffsetAtUtf16(offset) {
-      const value = snapshotTable(this).byteAtUtf16[offset];
+      safeInteger(offset);
+      const offsets = snapshotTable(this).byteAtUtf16;
+      const value = Object.hasOwn(offsets, offset) ? offsets[offset] : undefined;
       if (value === undefined) {
         throw new RangeError("UTF-16 offset splits a surrogate pair or is out of bounds");
       }
       return value;
     },
     utf16OffsetAtByte(offset) {
+      safeInteger(offset);
       const value = snapshotTable(this).utf16AtByte.get(offset);
       if (value === undefined) {
         throw new RangeError("byte offset splits a UTF-8 scalar or is out of bounds");
@@ -158,35 +243,28 @@ function bufferFor(handle) {
   let buffer = buffers.get(handle);
   if (buffer) return buffer;
 
-  let contributionsDisposed = false;
+  const contributionOwnership = ownership(() => {}, () => request("disposeEditorContributions", handle));
   const contributions = Object.freeze({
     async replace(items, options) {
-      if (contributionsDisposed) {
-        const error = new Error("editor contribution set is disposed");
-        error.name = "ContributionSetDisposedError";
-        throw error;
-      }
-      await request(
-        "replaceEditorContributions",
-        handle,
-        items,
-        options?.ifRevision,
-      );
+      contributionOwnership.assertActive();
+      const converted = arrayItems(items, contribution);
+      const ifRevision = revision(options);
+      await contributionOwnership.track(request("replaceEditorContributions", handle, converted, ifRevision));
     },
-    async dispose() {
-      if (contributionsDisposed) return;
-      contributionsDisposed = true;
-      await request("disposeEditorContributions", handle);
-    },
+    dispose: () => contributionOwnership.dispose(),
   });
 
   buffer = Object.freeze({
     async snapshot(range) {
-      return snapshotFromNative(await request("snapshot", handle, range));
+      return snapshotFromNative(await request("snapshot", handle, range == null ? null : byteRange(range)));
     },
     async applyEdits(edits, options) {
-      const revision = await request("applyEdits", handle, edits, options?.ifRevision);
-      return Object.freeze({ revision });
+      const converted = arrayItems(edits, (edit) => {
+        record(edit, "edit must be an object");
+        return { range: byteRange(edit.range), text: string(edit.text, "edit text must be a string") };
+      });
+      const resultRevision = await request("applyEdits", handle, converted, revision(options));
+      return Object.freeze({ revision: resultRevision });
     },
     async onDidChange(listener) {
       if (typeof listener !== "function") {
@@ -194,15 +272,9 @@ function bufferFor(handle) {
       }
       const subscription = await request("subscribeBufferChanges", handle);
       bufferChangeListeners.set(subscription, { handle, listener });
-      let disposed = false;
-      return Object.freeze({
-        dispose() {
-          if (disposed) return;
-          disposed = true;
-          bufferChangeListeners.delete(subscription);
-          void request("unsubscribeBufferChanges", subscription);
-        },
-      });
+      const owned = ownership(() => bufferChangeListeners.delete(subscription),
+        () => request("unsubscribeBufferChanges", subscription));
+      return Object.freeze({ dispose: () => owned.dispose() });
     },
     contributions,
   });
@@ -247,15 +319,9 @@ export async function registerCommand(name, handler) {
   }
   const registration = await request("registerCommand", name, name);
   commandHandlers.set(registration, handler);
-  let disposed = false;
-  return Object.freeze({
-    dispose() {
-      if (disposed) return;
-      disposed = true;
-      commandHandlers.delete(registration);
-      void request("unregisterCommand", registration);
-    },
-  });
+  const owned = ownership(() => commandHandlers.delete(registration),
+    () => request("unregisterCommand", registration));
+  return Object.freeze({ dispose: () => owned.dispose() });
 }
 
 export async function registerViewCommand(viewKind, name, handler) {
@@ -264,15 +330,9 @@ export async function registerViewCommand(viewKind, name, handler) {
   }
   const registration = await request("registerViewCommand", viewKind, name);
   commandHandlers.set(registration, handler);
-  let disposed = false;
-  return Object.freeze({
-    dispose() {
-      if (disposed) return;
-      disposed = true;
-      commandHandlers.delete(registration);
-      void request("unregisterCommand", registration);
-    },
-  });
+  const owned = ownership(() => commandHandlers.delete(registration),
+    () => request("unregisterCommand", registration));
+  return Object.freeze({ dispose: () => owned.dispose() });
 }
 
 export async function selectedViewText(target) {
@@ -291,15 +351,15 @@ export async function invokeCommand(name, commandArguments) {
     throw new TypeError("commands.invoke requires a command name");
   }
   const arguments_ = commandArguments === undefined ? null : commandArguments;
-  validateCommandArguments(arguments_);
-  const dispatch = await request("invokeCommand", name, arguments_);
+  const normalized = validateCommandArguments(arguments_);
+  const dispatch = await request("invokeCommand", name, normalized);
   if (dispatch.kind === "outcome") return Object.freeze(dispatch.outcome);
 
   const outcome = await invokeRegisteredCommand(
     dispatch.invocation,
     dispatch.registration,
     activeCommandFrames.at(-1)?.buffer ?? null,
-    arguments_,
+    normalized,
     activeCommandFrames.at(-1)?.capture ?? null,
   );
   await requestForInvocation(
@@ -312,27 +372,43 @@ export async function invokeCommand(name, commandArguments) {
 }
 
 function validateCommandArguments(value, seen = new Set()) {
-  if (value === null || typeof value === "string" || typeof value === "boolean") return;
+  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
   if (typeof value === "number") {
-    if (Number.isFinite(value)) return;
+    if (Number.isFinite(value)) return value;
     throw new TypeError("command arguments require finite numbers");
   }
-  if (typeof value !== "object") {
-    throw new TypeError("command arguments must be JSON-compatible");
-  }
+  if (typeof value !== "object") throw new TypeError("command arguments must be JSON-compatible");
   if (seen.has(value)) throw new TypeError("command arguments cannot contain cycles");
+  const prototype = Object.getPrototypeOf(value);
+  if ((Array.isArray(value) ? prototype !== Array.prototype : prototype !== null && prototype !== Object.prototype) ||
+      typeof value.toJSON === "function" || Object.getOwnPropertySymbols(value).length !== 0) {
+    throw new TypeError("command arguments require plain JSON data");
+  }
   seen.add(value);
+  let copy;
   if (Array.isArray(value)) {
-    for (const item of value) validateCommandArguments(item, seen);
+    if (Object.keys(value).some((key) => {
+      const index = Number(key);
+      return !Number.isInteger(index) || index < 0 || index >= value.length || String(index) !== key;
+    })) throw new TypeError("command arrays must contain only indexed data");
+    copy = [];
+    Object.defineProperty(copy, "toJSON", { value: undefined });
+    for (let index = 0; index < value.length; index++) {
+      if (!Object.hasOwn(value, index)) throw new TypeError("command arrays must be dense");
+      copy.push(validateCommandArguments(value[index], seen));
+    }
   } else {
-    for (const item of Object.values(value)) validateCommandArguments(item, seen);
+    copy = Object.create(null);
+    for (const key of Object.keys(value)) copy[key] = validateCommandArguments(value[key], seen);
   }
   seen.delete(value);
+  return Object.freeze(copy);
 }
 
 export function invalidCommandArguments(message) {
-  const error = new Error(String(message));
+  const error = new Error(string(message, "invalidArguments requires a message"));
   error.name = "InvalidCommandArgumentsError";
+  invalidArgumentErrors.add(error);
   throw error;
 }
 
@@ -362,18 +438,18 @@ async function invokeRegisteredCommand(
       await handler(Object.freeze({
         target,
         buffer: activeHandle === null ? null : bufferFor(activeHandle),
-        arguments: commandArguments,
+        arguments: validateCommandArguments(commandArguments),
         signal: controller.signal,
       }));
       return controller.signal.aborted
         ? { kind: "cancelled" }
         : { kind: "completed" };
     } catch (error) {
-      if (controller.signal.aborted || error?.name === "AbortError") {
+      if (controller.signal.aborted) {
         return { kind: "cancelled" };
       }
       const message = String(error?.stack ?? error);
-      if (error?.name === "InvalidCommandArgumentsError") {
+      if (invalidArgumentErrors.has(error)) {
         return { kind: "invalidArgument", message };
       }
       return { kind: "handlerFailure", message };
@@ -409,18 +485,15 @@ export async function registerTreeDataProvider(viewId, provider) {
   }
   const registration = await request("registerTreeDataProvider", viewId);
   treeProviders.set(registration, provider);
-  let disposed = false;
+  const owned = ownership(() => treeProviders.delete(registration),
+    () => request("unregisterTreeDataProvider", registration));
   return Object.freeze({
-    invalidate(parentId) {
-      if (disposed) return;
-      void request("invalidateTreeDataProvider", registration, parentId ?? null);
+    async invalidate(parentId) {
+      owned.assertActive();
+      const parent = optionalText(parentId);
+      await owned.track(request("invalidateTreeDataProvider", registration, parent));
     },
-    dispose() {
-      if (disposed) return;
-      disposed = true;
-      treeProviders.delete(registration);
-      void request("unregisterTreeDataProvider", registration);
-    },
+    dispose: () => owned.dispose(),
   });
 }
 
@@ -430,7 +503,7 @@ globalThis.__knotRequestTreeChildren = async (registration, parentId, generation
     return { error: "tree data provider is disposed" };
   }
   try {
-    return { items: Array.from(await provider.getChildren(parentId)) };
+    return { items: iterableItems(await provider.getChildren(parentId), treeItem) };
   } catch (error) {
     return { error: String(error?.stack ?? error) };
   }
@@ -442,15 +515,9 @@ export async function registerCompletionProvider(label, provider) {
   }
   const registration = await request("registerCompletionProvider", label);
   completionProviders.set(registration, provider);
-  let disposed = false;
-  return Object.freeze({
-    dispose() {
-      if (disposed) return;
-      disposed = true;
-      completionProviders.delete(registration);
-      void request("unregisterCompletionProvider", registration);
-    },
-  });
+  const owned = ownership(() => completionProviders.delete(registration),
+    () => request("unregisterCompletionProvider", registration));
+  return Object.freeze({ dispose: () => owned.dispose() });
 }
 
 globalThis.__knotRequestCompletions = async (
@@ -470,7 +537,7 @@ globalThis.__knotRequestCompletions = async (
       buffer: bufferFor(handle), revision, cursorByteOffset, prefix, generation,
     }));
     return {
-      items: Array.from(provided, (item) => {
+      items: iterableItems(provided, (item) => {
         if (typeof item?.label !== "string" || typeof item?.insertText !== "string") {
           throw new TypeError("completion items require string label and insertText properties");
         }

@@ -177,7 +177,7 @@ impl ExtensionBufferBridge {
                         subscription: *subscription,
                     })
                 } else {
-                    Err(HostRequestError::BufferClosed)
+                    Err(HostRequestError::OwnershipDisposed)
                 }
             }
             HostOperation::ReplaceEditorContributions {
@@ -276,7 +276,7 @@ impl Default for ExtensionBufferBridge {
 fn map_buffer_error(error: BufferAccessError) -> HostRequestError {
     match error {
         BufferAccessError::Closed => HostRequestError::BufferClosed,
-        BufferAccessError::ReadOnly => HostRequestError::UnsupportedOperation,
+        BufferAccessError::ReadOnly => HostRequestError::BufferReadOnly,
         BufferAccessError::InvalidRange => HostRequestError::InvalidRange,
         BufferAccessError::InvalidEditBatch => HostRequestError::InvalidEditBatch,
         BufferAccessError::RevisionConflict => HostRequestError::RevisionConflict,
@@ -420,6 +420,69 @@ mod tests {
             );
             assert_eq!(stale.result, Err(HostRequestError::RevisionConflict));
             assert_eq!(model.read(cx).text(), "aE中z");
+            bridge.remove_lifecycle(extension, lifecycle, cx);
+            assert_eq!(model.read(cx).text(), "aE中z");
+            let cancelled = bridge.dispatch(
+                request(
+                    extension,
+                    lifecycle,
+                    5,
+                    HostOperation::Snapshot {
+                        buffer,
+                        range: None,
+                    },
+                ),
+                || false,
+                cx,
+            );
+            assert_eq!(cancelled.result, Err(HostRequestError::Cancelled));
+        });
+    }
+
+    #[gpui::test]
+    fn buffer_policy_and_stale_subscription_failures_are_distinct(cx: &mut TestAppContext) {
+        let extension = ExtensionId::new(7);
+        let lifecycle = ExtensionLifecycleId::new(3);
+        let model = cx.new(|_| BufferModel::from_read_only_text("generated"));
+        cx.update(|cx| {
+            let mut bridge = ExtensionBufferBridge::new();
+            bridge.admit_lifecycle(extension, lifecycle);
+            let buffer = bridge.open_buffer(&model);
+            let result = bridge.dispatch(
+                request(
+                    extension,
+                    lifecycle,
+                    1,
+                    HostOperation::ApplyEdits {
+                        buffer,
+                        edits: vec![TextEdit {
+                            range: ByteRange {
+                                start_byte_offset: 0,
+                                end_byte_offset: 0,
+                            },
+                            text: "edit".into(),
+                        }],
+                        if_revision: 0,
+                    },
+                ),
+                || false,
+                cx,
+            );
+            assert_eq!(result.result, Err(HostRequestError::BufferReadOnly));
+            let result = bridge.dispatch(
+                request(
+                    extension,
+                    lifecycle,
+                    2,
+                    HostOperation::UnsubscribeBufferChanges {
+                        subscription: BufferSubscriptionId::new(999),
+                    },
+                ),
+                || false,
+                cx,
+            );
+            assert_eq!(result.result, Err(HostRequestError::OwnershipDisposed));
+            assert_eq!(model.read(cx).text(), "generated");
         });
     }
 

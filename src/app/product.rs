@@ -4477,7 +4477,7 @@ mod tests {
                 (
                     "dist/main.js",
                     r#"
-                import * as knot from 'knot'; const { commands, editor } = knot;
+                import * as knot from 'knot'; const { commands, editor, workbench } = knot;
                 import { prefix } from './words.js';
                 await commands.register('example.base', async ({ buffer }) => {
                     const snapshot = await buffer.snapshot();
@@ -4515,12 +4515,13 @@ mod tests {
             &[(
                 "main.js",
                 r#"
-                import * as knot from 'knot'; const { commands, editor } = knot;
+                import * as knot from 'knot'; const { commands, editor, workbench } = knot;
                 await commands.register('example.shared', async () => {});
                 await commands.registerForView('outline', 'copy', async () => {});
                 await editor.registerCompletionProvider('broken-provider', {
                     provideCompletions() { return []; }
                 });
+                await workbench.registerTreeDataProvider('outline', { getChildren() { return []; } });
                 throw new Error('broken entry');
             "#,
             )],
@@ -4556,6 +4557,17 @@ mod tests {
             host.start_installed_extensions(root.path().to_path_buf(), cx)
         });
         let report = wait_for_extension_report(&host, cx);
+        cx.read(|cx| {
+            assert!(
+                !shell
+                    .read(cx)
+                    .extension_tree
+                    .as_ref()
+                    .unwrap()
+                    .read(cx)
+                    .has_provider()
+            )
+        });
         let result = |name| {
             report
                 .report
@@ -5382,6 +5394,186 @@ await commands.register("api.nontext", async (context) => {
         .unwrap();
         let execution = dispatch_product_command(&shell, window, "api.nontext", cx);
         assert_eq!(wait_for_command(execution, cx), CommandOutcome::Completed);
+    }
+
+    #[gpui::test]
+    fn public_api_disposal_and_unload_release_foreground_ownership(cx: &mut TestAppContext) {
+        use crate::host::lifecycle::ExtensionKey;
+        const SOURCE: &str = r#"
+import { commands, editor, workbench, keybinding } from "knot";
+let owned;
+keybinding("cmd-alt-o", "api.owned");
+await commands.register("api.owned-setup", async ({ buffer }) => {
+  const snapshot = await buffer.snapshot();
+  await buffer.contributions.replace([{ range: { startByteOffset: 0, endByteOffset: 1 }, decoration: "info" }], { ifRevision: snapshot.revision });
+  owned = [
+    buffer.contributions,
+    await buffer.onDidChange(() => workbench.writeClipboardText("leaked listener")),
+    await commands.register("api.owned", () => {}),
+    await workbench.registerTreeDataProvider("outline", { getChildren() { return [{ id: "owned", label: "owned", collapsibleState: "none" }]; } }),
+    await editor.registerCompletionProvider("owned", { provideCompletions() { return [{ label: "owned", insertText: "owned" }]; } }),
+  ];
+});
+await commands.register("api.owned-cleanup", async () => {
+  const cleanup = owned.map(owner => owner.dispose());
+  for (let index = 0; index < owned.length; index++) if (cleanup[index] !== owned[index].dispose()) throw new Error("cleanup promise changed");
+  await Promise.all(cleanup);
+});
+"#;
+        let documents = install_globals(cx);
+        cx.update(super::bind_product_keys);
+        let host = cx.update(super::super::extension_host::install);
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        model.update(cx, |model, _| model.replace(0..0, "owned").unwrap());
+        let (shell, window) = product_window(document, model.clone(), cx);
+        let editor = cx.read(|cx| {
+            shell
+                .read(cx)
+                .workbench
+                .read(cx)
+                .focused_pane()
+                .unwrap()
+                .active_tab()
+                .editor()
+                .unwrap()
+                .clone()
+        });
+        for explicit_cleanup in [true, false] {
+            let key = ExtensionKey::new(
+                ExtensionId::new(if explicit_cleanup { 704 } else { 705 }),
+                ExtensionLifecycleId::new(1),
+            );
+            host.update(cx, |host, cx| {
+                let execution = host.load_test_source(key, SOURCE).unwrap();
+                cx.spawn(async move |_, _| {
+                    execution.await.unwrap();
+                })
+                .detach();
+            });
+            wait_for_api_condition(cx, |cx| {
+                cx.global::<ApplicationProductCommands>()
+                    .0
+                    .read(cx)
+                    .catalog()
+                    .borrow()
+                    .resolve("api.owned-cleanup")
+                    .is_ok()
+            });
+            let setup = dispatch_product_command(&shell, window, "api.owned-setup", cx);
+            assert_eq!(wait_for_command(setup, cx), CommandOutcome::Completed);
+            wait_for_api_condition(cx, |cx| {
+                shell
+                    .read(cx)
+                    .extension_tree
+                    .as_ref()
+                    .unwrap()
+                    .read(cx)
+                    .root_labels()
+                    == ["owned"]
+            });
+            cx.read(|cx| assert_eq!(model.read(cx).resolved_contributions().len(), 1));
+            let completion =
+                dispatch_product_command(&shell, window, super::SHOW_COMPLETIONS_COMMAND, cx);
+            assert_eq!(wait_for_command(completion, cx), CommandOutcome::Completed);
+            wait_for_api_condition(cx, |cx| {
+                editor
+                    .read(cx)
+                    .completion_state()
+                    .is_some_and(|(items, pending, _, _, _)| items == 1 && pending == 0)
+            });
+            if explicit_cleanup {
+                let cleanup = dispatch_product_command(&shell, window, "api.owned-cleanup", cx);
+                assert_eq!(wait_for_command(cleanup, cx), CommandOutcome::Completed);
+            } else {
+                host.update(cx, |host, cx| host.unload(key, cx).unwrap());
+            }
+            cx.read(|cx| {
+                assert!(model.read(cx).resolved_contributions().is_empty());
+                assert!(
+                    !shell
+                        .read(cx)
+                        .extension_tree
+                        .as_ref()
+                        .unwrap()
+                        .read(cx)
+                        .has_provider()
+                );
+                assert!(
+                    cx.global::<ApplicationProductCommands>()
+                        .0
+                        .read(cx)
+                        .catalog()
+                        .borrow()
+                        .resolve("api.owned")
+                        .is_err()
+                );
+                let (items, pending, _, _, _) = editor.read(cx).completion_state().unwrap();
+                assert_eq!((items, pending), (0, 0));
+            });
+            if explicit_cleanup {
+                host.update(cx, |host, cx| host.unload(key, cx).unwrap());
+            }
+            cx.read(|cx| {
+                assert!(keymap_command(cx, "cmd-alt-o", Some("editor")).is_none());
+                assert!(
+                    cx.global::<ApplicationProductCommands>()
+                        .0
+                        .read(cx)
+                        .catalog()
+                        .borrow()
+                        .resolve("api.owned-setup")
+                        .is_err()
+                );
+            });
+        }
+        let key = ExtensionKey::new(ExtensionId::new(706), ExtensionLifecycleId::new(1));
+        host.update(cx, |host, cx| {
+            let execution = host.load_test_source(key, SOURCE).unwrap();
+            cx.spawn(async move |_, _| {
+                execution.await.unwrap();
+            })
+            .detach();
+        });
+        wait_for_api_condition(cx, |cx| {
+            cx.global::<ApplicationProductCommands>()
+                .0
+                .read(cx)
+                .catalog()
+                .borrow()
+                .resolve("api.owned-cleanup")
+                .is_ok()
+        });
+        let setup = dispatch_product_command(&shell, window, "api.owned-setup", cx);
+        assert_eq!(wait_for_command(setup, cx), CommandOutcome::Completed);
+        cx.read(|cx| assert_eq!(model.read(cx).resolved_contributions().len(), 1));
+        cx.update(|cx| {
+            drop(cx.remove_global::<super::super::extension_host::ApplicationExtensionHost>())
+        });
+        cx.update(move |_| drop(host));
+        cx.run_until_parked();
+        cx.read(|cx| {
+            assert!(model.read(cx).resolved_contributions().is_empty());
+            assert!(
+                !shell
+                    .read(cx)
+                    .extension_tree
+                    .as_ref()
+                    .unwrap()
+                    .read(cx)
+                    .has_provider()
+            );
+            assert!(
+                cx.global::<ApplicationProductCommands>()
+                    .0
+                    .read(cx)
+                    .catalog()
+                    .borrow()
+                    .resolve("api.owned")
+                    .is_err()
+            );
+            assert!(keymap_command(cx, "cmd-alt-o", Some("editor")).is_none());
+        });
     }
 
     #[gpui::test]

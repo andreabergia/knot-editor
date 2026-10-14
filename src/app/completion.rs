@@ -7,8 +7,8 @@ use std::{
 use gpui::{prelude::*, *};
 
 use crate::host::protocol::{
-    BufferHandle, CompletionProviderError, CompletionProviderRegistrationId, CompletionRequest,
-    CompletionResponse, CompletionResultItem, ExtensionId, ExtensionLifecycleId,
+    BufferHandle, CompletionProviderRegistrationId, CompletionRequest, CompletionResponse,
+    CompletionResultItem, ExtensionId, ExtensionLifecycleId,
 };
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -387,14 +387,11 @@ impl CompletionController {
         &mut self,
         registration: CompletionProviderRegistrationId,
     ) -> bool {
-        self.apply_response(CompletionResponse {
-            registration,
-            revision: self.revision,
-            generation: self.generation,
-            result: Err(CompletionProviderError {
-                message: "provider lifecycle ended".into(),
-            }),
-        })
+        if self.providers.remove(&registration).is_none() {
+            return false;
+        }
+        self.rebuild_snapshot();
+        true
     }
 
     fn rebuild_snapshot(&mut self) {
