@@ -46,6 +46,15 @@ notifies every observing view. All text mutation paths enforce the model's
 access policy; read-only models still permit snapshots, view anchors,
 contributions, and closure. `core::TextBuffer` remains unconditionally mutable.
 
+Extension buffer proxies remain usable independently of subscription and
+contribution ownership. Disposal makes each owner locally inactive and awaits
+native release; repeated calls share the same success or failure. Accepted
+contribution replacements precede cleanup acknowledgement. Subscription disposal
+prevents new admission and discards queued unowned listener deliveries without
+waiting for an executing callback. Lifecycle teardown and product-host release
+remove remaining owners from live models. Cancellation before mutation prevents
+the commit; teardown after an acknowledged commit does not undo its text.
+
 ## Stable positions and edit behavior
 
 - Text offsets and ranges are half-open UTF-8 byte ranges. Presentation layers

@@ -113,6 +113,15 @@ command path.
 Semantic tree state retains accessibility information, but gpui 0.2.2 lacks
 the required public platform bridge.
 
+Provider disposal removes local callback admission immediately and awaits native
+unregistration. Tree invalidation is acknowledged independently of subsequent
+fetch/paint, and accepted invalidations settle before cleanup acknowledgement.
+Native unregistration cancels retained requests across live surfaces. Completion
+removal also removes that provider's candidates from active aggregates, including
+already-completed results; other providers retain their state. A callback may
+await its own disposal without requiring its stack to unwind first. Invalid
+iterables or recognized item fields fail only the affected provider request.
+
 ## Generated text
 
 Generated search documents retain their application-owned

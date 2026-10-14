@@ -81,6 +81,22 @@ edits, change subscriptions, and one replaceable contribution set. The engine
 converts these values directly at the V8 boundary; immutable UTF-16 snapshot
 storage is externalized with one `Arc` reference retained until V8 releases it.
 
+The facade validates recognized data fields and copies command JSON before native
+admission. Native decoding uses Knot-owned typed values without invoking JSON
+conversion hooks. Numeric boundaries reject coercion and precision loss; native
+numbers that cannot be represented exactly are rejected before reaching JavaScript.
+Native failures construct `KnotHostError` instances from typed codes, while
+argument types and numeric limits use `TypeError` and `RangeError`.
+
+Registration and contribution disposers become locally inactive immediately and
+retain one cleanup promise, including its rejection. Native acknowledgement
+settles cleanup after earlier accepted mutations or invalidations have settled.
+There is no retry after cleanup failure. Listener/provider callbacks are outside
+that acknowledgement barrier, so a callback can await its own disposal. Native
+unregistration cancels pending provider receivers; a self-mutation's response is
+allowed to finish its active callback before releasing the scheduler root.
+Queued callbacks whose local registration is gone cannot enter author code.
+
 Personal config uses one capsule with optional pre-init and post-init graph
 entries. Loading the graph evaluates neither entry; the application schedules
 each entry as a separate awaited root turn. Compiled modules, JavaScript state,
@@ -222,13 +238,14 @@ Dropping the native receiver cancels a queued call before entry or wakes an
 active call to release its persistent promise and pending host resolvers.
 Unregistration removes the JavaScript provider synchronously, and unload or
 pool shutdown settles outstanding native callback completions during the
-ordinary lifecycle teardown.
+ordinary lifecycle teardown. Completion unregistration and lifecycle removal also
+cancel retained editor requests and remove that provider's aggregate results.
 
 The foreground command bridge shares the application's lifecycle-scoped catalog
 and owns one serial invocation tree. It retains the admitted presentation and
 its buffer on the root, inherits both through children, returns same-lifecycle
-children to JavaScript as inline continuations, and defers cross-lifecycle or native outcomes until their work
-settles. Product nested commands are offered to the captured window before a
+children to JavaScript as inline continuations, and defers cross-lifecycle or
+native outcomes until their work settles. Product nested commands are offered to the captured window before a
 child is admitted; the bridge then preserves one-child and ancestry checks for
 the selected handler. The shared catalog supplies lifecycle registrations for
 palette and keybinding discovery, while the application bridge retains the captured native
@@ -261,3 +278,12 @@ view-owned completion sessions dispatch awaitable provider calls through the
 application pool. Those native owners remain authoritative for parent,
 registration, generation, buffer-revision, and lifecycle validation, so late
 or stale provider results are ignored without involving V8.
+
+Releasing the product host unloads its remaining isolates and removes foreground
+ownership while retained buffer models and editor views are still live. Startup
+rollback, explicit unload, terminal lifecycle events and host release share the
+same idempotent foreground cleanup. Cleanup removes command/keymap ownership,
+subscriptions, contributions and semantic registrations independently of final
+JavaScript callbacks or cleanup awaits. Cancellation listeners have a validated,
+read-only signal/event surface; a throwing listener is diagnosed independently
+and cannot prevent delivery to the remaining listeners.

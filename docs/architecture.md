@@ -64,7 +64,9 @@ application's foreground catalog binds command handlers to live view instances.
 The application owns one extension pool. Its fixed workers enter persistent V8
 isolates for one turn at a time; awaiting host work retains JavaScript state without
 holding a worker. The host owns scheduling and runtime disposal, while the
-application owns protocol routing and foreground resource cleanup.
+application owns protocol routing and foreground resource cleanup. Foreground
+cleanup is shared by lifecycle teardown and host release, so registrations and
+contributions cannot outlive the host on retained models or views.
 Installed-package filesystem discovery runs on gpui's background executor.
 The application then loads valid packages in dependency order, keeps the
 startup report, and removes foreground registrations when a load fails or an

@@ -120,6 +120,21 @@ imports from reaching another package or native filesystem paths. V8 retains
 compiled modules and values inside its isolate; the application handles disk
 discovery and passes only Knot-owned sources into the host.
 
+Treat disposal as immediate local inactivity followed by native acknowledgement.
+Keep one result, including rejection, for repeated calls so a failed cleanup does
+not silently become success or create a second mutation. Earlier accepted
+mutations/invalidation settle before cleanup acknowledgement; executing callbacks
+are excluded from that barrier so self-disposal cannot deadlock. Authoritative
+teardown releases remaining foreground ownership without depending on JavaScript
+finally blocks or a disposer retry. Host release uses the same cleanup while
+buffer models and views may still be retained.
+
+Decode boundary data by recognized typed fields rather than JSON conversion
+hooks or diagnostic strings. Public host error codes come from native failure
+variants; type and numeric errors remain author-side categories. Preserve native
+integer precision instead of silently rounding identities, revisions or offsets.
+A bad callback or item remains a recoverable failure of its request.
+
 Reference: [extension host](architecture/extension-host.md). Evidence: [v8 runtime](archive/exploration/step7-v8-runtime.md).
 
 ## Installed extension directories

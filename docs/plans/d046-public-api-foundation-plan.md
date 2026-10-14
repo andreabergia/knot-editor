@@ -1,7 +1,7 @@
 # D046 — Public API foundation
 
 Status: ✅ checkpoint 1 approved; ✅ checkpoint 2 implemented, awaiting review;
-checkpoints 3–4 not started.
+✅ checkpoint 3 implemented, awaiting review; checkpoint 4 not started.
 
 Source: [extension platform plan](extension-platform-and-projects-plan.md),
 [D046 roadmap entry](../roadmap.md).
@@ -78,19 +78,19 @@ carry codes; full coded-error conversion and decoder alignment remain checkpoint
 
 ⏳ Review gate: inspect the JS command fixture, target validity and failure distinctions.
 
-## 3. Failures and lifecycle acknowledgements — ⬜
+## 3. Failures and lifecycle acknowledgements — ✅ implemented; ⏳ review pending
 
-- Align facade and native decoding with the declarations. Construct coded public
+- ✅ Align facade and native decoding with the declarations. Construct coded public
   errors from typed boundary failures; eliminate diagnostic-string inference.
-- Implement acknowledged, idempotent disposal for command registrations, buffer
+- ✅ Implement acknowledged, idempotent disposal for command registrations, buffer
   subscriptions/contributions, trees and completion registrations; make tree
   invalidation awaitable.
-- Preserve local inactivity and a shared cleanup result, including rejection.
+- ✅ Preserve local inactivity and a shared cleanup result, including rejection.
   Converge registration rollback and authoritative lifecycle teardown on exact-once
   release; cancel pending provider work and reject unowned queued deliveries.
-- Define deterministic mutation/invalidation/disposal ordering and avoid callback
+- ✅ Define deterministic mutation/invalidation/disposal ordering and avoid callback
   self-disposal deadlocks.
-- Update affected subsystem references and decisions.
+- ✅ Update affected subsystem references and decisions.
 
 Validation:
 
@@ -103,7 +103,25 @@ Validation:
   shutdown; retain command, buffer, keymap, provider and listener failure isolation.
 - Atomic synchronous keybinding batches with no partial map on failure.
 
-Review gate: verify contracts against declarations, no discarded cleanup/invalidation
+✅ Automated evidence: `cargo test --all-targets` passed (550 library tests and
+5 example tests); `scripts/check-extension-api.sh` and `git diff --check` passed.
+Coverage includes typed host codes, argument/revision/offset validation, exact
+native integers, deep plain JSON, rejected conversion hooks/array-like providers,
+ignored unknown item fields, all disposer kinds with concurrent/repeated success
+and failure, invalidate/replace versus cleanup ordering, queued deliveries,
+listener/tree/completion self-disposal, registration/unload races and foreground
+ownership after disposal, failed activation, unload and host release. Existing
+cancellation, response identity/kind, duplicate/late response, keymap atomicity and
+command/provider/listener isolation suites remain green.
+
+Completion unregistration removes pending work and completed candidates from live
+editor aggregates. Host release uses authoritative foreground cleanup while
+models/views remain live. Native JSON/result decoding invokes no author conversion
+hooks; cancellation listeners validate their interface, prevent replay and isolate
+callback failures. Package version admission and final authoring integration remain
+checkpoint 4.
+
+⏳ Review gate: verify contracts against declarations, no discarded cleanup/invalidation
 promises, and no deadlock or double release.
 
 ## 4. Package admission and authoring baseline — ⬜
@@ -137,9 +155,6 @@ Remove entries as implementation and regression coverage close them.
 
 | Checkpoint | Open gap / affected code |
 | --- | --- |
-| 3 | Numeric decoding coerces values; snapshot conversion accepts inherited/string indices; outgoing integers may lose precision. Required revision errors differ between edits/contributions; read-only buffers map to `UnsupportedOperation`. |
-| 3 | JSON stringify permits custom conversion/omission missed by facade validation; tree `Array.from` accepts accidental array-like results. Align recursive JSON, iterable/item and recognized-field validation; retain ignored unknown fields. |
-| 3 | Errors are string/name based; `invalidArguments` coerces its message. Most disposers/invalidation discard request promises, and repeated contribution disposal falsely succeeds during pending/failed cleanup. Add ownership/race assertions in engine and foreground tests. |
 | 4 | `extension_package.rs` lacks `apiVersion`; adapt discovery/loading, manifest constructors and JSON fixtures in package/load/host/product tests, example manifests and `docs/schemas/knot.schema.json`. |
 
 Completion requires all audit gaps closed, every public operation matched to its
