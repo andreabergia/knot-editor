@@ -1,6 +1,7 @@
 # D046 — Public API foundation
 
-Status: 🔎 checkpoint 1 ready for review; runtime checkpoints 2–4 not started.
+Status: ✅ checkpoint 1 approved; runtime checkpoints 2–4 not started.
+Checkpoint 2 implementation is deferred until requested.
 
 Source: [extension platform plan](extension-platform-and-projects-plan.md),
 [D046 roadmap entry](../roadmap.md).
@@ -24,7 +25,7 @@ identity, real buffer-removal wiring, resource operations, storage/project polic
 new tree-instance protocols and native contributions. Do not add restructuring,
 scheduling quotas, rendering changes, source maps or a generic command schema.
 
-## 1. Contract and audit — 🔎 review pending
+## 1. Contract and audit — ✅ complete
 
 - ✅ Draft and document the complete API in `knot.d.ts`, including context,
   errors, revision/offset rules, provider data and cleanup completion.
@@ -33,8 +34,8 @@ scheduling quotas, rendering changes, source maps or a generic command schema.
   response conversions; allocate outstanding mismatches below.
 - ✅ Add a reproducible compiler check with pinned tooling. It passes for the
   declarations, both installed examples, draft examples and 18 negative fixtures.
-- ⬜ Review the proposed contract before runtime changes. Focus on captured
-  context, acknowledged cleanup/errors and exact package API-version admission.
+- ✅ Contract approved on 2026-10-14. Retain explicit contextual target
+  arguments and a shared disposal result, including failure; no automatic retry.
 
 Validation: `scripts/check-extension-api.sh` and `git diff --check` passed.
 
