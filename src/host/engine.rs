@@ -4462,18 +4462,18 @@ fn host_response_to_v8<'s>(
             Ok(v8::null(scope).into())
         }
         (HostOperationKind::ActiveBuffer, HostResponseValue::ActiveBuffer(Some(buffer))) => {
-            Ok(exact_number(scope, buffer.value() as u64)?)
+            Ok(exact_number(scope, buffer.value())?)
         }
         (HostOperationKind::Snapshot, HostResponseValue::Snapshot(snapshot)) => {
             snapshot_to_v8(scope, snapshot)
         }
         (HostOperationKind::ApplyEdits, HostResponseValue::AppliedEdits { revision }) => {
-            Ok(exact_number(scope, revision as u64)?)
+            Ok(exact_number(scope, revision)?)
         }
         (
             HostOperationKind::SubscribeBufferChanges,
             HostResponseValue::BufferChangesSubscribed { subscription },
-        ) => Ok(exact_number(scope, subscription.value() as u64)?),
+        ) => Ok(exact_number(scope, subscription.value())?),
         (
             HostOperationKind::UnsubscribeBufferChanges,
             HostResponseValue::BufferChangesUnsubscribed { .. },
@@ -4493,7 +4493,7 @@ fn host_response_to_v8<'s>(
         | (
             HostOperationKind::RegisterViewCommand,
             HostResponseValue::ViewCommandRegistered { registration },
-        ) => Ok(exact_number(scope, registration.value() as u64)?),
+        ) => Ok(exact_number(scope, registration.value())?),
         (HostOperationKind::SelectedViewText, HostResponseValue::SelectedViewText(None)) => {
             Ok(v8::null(scope).into())
         }
@@ -4516,7 +4516,7 @@ fn host_response_to_v8<'s>(
         (
             HostOperationKind::RegisterTreeProvider,
             HostResponseValue::TreeProviderRegistered { registration },
-        ) => Ok(exact_number(scope, registration.value() as u64)?),
+        ) => Ok(exact_number(scope, registration.value())?),
         (HostOperationKind::InvalidateTreeProvider, HostResponseValue::TreeProviderInvalidated)
         | (
             HostOperationKind::UnregisterTreeProvider,
@@ -4529,7 +4529,7 @@ fn host_response_to_v8<'s>(
         (
             HostOperationKind::RegisterCompletionProvider,
             HostResponseValue::CompletionProviderRegistered { registration },
-        ) => Ok(exact_number(scope, registration.value() as u64)?),
+        ) => Ok(exact_number(scope, registration.value())?),
         _ => Err("UnsupportedOperation"),
     }
 }
@@ -4566,7 +4566,7 @@ fn snapshot_to_v8<'s>(
         snapshot.range.end_byte_offset as u64,
     )?;
     set_property(scope, value, "range", range.into())?;
-    set_number_property(scope, value, "revision", snapshot.revision as u64)?;
+    set_number_property(scope, value, "revision", snapshot.revision)?;
     Ok(value.into())
 }
 
@@ -4575,13 +4575,8 @@ fn buffer_change_to_v8<'s>(
     change: BufferChange,
 ) -> Result<v8::Local<'s, v8::Value>, &'static str> {
     let value = v8::Object::new(scope);
-    set_number_property(
-        scope,
-        value,
-        "beforeRevision",
-        change.before_revision as u64,
-    )?;
-    set_number_property(scope, value, "revision", change.revision as u64)?;
+    set_number_property(scope, value, "beforeRevision", change.before_revision)?;
+    set_number_property(scope, value, "revision", change.revision)?;
     let edits = v8::Array::new(
         scope,
         i32::try_from(change.edits.len()).map_err(|_| "InvalidEditBatch")?,

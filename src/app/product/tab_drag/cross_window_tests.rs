@@ -231,7 +231,7 @@ fn destination_preview_tracks_source_pointer_and_either_receiver_can_drop_or_can
     start_drag(&mut visual, 1);
     visual.simulate_mouse_move(target + offset, MouseButton::Left, Modifiers::default());
     visual.run_until_parked();
-    let first = VisualTestContext::from_window(destination_window, &mut visual)
+    let first = VisualTestContext::from_window(destination_window, &visual)
         .debug_bounds("tab-drag-label")
         .unwrap();
     let error = first.origin - (target - grab_offset);
@@ -243,12 +243,12 @@ fn destination_preview_tracks_source_pointer_and_either_receiver_can_drop_or_can
         Modifiers::default(),
     );
     visual.run_until_parked();
-    let second = VisualTestContext::from_window(destination_window, &mut visual)
+    let second = VisualTestContext::from_window(destination_window, &visual)
         .debug_bounds("tab-drag-label")
         .unwrap();
     assert_eq!(second.origin - first.origin, delta);
     // Escape is delivered through destination focus while movement stays in the source.
-    let mut destination_visual = VisualTestContext::from_window(destination_window, &mut visual);
+    let mut destination_visual = VisualTestContext::from_window(destination_window, &visual);
     destination_visual.simulate_keystrokes("escape");
     destination_visual.simulate_mouse_up(target, MouseButton::Left, Modifiers::default());
     destination_visual.run_until_parked();
@@ -267,7 +267,7 @@ fn destination_preview_tracks_source_pointer_and_either_receiver_can_drop_or_can
     });
     drop(destination_visual);
     start_drag(&mut visual, 1);
-    let mut destination_visual = VisualTestContext::from_window(destination_window, &mut visual);
+    let mut destination_visual = VisualTestContext::from_window(destination_window, &visual);
     destination_visual.simulate_mouse_move(target, MouseButton::Left, Modifiers::default());
     destination_visual.simulate_mouse_up(target, MouseButton::Left, Modifiers::default());
     destination_visual.run_until_parked();

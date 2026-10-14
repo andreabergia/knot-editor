@@ -238,19 +238,19 @@ impl Workbench {
         if !self.contains_tab_move(source) {
             return None;
         }
-        if let super::TabSurfaceId::Terminal(session) = source.tab.surface {
-            if destination.has_terminal_session(session) {
-                return None;
-            }
+        if let super::TabSurfaceId::Terminal(session) = source.tab.surface
+            && destination.has_terminal_session(session)
+        {
+            return None;
         }
         let prepared = destination.prepare_destination(target, None)?;
         let mut removed = self
             .remove_tab(source.tab.pane_id, source.tab.tab_id)
             .expect("validated source tab");
-        if let WorkbenchTabPayload::Terminal { view, .. } = &mut removed.tab.payload {
-            if let Some(source_view) = view.take() {
-                *view = Some(handoff(source_view));
-            }
+        if let WorkbenchTabPayload::Terminal { view, .. } = &mut removed.tab.payload
+            && let Some(source_view) = view.take()
+        {
+            *view = Some(handoff(source_view));
         }
         let snapshot = destination.install_moved_tab(removed.tab, prepared);
         self.debug_assert_invariants();

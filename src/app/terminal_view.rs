@@ -22,6 +22,8 @@ use super::{
     typography::{TEXT_SIZE, text_font},
 };
 
+type LinkOpener = Rc<dyn Fn(&str, &mut App)>;
+
 /// Native terminal presentation attached to one stable session.
 pub(crate) struct TerminalView {
     session: Entity<TerminalSession>,
@@ -39,7 +41,7 @@ pub(crate) struct TerminalView {
     focus_subscriptions: Vec<Subscription>,
     hovered_link: Option<LinkTarget>,
     armed_link: Option<ArmedLink>,
-    open_link: Rc<dyn Fn(&str, &mut App)>,
+    open_link: LinkOpener,
 }
 
 struct ArmedLink {
@@ -299,19 +301,18 @@ impl TerminalView {
                     && epoch.1 == session.pointer_revision()
                     && epoch.2 == interaction_modes(mode)
             }) && mode.intersects(TermMode::MOUSE_MODE)
+                && let Some((column, row)) = self.viewport_cell(position, cx)
             {
-                if let Some((column, row)) = self.viewport_cell(position, cx) {
-                    for button in self.pointer.application_buttons() {
-                        self.send_pointer(
-                            self.release_bytes(
-                                mode,
-                                button_code(button) + modifier_code(self.pointer_modifiers),
-                                column,
-                                row,
-                            ),
-                            cx,
-                        );
-                    }
+                for button in self.pointer.application_buttons() {
+                    self.send_pointer(
+                        self.release_bytes(
+                            mode,
+                            button_code(button) + modifier_code(self.pointer_modifiers),
+                            column,
+                            row,
+                        ),
+                        cx,
+                    );
                 }
             }
         }
@@ -399,21 +400,21 @@ impl TerminalView {
         self.pointer_position = Some(event.position);
         self.pointer_modifiers = event.modifiers;
         self.focus.focus(window);
-        if event.button == MouseButton::Left && link_modifier(event.modifiers) {
-            if let Some(grid) = self.link_grid(cx) {
-                if let Some(target) = grid.at(column, row).cloned() {
-                    self.armed_link = Some(ArmedLink {
-                        grid,
-                        target,
-                        generation: self.session.read(cx).generation(),
-                        bounds: self.interaction_bounds,
-                        layout: self.layout.unwrap(),
-                        position: event.position,
-                    });
-                    self.pointer.press(event.button, PointerOwner::Link);
-                    return true;
-                }
-            }
+        if event.button == MouseButton::Left
+            && link_modifier(event.modifiers)
+            && let Some(grid) = self.link_grid(cx)
+            && let Some(target) = grid.at(column, row).cloned()
+        {
+            self.armed_link = Some(ArmedLink {
+                grid,
+                target,
+                generation: self.session.read(cx).generation(),
+                bounds: self.interaction_bounds,
+                layout: self.layout.unwrap(),
+                position: event.position,
+            });
+            self.pointer.press(event.button, PointerOwner::Link);
+            return true;
         }
         if mode.intersects(TermMode::MOUSE_MODE) && !event.modifiers.shift {
             let code = button_code(event.button) + modifier_code(event.modifiers);
@@ -466,16 +467,16 @@ impl TerminalView {
                     return true;
                 }
                 Some(PointerOwner::Application) => {
-                    if mode.intersects(TermMode::MOUSE_DRAG | TermMode::MOUSE_MOTION) {
-                        if let Some((column, row)) = self.viewport_cell(event.position, cx) {
-                            let code = button_code(button) + 32 + modifier_code(event.modifiers);
-                            if self.pointer.motion_changed(column, row, code) {
-                                let bytes = mouse_bytes(mode, code, column, row, false);
-                                if !bytes.is_empty() {
-                                    self.reported_cell = Some((column, row));
-                                }
-                                self.send_pointer(bytes, cx);
+                    if mode.intersects(TermMode::MOUSE_DRAG | TermMode::MOUSE_MOTION)
+                        && let Some((column, row)) = self.viewport_cell(event.position, cx)
+                    {
+                        let code = button_code(button) + 32 + modifier_code(event.modifiers);
+                        if self.pointer.motion_changed(column, row, code) {
+                            let bytes = mouse_bytes(mode, code, column, row, false);
+                            if !bytes.is_empty() {
+                                self.reported_cell = Some((column, row));
                             }
+                            self.send_pointer(bytes, cx);
                         }
                     }
                     return true;
@@ -992,19 +993,21 @@ impl Element for TerminalElement {
         let scroll_hitbox = hitbox.clone();
         let entity = self.entity.clone();
         window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
-            if phase == DispatchPhase::Bubble && scroll_hitbox.should_handle_scroll(window) {
-                if entity.update(cx, |terminal, cx| terminal.scroll(event, cx)) {
-                    cx.stop_propagation();
-                }
+            if phase == DispatchPhase::Bubble
+                && scroll_hitbox.should_handle_scroll(window)
+                && entity.update(cx, |terminal, cx| terminal.scroll(event, cx))
+            {
+                cx.stop_propagation();
             }
         });
         let press_hitbox = hitbox.clone();
         let entity = self.entity.clone();
         window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
-            if phase == DispatchPhase::Bubble && press_hitbox.is_hovered(window) {
-                if entity.update(cx, |terminal, cx| terminal.mouse_down(event, window, cx)) {
-                    cx.stop_propagation();
-                }
+            if phase == DispatchPhase::Bubble
+                && press_hitbox.is_hovered(window)
+                && entity.update(cx, |terminal, cx| terminal.mouse_down(event, window, cx))
+            {
+                cx.stop_propagation();
             }
         });
         let motion_hitbox = hitbox.clone();
@@ -1019,10 +1022,10 @@ impl Element for TerminalElement {
         });
         let entity = self.entity.clone();
         window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
-            if phase == DispatchPhase::Bubble {
-                if entity.update(cx, |terminal, cx| terminal.mouse_up(event, cx)) {
-                    cx.stop_propagation();
-                }
+            if phase == DispatchPhase::Bubble
+                && entity.update(cx, |terminal, cx| terminal.mouse_up(event, cx))
+            {
+                cx.stop_propagation();
             }
         });
 
