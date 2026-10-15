@@ -1,5 +1,6 @@
 import {
   activeBuffer,
+  listDocuments, getDocument, listWindows, getWindow, getWorkspace,
   invalidCommandArguments,
   keybinding,
   removeKeybinding,
@@ -31,3 +32,7 @@ export const workbench = Object.freeze({
   selectedText: selectedViewText,
   writeClipboardText,
 });
+
+export const documents = Object.freeze({ list: listDocuments, get: getDocument });
+export const windows = Object.freeze({ list: listWindows, get: getWindow });
+export const workspaces = Object.freeze({ get: getWorkspace });

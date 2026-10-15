@@ -40,6 +40,9 @@ when handling failures. See the API reference for precise rules.
 | Runtime/config lifecycle | Hidden; config phases share their own lifecycle | No |
 | Window/view IDs | Opaque live identities in a command capture | No |
 | Command target/invocation | Invocation-scoped authority; invocation ID is hidden | No |
+| Document ID | Application-allocated; stable across Save As and presentations | No restart reuse guarantee yet |
+| Live window/pane/view target | Exact discoverable product presentation, independent of commands | No |
+| Root ID | Window-owned; retained while its normalized URI remains installed | No |
 | Buffer proxy | Live shared model, independent of any one presentation | No |
 | Registration/subscription | Extension-owned until disposal, resource loss or teardown; IDs hidden | No |
 | Contribution set | One set per buffer and extension lifecycle | No |
@@ -51,6 +54,30 @@ no native handles and cannot be reconstructed from saved IDs. Retained explicit
 buffers support asynchronous work while live; retained command targets do not
 extend the invocation's authority. Lifecycle teardown releases ownership without
 requiring the extension to await cleanup or receive a final callback.
+
+## Inspect application state
+
+`documents.list()` and `documents.get(id)` return current metadata and a shared
+buffer proxy. Read text through that buffer. Document IDs survive Save As and
+additional presentations; reopening after closure allocates a fresh ID. No
+cross-restart identity reuse is promised yet.
+
+`windows.list()` and `windows.get(target)` return product windows, panes, ordered
+tabs, selected tabs and the actual focused tab target. A terminal tab has kind
+`terminal` and null document/buffer fields. Focus outside tabs has a null current
+target. Diagnostic and startup-error windows are excluded.
+
+`workspaces.get(windowTarget)` returns that window's ordered roots and generation.
+An empty root set is valid; the model accepts at most one root. A retained normalized
+root keeps its ID. Clearing/reinstalling changes the generation and root identity.
+
+Queries work during activation and callbacks, including before windows exist.
+They describe current state without reserving targets for later use. A closed
+document/window lookup returns null. Discoverable window, pane and view targets
+are opaque live objects: retain the returned objects, not copies or serialized
+representations. They are separate from invocation-scoped command targets and
+cannot be passed to contextual buffer/selection APIs. Replacing a workbench or
+tab, or transferring a view to another pane/window, invalidates its old exact target.
 
 ## Package and check your code
 

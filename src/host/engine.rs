@@ -23,14 +23,15 @@ use super::{
     lifecycle::{ExtensionKey, Failure},
     module_graph::{ConfigPhase, ModuleGraph},
     protocol::{
-        BufferChange, BufferHandle, BufferSubscriptionId, ByteRange, Command, CommandArgumentValue,
-        CommandInvocation, CommandInvocationId, CommandInvokeDispatch, CommandOutcome,
-        CommandRegistrationId, CompletionProviderError, CompletionProviderRegistrationId,
-        CompletionRequest, CompletionResponse, CompletionResultItem, DecorationToken,
-        EditorContribution, ExtensionId, GutterToken, HostOperation, HostRequest, HostRequestError,
-        HostResponse, HostResponseValue, KeybindingMutation, RequestId, SnapshotText, TextEdit,
-        TextSnapshot, TreeChildrenRequest, TreeChildrenResponse, TreeCollapsibleState, TreeIcon,
-        TreeItem, TreeProviderError, TreeProviderRegistrationId,
+        ApplicationQuery, ApplicationQueryResult, BufferChange, BufferHandle, BufferSubscriptionId,
+        ByteRange, Command, CommandArgumentValue, CommandInvocation, CommandInvocationId,
+        CommandInvokeDispatch, CommandOutcome, CommandRegistrationId, CompletionProviderError,
+        CompletionProviderRegistrationId, CompletionRequest, CompletionResponse,
+        CompletionResultItem, DecorationToken, EditorContribution, ExtensionId, GutterToken,
+        HostOperation, HostRequest, HostRequestError, HostResponse, HostResponseValue,
+        KeybindingMutation, RequestId, SnapshotText, TextEdit, TextSnapshot, TreeChildrenRequest,
+        TreeChildrenResponse, TreeCollapsibleState, TreeIcon, TreeItem, TreeProviderError,
+        TreeProviderRegistrationId,
     },
     scheduler::{
         CompletionOutcome, CompletionReceiver, PoolConfig, RootId, SchedulerError, SchedulerHandle,
@@ -333,6 +334,7 @@ struct PendingRequest {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum HostOperationKind {
+    ApplicationQuery,
     KeybindingBatch,
     ActiveBuffer,
     Snapshot,
@@ -3803,6 +3805,33 @@ fn parse_host_operation<'s, 'i>(
 ) -> Result<(HostOperation, HostOperationKind), BoundaryError> {
     let operation = required_string(scope, arguments.get(1), "operation must be text")?;
     match operation.as_str() {
+        "listDocuments" => Ok((
+            HostOperation::ApplicationQuery(ApplicationQuery::Documents),
+            HostOperationKind::ApplicationQuery,
+        )),
+        "getDocument" => Ok((
+            HostOperation::ApplicationQuery(ApplicationQuery::Document {
+                id: required_string(scope, arguments.get(2), "document identity must be text")?,
+            }),
+            HostOperationKind::ApplicationQuery,
+        )),
+        "listWindows" => Ok((
+            HostOperation::ApplicationQuery(ApplicationQuery::Windows),
+            HostOperationKind::ApplicationQuery,
+        )),
+        "getWindow" | "getWorkspace" => {
+            let target = super::protocol::WindowTarget {
+                window: required_string(scope, arguments.get(2), "window target must be text")?,
+            };
+            Ok((
+                HostOperation::ApplicationQuery(if operation == "getWindow" {
+                    ApplicationQuery::Window { target }
+                } else {
+                    ApplicationQuery::Workspace { target }
+                }),
+                HostOperationKind::ApplicationQuery,
+            ))
+        }
         "activeBuffer" => Ok((
             HostOperation::ActiveBuffer {
                 target: optional_invocation(scope, arguments.get(2))?,
@@ -4512,12 +4541,46 @@ fn exact_number<'s>(
     Ok(v8::Number::new(scope, value as f64).into())
 }
 
+fn application_query_to_v8<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: &ApplicationQueryResult,
+) -> Result<v8::Local<'s, v8::Value>, &'static str> {
+    fn document(info: &super::protocol::DocumentInfo) -> bool {
+        info.revision <= MAX_JS_INTEGER && info.buffer.value() <= MAX_JS_INTEGER
+    }
+    fn window(info: &super::protocol::WindowInfo) -> bool {
+        info.workspace.generation <= MAX_JS_INTEGER
+            && info.panes.iter().flat_map(|pane| &pane.tabs).all(|tab| {
+                tab.buffer
+                    .is_none_or(|buffer| buffer.value() <= MAX_JS_INTEGER)
+            })
+    }
+    let exact = match value {
+        ApplicationQueryResult::Documents(infos) => infos.iter().all(document),
+        ApplicationQueryResult::Document(info) => info.as_ref().is_none_or(document),
+        ApplicationQueryResult::Windows(infos) => infos.iter().all(window),
+        ApplicationQueryResult::Window(info) => info.as_ref().is_none_or(window),
+        ApplicationQueryResult::Workspace(info) => info
+            .as_ref()
+            .is_none_or(|info| info.generation <= MAX_JS_INTEGER),
+    };
+    if !exact {
+        return Err("native application integer cannot be represented exactly");
+    }
+    let json = serde_json::to_string(value).map_err(|_| "UnsupportedOperation")?;
+    let json = v8::String::new(scope, &json).ok_or("UnsupportedOperation")?;
+    v8::json::parse(scope, json).ok_or("UnsupportedOperation")
+}
+
 fn host_response_to_v8<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     operation: HostOperationKind,
     response: HostResponseValue,
 ) -> Result<v8::Local<'s, v8::Value>, &'static str> {
     match (operation, response) {
+        (HostOperationKind::ApplicationQuery, HostResponseValue::ApplicationQuery(value)) => {
+            application_query_to_v8(scope, &value)
+        }
         (HostOperationKind::ActiveBuffer, HostResponseValue::ActiveBuffer(None)) => {
             Ok(v8::null(scope).into())
         }
@@ -6903,7 +6966,7 @@ mod tests {
                 if (typeof globalThis.__knotNativeBindings !== "undefined") {
                     throw new Error("private native bindings are exposed");
                 }
-                if (Object.keys(knot).sort().join(",") !== "commands,editor,keybinding,removeKeybinding,workbench") {
+                if (Object.keys(knot).sort().join(",") !== "commands,documents,editor,keybinding,removeKeybinding,windows,workbench,workspaces") {
                     throw new Error("unexpected public exports");
                 }
                 if (!Object.isFrozen(knot.editor) || !Object.isFrozen(knot.commands) || !Object.isFrozen(knot.workbench)) {

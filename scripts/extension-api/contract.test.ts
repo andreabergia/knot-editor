@@ -76,6 +76,37 @@ const token: import("knot").EditorContribution = { range: { startByteOffset: 0, 
 await workbench.writeClipboardText(null);
 // @ts-expect-error contextual targets cannot be null
 await editor.activeBuffer(null);
+
+import { documents, windows, workspaces } from "knot";
+import type { DocumentId, WindowTarget, PaneTarget, ViewTarget } from "knot";
+for (const document of await documents.list()) {
+  const id: DocumentId = document.id;
+  const current = await documents.get(id);
+  if (current) await current.buffer.snapshot();
+}
+for (const window of await windows.list()) {
+  const target: WindowTarget = window.target;
+  await windows.get(target);
+  await workspaces.get(target);
+  const pane: PaneTarget | undefined = window.panes[0]?.target;
+  const view: ViewTarget | null = window.currentTarget;
+  if (view) {
+    const parent: WindowTarget = view.window;
+    void parent;
+    // @ts-expect-error live view targets have no command invocation authority
+    await editor.activeBuffer(view);
+  }
+  // @ts-expect-error live targets cannot be fabricated
+  const forgedWindow: WindowTarget = {};
+  // @ts-expect-error panes cannot be used as windows
+  await windows.get(pane);
+  // @ts-expect-error command targets cannot be used as live windows
+  await windows.get({} as CommandTarget);
+  void forgedWindow;
+}
+// @ts-expect-error plain URIs are not document identities
+await documents.get("file:///tmp/document.txt");
+
 // @ts-expect-error invalid-argument helper requires a string
 commands.invalidArguments(1);
 // @ts-expect-error no application namespace is declared

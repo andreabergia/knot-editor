@@ -293,8 +293,8 @@ undo, filesystem watching, new resource providers, and terminal restoration.
   stable retained IDs and monotonic replacement generations. Extra roots reject
   atomically; clearing/reinstalling cannot revive directory captures. Native folder
   Open and workspace-tree captures use the model.
-- 🚧 Checkpoint 2 remains unfinished: live targets/catalog, committed application
-  events, public queries/observation, observer fixture,
+- 🚧 Checkpoint 2 remains unfinished: committed application
+  events, public observation, observer fixture,
   documentation and full checkpoint validation remain. No review approval recorded.
 
 Model foundation validation (2026-10-15): `cargo test --all-targets` passed
@@ -319,3 +319,19 @@ Document lifetime validation (2026-10-15): `cargo test --all-targets` passed
 `scripts/check-extension-api.sh`, and `git diff --check` passed. Existing protected
 closure, cancellation, window sharing and relocation regressions remain green.
 Checkpoint 2's observation contracts and review gate are still outstanding.
+
+- ✅ Public metadata queries: `documents.list/get`, `windows.list/get`, and
+  `workspaces.get` derive current state from native documents and product shells.
+  No catalog replica. Empty startup catalogs, shared document/buffer associations,
+  selected/focused presentations, terminals, and diagnostic-window exclusion have
+  product-host integration coverage.
+- ✅ Discoverable live targets are opaque objects separate from command captures.
+  Pane/view targets qualify window-local IDs with workbench and presentation entity
+  identity. Runtime and TypeScript coverage reject fabricated and cross-authority
+  target use. Public query data is recursively read-only; integer responses reject
+  precision loss. Declarations and author guide cover query/identity semantics.
+
+Query/target validation (2026-10-15): `cargo test --all-targets` passed
+(566 library tests and 5 example tests); `cargo clippy --all-targets -- -D warnings`,
+`scripts/check-extension-api.sh`, and `git diff --check` passed. Checkpoint 2 still
+requires commit observation, FIFO delivery/disposal, and the checked observer fixture.

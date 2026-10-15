@@ -123,7 +123,7 @@ impl CompletionProviderRegistrationId {
 }
 
 /// An opaque reference to an editor buffer.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, serde::Serialize)]
 pub struct BufferHandle(u64);
 
 impl BufferHandle {
@@ -367,6 +367,126 @@ pub struct CompletionResponse {
     pub result: Result<Vec<CompletionResultItem>, CompletionProviderError>,
 }
 
+/// Discoverable live product targets, separate from command invocation authority.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WindowTarget {
+    pub window: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PaneTarget {
+    pub window: WindowTarget,
+    pub workbench: String,
+    pub pane: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PresentationTarget {
+    pub pane: PaneTarget,
+    pub tab: String,
+    pub presentation: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DocumentKind {
+    Untitled,
+    Destination,
+    Persisted,
+    Generated,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentInfo {
+    pub id: String,
+    pub title: String,
+    pub kind: DocumentKind,
+    pub resource_uri: Option<String>,
+    pub dirty: bool,
+    pub revision: u64,
+    pub buffer: BufferHandle,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SurfaceKind {
+    Document,
+    Terminal,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PresentationInfo {
+    pub target: PresentationTarget,
+    pub kind: SurfaceKind,
+    pub document: Option<String>,
+    pub buffer: Option<BufferHandle>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PaneInfo {
+    pub target: PaneTarget,
+    pub tabs: Vec<PresentationInfo>,
+    pub selected: PresentationTarget,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceRootInfo {
+    pub id: String,
+    pub uri: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceInfo {
+    pub window: WindowTarget,
+    pub roots: Vec<WorkspaceRootInfo>,
+    pub generation: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WindowInfo {
+    pub target: WindowTarget,
+    pub panes: Vec<PaneInfo>,
+    pub current_target: Option<PresentationTarget>,
+    pub workspace: WorkspaceInfo,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApplicationSnapshot {
+    pub documents: Vec<DocumentInfo>,
+    pub windows: Vec<WindowInfo>,
+    pub active_window: Option<WindowTarget>,
+    pub active_target: Option<PresentationTarget>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum ApplicationQuery {
+    Documents,
+    Document { id: String },
+    Windows,
+    Window { target: WindowTarget },
+    Workspace { target: WindowTarget },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(untagged)]
+pub enum ApplicationQueryResult {
+    Documents(Vec<DocumentInfo>),
+    Document(Option<DocumentInfo>),
+    Windows(Vec<WindowInfo>),
+    Window(Option<WindowInfo>),
+    Workspace(Option<WorkspaceInfo>),
+}
+
 /// A request sent by one extension runtime to the editor foreground owner.
 #[derive(Clone, Debug, PartialEq)]
 pub struct HostRequest {
@@ -380,6 +500,7 @@ pub struct HostRequest {
 /// Editor operations available to the initial buffer API boundary.
 #[derive(Clone, Debug, PartialEq)]
 pub enum HostOperation {
+    ApplicationQuery(ApplicationQuery),
     MutateKeybindings {
         mutations: Vec<KeybindingMutation>,
     },
@@ -463,6 +584,7 @@ pub struct HostResponse {
 /// Successful values returned by [`HostOperation`].
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum HostResponseValue {
+    ApplicationQuery(ApplicationQueryResult),
     KeybindingsApplied {
         error: Option<String>,
     },

@@ -299,3 +299,18 @@ subscriptions, contributions and semantic registrations independently of final
 JavaScript callbacks or cleanup awaits. Cancellation listeners have a validated,
 read-only signal/event surface; a throwing listener is diagnosed independently
 and cannot prevent delivery to the remaining listeners.
+
+## Application metadata queries
+
+The product host derives document metadata from the application collection and
+window/pane/tab associations from live product shells. It reads gpui's live window
+roots rather than maintaining a synchronized catalog. Only product shell windows
+participate, so diagnostics and startup errors are excluded. Native focus determines
+the current tab target; non-document terminals carry no document or buffer.
+
+Typed query responses become immutable author metadata with shared buffer proxies.
+Discoverable window/pane/presentation targets are separate opaque objects from
+command captures. Window-local targets include the workbench identity and exact
+presentation entity, preventing replacement or transfer from selecting another view.
+Queries require a live extension lifecycle and honor command cancellation, but do
+not require command context or promise future validity of returned targets.

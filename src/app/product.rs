@@ -316,6 +316,101 @@ impl ProductShell {
         }
     }
 
+    pub(crate) fn application_window(
+        &self,
+        window: &Window,
+        buffers: &std::collections::HashMap<DocumentId, crate::host::protocol::BufferHandle>,
+        cx: &App,
+    ) -> crate::host::protocol::WindowInfo {
+        use crate::host::protocol::{
+            PaneInfo, PaneTarget, PresentationInfo, PresentationTarget, SurfaceKind, WindowInfo,
+            WindowTarget, WorkspaceInfo, WorkspaceRootInfo,
+        };
+        let target = WindowTarget {
+            window: window.window_handle().window_id().as_u64().to_string(),
+        };
+        let workbench = self.workbench.read(cx);
+        let documents = cx.global::<ApplicationDocuments>().0.read(cx);
+        let mut current_target = None;
+        let panes = workbench
+            .panes()
+            .iter()
+            .map(|pane| {
+                let pane_target = PaneTarget {
+                    window: target.clone(),
+                    workbench: self.workbench.entity_id().as_u64().to_string(),
+                    pane: pane.id().value().to_string(),
+                };
+                let tabs = pane
+                    .tabs()
+                    .iter()
+                    .map(|tab| {
+                        let presentation = tab
+                            .editor()
+                            .map(|view| view.entity_id())
+                            .or_else(|| tab.terminal_view().map(|view| view.entity_id()))
+                            .map(|id| id.as_u64().to_string())
+                            .unwrap_or_default();
+                        let view_target = PresentationTarget {
+                            pane: pane_target.clone(),
+                            tab: tab.id().value().to_string(),
+                            presentation,
+                        };
+                        if let Some(focus) = window.focused(cx)
+                            && tab
+                                .command_view()
+                                .is_some_and(|view| view.matches_focus(&focus.downgrade(), cx))
+                        {
+                            current_target = Some(view_target.clone());
+                        }
+                        let document = tab.document_id();
+                        PresentationInfo {
+                            target: view_target,
+                            kind: if document.is_some() {
+                                SurfaceKind::Document
+                            } else {
+                                SurfaceKind::Terminal
+                            },
+                            document: document
+                                .and_then(|id| documents.get(id))
+                                .map(|document| document.identity().to_string()),
+                            buffer: document.and_then(|id| buffers.get(&id).copied()),
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                let selected = tabs
+                    .iter()
+                    .find(|tab| tab.target.tab == pane.active_tab_id().value().to_string())
+                    .unwrap()
+                    .target
+                    .clone();
+                PaneInfo {
+                    target: pane_target,
+                    tabs,
+                    selected,
+                }
+            })
+            .collect();
+        let workspace = self.workspace.snapshot();
+        WindowInfo {
+            target: target.clone(),
+            panes,
+            current_target,
+            workspace: WorkspaceInfo {
+                window: target,
+                generation: workspace.generation(),
+                roots: workspace
+                    .roots()
+                    .iter()
+                    .map(|root| WorkspaceRootInfo {
+                        id: root.id.to_string(),
+                        uri: root.uri.to_string(),
+                    })
+                    .collect(),
+            },
+        }
+    }
+
     pub(crate) fn extension_command_view(
         &self,
         id: crate::host::protocol::ViewId,
@@ -5645,6 +5740,106 @@ await commands.register("api.nontext", async (context) => {
         .unwrap();
         let execution = dispatch_product_command(&shell, window, "api.nontext", cx);
         assert_eq!(wait_for_command(execution, cx), CommandOutcome::Completed);
+    }
+
+    #[gpui::test]
+    fn application_queries_use_live_product_state_and_distinct_target_authority(
+        cx: &mut TestAppContext,
+    ) {
+        use crate::host::lifecycle::ExtensionKey;
+        const SOURCE: &str = r#"
+import { commands, documents, windows, workspaces, editor } from "knot";
+if ((await documents.list()).length || (await windows.list()).length) throw new Error("startup catalog not empty");
+let savedId, savedWindows;
+await commands.register("queries.catalog", async ({ target }) => {
+  const docs = await documents.list();
+  const wins = await windows.list();
+  if (docs.length !== 1 || wins.length !== 2) throw new Error("catalog scope/dedup");
+  const doc = docs[0];
+  if (doc.kind !== "untitled" || doc.title !== "Clean" || doc.dirty || doc.resourceUri !== null || doc.revision !== 0) throw new Error("document metadata");
+  if ((await doc.buffer.snapshot()).text !== "owned") throw new Error("document buffer");
+  if ((await documents.get(doc.id)).buffer !== doc.buffer) throw new Error("document lookup");
+  if (await documents.get("missing") !== null) throw new Error("missing identity");
+  for (const win of wins) {
+    const pane = win.panes[0], tab = pane.tabs[0];
+    if (tab.document !== doc.id || tab.buffer !== doc.buffer || tab.kind !== "document") throw new Error("presentation association");
+    if (pane.selected !== tab.target || tab.target.pane !== pane.target || tab.target.window !== win.target) throw new Error("target identity");
+    const again = await windows.get(win.target);
+    if (again.panes[0].tabs[0].target !== tab.target) throw new Error("unstable target");
+    const workspace = await workspaces.get(win.target);
+    if (workspace.window !== win.target || workspace.roots.length !== 0 || workspace.generation !== 0) throw new Error("empty workspace");
+    for (const value of [docs, doc, wins, win, pane, pane.tabs, tab, tab.target, workspace, workspace.roots]) {
+      if (!Object.isFrozen(value)) throw new Error("mutable snapshot");
+    }
+  }
+  for (const invalid of [target, {}, wins[0].panes[0].target, wins[0].panes[0].tabs[0].target]) {
+    try { await windows.get(invalid); } catch (error) {
+      if (error.code === "InvalidTarget") continue;
+      throw error;
+    }
+    throw new Error("invalid live window accepted");
+  }
+  try { await editor.activeBuffer(wins[0].panes[0].tabs[0].target); throw new Error("live target gained invocation authority"); }
+  catch (error) { if (error.code !== "InvalidTarget") throw error; }
+  savedId = doc.id; savedWindows = wins.map(win => win.target);
+});
+await commands.register("queries.closed", async () => {
+  if (await documents.get(savedId) !== null) throw new Error("closed document catalogued");
+  const values = await Promise.all(savedWindows.map(target => windows.get(target)));
+  if (values.filter(value => value === null).length !== 1) throw new Error("closed window catalogued");
+  const closed = savedWindows[values.findIndex(value => value === null)];
+  if (await workspaces.get(closed) !== null) throw new Error("closed workspace catalogued");
+});
+await commands.register("queries.terminal", async () => {
+  const wins = await windows.list();
+  const terminal = wins.flatMap(win => win.panes.flatMap(pane => pane.tabs)).find(tab => tab.kind === "terminal");
+  if (!terminal || terminal.buffer !== null || terminal.document !== null) throw new Error("terminal pretends to be a document");
+  if (!wins.some(win => win.currentTarget === terminal.target)) throw new Error("terminal focus missing");
+});
+"#;
+        let documents = install_globals(cx);
+        let host = cx.update(super::super::extension_host::install);
+        let key = ExtensionKey::new(ExtensionId::new(707), ExtensionLifecycleId::new(1));
+        host.update(cx, |host, cx| {
+            let execution = host.load_test_source(key, SOURCE).unwrap();
+            cx.spawn(async move |_, _| {
+                execution.await.unwrap();
+            })
+            .detach();
+        });
+        wait_for_api_condition(cx, |cx| {
+            cx.global::<ApplicationProductCommands>()
+                .0
+                .read(cx)
+                .catalog()
+                .borrow()
+                .resolve("queries.terminal")
+                .is_ok()
+        });
+        let model = cx.new(|_| BufferModel::from_text("owned"));
+        let document = documents.update(cx, |documents, cx| {
+            documents.create_untitled("Clean", model.clone(), cx)
+        });
+        let (first, first_window) = product_window(document, model.clone(), cx);
+        let (second, second_window) = product_window(document, model, cx);
+        let (_diagnostic, _) =
+            cx.add_window_view(|_, cx| crate::app::tree_view::TreeView::new("diagnostic", cx));
+        for (shell, window, command) in [
+            (&first, first_window, "queries.catalog"),
+            (&first, first_window, CLOSE_TAB_COMMAND),
+            (&second, second_window, super::CLOSE_WINDOW_COMMAND),
+            (&first, first_window, "queries.closed"),
+            (&first, first_window, NEW_TERMINAL_COMMAND),
+            (&first, first_window, "queries.terminal"),
+        ] {
+            let execution = dispatch_product_command(shell, window, command, cx);
+            assert_eq!(
+                wait_for_command(execution, cx),
+                CommandOutcome::Completed,
+                "{command}"
+            );
+        }
+        host.update(cx, |host, cx| host.unload(key, cx).unwrap());
     }
 
     #[gpui::test]

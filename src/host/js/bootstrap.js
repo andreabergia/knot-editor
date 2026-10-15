@@ -548,3 +548,84 @@ globalThis.__knotRequestCompletions = async (
     return { error: String(error?.stack ?? error) };
   }
 };
+
+const liveWindows = new WeakMap();
+const livePanes = new WeakMap();
+const livePresentations = new WeakMap();
+const windowTargets = new Map();
+const paneTargets = new Map();
+const presentationTargets = new Map();
+
+function windowTarget(value) {
+  let target = windowTargets.get(value.window);
+  if (!target) {
+    target = Object.freeze({});
+    liveWindows.set(target, value);
+    windowTargets.set(value.window, target);
+  }
+  return target;
+}
+function paneTarget(value) {
+  const key = `${value.window.window}/${value.workbench}/${value.pane}`;
+  let target = paneTargets.get(key);
+  if (!target) {
+    target = Object.freeze({ window: windowTarget(value.window) });
+    livePanes.set(target, value);
+    paneTargets.set(key, target);
+  }
+  return target;
+}
+function presentationTarget(value) {
+  const key = `${value.pane.window.window}/${value.pane.workbench}/${value.pane.pane}/${value.tab}/${value.presentation}`;
+  let target = presentationTargets.get(key);
+  if (!target) {
+    const pane = paneTarget(value.pane);
+    target = Object.freeze({ window: pane.window, pane });
+    livePresentations.set(target, value);
+    presentationTargets.set(key, target);
+  }
+  return target;
+}
+function windowAuthority(target) {
+  const value = liveWindows.get(target);
+  if (!value) hostError("InvalidTarget");
+  return value.window;
+}
+function documentFromNative(value) {
+  return Object.freeze({ ...value, buffer: bufferFor(value.buffer) });
+}
+function workspaceFromNative(value) {
+  return Object.freeze({ window: windowTarget(value.window), generation: value.generation,
+    roots: Object.freeze(value.roots.map(root => Object.freeze(root))) });
+}
+function windowFromNative(value) {
+  return Object.freeze({ target: windowTarget(value.target),
+    currentTarget: value.currentTarget === null ? null : presentationTarget(value.currentTarget),
+    workspace: workspaceFromNative(value.workspace),
+    panes: Object.freeze(value.panes.map(pane => Object.freeze({
+      target: paneTarget(pane.target), selected: presentationTarget(pane.selected),
+      tabs: Object.freeze(pane.tabs.map(tab => Object.freeze({
+        target: presentationTarget(tab.target), kind: tab.kind, document: tab.document,
+        buffer: tab.buffer === null ? null : bufferFor(tab.buffer),
+      }))),
+    }))),
+  });
+}
+export async function listDocuments() {
+  return Object.freeze((await request("listDocuments")).map(documentFromNative));
+}
+export async function getDocument(id) {
+  const value = await request("getDocument", string(id, "document identity must be text"));
+  return value === null ? null : documentFromNative(value);
+}
+export async function listWindows() {
+  return Object.freeze((await request("listWindows")).map(windowFromNative));
+}
+export async function getWindow(target) {
+  const value = await request("getWindow", windowAuthority(target));
+  return value === null ? null : windowFromNative(value);
+}
+export async function getWorkspace(target) {
+  const value = await request("getWorkspace", windowAuthority(target));
+  return value === null ? null : workspaceFromNative(value);
+}

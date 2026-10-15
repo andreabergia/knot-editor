@@ -823,6 +823,7 @@ impl ProductExtensionHost {
                 }
             }
             RequestRoute::View => self.dispatch_view_request(request, cx),
+            RequestRoute::Application => Some(self.dispatch_application_query(request, cx)),
             RequestRoute::Semantic => {
                 let removed = match &request.operation {
                     HostOperation::UnregisterCompletionProvider { registration } => {
@@ -1450,9 +1451,17 @@ impl ProductExtensionHost {
             .read(cx)
             .model()
             .clone();
-        let buffer = self.buffers.open_buffer(&model);
+        Some(self.track_buffer(&model, cx))
+    }
+
+    fn track_buffer(
+        &mut self,
+        model: &Entity<super::model::BufferModel>,
+        cx: &mut Context<Self>,
+    ) -> crate::host::protocol::BufferHandle {
+        let buffer = self.buffers.open_buffer(model);
         self.buffer_observers.entry(buffer).or_insert_with(|| {
-            cx.observe(&model, move |this, model, cx| {
+            cx.observe(model, move |this, model, cx| {
                 for dispatch in this.buffers.drain_model_changes(&model, cx) {
                     let _ = this.pool.dispatch_buffer_change(
                         ExtensionKey::new(dispatch.extension, dispatch.lifecycle),
@@ -1465,7 +1474,128 @@ impl ProductExtensionHost {
                 }
             })
         });
-        Some(buffer)
+        buffer
+    }
+
+    fn application_snapshot(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> crate::host::protocol::ApplicationSnapshot {
+        use super::documents::{ApplicationDocuments, DocumentState};
+        use crate::host::protocol::{ApplicationSnapshot, DocumentInfo, DocumentKind};
+        let Some(documents) = cx
+            .try_global::<ApplicationDocuments>()
+            .map(|global| global.0.clone())
+        else {
+            return ApplicationSnapshot::default();
+        };
+        let models = documents
+            .read(cx)
+            .documents()
+            .map(|document| (document.id(), document.model().clone()))
+            .collect::<Vec<_>>();
+        let buffers = models
+            .iter()
+            .map(|(id, model)| (*id, self.track_buffer(model, cx)))
+            .collect::<HashMap<_, _>>();
+        let document_infos = documents
+            .read(cx)
+            .documents()
+            .map(|document| DocumentInfo {
+                id: document.identity().to_string(),
+                title: document.title().to_string(),
+                kind: match document.state() {
+                    DocumentState::Untitled { .. } => DocumentKind::Untitled,
+                    DocumentState::Destination { .. } => DocumentKind::Destination,
+                    DocumentState::Persisted { .. } => DocumentKind::Persisted,
+                    DocumentState::Generated => DocumentKind::Generated,
+                },
+                resource_uri: document.resource_uri().map(ToString::to_string),
+                dirty: document.is_dirty(cx),
+                revision: document.model().read(cx).revision(),
+                buffer: buffers[&document.id()],
+            })
+            .collect();
+        let active = cx.active_window();
+        let mut snapshot = ApplicationSnapshot {
+            documents: document_infos,
+            ..Default::default()
+        };
+        for handle in cx.windows() {
+            if handle.downcast::<ProductShell>().is_none() {
+                continue;
+            }
+            if let Ok(info) = cx.update_window(handle, |root, window, cx| {
+                root.downcast::<ProductShell>()
+                    .unwrap()
+                    .read(cx)
+                    .application_window(window, &buffers, cx)
+            }) {
+                if active == Some(handle) {
+                    snapshot.active_window = Some(info.target.clone());
+                    snapshot.active_target = info.current_target.clone();
+                }
+                snapshot.windows.push(info);
+            }
+        }
+        snapshot
+            .windows
+            .sort_by(|a, b| a.target.window.cmp(&b.target.window));
+        snapshot
+    }
+
+    fn dispatch_application_query(
+        &mut self,
+        request: HostRequest,
+        cx: &mut Context<Self>,
+    ) -> crate::host::protocol::HostResponse {
+        use crate::host::protocol::{
+            ApplicationQuery, ApplicationQueryResult, HostRequestError, HostResponse,
+            HostResponseValue,
+        };
+        let result = if !self
+            .lifecycles
+            .contains(&ExtensionKey::new(request.extension, request.lifecycle))
+            || self.commands.is_cancelled(request.invocation)
+        {
+            Err(HostRequestError::Cancelled)
+        } else if let HostOperation::ApplicationQuery(query) = request.operation {
+            let snapshot = self.application_snapshot(cx);
+            let value = match query {
+                ApplicationQuery::Documents => {
+                    ApplicationQueryResult::Documents(snapshot.documents)
+                }
+                ApplicationQuery::Document { id } => ApplicationQueryResult::Document(
+                    snapshot
+                        .documents
+                        .into_iter()
+                        .find(|document| document.id == id),
+                ),
+                ApplicationQuery::Windows => ApplicationQueryResult::Windows(snapshot.windows),
+                ApplicationQuery::Window { target } => ApplicationQueryResult::Window(
+                    snapshot
+                        .windows
+                        .into_iter()
+                        .find(|window| window.target == target),
+                ),
+                ApplicationQuery::Workspace { target } => ApplicationQueryResult::Workspace(
+                    snapshot
+                        .windows
+                        .into_iter()
+                        .find(|window| window.target == target)
+                        .map(|window| window.workspace),
+                ),
+            };
+            Ok(HostResponseValue::ApplicationQuery(value))
+        } else {
+            Err(HostRequestError::UnsupportedOperation)
+        };
+        HostResponse {
+            extension: request.extension,
+            lifecycle: request.lifecycle,
+            id: request.id,
+            result,
+        }
     }
 
     fn remove_lifecycle(&mut self, key: ExtensionKey, cx: &mut Context<Self>) {
@@ -1514,6 +1644,7 @@ impl ProductExtensionHost {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RequestRoute {
+    Application,
     Buffer,
     Command,
     View,
@@ -1523,6 +1654,7 @@ enum RequestRoute {
 
 fn request_route(operation: &HostOperation) -> RequestRoute {
     match operation {
+        HostOperation::ApplicationQuery(_) => RequestRoute::Application,
         HostOperation::MutateKeybindings { .. } => RequestRoute::Keymap,
         HostOperation::Snapshot { .. }
         | HostOperation::ApplyEdits { .. }

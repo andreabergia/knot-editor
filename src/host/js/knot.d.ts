@@ -20,6 +20,80 @@ declare module "knot" {
   /** Opaque live extension-addressable view identity; not a native handle. */
   export type ViewId = string & { readonly [viewIdentity]: true };
 
+  const documentIdentity: unique symbol;
+  const liveWindowIdentity: unique symbol;
+  const livePaneIdentity: unique symbol;
+  const presentationIdentity: unique symbol;
+  const rootIdentity: unique symbol;
+  /** Application-allocated identity, preserved across Save As and presentations.
+   * Reopening allocates a new identity; restart reuse is not guaranteed. */
+  export type DocumentId = string & { readonly [documentIdentity]: true };
+  /** Root identity retained while its normalized URI remains installed. */
+  export type RootId = string & { readonly [rootIdentity]: true };
+  /** Discoverable live targets have no command invocation authority.
+   * Do not fabricate, copy, serialize or persist target objects. */
+  export interface WindowTarget { readonly [liveWindowIdentity]: true; }
+  export interface PaneTarget {
+    readonly [livePaneIdentity]: true;
+    readonly window: WindowTarget;
+  }
+  /** Exact tab presentation. Replacement, pane/window transfer, or closure
+   * invalidates this target; it cannot select a replacement presentation. */
+  export interface ViewTarget {
+    readonly [presentationIdentity]: true;
+    readonly window: WindowTarget;
+    readonly pane: PaneTarget;
+  }
+  export interface DocumentInfo {
+    readonly id: DocumentId;
+    readonly title: string;
+    readonly kind: "untitled" | "destination" | "persisted" | "generated";
+    readonly resourceUri: string | null;
+    readonly dirty: boolean;
+    readonly revision: number;
+    readonly buffer: Buffer;
+  }
+  export interface PresentationInfo {
+    readonly target: ViewTarget;
+    readonly kind: "document" | "terminal";
+    readonly document: DocumentId | null;
+    readonly buffer: Buffer | null;
+  }
+  export interface PaneInfo {
+    readonly target: PaneTarget;
+    readonly tabs: readonly PresentationInfo[];
+    readonly selected: ViewTarget;
+  }
+  export interface WorkspaceRoot { readonly id: RootId; readonly uri: string; }
+  export interface WorkspaceInfo {
+    readonly window: WindowTarget;
+    readonly roots: readonly WorkspaceRoot[];
+    readonly generation: number;
+  }
+  export interface WindowInfo {
+    readonly target: WindowTarget;
+    readonly panes: readonly PaneInfo[];
+    /** Actual focused tab surface; null for focus outside tabs. */
+    readonly currentTarget: ViewTarget | null;
+    readonly workspace: WorkspaceInfo;
+  }
+  /** Current metadata queries do not grant future target validity. Valid during
+   * activation, including before any product window exists. */
+  export const documents: Readonly<{
+    list(): Promise<readonly DocumentInfo[]>;
+    get(id: DocumentId): Promise<DocumentInfo | null>;
+  }>;
+  /** Only product windows; diagnostic and startup-error windows are excluded.
+   * get returns null after closure; fabricated/command targets reject InvalidTarget. */
+  export const windows: Readonly<{
+    list(): Promise<readonly WindowInfo[]>;
+    get(target: WindowTarget): Promise<WindowInfo | null>;
+  }>;
+  /** Window-owned ordered roots; empty roots are valid. Closed windows return null. */
+  export const workspaces: Readonly<{
+    get(target: WindowTarget): Promise<WorkspaceInfo | null>;
+  }>;
+
   /**
    * Host-issued capture, valid only in its originating command invocation tree.
    * Contextual methods validate both authority and the live presentation.
