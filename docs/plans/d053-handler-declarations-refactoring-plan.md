@@ -1,7 +1,7 @@
 # D053 — Handler-defined operations, errors, and commands
 
-Status: 🟡 checkpoint 1 authoring shape approved on 2026-10-15; checkpoint 2
-implemented and locally verified, awaiting review. Remote platform checks remain pending.
+Status: 🟡 checkpoints 1 and 2 approved on 2026-10-15; checkpoint 3 in progress.
+Remote platform checks remain pending.
 Execute after D047 is approved and archived, before D048 adds more host APIs.
 This is a separate refactoring, not another D047 acceptance requirement.
 
@@ -156,7 +156,7 @@ Checkpoint 1 implementation evidence and choices:
   ownership, adapters and automatic linking on 2026-10-15. Remote build evidence
   remains pending and is carried into checkpoint 2 validation.
 
-### 2. Migrate the host capability boundary 🟡
+### 2. Migrate the host capability boundary ✅
 
 - ✅ Migrate every existing JS-to-native capability, including buffer/query/mutation,
   observation/disposal, clipboard/context, commands, providers, and keymap batches.
@@ -213,8 +213,8 @@ Checkpoint 2 implementation evidence:
   operation/result/kind/query/error mirrors remain in Rust source or tests.
 - ⏳ Remote Linux/Windows checks remain pending; no remote run exists for these
   local changes.
-- ⏳ Review gate: verify complete capability coverage, removed parallel registries,
-  and unchanged representative JS consumers before checkpoint 3.
+- ✅ Review gate: user approved complete capability coverage, removed parallel
+  registries, and representative JS consumer behavior on 2026-10-15.
 
 ### 3. Migrate native command declarations ⬜
 
