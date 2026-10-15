@@ -340,6 +340,7 @@ enum HostOperationKind {
     ApplicationQuery,
     DocumentPresented,
     WorkspaceUpdated,
+    PresentationClosed,
     KeybindingBatch,
     ActiveBuffer,
     Snapshot,
@@ -1843,16 +1844,26 @@ impl RuntimeCapsule {
                 })
                 .collect();
             ids.into_iter()
-                .filter_map(|id| requests.remove(&id))
+                .filter_map(|id| {
+                    if requests
+                        .get(&id)
+                        .is_some_and(|pending| pending.response_queued)
+                    {
+                        // Keep an admitted response attached to this root until its queued turn consumes it.
+                        requests
+                            .get_mut(&id)
+                            .and_then(|pending| pending.resolver.take())
+                    } else {
+                        requests.remove(&id).and_then(|pending| pending.resolver)
+                    }
+                })
                 .collect::<Vec<_>>()
         };
-        for pending in pending {
-            if let Some(resolver) = pending.resolver {
-                let resolver = v8::Local::new(scope, &resolver);
-                let cancelled =
-                    boundary_exception(scope, BoundaryError::Host(HostRequestError::Cancelled));
-                resolver.reject(scope, cancelled);
-            }
+        for resolver in pending {
+            let resolver = v8::Local::new(scope, &resolver);
+            let cancelled =
+                boundary_exception(scope, BoundaryError::Host(HostRequestError::Cancelled));
+            resolver.reject(scope, cancelled);
         }
         scope.perform_microtask_checkpoint();
     }
@@ -3924,6 +3935,17 @@ fn parse_host_operation<'s, 'i>(
 ) -> Result<(HostOperation, HostOperationKind), BoundaryError> {
     let operation = required_string(scope, arguments.get(1), "operation must be text")?;
     match operation.as_str() {
+        "closePresentation" => {
+            let Some(super::protocol::DocumentDestination::View(target)) =
+                document_destination_from_v8(scope, arguments.get(2))?
+            else {
+                return Err(BoundaryError::Type("close requires an exact view target"));
+            };
+            Ok((
+                HostOperation::ClosePresentation { target },
+                HostOperationKind::PresentationClosed,
+            ))
+        }
         "openFolder" => Ok((
             HostOperation::OpenFolder {
                 uri: required_string(scope, arguments.get(2), "resource URI must be text")?,
@@ -4790,6 +4812,11 @@ fn host_response_to_v8<'s>(
         }
         (HostOperationKind::UnobserveWorkbench, HostResponseValue::WorkbenchUnobserved) => {
             Ok(v8::undefined(scope).into())
+        }
+        (HostOperationKind::PresentationClosed, HostResponseValue::PresentationClosed(value)) => {
+            let json = serde_json::to_string(&value).map_err(|_| "UnsupportedOperation")?;
+            let json = v8::String::new(scope, &json).ok_or("UnsupportedOperation")?;
+            v8::json::parse(scope, json).ok_or("UnsupportedOperation")
         }
         (HostOperationKind::WorkspaceUpdated, HostResponseValue::WorkspaceUpdated(value)) => {
             if value.generation > MAX_JS_INTEGER {
@@ -9831,6 +9858,105 @@ globalThis.activationFinished = true;
         .unwrap()
         .wait()
         .unwrap();
+        pool.shutdown();
+    }
+
+    #[test]
+    fn command_cancellation_consumes_an_already_queued_response_without_ending_the_lifecycle() {
+        let pool = RuntimePool::new(PoolConfig::single_worker());
+        let runtime = key(213);
+        let blocker = key(214);
+        pool.load(runtime, IsolateConfig::default()).unwrap();
+        pool.load(blocker, IsolateConfig::default()).unwrap();
+        let registration = CommandRegistrationId::new(85);
+        let setup = pool
+            .execute_fixture_module(
+                runtime,
+                "file:///fixtures/cancellation-response.js",
+                r#"
+import { commands, documents, workbench } from "knot";
+await commands.register("cancel-response", async () => {
+  try { await workbench.writeClipboardText("pending"); }
+  catch (error) { globalThis.cancelledCode = error.code; await documents.list(); }
+});
+"#,
+            )
+            .unwrap();
+        let request = pool.receive_request().unwrap();
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: request.id,
+            result: Ok(HostResponseValue::CommandRegistered { registration }),
+        })
+        .unwrap();
+        setup.wait().unwrap();
+        let invocation = CommandInvocationId::new(905);
+        let execution = pool
+            .invoke_command(
+                runtime,
+                CommandInvocation {
+                    id: invocation,
+                    registration,
+                    extension: runtime.extension,
+                    lifecycle: runtime.lifecycle,
+                    arguments: CommandArgumentValue::Null,
+                    capture: None,
+                },
+                None,
+            )
+            .unwrap();
+        let pending = pool.receive_request().unwrap();
+        wait_for_state(&pool, runtime, ExtensionState::AwaitingHostWork);
+        let gate = Arc::new(TestGate::default());
+        pool.capsule(blocker)
+            .unwrap()
+            .install_test_barrier(gate.clone());
+        let blocked = pool
+            .execute(blocker, "block-worker.js", "__knotTestBarrier()")
+            .unwrap();
+        {
+            let entered = gate.entered.lock().unwrap();
+            let (_entered, timeout) = gate
+                .ready
+                .wait_timeout_while(entered, Duration::from_secs(1), |entered| *entered == 0)
+                .unwrap();
+            assert!(!timeout.timed_out());
+        }
+        pool.cancel_command(runtime, invocation).unwrap();
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: pending.id,
+            result: Ok(HostResponseValue::ClipboardTextWritten),
+        })
+        .unwrap();
+        gate.wait();
+        blocked.wait().unwrap();
+        let followup = pool.receive_request().unwrap();
+        assert!(matches!(
+            followup.operation,
+            HostOperation::ApplicationQuery(ApplicationQuery::Documents)
+        ));
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: followup.id,
+            result: Ok(HostResponseValue::ApplicationQuery(
+                ApplicationQueryResult::Documents(vec![]),
+            )),
+        })
+        .unwrap();
+        assert_eq!(execution.wait().unwrap(), CommandOutcome::Cancelled);
+        assert_eq!(
+            &*pool
+                .execute(runtime, "check-lifecycle.js", "cancelledCode")
+                .unwrap()
+                .wait()
+                .unwrap()
+                .value,
+            "Cancelled"
+        );
         pool.shutdown();
     }
 

@@ -32,3 +32,18 @@ The operation uses the originating command window captured by the native host.
 window, or accepts `{ uri }` directory arguments from JavaScript.
 **example.clear-roots** clears that window's roots. Both copy committed roots and
 generation to the clipboard and leave open documents intact.
+
+For checkpoint 3's manual smoke check, use the updated package and product build:
+
+1. Open a file in window A. In window B, run **example.open-document**: the same
+   document should appear there and the clipboard should report its committed ID.
+2. In B, run **example.open-folder**, then **example.clear-roots**: the tree should
+   open the file's parent, then clear; document tabs should remain open.
+3. In A, run **example.create-untitled**, then edit that document. In B, run
+   **example.close-created-document** and choose Cancel in A's dirty-close prompt:
+   the tab/content should remain, and the clipboard should say `{"kind":"cancelled"}`.
+   Run it again and choose Don't Save to close the document; the clipboard should
+   say `{"kind":"closed"}`. Running the command from B preserves its command target
+   while the captured presentation in A closes.
+4. Run **example.application-state** to inspect document/presentation events and
+   the workspace generations. Report the results for checkpoint approval.

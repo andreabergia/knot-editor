@@ -169,7 +169,7 @@ declare module "knot" {
     | "InvalidRange" | "InvalidEditBatch" | "RevisionConflict" | "ContributionSetNotFound"
     | "TreeViewNotFound" | "ViewNotFound" | "TreeProviderInUse" | "TreeProviderNotFound"
     | "CompletionProviderNotFound" | "CommandNameInUse" | "CommandNotFound"
-    | "InvalidUri" | "DocumentNotFound" | "TooManyWorkspaceRoots" | "ResourceNotFound" | "ResourceWrongKind" | "InvalidUtf8" | "ProviderFailure";
+    | "InvalidUri" | "DocumentNotFound" | "TooManyWorkspaceRoots" | "OperationInProgress" | "PersistenceFailed" | "ResourceNotFound" | "ResourceWrongKind" | "InvalidUtf8" | "ProviderFailure";
   /**
    * Native operation failure. Narrow a caught Error by name === "KnotHostError"
    * and its string code property, then dispatch on code. No error constructor
@@ -466,6 +466,7 @@ declare module "knot" {
     /** Throw an author diagnostic converted by the handler to invalidArgument. */
     invalidArguments(message: string): never;
   }>;
+  export type PresentationCloseOutcome = Readonly<{ kind: "closed" | "cancelled" }>;
   /** Native tree registration, supported captured selection and clipboard access. */
   export const workbench: Readonly<{
     /** Atomically register and capture current metadata plus sequence watermark.
@@ -476,6 +477,15 @@ declare module "knot" {
      * Valid during activation before windows exist; operations do not await listeners.
      */
     observe(listener: (event: ApplicationEvent) => void | Promise<void>): Promise<WorkbenchObservation>;
+    /** Closes this exact native tab through protected closure. Dirty final views
+     * offer Save / Don't Save / Cancel. Cancel returns { kind: "cancelled" };
+     * a committed close returns { kind: "closed" } without awaiting observers.
+     * Other presentations keep a shared document live. Replaced/transferred/closed
+     * targets reject InvalidTarget; concurrent closure rejects OperationInProgress;
+     * save failures reject PersistenceFailed and leave the presentation intact.
+     * Caller cancellation/unload before closure commits prevents the close; an
+     * accepted save may already have persisted content and cannot be rolled back. */
+    close(target: ViewTarget): Promise<PresentationCloseOutcome>;
     /**
      * Register the declared outline tree provider, even before windows exist.
      * Resolution acknowledges native ownership on its kind; teardown racing

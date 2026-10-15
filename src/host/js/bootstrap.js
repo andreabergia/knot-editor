@@ -630,6 +630,10 @@ function documentPresentationFromNative(value) {
     presentation: Object.freeze({ target: presentationTarget(presentation.target), kind: presentation.kind,
       document: presentation.document, buffer: bufferFor(presentation.buffer) }) });
 }
+export async function closePresentation(target) {
+  if (!livePresentations.has(target)) hostError("InvalidTarget");
+  return Object.freeze(await request("closePresentation", destinationAuthority({ target })));
+}
 export async function createUntitled(options) {
   return documentPresentationFromNative(await request("createUntitled", destinationAuthority(options)));
 }

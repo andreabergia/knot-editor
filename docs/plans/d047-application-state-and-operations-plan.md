@@ -1,7 +1,8 @@
 # D047 — Application state and document operations
 
 Status: ✅ parent checkpoint 2 complete and approved on 2026-10-15.
-Parent checkpoint 3 is in progress.
+Parent checkpoint 3 is implemented and automatically validated; awaiting real-product
+manual checks and explicit approval.
 
 Source: checkpoints 2–3 of the
 [extension platform and projects plan](extension-platform-and-projects-plan.md)
@@ -228,28 +229,19 @@ adding programmatic mutations. Mark the parent checkpoint complete only on appro
 
 ## Parent checkpoint 3 — Programmatic resources and documents ⬜
 
-1. **Shared semantic completion.** ⏳ Resource Open now returns typed committed
-   document/presentation or workspace data and preserves resource failures; native
-   command dispatch adapts that result. Root completion is shared; protected-close
-   integration remains.
-   Refactor only the product entry points needed
-   to return typed open/present/root/close results. Keep provider work off the
-   foreground; keep target capture, generation validation and commit with the
-   existing owners. Native and JS callers use the same implementation.
-2. **Open and present.** ✅ File/folder Open, untitled creation, and presenting
-   a live document are public through shared native transitions. Implement file/folder opening, untitled creation, and
-   presenting a live document. Admit explicit destinations and optional-window
-   capture; return metadata and the actual selected/created presentation. Validate
-   after asynchronous work before mutating the captured destination.
-3. **Roots and close.** ⏳ Root replacement/clear is public; protected closure
-   remains. Expose validated root replacement/clear and exact
-   presentation closure through current protected closure. No unconditional close,
-   direct document removal API, all-window document-close policy, or new window
-   management API. Continue publishing through checkpoint 2 commit boundaries.
-4. **Public integration.** Complete declarations, structured error conversion,
-   checked examples and author guide. Add a JS open command that uses its captured
-   destination and consumes semantic results. Update affected subsystem references
-   and validated decisions.
+1. **Shared semantic completion.** ✅ Shared product Open, New, presentation,
+   root replacement and protected closure return typed semantic results. Native
+   commands and JS adapt those results independently. Provider work stays off the
+   foreground; existing owners retain capture, generation validation and commit.
+2. **Open and present.** ✅ File/folder Open, untitled creation and presenting a
+   live document admit explicit destinations or admission-time window capture,
+   return committed metadata/presentations, and revalidate after asynchronous work.
+3. **Roots and close.** ✅ Validated root replacement/clear and exact presentation
+   closure use existing root/tree transitions and protected closure. No unconditional
+   close, document-removal or window-management API was added.
+4. **Public integration.** ✅ Declarations, structured errors, checked installed
+   commands, author guide and subsystem references match the implemented API.
+   The JS Open command consumes semantic results in its captured destination.
 
 **Automated validation:**
 
@@ -496,3 +488,51 @@ Folder/root validation (2026-10-15): `cargo test --all-targets --quiet` passed
 `scripts/check-extension-api.sh` and `git diff --check` passed. The fixture waits
 for activation completion before teardown, in addition to command registration.
 Protected closure and the checkpoint 3 acceptance/manual gate remain outstanding.
+
+- ✅ `workbench.close(view)` now shares a typed protected operation with native tab,
+  window and Quit dispatch. User Cancel returns a cancelled outcome; stale targets,
+  concurrent closure and persistence failures remain typed failures. Native command
+  outcomes retain their adapter. Exact workbench and presentation IDs are included
+  in protected snapshots, preventing a prompt approval from closing a replacement.
+- ✅ JS caller cancellation/unload prevents close commit and starting a later save.
+  Accepted saves remain observable; racing edits or failed saves preserve the view.
+  Final closure invalidates retained buffers; shared documents and terminal/session
+  lifetime use the existing owners.
+- ✅ Close tests exercise Save / Don't Save / Cancel, shared dirty documents,
+  concurrent rejection, save failure and racing edits, replaced/transferred views,
+  command cancellation/unload, final-tab replacement, terminal closure, activation,
+  listener-awaited close and self-disposal. Checked installed create/close commands
+  consume semantic results in the real product host.
+- ✅ A deterministic runtime regression covers command cancellation after a response
+  has been queued. Cancellation rejects its resolver while retaining the queued
+  native entry until consumption, preventing a missing-request lifecycle failure.
+- ✅ Public file Open also has gated tests for pane/window loss and command
+  cancellation during I/O, with no retargeting or leaked new document.
+
+## Checkpoint 3 acceptance audit
+
+| Requirement | Current evidence |
+| --- | --- |
+| Semantic results and native/JS parity | Shared product entry points plus native product tests and [`operations.rs`](../../src/app/product/tests/operations.rs), [`workspaces.rs`](../../src/app/product/tests/workspaces.rs), [`closure.rs`](../../src/app/product/tests/closure.rs) |
+| File/folder kinds, missing destinations, UTF-8/provider/URI failures and URI deduplication | Public Open/roots tests and `open::tests`; native CLI/picker/platform convergence in the observation suite |
+| Explicit targets, pre-window activation, admission-time window capture and focus changes | Public operations/roots fixtures, activation/listener cases and gated reads/stats |
+| Lost/replaced/transferred panes/views/windows and cancellation before commit | Gated public Open and root tests; replaced prompted editor, transferred live target, close cancellation/unload tests |
+| Shared presentation/reuse, terminal preservation, clean/dirty untitled | Public untitled/present test, installed Open fixture, terminal Open and close tests |
+| Atomic roots/tree replacement, retained IDs, clear/reinstall and stale requests | Public roots suite and existing workspace/tree generation tests; root changes preserve documents |
+| Protected Save / Don't Save / Cancel, shared dirty views, failure/racing edits, concurrency | Public closure suite and existing native tab/window/Quit regressions |
+| Final invalidation, cancelled-close preservation and empty-workbench replacement | Public closure suite, retained buffer access checks and final-tab activation fixture |
+| Listener independence, awaited mutation and self-disposal | Public Open and close listener fixtures plus observation scheduler/isolation tests |
+| Public types, examples, docs and installed package | Pinned authoring checker, real installed application-state fixture and native product-host tests |
+| Real product manual gate and approval | ⏳ Pending the [checked example smoke check](../../examples/extensions/README.md); user approval not yet recorded |
+
+Final checkpoint 3 automated validation (2026-10-15): `cargo test --all-targets --quiet`
+passed (608 library tests and 5 example tests); `cargo clippy --all-targets -- -D warnings`,
+`scripts/check-extension-api.sh`, `git diff --check` and changed Markdown-link
+validation passed. The checked package exercises semantic Open, folder/clear,
+untitled and close results through the installed product host.
+`scripts/build-macos-app.sh` also passed and produced `target/debug/Knot.app`
+for the manual smoke check.
+
+D047 remains active until checkpoint 3's real-product manual checks and explicit
+approval are recorded. No manual product result has been claimed; archive only
+after that gate.

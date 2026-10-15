@@ -135,11 +135,14 @@ pub(crate) enum ProtectedCloseKind {
 struct ProtectedCloseRequest {
     kind: ProtectedCloseKind,
     origin: ProductCommandTarget,
+    caller: Option<operations::OperationCaller>,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 struct ProtectedViewKey {
     window: AnyWindowHandle,
+    workbench: EntityId,
+    presentation: Option<EntityId>,
     pane: PaneId,
     tab: TabId,
     surface: TabSurfaceId,
@@ -169,6 +172,33 @@ struct ProtectedClosePlan {
     scope: Vec<ProtectedViewKey>,
     prompts: Vec<(DocumentId, ProductCommandTarget)>,
 }
+
+#[derive(Debug)]
+enum ProtectedCloseFailure {
+    InvalidTarget,
+    InProgress,
+    Cancelled,
+    PersistenceFailed { message: String },
+}
+
+impl ProtectedCloseFailure {
+    fn command_outcome(self) -> crate::host::protocol::CommandOutcome {
+        use crate::host::protocol::CommandOutcome;
+        match self {
+            Self::InvalidTarget => CommandOutcome::InvalidTarget,
+            Self::InProgress => CommandOutcome::Unavailable,
+            Self::Cancelled => CommandOutcome::Cancelled,
+            Self::PersistenceFailed { message } => CommandOutcome::HandlerFailure { message },
+        }
+    }
+}
+
+type ProtectedCloseCompletion = Box<
+    dyn FnOnce(
+        Result<crate::host::protocol::PresentationCloseOutcome, ProtectedCloseFailure>,
+        &mut App,
+    ),
+>;
 
 struct ApplicationFileSystems(Arc<FileSystemProviderRegistry>);
 
@@ -840,6 +870,12 @@ impl ProductShell {
                                 ProtectedView {
                                     key: ProtectedViewKey {
                                         window: window_handle,
+                                        workbench: workbench.entity_id(),
+                                        presentation: workbench
+                                            .read(cx)
+                                            .capture_tab_move(snapshot.pane_id, snapshot.tab_id)
+                                            .unwrap()
+                                            .presentation,
                                         pane: snapshot.pane_id,
                                         tab: snapshot.tab_id,
                                         surface: snapshot.surface,
@@ -871,18 +907,22 @@ impl ProductShell {
     fn build_protected_close_plan(
         request: ProtectedCloseRequest,
         cx: &mut App,
-    ) -> Result<ProtectedClosePlan, crate::host::protocol::CommandOutcome> {
-        use crate::host::protocol::CommandOutcome;
-
+    ) -> Result<ProtectedClosePlan, ProtectedCloseFailure> {
+        request
+            .origin
+            .validate_tab(cx)
+            .map_err(|_| ProtectedCloseFailure::InvalidTarget)?;
         let views = Self::collect_product_views(cx);
         let origin_key = ProtectedViewKey {
             window: request.origin.window,
+            workbench: request.origin.workbench.entity_id(),
+            presentation: request.origin.presentation,
             pane: request.origin.pane,
             tab: request.origin.tab,
             surface: request.origin.surface,
         };
         if !views.iter().any(|view| view.key == origin_key) {
-            return Err(CommandOutcome::InvalidTarget);
+            return Err(ProtectedCloseFailure::InvalidTarget);
         }
         let scoped = views
             .iter()
@@ -934,7 +974,7 @@ impl ProductShell {
                 .documents()
                 .any(|document| document.is_dirty(cx) && !prompted.contains(&document.id()))
         {
-            return Err(CommandOutcome::InvalidTarget);
+            return Err(ProtectedCloseFailure::InvalidTarget);
         }
         Ok(ProtectedClosePlan {
             request,
@@ -2150,46 +2190,82 @@ impl ProductShell {
         completion: Option<CommandCompletion>,
         cx: &mut App,
     ) {
-        use crate::host::protocol::CommandOutcome;
+        Self::begin_protected_operation(
+            kind,
+            origin,
+            None,
+            Box::new(move |result, cx| {
+                use crate::host::protocol::{CommandOutcome, PresentationCloseOutcome};
+                let outcome = match result {
+                    Ok(PresentationCloseOutcome::Closed) => CommandOutcome::Completed,
+                    Ok(PresentationCloseOutcome::Cancelled) => CommandOutcome::Cancelled,
+                    Err(error) => error.command_outcome(),
+                };
+                Self::finish_protected_close_completion(completion, outcome, cx);
+            }),
+            cx,
+        );
+    }
 
+    fn begin_protected_operation(
+        kind: ProtectedCloseKind,
+        origin: ProductCommandTarget,
+        caller: Option<operations::OperationCaller>,
+        completion: ProtectedCloseCompletion,
+        cx: &mut App,
+    ) {
         if Self::protected_closure_is_active(cx) {
-            Self::finish_protected_close_completion(completion, CommandOutcome::Unavailable, cx);
+            completion(Err(ProtectedCloseFailure::InProgress), cx);
             return;
         }
-        let plan =
-            match Self::build_protected_close_plan(ProtectedCloseRequest { kind, origin }, cx) {
-                Ok(plan) => plan,
-                Err(outcome) => {
-                    Self::finish_protected_close_completion(completion, outcome, cx);
-                    return;
-                }
-            };
+        let plan = match Self::build_protected_close_plan(
+            ProtectedCloseRequest {
+                kind,
+                origin,
+                caller,
+            },
+            cx,
+        ) {
+            Ok(plan) => plan,
+            Err(error) => {
+                completion(Err(error), cx);
+                return;
+            }
+        };
         let Some(shell) = plan.request.origin.shell.upgrade() else {
-            Self::finish_protected_close_completion(completion, CommandOutcome::InvalidTarget, cx);
+            completion(Err(ProtectedCloseFailure::InvalidTarget), cx);
             return;
         };
         Self::set_protected_closure_active(true, cx);
         shell.update(cx, |shell, cx| {
-            shell.start_protected_close_plan(plan, completion, cx);
+            shell.start_protected_close_plan(plan, completion, cx)
         });
     }
 
     fn start_protected_close_plan(
         &mut self,
         plan: ProtectedClosePlan,
-        completion: Option<CommandCompletion>,
+        completion: ProtectedCloseCompletion,
         cx: &mut Context<Self>,
     ) {
-        use crate::host::protocol::CommandOutcome;
+        use crate::host::protocol::{CommandOutcome, PresentationCloseOutcome};
 
         cx.spawn(async move |this, cx| {
             let mut approvals = Vec::new();
-            let mut outcome = CommandOutcome::Completed;
+            let mut outcome = Ok(PresentationCloseOutcome::Closed);
             for (document, target) in &plan.prompts {
                 let prompt = cx.update(|cx| {
+                    if plan
+                        .request
+                        .caller
+                        .as_ref()
+                        .is_some_and(|caller| !caller.is_live(cx))
+                    {
+                        return Err(ProtectedCloseFailure::Cancelled);
+                    }
                     let documents = Self::documents(cx);
                     let Some(document_state) = documents.read(cx).get(*document) else {
-                        return Err(CommandOutcome::InvalidTarget);
+                        return Err(ProtectedCloseFailure::InvalidTarget);
                     };
                     if !document_state.is_dirty(cx) {
                         return Ok(None);
@@ -2212,31 +2288,39 @@ impl ProductShell {
                             prompted_revision,
                         )))
                     })
-                    .unwrap_or(Err(CommandOutcome::InvalidTarget))
+                    .unwrap_or(Err(ProtectedCloseFailure::InvalidTarget))
                 });
                 let (prompt, prompted_revision) = match prompt {
                     Ok(Ok(Some(prompt))) => prompt,
                     Ok(Ok(None)) => continue,
                     Ok(Err(error)) => {
-                        outcome = error;
+                        outcome = Err(error);
                         break;
                     }
                     Err(_) => {
-                        outcome = CommandOutcome::InvalidTarget;
+                        outcome = Err(ProtectedCloseFailure::InvalidTarget);
                         break;
                     }
                 };
                 match prompt.await.unwrap_or(2) {
                     0 => {
                         let save = cx.update(|cx| {
+                            if plan
+                                .request
+                                .caller
+                                .as_ref()
+                                .is_some_and(|caller| !caller.is_live(cx))
+                            {
+                                return Err(ProtectedCloseFailure::Cancelled);
+                            }
                             let Some(shell) = target.shell.upgrade() else {
-                                return Err(CommandOutcome::InvalidTarget);
+                                return Err(ProtectedCloseFailure::InvalidTarget);
                             };
                             let (save_completion, receiver) = CommandCompletion::new();
                             let result = cx.update_window(target.window, |_, window, cx| {
                                 if window.root::<ProductShell>().flatten().as_ref() != Some(&shell)
                                 {
-                                    return Err(CommandOutcome::InvalidTarget);
+                                    return Err(ProtectedCloseFailure::InvalidTarget);
                                 }
                                 shell.update(cx, |shell, cx| {
                                     shell.start_save_command(
@@ -2248,24 +2332,43 @@ impl ProductShell {
                                 });
                                 Ok(receiver)
                             });
-                            result.unwrap_or(Err(CommandOutcome::InvalidTarget))
+                            result.unwrap_or(Err(ProtectedCloseFailure::InvalidTarget))
                         });
                         let save_outcome = match save {
                             Ok(Ok(receiver)) => receiver.await.unwrap_or(CommandOutcome::Cancelled),
-                            Ok(Err(error)) => error,
-                            Err(_) => CommandOutcome::InvalidTarget,
+                            Ok(Err(error)) => {
+                                outcome = Err(error);
+                                break;
+                            }
+                            Err(_) => {
+                                outcome = Err(ProtectedCloseFailure::InvalidTarget);
+                                break;
+                            }
                         };
                         if save_outcome != CommandOutcome::Completed {
-                            outcome = save_outcome;
+                            outcome = match save_outcome {
+                                CommandOutcome::Cancelled => {
+                                    Ok(PresentationCloseOutcome::Cancelled)
+                                }
+                                CommandOutcome::InvalidTarget => {
+                                    Err(ProtectedCloseFailure::InvalidTarget)
+                                }
+                                CommandOutcome::HandlerFailure { message } => {
+                                    Err(ProtectedCloseFailure::PersistenceFailed { message })
+                                }
+                                _ => Err(ProtectedCloseFailure::PersistenceFailed {
+                                    message: "save is unavailable".into(),
+                                }),
+                            };
                             break;
                         }
                         let approval = cx.update(|cx| {
                             let documents = Self::documents(cx);
                             let Some(document_state) = documents.read(cx).get(*document) else {
-                                return Err(CommandOutcome::InvalidTarget);
+                                return Err(ProtectedCloseFailure::InvalidTarget);
                             };
                             if document_state.is_dirty(cx) {
-                                return Err(CommandOutcome::HandlerFailure {
+                                return Err(ProtectedCloseFailure::PersistenceFailed {
                                     message: "document changed while it was being saved".into(),
                                 });
                             }
@@ -2278,11 +2381,11 @@ impl ProductShell {
                         match approval {
                             Ok(Ok(approval)) => approvals.push(approval),
                             Ok(Err(error)) => {
-                                outcome = error;
+                                outcome = Err(error);
                                 break;
                             }
                             Err(_) => {
-                                outcome = CommandOutcome::InvalidTarget;
+                                outcome = Err(ProtectedCloseFailure::InvalidTarget);
                                 break;
                             }
                         }
@@ -2291,10 +2394,10 @@ impl ProductShell {
                         let approval = cx.update(|cx| {
                             let documents = Self::documents(cx);
                             let Some(document_state) = documents.read(cx).get(*document) else {
-                                return Err(CommandOutcome::InvalidTarget);
+                                return Err(ProtectedCloseFailure::InvalidTarget);
                             };
                             if document_state.model().read(cx).revision() != prompted_revision {
-                                return Err(CommandOutcome::InvalidTarget);
+                                return Err(ProtectedCloseFailure::InvalidTarget);
                             }
                             Ok(CloseApproval {
                                 document: *document,
@@ -2305,62 +2408,56 @@ impl ProductShell {
                         match approval {
                             Ok(Ok(approval)) => approvals.push(approval),
                             Ok(Err(error)) => {
-                                outcome = error;
+                                outcome = Err(error);
                                 break;
                             }
                             Err(_) => {
-                                outcome = CommandOutcome::InvalidTarget;
+                                outcome = Err(ProtectedCloseFailure::InvalidTarget);
                                 break;
                             }
                         }
                     }
                     _ => {
-                        outcome = CommandOutcome::Cancelled;
+                        outcome = Ok(PresentationCloseOutcome::Cancelled);
                         break;
                     }
                 }
             }
-            let current_views = if outcome == CommandOutcome::Completed {
+            let current_views = if matches!(outcome, Ok(PresentationCloseOutcome::Closed)) {
                 cx.update(Self::collect_product_views).ok()
             } else {
                 None
             };
-            let fallback = completion.clone();
+            let mut completion = Some(completion);
             if this
                 .update(cx, |this, cx| {
-                    if outcome == CommandOutcome::Completed {
+                    if plan
+                        .request
+                        .caller
+                        .as_ref()
+                        .is_some_and(|caller| !caller.is_live(cx))
+                    {
+                        outcome = Err(ProtectedCloseFailure::Cancelled);
+                    } else if matches!(outcome, Ok(PresentationCloseOutcome::Closed)) {
                         outcome = match current_views {
-                            Some(ref views) => {
-                                this.commit_protected_close(&plan, &approvals, views, cx)
-                            }
-                            None => CommandOutcome::InvalidTarget,
+                            Some(ref views) => this
+                                .commit_protected_close(&plan, &approvals, views, cx)
+                                .map(|()| PresentationCloseOutcome::Closed),
+                            None => Err(ProtectedCloseFailure::InvalidTarget),
                         };
                     }
                     Self::set_protected_closure_active(false, cx);
-                    this.finish_protected_close(completion, outcome, cx);
+                    completion.take().unwrap()(outcome, cx);
                 })
                 .is_err()
             {
                 let _ = cx.update(|cx| {
                     Self::set_protected_closure_active(false, cx);
-                    Self::finish_protected_close_completion(
-                        fallback,
-                        CommandOutcome::InvalidTarget,
-                        cx,
-                    );
+                    completion.take().unwrap()(Err(ProtectedCloseFailure::InvalidTarget), cx);
                 });
             }
         })
         .detach();
-    }
-
-    fn finish_protected_close(
-        &mut self,
-        completion: Option<CommandCompletion>,
-        outcome: crate::host::protocol::CommandOutcome,
-        cx: &mut Context<Self>,
-    ) {
-        Self::finish_protected_close_completion(completion, outcome, cx);
     }
 
     fn finish_protected_close_completion(
@@ -2383,9 +2480,7 @@ impl ProductShell {
         approvals: &[CloseApproval],
         views: &[ProtectedView],
         cx: &mut Context<Self>,
-    ) -> crate::host::protocol::CommandOutcome {
-        use crate::host::protocol::CommandOutcome;
-
+    ) -> Result<(), ProtectedCloseFailure> {
         let current_scope = views
             .iter()
             .filter(|view| match plan.request.kind {
@@ -2405,17 +2500,17 @@ impl ProductShell {
                 .iter()
                 .any(|key| !plan.scope.iter().any(|planned| planned == key))
         {
-            return CommandOutcome::InvalidTarget;
+            return Err(ProtectedCloseFailure::InvalidTarget);
         }
         let documents = Self::documents(cx);
         for approval in approvals {
             let Some(document) = documents.read(cx).get(approval.document) else {
-                return CommandOutcome::InvalidTarget;
+                return Err(ProtectedCloseFailure::InvalidTarget);
             };
             if document.model().read(cx).revision() != approval.revision
                 || (approval.kind == CloseApprovalKind::Saved && document.is_dirty(cx))
             {
-                return CommandOutcome::InvalidTarget;
+                return Err(ProtectedCloseFailure::InvalidTarget);
             }
         }
         let total_counts = views.iter().fold(HashMap::new(), |mut counts, view| {
@@ -2441,7 +2536,7 @@ impl ProductShell {
                         && approval.kind == CloseApprovalKind::Discarded
                 });
                 if !approved {
-                    return CommandOutcome::InvalidTarget;
+                    return Err(ProtectedCloseFailure::InvalidTarget);
                 }
             }
         }
@@ -2477,9 +2572,9 @@ impl ProductShell {
                             }),
                             cx,
                         );
-                        CommandOutcome::Completed
+                        Ok(())
                     }
-                    Err(_) => CommandOutcome::InvalidTarget,
+                    Err(_) => Err(ProtectedCloseFailure::InvalidTarget),
                 }
             }
             ProtectedCloseKind::Quit => {
@@ -2491,7 +2586,7 @@ impl ProductShell {
                     cx,
                 );
                 cx.quit();
-                CommandOutcome::Completed
+                Ok(())
             }
         }
     }
@@ -2564,12 +2659,11 @@ impl ProductShell {
         tab: TabId,
         surface: TabSurfaceId,
         cx: &mut Context<Self>,
-    ) -> crate::host::protocol::CommandOutcome {
+    ) -> Result<(), ProtectedCloseFailure> {
         use crate::app::workbench::CloseConfirmation;
-        use crate::host::protocol::CommandOutcome;
 
         if !self.workbench.read(cx).contains_surface(pane, tab, surface) {
-            return CommandOutcome::InvalidTarget;
+            return Err(ProtectedCloseFailure::InvalidTarget);
         }
         let TabSurfaceId::Document(document) = surface else {
             let TabSurfaceId::Terminal(session_id) = surface else {
@@ -2579,7 +2673,7 @@ impl ProductShell {
                 workbench.request_close_terminal_tab(pane, tab, session_id)
             });
             let Some(transition) = outcome else {
-                return CommandOutcome::InvalidTarget;
+                return Err(ProtectedCloseFailure::InvalidTarget);
             };
             self.close_terminal(session_id, cx);
             if transition.workbench_is_empty() {
@@ -2589,7 +2683,7 @@ impl ProductShell {
                 self.focus_active_surface(window, cx)
             });
             cx.notify();
-            return CommandOutcome::Completed;
+            return Ok(());
         };
         let open_view_count = cx
             .global::<ApplicationWorkbenches>()
@@ -2620,7 +2714,7 @@ impl ProductShell {
                     )
                 })
                 .unwrap(),
-            None => return CommandOutcome::InvalidTarget,
+            None => return Err(ProtectedCloseFailure::InvalidTarget),
         };
         if transition.document == Some(DocumentCloseDisposition::CloseRequested) {
             documents.update(cx, |documents, cx| {
@@ -2643,7 +2737,7 @@ impl ProductShell {
             });
         }
         cx.notify();
-        CommandOutcome::Completed
+        Ok(())
     }
 
     fn focus_active_editor(&self, window: &mut Window, cx: &App) {
@@ -3599,6 +3693,7 @@ pub(super) fn bind_product_keys(cx: &mut App) {
 
 #[cfg(test)]
 mod tests {
+    mod closure;
     mod observation;
     mod operations;
     mod workspaces;

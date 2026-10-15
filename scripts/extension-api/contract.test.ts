@@ -129,6 +129,14 @@ await workspaces.replaceRoots(workspace.roots);
 // @ts-expect-error root collections must be arrays
 await workspaces.replaceRoots("file:///tmp");
 
+const closed: import("knot").PresentationCloseOutcome = await workbench.close(opened.presentation.target);
+const closedKind: "closed" | "cancelled" = closed.kind;
+// @ts-expect-error closure requires an exact view, not a window
+await workbench.close(workspace.window);
+// @ts-expect-error command targets cannot close live presentations
+await workbench.close({} as CommandTarget);
+void closedKind;
+
 // @ts-expect-error plain URIs are not document identities
 await documents.present("file:///tmp/document.txt");
 

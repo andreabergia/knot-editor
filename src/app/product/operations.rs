@@ -9,6 +9,7 @@ use crate::host::{
     },
 };
 
+#[derive(Clone)]
 pub(crate) struct OperationCaller {
     pub(crate) host: WeakEntity<super::super::extension_host::ProductExtensionHost>,
     pub(crate) key: ExtensionKey,
@@ -317,5 +318,58 @@ pub(crate) fn replace_roots(
         });
         shell.tasks.push(task);
     });
+    Ok(())
+}
+
+pub(crate) fn close_presentation(
+    presentation: PresentationTarget,
+    caller: OperationCaller,
+    completion: impl FnOnce(Result<crate::host::protocol::PresentationCloseOutcome, HostRequestError>)
+    + 'static,
+    cx: &mut App,
+) -> Result<(), HostRequestError> {
+    let (shell, target) = capture_destination(&DocumentDestination::View(presentation), cx)?;
+    let workbench = target
+        .workbench
+        .upgrade()
+        .ok_or(HostRequestError::InvalidTarget)?;
+    let focus = workbench
+        .read(cx)
+        .pane(target.pane)
+        .and_then(|pane| pane.tabs().iter().find(|tab| tab.id() == target.tab))
+        .and_then(|tab| {
+            tab.editor()
+                .map(|editor| editor.focus_handle(cx))
+                .or_else(|| tab.terminal_view().map(|view| view.focus_handle(cx)))
+        })
+        .ok_or(HostRequestError::InvalidTarget)?;
+    let origin = ProductCommandTarget {
+        window: target.window,
+        shell: shell.downgrade(),
+        workbench: target.workbench,
+        pane: target.pane,
+        tab: target.tab,
+        surface: target.surface,
+        presentation: target.presentation,
+        focus: focus.downgrade(),
+        view: None,
+    };
+    super::super::product_commands::break_captured_history_group(&origin, cx);
+    ProductShell::begin_protected_operation(
+        ProtectedCloseKind::Tab,
+        origin,
+        Some(caller),
+        Box::new(move |result, _| {
+            completion(result.map_err(|error| match error {
+                ProtectedCloseFailure::InvalidTarget => HostRequestError::InvalidTarget,
+                ProtectedCloseFailure::InProgress => HostRequestError::OperationInProgress,
+                ProtectedCloseFailure::Cancelled => HostRequestError::Cancelled,
+                ProtectedCloseFailure::PersistenceFailed { .. } => {
+                    HostRequestError::PersistenceFailed
+                }
+            }));
+        }),
+        cx,
+    );
     Ok(())
 }

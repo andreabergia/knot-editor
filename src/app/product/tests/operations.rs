@@ -511,6 +511,34 @@ fn installed_open_command_consumes_the_committed_result_in_its_originating_windo
             1
         );
     }
+    assert_eq!(
+        wait_for_command(
+            dispatch_product_command(&second, second_window, "example.create-untitled", cx),
+            cx
+        ),
+        CommandOutcome::Completed
+    );
+    let created: serde_json::Value = cx.read(|cx| {
+        serde_json::from_str(&cx.read_from_clipboard().unwrap().text().unwrap()).unwrap()
+    });
+    assert_eq!(created["kind"], "untitled");
+    assert_eq!(created["dirty"], false);
+    assert_eq!(
+        wait_for_command(
+            dispatch_product_command(&first, first_window, "example.close-created-document", cx),
+            cx
+        ),
+        CommandOutcome::Completed
+    );
+    let closed: serde_json::Value = cx.read(|cx| {
+        serde_json::from_str(&cx.read_from_clipboard().unwrap().text().unwrap()).unwrap()
+    });
+    assert_eq!(closed["kind"], "closed");
+    assert!(!cx.read(|cx| {
+        documents.read(cx).documents().any(|document| {
+            document.identity().to_string() == created["document"].as_str().unwrap()
+        })
+    }));
 }
 
 #[gpui::test]
@@ -602,4 +630,120 @@ await commands.register("operations.clean", async () => {
         CommandOutcome::Completed
     );
     host.update(cx, |host, cx| host.unload(key, cx).unwrap());
+}
+
+#[gpui::test]
+fn public_open_rejects_pane_or_window_loss_and_command_cancellation_without_leaks(
+    cx: &mut TestAppContext,
+) {
+    for scenario in ["pane", "window", "cancel"] {
+        let documents = install_globals(cx);
+        let (_, inner) = memory_filesystems_with_provider();
+        let (release, gate) = tokio::sync::oneshot::channel();
+        let provider = Arc::new(GatedFileSystemProvider {
+            inner,
+            read_release: Mutex::new(Some(gate)),
+            replace_release: Mutex::new(None),
+        });
+        let mut filesystems = FileSystemProviderRegistry::new();
+        filesystems.register("mem", provider.clone()).unwrap();
+        cx.set_global(ApplicationFileSystems(Arc::new(filesystems)));
+        let host = cx.update(extension_host::install);
+        let (first, first_window) = empty_product_window(&documents, cx);
+        assert_eq!(
+            wait_for_command(
+                dispatch_product_command(&first, first_window, SPLIT_HORIZONTAL_COMMAND, cx),
+                cx
+            ),
+            CommandOutcome::Completed
+        );
+        let (control, control_window) = empty_product_window(&documents, cx);
+        let index = usize::from(
+            first_window.window_id().as_u64().to_string()
+                > control_window.window_id().as_u64().to_string(),
+        );
+        let source = r#"
+import { commands, documents, windows, workbench } from "knot";
+await commands.register("operations.target-loss", async () => {
+  const target = (await windows.list())[DESTINATION].panes[0].selected;
+  try { await documents.open("mem://product/notes.txt", { target }); throw new Error("lost target accepted"); }
+  catch (error) {
+    if (error.code === "Cancelled") return;
+    if (error.code !== "InvalidTarget") throw error;
+    await workbench.writeClipboardText(error.code);
+  }
+});
+"#.replace("DESTINATION", &index.to_string());
+        let key = install_operation_fixture(&host, &source, "operations.target-loss", cx);
+        let pending =
+            dispatch_product_command(&control, control_window, "operations.target-loss", cx);
+        wait_for_api_condition(cx, |_| provider.read_release.lock().unwrap().is_none());
+        match scenario {
+            "pane" => {
+                cx.update_window(first_window, |_, window, cx| {
+                    first.update(cx, |shell, cx| {
+                        let pane = &shell.workbench.read(cx).panes()[0];
+                        let (pane, tab) = (pane.id(), pane.active_tab_id());
+                        shell.activate_tab(pane, tab, window, cx);
+                    })
+                })
+                .unwrap();
+                assert_eq!(
+                    wait_for_command(
+                        dispatch_product_command(&first, first_window, CLOSE_TAB_COMMAND, cx),
+                        cx
+                    ),
+                    CommandOutcome::Completed
+                );
+            }
+            "window" => assert_eq!(
+                wait_for_command(
+                    dispatch_product_command(&first, first_window, CLOSE_WINDOW_COMMAND, cx),
+                    cx
+                ),
+                CommandOutcome::Completed
+            ),
+            "cancel" => host.update(cx, |host, cx| host.cancel_active_test_commands(cx)),
+            _ => unreachable!(),
+        }
+        release.send(()).unwrap();
+        assert_eq!(
+            wait_for_command(pending, cx),
+            if scenario == "cancel" {
+                CommandOutcome::Cancelled
+            } else {
+                CommandOutcome::Completed
+            },
+            "{scenario}"
+        );
+        cx.run_until_parked();
+        cx.read(|cx| {
+            assert!(
+                documents
+                    .read(cx)
+                    .document_for_resource(&ResourceUri::parse("mem://product/notes.txt").unwrap())
+                    .is_none()
+            );
+            assert_eq!(
+                documents.read(cx).documents().count(),
+                if scenario == "window" { 1 } else { 2 }
+            );
+            if scenario == "pane" {
+                assert_eq!(first.read(cx).workbench.read(cx).panes().len(), 1);
+            }
+        });
+        if scenario != "cancel" {
+            assert_eq!(
+                cx.read(|cx| cx.read_from_clipboard().unwrap().text().unwrap()),
+                "InvalidTarget"
+            );
+        }
+        host.update(cx, |host, cx| host.unload(key, cx).unwrap());
+        if scenario != "window" {
+            cx.update_window(first_window, |_, window, _| window.remove_window())
+                .unwrap();
+        }
+        cx.update_window(control_window, |_, window, _| window.remove_window())
+            .unwrap();
+    }
 }

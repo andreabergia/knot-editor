@@ -860,6 +860,8 @@ impl ProductExtensionHost {
                     HostOperation::OpenFolder { .. } | HostOperation::ReplaceWorkspaceRoots { .. }
                 ) {
                     self.dispatch_workspace_operation(request, cx)
+                } else if matches!(&request.operation, HostOperation::ClosePresentation { .. }) {
+                    self.dispatch_close_operation(request, cx)
                 } else {
                     self.dispatch_document_operation(request, cx)
                 }
@@ -1768,6 +1770,57 @@ impl ProductExtensionHost {
         })
     }
 
+    #[cfg(test)]
+    pub(crate) fn cancel_active_test_commands(&mut self, cx: &mut Context<Self>) {
+        for invocation in self.command_targets.keys().copied().collect::<Vec<_>>() {
+            self.commands.cancel(invocation);
+        }
+        self.drain_command_events(cx);
+    }
+
+    fn dispatch_close_operation(
+        &mut self,
+        request: HostRequest,
+        cx: &mut Context<Self>,
+    ) -> Option<crate::host::protocol::HostResponse> {
+        use crate::host::protocol::{HostRequestError, HostResponse, HostResponseValue};
+        let key = ExtensionKey::new(request.extension, request.lifecycle);
+        let result = (|| {
+            if !self.operation_is_live(key, request.invocation) {
+                return Err(HostRequestError::Cancelled);
+            }
+            let HostOperation::ClosePresentation { target } = request.operation.clone() else {
+                return Err(HostRequestError::UnsupportedOperation);
+            };
+            let caller = product::operations::OperationCaller {
+                host: cx.entity().downgrade(),
+                key,
+                invocation: request.invocation,
+            };
+            let pool = self.pool.clone();
+            let delivered = request.clone();
+            product::operations::close_presentation(
+                target,
+                caller,
+                move |result| {
+                    let _ = pool.respond(HostResponse {
+                        extension: delivered.extension,
+                        lifecycle: delivered.lifecycle,
+                        id: delivered.id,
+                        result: result.map(HostResponseValue::PresentationClosed),
+                    });
+                },
+                cx,
+            )
+        })();
+        result.err().map(|error| HostResponse {
+            extension: request.extension,
+            lifecycle: request.lifecycle,
+            id: request.id,
+            result: Err(error),
+        })
+    }
+
     fn document_presentation(
         &mut self,
         id: super::documents::DocumentId,
@@ -1957,7 +2010,8 @@ fn request_route(operation: &HostOperation) -> RequestRoute {
         | HostOperation::CreateUntitled { .. }
         | HostOperation::PresentDocument { .. }
         | HostOperation::OpenFolder { .. }
-        | HostOperation::ReplaceWorkspaceRoots { .. } => RequestRoute::ApplicationMutation,
+        | HostOperation::ReplaceWorkspaceRoots { .. }
+        | HostOperation::ClosePresentation { .. } => RequestRoute::ApplicationMutation,
         HostOperation::ApplicationQuery(_)
         | HostOperation::ObserveWorkbench
         | HostOperation::UnobserveWorkbench { .. } => RequestRoute::Application,

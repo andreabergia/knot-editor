@@ -348,3 +348,12 @@ work. Before commit it verifies caller lifecycle/cancellation; after commit the
 host builds the typed document/presentation response directly from that result,
 without invoking a command or querying window focus. Resource failures map from
 native variants to stable host codes. Listener delivery is outside completion.
+
+Protected presentation closure returns its semantic result through the typed
+bridge, using the product coordinator independently of command invocation.
+Cancelled callers cannot commit closure. User cancellation is a successful
+cancelled outcome; stale targets, concurrent closure and persistence failures are
+structured errors. A command cancellation rejects its pending JS promises; requests
+with an already queued response retain their native pending entry until that turn
+consumes it without settling the rejected resolver again. This keeps an admitted
+response associated with its root while cancellation callbacks run.

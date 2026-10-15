@@ -60,3 +60,18 @@ await commands.register("example.clear-roots", async () => {
   const result = await workspaces.replaceRoots([]);
   await workbench.writeClipboardText(JSON.stringify({ roots: result.roots, generation: result.generation }, null, 2));
 });
+
+/** @type {import("knot").ViewTarget | null} */
+let createdView = null;
+await commands.register("example.create-untitled", async () => {
+  const result = await documents.createUntitled();
+  createdView = result.presentation.target;
+  await workbench.writeClipboardText(JSON.stringify({ document: result.document.id,
+    kind: result.document.kind, dirty: result.document.dirty }, null, 2));
+});
+await commands.register("example.close-created-document", async () => {
+  if (createdView === null) return commands.invalidArguments("Run example.create-untitled first.");
+  const result = await workbench.close(createdView);
+  if (result.kind === "closed") createdView = null;
+  await workbench.writeClipboardText(JSON.stringify(result));
+});

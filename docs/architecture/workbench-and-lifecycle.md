@@ -62,7 +62,8 @@ document and confirmation coordination. Final application-level removal explicit
 closes the buffer model, so retained views cannot preserve transport access.
 
 Protected closure is application-coordinated across tab, window, and quit
-scopes. It snapshots exact tab and surface identities, determines which dirty
+scopes. It snapshots exact window, workbench, tab, surface and presentation
+identities, determines which dirty
 documents would lose their final application-wide view, deduplicates them, and
 presents native Save / Don't Save / Cancel alerts serially. Save reuses the ordinary
 captured persistence path. View and window mutation is deferred until every
@@ -73,6 +74,14 @@ presentation intact. Terminal tabs participate in the scope and its stale
 identity checks, but not document view counts or dirty prompts. Native
 window-close requests are vetoed until this flow authorizes programmatic
 removal; Quit enters the same flow before asking gpui to terminate.
+
+The shared protected operation returns a semantic closed/cancelled result or typed
+failure; native dispatch adapts it to command outcomes. Extension closure admits
+an exact live presentation and uses the same coordinator, prompts, save path and
+final-view invalidation. It revalidates caller lifecycle/cancellation before
+starting a save and before committing closure. A completed save remains visible
+if a later close is cancelled; accepted I/O is not rolled back. Operation
+completion follows the foreground close transition without awaiting listeners.
 
 Each native product window renders one workbench recursively as tabbed panes
 and horizontal or vertical splits. A shell-wide weak workbench registry binds each current workbench to its native
@@ -230,7 +239,7 @@ window closure sees only the tabs still in that window; destination resize and
 input belong to the new view. On macOS the destination stays hidden until its
 terminal content has been laid out, then becomes the active window.
 The diagnostic window continues to exercise view rebuilding; see the
-[D024 plan](../plans/d024-terminal-session-plan.md).
+[D024 plan](../archive/plans/d024-terminal-session-plan.md).
 
 Terminal pointer input honors Alacritty click (1000), drag (1002), and all-motion
 (1003) tracking with legacy, UTF-8 (1005), or SGR (1006) encoding. The view

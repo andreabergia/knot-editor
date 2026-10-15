@@ -502,6 +502,13 @@ pub struct DocumentPresentation {
     pub presentation: PresentationInfo,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum PresentationCloseOutcome {
+    Closed,
+    Cancelled,
+}
+
 /// One lifecycle-owned application observer.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, serde::Serialize)]
 pub struct WorkbenchSubscriptionId(u64);
@@ -582,6 +589,9 @@ pub enum HostOperation {
         subscription: WorkbenchSubscriptionId,
     },
     ApplicationQuery(ApplicationQuery),
+    ClosePresentation {
+        target: PresentationTarget,
+    },
     OpenFolder {
         uri: String,
         target: Option<WindowTarget>,
@@ -689,6 +699,7 @@ pub enum HostResponseValue {
     ApplicationQuery(ApplicationQueryResult),
     DocumentPresented(DocumentPresentation),
     WorkspaceUpdated(WorkspaceInfo),
+    PresentationClosed(PresentationCloseOutcome),
     KeybindingsApplied {
         error: Option<String>,
     },
@@ -796,6 +807,8 @@ pub enum HostRequestError {
     InvalidUri,
     DocumentNotFound,
     TooManyWorkspaceRoots,
+    OperationInProgress,
+    PersistenceFailed,
     ResourceNotFound,
     ResourceWrongKind,
     InvalidUtf8,
@@ -826,6 +839,8 @@ impl HostRequestError {
             Self::InvalidUri => "InvalidUri",
             Self::DocumentNotFound => "DocumentNotFound",
             Self::TooManyWorkspaceRoots => "TooManyWorkspaceRoots",
+            Self::OperationInProgress => "OperationInProgress",
+            Self::PersistenceFailed => "PersistenceFailed",
             Self::ResourceNotFound => "ResourceNotFound",
             Self::ResourceWrongKind => "ResourceWrongKind",
             Self::InvalidUtf8 => "InvalidUtf8",

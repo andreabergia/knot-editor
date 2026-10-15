@@ -120,6 +120,24 @@ more than one root rejects `TooManyWorkspaceRoots`. All validation finishes befo
 changing either roots or tree. Retained normalized roots keep their IDs; generation
 increases on replacement, including clear/reinstall, which allocates a new root ID.
 
+`workbench.close(viewTarget)` closes that exact tab through protected closure.
+A dirty document's final presentation offers Save / Don't Save / Cancel; other
+presentations keep its shared model live without prompting. Cancel resolves to
+`{ kind: "cancelled" }`, and a committed close resolves to `{ kind: "closed" }`.
+The final document close invalidates retained buffer proxies; an empty workbench
+receives the ordinary untitled replacement. Terminal closure stops that session
+without removing unrelated documents.
+
+A fabricated, replaced, transferred or closed target rejects `InvalidTarget`;
+concurrent protected closure rejects `OperationInProgress`. A failed save or an
+edit racing the save rejects `PersistenceFailed` and leaves the presentation
+intact. Caller cancellation/unload prevents the close before commit. A save already
+accepted during the flow may persist content and remains observable even if the
+later close is cancelled. Close never waits for observation listeners and can be
+awaited from a listener, followed by that listener's own disposal. Closing a
+presentation invalidates command context captured from that presentation; existing
+command target-validity and outcome rules still apply.
+
 `await workbench.observe(listener)` registers application-wide observation and
 returns an initial `snapshot`, a sequence `watermark`, and an awaitable `dispose()`.
 Registration, snapshot and watermark are captured together on the foreground;

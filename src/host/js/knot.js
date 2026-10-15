@@ -1,6 +1,6 @@
 import {
   activeBuffer,
-  observeWorkbench,
+  observeWorkbench, closePresentation,
   openDocument, createUntitled, presentDocument, listDocuments, getDocument, listWindows, getWindow, getWorkspace, openFolder, replaceWorkspaceRoots,
   invalidCommandArguments,
   keybinding,
@@ -30,6 +30,7 @@ export const commands = Object.freeze({
 
 export const workbench = Object.freeze({
   observe: observeWorkbench,
+  close: closePresentation,
   registerTreeDataProvider,
   selectedText: selectedViewText,
   writeClipboardText,
