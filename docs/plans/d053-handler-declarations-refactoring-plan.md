@@ -146,8 +146,11 @@ Checkpoint 1 implementation evidence and choices:
   `scripts/check-extension-api.sh`, `scripts/build-macos-app.sh`,
   `git diff --check`, and 53 local Markdown links in changed documents.
   `cargo fmt --all` ran once after Rust edits and before the final checks.
-- ⏳ Linux and Windows build/linking results require remote CI; only the installed
-  `aarch64-apple-darwin` target has been executed locally.
+- ✅ CI now runs workspace tests/lints and compile-fail examples on Linux, plus
+  macro tests, linked test/product-library discovery, compile-fail examples and
+  product builds on macOS/Windows.
+- ⏳ Remote Linux/Windows build/linking results remain unverified; only the
+  installed `aarch64-apple-darwin` target has been executed locally.
 - ⏳ Review gate remains open: approve representative handler/error syntax,
   context ownership, adapters and automatic linking before checkpoint 2.
 
