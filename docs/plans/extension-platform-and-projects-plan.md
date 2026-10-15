@@ -120,10 +120,12 @@ Listeners remain asynchronous scheduler roots, never foreground callbacks.
 Operations finish after their foreground commit, without awaiting listeners.
 An event handler can await another host operation without the operation waiting
 for its own queued callback. Listener failures are isolated and reported;
-unsubscription/unload removes ownership and rejects stale deliveries. Snapshot
-resynchronization is explicit. Measure queue depth and lag; do not silently
-drop correctness events. Broader enforcement remains D019 unless concrete
-evidence at a checkpoint requires bringing a specific policy into scope.
+unsubscription/unload removes ownership and rejects stale deliveries. A caller
+can dispose and observe again for a fresh baseline. Reuse scheduler queue-depth
+and lag diagnostics; do not add event replay, public batches, observer recovery,
+or a separate backpressure mechanism. Do not silently drop correctness events.
+Broader enforcement remains D019 unless concrete evidence at a checkpoint
+requires bringing a specific policy into scope.
 
 ### Workspaces and programmatic operations — D047, D052
 
@@ -313,6 +315,11 @@ Detailed execution: [D046 public API foundation plan](../archive/plans/d046-publ
   denied, the pinned authoring checker and manual product smoke checks.
 
 ### 2. Observable application state — D047 ⬜
+
+Detailed execution: [D047 application state and operations plan](d047-application-state-and-operations-plan.md).
+This also covers checkpoint 3, retaining a separate review gate for each.
+Keep observation small: one foreground snapshot-and-subscribe operation, ordered
+notifications, window-owned workspaces, and existing product lifetime rules.
 
 - Finalize and publish document/window/workspace namespaces and live-target
   types with implemented operations; extend the D046 declarations and contract
