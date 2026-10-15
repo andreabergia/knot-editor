@@ -1563,9 +1563,15 @@ impl ProductShell {
             let replaced = self.workbench.update(cx, |workbench, cx| {
                 workbench.replace_tab_document(target.pane, target.tab, document, model, cx)
             });
-            if replaced && previous != document {
-                documents.update(cx, |documents, _| {
-                    documents.remove(previous);
+            if replaced
+                && previous != document
+                && cx
+                    .global::<ApplicationWorkbenches>()
+                    .view_count(previous, cx)
+                    == 0
+            {
+                documents.update(cx, |documents, cx| {
+                    documents.remove(previous, cx);
                 });
             }
         } else {
@@ -2133,9 +2139,9 @@ impl ProductShell {
                     window.remove_window();
                 }) {
                     Ok(()) => {
-                        documents.update(cx, |documents, _| {
+                        documents.update(cx, |documents, cx| {
                             for document in final_documents {
-                                documents.remove(document);
+                                documents.remove(document, cx);
                             }
                         });
                         Self::close_terminal_ids(
@@ -2205,8 +2211,8 @@ impl ProductShell {
         };
 
         if transition.document == Some(DocumentCloseDisposition::CloseRequested) {
-            documents.update(cx, |documents, _| {
-                documents.remove(document);
+            documents.update(cx, |documents, cx| {
+                documents.remove(document, cx);
             });
         }
         if transition.workbench_is_empty() {
@@ -2290,8 +2296,8 @@ impl ProductShell {
             None => return CommandOutcome::InvalidTarget,
         };
         if transition.document == Some(DocumentCloseDisposition::CloseRequested) {
-            documents.update(cx, |documents, _| {
-                documents.remove(document);
+            documents.update(cx, |documents, cx| {
+                documents.remove(document, cx);
             });
         }
         if transition.workbench_is_empty() {
@@ -5642,6 +5648,94 @@ await commands.register("api.nontext", async (context) => {
     }
 
     #[gpui::test]
+    fn final_document_close_invalidates_js_buffer_even_with_retained_editor(
+        cx: &mut TestAppContext,
+    ) {
+        use crate::host::lifecycle::ExtensionKey;
+        const SOURCE: &str = r#"
+import { commands } from "knot";
+let saved;
+await commands.register("closure.setup", async ({ buffer }) => {
+  saved = buffer;
+  const snapshot = await buffer.snapshot();
+  await buffer.contributions.replace([{ range: { startByteOffset: 0, endByteOffset: 1 }, decoration: "info" }], { ifRevision: snapshot.revision });
+  await buffer.onDidChange(() => {});
+});
+await commands.register("closure.live", async () => {
+  if ((await saved.snapshot()).text !== "owned") throw new Error("shared buffer lost");
+});
+await commands.register("closure.closed", async () => {
+  for (const operation of [() => saved.snapshot(), () => saved.onDidChange(() => {}), () => saved.applyEdits([], { ifRevision: 0 }), () => saved.contributions.replace([], { ifRevision: 0 })]) {
+    try { await operation(); } catch (error) {
+      if (error.code === "BufferClosed") continue;
+      throw error;
+    }
+    throw new Error("closed buffer accepted operation");
+  }
+});
+"#;
+        let documents = install_globals(cx);
+        let host = cx.update(super::super::extension_host::install);
+        let model = cx.new(|_| BufferModel::from_text("owned"));
+        let document = documents.update(cx, |documents, cx| {
+            documents.create_untitled("Clean", model.clone(), cx)
+        });
+        let (first, first_window) = product_window(document, model.clone(), cx);
+        let (second, second_window) = product_window(document, model.clone(), cx);
+        let retained_editor = cx.read(|cx| {
+            first
+                .read(cx)
+                .workbench
+                .read(cx)
+                .focused_pane()
+                .unwrap()
+                .active_tab()
+                .editor()
+                .unwrap()
+                .clone()
+        });
+        let key = ExtensionKey::new(ExtensionId::new(706), ExtensionLifecycleId::new(1));
+        host.update(cx, |host, cx| {
+            let execution = host.load_test_source(key, SOURCE).unwrap();
+            cx.spawn(async move |_, _| {
+                execution.await.unwrap();
+            })
+            .detach();
+        });
+        wait_for_api_condition(cx, |cx| {
+            cx.global::<ApplicationProductCommands>()
+                .0
+                .read(cx)
+                .catalog()
+                .borrow()
+                .resolve("closure.closed")
+                .is_ok()
+        });
+        let setup = dispatch_product_command(&first, first_window, "closure.setup", cx);
+        assert_eq!(wait_for_command(setup, cx), CommandOutcome::Completed);
+        let close = dispatch_product_command(&first, first_window, CLOSE_TAB_COMMAND, cx);
+        assert_eq!(wait_for_command(close, cx), CommandOutcome::Completed);
+        cx.read(|cx| {
+            assert!(documents.read(cx).get(document).is_some());
+            assert!(model.read(cx).is_open());
+            assert_eq!(model.read(cx).resolved_contributions().len(), 1);
+        });
+        let live = dispatch_product_command(&second, second_window, "closure.live", cx);
+        assert_eq!(wait_for_command(live, cx), CommandOutcome::Completed);
+        let close = dispatch_product_command(&second, second_window, CLOSE_TAB_COMMAND, cx);
+        assert_eq!(wait_for_command(close, cx), CommandOutcome::Completed);
+        cx.read(|cx| {
+            assert!(documents.read(cx).get(document).is_none());
+            assert!(!model.read(cx).is_open());
+            assert!(model.read(cx).resolved_contributions().is_empty());
+            assert_eq!(retained_editor.read(cx).model(), &model);
+        });
+        let closed = dispatch_product_command(&second, second_window, "closure.closed", cx);
+        assert_eq!(wait_for_command(closed, cx), CommandOutcome::Completed);
+        host.update(cx, |host, cx| host.unload(key, cx).unwrap());
+    }
+
+    #[gpui::test]
     fn public_api_disposal_and_unload_release_foreground_ownership(cx: &mut TestAppContext) {
         use crate::host::lifecycle::ExtensionKey;
         const SOURCE: &str = r#"
@@ -8045,6 +8139,35 @@ await commands.registerForView("outline", "copy", async () => {
                 shell.read(cx).status,
                 "created replacement untitled document"
             );
+        });
+    }
+
+    #[gpui::test]
+    fn replacing_a_shared_blank_tab_preserves_the_other_windows_document(cx: &mut TestAppContext) {
+        let documents = install_globals(cx);
+        let blank = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(blank).unwrap().model().clone());
+        let (first, first_window) = product_window(blank, model.clone(), cx);
+        let (second, _) = product_window(blank, model.clone(), cx);
+        let replacement = cx.update(|cx| create_untitled_document(&documents, cx));
+        cx.update_window(first_window, |_, _window, cx| {
+            first.update(cx, |shell, cx| {
+                let pane = shell.workbench.read(cx).focused_pane().unwrap();
+                let target = super::OpenTarget {
+                    workbench: shell.workbench.downgrade(),
+                    pane: pane.id(),
+                    tab: pane.active_tab_id(),
+                    surface: pane.active_tab().surface_id(),
+                };
+                shell.present_open_document(replacement, &target, true, cx);
+            });
+        })
+        .unwrap();
+        cx.read(|cx| {
+            assert!(documents.read(cx).get(blank).is_some());
+            assert!(model.read(cx).is_open());
+            assert_eq!(first.read(cx).workbench.read(cx).view_count(blank), 0);
+            assert_eq!(second.read(cx).workbench.read(cx).view_count(blank), 1);
         });
     }
 

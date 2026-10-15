@@ -55,10 +55,6 @@ impl ExtensionBufferBridge {
         self.buffers.open(model)
     }
 
-    #[allow(
-        dead_code,
-        reason = "product document closure has no buffer-removal event"
-    )]
     pub(crate) fn close_buffer(
         &mut self,
         buffer: BufferHandle,
@@ -123,7 +119,7 @@ impl ExtensionBufferBridge {
         match &request.operation {
             HostOperation::Snapshot { buffer, range } => self
                 .buffers
-                .resolve(*buffer)
+                .resolve(*buffer, cx)
                 .map_err(|_| HostRequestError::BufferClosed)?
                 .read_with(cx, |model, _| model.snapshot(*range))
                 .map(HostResponseValue::Snapshot)
@@ -135,7 +131,7 @@ impl ExtensionBufferBridge {
             } => {
                 let model = self
                     .buffers
-                    .resolve(*buffer)
+                    .resolve(*buffer, cx)
                     .map_err(|_| HostRequestError::BufferClosed)?;
                 if !self.lifecycles.contains(&identity) {
                     return Err(HostRequestError::Cancelled);
@@ -157,7 +153,7 @@ impl ExtensionBufferBridge {
             }
             HostOperation::SubscribeBufferChanges { buffer } => {
                 self.buffers
-                    .resolve(*buffer)
+                    .resolve(*buffer, cx)
                     .map_err(|_| HostRequestError::BufferClosed)?;
                 Ok(HostResponseValue::BufferChangesSubscribed {
                     subscription: self.subscriptions.subscribe(
@@ -187,7 +183,7 @@ impl ExtensionBufferBridge {
             } => {
                 let model = self
                     .buffers
-                    .resolve(*buffer)
+                    .resolve(*buffer, cx)
                     .map_err(|_| HostRequestError::BufferClosed)?;
                 if !self.lifecycles.contains(&identity) {
                     return Err(HostRequestError::Cancelled);
@@ -213,7 +209,7 @@ impl ExtensionBufferBridge {
             HostOperation::DisposeEditorContributions { buffer } => {
                 let model = self
                     .buffers
-                    .resolve(*buffer)
+                    .resolve(*buffer, cx)
                     .map_err(|_| HostRequestError::BufferClosed)?;
                 if !self.lifecycles.contains(&identity) {
                     return Err(HostRequestError::Cancelled);
@@ -246,6 +242,10 @@ impl ExtensionBufferBridge {
         let Some(buffer) = self.buffers.handle_for(model) else {
             return Vec::new();
         };
+        if !model.read(cx).is_open() {
+            let _ = self.close_buffer(buffer, cx);
+            return Vec::new();
+        }
         let mut dispatches = Vec::new();
         while let Some(committed) = model.update(cx, |model, _| model.take_pending_change()) {
             let change = BufferChange {
@@ -483,6 +483,93 @@ mod tests {
             );
             assert_eq!(result.result, Err(HostRequestError::OwnershipDisposed));
             assert_eq!(model.read(cx).text(), "generated");
+        });
+    }
+
+    #[gpui::test]
+    fn document_removal_invalidates_retained_models_and_releases_buffer_ownership(
+        cx: &mut TestAppContext,
+    ) {
+        use crate::app::documents::DocumentCollection;
+        let extension = ExtensionId::new(11);
+        let lifecycle = ExtensionLifecycleId::new(5);
+        let model = cx.new(|_| BufferModel::from_text("owned"));
+        cx.update(|cx| {
+            let mut documents = DocumentCollection::new();
+            let document = documents.create_untitled("owned", model.clone(), cx);
+            let mut bridge = ExtensionBufferBridge::new();
+            bridge.admit_lifecycle(extension, lifecycle);
+            let buffer = bridge.open_buffer(&model);
+            assert!(
+                bridge
+                    .dispatch(
+                        request(
+                            extension,
+                            lifecycle,
+                            1,
+                            HostOperation::SubscribeBufferChanges { buffer }
+                        ),
+                        || false,
+                        cx
+                    )
+                    .result
+                    .is_ok()
+            );
+            assert!(
+                bridge
+                    .dispatch(
+                        request(
+                            extension,
+                            lifecycle,
+                            2,
+                            HostOperation::ReplaceEditorContributions {
+                                buffer,
+                                contributions: vec![EditorContribution {
+                                    range: ByteRange {
+                                        start_byte_offset: 0,
+                                        end_byte_offset: 1
+                                    },
+                                    decoration: Some(DecorationToken::Info),
+                                    gutter: None,
+                                    command: None,
+                                }],
+                                if_revision: 0,
+                            }
+                        ),
+                        || false,
+                        cx
+                    )
+                    .result
+                    .is_ok()
+            );
+            assert_eq!(bridge.subscriptions.for_buffer(buffer).count(), 1);
+            model.update(cx, |model, _| model.replace(0..0, "pending ").unwrap());
+            assert!(documents.remove(document, cx));
+            assert!(!model.read(cx).is_open());
+            assert!(model.read(cx).resolved_contributions().is_empty());
+            // Access fails immediately, before the model observer has drained cleanup.
+            for operation in [
+                HostOperation::Snapshot {
+                    buffer,
+                    range: None,
+                },
+                HostOperation::SubscribeBufferChanges { buffer },
+            ] {
+                assert_eq!(
+                    bridge
+                        .dispatch(request(extension, lifecycle, 3, operation), || false, cx)
+                        .result,
+                    Err(HostRequestError::BufferClosed)
+                );
+            }
+            assert!(bridge.drain_model_changes(&model, cx).is_empty());
+            assert_eq!(bridge.subscriptions.for_buffer(buffer).count(), 0);
+            assert!(bridge.buffers.handle_for(&model).is_none());
+            assert!(
+                model
+                    .update(cx, |model, _| model.take_pending_change())
+                    .is_none()
+            );
         });
     }
 

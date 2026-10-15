@@ -688,9 +688,10 @@ impl BufferModel {
         state
     }
 
-    fn close(&mut self) {
+    pub(crate) fn close(&mut self) {
         self.anchored_ranges = AnchoredRangeStore::new();
         self.contributions = ContributionRegistry::new();
+        self.pending_changes.clear();
         self.open = false;
     }
 
@@ -775,10 +776,15 @@ impl BufferRegistry {
         })
     }
 
-    pub fn resolve(&self, handle: BufferHandle) -> Result<Entity<BufferModel>, BufferClosed> {
+    pub fn resolve(
+        &self,
+        handle: BufferHandle,
+        cx: &gpui::App,
+    ) -> Result<Entity<BufferModel>, BufferClosed> {
         self.buffers
             .get(&handle)
             .and_then(WeakEntity::upgrade)
+            .filter(|model| model.read(cx).is_open())
             .ok_or(BufferClosed)
     }
 
@@ -787,10 +793,16 @@ impl BufferRegistry {
         handle: BufferHandle,
         cx: &mut C,
     ) -> Result<(), BufferClosed> {
-        let model = self.resolve(handle)?;
+        let model = self
+            .buffers
+            .get(&handle)
+            .and_then(WeakEntity::upgrade)
+            .ok_or(BufferClosed)?;
         let _ = model.update(cx, |model, cx| {
-            model.close();
-            cx.notify();
+            if model.is_open() {
+                model.close();
+                cx.notify();
+            }
         });
         self.invalidate(handle);
         Ok(())
@@ -1262,15 +1274,15 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn handles_are_monotonic_and_invalidated_buffers_stay_invalid() {
+    #[gpui::test]
+    fn handles_are_monotonic_and_invalidated_buffers_stay_invalid(cx: &mut gpui::TestAppContext) {
         let mut registry = BufferRegistry::new();
         let first_handle = registry.register(WeakEntity::new_invalid());
         let second_handle = registry.register(WeakEntity::new_invalid());
         assert_ne!(first_handle, second_handle);
 
         registry.invalidate(first_handle);
-        assert!(registry.resolve(first_handle).is_err());
+        assert!(cx.read(|cx| registry.resolve(first_handle, cx)).is_err());
 
         let third_handle = registry.register(WeakEntity::new_invalid());
         assert_ne!(third_handle, first_handle);

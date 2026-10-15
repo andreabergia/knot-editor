@@ -14,7 +14,11 @@ UUID independent of its session-local collection ID and buffer transport handle.
 That opaque identity survives Save As and additional presentations; closure and
 reopening allocate a new identity, with no restart reuse guarantee. Shell selection is presentation state
 and remains outside the collection; `BufferRegistry` remains only a
-transport-handle registry.
+transport-handle registry. Final document removal closes the model explicitly,
+invalidates transport access even if a stale view retains the entity, and releases
+anchored contributions and pending buffer changes. The product host then removes
+buffer subscription ownership and its model observer. Nonfinal presentation closure
+and tab transfer leave the shared model open.
 
 A document explicitly records whether it is untitled,
 destination-associated-but-uncreated, persisted, or generated. Untitled dirty

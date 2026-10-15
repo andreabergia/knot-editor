@@ -1452,13 +1452,16 @@ impl ProductExtensionHost {
             .clone();
         let buffer = self.buffers.open_buffer(&model);
         self.buffer_observers.entry(buffer).or_insert_with(|| {
-            cx.observe(&model, |this, model, cx| {
+            cx.observe(&model, move |this, model, cx| {
                 for dispatch in this.buffers.drain_model_changes(&model, cx) {
                     let _ = this.pool.dispatch_buffer_change(
                         ExtensionKey::new(dispatch.extension, dispatch.lifecycle),
                         dispatch.subscription,
                         dispatch.change,
                     );
+                }
+                if !model.read(cx).is_open() {
+                    this.buffer_observers.remove(&buffer);
                 }
             })
         });

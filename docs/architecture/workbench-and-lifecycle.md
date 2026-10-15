@@ -58,7 +58,8 @@ confirmation revalidates those identities and the current application-wide
 view count before applying the transition. A closed final view requests
 document closure but does not remove the application-owned document itself.
 This keeps window-local presentation mutation separate from application-level
-document and confirmation coordination.
+document and confirmation coordination. Final application-level removal explicitly
+closes the buffer model, so retained views cannot preserve transport access.
 
 Protected closure is application-coordinated across tab, window, and quit
 scopes. It snapshots exact tab and surface identities, determines which dirty

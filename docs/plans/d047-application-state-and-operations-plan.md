@@ -181,7 +181,7 @@ cancellation plumbing; do not add a general cancellation framework.
    captures for the collection/generation model. Derive application queries from
    existing documents and live product shells/workbenches. Add only the live-window
    registration needed to discover targets; avoid a synchronized catalog replica.
-2. **Commit notifications and lifetime.** Wire document creation/removal,
+2. **Commit notifications and lifetime.** 🚧 Wire document creation/removal,
    persistence/Save As, model content/dirty changes, workspace installation/clear,
    window lifecycle, presentation mutations, and native focus/activation. Include
    new/split/activate/close and tab relocation across panes/windows. Centralize final
@@ -294,7 +294,7 @@ undo, filesystem watching, new resource providers, and terminal restoration.
   atomically; clearing/reinstalling cannot revive directory captures. Native folder
   Open and workspace-tree captures use the model.
 - 🚧 Checkpoint 2 remains unfinished: live targets/catalog, committed application
-  events, final-document invalidation, public queries/observation, observer fixture,
+  events, public queries/observation, observer fixture,
   documentation and full checkpoint validation remain. No review approval recorded.
 
 Model foundation validation (2026-10-15): `cargo test --all-targets` passed
@@ -303,3 +303,19 @@ Model foundation validation (2026-10-15): `cargo test --all-targets` passed
 identity retention/reopening, normalized retained roots, extra-root rejection,
 clear/reinstall generations, and stale directory responses with cached tree state.
 This is intermediate validation, not checkpoint acceptance.
+
+- ✅ Final-document invalidation: collection removal closes the model, clears
+  contributions and pending buffer changes, rejects transport access immediately,
+  and releases host subscriptions/observers. Closing a shared presentation and tab
+  transfer preserve the model. Blank-tab replacement also checks other windows
+  before removing the replaced document.
+- ✅ Added product-host JS coverage retaining a real editor and buffer across
+  nonfinal/final close; final reads, edits, subscription admission and contribution
+  writes reject `BufferClosed`. Focused bridge coverage asserts subscription and
+  handle release; a native replacement regression covers a shared blank document.
+
+Document lifetime validation (2026-10-15): `cargo test --all-targets` passed
+(565 library tests and 5 example tests); `cargo clippy --all-targets -- -D warnings`,
+`scripts/check-extension-api.sh`, and `git diff --check` passed. Existing protected
+closure, cancellation, window sharing and relocation regressions remain green.
+Checkpoint 2's observation contracts and review gate are still outstanding.

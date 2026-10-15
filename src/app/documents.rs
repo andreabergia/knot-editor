@@ -243,12 +243,15 @@ impl DocumentCollection {
         self.resources.get(uri).copied()
     }
 
-    #[allow(dead_code, reason = "document closure owns this lifecycle transition")]
-    pub(crate) fn remove(&mut self, id: DocumentId) -> bool {
+    pub(crate) fn remove(&mut self, id: DocumentId, cx: &mut App) -> bool {
         let Some(index) = self.documents.iter().position(|document| document.id == id) else {
             return false;
         };
         let document = self.documents.remove(index);
+        document.model.update(cx, |model, cx| {
+            model.close();
+            cx.notify();
+        });
         if let Some(uri) = document.resource_uri() {
             self.resources.remove(uri);
         }
@@ -404,9 +407,9 @@ mod tests {
 
         assert!(!documents.get(id).unwrap().identity().is_nil());
         assert!(weak.upgrade().is_some());
-        assert!(documents.remove(id));
+        assert!(cx.update(|cx| documents.remove(id, cx)));
         assert!(weak.upgrade().is_none());
-        assert!(!documents.remove(id));
+        assert!(!cx.update(|cx| documents.remove(id, cx)));
     }
 
     #[gpui::test]
@@ -527,7 +530,7 @@ mod tests {
             DocumentState::Untitled { .. }
         ));
 
-        assert!(documents.remove(first));
+        assert!(cx.update(|cx| documents.remove(first, cx)));
         assert_eq!(documents.document_for_resource(&uri), None);
         let reopened = documents.create_persisted(
             "notes.txt",

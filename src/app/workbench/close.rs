@@ -281,7 +281,7 @@ mod tests {
         assert!(retained_view.unwrap().upgrade().is_some());
         assert!(documents.get(second_document).is_some());
         assert!(second_model_weak.upgrade().is_some());
-        assert!(documents.remove(second_document));
+        assert!(cx.update(|cx| documents.remove(second_document, cx)));
         assert!(second_model_weak.upgrade().is_none());
     }
 
