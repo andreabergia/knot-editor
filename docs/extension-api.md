@@ -32,6 +32,22 @@ lookup and command invocation require a running command. Await disposal and
 tree invalidation to observe completion, and use host error `code` values
 when handling failures. See the API reference for precise rules.
 
+## Compose commands
+
+`await commands.invoke(name, arguments)` routes a child through the originating
+command's captured target and returns a structured outcome. Native and registered
+JavaScript commands use the same route. Check `outcome.kind`; command return values
+do not become semantic results. A participant can decline, and a valid invocation
+can return `unavailable` for a command unsupported by its captured surface. Calling
+from activation or unrelated callbacks rejects `ContextUnavailable`.
+
+The checked [activation example](../scripts/extension-api/examples/activation.js)
+includes `guide.compose`, which awaits another JavaScript command, and
+`guide.select-all`, which awaits the native `editor.select-all` command. The
+outline's `copy` registration shares the native command name and handles it only
+when that outline instance claims the command. Dispose these registrations when
+removing the feature; native definitions retain their application ownership.
+
 ## Identity and lifetime
 
 | Identity | Ownership and validity | Persist? |
@@ -214,7 +230,11 @@ settle before cleanup acknowledgement. A callback can await its own disposal.
 Narrow an `Error` by `name === "KnotHostError"` and its `code`, as in the
 [error example](../scripts/extension-api/examples/errors.js). A `RevisionConflict`
 means the captured revision is no longer current; choose whether to abandon the
-operation or deliberately read a new snapshot. `Cancelled` does not roll back a
+operation or deliberately read a new snapshot. Optional `details` contains
+handler-specific JSON diagnostics and can be null; narrow its value and fields
+before reading them. Choose failure categories by `code`, independently of Rust
+variant names or diagnostic message text. The closed TypeScript code union is
+checked against native declarations. `Cancelled` does not roll back a
 commit that already succeeded. Invalid argument types use `TypeError`; invalid
 numeric limits and snapshot conversion coordinates use `RangeError`.
 
@@ -223,7 +243,13 @@ captured commands, explicit-buffer callbacks, providers, awaitable cleanup and
 synchronous keybindings. Keybindings registered during one V8 turn form one atomic
 batch: invalid input fails that entire batch through its turn result.
 
-Current contextual selection supports admitted outline handlers. Application
-queries/events, live window/view targets, persistent document identity, resource
-operations, storage and new native contribution protocols remain follow-up work;
-retaining an ID does not expose those capabilities.
+Current contextual selection supports admitted outline handlers. Restart-stable
+document identity, durable storage and new native contribution protocols remain
+follow-up work; retaining an ID does not extend its lifetime or grant authority.
+
+Native contributors can find the annotation, argument/result and error contracts
+in the [host handler module](../src/app/extension_host/handlers.rs) and
+[command declarations module](../src/app/command_declarations.rs). Runtime
+ownership and routing are documented in the
+[extension host](architecture/extension-host.md) and
+[command architecture](architecture/commands.md) references.

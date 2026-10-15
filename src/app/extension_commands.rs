@@ -38,7 +38,7 @@ pub(crate) enum RoutedCommandTarget {
     Extension(CommandTarget),
 }
 
-struct PendingHostResponse {
+struct PendingCommandReply {
     extension: ExtensionId,
     lifecycle: ExtensionLifecycleId,
     reply: CommandReply,
@@ -71,7 +71,7 @@ struct InvocationNode {
     parent: Option<CommandInvocationId>,
     child: Option<CommandInvocationId>,
     completion: CommandCompletion,
-    host_response: Option<PendingHostResponse>,
+    command_reply: Option<PendingCommandReply>,
     handler_outcome: Option<CommandOutcome>,
     started: bool,
     cancelled: bool,
@@ -306,7 +306,7 @@ impl ExtensionCommandBridge {
                     InvocationTarget::Extension(target)
                         if (target.extension, target.lifecycle) == identity
                 ) || node
-                    .host_response
+                    .command_reply
                     .as_ref()
                     .is_some_and(|pending| (pending.extension, pending.lifecycle) == identity))
                 .then_some(*id)
@@ -422,7 +422,7 @@ impl ExtensionCommandBridge {
                 parent: None,
                 child: None,
                 completion,
-                host_response: None,
+                command_reply: None,
                 handler_outcome: None,
                 started: false,
                 cancelled: false,
@@ -481,10 +481,10 @@ impl ExtensionCommandBridge {
                 parent: Some(parent),
                 child: None,
                 completion,
-                host_response: if same_runtime {
+                command_reply: if same_runtime {
                     None
                 } else {
-                    reply.take().map(|reply| PendingHostResponse {
+                    reply.take().map(|reply| PendingCommandReply {
                         extension: caller.0,
                         lifecycle: caller.1,
                         reply,
@@ -603,7 +603,7 @@ impl ExtensionCommandBridge {
             CommandOutcome::Unavailable
         });
         node.completion.complete(outcome.clone());
-        if let Some(reply) = node.host_response {
+        if let Some(reply) = node.command_reply {
             let _ = reply.reply.send(Ok(CommandInvokeDispatch::Outcome {
                 outcome: outcome.clone(),
             }));

@@ -1,7 +1,7 @@
 # D053 — Handler-defined operations, errors, and commands
 
-Status: 🟡 checkpoints 1–3 approved on 2026-10-15; checkpoint 4 in progress.
-Remote platform checks remain pending.
+Status: 🟡 checkpoints 1–3 approved on 2026-10-15; checkpoint 4 implemented and
+locally verified, awaiting final approval. Remote platform checks remain pending.
 Execute after D047 is approved and archived, before D048 adds more host APIs.
 This is a separate refactoring, not another D047 acceptance requirement.
 
@@ -66,20 +66,23 @@ update architecture references and decisions when implementation lands.
   unregistration and unload semantics, feeding the same application catalog.
   Automatic static native registration must coexist with those registrations.
 
-Illustrative signatures, not final API contracts:
+Representative production signatures:
 
 ```rust
-#[host_operation("documents.open")]
-async fn open_document(context: HostContext, args: OpenDocumentArgs)
+#[host_operation("openDocument")]
+async fn open_document(context: HostContext, arguments: OpenArguments)
     -> Result<DocumentPresentation, OpenError>;
 
-#[command("file.open", title = "Open…")]
-async fn open(context: CommandContext, args: OpenArguments)
-    -> Result<(), OpenError>;
+#[command("file.open", title = "Open…", id = OPEN_COMMAND, participant = Workbench)]
+async fn open(context: CommandContext, (): ())
+    -> Result<CommandOutcome, CommandOutcome>;
 ```
 
-The command adapter must also represent a participant declining a command; the
-illustration does not replace that routing result with an error or completion.
+An optional synchronous `claim` predicate represents participant decline before
+argument decoding and async execution. Decline continues focus routing; it does
+not become an error or completion outcome. Repeated attributes can share a typed
+implementation. Native command statuses reuse `CommandOutcome`, while host
+operations return semantic values and explicit-code failures.
 
 ## Implementation choices to resolve in checkpoint 1
 
@@ -273,11 +276,11 @@ Checkpoint 3 implementation evidence and choices:
   native declarations and product behavior. UI automation was excluded by the
   user's repository instructions.
 
-### 4. Cleanup, documentation and completion ⬜
+### 4. Cleanup, documentation and completion 🟡
 
-- Remove remaining migration adapters and obsolete registry plumbing. Useful domain
+- ✅ Remove remaining migration adapters and obsolete registry plumbing. Useful domain
   sums such as application events, document kinds and command outcomes remain.
-- Update architecture/decisions, extension authoring docs/declarations, checked
+- ✅ Update architecture/decisions, extension authoring docs/declarations, checked
   examples, this initiative's sequencing, and the roadmap. No speculative public API.
 - **Validation:** run `cargo test --all-targets`, `cargo clippy --all-targets -- -D warnings`,
   `scripts/check-extension-api.sh`, `git diff --check`, changed Markdown-link checks,
@@ -285,6 +288,44 @@ Checkpoint 3 implementation evidence and choices:
   commands and installed JS commands end to end with the complete existing suite.
 - **Review gate:** approve the behavior-preserving refactoring and its final
   operation/command/error authoring shape before marking D053 complete.
+
+Checkpoint 4 implementation evidence:
+
+- ✅ Audited application/host/macro code and tests: no per-operation request,
+  result, kind, query or central error mirrors, handwritten host/native command
+  registration lists, or temporary migration adapters remain. Renamed the command
+  bridge's pending reply state to describe its typed channel and retained caller
+  lifecycle ownership. Semantic command outcomes and domain sums remain intact.
+- ✅ Code-owned native authoring contracts document both attributes, generated
+  constants, typed arguments/results/errors, synchronous decline and owned
+  foreground access. The extension guide/declarations/checked examples explain
+  awaited native/JS composition and optional structured diagnostics. Removed stale
+  claims that already available application APIs remain deferred.
+- ✅ The checked authoring package demonstrates a JS command awaiting native
+  Select All; its existing product-host regression now verifies the resulting
+  captured selection through native Copy. TypeScript checks cover optional JSON
+  details and read-only diagnostics. Platform CI also selects native command
+  declaration/discovery tests alongside host declarations and ordinary library
+  linking. The roadmap and parent initiative retain D048 as the next numbered
+  checkpoint after D053's final approval and archival.
+- ✅ Final local validation: `cargo test --workspace --all-targets` (619 library
+  tests, 3 macro tests, the ordinary product-library linking test and 5 example
+  tests); `cargo test --doc` (4 compile-fail cases plus a positive authoring example);
+  `cargo clippy --workspace --all-targets -- -D warnings`;
+  `scripts/check-extension-api.sh`; `scripts/build-macos-app.sh`;
+  `git diff --check`; and 73 local Markdown links in changed documents.
+  `cargo fmt --all` ran once at the end of Rust work before final checks/commit.
+- ✅ The full suite verifies representative declared capabilities, structured
+  errors and precision, native menu/keymap/palette routing and async work,
+  installed/checked JS command composition, lifecycle ownership and cancellation.
+  Product behavior was accepted at checkpoint 3; no UI automation was used.
+- ⏳ Remote Linux/Windows build/linking results remain unverified. The local main
+  branch is ahead of origin; these changes have no remote run. CI is configured
+  for host and native-command discovery plus product builds on supported platforms.
+- ⏳ Final review gate: approve the behavior-preserving refactoring and final
+  operation/command/error authoring shape. No new public capabilities or D048
+  implementation were introduced. Archive only after all completion requirements
+  and the final gate pass, in a separate final commit.
 
 ## Scope and completion
 

@@ -168,8 +168,11 @@ void [token, application];
 function handleError(error: HostError) {
   const code: HostErrorCode = error.code;
   const message: string = error.message;
+  const details: import("knot").JsonValue | undefined = error.details;
+  // @ts-expect-error structured diagnostics are read-only
+  error.details = null;
   // @ts-expect-error error codes are a closed union
   const unsupported: HostErrorCode = "Anything";
-  void [code, message, unsupported];
+  void [code, message, details, unsupported];
 }
 void handleError;

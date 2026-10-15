@@ -4941,6 +4941,14 @@ mod tests {
         });
         assert_eq!(wait_for_command(insertion, cx), CommandOutcome::Completed);
         cx.read(|cx| assert_eq!(model.read(cx).text(), "!text"));
+        let native_child = dispatch_product_command(&shell, window, "guide.select-all", cx);
+        assert_eq!(
+            wait_for_command(native_child, cx),
+            CommandOutcome::Completed
+        );
+        let native_copy = dispatch_product_command(&shell, window, super::COPY_COMMAND, cx);
+        assert_eq!(wait_for_command(native_copy, cx), CommandOutcome::Completed);
+        cx.read(|cx| assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), "!text"));
         let tree = cx.read(|cx| shell.read(cx).extension_tree.as_ref().unwrap().clone());
         wait_for_api_condition(cx, |cx| tree.read(cx).root_labels() == ["Guide"]);
         cx.update_window(window, |_, window, cx| {

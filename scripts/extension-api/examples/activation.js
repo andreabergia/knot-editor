@@ -38,6 +38,14 @@ const child = await commands.register("guide.compose", async () => {
   if (outcome.kind === "handlerFailure") throw new Error(outcome.message);
 });
 
+// Native and JavaScript children share captured routing and awaited outcomes.
+const nativeChild = await commands.register("guide.select-all", async () => {
+  const outcome = await commands.invoke("editor.select-all");
+  if (outcome.kind !== "completed") {
+    throw new Error(`Select All did not complete: ${outcome.kind}`);
+  }
+});
+
 const tree = await workbench.registerTreeDataProvider("outline", {
   getChildren(parentId) {
     return parentId === null ? [{
@@ -74,7 +82,7 @@ export async function deactivateFeature() {
   removeKeybinding("cmd-c", { view: "outline" });
   await Promise.all([
     ...Array.from(bufferOwnership, (owner) => owner.dispose()),
-    command.dispose(), child.dispose(), viewCommand.dispose(),
+    command.dispose(), child.dispose(), nativeChild.dispose(), viewCommand.dispose(),
     completion.dispose(), tree.dispose(),
   ]);
 }

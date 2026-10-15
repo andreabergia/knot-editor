@@ -229,8 +229,10 @@ numbers remain `RangeError`; unrepresentable native integers remain
 `UnsupportedOperation` host errors. Local/shared error derives retain explicit
 stable codes, diagnostic messages and typed structured details. Descriptor codes
 plus the common transport failures check the closed TypeScript declaration,
-without a separate error membership registry. Native commands retain their
-existing catalog and routing.
+without a separate error membership registry. Native command declarations share
+the async call contract, with application-owned command adapters retaining catalog
+ownership and captured participant routing. See [commands](commands.md) for
+synchronous claim selection and foreground execution ordering.
 
 ## Boundary contracts
 

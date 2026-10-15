@@ -16,7 +16,8 @@ uses a JavaScript project manager to establish production application APIs,
 native semantic UI contributions, durable extension storage, multi-root
 workspaces, and session restoration including unsaved documents. D046 is complete
 and approved on 2026-10-15. D047 checkpoints 2–3 are complete and approved on
-2026-10-15. Execute the separate D053 handler refactoring next, before D048.
+2026-10-15. D053 is implemented through native commands; its final cleanup and
+validation checkpoint awaits approval before archival and D048.
 Execute one checkpoint at a time and stop at its review gate.
 
 | Priority | Checkpoint | Work identifiers | Outcome |
@@ -24,7 +25,7 @@ Execute one checkpoint at a time and stop at its review gate.
 | 1 | Public API foundation (✅ complete) | D046 | Documented and typed JS contracts; prototype coupling removed at the API boundary |
 | 2 | Application state and events (✅ complete) | D047 | Window/document/workspace queries and race-free observation |
 | 3 | Resource and document operations (✅ complete) | D047 | JS opens resources and manages documents through product flows |
-| 3a | Handler declarations refactoring (next) | D053 | Function-defined typed async operations/errors/native commands with automatic registration |
+| 3a | Handler declarations refactoring (final review) | D053 | Function-defined typed async operations/errors/native commands with automatic registration |
 | 4 | Durable extension storage | D048 | Rust-owned SQLite and lifecycle-independent extension namespaces |
 | 5 | Native extension UI | D049 | Extension-created views and native picker/input surfaces |
 | 6 | Project registry validation | D051 | A usable JavaScript project manager with one root per workspace |
@@ -48,11 +49,13 @@ Explicit follow-up tasks within the selected initiative:
   an admission-time captured command/active window. Folder/root operations,
   untitled creation, presenting documents and protected closure are implemented;
   automated acceptance passes, and the user approved completion on 2026-10-15.
-- **D053, separate maintenance interlude:** after D047 is approved and archived,
-  execute the [handler declarations refactoring](plans/d053-handler-declarations-refactoring-plan.md)
-  before D048. Annotated functions define their arguments/results/errors, with
-  automatic registration and async support from the start. Native commands share
-  machinery while retaining focus routing; JS registration remains dynamic.
+- **D053, separate maintenance interlude:** the
+  [handler declarations refactoring](plans/d053-handler-declarations-refactoring-plan.md)
+  awaits final cleanup/validation approval. All current host capabilities and native
+  commands use annotated typed async handlers with automatic registration. Focus
+  routing and dynamic JS registration retain their existing ownership. Archive
+  after the final gate, then resume numbered checkpoint 4 (D048); storage remains
+  unimplemented. Remote Linux/Windows build evidence remains pending.
 - **D048, checkpoint 4:** publish the storage namespace with its implemented
   record operations and ownership contracts.
 - **D049, checkpoint 5:** finalize native contribution APIs and pass originating

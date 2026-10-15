@@ -1,4 +1,17 @@
 //! Declared application capabilities and their foreground access context.
+//!
+//! A `host_operation` attribute pairs the async function's owned context,
+//! arguments, semantic success and error types, and automatically links its
+//! descriptor. Implement `HostArguments` using recognized fields from
+//! `ArgumentReader`; implement `HostSuccess` for the result representation. Reuse
+//! shared payloads and compose local errors with `HostError`'s transparent form.
+//! Every public failure variant declares an explicit stable code and diagnostic
+//! message; named fields become structured details.
+//!
+//! Access models only through short foreground closures returning owned values.
+//! Retain captured authority across native awaits and revalidate it before commit.
+//! Keep V8 conversion in the host adapters and update the checked TypeScript
+//! facade/declarations when exposing or changing a public capability.
 
 use super::*;
 use crate::host::declarations::{

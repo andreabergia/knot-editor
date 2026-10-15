@@ -67,6 +67,7 @@ jobs:
         run: |
           cargo test --locked -p knot-handler-macros
           cargo test --locked --lib host::declarations
+          cargo test --locked --lib app::command_declarations
           cargo test --locked --test handler_linking
           cargo test --locked --doc
       - name: Build product

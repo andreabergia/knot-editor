@@ -163,7 +163,8 @@ declare module "knot" {
    */
   export type JsonValue = null | boolean | number | string | readonly JsonValue[]
     | { readonly [key: string]: JsonValue };
-  /** Stable host failure codes; names, messages and stacks are diagnostics. */
+  /** Stable host failure codes; names, messages and stacks are diagnostics.
+   * Checked against native handler descriptors and common transport failures. */
   export type HostErrorCode = "ContextUnavailable" | "InvalidTarget" | "OwnershipDisposed"
     | "Cancelled" | "UnsupportedOperation" | "BufferClosed" | "BufferReadOnly"
     | "InvalidRange" | "InvalidEditBatch" | "RevisionConflict" | "ContributionSetNotFound"
@@ -179,7 +180,8 @@ declare module "knot" {
     readonly name: "KnotHostError";
     /** Stable category for handling a failure independently of its message. */
     readonly code: HostErrorCode;
-    /** Handler-specific structured diagnostics, when supplied by native code. */
+    /** Optional handler-specific JSON diagnostics; may be null. Narrow fields
+     * before inspecting them. Use code for categories; message is diagnostic. */
     readonly details?: JsonValue;
   }
   /**

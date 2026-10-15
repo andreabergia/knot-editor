@@ -1,4 +1,19 @@
 //! Automatically linked native commands and owned foreground command access.
+//!
+//! Annotate a safe async function taking owned `CommandContext` and arguments and
+//! returning `Result<Success, Error>`. The `command` attribute requires a wire
+//! name, `title`, generated name constant `id`, and routing `participant`:
+//! `#[command("file.open", title = "Open…", id = OPEN_COMMAND, participant = Workbench)]`.
+//! Repeated attributes share an implementation; `context.name` identifies its
+//! declaration. An optional `claim = path` predicate returns false to decline
+//! synchronously, preserving routing before any handler work starts.
+//!
+//! Arguments implement `CommandArguments`; success and error types implement
+//! `CommandSuccess` and `CommandError`. Unit arguments reject non-null input;
+//! unit success means Completed. Existing native flows can return CommandOutcome.
+//! Use foreground/shell closures for model access and pending for an owned native
+//! completion channel. Await these methods; closure captures and results must be
+//! owned. Each foreground entry revalidates the captured presentation.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::OnceLock;

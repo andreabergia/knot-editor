@@ -15,6 +15,7 @@ await commands.register("guide.insert", async ({ buffer, arguments: value }) => 
       range: { startByteOffset: 0, endByteOffset: 0 }, text: value,
     }], { ifRevision: snapshot.revision });
   } catch (error) {
+    // Optional error.details carries diagnostics; recovery uses the stable code.
     if (isHostError(error) && error.code === "RevisionConflict") {
       // Deliberately abandon this edit rather than silently retry a newer revision.
       return;
