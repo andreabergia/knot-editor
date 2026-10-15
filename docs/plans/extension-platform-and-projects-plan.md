@@ -1,6 +1,7 @@
 # Production extension APIs and JavaScript project management
 
-Status: ✅ D046 complete and approved on 2026-10-15; checkpoints 2–10 not started.
+Status: ✅ D046 and D047 checkpoint 2 complete and approved on 2026-10-15;
+checkpoints 3–10 not started.
 
 Source: the project-management design discussion of 2026-10-13 and the
 [prioritized roadmap](../roadmap.md). Work identifiers: D046–D052 and promoted
@@ -314,12 +315,13 @@ Detailed execution: [D046 public API foundation plan](../archive/plans/d046-publ
   Validation passed: 559 library tests, 5 example tests, Clippy with warnings
   denied, the pinned authoring checker and manual product smoke checks.
 
-### 2. Observable application state — D047 ⏳
+### 2. Observable application state — D047 ✅
 
 Detailed execution: [D047 application state and operations plan](d047-application-state-and-operations-plan.md).
 This also covers checkpoint 3, retaining a separate review gate for each.
-Checkpoint 2 implementation and automated validation are ready; explicit review
-approval is pending. Checkpoint 3 has not started.
+Checkpoint 2 is complete and explicitly approved on 2026-10-15 after automated
+validation and manual observer, shared-identity, Save As, and disposal smoke checks.
+Checkpoint 3 has not started.
 Keep observation small: one foreground snapshot-and-subscribe operation, ordered
 notifications, window-owned workspaces, and existing product lifetime rules.
 
@@ -337,8 +339,9 @@ notifications, window-owned workspaces, and existing product lifetime rules.
 - **Validation:** no gaps during subscription startup; open versus present versus
   activate; cross-window shared documents; Save As; cancelled/stale opens; listener
   failure/unload; awaiting host calls in listeners without scheduler deadlock.
-- **Review gate:** approve event taxonomy, snapshots, ordering, and root/identity
-  model with a small observing JS fixture.
+- **Review gate:** ✅ approved on 2026-10-15: event taxonomy, snapshots, ordering,
+  root/identity model, live targets, and final-document invalidation, exercised
+  through the observing JS fixture.
 
 ### 3. Programmatic resources and documents — D047 ⬜
 

@@ -1,6 +1,6 @@
 # D047 — Application state and document operations
 
-Status: ⏳ parent checkpoint 2 implemented; awaiting explicit review approval.
+Status: ✅ parent checkpoint 2 complete and approved on 2026-10-15.
 Parent checkpoint 3 has not started.
 
 Source: checkpoints 2–3 of the
@@ -175,7 +175,7 @@ outcome. A successful close returns only after protected closure commits.
 Cancellation after a successful mutation cannot undo it. Reuse existing command
 cancellation plumbing; do not add a general cancellation framework.
 
-## Parent checkpoint 2 — Observable application state ⬜
+## Parent checkpoint 2 — Observable application state ✅
 
 1. **Model and targets.** ✅ Add document identity and ordered root records; keep
    window-owned workspace state and one-root enforcement. Extend workspace-tree
@@ -294,8 +294,8 @@ undo, filesystem watching, new resource providers, and terminal restoration.
   stable retained IDs and monotonic replacement generations. Extra roots reject
   atomically; clearing/reinstalling cannot revive directory captures. Native folder
   Open and workspace-tree captures use the model.
-- ⏳ Checkpoint 2 implementation and automated acceptance coverage are ready for
-  review. Parent completion still requires explicit approval; none recorded.
+- ✅ Checkpoint 2 implementation, automated acceptance coverage, and manual smoke
+  checks accepted; explicit user approval recorded on 2026-10-15.
 
 Model foundation validation (2026-10-15): `cargo test --all-targets` passed
 (562 library tests and 5 example tests); `cargo clippy --all-targets -- -D warnings`,
@@ -363,7 +363,7 @@ closure, unload ownership, and failed installed activation cleanup. The observer
 fixture ran as an installed package through the real product host. The full
 checkpoint acceptance audit and explicit parent review approval remain outstanding.
 
-## Checkpoint 2 acceptance audit — ready for review
+## Checkpoint 2 acceptance audit — approved
 
 Previous goal turns made concrete progress through model/lifetime, queries/targets,
 and observation implementation commits. This audit adds focused product-boundary
@@ -394,15 +394,21 @@ Audit fixes:
 - ✅ Open focuses its actual selected/created editor in the captured window.
   Existing-tab activation now publishes matching selection and actual focus.
 
-Review remains required for snapshots, event taxonomy, opaque document/root/live
-identity rules and final-document invalidation. Inspect the checked
+Review approved on 2026-10-15 for snapshots, event taxonomy, opaque document/root/live
+identity rules and final-document invalidation, following inspection of the checked
 [`@example/application-state` fixture](../../examples/extensions/@example/application-state/dist/main.js)
-and the published [declarations](../../src/host/js/knot.d.ts). No checkpoint 3
-mutations are published, and neither the parent checkpoint nor D047 is marked done.
+and the published [declarations](../../src/host/js/knot.d.ts). Parent checkpoint 2
+is complete. No checkpoint 3 mutations are published; D047 remains in progress.
 
 Final checkpoint 2 automated validation (2026-10-15): `cargo test --all-targets`
 passed (583 library tests and 5 example tests); `cargo clippy --all-targets -- -D warnings`,
 `scripts/check-extension-api.sh`, `git diff --check`, and added Markdown-link
 validation passed. The full product suite includes the checked installed observer
-fixture and both public JS and native commit-boundary tests. Required review is
-still pending; checkpoint 3 and D047 completion remain unapproved.
+fixture and both public JS and native commit-boundary tests.
+
+Manual product validation (2026-10-15): user reports confirmed shared document
+identity across presentations, contiguous event sequences, Save As from `justfile`
+to `foot` preserving UUID and revision while becoming clean, and observer disposal
+freezing event history while live queries continued updating. The user explicitly
+approved checkpoint 2 after these checks. Checkpoint 3 has not started; its review
+gate and D047 completion remain outstanding.

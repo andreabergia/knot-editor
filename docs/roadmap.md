@@ -40,7 +40,7 @@ evaluation.
 Explicit follow-up tasks within the selected initiative:
 
 - **D047, checkpoint 2:** document/window/workspace queries, live target types
-  and application observation are implemented and awaiting explicit review in the
+  and application observation are complete and approved on 2026-10-15 in the
   [D047 plan](plans/d047-application-state-and-operations-plan.md).
 - **D047, checkpoint 3:** implement explicit window/pane/view targets and
   admission-time active-window convenience; reject unavailable or stale targets,
