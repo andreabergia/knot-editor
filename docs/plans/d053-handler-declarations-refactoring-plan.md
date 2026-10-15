@@ -1,7 +1,8 @@
 # D053 — Handler-defined operations, errors, and commands
 
-Status: 🟡 checkpoints 1–3 approved on 2026-10-15; checkpoint 4 implemented and
-locally verified, awaiting final approval. Remote platform checks remain pending.
+Status: ✅ complete and approved on 2026-10-15. All four checkpoints and review
+gates are accepted. Local validation passed; remote Linux/Windows results remain
+unverified as a recorded validation limitation.
 Execute after D047 is approved and archived, before D048 adds more host APIs.
 This is a separate refactoring, not another D047 acceptance requirement.
 
@@ -276,7 +277,7 @@ Checkpoint 3 implementation evidence and choices:
   native declarations and product behavior. UI automation was excluded by the
   user's repository instructions.
 
-### 4. Cleanup, documentation and completion 🟡
+### 4. Cleanup, documentation and completion ✅
 
 - ✅ Remove remaining migration adapters and obsolete registry plumbing. Useful domain
   sums such as application events, document kinds and command outcomes remain.
@@ -319,13 +320,19 @@ Checkpoint 4 implementation evidence:
   errors and precision, native menu/keymap/palette routing and async work,
   installed/checked JS command composition, lifecycle ownership and cancellation.
   Product behavior was accepted at checkpoint 3; no UI automation was used.
-- ⏳ Remote Linux/Windows build/linking results remain unverified. The local main
-  branch is ahead of origin; these changes have no remote run. CI is configured
-  for host and native-command discovery plus product builds on supported platforms.
-- ⏳ Final review gate: approve the behavior-preserving refactoring and final
-  operation/command/error authoring shape. No new public capabilities or D048
-  implementation were introduced. Archive only after all completion requirements
-  and the final gate pass, in a separate final commit.
+- ⚪ Validation limitation: remote Linux/Windows build/linking results remain
+  unverified. These local changes have no remote run. CI is configured for host
+  and native-command discovery plus product builds on supported platforms. No
+  remote success is claimed.
+- ✅ Final review gate: user approved the behavior-preserving refactoring and
+  final operation/command/error authoring shape on 2026-10-15, following delivery
+  of the passing local validation record and disclosed remote-platform limitation.
+  No new public capabilities or D048 implementation were introduced.
+- ✅ Completion audit: all 33 current host capabilities and 55 native participant
+  declarations (53 catalog definitions) use automatic typed declarations; obsolete
+  mirrors/adapters are absent. Durable boundary, command, lifecycle and persistence
+  coverage passes. Architecture, authoring contracts, examples and sequencing are
+  updated. Archive in a separate commit; D048 remains the next product checkpoint.
 
 ## Scope and completion
 
