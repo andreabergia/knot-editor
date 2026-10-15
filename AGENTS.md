@@ -20,6 +20,9 @@ persistence paths covered. Use focused tests where they provide confidence,
 and add UI or integration coverage when behavior cannot be validated at a
 lower boundary.
 
+No one is using the product at the moment; we are free to break any backward
+compatibility concerns at any time.
+
 ## Rules
 
 - Whenever implementing a plan or design document, always keep the plan
@@ -37,3 +40,5 @@ updated. Use ✅ and other emoji to mark executed steps.
 - Don't use conventional commits.
 - Run `cargo fmt` once at the end of Rust work, before committing. Do not use
   `cargo fmt --check` or manually format individual files.
+- There's a thing as being _too_ careful. This is a text editor, used by
+humans. Incredibily unlikely edge cases shouldn't be handled.
