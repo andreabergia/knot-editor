@@ -284,7 +284,7 @@ undo, filesystem watching, new resource providers, and terminal restoration.
 ## Separate follow-up
 
 After D047's manual gate and explicit approval, complete its archival and execute
-[D053 — handler declarations refactoring](../../plans/d053-handler-declarations-refactoring-plan.md)
+[D053 — handler declarations refactoring](d053-handler-declarations-refactoring-plan.md)
 before D048. That plan covers function-defined arguments/results/errors, automatic
 registration, async handlers, and native command declarations. Keep D047's current
 behavior and acceptance scope unchanged; this refactoring is not required for

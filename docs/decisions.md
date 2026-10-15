@@ -159,8 +159,8 @@ focus precedence so extension routing can select inline children before scheduli
 Drive short foreground requests in the current dispatch turn, handing suspended
 futures to the executor only when necessary. This preserves key-command/text-input
 ordering without retaining foreground borrows across awaits. Dynamic extension
-registration and ownership stay in the application catalog. Evidence and the
-final review gate: [D053](plans/d053-handler-declarations-refactoring-plan.md).
+registration and ownership stay in the application catalog. Evidence and accepted
+authoring shape: [D053](archive/plans/d053-handler-declarations-refactoring-plan.md).
 
 ## Installed extension directories
 

@@ -7,12 +7,12 @@ Execute after D047 is approved and archived, before D048 adds more host APIs.
 This is a separate refactoring, not another D047 acceptance requirement.
 
 Source: the protocol/command design discussion of 2026-10-15; scheduled by the
-[roadmap](../roadmap.md) and the
-[extension platform plan](extension-platform-and-projects-plan.md).
-Current constraints: [architecture](../architecture.md), [decisions](../decisions.md),
-[extension host](../architecture/extension-host.md), and
-[commands](../architecture/commands.md). D047's implementation and acceptance
-record live in its [completed plan](../archive/plans/d047-application-state-and-operations-plan.md).
+[roadmap](../../roadmap.md) and the
+[extension platform plan](../../plans/extension-platform-and-projects-plan.md).
+Current constraints: [architecture](../../architecture.md), [decisions](../../decisions.md),
+[extension host](../../architecture/extension-host.md), and
+[commands](../../architecture/commands.md). D047's implementation and acceptance
+record live in its [completed plan](d047-application-state-and-operations-plan.md).
 
 ## Outcome
 
@@ -332,7 +332,7 @@ Checkpoint 4 implementation evidence:
   declarations (53 catalog definitions) use automatic typed declarations; obsolete
   mirrors/adapters are absent. Durable boundary, command, lifecycle and persistence
   coverage passes. Architecture, authoring contracts, examples and sequencing are
-  updated. Archive in a separate commit; D048 remains the next product checkpoint.
+  updated. Archived in a separate commit; D048 remains the next product checkpoint.
 
 ## Scope and completion
 

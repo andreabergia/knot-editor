@@ -1,7 +1,7 @@
 # Production extension APIs and JavaScript project management
 
-Status: ✅ D046 and D047 complete and approved on 2026-10-15;
-D053 checkpoints 1–3 approved; final cleanup/validation awaits approval.
+Status: ✅ D046, D047 and the D053 maintenance interlude complete, approved
+and archived on 2026-10-15. D048 is the next numbered checkpoint.
 Numbered product checkpoints 4–10 remain unstarted.
 
 Source: the project-management design discussion of 2026-10-13 and the
@@ -362,19 +362,18 @@ notifications, window-owned workspaces, and existing product lifetime rules.
 - **Review gate:** ✅ user accepted the product review gate and approved
   target/outcome contracts on 2026-10-15.
 
-### Maintenance interlude — Handler declarations refactoring, D053 🟡
+### Maintenance interlude — Handler declarations refactoring, D053 ✅
 
-The separate [D053 plan](d053-handler-declarations-refactoring-plan.md) follows
-D047's approval and archival. Its first three checkpoints are approved; final
-cleanup, documentation and validation await the last review gate. All 33 host
-capabilities and 53 native command definitions now come from annotated typed async
-handlers, without parallel transport or handwritten registration tables. Native
-participant routing and dynamic JS lifecycle ownership are preserved.
+The separate [D053 plan](../archive/plans/d053-handler-declarations-refactoring-plan.md)
+is complete, approved and archived on 2026-10-15. All 33 host capabilities and
+53 native command definitions come from annotated typed async handlers, without
+parallel transport or handwritten registration tables. Native participant routing
+and dynamic JS lifecycle ownership are preserved. Its archive records the passing
+local checks and unverified remote Linux/Windows build/linking results.
 
-After final approval and D053 archival, resume numbered checkpoint 4 (D048).
-Keep checkpoints 4–10 unchanged and unstarted. D053 adds no D047 requirement and
-does not implement D048 storage or D020 user automation. Remote Linux/Windows
-build/linking evidence remains pending in D053's validation record.
+Resume numbered checkpoint 4 (D048) next. Keep checkpoints 4–10 unchanged and
+unstarted. D053 adds no D047 requirement and does not implement D048 storage or
+D020 user automation. The broader extension/project initiative remains in progress.
 
 ### 4. SQLite-backed extension storage — D048 ⬜
 
