@@ -165,6 +165,15 @@ its documented contract. Only after all four gates pass, mark D046 complete in t
 parent plan and roadmap. Commit completion documentation separately; stop before D047.
 Delete this temporary plan after completion and fix links that pointed to it.
 
+## Manual validation — ✅ passed
+
+The user completed the product smoke checks on 2026-10-15: installed examples
+appear in the startup report, `example.greet` targets the originating buffer in
+two windows, unsupported `apiVersion: 2` rejects the package and its dependent
+(with version restored to `1`), and personal config/keybindings still work.
+Installation required the packages under `extensions/@example/`; copying into a
+nonexistent `extensions` destination had initially omitted that scope directory.
+
 ## Audit result
 
 ✅ All implementation audit gaps are closed. Review acceptance for checkpoints
