@@ -319,7 +319,7 @@ Detailed execution: [D046 public API foundation plan](../archive/plans/d046-publ
 
 ### 2. Observable application state — D047 ✅
 
-Detailed execution: [D047 application state and operations plan](d047-application-state-and-operations-plan.md).
+Detailed execution: [D047 application state and operations plan](../archive/plans/d047-application-state-and-operations-plan.md).
 This also covers checkpoint 3, retaining a separate review gate for each.
 Checkpoint 2 is complete and explicitly approved on 2026-10-15 after automated
 validation and manual observer, shared-identity, Save As, and disposal smoke checks.

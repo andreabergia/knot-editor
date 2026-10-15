@@ -3,9 +3,9 @@
 Status: ✅ complete; parent checkpoints 2 and 3 approved on 2026-10-15.
 
 Source: checkpoints 2–3 of the
-[extension platform and projects plan](extension-platform-and-projects-plan.md)
-and the [roadmap](../roadmap.md). Builds on the completed
-[D046 API foundation](../archive/plans/d046-public-api-foundation-plan.md).
+[extension platform and projects plan](../../plans/extension-platform-and-projects-plan.md)
+and the [roadmap](../../roadmap.md). Builds on the completed
+[D046 API foundation](d046-public-api-foundation-plan.md).
 
 ## Outcome and scope
 
@@ -27,13 +27,13 @@ before committing. Update architecture references and validated decisions when
 behavior lands, rather than documenting this proposal as implemented now.
 
 Relevant current boundaries:
-[architecture](../architecture.md), [decisions](../decisions.md),
-[documents](../architecture/documents-and-persistence.md),
-[workbench/lifecycle](../architecture/workbench-and-lifecycle.md),
-[extension host](../architecture/extension-host.md), and
-[commands](../architecture/commands.md).
-Extend the [declarations](../../src/host/js/knot.d.ts) and
-[author guide](../extension-api.md) together with runtime behavior.
+[architecture](../../architecture.md), [decisions](../../decisions.md),
+[documents](../../architecture/documents-and-persistence.md),
+[workbench/lifecycle](../../architecture/workbench-and-lifecycle.md),
+[extension host](../../architecture/extension-host.md), and
+[commands](../../architecture/commands.md).
+Extend the [declarations](../../../src/host/js/knot.d.ts) and
+[author guide](../../extension-api.md) together with runtime behavior.
 
 ## Agreed simplifications
 
@@ -284,7 +284,7 @@ undo, filesystem watching, new resource providers, and terminal restoration.
 ## Separate follow-up
 
 After D047's manual gate and explicit approval, complete its archival and execute
-[D053 — handler declarations refactoring](d053-handler-declarations-refactoring-plan.md)
+[D053 — handler declarations refactoring](../../plans/d053-handler-declarations-refactoring-plan.md)
 before D048. That plan covers function-defined arguments/results/errors, automatic
 registration, async handlers, and native command declarations. Keep D047's current
 behavior and acceptance scope unchanged; this refactoring is not required for
@@ -401,8 +401,8 @@ Audit fixes:
 
 Review approved on 2026-10-15 for snapshots, event taxonomy, opaque document/root/live
 identity rules and final-document invalidation, following inspection of the checked
-[`@example/application-state` fixture](../../examples/extensions/@example/application-state/dist/main.js)
-and the published [declarations](../../src/host/js/knot.d.ts). Parent checkpoint 2
+[`@example/application-state` fixture](../../../examples/extensions/@example/application-state/dist/main.js)
+and the published [declarations](../../../src/host/js/knot.d.ts). Parent checkpoint 2
 is complete. No checkpoint 3 mutations are published; D047 remains in progress.
 
 Final checkpoint 2 automated validation (2026-10-15): `cargo test --all-targets`
@@ -520,7 +520,7 @@ Protected closure and the checkpoint 3 acceptance/manual gate remain outstanding
 
 | Requirement | Current evidence |
 | --- | --- |
-| Semantic results and native/JS parity | Shared product entry points plus native product tests and [`operations.rs`](../../src/app/product/tests/operations.rs), [`workspaces.rs`](../../src/app/product/tests/workspaces.rs), [`closure.rs`](../../src/app/product/tests/closure.rs) |
+| Semantic results and native/JS parity | Shared product entry points plus native product tests and [`operations.rs`](../../../src/app/product/tests/operations.rs), [`workspaces.rs`](../../../src/app/product/tests/workspaces.rs), [`closure.rs`](../../../src/app/product/tests/closure.rs) |
 | File/folder kinds, missing destinations, UTF-8/provider/URI failures and URI deduplication | Public Open/roots tests and `open::tests`; native CLI/picker/platform convergence in the observation suite |
 | Explicit targets, pre-window activation, admission-time window capture and focus changes | Public operations/roots fixtures, activation/listener cases and gated reads/stats |
 | Lost/replaced/transferred panes/views/windows and cancellation before commit | Gated public Open and root tests; replaced prompted editor, transferred live target, close cancellation/unload tests |
@@ -530,7 +530,7 @@ Protected closure and the checkpoint 3 acceptance/manual gate remain outstanding
 | Final invalidation, cancelled-close preservation and empty-workbench replacement | Public closure suite, retained buffer access checks and final-tab activation fixture |
 | Listener independence, awaited mutation and self-disposal | Public Open and close listener fixtures plus observation scheduler/isolation tests |
 | Public types, examples, docs and installed package | Pinned authoring checker, real installed application-state fixture and native product-host tests |
-| Real product manual gate and approval | ✅ User accepted the review gate and explicitly approved completion on 2026-10-15; [checked example smoke instructions](../../examples/extensions/README.md) |
+| Real product manual gate and approval | ✅ User accepted the review gate and explicitly approved completion on 2026-10-15; [checked example smoke instructions](../../../examples/extensions/README.md) |
 
 Final checkpoint 3 automated validation (2026-10-15): `cargo test --all-targets --quiet`
 passed (608 library tests and 5 example tests); `cargo clippy --all-targets -- -D warnings`,

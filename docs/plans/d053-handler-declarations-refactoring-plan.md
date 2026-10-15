@@ -10,8 +10,7 @@ Source: the protocol/command design discussion of 2026-10-15; scheduled by the
 Current constraints: [architecture](../architecture.md), [decisions](../decisions.md),
 [extension host](../architecture/extension-host.md), and
 [commands](../architecture/commands.md). D047's implementation and acceptance
-record currently live in its [active plan](d047-application-state-and-operations-plan.md);
-update that link when D047 is archived.
+record live in its [completed plan](../archive/plans/d047-application-state-and-operations-plan.md).
 
 ## Outcome
 
