@@ -3,18 +3,18 @@
 Status: ✅ complete. Checkpoint 1 approved on 2026-10-14; checkpoints 2–4
 approved by the user on 2026-10-15 after passing manual smoke checks.
 
-Source: [extension platform plan](extension-platform-and-projects-plan.md),
-[D046 roadmap entry](../roadmap.md).
-Contract: [documented declarations](../../src/host/js/knot.d.ts).
-Authoring: [extension guide](../extension-api.md).
+Source: [extension platform plan](../../plans/extension-platform-and-projects-plan.md),
+[D046 roadmap entry](../../roadmap.md).
+Contract: [documented declarations](../../../src/host/js/knot.d.ts).
+Authoring: [extension guide](../../extension-api.md).
 
 ## Scope and delivery
 
 Implement the documented contract for every existing `knot` operation. Update
 repository consumers directly, without compatibility layers. Reuse current
 command routing, cancellation, pool teardown and foreground ownership; follow
-[architecture](../architecture.md), [commands](../architecture/commands.md) and
-[extension host](../architecture/extension-host.md).
+[architecture](../../architecture.md), [commands](../../architecture/commands.md) and
+[extension host](../../architecture/extension-host.md).
 
 Execute one checkpoint per request and stop at its review gate. Keep progress
 current, make logical commits, and run `cargo fmt` once after Rust work before
@@ -163,7 +163,7 @@ removal, resource operations, storage and new contribution protocols.
 ✅ Review gate approved on 2026-10-15: review runtime imports/context/errors/cleanup/version admission against
 its documented contract. Only after all four gates pass, mark D046 complete in the
 parent plan and roadmap. Commit completion documentation separately; stop before D047.
-Delete this temporary plan after completion and fix links that pointed to it.
+✅ Retired from active plans into the archive after completion; incoming links updated.
 
 ## Manual validation — ✅ passed
 

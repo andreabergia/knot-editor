@@ -295,7 +295,7 @@ Run `cargo fmt` once at the end of Rust work, before committing.
 
 ### 1. Production public API foundation — D046 ✅ complete
 
-Detailed execution: [D046 public API foundation plan](d046-public-api-foundation-plan.md).
+Detailed execution: [D046 public API foundation plan](../archive/plans/d046-public-api-foundation-plan.md).
 
 - Audit all existing JS operations and identify prototype coupling, implicit
   context, swallowed asynchronous errors, and missing lifecycle contracts.

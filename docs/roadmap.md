@@ -31,7 +31,7 @@ checkpoint at a time and stop at its review gate.
 | 9 | Multiple workspace roots | D052 | Root collections supported throughout UI and opening flows |
 | 10 | Layout and startup restoration | D005, D051 | Project/session restoration of windows, panes, tabs, and view state |
 
-The [detailed D046 plan](plans/d046-public-api-foundation-plan.md) retains the
+The [detailed D046 plan](archive/plans/d046-public-api-foundation-plan.md) retains the
 current namespaces, exposes captured command context, and removes global-focus
 fallback. There is no backward-compatibility requirement: contracts and repository
 consumers change together, with unsupported package API versions diagnosed before
