@@ -15,14 +15,17 @@ The [extension platform and project management plan](plans/extension-platform-an
 uses a JavaScript project manager to establish production application APIs,
 native semantic UI contributions, durable extension storage, multi-root
 workspaces, and session restoration including unsaved documents. D046 is complete
-and approved on 2026-10-15; subsequent checkpoints have not started. Execute one
-checkpoint at a time and stop at its review gate.
+and approved on 2026-10-15. D047 checkpoint 2 is also approved; checkpoint 3 is
+implemented and automatically validated, awaiting its real-product manual review.
+After completing D047, execute the separate D053 handler refactoring before D048.
+Execute one checkpoint at a time and stop at its review gate.
 
 | Priority | Checkpoint | Work identifiers | Outcome |
 | --- | --- | --- | --- |
 | 1 | Public API foundation (✅ complete) | D046 | Documented and typed JS contracts; prototype coupling removed at the API boundary |
 | 2 | Application state and events | D047 | Window/document/workspace queries and race-free observation |
 | 3 | Resource and document operations | D047 | JS opens resources and manages documents through product flows |
+| 3a | Handler declarations refactoring (after D047 approval) | D053 | Function-defined typed async operations/errors/native commands with automatic registration |
 | 4 | Durable extension storage | D048 | Rust-owned SQLite and lifecycle-independent extension namespaces |
 | 5 | Native extension UI | D049 | Extension-created views and native picker/input surfaces |
 | 6 | Project registry validation | D051 | A usable JavaScript project manager with one root per workspace |
@@ -46,6 +49,11 @@ Explicit follow-up tasks within the selected initiative:
   an admission-time captured command/active window. Folder/root operations,
   untitled creation, presenting documents and protected closure are implemented;
   automated acceptance passes, and real-product review remains pending.
+- **D053, separate maintenance interlude:** after D047 is approved and archived,
+  execute the [handler declarations refactoring](plans/d053-handler-declarations-refactoring-plan.md)
+  before D048. Annotated functions define their arguments/results/errors, with
+  automatic registration and async support from the start. Native commands share
+  machinery while retaining focus routing; JS registration remains dynamic.
 - **D048, checkpoint 4:** publish the storage namespace with its implemented
   record operations and ownership contracts.
 - **D049, checkpoint 5:** finalize native contribution APIs and pass originating
@@ -167,9 +175,12 @@ restoration (D043), and broad scheduling policy (D019) remain deferred.
   - Deferred: Correct policy depends on observed extension workloads.
   - Reconsider: Real extensions can affect responsiveness or resource use.
 
-- **D020 — Command schemas, aliases, macros, repetition, and concurrent task
-  graphs**
+- **D020 — Public command schemas, aliases, user macros, repetition, and concurrent
+  task graphs**
   - Deferred: Ordinary commands and awaited composition cover validated cases.
+    Internal native-handler argument typing, Rust declaration macros and automatic
+    registration are selected under D053; public schema introspection and user
+    automation remain here.
   - Reconsider: A concrete automation workflow cannot be expressed cleanly.
 
 - **D021 — General extension UI or WebView escape hatch**

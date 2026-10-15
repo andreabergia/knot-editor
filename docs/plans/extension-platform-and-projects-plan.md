@@ -2,11 +2,12 @@
 
 Status: ✅ D046 and D047 checkpoint 2 complete and approved on 2026-10-15;
 checkpoint 3 implemented and automatically validated, pending manual review;
-checkpoints 4–10 not started.
+D053 refactoring queued after D047 approval; checkpoints 4–10 not started.
 
 Source: the project-management design discussion of 2026-10-13 and the
 [prioritized roadmap](../roadmap.md). Work identifiers: D046–D052 and promoted
-D005. This is an architectural enhancement initiative, validated through a
+D005. A separate D053 maintenance interlude follows D047 and precedes D048.
+This is an architectural enhancement initiative, validated through a
 usable JavaScript extension rather than a Rust project-manager implementation.
 
 ## Outcome
@@ -37,16 +38,17 @@ Read [architecture](../architecture.md), [decisions](../decisions.md), and the
 - Persistent V8 isolates, bounded scheduling, awaitable host requests, lifecycle
   cleanup, command composition, and semantic providers already exist. Extend
   those boundaries; do not replace the runtime to build this feature.
-- The public `knot` facade currently exposes buffers, commands, keybindings,
-  trees, completion, selected text, and clipboard writing. It does not expose
-  the application document/workspace catalog, general lifecycle events,
-  programmatic resource opening, or durable extension storage.
+- The public `knot` facade exposes buffers, commands, keybindings, trees,
+  completion, selected text and clipboard writing. D047 additionally implements
+  application queries/observation, programmatic resources/documents, root replacement
+  and protected closure; its final review remains pending. Durable storage is D048.
 - Contextual APIs use admitted command captures and reject missing/stale context.
-  Explicit live window/view targets and application queries remain D047.
-- Application document IDs and buffer/view transport handles are process-local.
-  They cannot serve as persisted document references across restarts.
-- A shell has one optional workspace root. Workspace generations and directory
-  request generations already reject stale tree results.
+  D047 implements separate live targets and application queries; review is pending.
+- D047 document UUIDs are separate from session-local collection IDs and buffer/view
+  handles. Identity is preserved across Save As; persistence across restarts is
+  still D048/D050 work.
+- Each shell owns zero/one ordered root records with retained IDs and a monotonic
+  generation. Workspace/directory generations reject stale tree results.
 - Extension trees use predeclared kinds; the shell hardcodes an `outline` tree.
   A production contribution registry must let extensions create their own views.
 - Product resource opening already normalizes URIs, deduplicates documents, and
@@ -359,6 +361,17 @@ notifications, window-owned workspaces, and existing product lifetime rules.
   and dirty documents shared by multiple windows.
 - **Review gate:** approve target/outcome contracts using a JS open command in
   the real product.
+
+### Maintenance interlude — Handler declarations refactoring, D053 ⬜
+
+Execute the separate [D053 plan](d053-handler-declarations-refactoring-plan.md)
+only after D047's manual gate, approval and archival, before beginning checkpoint 4.
+Keep the numbered product checkpoints unchanged. D053 replaces parallel operation,
+result, codec-kind and error registries with annotated typed async handlers and
+automatic registration. Native command declarations share the machinery while
+preserving participant routing; JS commands retain dynamic lifecycle ownership.
+Its own checkpoints and review gates govern migration and validation. It adds no
+D047 requirement and does not implement D048 storage or D020 user automation.
 
 ### 4. SQLite-backed extension storage — D048 ⬜
 
