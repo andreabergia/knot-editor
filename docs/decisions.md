@@ -375,3 +375,17 @@ sandboxes: symlinks deliberately remain usable even when they lead outside the
 root.
 
 Reference: [documents and persistence](architecture/documents-and-persistence.md). Evidence: [uri filesystem plan](archive/exploration/step13-uri-filesystem-plan.md).
+
+## Application document and root identity
+
+Allocate a UUID per open application document separately from its session-local
+collection ID and transport handle. Resource association changes preserve that
+identity; reopening after closure allocates another. This supports future durable
+metadata without deriving identity from a mutable URI or promising recovery now.
+
+Keep workspace roots owned by each window, including an empty root set. Ordered
+root records retain their IDs while their normalized URI is retained. A window's
+root-set generation survives clear/reinstall so old asynchronous directory work
+cannot become current again. The model accepts at most one root.
+
+Reference: [documents and persistence](architecture/documents-and-persistence.md).

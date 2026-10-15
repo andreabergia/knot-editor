@@ -9,7 +9,10 @@ Part of the [architecture](../architecture.md). Design rationale is recorded in
 references. Its active-buffer entry is the prototype command context.
 An application-global `DocumentCollection` assigns document identities,
 strongly owns every open document and its model, and deduplicates normalized
-resource URIs across the application. Shell selection is presentation state
+resource URIs across the application. Each document also has an application-allocated
+UUID independent of its session-local collection ID and buffer transport handle.
+That opaque identity survives Save As and additional presentations; closure and
+reopening allocate a new identity, with no restart reuse guarantee. Shell selection is presentation state
 and remains outside the collection; `BufferRegistry` remains only a
 transport-handle registry.
 
@@ -62,7 +65,7 @@ Application-owned provider registry
         scheme -> provider
                 |
        WorkspaceState
-       root + generation
+       roots + generation
           /          \
          v            v
  WorkspaceTree   resource open/save
@@ -75,9 +78,13 @@ Application-owned provider registry
                     BufferModel
 ```
 
-An optional window-local `WorkspaceState` owns one normalized root and a
-monotonic generation. Workspace-tree requests are checked against that root
-and revalidate the capture before applying foreground results. Document opens
+A window-local `WorkspaceState` lives for the entire window lifetime, including
+when its root set is empty. It owns ordered root records and a monotonic root-set
+generation; zero or one root is supported. Retaining a normalized root retains
+its opaque root ID. Clearing and reinstalling allocates a fresh root ID without
+resetting the generation. Replacements reject extra roots without changing state.
+Workspace-tree requests capture the roots and generation and revalidate both
+before applying foreground results; clearing also clears cached tree state. Document opens
 use the application provider directly and are deliberately independent of the
 workspace root.
 `WorkspaceTree` additionally versions each directory request. Enumeration is

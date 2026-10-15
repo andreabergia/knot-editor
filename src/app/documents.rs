@@ -84,12 +84,14 @@ impl DocumentState {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PersistenceCapture {
+    identity: uuid::Uuid,
     generation: u64,
     state: DocumentState,
 }
 
 pub(crate) struct Document {
     id: DocumentId,
+    identity: uuid::Uuid,
     title: SharedString,
     model: Entity<BufferModel>,
     state: DocumentState,
@@ -104,6 +106,11 @@ pub(crate) struct Document {
 impl Document {
     pub(crate) fn id(&self) -> DocumentId {
         self.id
+    }
+
+    /// Opaque identity retained across persistence and presentation changes.
+    pub(crate) fn identity(&self) -> uuid::Uuid {
+        self.identity
     }
 
     pub(crate) fn title(&self) -> &SharedString {
@@ -265,6 +272,7 @@ impl DocumentCollection {
             .checked_add(1)
             .expect("document persistence generation overflowed");
         Some(PersistenceCapture {
+            identity: document.identity(),
             generation: document.persistence_generation,
             state: document.state.clone(),
         })
@@ -294,7 +302,8 @@ impl DocumentCollection {
         let Some(document) = self.documents.iter_mut().find(|document| document.id == id) else {
             return false;
         };
-        if &document.model != model
+        if document.identity() != capture.identity
+            || &document.model != model
             || document.persistence_generation != capture.generation
             || document.state != capture.state
             || matches!(document.state, DocumentState::Generated)
@@ -346,6 +355,7 @@ impl DocumentCollection {
             .expect("document identity space exhausted");
         self.documents.push(Document {
             id,
+            identity: uuid::Uuid::new_v4(),
             title: title.into(),
             model,
             state,
@@ -392,6 +402,7 @@ mod tests {
         let mut documents = DocumentCollection::new();
         let id = cx.update(|cx| documents.create_untitled("Untitled", model, cx));
 
+        assert!(!documents.get(id).unwrap().identity().is_nil());
         assert!(weak.upgrade().is_some());
         assert!(documents.remove(id));
         assert!(weak.upgrade().is_none());
@@ -494,6 +505,8 @@ mod tests {
         assert_eq!(documents.documents().count(), 1);
         assert_eq!(documents.document_for_resource(&uri), Some(first));
         assert_eq!(documents.get(first).unwrap().model(), &first_model);
+        let first_identity = documents.get(first).unwrap().identity();
+        assert_eq!(documents.get(duplicate).unwrap().identity(), first_identity);
         assert!(duplicate_weak.upgrade().is_none());
 
         let untitled =
@@ -524,6 +537,7 @@ mod tests {
             version(3),
         );
         assert_ne!(reopened, first);
+        assert_ne!(documents.get(reopened).unwrap().identity(), first_identity);
     }
 
     #[gpui::test]
@@ -567,6 +581,7 @@ mod tests {
         let mut documents = DocumentCollection::new();
         let id =
             documents.create_persisted("old.txt", model.clone(), old_uri.clone(), 0, version(1));
+        let identity = documents.get(id).unwrap().identity();
         let capture = documents.begin_persistence(id, &model).unwrap();
 
         assert!(documents.finish_persistence(
@@ -580,6 +595,7 @@ mod tests {
         assert_eq!(documents.document_for_resource(&old_uri), None);
         assert_eq!(documents.document_for_resource(&new_uri), Some(id));
         assert_eq!(documents.get(id).unwrap().title(), "new.txt");
+        assert_eq!(documents.get(id).unwrap().identity(), identity);
     }
 
     #[gpui::test]

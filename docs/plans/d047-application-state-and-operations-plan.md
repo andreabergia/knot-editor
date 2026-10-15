@@ -1,6 +1,6 @@
 # D047 — Application state and document operations
 
-Status: 📝 planned; implementation not started.
+Status: 🚧 parent checkpoint 2 in progress; review gate not reached.
 
 Source: checkpoints 2–3 of the
 [extension platform and projects plan](extension-platform-and-projects-plan.md)
@@ -176,7 +176,7 @@ cancellation plumbing; do not add a general cancellation framework.
 
 ## Parent checkpoint 2 — Observable application state ⬜
 
-1. **Model and targets.** Add document identity and ordered root records; keep
+1. **Model and targets.** 🚧 Add document identity and ordered root records; keep
    window-owned workspace state and one-root enforcement. Extend workspace-tree
    captures for the collection/generation model. Derive application queries from
    existing documents and live product shells/workbenches. Add only the live-window
@@ -283,3 +283,23 @@ Deferred: durable metadata/storage (D048), contributed UI and provider instance
 context (D049), content recovery (D050), project policy/switching (D051), multi-root
 behavior (D052), layout restoration (D005), scheduling policy (D019), persistent
 undo, filesystem watching, new resource providers, and terminal restoration.
+
+## Implementation evidence
+
+- ✅ Model foundation: application-allocated document UUIDs survive Save As and URI
+  deduplication; reopening allocates a fresh identity. Session-local IDs and buffer
+  handles remain separate.
+- ✅ Root model: every product shell owns empty/single ordered root records with
+  stable retained IDs and monotonic replacement generations. Extra roots reject
+  atomically; clearing/reinstalling cannot revive directory captures. Native folder
+  Open and workspace-tree captures use the model.
+- 🚧 Checkpoint 2 remains unfinished: live targets/catalog, committed application
+  events, final-document invalidation, public queries/observation, observer fixture,
+  documentation and full checkpoint validation remain. No review approval recorded.
+
+Model foundation validation (2026-10-15): `cargo test --all-targets` passed
+(562 library tests and 5 example tests); `cargo clippy --all-targets -- -D warnings`,
+`scripts/check-extension-api.sh`, and `git diff --check` passed. Focused tests cover
+identity retention/reopening, normalized retained roots, extra-root rejection,
+clear/reinstall generations, and stale directory responses with cached tree state.
+This is intermediate validation, not checkpoint acceptance.

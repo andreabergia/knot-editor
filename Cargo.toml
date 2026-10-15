@@ -18,6 +18,7 @@ tokio = { version = "1.53", features = ["fs", "rt-multi-thread", "sync", "time"]
 tempfile = "3"
 unicode-segmentation = "1"
 url = "2"
+uuid = { version = "1", features = ["v4"] }
 v8 = "152.2"
 
 [dev-dependencies]

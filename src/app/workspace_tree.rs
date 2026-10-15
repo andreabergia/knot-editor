@@ -109,7 +109,11 @@ impl WorkspaceTree {
 
     #[cfg(test)]
     pub(crate) fn reload(&mut self, uri: ResourceUri, cx: &mut Context<Self>) -> bool {
-        if uri != *self.workspace.root() && !uri.is_descendant_of(self.workspace.root()) {
+        if !self
+            .workspace
+            .root()
+            .is_some_and(|root| uri == *root || uri.is_descendant_of(root))
+        {
             return false;
         }
         self.request_children(uri, cx);
@@ -145,7 +149,11 @@ impl WorkspaceTree {
     }
 
     fn request_root(&mut self, cx: &mut Context<Self>) {
-        self.request_children(self.workspace.root().clone(), cx);
+        if let Some(root) = self.workspace.root().cloned() {
+            self.request_children(root, cx);
+        } else {
+            cx.notify();
+        }
     }
 
     fn request_children(&mut self, parent: ResourceUri, cx: &mut Context<Self>) {
@@ -169,7 +177,9 @@ impl WorkspaceTree {
     fn visible_rows(&self) -> Vec<VisibleRow> {
         let mut rows = Vec::new();
         let mut visited = HashSet::new();
-        self.append_children(self.workspace.root(), 0, &mut visited, &mut rows);
+        if let Some(root) = self.workspace.root() {
+            self.append_children(root, 0, &mut visited, &mut rows);
+        }
         rows
     }
 
@@ -276,7 +286,7 @@ impl WorkspaceTree {
                 let (uri, parent) = entries[index];
                 if self.expanded.remove(uri) {
                     cx.notify();
-                } else if parent != self.workspace.root() {
+                } else if Some(parent) != self.workspace.root() {
                     self.selected = Some(parent.clone());
                     cx.notify();
                 }
@@ -454,11 +464,11 @@ mod tests {
 
         tree.update(cx, |tree, cx| {
             tree.load(cx);
-            assert!(tree.reload(first.root().clone(), cx));
+            assert!(tree.reload(first.root().unwrap().clone(), cx));
             assert!(!tree.apply_response(
                 WorkspaceTreeResponse {
                     workspace: first.clone(),
-                    parent: first.root().clone(),
+                    parent: first.root().unwrap().clone(),
                     generation: 1,
                     result: Ok(Vec::new()),
                 },
@@ -481,13 +491,70 @@ mod tests {
     }
 
     #[gpui::test]
+    fn clearing_and_reinstalling_roots_rejects_prior_directory_responses(cx: &mut TestAppContext) {
+        let root = uri("mem://workspace/");
+        let mut state = WorkspaceState::new(root.clone());
+        let first = state.snapshot();
+        let tree = cx.new(|cx| WorkspaceTree::new(first.clone(), cx));
+        let cleared = state.replace_roots(Vec::new()).unwrap();
+        let reinstalled = state.replace_root(root.clone());
+        tree.update(cx, |tree, cx| {
+            tree.load(cx);
+            assert!(tree.apply_response(
+                WorkspaceTreeResponse {
+                    workspace: first.clone(),
+                    parent: root.clone(),
+                    generation: 1,
+                    result: Ok(vec![entry(
+                        "mem://workspace/old.txt",
+                        "old.txt",
+                        ResourceKind::File
+                    )]),
+                },
+                cx
+            ));
+            assert!(!tree.visible_rows().is_empty());
+            tree.set_workspace(cleared, cx);
+            assert!(tree.visible_rows().is_empty());
+            assert!(!tree.is_loading());
+            assert!(!tree.reload(root.clone(), cx));
+            tree.set_workspace(reinstalled.clone(), cx);
+            assert!(!tree.apply_response(
+                WorkspaceTreeResponse {
+                    workspace: first,
+                    parent: root.clone(),
+                    generation: 1,
+                    result: Ok(Vec::new()),
+                },
+                cx
+            ));
+            assert!(tree.is_loading());
+            assert!(tree.apply_response(
+                WorkspaceTreeResponse {
+                    workspace: reinstalled,
+                    parent: root,
+                    generation: 2,
+                    result: Ok(vec![entry(
+                        "mem://workspace/new.txt",
+                        "new.txt",
+                        ResourceKind::File
+                    )]),
+                },
+                cx
+            ));
+            assert_eq!(tree.visible_rows().len(), 1);
+            assert!(!tree.is_loading());
+        });
+    }
+
+    #[gpui::test]
     fn errors_replace_loading_without_discarding_cached_children(cx: &mut TestAppContext) {
         let workspace = WorkspaceState::new(uri("mem://workspace/")).snapshot();
         let tree = cx.new(|cx| WorkspaceTree::new(workspace.clone(), cx));
 
         tree.update(cx, |tree, cx| {
             tree.load(cx);
-            let root = workspace.root().clone();
+            let root = workspace.root().unwrap().clone();
             assert!(tree.apply_response(
                 WorkspaceTreeResponse {
                     workspace: workspace.clone(),

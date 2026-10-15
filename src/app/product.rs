@@ -255,7 +255,7 @@ pub(crate) struct ProductShell {
     tab_drag: std::rc::Rc<RefCell<tab_drag::TabDragState>>,
     command_palette: Option<Entity<CommandPalette<ProductCommandTarget>>>,
     command_palette_subscription: Option<Subscription>,
-    workspace: Option<WorkspaceState>,
+    workspace: WorkspaceState,
     workspace_tree: Option<Entity<WorkspaceTree>>,
     workspace_tree_subscription: Option<Subscription>,
     extension_tree: Option<Entity<super::tree_view::TreeView>>,
@@ -277,7 +277,7 @@ impl ProductShell {
             tab_drag: Default::default(),
             command_palette: None,
             command_palette_subscription: None,
-            workspace: None,
+            workspace: WorkspaceState::default(),
             workspace_tree: None,
             workspace_tree_subscription: None,
             extension_tree: None,
@@ -1576,15 +1576,7 @@ impl ProductShell {
     }
 
     fn install_workspace(&mut self, root: super::resource::ResourceUri, cx: &mut Context<Self>) {
-        let workspace = match &mut self.workspace {
-            Some(workspace) => workspace.replace_root(root),
-            None => {
-                let workspace = WorkspaceState::new(root);
-                let snapshot = workspace.snapshot();
-                self.workspace = Some(workspace);
-                snapshot
-            }
-        };
+        let workspace = self.workspace.replace_root(root);
         if let Some(tree) = &self.workspace_tree {
             tree.update(cx, |tree, cx| tree.set_workspace(workspace, cx));
         } else {
@@ -1609,11 +1601,7 @@ impl ProductShell {
                 self.enumerate_workspace(request, cx);
             }
             WorkspaceTreeEvent::OpenFile { workspace, uri } => {
-                if !self
-                    .workspace
-                    .as_ref()
-                    .is_some_and(|current| current.is_current(&workspace))
-                {
+                if !self.workspace.is_current(&workspace) {
                     return;
                 }
                 let Some(pane) = self.workbench.read(cx).focused_pane() else {
@@ -1641,22 +1629,14 @@ impl ProductShell {
     }
 
     fn enumerate_workspace(&mut self, request: WorkspaceTreeRequest, cx: &mut Context<Self>) {
-        if !self
-            .workspace
-            .as_ref()
-            .is_some_and(|workspace| workspace.is_current(&request.workspace))
-        {
+        if !self.workspace.is_current(&request.workspace) {
             return;
         }
         let providers = Self::filesystems(cx);
         let task = cx.spawn(async move |this, cx| {
             let result = enumerate_directory(providers, request.parent.clone()).await;
             let _ = this.update(cx, |this, cx| {
-                if !this
-                    .workspace
-                    .as_ref()
-                    .is_some_and(|workspace| workspace.is_current(&request.workspace))
-                {
+                if !this.workspace.is_current(&request.workspace) {
                     return;
                 }
                 if let Some(tree) = &this.workspace_tree {
@@ -9396,7 +9376,7 @@ await commands.registerForView("outline", "copy", async () => {
         cx.read(|cx| {
             let shell = shell.read(cx);
             assert_eq!(
-                shell.workspace.as_ref().unwrap().root().to_string(),
+                shell.workspace.snapshot().root().unwrap().to_string(),
                 "mem://product/src"
             );
             assert!(shell.workspace_tree.is_some());
