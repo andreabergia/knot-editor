@@ -25,8 +25,11 @@ gpui application and views        extension runtimes
   discover annotated operations automatically; `app` supplies owned foreground
   contexts and handlers. Foreground resource owners expose typed methods, and
   declaration adapters own response transport. `knot-handler-macros` generates
-  adapters without depending
-  on V8, gpui, or editor models.
+  adapters without depending on V8, gpui, or editor models.
+- `app::command_declarations` discovers native command metadata and adapters,
+  sharing the typed async call contract with host operations. The application
+  catalog retains dynamic registrations and name ownership; the captured dispatcher
+  retains participant precedence and extension composition.
 - `host::module_graph` validates Knot-owned, immutable package source graphs
   and personal-config source graphs before they enter an isolate.
 - `app::extension_package` owns installed-directory manifest discovery and

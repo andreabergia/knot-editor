@@ -9,6 +9,7 @@ use crate::host::protocol::CommandOutcome;
 use gpui::*;
 
 mod application_observation;
+mod command_declarations;
 #[allow(
     dead_code,
     reason = "retained application boundary outside the current product surface"

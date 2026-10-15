@@ -4,6 +4,8 @@
 //! pointer hit testing use grapheme boundaries and shaped visual coordinates.
 //! Views independently own scrolling, selection, completion, and IME preedit.
 
+pub(super) mod native_commands;
+
 use gpui::{prelude::*, *};
 use std::{
     ops::Range,
@@ -539,66 +541,6 @@ impl EditorView {
         } else if line_bottom > self.scroll + viewport_h {
             self.scroll = line_bottom - viewport_h;
         }
-    }
-
-    pub(crate) fn handle_command(
-        &mut self,
-        command: &crate::host::protocol::Command,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> super::product_commands::CommandClaim {
-        use super::product_commands::CommandClaim;
-        use crate::host::protocol::CommandOutcome;
-
-        let name = command.name.as_ref();
-        if Self::is_editing_command_name(name)
-            && let Err(claim) = super::product_commands::validate_native_arguments(command)
-        {
-            return claim;
-        }
-        if self.execute_editing_command(command.name.as_ref(), window, cx) {
-            CommandClaim::Finished(CommandOutcome::Completed)
-        } else {
-            CommandClaim::Declined
-        }
-    }
-
-    fn is_editing_command_name(name: &str) -> bool {
-        if matches!(
-            name,
-            commands::UNDO_COMMAND
-                | commands::REDO_COMMAND
-                | commands::CUT_COMMAND
-                | commands::COPY_COMMAND
-                | commands::PASTE_COMMAND
-                | commands::SELECT_ALL_COMMAND
-                | commands::INSERT_NEWLINE_COMMAND
-                | commands::INSERT_TAB_COMMAND
-                | commands::DELETE_BACKWARD_COMMAND
-                | commands::DELETE_FORWARD_COMMAND
-        ) {
-            return true;
-        }
-        let movement = name
-            .strip_prefix(commands::EDITOR_MOVE_PREFIX)
-            .or_else(|| name.strip_prefix(commands::EDITOR_SELECT_PREFIX));
-        movement.is_some_and(|movement| {
-            matches!(
-                movement,
-                "left"
-                    | "right"
-                    | "up"
-                    | "down"
-                    | "word-left"
-                    | "word-right"
-                    | "line-start"
-                    | "line-end"
-                    | "page-up"
-                    | "page-down"
-                    | "document-start"
-                    | "document-end"
-            )
-        })
     }
 
     pub(crate) fn execute_editing_command(

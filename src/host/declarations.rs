@@ -248,16 +248,27 @@ pub enum TransportError {
     UnsupportedOperation,
 }
 
-pub trait Handler: 'static {
+/// Shared typed call contract for native host operations and commands.
+pub trait AsyncHandler: 'static {
     type Context: 'static;
-    type Arguments: HostArguments;
-    type Success: HostSuccess;
-    type Error: HostError;
+    type Arguments: 'static;
+    type Success: 'static;
+    type Error: 'static;
     const NAME: &'static str;
     fn call(
         context: Self::Context,
         arguments: Self::Arguments,
     ) -> HandlerFuture<Result<Self::Success, Self::Error>>;
+}
+
+/// Host transport constraints on the shared async handler contract.
+pub trait Handler:
+    AsyncHandler<Arguments: HostArguments, Success: HostSuccess, Error: HostError>
+{
+}
+impl<H> Handler for H where
+    H: AsyncHandler<Arguments: HostArguments, Success: HostSuccess, Error: HostError>
+{
 }
 
 /// A typed responder accepts only the success/error pair declared by its handler.
@@ -498,7 +509,7 @@ mod tests {
     }
 
     struct First;
-    impl Handler for First {
+    impl AsyncHandler for First {
         type Context = ();
         type Arguments = Arguments;
         type Success = ();
@@ -509,7 +520,7 @@ mod tests {
         }
     }
     struct Last;
-    impl Handler for Last {
+    impl AsyncHandler for Last {
         type Context = ();
         type Arguments = Arguments;
         type Success = ();
@@ -586,7 +597,7 @@ mod tests {
             task::{Context, Poll, Waker},
         };
         struct Awaiting;
-        impl Handler for Awaiting {
+        impl AsyncHandler for Awaiting {
             type Context = (tokio::sync::oneshot::Receiver<()>, Rc<Cell<bool>>);
             type Arguments = Arguments;
             type Success = ();

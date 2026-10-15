@@ -11,6 +11,21 @@ ownership, and invocation admission. Keybindings, palette choices, native menus,
 and scripts carry the same Knot-owned command and structured outcome. The
 palette retains the origin captured before it takes focus.
 
+Native command handlers declare their name, title, routing participant and typed
+async signature with `#[command(...)]`. Repeated declarations can share an
+implementation. Automatically linked descriptors provide catalog definitions and
+argument/result adapters; sorted assembly rejects duplicate participant entries
+and conflicting titles. Editor and terminal handlers can share a public name and
+title. Native name constants are generated from their declarations for menus and
+keymaps. There is no separate native registration list.
+
+Optional synchronous claim predicates retain explicit participant decline before
+starting native work. Typed command arguments decode after a participant claims;
+failures become structured command outcomes. Native handlers use the same owned
+async call contract as host operations, with command-specific conversion traits.
+Existing native routines reuse `CommandOutcome` for status and failure reporting.
+The advertised Find commands retain their explicit unavailable behavior.
+
 Each native product invocation captures its window, focus, workbench, tab, and surface.
 An extension-backed focused view also contributes its Knot-owned view identity.
 The window routes the command to the captured focused view, then the workbench,
@@ -23,6 +38,14 @@ and reject results after the captured native window closes. Reordering within a
 pane preserves its capture; replacement or transfer invalidates it.
 GPUI enters the captured window after the current update releases it, during
 that update's effect cycle and before the invocation turn returns.
+
+Owned command contexts submit short foreground closures returning owned results.
+The adapter drives those closures in the current dispatch turn, preserving order
+with subsequent key events and raw text input. Only a genuinely suspended future
+moves to gpui's executor. After suspension, foreground access revalidates the
+captured window, tab, presentation and view; no editor borrow crosses an await.
+Native dialog/protected-close handlers await the existing completion channels.
+This keeps extension participant selection synchronous, including inline children.
 
 The catalog retains one public definition per command name. An extension can
 register a handler for an existing name and a declared view kind. The foreground

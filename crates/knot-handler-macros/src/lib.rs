@@ -12,6 +12,89 @@ pub fn host_operation(attribute: TokenStream, item: TokenStream) -> TokenStream 
 }
 
 fn expand_operation(name: LitStr, function: ItemFn) -> syn::Result<proc_macro2::TokenStream> {
+    expand_handler(name, function, None)
+}
+
+#[proc_macro_attribute]
+pub fn command(attribute: TokenStream, item: TokenStream) -> TokenStream {
+    let attribute = proc_macro2::TokenStream::from(attribute);
+    let mut function = parse_macro_input!(item as ItemFn);
+    let mut declarations = vec![attribute];
+    function.attrs.retain(|attr| {
+        if attr.path().is_ident("command") {
+            if let syn::Meta::List(meta) = &attr.meta {
+                declarations.push(meta.tokens.clone());
+            }
+            false
+        } else {
+            true
+        }
+    });
+    let result = (|| {
+        let mut output = quote! { #function };
+        for declaration in declarations {
+            let options = syn::parse2::<CommandOptions>(declaration)?;
+            output.extend(expand_handler(
+                options.name.clone(),
+                function.clone(),
+                Some(options),
+            )?);
+        }
+        Ok::<_, syn::Error>(output)
+    })();
+    result.unwrap_or_else(syn::Error::into_compile_error).into()
+}
+
+struct CommandOptions {
+    name: LitStr,
+    title: LitStr,
+    id: syn::Ident,
+    participant: syn::Ident,
+    claim: Option<syn::Path>,
+}
+
+impl syn::parse::Parse for CommandOptions {
+    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        let name = input.parse()?;
+        let mut title = None;
+        let mut id = None;
+        let mut participant = None;
+        let mut claim = None;
+        while !input.is_empty() {
+            input.parse::<syn::Token![,]>()?;
+            if input.is_empty() {
+                break;
+            }
+            let key: syn::Ident = input.parse()?;
+            input.parse::<syn::Token![=]>()?;
+            match key.to_string().as_str() {
+                "title" => title = Some(input.parse()?),
+                "id" => id = Some(input.parse()?),
+                "participant" => participant = Some(input.parse()?),
+                "claim" => claim = Some(input.parse()?),
+                _ => {
+                    return Err(syn::Error::new_spanned(
+                        key,
+                        "expected title, id, participant, or claim",
+                    ));
+                }
+            }
+        }
+        Ok(Self {
+            name,
+            title: title.ok_or_else(|| input.error("expected title"))?,
+            id: id.ok_or_else(|| input.error("expected id"))?,
+            participant: participant.ok_or_else(|| input.error("expected participant"))?,
+            claim,
+        })
+    }
+}
+
+fn expand_handler(
+    name: LitStr,
+    function: ItemFn,
+    command: Option<CommandOptions>,
+) -> syn::Result<proc_macro2::TokenStream> {
     let signature = &function.sig;
     if signature.asyncness.is_none()
         || signature.inputs.len() != 2
@@ -20,7 +103,7 @@ fn expand_operation(name: LitStr, function: ItemFn) -> syn::Result<proc_macro2::
     {
         return Err(syn::Error::new_spanned(
             signature,
-            "host operations must be safe async functions with owned context and arguments, without generics",
+            "handlers must be safe async functions with owned context and arguments, without generics",
         ));
     }
     let types = signature
@@ -66,7 +149,6 @@ fn expand_operation(name: LitStr, function: ItemFn) -> syn::Result<proc_macro2::
     let success = &parameters.args[0];
     let error = &parameters.args[1];
     let ident = &signature.ident;
-    let visibility = &function.vis;
     let conditions = function
         .attrs
         .iter()
@@ -74,18 +156,48 @@ fn expand_operation(name: LitStr, function: ItemFn) -> syn::Result<proc_macro2::
             attribute.path().is_ident("cfg") || attribute.path().is_ident("cfg_attr")
         })
         .collect::<Vec<_>>();
+    let visibility = &function.vis;
+    let (marker, definition, registration, handler_name) = if let Some(options) = command {
+        let id = options.id;
+        let title = options.title;
+        let participant = options.participant;
+        let marker = quote::format_ident!("__command_{}", id);
+        let claim = if let Some(claim) = options.claim {
+            quote! { #claim }
+        } else {
+            quote! { crate::app::command_declarations::always_claim }
+        };
+        (
+            marker.clone(),
+            quote! { #(#conditions)* #visibility const #id: &str = #name; },
+            quote! {
+                crate::app::command_declarations::CommandDescriptor::new::<#marker>(
+                    #title, crate::app::command_declarations::Participant::#participant, #claim)
+            },
+            quote! { #id },
+        )
+    } else {
+        (
+            ident.clone(),
+            quote! { #function },
+            quote! {
+                crate::host::declarations::OperationDescriptor::new::<#ident>()
+            },
+            quote! { #name },
+        )
+    };
     Ok(quote! {
-        #function
+        #definition
         #(#conditions)*
         #[allow(non_camel_case_types)]
-        #visibility enum #ident {}
+        #visibility enum #marker {}
         #(#conditions)*
-        impl crate::host::declarations::Handler for #ident {
+        impl crate::host::declarations::AsyncHandler for #marker {
             type Context = #context;
             type Arguments = #arguments;
             type Success = #success;
             type Error = #error;
-            const NAME: &'static str = #name;
+            const NAME: &'static str = #handler_name;
             fn call(context: Self::Context, arguments: Self::Arguments)
                 -> crate::host::declarations::HandlerFuture<Result<Self::Success, Self::Error>>
             {
@@ -94,7 +206,7 @@ fn expand_operation(name: LitStr, function: ItemFn) -> syn::Result<proc_macro2::
         }
         #(#conditions)*
         inventory::submit! {
-            crate::host::declarations::OperationDescriptor::new::<#ident>()
+            #registration
         }
     })
 }
@@ -265,6 +377,50 @@ mod tests {
         ] {
             assert!(expand_operation(syn::parse_quote!("example"), function).is_err());
         }
+    }
+
+    #[test]
+    fn command_declarations_require_metadata_and_share_signature_validation() {
+        for options in [
+            quote! { "example", id = EXAMPLE, participant = Editor },
+            quote! { "example", title = "Example", participant = Editor },
+            quote! { "example", title = "Example", id = EXAMPLE },
+            quote! { "example", title = "Example", id = EXAMPLE, participant = Editor, unknown = value },
+        ] {
+            assert!(syn::parse2::<CommandOptions>(options).is_err());
+        }
+        let options = syn::parse2::<CommandOptions>(quote! {
+            "example", title = "Example", id = EXAMPLE, participant = Editor
+        })
+        .unwrap();
+        assert!(
+            expand_handler(
+                options.name.clone(),
+                syn::parse_quote!(
+                    fn example(context: Context, args: Args) -> Result<(), Error> {}
+                ),
+                Some(options)
+            )
+            .is_err()
+        );
+        let options = syn::parse2::<CommandOptions>(quote! {
+            "example", title = "Example", id = EXAMPLE, participant = Editor, claim = claim_example
+        })
+        .unwrap();
+        let expanded = expand_handler(
+            options.name.clone(),
+            syn::parse_quote!(
+                async fn example(context: Context, args: Args) -> Result<(), Error> {}
+            ),
+            Some(options),
+        )
+        .unwrap()
+        .to_string();
+        assert!(expanded.contains("inventory :: submit !"));
+        assert!(expanded.contains("AsyncHandler"));
+        assert!(expanded.contains("CommandDescriptor :: new"));
+        assert!(expanded.contains("claim_example"));
+        assert!(expanded.contains("const EXAMPLE"));
     }
 
     #[test]

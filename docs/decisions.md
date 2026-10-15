@@ -149,8 +149,18 @@ TypeScript code union from descriptor metadata rather than another native list.
 All host capabilities use this mechanism, including native-turn keymap batching.
 Keep foreground owners independent of response envelopes and use typed completion
 channels for nested command work. This preserves command-tree ownership without
-keeping transport dispatch tables in the application. Native command declarations
-remain scheduled by [D053](plans/d053-handler-declarations-refactoring-plan.md).
+keeping transport dispatch tables in the application.
+
+Use the same typed async call contract for annotated native commands, with
+command-specific argument and outcome adapters. Native declarations own catalog
+metadata and generated name constants; distinct participants may share a name
+only with consistent titles. Keep synchronous claim predicates and the existing
+focus precedence so extension routing can select inline children before scheduling.
+Drive short foreground requests in the current dispatch turn, handing suspended
+futures to the executor only when necessary. This preserves key-command/text-input
+ordering without retaining foreground borrows across awaits. Dynamic extension
+registration and ownership stay in the application catalog. Evidence and the
+remaining review gates: [D053](plans/d053-handler-declarations-refactoring-plan.md).
 
 ## Installed extension directories
 

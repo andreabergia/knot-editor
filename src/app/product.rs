@@ -11,9 +11,12 @@ use std::{
 
 use gpui::{prelude::FluentBuilder, *};
 
+pub(super) mod commands;
 pub(super) mod operations;
 mod relocate;
 mod tab_drag;
+#[cfg(test)]
+use super::product_commands::SHOW_COMPLETIONS_COMMAND;
 
 use super::{
     CommandCompletion, CommandPalette, CommandPaletteEntry, CommandPaletteEvent,
@@ -28,13 +31,13 @@ use super::{
     open::{OpenResource, enumerate_directory, load_resource},
     product_commands::{
         ApplicationProductCommands, CLOSE_TAB_COMMAND, CLOSE_WINDOW_COMMAND, COPY_COMMAND,
-        CUT_COMMAND, CommandClaim, FIND_COMMAND, FIND_NEXT_COMMAND, FIND_PREVIOUS_COMMAND,
+        CUT_COMMAND, FIND_COMMAND, FIND_NEXT_COMMAND, FIND_PREVIOUS_COMMAND,
         MOVE_TERMINAL_TO_NEW_WINDOW_COMMAND, NEW_COMMAND, NEW_TERMINAL_COMMAND, NEW_WINDOW_COMMAND,
         OPEN_COMMAND, PASTE_COMMAND, ProductCommandDispatcher, ProductCommandSource,
         ProductCommandTarget, QUIT_COMMAND, REDO_COMMAND, SAVE_AS_COMMAND, SAVE_COMMAND,
-        SELECT_ALL_COMMAND, SHOW_COMMAND_PALETTE_COMMAND, SHOW_COMPLETIONS_COMMAND,
-        SHOW_EXTENSION_REPORT_COMMAND, SPLIT_HORIZONTAL_COMMAND, SPLIT_VERTICAL_COMMAND,
-        UNDO_COMMAND, dispatch_close_to_captured_target, dispatch_open_to_captured_target,
+        SELECT_ALL_COMMAND, SHOW_COMMAND_PALETTE_COMMAND, SHOW_EXTENSION_REPORT_COMMAND,
+        SPLIT_HORIZONTAL_COMMAND, SPLIT_VERTICAL_COMMAND, UNDO_COMMAND,
+        dispatch_close_to_captured_target, dispatch_open_to_captured_target,
         dispatch_save_to_captured_target,
     },
     terminal_session::TerminalSession,
@@ -2780,169 +2783,6 @@ impl ProductShell {
             return CommandOutcome::InvalidTarget;
         };
         self.relocate_tab_to_new_window_with(&source, window, cx, create_destination)
-    }
-
-    pub(crate) fn handle_workbench_command(
-        &mut self,
-        command: &crate::host::protocol::Command,
-        target: &ProductCommandTarget,
-        completion: CommandCompletion,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> CommandClaim {
-        use crate::host::protocol::CommandOutcome;
-
-        let target_is_live = target.workbench.upgrade() == Some(self.workbench.clone())
-            && self
-                .workbench
-                .read(cx)
-                .contains_surface(target.pane, target.tab, target.surface);
-        if !target_is_live {
-            return CommandClaim::Finished(CommandOutcome::InvalidTarget);
-        }
-        let name = command.name.as_ref();
-        if matches!(
-            name,
-            NEW_COMMAND
-                | NEW_TERMINAL_COMMAND
-                | MOVE_TERMINAL_TO_NEW_WINDOW_COMMAND
-                | CLOSE_TAB_COMMAND
-                | SPLIT_HORIZONTAL_COMMAND
-                | SPLIT_VERTICAL_COMMAND
-                | OPEN_COMMAND
-                | SAVE_COMMAND
-                | SAVE_AS_COMMAND
-                | SHOW_COMPLETIONS_COMMAND
-                | SHOW_COMMAND_PALETTE_COMMAND
-        ) && let Err(claim) = super::product_commands::validate_native_arguments(command)
-        {
-            return claim;
-        }
-        let result = match name {
-            SHOW_COMMAND_PALETTE_COMMAND => {
-                self.open_command_palette_from(target.clone(), window, cx);
-                CommandClaim::Finished(CommandOutcome::Completed)
-            }
-            NEW_COMMAND => {
-                if self.new_document_in_pane(target.pane, window, cx).is_some() {
-                    CommandClaim::Finished(CommandOutcome::Completed)
-                } else {
-                    CommandClaim::Finished(CommandOutcome::InvalidTarget)
-                }
-            }
-            NEW_TERMINAL_COMMAND => {
-                if self.new_terminal_in_pane(target.pane, window, cx) {
-                    CommandClaim::Finished(CommandOutcome::Completed)
-                } else {
-                    CommandClaim::Finished(CommandOutcome::InvalidTarget)
-                }
-            }
-            MOVE_TERMINAL_TO_NEW_WINDOW_COMMAND => CommandClaim::Finished(
-                self.move_terminal_to_new_window_with(target, window, cx, open_tab_transfer_window),
-            ),
-            CLOSE_TAB_COMMAND => {
-                let target = target.clone();
-                CommandClaim::Pending(Box::new(move |cx| {
-                    dispatch_close_to_captured_target(
-                        &target,
-                        ProtectedCloseKind::Tab,
-                        completion,
-                        cx,
-                    )
-                }))
-            }
-            SPLIT_HORIZONTAL_COMMAND => {
-                if self.split_pane(target.pane, SplitDirection::Horizontal, window, cx) {
-                    CommandClaim::Finished(CommandOutcome::Completed)
-                } else {
-                    CommandClaim::Finished(CommandOutcome::InvalidTarget)
-                }
-            }
-            SPLIT_VERTICAL_COMMAND => {
-                if self.split_pane(target.pane, SplitDirection::Vertical, window, cx) {
-                    CommandClaim::Finished(CommandOutcome::Completed)
-                } else {
-                    CommandClaim::Finished(CommandOutcome::InvalidTarget)
-                }
-            }
-            OPEN_COMMAND => {
-                let target = target.clone();
-                CommandClaim::Pending(Box::new(move |cx| {
-                    dispatch_open_to_captured_target(&target, completion, cx)
-                }))
-            }
-            SAVE_COMMAND | SAVE_AS_COMMAND => {
-                let target = target.clone();
-                let save_as = name == SAVE_AS_COMMAND;
-                CommandClaim::Pending(Box::new(move |cx| {
-                    dispatch_save_to_captured_target(&target, save_as, completion, cx)
-                }))
-            }
-            SHOW_COMPLETIONS_COMMAND => {
-                CommandClaim::Finished(super::extension_host::start_completion(target.clone(), cx))
-            }
-            _ => CommandClaim::Declined,
-        };
-        if !matches!(result, CommandClaim::Declined) {
-            super::product_commands::break_captured_history_group(target, cx);
-        }
-        result
-    }
-
-    pub(crate) fn handle_application_command(
-        &mut self,
-        command: &crate::host::protocol::Command,
-        target: &ProductCommandTarget,
-        completion: CommandCompletion,
-        cx: &mut Context<Self>,
-    ) -> CommandClaim {
-        use crate::host::protocol::CommandOutcome;
-
-        if matches!(
-            command.name.as_ref(),
-            SHOW_EXTENSION_REPORT_COMMAND
-                | NEW_WINDOW_COMMAND
-                | CLOSE_WINDOW_COMMAND
-                | QUIT_COMMAND
-        ) && let Err(claim) = super::product_commands::validate_native_arguments(command)
-        {
-            return claim;
-        }
-        match command.name.as_ref() {
-            SHOW_EXTENSION_REPORT_COMMAND => {
-                super::product_commands::break_captured_history_group(target, cx);
-                self.toggle_extension_report(cx);
-                CommandClaim::Finished(CommandOutcome::Completed)
-            }
-            NEW_WINDOW_COMMAND => {
-                super::product_commands::break_captured_history_group(target, cx);
-                open_product_window(None, cx);
-                CommandClaim::Finished(CommandOutcome::Completed)
-            }
-            CLOSE_WINDOW_COMMAND | QUIT_COMMAND => {
-                super::product_commands::break_captured_history_group(target, cx);
-                let kind = if command.name.as_ref() == CLOSE_WINDOW_COMMAND {
-                    ProtectedCloseKind::Window
-                } else {
-                    ProtectedCloseKind::Quit
-                };
-                let target = target.clone();
-                CommandClaim::Pending(Box::new(move |cx| {
-                    dispatch_close_to_captured_target(&target, kind, completion, cx)
-                }))
-            }
-            _ => {
-                let catalog = Self::command_dispatcher(cx).read(cx).catalog();
-                let handler = match catalog.borrow().resolve(command.name.as_ref()) {
-                    Ok(super::model::CommandTargetKind::Extension(handler)) => handler,
-                    _ => return CommandClaim::Declined,
-                };
-                CommandClaim::Extension {
-                    handler,
-                    view: None,
-                }
-            }
-        }
     }
 
     pub(crate) fn toggle_extension_report(&mut self, cx: &mut Context<Self>) {
@@ -7991,8 +7831,8 @@ await commands.registerForView("outline", "copy", async () => {
         cx: &mut TestAppContext,
     ) {
         use crate::app::{
-            product_commands::TOGGLE_TERMINAL_MOUSE_REPORTING_COMMAND,
-            terminal_session::TerminalSession, terminal_view::TerminalView,
+            terminal_session::TerminalSession,
+            terminal_view::TOGGLE_TERMINAL_MOUSE_REPORTING_COMMAND, terminal_view::TerminalView,
         };
         use alacritty_terminal::{tty, vte::ansi::Processor};
         let documents = install_globals(cx);
@@ -8672,7 +8512,13 @@ await commands.registerForView("outline", "copy", async () => {
             .unwrap();
         cx.update(|cx| cx.write_to_clipboard(gpui::ClipboardItem::new_string("ignored".into())));
         let dispatcher = cx.read(|cx| cx.global::<ApplicationProductCommands>().0.clone());
-        for name in [super::PASTE_COMMAND, NEW_COMMAND, super::NEW_WINDOW_COMMAND] {
+        for name in [
+            super::COPY_COMMAND,
+            super::PASTE_COMMAND,
+            NEW_COMMAND,
+            super::NEW_WINDOW_COMMAND,
+            SHOW_EXTENSION_REPORT_COMMAND,
+        ] {
             let execution = dispatcher.update(cx, |dispatcher, cx| {
                 dispatcher.dispatch(
                     Command {

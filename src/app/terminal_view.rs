@@ -62,34 +62,31 @@ fn link_modifier(modifiers: Modifiers) -> bool {
         }
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(crate) enum TerminalCommand {
+    Copy,
+    Paste,
+    ToggleMouseReporting,
+}
+
 impl TerminalView {
-    pub(crate) fn handle_command(
+    pub(crate) fn execute_terminal_command(
         &mut self,
-        command: &crate::host::protocol::Command,
+        command: TerminalCommand,
         cx: &mut Context<Self>,
     ) -> super::product_commands::CommandClaim {
         use super::product_commands::CommandClaim;
-        use super::product_commands::{
-            COPY_COMMAND, PASTE_COMMAND, TOGGLE_TERMINAL_MOUSE_REPORTING_COMMAND,
-        };
-        if !matches!(
-            command.name.as_ref(),
-            COPY_COMMAND | PASTE_COMMAND | TOGGLE_TERMINAL_MOUSE_REPORTING_COMMAND
-        ) || self.attachment.is_none()
-        {
+        if self.attachment.is_none() {
             return CommandClaim::Declined;
         }
-        if let Err(claim) = super::product_commands::validate_native_arguments(command) {
-            return claim;
-        }
-        if command.name.as_ref() == TOGGLE_TERMINAL_MOUSE_REPORTING_COMMAND {
+        if command == TerminalCommand::ToggleMouseReporting {
             self.cancel_pointer(cx);
             self.session
                 .update(cx, |session, cx| session.toggle_mouse_reporting(cx));
             cx.notify();
             return CommandClaim::Finished(crate::host::protocol::CommandOutcome::Completed);
         }
-        if command.name.as_ref() == PASTE_COMMAND {
+        if command == TerminalCommand::Paste {
             if self.session.read(cx).status() != TerminalStatus::Running {
                 return CommandClaim::Declined;
             }
@@ -1183,3 +1180,67 @@ impl Element for TerminalElement {
 #[cfg(all(test, unix))]
 #[path = "terminal_mouse_tests.rs"]
 mod mouse_tests;
+
+use crate::app::command_declarations::{CommandContext, command};
+use crate::app::product_commands::ProductCommandTarget;
+use crate::host::protocol::{Command, CommandArgumentValue, CommandOutcome};
+
+fn claim_terminal(command: &Command, target: &ProductCommandTarget, cx: &App) -> bool {
+    let Some(crate::app::workbench::CommandView::Terminal(view)) = target.command_view(cx) else {
+        return false;
+    };
+    let view = view.read(cx);
+    if view.attachment.is_none() {
+        return false;
+    }
+    if command.arguments != CommandArgumentValue::Null {
+        return true;
+    }
+    if command.name.as_ref() == crate::app::product_commands::PASTE_COMMAND {
+        return view.session.read(cx).status() == TerminalStatus::Running;
+    }
+    if command.name.as_ref() == crate::app::product_commands::COPY_COMMAND {
+        return view
+            .session
+            .read(cx)
+            .terminal()
+            .and_then(|terminal| terminal.lock().selection_to_string())
+            .is_some_and(|text| !text.is_empty());
+    }
+    true
+}
+
+#[command("copy", title = "Copy", id = TERMINAL_COPY_COMMAND, participant = Terminal, claim = claim_terminal)]
+pub(crate) async fn terminal_copy(context: CommandContext, (): ()) -> Result<(), CommandOutcome> {
+    execute_terminal(context, TerminalCommand::Copy).await
+}
+#[command("editor.paste", title = "Paste", id = TERMINAL_PASTE_COMMAND, participant = Terminal, claim = claim_terminal)]
+pub(crate) async fn terminal_paste(context: CommandContext, (): ()) -> Result<(), CommandOutcome> {
+    execute_terminal(context, TerminalCommand::Paste).await
+}
+#[command("terminal.toggle-mouse-reporting", title = "Toggle Terminal Mouse Reporting", id = TOGGLE_TERMINAL_MOUSE_REPORTING_COMMAND, participant = Terminal, claim = claim_terminal)]
+pub(crate) async fn terminal_toggle(context: CommandContext, (): ()) -> Result<(), CommandOutcome> {
+    execute_terminal(context, TerminalCommand::ToggleMouseReporting).await
+}
+async fn execute_terminal(
+    context: CommandContext,
+    command: TerminalCommand,
+) -> Result<(), CommandOutcome> {
+    context
+        .foreground(move |target, _, cx| {
+            let Some(crate::app::workbench::CommandView::Terminal(view)) = target.command_view(cx)
+            else {
+                return Err(CommandOutcome::InvalidTarget);
+            };
+            match view.update(cx, |view, cx| view.execute_terminal_command(command, cx)) {
+                crate::app::product_commands::CommandClaim::Finished(CommandOutcome::Completed) => {
+                    Ok(())
+                }
+                crate::app::product_commands::CommandClaim::Declined => {
+                    Err(CommandOutcome::Unavailable)
+                }
+                _ => unreachable!("terminal commands complete immediately"),
+            }
+        })
+        .await
+}

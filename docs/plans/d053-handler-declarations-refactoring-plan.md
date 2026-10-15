@@ -1,7 +1,7 @@
 # D053 — Handler-defined operations, errors, and commands
 
-Status: 🟡 checkpoints 1 and 2 approved on 2026-10-15; checkpoint 3 in progress.
-Remote platform checks remain pending.
+Status: 🟡 checkpoints 1 and 2 approved on 2026-10-15; checkpoint 3 implemented
+and locally verified, awaiting product review. Remote platform checks remain pending.
 Execute after D047 is approved and archived, before D048 adds more host APIs.
 This is a separate refactoring, not another D047 acceptance requirement.
 
@@ -216,14 +216,14 @@ Checkpoint 2 implementation evidence:
 - ✅ Review gate: user approved complete capability coverage, removed parallel
   registries, and representative JS consumer behavior on 2026-10-15.
 
-### 3. Migrate native command declarations ⬜
+### 3. Migrate native command declarations 🟡
 
-- Automatically discover annotated native command handlers and catalog metadata.
+- ✅ Automatically discover annotated native command handlers and catalog metadata.
   Migrate native commands across editor views, workbench and application routing;
   retain explicit participant decline and reuse shared handlers/types where useful.
-- Remove replaced command-name/metadata/registration boilerplate. Handler internals
+- ✅ Remove replaced command-name/metadata/registration boilerplate. Handler internals
   may still match semantic values; do not mechanically ban useful Rust enums/matches.
-- Keep extension registrations, view-specific overrides, name ownership, and
+- ✅ Keep extension registrations, view-specific overrides, name ownership, and
   lifecycle cleanup in the current catalog and dispatcher.
 - **Validation:** view/workbench/application precedence, decline/unavailable,
   typed argument failure and outcome adaptation, captured/palette/delayed targets,
@@ -231,6 +231,47 @@ Checkpoint 2 implementation evidence:
   extension registration/disposal/unload, and product/diagnostic startup commands.
 - **Review gate:** review representative native commands and exercise palette,
   keymap/menu, async Open/Save, and extension command composition in the product.
+
+Checkpoint 3 implementation evidence and choices:
+
+- ✅ 55 native participant declarations provide the original 53 public catalog
+  names/titles. Shared editor motion/editing implementations use repeated
+  attributes; terminal Copy/Paste share those definitions at their own participant.
+  Workbench/application handlers own their metadata beside implementation.
+  Find remains advertised and explicitly declines, preserving current behavior.
+- ✅ The common `AsyncHandler` contract pairs owned context, typed arguments,
+  success and errors. Host transport constraints remain in its adapter; command
+  adapters decode Knot-owned arguments and convert typed results/failures to
+  structured command outcomes. Existing native routines reuse `CommandOutcome`.
+  Generated constants serve menu/keymap references; the separate native catalog
+  list and per-participant name-dispatch boilerplate are removed.
+- ✅ Synchronous claim predicates preserve explicit decline and participant
+  selection for inline extension composition. Owned command contexts queue short
+  foreground closures. The adapter drains them in the dispatch turn, preserving
+  command/text-input ordering, and schedules only genuinely suspended futures.
+  Native Open/Save/protected-close handlers await existing completion channels;
+  foreground access revalidates captured identity after suspension.
+- ✅ Dynamic extension registrations, view overrides, ownership and lifecycle
+  cleanup still use the existing catalog and command tree.
+- ✅ Local macOS validation: `cargo test --workspace --all-targets` (619 library
+  tests, 3 macro tests, ordinary product-library capability linking and 5 example
+  tests); `cargo test --doc` (4 compile-fail cases plus a positive authoring example);
+  `cargo clippy --workspace --all-targets -- -D warnings`;
+  `scripts/check-extension-api.sh`; `scripts/build-macos-app.sh`;
+  `git diff --check`; and 53 local Markdown links in changed documents.
+  `cargo fmt --all` ran once after Rust work and before final checks.
+- ✅ Existing regressions exercise view/workbench/application precedence and
+  decline, typed argument rejection, captured/palette/delayed targets, keymaps/menu
+  turn ordering, pending Open/Save/closure, nested inline/cross-lifecycle composition,
+  cancellation, extension disposal/unload, and product/diagnostic startup commands.
+  New checks cover deterministic duplicate/title diagnostics, shared participant
+  metadata, typed outcome conversion, foreground execution and suspension/resumption.
+  A comparison with the previous catalog confirms all 53 names/titles are preserved.
+- ⏳ Remote Linux/Windows checks remain pending; no remote run exists for these
+  local changes.
+- ⏳ Product review gate: representative declarations, palette, keymap/menu, async
+  Open/Save and extension composition. UI automation is excluded by the user's
+  repository instructions. Checkpoint 4 has not started.
 
 ### 4. Cleanup, documentation and completion ⬜
 

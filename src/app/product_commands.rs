@@ -4,130 +4,14 @@ use gpui::*;
 
 use super::model::{CommandCatalog, CommandDefinition, SharedCommandCatalog};
 use super::product::ProductShell;
+use super::workbench::CommandView;
 use super::{CommandCompletion, CommandExecution};
 use crate::host::protocol::{Command, CommandArgumentValue, CommandOutcome, ViewId};
 
-pub(crate) const NEW_COMMAND: &str = "file.new";
-pub(crate) const TOGGLE_TERMINAL_MOUSE_REPORTING_COMMAND: &str = "terminal.toggle-mouse-reporting";
-pub(crate) const NEW_TERMINAL_COMMAND: &str = "terminal.new";
-pub(crate) const MOVE_TERMINAL_TO_NEW_WINDOW_COMMAND: &str = "terminal.move-to-new-window";
-pub(crate) const OPEN_COMMAND: &str = "file.open";
-pub(crate) const SAVE_COMMAND: &str = "file.save";
-pub(crate) const SAVE_AS_COMMAND: &str = "file.save-as";
-pub(crate) const CLOSE_TAB_COMMAND: &str = "workbench.close-tab";
-pub(crate) const CLOSE_WINDOW_COMMAND: &str = "window.close";
-pub(crate) const NEW_WINDOW_COMMAND: &str = "window.new";
-pub(crate) const QUIT_COMMAND: &str = "application.quit";
-pub(crate) const SPLIT_HORIZONTAL_COMMAND: &str = "workbench.split-horizontal";
-pub(crate) const SPLIT_VERTICAL_COMMAND: &str = "workbench.split-vertical";
-pub(crate) const UNDO_COMMAND: &str = "editor.undo";
-pub(crate) const REDO_COMMAND: &str = "editor.redo";
-pub(crate) const CUT_COMMAND: &str = "editor.cut";
-pub(crate) const COPY_COMMAND: &str = "copy";
-pub(crate) const PASTE_COMMAND: &str = "editor.paste";
-pub(crate) const SELECT_ALL_COMMAND: &str = "editor.select-all";
-pub(crate) const FIND_COMMAND: &str = "editor.find";
-pub(crate) const FIND_NEXT_COMMAND: &str = "editor.find-next";
-pub(crate) const FIND_PREVIOUS_COMMAND: &str = "editor.find-previous";
-pub(crate) const SHOW_COMPLETIONS_COMMAND: &str = "editor.show-completions";
-pub(crate) const SHOW_EXTENSION_REPORT_COMMAND: &str = "extensions.show-startup-report";
-pub(crate) const SHOW_COMMAND_PALETTE_COMMAND: &str = "workbench.show-command-palette";
+pub(crate) use super::editor::native_commands::*;
+pub(crate) use super::product::commands::*;
 pub(crate) const EDITOR_MOVE_PREFIX: &str = "editor.move-";
 pub(crate) const EDITOR_SELECT_PREFIX: &str = "editor.select-";
-
-pub(crate) const DELETE_BACKWARD_COMMAND: &str = "editor.delete-backward";
-pub(crate) const DELETE_FORWARD_COMMAND: &str = "editor.delete-forward";
-pub(crate) const INSERT_NEWLINE_COMMAND: &str = "editor.insert-newline";
-pub(crate) const INSERT_TAB_COMMAND: &str = "editor.insert-tab";
-pub(crate) const MOVE_DOCUMENT_END_COMMAND: &str = "editor.move-document-end";
-pub(crate) const MOVE_DOCUMENT_START_COMMAND: &str = "editor.move-document-start";
-pub(crate) const MOVE_DOWN_COMMAND: &str = "editor.move-down";
-pub(crate) const MOVE_LEFT_COMMAND: &str = "editor.move-left";
-pub(crate) const MOVE_LINE_END_COMMAND: &str = "editor.move-line-end";
-pub(crate) const MOVE_LINE_START_COMMAND: &str = "editor.move-line-start";
-pub(crate) const MOVE_PAGE_DOWN_COMMAND: &str = "editor.move-page-down";
-pub(crate) const MOVE_PAGE_UP_COMMAND: &str = "editor.move-page-up";
-pub(crate) const MOVE_RIGHT_COMMAND: &str = "editor.move-right";
-pub(crate) const MOVE_UP_COMMAND: &str = "editor.move-up";
-pub(crate) const MOVE_WORD_LEFT_COMMAND: &str = "editor.move-word-left";
-pub(crate) const MOVE_WORD_RIGHT_COMMAND: &str = "editor.move-word-right";
-pub(crate) const SELECT_DOCUMENT_END_COMMAND: &str = "editor.select-document-end";
-pub(crate) const SELECT_DOCUMENT_START_COMMAND: &str = "editor.select-document-start";
-pub(crate) const SELECT_DOWN_COMMAND: &str = "editor.select-down";
-pub(crate) const SELECT_LEFT_COMMAND: &str = "editor.select-left";
-pub(crate) const SELECT_LINE_END_COMMAND: &str = "editor.select-line-end";
-pub(crate) const SELECT_LINE_START_COMMAND: &str = "editor.select-line-start";
-pub(crate) const SELECT_PAGE_DOWN_COMMAND: &str = "editor.select-page-down";
-pub(crate) const SELECT_PAGE_UP_COMMAND: &str = "editor.select-page-up";
-pub(crate) const SELECT_RIGHT_COMMAND: &str = "editor.select-right";
-pub(crate) const SELECT_UP_COMMAND: &str = "editor.select-up";
-pub(crate) const SELECT_WORD_LEFT_COMMAND: &str = "editor.select-word-left";
-pub(crate) const SELECT_WORD_RIGHT_COMMAND: &str = "editor.select-word-right";
-
-const PRODUCT_COMMANDS: &[(&str, &str)] = &[
-    (MOVE_LEFT_COMMAND, "Move left"),
-    (MOVE_RIGHT_COMMAND, "Move right"),
-    (MOVE_UP_COMMAND, "Move up"),
-    (MOVE_DOWN_COMMAND, "Move down"),
-    (MOVE_WORD_LEFT_COMMAND, "Move to previous word"),
-    (MOVE_WORD_RIGHT_COMMAND, "Move to next word"),
-    (MOVE_LINE_START_COMMAND, "Move to line start"),
-    (MOVE_LINE_END_COMMAND, "Move to line end"),
-    (MOVE_PAGE_UP_COMMAND, "Move up one page"),
-    (MOVE_PAGE_DOWN_COMMAND, "Move down one page"),
-    (MOVE_DOCUMENT_START_COMMAND, "Move to document start"),
-    (MOVE_DOCUMENT_END_COMMAND, "Move to document end"),
-    (SELECT_LEFT_COMMAND, "Select left"),
-    (SELECT_RIGHT_COMMAND, "Select right"),
-    (SELECT_UP_COMMAND, "Select up"),
-    (SELECT_DOWN_COMMAND, "Select down"),
-    (SELECT_WORD_LEFT_COMMAND, "Select to previous word"),
-    (SELECT_WORD_RIGHT_COMMAND, "Select to next word"),
-    (SELECT_LINE_START_COMMAND, "Select to line start"),
-    (SELECT_LINE_END_COMMAND, "Select to line end"),
-    (SELECT_PAGE_UP_COMMAND, "Select up one page"),
-    (SELECT_PAGE_DOWN_COMMAND, "Select down one page"),
-    (SELECT_DOCUMENT_START_COMMAND, "Select to document start"),
-    (SELECT_DOCUMENT_END_COMMAND, "Select to document end"),
-    (INSERT_NEWLINE_COMMAND, "Insert Newline"),
-    (INSERT_TAB_COMMAND, "Insert Tab"),
-    (DELETE_BACKWARD_COMMAND, "Delete Backward"),
-    (DELETE_FORWARD_COMMAND, "Delete Forward"),
-    (NEW_COMMAND, "New Document"),
-    (NEW_TERMINAL_COMMAND, "New Terminal"),
-    (
-        TOGGLE_TERMINAL_MOUSE_REPORTING_COMMAND,
-        "Toggle Terminal Mouse Reporting",
-    ),
-    (
-        MOVE_TERMINAL_TO_NEW_WINDOW_COMMAND,
-        "Move Terminal to New Window",
-    ),
-    (OPEN_COMMAND, "Open…"),
-    (SAVE_COMMAND, "Save"),
-    (SAVE_AS_COMMAND, "Save As…"),
-    (CLOSE_TAB_COMMAND, "Close Tab"),
-    (CLOSE_WINDOW_COMMAND, "Close Window"),
-    (NEW_WINDOW_COMMAND, "New Window"),
-    (QUIT_COMMAND, "Quit Knot"),
-    (SPLIT_HORIZONTAL_COMMAND, "Split Right"),
-    (SPLIT_VERTICAL_COMMAND, "Split Down"),
-    (UNDO_COMMAND, "Undo"),
-    (REDO_COMMAND, "Redo"),
-    (CUT_COMMAND, "Cut"),
-    (COPY_COMMAND, "Copy"),
-    (PASTE_COMMAND, "Paste"),
-    (SELECT_ALL_COMMAND, "Select All"),
-    (FIND_COMMAND, "Find"),
-    (FIND_NEXT_COMMAND, "Find Next"),
-    (FIND_PREVIOUS_COMMAND, "Find Previous"),
-    (SHOW_COMPLETIONS_COMMAND, "Show Completions"),
-    (
-        SHOW_EXTENSION_REPORT_COMMAND,
-        "Show Extension Startup Report",
-    ),
-    (SHOW_COMMAND_PALETTE_COMMAND, "Show Command Palette"),
-];
 
 #[derive(Clone, PartialEq, Action)]
 #[action(namespace = knot, no_json)]
@@ -263,20 +147,10 @@ pub(crate) enum CommandClaim {
     },
 }
 
-pub(crate) fn validate_native_arguments(command: &Command) -> Result<(), CommandClaim> {
-    if command.arguments == CommandArgumentValue::Null {
-        Ok(())
-    } else {
-        Err(CommandClaim::Finished(CommandOutcome::InvalidArgument {
-            message: "product commands do not accept arguments".into(),
-        }))
-    }
-}
-
 impl ProductCommandDispatcher {
     pub(crate) fn new(_cx: &mut Context<Self>) -> Self {
         let mut catalog = CommandCatalog::new();
-        for &(name, title) in PRODUCT_COMMANDS {
+        for (name, title) in super::command_declarations::registry().definitions() {
             catalog
                 .register_native(name.into(), title.into())
                 .expect("product command names are unique");
@@ -520,25 +394,69 @@ pub(crate) fn dispatch_to_captured_target(
         if let Some(view) = target.command_view(cx)
             && view.matches_focus(&target.focus, cx)
         {
-            let result = view.handle_command(command, window, cx);
+            let result = match view {
+                CommandView::Extension(view) => {
+                    view.update(cx, |view, cx| view.handle_command(command, cx))
+                }
+                CommandView::Editor(_) => super::command_declarations::registry().dispatch(
+                    super::command_declarations::Participant::Editor,
+                    command,
+                    &target,
+                    completion.clone(),
+                    cx,
+                ),
+                CommandView::Terminal(_) => super::command_declarations::registry().dispatch(
+                    super::command_declarations::Participant::Terminal,
+                    command,
+                    &target,
+                    completion.clone(),
+                    cx,
+                ),
+            };
             if !matches!(result, CommandClaim::Declined) {
                 return result;
             }
         }
-        let result = shell.update(cx, |shell, cx| {
-            shell.handle_workbench_command(command, &target, completion.clone(), window, cx)
-        });
+        let result = super::command_declarations::registry().dispatch(
+            super::command_declarations::Participant::Workbench,
+            command,
+            &target,
+            completion.clone(),
+            cx,
+        );
         if !matches!(result, CommandClaim::Declined) {
             return result;
         }
-        shell.update(cx, |shell, cx| {
-            shell.handle_application_command(command, &target, completion, cx)
-        })
+        let result = super::command_declarations::registry().dispatch(
+            super::command_declarations::Participant::Application,
+            command,
+            &target,
+            completion,
+            cx,
+        );
+        if !matches!(result, CommandClaim::Declined) {
+            return result;
+        }
+        let catalog = cx
+            .global::<ApplicationProductCommands>()
+            .0
+            .read(cx)
+            .catalog();
+        let handler = match catalog.borrow().resolve(command.name.as_ref()) {
+            Ok(super::model::CommandTargetKind::Extension(handler)) => handler,
+            _ => return CommandClaim::Declined,
+        };
+        CommandClaim::Extension {
+            handler,
+            view: None,
+        }
     })
     .unwrap_or(CommandClaim::Finished(CommandOutcome::InvalidTarget))
 }
 
 #[cfg(test)]
 pub(crate) fn product_command_names() -> impl Iterator<Item = &'static str> {
-    PRODUCT_COMMANDS.iter().map(|(name, _)| *name)
+    super::command_declarations::registry()
+        .definitions()
+        .map(|(name, _)| name)
 }

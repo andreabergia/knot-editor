@@ -8,14 +8,11 @@
 #[cfg(debug_assertions)]
 use std::collections::HashSet;
 
-use gpui::{App, AppContext, Context, Entity, Focusable, WeakFocusHandle, Window};
-
-use crate::host::protocol::Command;
+use gpui::{App, AppContext, Context, Entity, Focusable, WeakFocusHandle};
 
 use super::{
     documents::{Document, DocumentId},
     editor::EditorView,
-    product_commands::CommandClaim,
     terminal_view::TerminalView,
     tree_view::TreeView,
 };
@@ -174,21 +171,6 @@ impl CommandView {
             Self::Extension(view) => view.focus_handle(cx),
         };
         focus.upgrade() == Some(handle)
-    }
-
-    pub(crate) fn handle_command(
-        &self,
-        command: &Command,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> CommandClaim {
-        match self {
-            Self::Editor(view) => {
-                view.update(cx, |view, cx| view.handle_command(command, window, cx))
-            }
-            Self::Terminal(view) => view.update(cx, |view, cx| view.handle_command(command, cx)),
-            Self::Extension(view) => view.update(cx, |view, cx| view.handle_command(command, cx)),
-        }
     }
 }
 
