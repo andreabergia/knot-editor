@@ -137,6 +137,19 @@ A bad callback or item remains a recoverable failure of its request.
 
 Reference: [extension host](architecture/extension-host.md). Evidence: [v8 runtime](archive/exploration/step7-v8-runtime.md).
 
+Use annotated async native handlers with linked descriptors to keep operation
+arguments, semantic results and errors paired at their definition. A small
+proc-macro crate generates the adapters; `inventory` avoids a parallel handwritten
+registration list, and sorted assembly makes discovery and duplicate diagnostics
+deterministic. Owned foreground contexts keep gpui borrows out of suspended
+futures. Keep V8 field decoding in the host and application mutation in the app.
+Explicit error-code attributes survive Rust variant renames; transparent error
+composition shares failures without a central membership enum. Check the closed
+TypeScript code union from descriptor metadata rather than another native list.
+Clipboard and document Open validate this authoring shape; the remaining
+capabilities and native commands are still scheduled by
+[D053](plans/d053-handler-declarations-refactoring-plan.md).
+
 ## Installed extension directories
 
 Use the platform's local application-data `Knot/extensions` root and canonical

@@ -1,6 +1,7 @@
 # D053 — Handler-defined operations, errors, and commands
 
-Status: ⬜ agreed design; ready for implementation after D047 approval on 2026-10-15.
+Status: 🟡 checkpoint 1 implemented and locally verified; authoring-shape review
+and remote platform checks remain open. Later checkpoints remain unstarted.
 Execute after D047 is approved and archived, before D048 adds more host APIs.
 This is a separate refactoring, not another D047 acceptance requirement.
 
@@ -96,13 +97,13 @@ Implement one checkpoint per request, keep this plan updated with ✅ and eviden
 and stop at each gate. Split logical commits without conventional commit titles.
 Run `cargo fmt` once at the end of Rust work before committing.
 
-### 1. Typed async handler declarations and automatic registration ⬜
+### 1. Typed async handler declarations and automatic registration 🟡
 
-- Introduce the minimal macros, typed adapters, common envelope, and automatic
+- ✅ Introduce the minimal macros, typed adapters, common envelope, and automatic
   registry assembly. Keep request/result/error pairing local to the definition.
-- Route an immediate production operation and an operation that awaits native work
+- ✅ Route an immediate production operation and an operation that awaits native work
   end to end through the new machinery. Include a reusable/composed error type.
-- Keep any temporary migration adapter explicit and bounded to unmigrated handlers.
+- ✅ Keep any temporary migration adapter explicit and bounded to unmigrated handlers.
 - **Validation:** compile-fail cases for invalid handler/error declarations and
   mismatched typed replies; deterministic discovery and duplicate diagnostics;
   actual argument/result/error conversion, async suspension and foreground commits;
@@ -110,6 +111,45 @@ Run `cargo fmt` once at the end of Rust work before committing.
 - **Review gate:** inspect representative handlers, error declarations, context
   ownership, generated adapters and automatic registration. Approve the authoring
   shape before migrating the rest of the boundary.
+
+Checkpoint 1 implementation evidence and choices:
+
+- ✅ `knot-handler-macros` is a workspace proc-macro companion. `host_operation`
+  emits a typed handler implementation and an `inventory` contribution. There is
+  no handwritten list of annotated operations. Assembly sorts names, rejects
+  duplicate names, and validates application context types at startup.
+- ✅ `writeClipboardText` and `openDocument` use declarations end to end. Their
+  operation variants and clipboard result/kind entries are removed. Shared
+  document-presentation results still serve Create/Present. The common existing
+  request envelope retains identity and invocation/cancellation metadata.
+- ✅ `HostContext` owns a weak host, async application handle and admitted request.
+  Its short foreground closures check lifecycle/cancellation and return owned
+  results. Open awaits a native completion, retaining destination/caller authority,
+  and checks the exact resulting presentation again before replying.
+- ✅ Host-owned argument readers retain direct recognized-field V8 decoding.
+  Success/error encoding checks numeric precision. Generated typed responders
+  enforce result/error pairing; runtime resolver checks retain operation identity.
+- ✅ `HostError` uses explicit `code`/`message` attributes, named structured details,
+  and a single-field `transparent` composition form. Descriptor error codes plus
+  derived codes for the unmigrated error enum check the closed TypeScript union.
+  That enum remains only for existing handlers and shared product-operation
+  failures; Open has a bounded typed translation of those failures.
+- ✅ Coverage includes compile-fail declarations/replies, sorted discovery and
+  duplicate/context diagnostics, structured errors through V8, precision and
+  operation pairing, actual async suspension, immediate foreground mutation and
+  disposed-context rejection. A separate integration binary checks discovery
+  from the ordinary product library without `cfg(test)`.
+- ✅ Local macOS validation: `cargo test --workspace --all-targets` (616 library
+  tests, 2 macro tests, the product-library linking integration test, and 5 example
+  tests), `cargo test --doc` (4 compile-fail cases and a positive authoring example),
+  `cargo clippy --workspace --all-targets -- -D warnings`,
+  `scripts/check-extension-api.sh`, `scripts/build-macos-app.sh`,
+  `git diff --check`, and 53 local Markdown links in changed documents.
+  `cargo fmt --all` ran once after Rust edits and before the final checks.
+- ⏳ Linux and Windows build/linking results require remote CI; only the installed
+  `aarch64-apple-darwin` target has been executed locally.
+- ⏳ Review gate remains open: approve representative handler/error syntax,
+  context ownership, adapters and automatic linking before checkpoint 2.
 
 ### 2. Migrate the host capability boundary ⬜
 

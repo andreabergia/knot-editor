@@ -8,7 +8,8 @@ work that is not yet implemented.
 
 ## System map
 
-Knot is one Rust package whose module boundaries may become crate boundaries:
+Knot has one runtime Rust package and a compile-time handler macro crate. Runtime
+module boundaries may become crate boundaries:
 
 ```text
 gpui application and views        extension runtimes
@@ -20,7 +21,10 @@ gpui application and views        extension runtimes
 
 - `core` owns UI- and scripting-independent editor data.
 - `app` owns the gpui shell, foreground models, and native views.
-- `host` contains V8 and the typed extension transport.
+- `host` contains V8 and the typed extension transport. Its declaration adapters
+  discover annotated operations automatically; `app` supplies owned foreground
+  contexts and handlers. `knot-handler-macros` generates adapters without depending
+  on V8, gpui, or editor models.
 - `host::module_graph` validates Knot-owned, immutable package source graphs
   and personal-config source graphs before they enter an isolate.
 - `app::extension_package` owns installed-directory manifest discovery and

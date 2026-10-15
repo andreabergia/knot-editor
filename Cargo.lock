@@ -3093,7 +3093,9 @@ dependencies = [
  "anyhow",
  "directories",
  "gpui",
+ "inventory",
  "jsonc-parser",
+ "knot-handler-macros",
  "percent-encoding",
  "pollster 1.0.1",
  "semver",
@@ -3105,6 +3107,15 @@ dependencies = [
  "url",
  "uuid",
  "v8",
+]
+
+[[package]]
+name = "knot-handler-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]

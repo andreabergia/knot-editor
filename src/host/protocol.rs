@@ -584,6 +584,7 @@ pub struct HostRequest {
 /// Editor operations available to the initial buffer API boundary.
 #[derive(Clone, Debug, PartialEq)]
 pub enum HostOperation {
+    Declared(super::declarations::DeclaredRequest),
     ObserveWorkbench,
     UnobserveWorkbench {
         subscription: WorkbenchSubscriptionId,
@@ -605,10 +606,6 @@ pub enum HostOperation {
     },
     PresentDocument {
         id: String,
-        target: Option<DocumentDestination>,
-    },
-    OpenDocument {
-        uri: String,
         target: Option<DocumentDestination>,
     },
     MutateKeybindings {
@@ -636,9 +633,6 @@ pub enum HostOperation {
     },
     SelectedViewText {
         target: Option<CommandInvocationId>,
-    },
-    WriteClipboardText {
-        text: String,
     },
     UnregisterCommand {
         registration: CommandRegistrationId,
@@ -694,6 +688,7 @@ pub struct HostResponse {
 /// Successful values returned by [`HostOperation`].
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum HostResponseValue {
+    Declared(super::declarations::DeclaredResponse),
     WorkbenchObserved(WorkbenchObservation),
     WorkbenchUnobserved,
     ApplicationQuery(ApplicationQueryResult),
@@ -715,7 +710,6 @@ pub enum HostResponseValue {
         registration: CommandRegistrationId,
     },
     SelectedViewText(Option<String>),
-    ClipboardTextWritten,
     CommandUnregistered {
         registration: CommandRegistrationId,
     },
@@ -800,69 +794,71 @@ pub struct BufferChange {
 }
 
 /// Stable failures at the host boundary.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, knot_handler_macros::HostError)]
 #[serde(rename_all = "PascalCase")]
 pub enum HostRequestError {
+    #[error(code = "ContextUnavailable", message = "ContextUnavailable")]
     ContextUnavailable,
+    #[error(code = "InvalidUri", message = "InvalidUri")]
     InvalidUri,
+    #[error(code = "DocumentNotFound", message = "DocumentNotFound")]
     DocumentNotFound,
+    #[error(code = "TooManyWorkspaceRoots", message = "TooManyWorkspaceRoots")]
     TooManyWorkspaceRoots,
+    #[error(code = "OperationInProgress", message = "OperationInProgress")]
     OperationInProgress,
+    #[error(code = "PersistenceFailed", message = "PersistenceFailed")]
     PersistenceFailed,
+    #[error(code = "ResourceNotFound", message = "ResourceNotFound")]
     ResourceNotFound,
+    #[error(code = "ResourceWrongKind", message = "ResourceWrongKind")]
     ResourceWrongKind,
+    #[error(code = "InvalidUtf8", message = "InvalidUtf8")]
     InvalidUtf8,
+    #[error(code = "ProviderFailure", message = "ProviderFailure")]
     ProviderFailure,
+    #[error(code = "InvalidTarget", message = "InvalidTarget")]
     InvalidTarget,
+    #[error(code = "OwnershipDisposed", message = "OwnershipDisposed")]
     OwnershipDisposed,
+    #[error(code = "UnsupportedOperation", message = "UnsupportedOperation")]
     UnsupportedOperation,
+    #[error(code = "BufferClosed", message = "BufferClosed")]
     BufferClosed,
+    #[error(code = "BufferReadOnly", message = "BufferReadOnly")]
     BufferReadOnly,
+    #[error(code = "InvalidRange", message = "InvalidRange")]
     InvalidRange,
+    #[error(code = "InvalidEditBatch", message = "InvalidEditBatch")]
     InvalidEditBatch,
+    #[error(code = "RevisionConflict", message = "RevisionConflict")]
     RevisionConflict,
+    #[error(code = "ContributionSetNotFound", message = "ContributionSetNotFound")]
     ContributionSetNotFound,
+    #[error(code = "TreeViewNotFound", message = "TreeViewNotFound")]
     TreeViewNotFound,
+    #[error(code = "ViewNotFound", message = "ViewNotFound")]
     ViewNotFound,
+    #[error(code = "TreeProviderInUse", message = "TreeProviderInUse")]
     TreeProviderInUse,
+    #[error(code = "TreeProviderNotFound", message = "TreeProviderNotFound")]
     TreeProviderNotFound,
+    #[error(
+        code = "CompletionProviderNotFound",
+        message = "CompletionProviderNotFound"
+    )]
     CompletionProviderNotFound,
+    #[error(code = "CommandNameInUse", message = "CommandNameInUse")]
     CommandNameInUse,
+    #[error(code = "CommandNotFound", message = "CommandNotFound")]
     CommandNotFound,
+    #[error(code = "Cancelled", message = "Cancelled")]
     Cancelled,
 }
 
 impl HostRequestError {
-    pub(crate) const fn code(self) -> &'static str {
-        match self {
-            Self::ContextUnavailable => "ContextUnavailable",
-            Self::InvalidUri => "InvalidUri",
-            Self::DocumentNotFound => "DocumentNotFound",
-            Self::TooManyWorkspaceRoots => "TooManyWorkspaceRoots",
-            Self::OperationInProgress => "OperationInProgress",
-            Self::PersistenceFailed => "PersistenceFailed",
-            Self::ResourceNotFound => "ResourceNotFound",
-            Self::ResourceWrongKind => "ResourceWrongKind",
-            Self::InvalidUtf8 => "InvalidUtf8",
-            Self::ProviderFailure => "ProviderFailure",
-            Self::InvalidTarget => "InvalidTarget",
-            Self::OwnershipDisposed => "OwnershipDisposed",
-            Self::UnsupportedOperation => "UnsupportedOperation",
-            Self::BufferClosed => "BufferClosed",
-            Self::BufferReadOnly => "BufferReadOnly",
-            Self::InvalidRange => "InvalidRange",
-            Self::InvalidEditBatch => "InvalidEditBatch",
-            Self::RevisionConflict => "RevisionConflict",
-            Self::ContributionSetNotFound => "ContributionSetNotFound",
-            Self::TreeViewNotFound => "TreeViewNotFound",
-            Self::ViewNotFound => "ViewNotFound",
-            Self::TreeProviderInUse => "TreeProviderInUse",
-            Self::TreeProviderNotFound => "TreeProviderNotFound",
-            Self::CompletionProviderNotFound => "CompletionProviderNotFound",
-            Self::CommandNameInUse => "CommandNameInUse",
-            Self::CommandNotFound => "CommandNotFound",
-            Self::Cancelled => "Cancelled",
-        }
+    pub(crate) fn code(self) -> &'static str {
+        super::declarations::HostError::code(&self)
     }
 }
 

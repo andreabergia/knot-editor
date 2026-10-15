@@ -6,11 +6,14 @@ Part of the [architecture](../architecture.md). Design rationale is recorded in
 
 ## Boundaries
 
-`host` owns six boundaries:
+`host` owns seven boundaries:
 
 - `protocol` contains Knot-owned transport identities, requests, responses,
   contribution data, and errors. It depends on neither gpui nor concrete core
   models.
+- `declarations` owns typed async handler contracts, error descriptors and linked
+  operation discovery. Its transport adapters erase owned payloads, while native
+  handler signatures retain their argument/success/error pairing.
 - `scheduler` owns bounded worker scheduling independently of V8 mechanics.
 - `engine` owns direct `v8` initialization, isolates, contexts, bindings, and
   all V8 types.
@@ -193,6 +196,35 @@ application-owned gpui foreground bridge
         |
 application registries and models
 ```
+
+## Handler declarations
+
+Native clipboard writes and document Open are annotated async handlers alongside
+an application-owned context. The macro contributes a descriptor through
+`inventory`; registry assembly sorts names and rejects duplicates before product
+host startup. Startup also validates each handler's context type. The common
+request envelope retains extension, lifecycle, request and invocation identity;
+invocation cancellation remains owned by the command bridge.
+
+The owned context retains a weak host and an async application handle. Short
+foreground closures check caller lifecycle and cancellation and cannot return
+borrowed model state. Document Open captures its destination before awaiting
+provider work, uses the shared product operation's commit checks, then revalidates
+the presentation before constructing its response. Immediate handlers follow the
+same future contract. Worker messages contain only owned Knot data.
+
+Argument codecs read recognized V8 fields through a host-owned reader. Success
+codecs and structured error details reject integer precision loss before entering
+V8. Attribute-generated adapters pair each argument decoder with the handler and
+its typed responder; the resolver additionally checks operation identity.
+`HostError` derives explicit public codes, diagnostics and named structured
+details, with transparent composition for shared errors. Descriptor codes and the
+remaining enum's derived codes check the closed TypeScript declaration.
+
+Other capabilities still use the operation/result/kind enums and their codec and
+foreground routing tables. Document Open's bounded error adapter translates only
+the shared product operation's current failures into its local/shared errors.
+Native commands retain their existing catalog and routing.
 
 ## Boundary contracts
 

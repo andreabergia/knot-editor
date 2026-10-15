@@ -335,6 +335,7 @@ struct PendingRequest {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum HostOperationKind {
+    Declared(&'static str),
     ObserveWorkbench,
     UnobserveWorkbench,
     ApplicationQuery,
@@ -352,7 +353,6 @@ enum HostOperationKind {
     RegisterCommand,
     RegisterViewCommand,
     SelectedViewText,
-    WriteClipboardText,
     UnregisterCommand,
     InvokeCommand,
     CompleteInlineCommand,
@@ -1549,6 +1549,27 @@ impl RuntimeCapsule {
             return;
         };
         let resolver = v8::Local::new(scope, &resolver);
+        if let (HostOperationKind::Declared(name), Ok(HostResponseValue::Declared(response))) =
+            (pending.operation, &response.result)
+        {
+            let value = if name != response.operation {
+                Err(boundary_exception(
+                    scope,
+                    BoundaryError::Host(HostRequestError::UnsupportedOperation),
+                ))
+            } else {
+                declared_response_to_v8(scope, response)
+            };
+            match value {
+                Ok(value) => {
+                    resolver.resolve(scope, value);
+                }
+                Err(error) => {
+                    resolver.reject(scope, error);
+                }
+            }
+            return;
+        }
         match response.result {
             Ok(value) => match host_response_to_v8(scope, pending.operation, value) {
                 Ok(value) => {
@@ -3929,11 +3950,59 @@ fn workspace_root_uris<'s>(
     Ok(roots)
 }
 
+struct DeclarationReader<'a, 's, 'i> {
+    scope: &'a mut v8::PinnedRef<'s, v8::HandleScope<'i>>,
+    arguments: &'a v8::FunctionCallbackArguments<'s>,
+}
+
+impl super::declarations::ArgumentReader for DeclarationReader<'_, '_, '_> {
+    fn text(
+        &mut self,
+        index: usize,
+        message: &'static str,
+    ) -> Result<String, super::declarations::DecodeError> {
+        required_string(self.scope, self.arguments.get(index as i32), message)
+            .map_err(declaration_decode_error)
+    }
+    fn destination(
+        &mut self,
+        index: usize,
+    ) -> Result<Option<super::protocol::DocumentDestination>, super::declarations::DecodeError>
+    {
+        document_destination_from_v8(self.scope, self.arguments.get(index as i32))
+            .map_err(declaration_decode_error)
+    }
+}
+
+fn declaration_decode_error(error: BoundaryError) -> super::declarations::DecodeError {
+    match error {
+        BoundaryError::Type(message) => super::declarations::DecodeError::Type(message),
+        BoundaryError::Range(message) => super::declarations::DecodeError::Range(message),
+        BoundaryError::Host(_) => unreachable!("argument decoding returns author errors"),
+    }
+}
+
+impl From<super::declarations::DecodeError> for BoundaryError {
+    fn from(error: super::declarations::DecodeError) -> Self {
+        match error {
+            super::declarations::DecodeError::Type(message) => Self::Type(message),
+            super::declarations::DecodeError::Range(message) => Self::Range(message),
+        }
+    }
+}
+
 fn parse_host_operation<'s, 'i>(
     scope: &mut v8::PinnedRef<'s, v8::HandleScope<'i>>,
     arguments: &v8::FunctionCallbackArguments<'s>,
 ) -> Result<(HostOperation, HostOperationKind), BoundaryError> {
     let operation = required_string(scope, arguments.get(1), "operation must be text")?;
+    if let Some(descriptor) = super::declarations::registry().get(&operation) {
+        let request = descriptor.decode(&mut DeclarationReader { scope, arguments })?;
+        return Ok((
+            HostOperation::Declared(request),
+            HostOperationKind::Declared(descriptor.name),
+        ));
+    }
     match operation.as_str() {
         "closePresentation" => {
             let Some(super::protocol::DocumentDestination::View(target)) =
@@ -3969,13 +4038,6 @@ fn parse_host_operation<'s, 'i>(
         "presentDocument" => Ok((
             HostOperation::PresentDocument {
                 id: required_string(scope, arguments.get(2), "document identity must be text")?,
-                target: document_destination_from_v8(scope, arguments.get(3))?,
-            },
-            HostOperationKind::DocumentPresented,
-        )),
-        "openDocument" => Ok((
-            HostOperation::OpenDocument {
-                uri: required_string(scope, arguments.get(2), "resource URI must be text")?,
                 target: document_destination_from_v8(scope, arguments.get(3))?,
             },
             HostOperationKind::DocumentPresented,
@@ -4083,12 +4145,6 @@ fn parse_host_operation<'s, 'i>(
                 target: optional_invocation(scope, arguments.get(2))?,
             },
             HostOperationKind::SelectedViewText,
-        )),
-        "writeClipboardText" => Ok((
-            HostOperation::WriteClipboardText {
-                text: required_string(scope, arguments.get(2), "UnsupportedOperation")?,
-            },
-            HostOperationKind::WriteClipboardText,
         )),
         "unregisterCommand" => Ok((
             HostOperation::UnregisterCommand {
@@ -4793,6 +4849,41 @@ fn application_event_to_v8<'s>(
     v8::json::parse(scope, json).ok_or("UnsupportedOperation")
 }
 
+fn declared_response_to_v8<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    response: &super::declarations::DeclaredResponse,
+) -> Result<v8::Local<'s, v8::Value>, v8::Local<'s, v8::Value>> {
+    use super::declarations::{EncodedValue, encode_json};
+    let json_value = |scope: &mut v8::PinScope<'s, '_>, value: &serde_json::Value| {
+        encode_json(value).map_err(|error| boundary_exception(scope, error.into()))?;
+        let json = serde_json::to_string(value).expect("encoded host data");
+        let json = v8::String::new(scope, &json).expect("host data string");
+        v8::json::parse(scope, json).ok_or_else(|| {
+            boundary_exception(
+                scope,
+                BoundaryError::Host(HostRequestError::UnsupportedOperation),
+            )
+        })
+    };
+    match &response.result {
+        Ok(Ok(EncodedValue::Undefined)) => Ok(v8::undefined(scope).into()),
+        Ok(Ok(EncodedValue::Json(value))) => json_value(scope, value),
+        Ok(Err(error)) => Err(boundary_exception(scope, (*error).into())),
+        Err(error) => {
+            let details = json_value(scope, &error.details)?;
+            let message = v8::String::new(scope, &error.message).unwrap();
+            let exception = v8::Exception::error(scope, message);
+            let object = v8::Local::<v8::Object>::try_from(exception).unwrap();
+            let name = v8::String::new(scope, "KnotHostError").unwrap();
+            let code = v8::String::new(scope, error.code).unwrap();
+            set_property(scope, object, "name", name.into()).expect("error name");
+            set_property(scope, object, "code", code.into()).expect("error code");
+            set_property(scope, object, "details", details).expect("error details");
+            Err(exception)
+        }
+    }
+}
+
 fn host_response_to_v8<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     operation: HostOperationKind,
@@ -4885,9 +4976,6 @@ fn host_response_to_v8<'s>(
             Ok(v8::String::new(scope, &text)
                 .ok_or("UnsupportedOperation")?
                 .into())
-        }
-        (HostOperationKind::WriteClipboardText, HostResponseValue::ClipboardTextWritten) => {
-            Ok(v8::undefined(scope).into())
         }
         (HostOperationKind::UnregisterCommand, HostResponseValue::CommandUnregistered { .. })
         | (
@@ -5287,6 +5375,42 @@ fn test_entered_callback(
 
 #[cfg(test)]
 mod tests {
+    fn clipboard_operation(text: &str) -> HostOperation {
+        struct Reader(String);
+        impl super::super::declarations::ArgumentReader for Reader {
+            fn text(
+                &mut self,
+                _: usize,
+                _: &'static str,
+            ) -> Result<String, super::super::declarations::DecodeError> {
+                Ok(self.0.clone())
+            }
+            fn destination(
+                &mut self,
+                _: usize,
+            ) -> Result<
+                Option<super::super::protocol::DocumentDestination>,
+                super::super::declarations::DecodeError,
+            > {
+                unreachable!()
+            }
+        }
+        HostOperation::Declared(
+            super::super::declarations::registry()
+                .get("writeClipboardText")
+                .unwrap()
+                .decode(&mut Reader(text.into()))
+                .unwrap(),
+        )
+    }
+
+    fn clipboard_written() -> HostResponseValue {
+        HostResponseValue::Declared(super::super::declarations::DeclaredResponse {
+            operation: "writeClipboardText",
+            result: Ok(Ok(super::super::declarations::EncodedValue::Undefined)),
+        })
+    }
+
     use super::*;
     use std::{
         collections::{BTreeMap, HashSet},
@@ -5401,12 +5525,12 @@ mod tests {
         let second = pool
             .receive_request_timeout(Duration::from_secs(1))
             .unwrap();
-        let (host_request, batch) =
-            if matches!(first.operation, HostOperation::WriteClipboardText { .. }) {
-                (first, second)
-            } else {
-                (second, first)
-            };
+        let (host_request, batch) = if matches!(&first.operation, HostOperation::Declared(operation) if operation.descriptor.name == "writeClipboardText")
+        {
+            (first, second)
+        } else {
+            (second, first)
+        };
         assert!(matches!(
             batch.operation,
             HostOperation::MutateKeybindings { .. }
@@ -5415,7 +5539,7 @@ mod tests {
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: host_request.id,
-            result: Ok(HostResponseValue::ClipboardTextWritten),
+            result: Ok(clipboard_written()),
         })
         .unwrap();
         assert!(
@@ -6435,15 +6559,13 @@ mod tests {
         let acknowledgement = pool.receive_request().unwrap();
         assert_eq!(
             acknowledgement.operation,
-            HostOperation::WriteClipboardText {
-                text: "cleanup acknowledged".into()
-            }
+            clipboard_operation("cleanup acknowledged")
         );
         pool.respond(HostResponse {
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: acknowledgement.id,
-            result: Ok(HostResponseValue::ClipboardTextWritten),
+            result: Ok(clipboard_written()),
         })
         .unwrap();
         work.wait().unwrap();
@@ -7029,15 +7151,13 @@ globalThis.activationFinished = true;
         let acknowledged = pool.receive_request().unwrap();
         assert_eq!(
             acknowledged.operation,
-            HostOperation::WriteClipboardText {
-                text: "contribution cleanup".into()
-            }
+            clipboard_operation("contribution cleanup")
         );
         pool.respond(HostResponse {
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: acknowledged.id,
-            result: Ok(HostResponseValue::ClipboardTextWritten),
+            result: Ok(clipboard_written()),
         })
         .unwrap();
         work.wait().unwrap();
@@ -7887,17 +8007,12 @@ globalThis.activationFinished = true;
         assert_eq!(request.extension, runtime.extension);
         assert_eq!(request.lifecycle, runtime.lifecycle);
         assert_eq!(request.id, RequestId::new(1));
-        assert_eq!(
-            request.operation,
-            HostOperation::WriteClipboardText {
-                text: "wait".into()
-            }
-        );
+        assert_eq!(request.operation, clipboard_operation("wait"));
         pool.respond(HostResponse {
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: request.id,
-            result: Ok(HostResponseValue::ClipboardTextWritten),
+            result: Ok(clipboard_written()),
         })
         .unwrap();
         execution.wait().unwrap();
@@ -7910,6 +8025,74 @@ globalThis.activationFinished = true;
                 .value,
             "true"
         );
+        pool.shutdown();
+    }
+
+    #[test]
+    fn declared_responses_preserve_structured_errors_precision_and_operation_pairing() {
+        use crate::host::declarations::{DeclaredResponse, EncodedValue, HostError};
+        #[derive(knot_handler_macros::HostError)]
+        enum ProbeError {
+            #[error(code = "ProbeFailed", message = "probe diagnostic")]
+            RenamableVariant { revision: u64 },
+        }
+        let cases = [
+            (
+                "structured",
+                DeclaredResponse {
+                    operation: "writeClipboardText",
+                    result: Err(ProbeError::RenamableVariant { revision: 7 }.into_failure()),
+                },
+                r#"if (error.name !== "KnotHostError" || error.code !== "ProbeFailed" || error.message !== "probe diagnostic" || error.details.revision !== 7) throw error;"#,
+            ),
+            (
+                "precision",
+                DeclaredResponse {
+                    operation: "writeClipboardText",
+                    result: Ok(Ok(EncodedValue::Json(
+                        serde_json::json!({"revision": MAX_JS_INTEGER + 1}),
+                    ))),
+                },
+                r#"if (!(error instanceof RangeError)) throw error;"#,
+            ),
+            (
+                "pairing",
+                DeclaredResponse {
+                    operation: "openDocument",
+                    result: Ok(Ok(EncodedValue::Undefined)),
+                },
+                r#"if (error.code !== "UnsupportedOperation") throw error;"#,
+            ),
+        ];
+        let pool = RuntimePool::new(PoolConfig::single_worker());
+        let runtime = key(719);
+        pool.load(runtime, IsolateConfig::default()).unwrap();
+        for (name, response, check) in cases {
+            let execution = pool
+                .execute_fixture_module(
+                    runtime,
+                    format!("file:///fixtures/declared-{name}.js"),
+                    format!(
+                        r#"
+                import {{ workbench }} from "knot";
+                let rejected = false;
+                try {{ await workbench.writeClipboardText("probe"); }}
+                catch (error) {{ rejected = true; {check} }}
+                if (!rejected) throw new Error("invalid native response accepted");
+            "#
+                    ),
+                )
+                .unwrap();
+            let request = pool.receive_request().unwrap();
+            pool.respond(HostResponse {
+                extension: request.extension,
+                lifecycle: request.lifecycle,
+                id: request.id,
+                result: Ok(HostResponseValue::Declared(response)),
+            })
+            .unwrap();
+            execution.wait().unwrap();
+        }
         pool.shutdown();
     }
 
@@ -7977,7 +8160,7 @@ globalThis.activationFinished = true;
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: second.id,
-            result: Ok(HostResponseValue::ClipboardTextWritten),
+            result: Ok(clipboard_written()),
         })
         .unwrap();
         assert_eq!(
@@ -7985,7 +8168,7 @@ globalThis.activationFinished = true;
                 extension: runtime.extension,
                 lifecycle: runtime.lifecycle,
                 id: second.id,
-                result: Ok(HostResponseValue::ClipboardTextWritten),
+                result: Ok(clipboard_written()),
             }),
             Err(RuntimeResponseError::UnknownRequest)
         );
@@ -7993,7 +8176,7 @@ globalThis.activationFinished = true;
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: first.id,
-            result: Ok(HostResponseValue::ClipboardTextWritten),
+            result: Ok(clipboard_written()),
         })
         .unwrap();
         execution.wait().unwrap();
@@ -8011,7 +8194,7 @@ globalThis.activationFinished = true;
                 extension: runtime.extension,
                 lifecycle: runtime.lifecycle,
                 id: first.id,
-                result: Ok(HostResponseValue::ClipboardTextWritten),
+                result: Ok(clipboard_written()),
             }),
             Err(RuntimeResponseError::UnknownRequest)
         );
@@ -8051,7 +8234,7 @@ globalThis.activationFinished = true;
                 extension: runtime.extension,
                 lifecycle: runtime.lifecycle,
                 id: second.id,
-                result: Ok(HostResponseValue::ClipboardTextWritten),
+                result: Ok(clipboard_written()),
             }),
             Err(RuntimeResponseError::UnknownRequest)
         );
@@ -8076,19 +8259,19 @@ globalThis.activationFinished = true;
                 extension: ExtensionId::new(99),
                 lifecycle: runtime.lifecycle,
                 id: request.id,
-                result: Ok(HostResponseValue::ClipboardTextWritten),
+                result: Ok(clipboard_written()),
             },
             HostResponse {
                 extension: runtime.extension,
                 lifecycle: ExtensionLifecycleId::new(99),
                 id: request.id,
-                result: Ok(HostResponseValue::ClipboardTextWritten),
+                result: Ok(clipboard_written()),
             },
             HostResponse {
                 extension: runtime.extension,
                 lifecycle: runtime.lifecycle,
                 id: RequestId::new(99),
-                result: Ok(HostResponseValue::ClipboardTextWritten),
+                result: Ok(clipboard_written()),
             },
         ] {
             assert!(pool.respond(response).is_err());
@@ -8097,7 +8280,7 @@ globalThis.activationFinished = true;
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: request.id,
-            result: Ok(HostResponseValue::ClipboardTextWritten),
+            result: Ok(clipboard_written()),
         })
         .unwrap();
         execution.wait().unwrap();
@@ -8132,7 +8315,7 @@ globalThis.activationFinished = true;
             extension: waiting.extension,
             lifecycle: waiting.lifecycle,
             id: request.id,
-            result: Ok(HostResponseValue::ClipboardTextWritten),
+            result: Ok(clipboard_written()),
         })
         .unwrap();
         delayed.wait().unwrap();
@@ -8163,7 +8346,7 @@ globalThis.activationFinished = true;
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: first.id,
-            result: Ok(HostResponseValue::ClipboardTextWritten),
+            result: Ok(clipboard_written()),
         })
         .unwrap();
         let second = pool.receive_request().unwrap();
@@ -8173,7 +8356,7 @@ globalThis.activationFinished = true;
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: second.id,
-            result: Ok(HostResponseValue::ClipboardTextWritten),
+            result: Ok(clipboard_written()),
         })
         .unwrap();
         execution.wait().unwrap();
@@ -8245,7 +8428,7 @@ globalThis.activationFinished = true;
                 extension: first.extension,
                 lifecycle: first.lifecycle,
                 id: first_request.id,
-                result: Ok(HostResponseValue::ClipboardTextWritten),
+                result: Ok(clipboard_written()),
             }),
             Err(RuntimeResponseError::WrongExtension)
         );
@@ -8266,7 +8449,7 @@ globalThis.activationFinished = true;
                 extension: first.extension,
                 lifecycle: first.lifecycle,
                 id: replacement_request.id,
-                result: Ok(HostResponseValue::ClipboardTextWritten),
+                result: Ok(clipboard_written()),
             }),
             Err(RuntimeResponseError::WrongExtension)
         );
@@ -8274,7 +8457,7 @@ globalThis.activationFinished = true;
             extension: replacement.extension,
             lifecycle: replacement.lifecycle,
             id: replacement_request.id,
-            result: Ok(HostResponseValue::ClipboardTextWritten),
+            result: Ok(clipboard_written()),
         })
         .unwrap();
         replacement_execution.wait().unwrap();
@@ -8323,7 +8506,7 @@ globalThis.activationFinished = true;
                 extension: runtime.extension,
                 lifecycle: runtime.lifecycle,
                 id: request.id,
-                result: Ok(HostResponseValue::ClipboardTextWritten),
+                result: Ok(clipboard_written()),
             }),
             Err(RuntimeResponseError::WrongExtension)
         );
@@ -9109,12 +9292,7 @@ globalThis.activationFinished = true;
         let suspended = pool
             .receive_request_timeout(Duration::from_secs(1))
             .unwrap();
-        assert_eq!(
-            suspended.operation,
-            HostOperation::WriteClipboardText {
-                text: "tree wait".into()
-            }
-        );
+        assert_eq!(suspended.operation, clipboard_operation("tree wait"));
         let completion = pool
             .request_completions(
                 runtime,
@@ -9141,7 +9319,7 @@ globalThis.activationFinished = true;
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: suspended.id,
-            result: Ok(HostResponseValue::ClipboardTextWritten),
+            result: Ok(clipboard_written()),
         })
         .unwrap();
         tree.wait().unwrap();
@@ -9202,7 +9380,7 @@ globalThis.activationFinished = true;
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: blocker_request.id,
-            result: Ok(HostResponseValue::ClipboardTextWritten),
+            result: Ok(clipboard_written()),
         })
         .unwrap();
         blocker.wait().unwrap();
@@ -9241,7 +9419,7 @@ globalThis.activationFinished = true;
                 extension: runtime.extension,
                 lifecycle: runtime.lifecycle,
                 id: pending.id,
-                result: Ok(HostResponseValue::ClipboardTextWritten),
+                result: Ok(clipboard_written()),
             }),
             Err(RuntimeResponseError::UnknownRequest)
         );
@@ -9928,7 +10106,7 @@ await commands.register("cancel-response", async () => {
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: pending.id,
-            result: Ok(HostResponseValue::ClipboardTextWritten),
+            result: Ok(clipboard_written()),
         })
         .unwrap();
         gate.wait();

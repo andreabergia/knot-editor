@@ -1,5 +1,7 @@
 //! Product ownership and foreground routing for the pooled extension host.
 
+mod handlers;
+
 use std::{
     collections::{HashMap, HashSet},
     path::PathBuf,
@@ -12,7 +14,7 @@ use std::{
 #[cfg(test)]
 use std::collections::BTreeMap;
 
-use gpui::{App, AppContext, ClipboardItem, Context, Entity, Global, Subscription, Task};
+use gpui::{App, AppContext, Context, Entity, Global, Subscription, Task};
 
 use crate::host::{
     lifecycle::ExtensionKey,
@@ -132,6 +134,9 @@ pub(crate) fn completion_provider_count(cx: &App) -> usize {
 }
 
 pub(crate) fn install(cx: &mut App) -> Entity<ProductExtensionHost> {
+    crate::host::declarations::registry()
+        .validate_context::<handlers::HostContext>()
+        .expect("valid application handler contexts");
     let (pool, inbox) = ExtensionPool::new(PoolConfig::default());
     let host = cx.new(|cx| ProductExtensionHost::new(pool, inbox, cx));
     cx.set_global(ApplicationExtensionHost {
@@ -831,6 +836,29 @@ impl ProductExtensionHost {
     }
 
     fn handle_request(&mut self, request: HostRequest, cx: &mut Context<Self>) {
+        #[cfg(test)]
+        if self.hold_clipboard_writes
+            && matches!(&request.operation,
+            HostOperation::Declared(operation) if operation.descriptor.name == "writeClipboardText")
+        {
+            self.deferred_view_requests.push(request);
+            return;
+        }
+        if let HostOperation::Declared(operation) = request.operation.clone() {
+            let context = handlers::HostContext::new(request.clone(), cx);
+            let pool = self.pool.clone();
+            cx.spawn(async move |_, _| {
+                let result = operation.run(context).await;
+                let _ = pool.respond(crate::host::protocol::HostResponse {
+                    extension: request.extension,
+                    lifecycle: request.lifecycle,
+                    id: request.id,
+                    result: Ok(crate::host::protocol::HostResponseValue::Declared(result)),
+                });
+            })
+            .detach();
+            return;
+        }
         let response = match request_route(&request.operation) {
             RequestRoute::Buffer => {
                 let invocation = request.invocation;
@@ -852,7 +880,7 @@ impl ProductExtensionHost {
                     Some(self.commands.handle_host_request(request))
                 }
             }
-            RequestRoute::View => self.dispatch_view_request(request, cx),
+            RequestRoute::View => Some(self.handle_view_request(request, cx)),
             RequestRoute::Application => Some(self.dispatch_application_request(request, cx)),
             RequestRoute::ApplicationMutation => {
                 if matches!(
@@ -952,21 +980,6 @@ impl ProductExtensionHost {
         })
     }
 
-    fn dispatch_view_request(
-        &mut self,
-        request: HostRequest,
-        cx: &mut Context<Self>,
-    ) -> Option<crate::host::protocol::HostResponse> {
-        #[cfg(test)]
-        if self.hold_clipboard_writes
-            && matches!(&request.operation, HostOperation::WriteClipboardText { .. })
-        {
-            self.deferred_view_requests.push(request);
-            return None;
-        }
-        Some(self.handle_view_request(request, cx))
-    }
-
     #[cfg(test)]
     pub(crate) fn hold_clipboard_writes(&mut self) {
         self.hold_clipboard_writes = true;
@@ -981,8 +994,7 @@ impl ProductExtensionHost {
     pub(crate) fn release_view_requests(&mut self, cx: &mut Context<Self>) {
         self.hold_clipboard_writes = false;
         for request in std::mem::take(&mut self.deferred_view_requests) {
-            let response = self.handle_view_request(request, cx);
-            let _ = self.pool.respond(response);
+            self.handle_request(request, cx);
         }
     }
 
@@ -998,13 +1010,6 @@ impl ProductExtensionHost {
                 .contains(&ExtensionKey::new(request.extension, request.lifecycle))
             {
                 return Err(HostRequestError::Cancelled);
-            }
-            if let HostOperation::WriteClipboardText { text } = &request.operation {
-                if self.commands.is_cancelled(request.invocation) {
-                    return Err(HostRequestError::Cancelled);
-                }
-                cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
-                return Ok(HostResponseValue::ClipboardTextWritten);
             }
             let explicit = match request.operation {
                 HostOperation::ActiveBuffer { target }
@@ -1616,60 +1621,24 @@ impl ProductExtensionHost {
                 return Err(HostRequestError::Cancelled);
             }
             let target = match &request.operation {
-                HostOperation::OpenDocument { target, .. }
-                | HostOperation::CreateUntitled { target }
+                HostOperation::CreateUntitled { target }
                 | HostOperation::PresentDocument { target, .. } => target.clone(),
                 _ => return Err(HostRequestError::UnsupportedOperation),
             };
             let destination = self.document_destination(&request, target, cx)?;
-            let uri = match request.operation.clone() {
+            let (document, target) = match &request.operation {
                 HostOperation::CreateUntitled { .. } => {
-                    let (document, target) = product::operations::create_untitled(destination, cx)?;
-                    let value = self.document_presentation(document, target, cx)?;
-                    return Ok(Some(HostResponseValue::DocumentPresented(value)));
+                    product::operations::create_untitled(destination, cx)?
                 }
                 HostOperation::PresentDocument { id, .. } => {
-                    let (document, target) =
-                        product::operations::present_document(id, destination, cx)?;
-                    let value = self.document_presentation(document, target, cx)?;
-                    return Ok(Some(HostResponseValue::DocumentPresented(value)));
+                    product::operations::present_document(id.clone(), destination, cx)?
                 }
-                HostOperation::OpenDocument { uri, .. } => uri,
                 _ => unreachable!(),
             };
-            let host = cx.entity().downgrade();
-            let caller = product::operations::OperationCaller {
-                host: host.clone(),
-                key,
-                invocation: request.invocation,
-            };
-            let delivered = request.clone();
-            let pool = self.pool.clone();
-            product::operations::open_document(
-                uri,
-                destination,
-                caller,
-                move |result, cx| {
-                    let result = result
-                        .and_then(|(document, target)| {
-                            let host = host.upgrade().ok_or(HostRequestError::Cancelled)?;
-                            host.update(cx, |host, cx| {
-                                host.document_presentation(document, target, cx)
-                            })
-                        })
-                        .map(HostResponseValue::DocumentPresented);
-                    let _ = pool.respond(HostResponse {
-                        extension: delivered.extension,
-                        lifecycle: delivered.lifecycle,
-                        id: delivered.id,
-                        result,
-                    });
-                },
-                cx,
-            )?;
-            Ok(None)
+            self.document_presentation(document, target, cx)
+                .map(HostResponseValue::DocumentPresented)
         })();
-        result.transpose().map(|result| HostResponse {
+        Some(HostResponse {
             extension: request.extension,
             lifecycle: request.lifecycle,
             id: request.id,
@@ -2006,8 +1975,8 @@ fn application_document_info(
 
 fn request_route(operation: &HostOperation) -> RequestRoute {
     match operation {
-        HostOperation::OpenDocument { .. }
-        | HostOperation::CreateUntitled { .. }
+        HostOperation::Declared(_) => unreachable!("declared handlers dispatch directly"),
+        HostOperation::CreateUntitled { .. }
         | HostOperation::PresentDocument { .. }
         | HostOperation::OpenFolder { .. }
         | HostOperation::ReplaceWorkspaceRoots { .. }
@@ -2027,9 +1996,9 @@ fn request_route(operation: &HostOperation) -> RequestRoute {
         | HostOperation::UnregisterCommand { .. }
         | HostOperation::InvokeCommand { .. }
         | HostOperation::CompleteInlineCommand { .. } => RequestRoute::Command,
-        HostOperation::ActiveBuffer { .. }
-        | HostOperation::SelectedViewText { .. }
-        | HostOperation::WriteClipboardText { .. } => RequestRoute::View,
+        HostOperation::ActiveBuffer { .. } | HostOperation::SelectedViewText { .. } => {
+            RequestRoute::View
+        }
         HostOperation::RegisterTreeProvider { .. }
         | HostOperation::InvalidateTreeProvider { .. }
         | HostOperation::UnregisterTreeProvider { .. }
@@ -2057,8 +2026,8 @@ mod tests {
     use gpui::TestAppContext;
 
     #[gpui::test]
-    fn application_clipboard_and_context_failures_have_distinct_results(cx: &mut TestAppContext) {
-        use crate::host::protocol::{HostRequestError, HostResponseValue, RequestId};
+    fn application_context_failures_have_distinct_results(cx: &mut TestAppContext) {
+        use crate::host::protocol::{HostRequestError, RequestId};
         cx.update(|cx| {
             let commands = cx.new(super::super::product_commands::ProductCommandDispatcher::new);
             cx.set_global(ApplicationProductCommands(commands));
@@ -2098,35 +2067,6 @@ mod tests {
                     )
                     .result,
                     Err(HostRequestError::InvalidTarget)
-                );
-                assert_eq!(
-                    host.handle_view_request(
-                        request(HostOperation::WriteClipboardText {
-                            text: "application".into()
-                        }),
-                        cx
-                    )
-                    .result,
-                    Ok(HostResponseValue::ClipboardTextWritten)
-                );
-                assert_eq!(
-                    cx.read_from_clipboard().unwrap().text().unwrap(),
-                    "application"
-                );
-                host.unload(key, cx).unwrap();
-                assert_eq!(
-                    host.handle_view_request(
-                        request(HostOperation::WriteClipboardText {
-                            text: "late".into()
-                        }),
-                        cx
-                    )
-                    .result,
-                    Err(HostRequestError::Cancelled)
-                );
-                assert_eq!(
-                    cx.read_from_clipboard().unwrap().text().unwrap(),
-                    "application"
                 );
             });
         });

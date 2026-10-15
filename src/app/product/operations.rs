@@ -168,6 +168,13 @@ impl OpenFailure {
     }
 }
 
+pub(crate) fn validate_presentation(
+    target: &PresentationTarget,
+    cx: &mut App,
+) -> Result<(), HostRequestError> {
+    capture_destination(&DocumentDestination::View(target.clone()), cx).map(|_| ())
+}
+
 pub(crate) fn open_document(
     uri: String,
     destination: DocumentDestination,

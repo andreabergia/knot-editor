@@ -179,6 +179,8 @@ declare module "knot" {
     readonly name: "KnotHostError";
     /** Stable category for handling a failure independently of its message. */
     readonly code: HostErrorCode;
+    /** Handler-specific structured diagnostics, when supplied by native code. */
+    readonly details?: JsonValue;
   }
   /**
    * A lifecycle-owned registration, subscription or contribution set; native IDs

@@ -1,9 +1,15 @@
+[workspace]
+members = ["crates/knot-handler-macros"]
+resolver = "3"
+
 [package]
 name = "knot"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+inventory = "0.3"
+knot-handler-macros = { path = "crates/knot-handler-macros" }
 alacritty_terminal = { version = "0.26", default-features = false }
 anyhow = "1"
 directories = "6"
