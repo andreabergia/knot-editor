@@ -1,8 +1,7 @@
 # Production extension APIs and JavaScript project management
 
-Status: ✅ D046 and D047 checkpoint 2 complete and approved on 2026-10-15;
-checkpoint 3 implemented and automatically validated, pending manual review;
-D053 refactoring queued after D047 approval; checkpoints 4–10 not started.
+Status: ✅ D046 and D047 complete and approved on 2026-10-15;
+D053 refactoring is next; checkpoints 4–10 not started.
 
 Source: the project-management design discussion of 2026-10-13 and the
 [prioritized roadmap](../roadmap.md). Work identifiers: D046–D052 and promoted
@@ -41,9 +40,9 @@ Read [architecture](../architecture.md), [decisions](../decisions.md), and the
 - The public `knot` facade exposes buffers, commands, keybindings, trees,
   completion, selected text and clipboard writing. D047 additionally implements
   application queries/observation, programmatic resources/documents, root replacement
-  and protected closure; its final review remains pending. Durable storage is D048.
+  and protected closure; it is approved and complete. Durable storage is D048.
 - Contextual APIs use admitted command captures and reject missing/stale context.
-  D047 implements separate live targets and application queries; review is pending.
+  D047 implements separate live targets and application queries.
 - D047 document UUIDs are separate from session-local collection IDs and buffer/view
   handles. Identity is preserved across Save As; persistence across restarts is
   still D048/D050 work.
@@ -324,9 +323,9 @@ Detailed execution: [D047 application state and operations plan](d047-applicatio
 This also covers checkpoint 3, retaining a separate review gate for each.
 Checkpoint 2 is complete and explicitly approved on 2026-10-15 after automated
 validation and manual observer, shared-identity, Save As, and disposal smoke checks.
-Checkpoint 3 is implemented and automatically validated (608 library tests and
-5 example tests, Clippy, API and documentation checks). Its real-product manual
-review and approval remain pending.
+Checkpoint 3 is complete and explicitly approved on 2026-10-15 following automated
+validation (608 library tests and 5 example tests, Clippy, API and documentation
+checks) and user acceptance of its product review gate.
 Keep observation small: one foreground snapshot-and-subscribe operation, ordered
 notifications, window-owned workspaces, and existing product lifetime rules.
 
@@ -348,7 +347,7 @@ notifications, window-owned workspaces, and existing product lifetime rules.
   root/identity model, live targets, and final-document invalidation, exercised
   through the observing JS fixture.
 
-### 3. Programmatic resources and documents — D047 ⏳
+### 3. Programmatic resources and documents — D047 ✅
 
 - Expose explicit file/folder opening, root-set replacement, untitled creation,
   document presentation, and protected closure through existing product flows.
@@ -359,8 +358,8 @@ notifications, window-owned workspaces, and existing product lifetime rules.
 - **Validation:** native/JS parity, URI deduplication, missing destinations, invalid
   UTF-8/provider errors, focus changes, window closure during I/O, cancellation,
   and dirty documents shared by multiple windows.
-- **Review gate:** approve target/outcome contracts using a JS open command in
-  the real product.
+- **Review gate:** ✅ user accepted the product review gate and approved
+  target/outcome contracts on 2026-10-15.
 
 ### Maintenance interlude — Handler declarations refactoring, D053 ⬜
 

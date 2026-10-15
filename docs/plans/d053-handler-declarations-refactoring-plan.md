@@ -1,6 +1,6 @@
 # D053 — Handler-defined operations, errors, and commands
 
-Status: ⬜ agreed design; implementation waits for D047 completion and approval.
+Status: ⬜ agreed design; ready for implementation after D047 approval on 2026-10-15.
 Execute after D047 is approved and archived, before D048 adds more host APIs.
 This is a separate refactoring, not another D047 acceptance requirement.
 

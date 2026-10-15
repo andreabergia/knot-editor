@@ -1,8 +1,6 @@
 # D047 — Application state and document operations
 
-Status: ✅ parent checkpoint 2 complete and approved on 2026-10-15.
-Parent checkpoint 3 is implemented and automatically validated; awaiting real-product
-manual checks and explicit approval.
+Status: ✅ complete; parent checkpoints 2 and 3 approved on 2026-10-15.
 
 Source: checkpoints 2–3 of the
 [extension platform and projects plan](extension-platform-and-projects-plan.md)
@@ -227,7 +225,7 @@ paths. Assert meaningful event order/state, not incidental notification counts.
 identity/root model, live targets, and final-document invalidation. Stop here before
 adding programmatic mutations. Mark the parent checkpoint complete only on approval.
 
-## Parent checkpoint 3 — Programmatic resources and documents ⬜
+## Parent checkpoint 3 — Programmatic resources and documents ✅
 
 1. **Shared semantic completion.** ✅ Shared product Open, New, presentation,
    root replacement and protected closure return typed semantic results. Native
@@ -532,7 +530,7 @@ Protected closure and the checkpoint 3 acceptance/manual gate remain outstanding
 | Final invalidation, cancelled-close preservation and empty-workbench replacement | Public closure suite, retained buffer access checks and final-tab activation fixture |
 | Listener independence, awaited mutation and self-disposal | Public Open and close listener fixtures plus observation scheduler/isolation tests |
 | Public types, examples, docs and installed package | Pinned authoring checker, real installed application-state fixture and native product-host tests |
-| Real product manual gate and approval | ⏳ Pending the [checked example smoke check](../../examples/extensions/README.md); user approval not yet recorded |
+| Real product manual gate and approval | ✅ User accepted the review gate and explicitly approved completion on 2026-10-15; [checked example smoke instructions](../../examples/extensions/README.md) |
 
 Final checkpoint 3 automated validation (2026-10-15): `cargo test --all-targets --quiet`
 passed (608 library tests and 5 example tests); `cargo clippy --all-targets -- -D warnings`,
@@ -542,6 +540,6 @@ untitled and close results through the installed product host.
 `scripts/build-macos-app.sh` also passed and produced `target/debug/Knot.app`
 for the manual smoke check.
 
-D047 remains active until checkpoint 3's real-product manual checks and explicit
-approval are recorded. No manual product result has been claimed; archive only
-after that gate.
+✅ On 2026-10-15 the user explicitly approved completion and resumed the D047
+goal, accepting checkpoint 3's review gate. Both parent checkpoints are complete.
+This records the user's acceptance; no additional agent-run manual checks are claimed.
