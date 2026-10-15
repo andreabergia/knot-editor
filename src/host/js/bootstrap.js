@@ -629,3 +629,40 @@ export async function getWorkspace(target) {
   const value = await request("getWorkspace", windowAuthority(target));
   return value === null ? null : workspaceFromNative(value);
 }
+
+const applicationListeners = new Map();
+function applicationSnapshotFromNative(value) {
+  return Object.freeze({
+    documents: Object.freeze(value.documents.map(documentFromNative)),
+    windows: Object.freeze(value.windows.map(windowFromNative)),
+    activeWindow: value.activeWindow === null ? null : windowTarget(value.activeWindow),
+    activeTarget: value.activeTarget === null ? null : presentationTarget(value.activeTarget),
+  });
+}
+export async function observeWorkbench(listener) {
+  if (typeof listener !== "function") throw new TypeError("observe requires a listener");
+  const value = await request("observeWorkbench");
+  applicationListeners.set(value.subscription, listener);
+  const owned = ownership(() => applicationListeners.delete(value.subscription),
+    () => request("unobserveWorkbench", value.subscription));
+  return Object.freeze({ snapshot: applicationSnapshotFromNative(value.snapshot), watermark: value.watermark,
+    dispose: () => owned.dispose() });
+}
+globalThis.__knotDispatchApplicationChange = async (subscription, value) => {
+  const listener = applicationListeners.get(subscription);
+  if (!listener) return;
+  let payload;
+  switch (value.type) {
+    case "documentOpened": case "documentChanged": payload = { document: documentFromNative(value.document) }; break;
+    case "documentClosed": payload = { document: value.document }; break;
+    case "windowOpened": case "presentationsChanged": payload = { window: windowFromNative(value.window) }; break;
+    case "windowClosed": payload = { window: windowTarget(value.window) }; break;
+    case "workspaceChanged": payload = { workspace: workspaceFromNative(value.workspace) }; break;
+    case "activeTargetChanged": payload = {
+      activeWindow: value.activeWindow === null ? null : windowTarget(value.activeWindow),
+      activeTarget: value.activeTarget === null ? null : presentationTarget(value.activeTarget),
+    }; break;
+    default: throw new Error("unknown application event");
+  }
+  await listener(Object.freeze({ type: value.type, sequence: value.sequence, ...payload }));
+};

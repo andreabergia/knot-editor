@@ -299,3 +299,17 @@ sends clipboard text through the existing PTY input channel. Plain paste
 normalizes newlines to carriage returns; bracketed paste preserves newlines,
 removes embedded escape characters, and adds the terminal's bracketed-paste
 markers. A detached or stopped terminal cannot accept paste.
+
+## Observing product state
+
+Application snapshots read live product shells and their workbenches, qualifying
+pane/tab identities with window, workbench and presentation entity identity.
+Snapshots include ordered tabs, selected tabs, current tab focus, document
+associations and roots, without layout geometry or editor view state. Terminals
+are explicit non-document surfaces. Startup diagnostics are excluded.
+
+Shell commit notifications feed foreground metadata comparison. Native activation
+and tab focus/blur subscriptions cover focus changes independently of repaints.
+Window closure feeds the same signal even when tests or stale callers retain the
+shell. Splits, ordinary replacement and intra-/cross-window relocation keep their
+existing ownership and notify the observer after their transitions commit.

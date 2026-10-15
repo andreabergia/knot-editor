@@ -114,3 +114,10 @@ also rejects edits racing its asynchronous read.
 Native Save As provides overwrite consent, but replacement still checks the
 observed provider version so a later external change becomes a conflict.
 Live filesystem watching, binary buffers, and encoding detection remain deferred.
+
+Creation, final removal and successful persistence signal application metadata
+observation on the foreground. Persistence changes title/resource/dirty metadata
+without changing the document UUID. Content edits use the existing model commit
+notifications; observation does not require an author to request a buffer first.
+Window root replacement/clear commits roots and generation with tree state, and
+signals through the product shell. Rejected extra roots preserve the prior state.

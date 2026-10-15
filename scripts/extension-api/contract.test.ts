@@ -107,6 +107,22 @@ for (const window of await windows.list()) {
 // @ts-expect-error plain URIs are not document identities
 await documents.get("file:///tmp/document.txt");
 
+const observation = await workbench.observe(async (event) => {
+  const sequence: number = event.sequence;
+  if (event.type === "documentOpened" || event.type === "documentChanged") {
+    const documentId: DocumentId = event.document.id;
+    await documents.get(documentId);
+  }
+  // @ts-expect-error application event payloads are immutable
+  event.sequence = sequence + 1;
+});
+const watermark: number = observation.watermark;
+const observedWindows: readonly import("knot").WindowInfo[] = observation.snapshot.windows;
+await observation.dispose();
+void [watermark, observedWindows];
+// @ts-expect-error an application observer requires a listener
+await workbench.observe();
+
 // @ts-expect-error invalid-argument helper requires a string
 commands.invalidArguments(1);
 // @ts-expect-error no application namespace is declared

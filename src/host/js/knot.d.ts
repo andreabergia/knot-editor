@@ -94,6 +94,25 @@ declare module "knot" {
     get(target: WindowTarget): Promise<WorkspaceInfo | null>;
   }>;
 
+  export interface ApplicationSnapshot {
+    readonly documents: readonly DocumentInfo[];
+    readonly windows: readonly WindowInfo[];
+    readonly activeWindow: WindowTarget | null;
+    readonly activeTarget: ViewTarget | null;
+  }
+  export type ApplicationChange =
+    | { readonly type: "documentOpened" | "documentChanged"; readonly document: DocumentInfo }
+    | { readonly type: "documentClosed"; readonly document: DocumentId }
+    | { readonly type: "windowOpened" | "presentationsChanged"; readonly window: WindowInfo }
+    | { readonly type: "windowClosed"; readonly window: WindowTarget }
+    | { readonly type: "workspaceChanged"; readonly workspace: WorkspaceInfo }
+    | { readonly type: "activeTargetChanged"; readonly activeWindow: WindowTarget | null; readonly activeTarget: ViewTarget | null };
+  export type ApplicationEvent = ApplicationChange & { readonly sequence: number };
+  export interface WorkbenchObservation extends Disposable {
+    readonly snapshot: ApplicationSnapshot;
+    readonly watermark: number;
+  }
+
   /**
    * Host-issued capture, valid only in its originating command invocation tree.
    * Contextual methods validate both authority and the live presentation.
@@ -417,6 +436,14 @@ declare module "knot" {
   }>;
   /** Native tree registration, supported captured selection and clipboard access. */
   export const workbench: Readonly<{
+    /** Atomically register and capture current metadata plus sequence watermark.
+     * Later committed changes arrive as asynchronous FIFO listener roots after the
+     * observing root finishes. Queries may already see newer state. Exceptions are
+     * isolated; disposal/unload prevents queued author callbacks. Awaiting another
+     * host request or self-disposal from a listener is supported. No replay/retries.
+     * Valid during activation before windows exist; operations do not await listeners.
+     */
+    observe(listener: (event: ApplicationEvent) => void | Promise<void>): Promise<WorkbenchObservation>;
     /**
      * Register the declared outline tree provider, even before windows exist.
      * Resolution acknowledges native ownership on its kind; teardown racing

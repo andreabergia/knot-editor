@@ -194,6 +194,16 @@ impl ExtensionPool {
         self.engine.respond(response)
     }
 
+    pub(crate) fn dispatch_application_change(
+        &self,
+        key: ExtensionKey,
+        subscription: super::protocol::WorkbenchSubscriptionId,
+        event: super::protocol::ApplicationEvent,
+    ) -> Result<(), ExtensionPoolError> {
+        self.engine
+            .dispatch_application_change(key, subscription, event)
+    }
+
     pub(crate) fn dispatch_buffer_change(
         &self,
         key: ExtensionKey,

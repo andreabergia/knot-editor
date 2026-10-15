@@ -115,6 +115,10 @@ pub(crate) fn entity(cx: &App) -> Option<Entity<ProductExtensionHost>> {
         .map(|global| global._host.clone())
 }
 
+pub(crate) fn application_changed(cx: &mut App) {
+    super::application_observation::changed(cx);
+}
+
 pub(crate) fn startup_report(cx: &App) -> Option<StartupReportSnapshot> {
     let host = entity(cx)?;
     host.read(cx).startup_report.clone()
@@ -133,6 +137,7 @@ pub(crate) fn install(cx: &mut App) -> Entity<ProductExtensionHost> {
     cx.set_global(ApplicationExtensionHost {
         _host: host.clone(),
     });
+    application_changed(cx);
     host
 }
 
@@ -311,6 +316,9 @@ pub(crate) struct ProductExtensionHost {
     pool: Arc<ExtensionPool>,
     lifecycles: HashSet<ExtensionKey>,
     buffers: ExtensionBufferBridge,
+    application_observation: super::application_observation::ApplicationObservation,
+    _application_window_closed: Subscription,
+    _application_signal: Subscription,
     buffer_observers: HashMap<crate::host::protocol::BufferHandle, Subscription>,
     commands: ExtensionCommandBridge,
     completion_editors: Vec<gpui::WeakEntity<super::editor::EditorView>>,
@@ -341,6 +349,7 @@ impl ProductExtensionHost {
         mut inbox: ExtensionEventInbox,
         cx: &mut Context<Self>,
     ) -> Self {
+        let application_signal = super::application_observation::signal(cx);
         let product_commands = cx.global::<ApplicationProductCommands>().0.clone();
         let catalog = product_commands.read(cx).catalog();
         catalog.borrow_mut().declare_view_kind("outline");
@@ -378,6 +387,11 @@ impl ProductExtensionHost {
             pool,
             lifecycles: HashSet::new(),
             buffers: ExtensionBufferBridge::new(),
+            application_observation: Default::default(),
+            _application_window_closed: cx.on_window_closed(application_changed),
+            _application_signal: cx.observe(&application_signal, |host, _, cx| {
+                host.refresh_application_observation(cx)
+            }),
             buffer_observers: HashMap::new(),
             commands,
             completion_editors: Vec::new(),
@@ -727,6 +741,11 @@ impl ProductExtensionHost {
     }
 
     #[cfg(test)]
+    pub(crate) fn application_observer_count(&self) -> usize {
+        self.application_observation.subscriptions().count()
+    }
+
+    #[cfg(test)]
     pub(crate) fn lifecycle_count(&self) -> usize {
         self.lifecycles.len()
     }
@@ -823,7 +842,7 @@ impl ProductExtensionHost {
                 }
             }
             RequestRoute::View => self.dispatch_view_request(request, cx),
-            RequestRoute::Application => Some(self.dispatch_application_query(request, cx)),
+            RequestRoute::Application => Some(self.dispatch_application_request(request, cx)),
             RequestRoute::Semantic => {
                 let removed = match &request.operation {
                     HostOperation::UnregisterCompletionProvider { registration } => {
@@ -1461,20 +1480,26 @@ impl ProductExtensionHost {
     ) -> crate::host::protocol::BufferHandle {
         let buffer = self.buffers.open_buffer(model);
         self.buffer_observers.entry(buffer).or_insert_with(|| {
+            let _ = self.buffers.drain_model_changes(model, cx);
             cx.observe(model, move |this, model, cx| {
-                for dispatch in this.buffers.drain_model_changes(&model, cx) {
-                    let _ = this.pool.dispatch_buffer_change(
-                        ExtensionKey::new(dispatch.extension, dispatch.lifecycle),
-                        dispatch.subscription,
-                        dispatch.change,
-                    );
-                }
+                this.route_model_changes(&model, cx);
                 if !model.read(cx).is_open() {
                     this.buffer_observers.remove(&buffer);
                 }
+                application_changed(cx);
             })
         });
         buffer
+    }
+
+    fn route_model_changes(&mut self, model: &Entity<super::model::BufferModel>, cx: &mut App) {
+        for dispatch in self.buffers.drain_model_changes(model, cx) {
+            let _ = self.pool.dispatch_buffer_change(
+                ExtensionKey::new(dispatch.extension, dispatch.lifecycle),
+                dispatch.subscription,
+                dispatch.change,
+            );
+        }
     }
 
     fn application_snapshot(
@@ -1498,6 +1523,9 @@ impl ProductExtensionHost {
             .iter()
             .map(|(id, model)| (*id, self.track_buffer(model, cx)))
             .collect::<HashMap<_, _>>();
+        for (_, model) in &models {
+            self.route_model_changes(model, cx);
+        }
         let document_infos = documents
             .read(cx)
             .documents()
@@ -1544,7 +1572,19 @@ impl ProductExtensionHost {
         snapshot
     }
 
-    fn dispatch_application_query(
+    fn refresh_application_observation(&mut self, cx: &mut Context<Self>) {
+        let snapshot = self.application_snapshot(cx);
+        let events = self.application_observation.commit(snapshot);
+        for event in events {
+            for (subscription, key) in self.application_observation.subscriptions() {
+                let _ = self
+                    .pool
+                    .dispatch_application_change(key, subscription, event.clone());
+            }
+        }
+    }
+
+    fn dispatch_application_request(
         &mut self,
         request: HostRequest,
         cx: &mut Context<Self>,
@@ -1559,6 +1599,21 @@ impl ProductExtensionHost {
             || self.commands.is_cancelled(request.invocation)
         {
             Err(HostRequestError::Cancelled)
+        } else if matches!(request.operation, HostOperation::ObserveWorkbench) {
+            self.refresh_application_observation(cx);
+            Ok(HostResponseValue::WorkbenchObserved(
+                self.application_observation
+                    .subscribe(ExtensionKey::new(request.extension, request.lifecycle)),
+            ))
+        } else if let HostOperation::UnobserveWorkbench { subscription } = request.operation {
+            if self.application_observation.unsubscribe(
+                subscription,
+                ExtensionKey::new(request.extension, request.lifecycle),
+            ) {
+                Ok(HostResponseValue::WorkbenchUnobserved)
+            } else {
+                Err(HostRequestError::OwnershipDisposed)
+            }
         } else if let HostOperation::ApplicationQuery(query) = request.operation {
             let snapshot = self.application_snapshot(cx);
             let value = match query {
@@ -1607,6 +1662,7 @@ impl ProductExtensionHost {
         if !self.lifecycles.remove(&key) {
             return;
         }
+        self.application_observation.remove_lifecycle(key);
         let personal = self.personal_config_key == Some(key);
         if cx.has_global::<super::keymaps::ApplicationKeymaps>() {
             let owner = if personal {
@@ -1654,7 +1710,9 @@ enum RequestRoute {
 
 fn request_route(operation: &HostOperation) -> RequestRoute {
     match operation {
-        HostOperation::ApplicationQuery(_) => RequestRoute::Application,
+        HostOperation::ApplicationQuery(_)
+        | HostOperation::ObserveWorkbench
+        | HostOperation::UnobserveWorkbench { .. } => RequestRoute::Application,
         HostOperation::MutateKeybindings { .. } => RequestRoute::Keymap,
         HostOperation::Snapshot { .. }
         | HostOperation::ApplyEdits { .. }

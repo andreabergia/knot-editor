@@ -689,6 +689,7 @@ impl BufferModel {
     }
 
     pub(crate) fn close(&mut self) {
+        self.snapshot_cache.get_mut().take();
         self.anchored_ranges = AnchoredRangeStore::new();
         self.contributions = ContributionRegistry::new();
         self.pending_changes.clear();
@@ -1788,7 +1789,12 @@ mod tests {
     #[test]
     fn checked_reads_reject_closed_buffers() {
         let mut model = BufferModel::from_text("abc");
+        model.snapshot(None).unwrap();
         model.close();
+        assert!(matches!(
+            model.snapshot(None),
+            Err(BufferAccessError::Closed)
+        ));
 
         assert_eq!(
             model.read_checked(ByteRange {

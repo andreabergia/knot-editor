@@ -176,7 +176,7 @@ cancellation plumbing; do not add a general cancellation framework.
 
 ## Parent checkpoint 2 — Observable application state ⬜
 
-1. **Model and targets.** 🚧 Add document identity and ordered root records; keep
+1. **Model and targets.** ✅ Add document identity and ordered root records; keep
    window-owned workspace state and one-root enforcement. Extend workspace-tree
    captures for the collection/generation model. Derive application queries from
    existing documents and live product shells/workbenches. Add only the live-window
@@ -188,7 +188,7 @@ cancellation plumbing; do not add a general cancellation framework.
    document removal enough to invalidate buffer handles, subscriptions and
    contributions even when a test or stale view still retains the model entity.
    Preserve documents shared by other windows and ordinary empty-window replacement.
-3. **Public observation.** Extend protocol, foreground routing, pool/engine dispatch,
+3. **Public observation.** ✅ Extend protocol, foreground routing, pool/engine dispatch,
    bootstrap, facade and declarations. Add snapshot queries, atomic observation,
    ordered delivery, and disposal using existing runtime ownership. Share the
    current document model commit source with buffer observation.
@@ -293,9 +293,8 @@ undo, filesystem watching, new resource providers, and terminal restoration.
   stable retained IDs and monotonic replacement generations. Extra roots reject
   atomically; clearing/reinstalling cannot revive directory captures. Native folder
   Open and workspace-tree captures use the model.
-- 🚧 Checkpoint 2 remains unfinished: committed application
-  events, public observation, observer fixture,
-  documentation and full checkpoint validation remain. No review approval recorded.
+- 🚧 Checkpoint 2 remains unfinished: complete acceptance coverage and review the
+  observer fixture/contracts before the parent gate. No approval recorded.
 
 Model foundation validation (2026-10-15): `cargo test --all-targets` passed
 (562 library tests and 5 example tests); `cargo clippy --all-targets -- -D warnings`,
@@ -335,3 +334,31 @@ Query/target validation (2026-10-15): `cargo test --all-targets` passed
 (566 library tests and 5 example tests); `cargo clippy --all-targets -- -D warnings`,
 `scripts/check-extension-api.sh`, and `git diff --check` passed. Checkpoint 2 still
 requires commit observation, FIFO delivery/disposal, and the checked observer fixture.
+
+- ✅ Foreground observation: collection commits, native shell transitions, model
+  commits, focus/activation and window closure feed metadata comparison. Root
+  replacement/clear commits tree state together and preserves generation safety.
+  Buffer payloads and metadata observation share one commit drain; author buffer
+  lookup is unnecessary. Cached snapshots also reject closed models.
+- ✅ Public `workbench.observe`: atomic snapshot/watermark, typed ordered events,
+  existing FIFO listener roots, asynchronous host work, self-disposal, failure
+  isolation, queued callback suppression, unload and activation rollback cleanup.
+- ✅ Checked installed `@example/application-state` observer: zero-window activation,
+  later window attachment, edits/undo, shared documents, split/transfer, active
+  target, roots/clear/reinstall, closure and disposal run through the product host.
+  Author guide, declarations, architecture references and decisions are updated.
+- 🚧 Continue the checkpoint acceptance audit, especially observation assertions
+  around native/CLI/platform Open, failed/stale opens, Save As and save races,
+  reorder and exact live-target invalidation. Do not begin checkpoint 3 or mark
+  the parent checkpoint complete before its explicit review approval.
+
+Observation implementation validation (2026-10-15): `cargo test --all-targets`
+passed (572 library tests and 5 example tests); `cargo clippy --all-targets -- -D warnings`,
+`scripts/check-extension-api.sh`, and `git diff --check` passed. New coverage includes
+atomic baseline/watermark comparison, event admission before observe response,
+activation-root ordering, awaited listener queries/mutations/self-disposal,
+queued-delivery suppression, listener failure isolation, native root retain/clear/
+reinstall and rejected replacement, cross-window transfer, active focus, window/final
+closure, unload ownership, and failed installed activation cleanup. The observer
+fixture ran as an installed package through the real product host. The full
+checkpoint acceptance audit and explicit parent review approval remain outstanding.

@@ -256,6 +256,9 @@ pub(crate) struct ProductShell {
     command_palette: Option<Entity<CommandPalette<ProductCommandTarget>>>,
     command_palette_subscription: Option<Subscription>,
     workspace: WorkspaceState,
+    application_observer: Option<Subscription>,
+    application_activation: Option<Subscription>,
+    application_focus: Vec<(FocusHandle, Subscription, Subscription)>,
     workspace_tree: Option<Entity<WorkspaceTree>>,
     workspace_tree_subscription: Option<Subscription>,
     extension_tree: Option<Entity<super::tree_view::TreeView>>,
@@ -278,6 +281,9 @@ impl ProductShell {
             command_palette: None,
             command_palette_subscription: None,
             workspace: WorkspaceState::default(),
+            application_observer: None,
+            application_activation: None,
+            application_focus: Vec::new(),
             workspace_tree: None,
             workspace_tree_subscription: None,
             extension_tree: None,
@@ -292,7 +298,16 @@ impl ProductShell {
         }
     }
 
-    fn observe_extension_host(&mut self, window: gpui::AnyWindowHandle, cx: &mut Context<Self>) {
+    fn observe_extension_host(&mut self, native_window: &mut Window, cx: &mut Context<Self>) {
+        let window = native_window.window_handle();
+        self.application_observer = Some(cx.observe(&cx.entity(), |_, _, cx| {
+            super::extension_host::application_changed(cx)
+        }));
+        self.application_activation =
+            Some(cx.observe_window_activation(native_window, |_, _, cx| {
+                super::extension_host::application_changed(cx)
+            }));
+        super::extension_host::application_changed(cx);
         if let Some(host) = super::extension_host::entity(cx) {
             self.extension_report_subscription = Some(cx.observe(&host, |_, _, cx| cx.notify()));
             let tree = cx.new(|cx| super::tree_view::TreeView::new("outline", cx));
@@ -313,6 +328,41 @@ impl ProductShell {
             }));
             super::extension_host::attach_tree_view(tree.clone(), cx);
             self.extension_tree = Some(tree);
+        }
+    }
+
+    fn observe_application_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let handles = self
+            .workbench
+            .read(cx)
+            .panes()
+            .iter()
+            .flat_map(|pane| pane.tabs())
+            .filter_map(|tab| {
+                tab.editor()
+                    .map(|view| view.focus_handle(cx))
+                    .or_else(|| tab.terminal_view().map(|view| view.focus_handle(cx)))
+            })
+            .collect::<Vec<_>>();
+        self.application_focus
+            .retain(|(handle, _, _)| handles.contains(handle));
+        for handle in handles {
+            if self
+                .application_focus
+                .iter()
+                .any(|(current, _, _)| current == &handle)
+            {
+                continue;
+            }
+            self.application_focus.push((
+                handle.clone(),
+                cx.on_focus(&handle, window, |_, _, cx| {
+                    super::extension_host::application_changed(cx)
+                }),
+                cx.on_blur(&handle, window, |_, _, cx| {
+                    super::extension_host::application_changed(cx)
+                }),
+            ));
         }
     }
 
@@ -1103,14 +1153,14 @@ impl ProductShell {
             if this
                 .update(cx, |this, cx| match result {
                     Ok((uri, version)) if this.target_is_live(&target, cx) => {
-                        let committed = Self::documents(cx).update(cx, |documents, _| {
+                        let committed = Self::documents(cx).update(cx, |documents, cx| {
                             documents.finish_persistence(
                                 target_document(&target).expect("save target is a document"),
                                 &model,
                                 &capture,
-                                title,
-                                uri.clone(),
+                                (title, uri.clone()),
                                 (version, revision),
+                                cx,
                             )
                         });
                         let outcome = if committed {
@@ -1282,15 +1332,15 @@ impl ProductShell {
                             match replaced {
                                 Ok(_) => {
                                     let loaded_revision = model.read(cx).revision();
-                                    if Self::documents(cx).update(cx, |documents, _| {
+                                    if Self::documents(cx).update(cx, |documents, cx| {
                                         documents.finish_persistence(
                                             target_document(&target)
                                                 .expect("save target is a document"),
                                             &model,
                                             &capture,
-                                            title,
-                                            uri.clone(),
+                                            (title, uri.clone()),
                                             (version, loaded_revision),
+                                            cx,
                                         )
                                     }) {
                                         this.status = format!("reloaded {uri}").into();
@@ -1592,8 +1642,8 @@ impl ProductShell {
                 let documents = Self::documents(cx);
                 let model = cx.new(|_| BufferModel::from_text(""));
                 let title = resource_title(&uri);
-                let document = documents.update(cx, |documents, _| {
-                    documents.create_destination(title, model, uri.clone())
+                let document = documents.update(cx, |documents, cx| {
+                    documents.create_destination(title, model, uri.clone(), cx)
                 });
                 self.present_open_document(document, target, replace_target, cx);
                 self.status = format!("new file {uri}").into();
@@ -1607,13 +1657,14 @@ impl ProductShell {
                         document
                     } else {
                         let model = cx.new(|_| BufferModel::from_text(text));
-                        documents.update(cx, |documents, _| {
+                        documents.update(cx, |documents, cx| {
                             documents.create_persisted(
                                 resource_title(&uri),
                                 model,
                                 uri.clone(),
                                 0,
                                 version,
+                                cx,
                             )
                         })
                     };
@@ -1677,7 +1728,23 @@ impl ProductShell {
     }
 
     fn install_workspace(&mut self, root: super::resource::ResourceUri, cx: &mut Context<Self>) {
-        let workspace = self.workspace.replace_root(root);
+        self.replace_workspace_roots(vec![root], cx)
+            .expect("one workspace root is supported");
+    }
+
+    fn replace_workspace_roots(
+        &mut self,
+        roots: Vec<super::resource::ResourceUri>,
+        cx: &mut Context<Self>,
+    ) -> Result<(), super::workspace::TooManyWorkspaceRoots> {
+        let workspace = self.workspace.replace_roots(roots)?;
+        if workspace.roots().is_empty() {
+            self.workspace_tree_subscription = None;
+            self.workspace_tree = None;
+            self.status = "workspace cleared".into();
+            cx.notify();
+            return Ok(());
+        }
         if let Some(tree) = &self.workspace_tree {
             tree.update(cx, |tree, cx| tree.set_workspace(workspace, cx));
         } else {
@@ -1694,6 +1761,7 @@ impl ProductShell {
         }
         self.status = "workspace opened".into();
         cx.notify();
+        Ok(())
     }
 
     fn handle_workspace_tree_event(&mut self, event: WorkspaceTreeEvent, cx: &mut Context<Self>) {
@@ -2772,6 +2840,7 @@ impl ProductShell {
 
 impl Render for ProductShell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.observe_application_focus(window, cx);
         tab_drag::coordinator(cx);
         self.tab_drag.borrow_mut().begin_frame();
         let layout = self.workbench.read(cx).layout().cloned();
@@ -3127,9 +3196,7 @@ pub(crate) fn open_product_window(request: Option<OpenRequest>, cx: &mut App) {
             let workbench = cx.new(|cx| Workbench::new_for_document(document, model, cx));
             cx.global::<ApplicationWorkbenches>().register(&workbench);
             let shell = cx.new(|_| ProductShell::new(workbench));
-            shell.update(cx, |shell, cx| {
-                shell.observe_extension_host(window.window_handle(), cx)
-            });
+            shell.update(cx, |shell, cx| shell.observe_extension_host(window, cx));
             install_protected_window_close(&shell, window, cx);
             shell.read(cx).focus_active_editor(window, cx);
             if let Some(request) = request {
@@ -3201,9 +3268,7 @@ fn open_tab_transfer_window_with_bounds(
         |window, cx| {
             let workbench = cx.new(|_| Workbench::empty());
             let shell = cx.new(|_| ProductShell::new(workbench));
-            shell.update(cx, |shell, cx| {
-                shell.observe_extension_host(window.window_handle(), cx)
-            });
+            shell.update(cx, |shell, cx| shell.observe_extension_host(window, cx));
             install_protected_window_close(&shell, window, cx);
             shell
         },
@@ -3537,7 +3602,9 @@ mod tests {
         });
         let window = *cx.windows().last().unwrap();
         cx.update_window(window, |_, native_window, cx| {
-            shell.update(cx, |shell, cx| shell.observe_extension_host(window, cx));
+            shell.update(cx, |shell, cx| {
+                shell.observe_extension_host(native_window, cx)
+            });
             install_protected_window_close(&shell, native_window, cx);
         })
         .unwrap();
@@ -5159,7 +5226,7 @@ mod tests {
         let (shell, window) = product_window(document, model.clone(), cx);
         host.update(cx, |host, cx| host.start_installed_extensions(root, cx));
         let report = wait_for_extension_report(&host, cx);
-        assert_eq!(report.report.entries.len(), 2);
+        assert_eq!(report.report.entries.len(), 3);
         assert!(
             report
                 .report
@@ -5740,6 +5807,345 @@ await commands.register("api.nontext", async (context) => {
         .unwrap();
         let execution = dispatch_product_command(&shell, window, "api.nontext", cx);
         assert_eq!(wait_for_command(execution, cx), CommandOutcome::Completed);
+    }
+
+    #[gpui::test]
+    fn installed_application_observer_tracks_zero_window_activation_and_native_commits(
+        cx: &mut TestAppContext,
+    ) {
+        fn report(
+            shell: &Entity<ProductShell>,
+            window: gpui::AnyWindowHandle,
+            cx: &mut TestAppContext,
+        ) -> serde_json::Value {
+            let execution =
+                dispatch_product_command(shell, window, "example.application-state", cx);
+            assert_eq!(wait_for_command(execution, cx), CommandOutcome::Completed);
+            cx.read(|cx| {
+                serde_json::from_str(&cx.read_from_clipboard().unwrap().text().unwrap()).unwrap()
+            })
+        }
+        let root = tempfile::tempdir().unwrap();
+        install_extension(
+            root.path(),
+            "@example/application-state",
+            &[],
+            &[(
+                "main.js",
+                include_str!("../../examples/extensions/@example/application-state/dist/main.js"),
+            )],
+        );
+        install_extension(
+            root.path(),
+            "@example/broken-observer",
+            &[],
+            &[(
+                "main.js",
+                "import {workbench} from 'knot'; await workbench.observe(() => { throw new Error('failed activation listener ran'); }); throw new Error('activation failed');",
+            )],
+        );
+        let documents = install_globals(cx);
+        let host = cx.update(super::super::extension_host::install);
+        host.update(cx, |host, cx| {
+            host.start_installed_extensions(root.path().to_path_buf(), cx)
+        });
+        let startup = wait_for_extension_report(&host, cx);
+        assert_eq!(
+            startup.report.entries[0].result,
+            super::super::extension_load::LoadResult::Loaded
+        );
+        assert!(matches!(
+            startup.report.entries[1].result,
+            super::super::extension_load::LoadResult::Failed(_)
+        ));
+        cx.read(|cx| assert_eq!(host.read(cx).application_observer_count(), 1));
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        let id = cx.read(|cx| {
+            documents
+                .read(cx)
+                .get(document)
+                .unwrap()
+                .identity()
+                .to_string()
+        });
+        let (first, first_window) = product_window(document, model.clone(), cx);
+        cx.update_window(first_window, |_, window, cx| {
+            window.activate_window();
+            first.read(cx).focus_active_editor(window, cx);
+        })
+        .unwrap();
+        let initial = report(&first, first_window, cx);
+        assert_eq!(initial["initial"]["documents"], 0);
+        assert_eq!(initial["initial"]["windows"], 0);
+        assert_eq!(initial["documents"].as_array().unwrap().len(), 1);
+        assert!(
+            initial["events"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|event| event["type"] == "documentOpened" && event["document"] == id)
+        );
+        model.update(cx, |model, cx| {
+            model.replace(0..0, "edit").unwrap();
+            cx.notify();
+        });
+        let edited = report(&first, first_window, cx);
+        assert_eq!(edited["documents"][0]["dirty"], true);
+        assert_eq!(edited["documents"][0]["revision"], 1);
+        model.update(cx, |model, cx| {
+            model.undo().unwrap();
+            cx.notify();
+        });
+        let split =
+            dispatch_product_command(&first, first_window, super::SPLIT_HORIZONTAL_COMMAND, cx);
+        assert_eq!(wait_for_command(split, cx), CommandOutcome::Completed);
+        let (second, second_window) = product_window(document, model.clone(), cx);
+        first.update(cx, |shell, cx| {
+            shell.install_workspace(ResourceUri::parse("mem://observer/").unwrap(), cx)
+        });
+        let source = cx.read(|cx| {
+            let shell = first.read(cx);
+            let pane = shell.workbench.read(cx).focused_pane().unwrap();
+            shell
+                .capture_tab_relocation(pane.id(), pane.active_tab_id(), cx)
+                .unwrap()
+        });
+        let destination = cx.read(|cx| {
+            let workbench = &second.read(cx).workbench;
+            let pane = workbench.read(cx).focused_pane().unwrap();
+            super::relocate::TabRelocationDestination {
+                window: second_window,
+                workbench: workbench.downgrade(),
+                tab: crate::app::workbench::TabMoveDestination::At {
+                    anchor: workbench
+                        .read(cx)
+                        .capture_tab_move(pane.id(), pane.active_tab_id())
+                        .unwrap(),
+                    placement: crate::app::workbench::TabMovePlacement::End,
+                },
+            }
+        });
+        assert_eq!(
+            cx.update_window(first_window, |_, window, cx| first.update(
+                cx,
+                |shell, cx| shell.relocate_tab_to(&source, &destination, window, cx)
+            ))
+            .unwrap(),
+            CommandOutcome::Completed
+        );
+        let updated = report(&first, first_window, cx);
+        let mut tabs = updated["windows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|window| {
+                window["panes"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|pane| pane["tabs"].as_array().unwrap().len())
+                    .sum::<usize>()
+            })
+            .collect::<Vec<_>>();
+        tabs.sort();
+        assert_eq!(tabs, [1, 2]);
+        assert_eq!(updated["documents"][0]["dirty"], false);
+        assert_eq!(updated["documents"][0]["revision"], 2);
+        assert_eq!(updated["windows"].as_array().unwrap().len(), 2);
+        let events = updated["events"].as_array().unwrap();
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event["type"] == "documentOpened" && event["document"] == id)
+                .count(),
+            1
+        );
+        for kind in [
+            "documentChanged",
+            "windowOpened",
+            "presentationsChanged",
+            "workspaceChanged",
+            "activeTargetChanged",
+        ] {
+            assert!(
+                events.iter().any(|event| event["type"] == kind),
+                "missing {kind}: {events:?}"
+            );
+        }
+        let mut previous = updated["initial"]["watermark"].as_u64().unwrap();
+        for event in events {
+            let sequence = event["sequence"].as_u64().unwrap();
+            assert!(sequence > previous);
+            previous = sequence;
+        }
+        let installed_root = updated["windows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find_map(|window| window["roots"].as_array().unwrap().first())
+            .unwrap()["id"]
+            .clone();
+        first.update(cx, |shell, cx| {
+            shell.install_workspace(ResourceUri::parse("mem://observer/").unwrap(), cx)
+        });
+        let retained = report(&first, first_window, cx);
+        assert!(
+            retained["windows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|window| window["generation"] == 2
+                    && window["roots"][0]["id"] == installed_root)
+        );
+        first.update(cx, |shell, cx| {
+            shell.replace_workspace_roots(Vec::new(), cx).unwrap()
+        });
+        let cleared = report(&first, first_window, cx);
+        assert!(
+            cleared["windows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|window| window["roots"].as_array().unwrap().is_empty())
+        );
+        let before_rejection = cleared["events"].as_array().unwrap().len();
+        first.update(cx, |shell, cx| {
+            assert!(
+                shell
+                    .replace_workspace_roots(
+                        vec![
+                            ResourceUri::parse("mem://one/").unwrap(),
+                            ResourceUri::parse("mem://two/").unwrap()
+                        ],
+                        cx
+                    )
+                    .is_err()
+            )
+        });
+        assert_eq!(
+            report(&first, first_window, cx)["events"]
+                .as_array()
+                .unwrap()
+                .len(),
+            before_rejection
+        );
+        first.update(cx, |shell, cx| {
+            shell.install_workspace(ResourceUri::parse("mem://observer/").unwrap(), cx)
+        });
+        let reinstalled = report(&first, first_window, cx);
+        assert!(reinstalled["windows"].as_array().unwrap().iter().any(
+            |window| window["generation"] == 4
+                && window["roots"][0]["id"] != installed_root
+                && !window["roots"].as_array().unwrap().is_empty()
+        ));
+        for (shell, window) in [(&second, second_window), (&first, first_window)] {
+            let close = dispatch_product_command(shell, window, super::CLOSE_WINDOW_COMMAND, cx);
+            assert_eq!(wait_for_command(close, cx), CommandOutcome::Completed);
+        }
+        let replacement = cx.update(|cx| create_untitled_document(&documents, cx));
+        let replacement_model =
+            cx.read(|cx| documents.read(cx).get(replacement).unwrap().model().clone());
+        let (replacement_shell, replacement_window) =
+            product_window(replacement, replacement_model.clone(), cx);
+        let closed = report(&replacement_shell, replacement_window, cx);
+        assert!(!cx.read(|cx| model.read(cx).is_open()));
+        let events = closed["events"].as_array().unwrap();
+        assert!(
+            events
+                .iter()
+                .any(|event| event["type"] == "documentClosed" && event["document"] == id)
+        );
+        assert!(events.iter().any(|event| event["type"] == "windowClosed"));
+        let stopped = dispatch_product_command(
+            &replacement_shell,
+            replacement_window,
+            "example.stop-application-observer",
+            cx,
+        );
+        assert_eq!(wait_for_command(stopped, cx), CommandOutcome::Completed);
+        cx.read(|cx| assert_eq!(host.read(cx).application_observer_count(), 0));
+        let stopped_count = report(&replacement_shell, replacement_window, cx)["events"]
+            .as_array()
+            .unwrap()
+            .len();
+        replacement_model.update(cx, |model, cx| {
+            model.replace(0..0, "after disposal").unwrap();
+            cx.notify();
+        });
+        assert_eq!(
+            report(&replacement_shell, replacement_window, cx)["events"]
+                .as_array()
+                .unwrap()
+                .len(),
+            stopped_count
+        );
+    }
+
+    #[gpui::test]
+    fn application_listener_can_query_edit_fail_and_dispose_without_blocking_queued_roots(
+        cx: &mut TestAppContext,
+    ) {
+        use crate::host::lifecycle::ExtensionKey;
+        const SOURCE: &str = r#"
+import { commands, documents, workbench } from "knot";
+let count = 0, last = 0;
+const failing = await workbench.observe(() => { throw new Error("isolated observer failure"); });
+const observation = await workbench.observe(async (event) => {
+  if (event.sequence <= observation.watermark || event.sequence <= last) throw new Error("observation order");
+  last = event.sequence;
+  if (event.type !== "documentChanged") return;
+  count++;
+  const current = await documents.get(event.document.id);
+  const snapshot = await current.buffer.snapshot();
+  await current.buffer.applyEdits([{ range: { startByteOffset: 0, endByteOffset: 0 }, text: "listener " }], { ifRevision: snapshot.revision });
+  const disposal = observation.dispose();
+  if (disposal !== observation.dispose()) throw new Error("disposal promise changed");
+  await disposal;
+});
+await commands.register("observation.verify", async () => {
+  if (count !== 1) throw new Error(`listener count ${count}`);
+  if (!(await (await documents.list())[0].buffer.snapshot()).text.startsWith("listener ")) throw new Error("listener mutation missing");
+  await failing.dispose();
+});
+await commands.register("observation.live", () => {});
+await commands.register("observation.install-for-unload", async () => { await workbench.observe(() => {}); });
+"#;
+        let documents = install_globals(cx);
+        let host = cx.update(super::super::extension_host::install);
+        let key = ExtensionKey::new(ExtensionId::new(708), ExtensionLifecycleId::new(1));
+        host.update(cx, |host, cx| {
+            let execution = host.load_test_source(key, SOURCE).unwrap();
+            cx.spawn(async move |_, _| {
+                execution.await.unwrap();
+            })
+            .detach();
+        });
+        wait_for_api_condition(cx, |cx| {
+            cx.global::<ApplicationProductCommands>()
+                .0
+                .read(cx)
+                .catalog()
+                .borrow()
+                .resolve("observation.install-for-unload")
+                .is_ok()
+        });
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        let (shell, window) = product_window(document, model.clone(), cx);
+        model.update(cx, |model, cx| {
+            model.replace(0..0, "edit").unwrap();
+            cx.notify();
+        });
+        let verify = dispatch_product_command(&shell, window, "observation.verify", cx);
+        assert_eq!(wait_for_command(verify, cx), CommandOutcome::Completed);
+        cx.read(|cx| assert_eq!(host.read(cx).application_observer_count(), 0));
+        let install =
+            dispatch_product_command(&shell, window, "observation.install-for-unload", cx);
+        assert_eq!(wait_for_command(install, cx), CommandOutcome::Completed);
+        cx.read(|cx| assert_eq!(host.read(cx).application_observer_count(), 1));
+        host.update(cx, |host, cx| host.unload(key, cx).unwrap());
+        cx.read(|cx| assert_eq!(host.read(cx).application_observer_count(), 0));
     }
 
     #[gpui::test]
@@ -8446,8 +8852,15 @@ await commands.registerForView("outline", "copy", async () => {
         let uri = ResourceUri::parse("mem://product/notes.txt").unwrap();
         let opened = provider.read(uri.clone()).await.unwrap();
         let model = cx.new(|_| BufferModel::from_text("loaded text"));
-        let document = documents.update(cx, |documents, _| {
-            documents.create_persisted("notes.txt", model.clone(), uri.clone(), 0, opened.version)
+        let document = documents.update(cx, |documents, cx| {
+            documents.create_persisted(
+                "notes.txt",
+                model.clone(),
+                uri.clone(),
+                0,
+                opened.version,
+                cx,
+            )
         });
         model.update(cx, |model, _| model.replace(0..0, "changed ").unwrap());
         let (shell, window) = product_window(document, model, cx);
@@ -8488,8 +8901,15 @@ await commands.registerForView("outline", "copy", async () => {
         cx.set_global(ApplicationFileSystems(Arc::new(filesystems)));
 
         let model = cx.new(|_| BufferModel::from_text("loaded text"));
-        let document = documents.update(cx, |documents, _| {
-            documents.create_persisted("notes.txt", model.clone(), uri.clone(), 0, opened.version)
+        let document = documents.update(cx, |documents, cx| {
+            documents.create_persisted(
+                "notes.txt",
+                model.clone(),
+                uri.clone(),
+                0,
+                opened.version,
+                cx,
+            )
         });
         model.update(cx, |model, _| model.replace(0..0, "captured ").unwrap());
         let (shell, window) = product_window(document, model.clone(), cx);
@@ -8641,13 +9061,14 @@ await commands.registerForView("outline", "copy", async () => {
         let uri = ResourceUri::parse("mem://product/notes.txt").unwrap();
         let opened = provider.read(uri.clone()).await.unwrap();
         let first_model = cx.new(|_| BufferModel::from_text("loaded text"));
-        let first = documents.update(cx, |documents, _| {
+        let first = documents.update(cx, |documents, cx| {
             documents.create_persisted(
                 "notes.txt",
                 first_model.clone(),
                 uri.clone(),
                 0,
                 opened.version,
+                cx,
             )
         });
         first_model.update(cx, |model, _| model.replace(0..0, "saved ").unwrap());
@@ -8990,8 +9411,8 @@ await commands.registerForView("outline", "copy", async () => {
         cx.set_global(ApplicationFileSystems(filesystems));
         let uri = ResourceUri::parse("mem://product/created.txt").unwrap();
         let model = cx.new(|_| BufferModel::from_text("created text"));
-        let document = documents.update(cx, |documents, _| {
-            documents.create_destination("created.txt", model.clone(), uri.clone())
+        let document = documents.update(cx, |documents, cx| {
+            documents.create_destination("created.txt", model.clone(), uri.clone(), cx)
         });
         let (shell, window_handle) = product_window(document, model, cx);
         let target = cx
@@ -9040,8 +9461,15 @@ await commands.registerForView("outline", "copy", async () => {
         let uri = ResourceUri::parse("mem://product/notes.txt").unwrap();
         let opened = provider.read(uri.clone()).await.unwrap();
         let model = cx.new(|_| BufferModel::from_text("loaded text"));
-        let document = documents.update(cx, |documents, _| {
-            documents.create_persisted("notes.txt", model.clone(), uri.clone(), 0, opened.version)
+        let document = documents.update(cx, |documents, cx| {
+            documents.create_persisted(
+                "notes.txt",
+                model.clone(),
+                uri.clone(),
+                0,
+                opened.version,
+                cx,
+            )
         });
         model.update(cx, |model, _| {
             let len = model.text().len();
@@ -9085,8 +9513,15 @@ await commands.registerForView("outline", "copy", async () => {
         let uri = ResourceUri::parse("mem://product/notes.txt").unwrap();
         let opened = provider.read(uri.clone()).await.unwrap();
         let model = cx.new(|_| BufferModel::from_text("loaded text"));
-        let document = documents.update(cx, |documents, _| {
-            documents.create_persisted("notes.txt", model.clone(), uri.clone(), 0, opened.version)
+        let document = documents.update(cx, |documents, cx| {
+            documents.create_persisted(
+                "notes.txt",
+                model.clone(),
+                uri.clone(),
+                0,
+                opened.version,
+                cx,
+            )
         });
         model.update(cx, |model, _| model.replace(0..0, "changed ").unwrap());
         let (shell, window_handle) = product_window(document, model.clone(), cx);
@@ -9283,8 +9718,15 @@ await commands.registerForView("outline", "copy", async () => {
         let uri = ResourceUri::parse("mem://product/notes.txt").unwrap();
         let opened = provider.read(uri.clone()).await.unwrap();
         let model = cx.new(|_| BufferModel::from_text("loaded text"));
-        let document = documents.update(cx, |documents, _| {
-            documents.create_persisted("notes.txt", model.clone(), uri.clone(), 0, opened.version)
+        let document = documents.update(cx, |documents, cx| {
+            documents.create_persisted(
+                "notes.txt",
+                model.clone(),
+                uri.clone(),
+                0,
+                opened.version,
+                cx,
+            )
         });
         model.update(cx, |model, _| model.replace(0..0, "local ").unwrap());
         provider.seed_file(uri.clone(), b"external text").unwrap();
@@ -9344,8 +9786,15 @@ await commands.registerForView("outline", "copy", async () => {
         cx.set_global(ApplicationFileSystems(Arc::new(filesystems)));
 
         let model = cx.new(|_| BufferModel::from_text("loaded text"));
-        let document = documents.update(cx, |documents, _| {
-            documents.create_persisted("notes.txt", model.clone(), uri.clone(), 0, opened.version)
+        let document = documents.update(cx, |documents, cx| {
+            documents.create_persisted(
+                "notes.txt",
+                model.clone(),
+                uri.clone(),
+                0,
+                opened.version,
+                cx,
+            )
         });
         model.update(cx, |model, _| model.replace(0..0, "local ").unwrap());
         let (shell, window_handle) = product_window(document, model.clone(), cx);
@@ -9385,8 +9834,15 @@ await commands.registerForView("outline", "copy", async () => {
         let uri = ResourceUri::parse("mem://product/notes.txt").unwrap();
         let opened = provider.read(uri.clone()).await.unwrap();
         let model = cx.new(|_| BufferModel::from_text("loaded text"));
-        let document = documents.update(cx, |documents, _| {
-            documents.create_persisted("notes.txt", model.clone(), uri.clone(), 0, opened.version)
+        let document = documents.update(cx, |documents, cx| {
+            documents.create_persisted(
+                "notes.txt",
+                model.clone(),
+                uri.clone(),
+                0,
+                opened.version,
+                cx,
+            )
         });
         model.update(cx, |model, _| model.replace(0..0, "local ").unwrap());
         provider.seed_file(uri.clone(), b"external text").unwrap();
@@ -9446,13 +9902,14 @@ await commands.registerForView("outline", "copy", async () => {
         ))));
         let opened = provider.read(original_uri.clone()).await.unwrap();
         let model = cx.new(|_| BufferModel::from_text("loaded text"));
-        let document = documents.update(cx, |documents, _| {
+        let document = documents.update(cx, |documents, cx| {
             documents.create_persisted(
                 "notes.txt",
                 model.clone(),
                 original_uri.clone(),
                 0,
                 opened.version,
+                cx,
             )
         });
         model.update(cx, |model, _| model.replace(0..0, "local ").unwrap());

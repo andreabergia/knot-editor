@@ -389,3 +389,20 @@ root-set generation survives clear/reinstall so old asynchronous directory work
 cannot become current again. The model accepts at most one root.
 
 Reference: [documents and persistence](architecture/documents-and-persistence.md).
+
+## Application observation
+
+Capture observation registration, initial metadata and a session sequence watermark
+in one foreground operation. Compare native metadata at committed transitions
+rather than copying application ownership into a second catalog or exposing buffer
+edits as application events. A retained baseline exists only to detect changes;
+queries always describe the current native owners.
+
+Deliver notifications as existing unrelated FIFO scheduler roots, preserving the
+observing root's admission order and allowing listeners to await host requests or
+self-disposal. Reuse local inactivity plus native cleanup acknowledgement for
+queued callback suppression and lifecycle teardown. A later query may see newer
+state, so no replay log, public transaction, acknowledgement or recovery protocol
+is needed for ordinary editor observation.
+
+Reference: [extension host](architecture/extension-host.md).

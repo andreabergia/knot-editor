@@ -14,3 +14,11 @@ its `text-utils` dependency. Use the toolbar's **extensions** button or the
 Each installed manifest declares `apiVersion: 1`. See the
 [extension author guide](../../docs/extension-api.md) for the API reference,
 manifest schema, lifetime rules and checked examples.
+
+The `application-state` package observes during activation, before product windows
+exist. After opening documents, splitting or moving tabs, or opening a folder,
+run **example.application-state** to copy its initial counts, current metadata,
+and ordered event summary to the clipboard. Paste it into an untitled document
+for inspection. Terminal tabs appear without document/buffer associations. Run
+**example.stop-application-observer** to await disposal; later reports still query
+current state while their event history stays unchanged.

@@ -23,15 +23,15 @@ use super::{
     lifecycle::{ExtensionKey, Failure},
     module_graph::{ConfigPhase, ModuleGraph},
     protocol::{
-        ApplicationQuery, ApplicationQueryResult, BufferChange, BufferHandle, BufferSubscriptionId,
-        ByteRange, Command, CommandArgumentValue, CommandInvocation, CommandInvocationId,
-        CommandInvokeDispatch, CommandOutcome, CommandRegistrationId, CompletionProviderError,
-        CompletionProviderRegistrationId, CompletionRequest, CompletionResponse,
-        CompletionResultItem, DecorationToken, EditorContribution, ExtensionId, GutterToken,
-        HostOperation, HostRequest, HostRequestError, HostResponse, HostResponseValue,
-        KeybindingMutation, RequestId, SnapshotText, TextEdit, TextSnapshot, TreeChildrenRequest,
-        TreeChildrenResponse, TreeCollapsibleState, TreeIcon, TreeItem, TreeProviderError,
-        TreeProviderRegistrationId,
+        ApplicationChange, ApplicationEvent, ApplicationQuery, ApplicationQueryResult,
+        BufferChange, BufferHandle, BufferSubscriptionId, ByteRange, Command, CommandArgumentValue,
+        CommandInvocation, CommandInvocationId, CommandInvokeDispatch, CommandOutcome,
+        CommandRegistrationId, CompletionProviderError, CompletionProviderRegistrationId,
+        CompletionRequest, CompletionResponse, CompletionResultItem, DecorationToken,
+        EditorContribution, ExtensionId, GutterToken, HostOperation, HostRequest, HostRequestError,
+        HostResponse, HostResponseValue, KeybindingMutation, RequestId, SnapshotText, TextEdit,
+        TextSnapshot, TreeChildrenRequest, TreeChildrenResponse, TreeCollapsibleState, TreeIcon,
+        TreeItem, TreeProviderError, TreeProviderRegistrationId, WorkbenchSubscriptionId,
     },
     scheduler::{
         CompletionOutcome, CompletionReceiver, PoolConfig, RootId, SchedulerError, SchedulerHandle,
@@ -224,6 +224,7 @@ pub(crate) struct ExecutionReport {
 
 #[derive(Clone, Copy, Eq, Hash, PartialEq)]
 enum RuntimeCallback {
+    ApplicationChange,
     BufferChange,
     Command,
     CancelCommand,
@@ -334,6 +335,8 @@ struct PendingRequest {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum HostOperationKind {
+    ObserveWorkbench,
+    UnobserveWorkbench,
     ApplicationQuery,
     KeybindingBatch,
     ActiveBuffer,
@@ -880,16 +883,32 @@ impl RuntimeCapsule {
         self.run_root_turn(root, entry, result, RootEvaluation::Module { source: None })
     }
 
-    fn start_buffer_change_turn(
+    fn start_notification_turn(
         &self,
         root: RootId,
-        subscription: BufferSubscriptionId,
-        change: BufferChange,
+        subscription: u64,
+        notification: ListenerNotification,
         enqueued_at: Instant,
     ) -> TurnOutcome {
-        self.local_state.buffer_change_started(enqueued_at);
-        if subscription.value() > MAX_JS_INTEGER || change.buffer.value() > MAX_JS_INTEGER {
-            eprintln!("[knot] buffer-change identity cannot be represented exactly");
+        let (callback, source, label) = match &notification {
+            ListenerNotification::Buffer(_) => {
+                self.local_state.buffer_change_started(enqueued_at);
+                (
+                    RuntimeCallback::BufferChange,
+                    "knot:buffer-change",
+                    "buffer-change listener",
+                )
+            }
+            ListenerNotification::Application(_) => (
+                RuntimeCallback::ApplicationChange,
+                "knot:application-change",
+                "application-change listener",
+            ),
+        };
+        if subscription > MAX_JS_INTEGER
+            || matches!(&notification, ListenerNotification::Buffer(change) if change.buffer.value() > MAX_JS_INTEGER)
+        {
+            eprintln!("[knot] listener identity cannot be represented exactly");
             return TurnOutcome::Completed;
         }
         if self.status.load(Ordering::Acquire) != ACTIVE {
@@ -908,11 +927,15 @@ impl RuntimeCapsule {
         let scope = &mut v8::ContextScope::new(&mut scope, context);
         v8::tc_scope!(let try_catch, scope);
         let evaluation = (|| {
-            let function = self
-                .local_state
-                .callback(try_catch, RuntimeCallback::BufferChange)?;
-            let subscription = v8::Number::new(try_catch, subscription.value() as f64);
-            let change = buffer_change_to_v8(try_catch, change).ok()?;
+            let function = self.local_state.callback(try_catch, callback)?;
+            let subscription = v8::Number::new(try_catch, subscription as f64);
+            let change = match notification {
+                ListenerNotification::Buffer(change) => buffer_change_to_v8(try_catch, change),
+                ListenerNotification::Application(event) => {
+                    application_event_to_v8(try_catch, &event)
+                }
+            }
+            .ok()?;
             function.call(
                 try_catch,
                 v8::undefined(try_catch).into(),
@@ -920,10 +943,10 @@ impl RuntimeCapsule {
             )
         })();
         let Some(value) = evaluation else {
-            let error = self.execution_error(try_catch, "knot:buffer-change");
+            let error = self.execution_error(try_catch, source);
             *self.local_state.current_root.lock().unwrap() = None;
             if !error.is_fatal() {
-                eprintln!("[knot] buffer-change listener failed: {error}");
+                eprintln!("[knot] {label} failed: {error}");
                 try_catch.reset();
                 self.reject_pending_for_root(try_catch, root);
             }
@@ -940,8 +963,8 @@ impl RuntimeCapsule {
         *self.local_state.active.lock().unwrap() = Some(ActiveExecution {
             root,
             promise: v8::Global::new(try_catch, promise),
-            source: "knot:buffer-change".into(),
-            completion: ActiveCompletion::Detached("buffer-change listener"),
+            source: source.into(),
+            completion: ActiveCompletion::Detached(label),
         });
         try_catch.perform_microtask_checkpoint();
         *self.local_state.current_root.lock().unwrap() = None;
@@ -2125,7 +2148,16 @@ struct EngineTurn {
     work: EngineWork,
 }
 
+enum ListenerNotification {
+    Buffer(BufferChange),
+    Application(ApplicationEvent),
+}
+
 enum EngineWork {
+    ApplicationChange {
+        subscription: WorkbenchSubscriptionId,
+        event: ApplicationEvent,
+    },
     Script {
         source_name: Arc<str>,
         source: Arc<str>,
@@ -2969,6 +3001,26 @@ impl RuntimePool {
         Ok(())
     }
 
+    pub(crate) fn dispatch_application_change(
+        &self,
+        key: ExtensionKey,
+        subscription: WorkbenchSubscriptionId,
+        event: ApplicationEvent,
+    ) -> Result<(), RuntimePoolError> {
+        let capsule = self.capsule(key)?;
+        self.scheduler_handle.enqueue_root(
+            key,
+            EngineTurn {
+                capsule,
+                work: EngineWork::ApplicationChange {
+                    subscription,
+                    event,
+                },
+            },
+        )?;
+        Ok(())
+    }
+
     pub(crate) fn dispatch_buffer_change(
         &self,
         key: ExtensionKey,
@@ -3129,6 +3181,10 @@ fn initialize_extension_context(
     let mut callbacks = HashMap::new();
     for (kind, name) in [
         (RuntimeCallback::BufferChange, "__knotDispatchBufferChange"),
+        (
+            RuntimeCallback::ApplicationChange,
+            "__knotDispatchApplicationChange",
+        ),
         (RuntimeCallback::Command, "__knotInvokeCommand"),
         (RuntimeCallback::CancelCommand, "__knotCancelCommand"),
         (RuntimeCallback::Tree, "__knotRequestTreeChildren"),
@@ -3805,6 +3861,16 @@ fn parse_host_operation<'s, 'i>(
 ) -> Result<(HostOperation, HostOperationKind), BoundaryError> {
     let operation = required_string(scope, arguments.get(1), "operation must be text")?;
     match operation.as_str() {
+        "observeWorkbench" => Ok((
+            HostOperation::ObserveWorkbench,
+            HostOperationKind::ObserveWorkbench,
+        )),
+        "unobserveWorkbench" => Ok((
+            HostOperation::UnobserveWorkbench {
+                subscription: WorkbenchSubscriptionId::new(argument_u64(scope, arguments, 2)?),
+            },
+            HostOperationKind::UnobserveWorkbench,
+        )),
         "listDocuments" => Ok((
             HostOperation::ApplicationQuery(ApplicationQuery::Documents),
             HostOperationKind::ApplicationQuery,
@@ -4541,25 +4607,29 @@ fn exact_number<'s>(
     Ok(v8::Number::new(scope, value as f64).into())
 }
 
+fn application_document_is_exact(info: &super::protocol::DocumentInfo) -> bool {
+    info.revision <= MAX_JS_INTEGER && info.buffer.value() <= MAX_JS_INTEGER
+}
+fn application_window_is_exact(info: &super::protocol::WindowInfo) -> bool {
+    info.workspace.generation <= MAX_JS_INTEGER
+        && info.panes.iter().flat_map(|pane| &pane.tabs).all(|tab| {
+            tab.buffer
+                .is_none_or(|buffer| buffer.value() <= MAX_JS_INTEGER)
+        })
+}
 fn application_query_to_v8<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: &ApplicationQueryResult,
 ) -> Result<v8::Local<'s, v8::Value>, &'static str> {
-    fn document(info: &super::protocol::DocumentInfo) -> bool {
-        info.revision <= MAX_JS_INTEGER && info.buffer.value() <= MAX_JS_INTEGER
-    }
-    fn window(info: &super::protocol::WindowInfo) -> bool {
-        info.workspace.generation <= MAX_JS_INTEGER
-            && info.panes.iter().flat_map(|pane| &pane.tabs).all(|tab| {
-                tab.buffer
-                    .is_none_or(|buffer| buffer.value() <= MAX_JS_INTEGER)
-            })
-    }
     let exact = match value {
-        ApplicationQueryResult::Documents(infos) => infos.iter().all(document),
-        ApplicationQueryResult::Document(info) => info.as_ref().is_none_or(document),
-        ApplicationQueryResult::Windows(infos) => infos.iter().all(window),
-        ApplicationQueryResult::Window(info) => info.as_ref().is_none_or(window),
+        ApplicationQueryResult::Documents(infos) => infos.iter().all(application_document_is_exact),
+        ApplicationQueryResult::Document(info) => {
+            info.as_ref().is_none_or(application_document_is_exact)
+        }
+        ApplicationQueryResult::Windows(infos) => infos.iter().all(application_window_is_exact),
+        ApplicationQueryResult::Window(info) => {
+            info.as_ref().is_none_or(application_window_is_exact)
+        }
         ApplicationQueryResult::Workspace(info) => info
             .as_ref()
             .is_none_or(|info| info.generation <= MAX_JS_INTEGER),
@@ -4572,12 +4642,58 @@ fn application_query_to_v8<'s>(
     v8::json::parse(scope, json).ok_or("UnsupportedOperation")
 }
 
+fn application_snapshot_is_exact(snapshot: &super::protocol::ApplicationSnapshot) -> bool {
+    snapshot.documents.iter().all(application_document_is_exact)
+        && snapshot.windows.iter().all(application_window_is_exact)
+}
+
+fn application_event_to_v8<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event: &ApplicationEvent,
+) -> Result<v8::Local<'s, v8::Value>, &'static str> {
+    let exact = event.sequence <= MAX_JS_INTEGER
+        && match &event.change {
+            ApplicationChange::DocumentOpened { document }
+            | ApplicationChange::DocumentChanged { document } => {
+                application_document_is_exact(document)
+            }
+            ApplicationChange::WindowOpened { window }
+            | ApplicationChange::PresentationsChanged { window } => {
+                application_window_is_exact(window)
+            }
+            ApplicationChange::WorkspaceChanged { workspace } => {
+                workspace.generation <= MAX_JS_INTEGER
+            }
+            _ => true,
+        };
+    if !exact {
+        return Err("native application integer cannot be represented exactly");
+    }
+    let json = serde_json::to_string(event).map_err(|_| "UnsupportedOperation")?;
+    let json = v8::String::new(scope, &json).ok_or("UnsupportedOperation")?;
+    v8::json::parse(scope, json).ok_or("UnsupportedOperation")
+}
+
 fn host_response_to_v8<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     operation: HostOperationKind,
     response: HostResponseValue,
 ) -> Result<v8::Local<'s, v8::Value>, &'static str> {
     match (operation, response) {
+        (HostOperationKind::ObserveWorkbench, HostResponseValue::WorkbenchObserved(value)) => {
+            if value.watermark > MAX_JS_INTEGER
+                || value.subscription.value() > MAX_JS_INTEGER
+                || !application_snapshot_is_exact(&value.snapshot)
+            {
+                return Err("native application integer cannot be represented exactly");
+            }
+            let json = serde_json::to_string(&value).map_err(|_| "UnsupportedOperation")?;
+            let json = v8::String::new(scope, &json).ok_or("UnsupportedOperation")?;
+            v8::json::parse(scope, json).ok_or("UnsupportedOperation")
+        }
+        (HostOperationKind::UnobserveWorkbench, HostResponseValue::WorkbenchUnobserved) => {
+            Ok(v8::undefined(scope).into())
+        }
         (HostOperationKind::ApplicationQuery, HostResponseValue::ApplicationQuery(value)) => {
             application_query_to_v8(scope, &value)
         }
@@ -4808,7 +4924,21 @@ fn execute_engine_turn(turn: Turn<EngineTurn>, finalizer: &LifecycleFinalizer) -
             subscription,
             change,
             enqueued_at,
-        } => capsule.start_buffer_change_turn(root, subscription, change, enqueued_at),
+        } => capsule.start_notification_turn(
+            root,
+            subscription.value(),
+            ListenerNotification::Buffer(change),
+            enqueued_at,
+        ),
+        EngineWork::ApplicationChange {
+            subscription,
+            event,
+        } => capsule.start_notification_turn(
+            root,
+            subscription.value(),
+            ListenerNotification::Application(event),
+            Instant::now(),
+        ),
         EngineWork::CommandInvocation {
             invocation,
             active_buffer,
@@ -6512,6 +6642,91 @@ mod tests {
             );
             pool.shutdown();
         }
+    }
+
+    #[test]
+    fn application_observation_installs_before_queued_delivery_and_self_disposes() {
+        use super::super::protocol::{ApplicationSnapshot, WorkbenchObservation};
+        let pool = RuntimePool::new(PoolConfig::single_worker());
+        let runtime = key(209);
+        pool.load(runtime, IsolateConfig::default()).unwrap();
+        let setup = pool.execute_fixture_module(runtime, "file:///fixtures/application-admission.js", r#"
+import { documents, workbench } from "knot";
+globalThis.calls = 0;
+const observation = await workbench.observe(async (event) => {
+  if (!globalThis.activationFinished || event.sequence <= observation.watermark) throw new Error("startup observation gap");
+  globalThis.calls++;
+  await documents.list();
+  await observation.dispose();
+  globalThis.disposed = true;
+});
+globalThis.activationFinished = true;
+"#).unwrap();
+        let admission = pool.receive_request().unwrap();
+        assert_eq!(admission.operation, HostOperation::ObserveWorkbench);
+        let subscription = WorkbenchSubscriptionId::new(911);
+        let event = |sequence| ApplicationEvent {
+            sequence,
+            change: ApplicationChange::DocumentClosed {
+                document: "document".into(),
+            },
+        };
+        pool.dispatch_application_change(runtime, subscription, event(8))
+            .unwrap();
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: admission.id,
+            result: Ok(HostResponseValue::WorkbenchObserved(WorkbenchObservation {
+                subscription,
+                snapshot: ApplicationSnapshot::default(),
+                watermark: 7,
+            })),
+        })
+        .unwrap();
+        setup.wait().unwrap();
+        let query = pool.receive_request().unwrap();
+        assert_eq!(
+            query.operation,
+            HostOperation::ApplicationQuery(ApplicationQuery::Documents)
+        );
+        pool.dispatch_application_change(runtime, subscription, event(9))
+            .unwrap();
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: query.id,
+            result: Ok(HostResponseValue::ApplicationQuery(
+                ApplicationQueryResult::Documents(vec![]),
+            )),
+        })
+        .unwrap();
+        let disposal = pool.receive_request().unwrap();
+        assert_eq!(
+            disposal.operation,
+            HostOperation::UnobserveWorkbench { subscription }
+        );
+        pool.respond(HostResponse {
+            extension: runtime.extension,
+            lifecycle: runtime.lifecycle,
+            id: disposal.id,
+            result: Ok(HostResponseValue::WorkbenchUnobserved),
+        })
+        .unwrap();
+        assert_eq!(
+            &*pool
+                .execute(
+                    runtime,
+                    "verify-observation.js",
+                    "`${activationFinished}:${disposed}:${calls}`"
+                )
+                .unwrap()
+                .wait()
+                .unwrap()
+                .value,
+            "true:true:1"
+        );
+        pool.shutdown();
     }
 
     #[test]

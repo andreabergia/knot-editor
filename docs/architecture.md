@@ -62,6 +62,11 @@ foreground state. Native I/O runs off the foreground thread.
 Each product window owns its extension-backed semantic tree surface; the
 application's foreground catalog binds command handlers to live view instances.
 
+A foreground application observation owner compares document and live product
+window metadata at committed transitions. It owns a session sequence and
+lifecycle-scoped subscriptions, while queries derive current state from the
+existing owners. No window catalog replica or durable layout model is introduced.
+
 The application owns one extension pool. Its fixed workers enter persistent V8
 isolates for one turn at a time; awaiting host work retains JavaScript state without
 holding a worker. The host owns scheduling and runtime disposal, while the

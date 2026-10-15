@@ -79,6 +79,30 @@ representations. They are separate from invocation-scoped command targets and
 cannot be passed to contextual buffer/selection APIs. Replacing a workbench or
 tab, or transferring a view to another pane/window, invalidates its old exact target.
 
+`await workbench.observe(listener)` registers application-wide observation and
+returns an initial `snapshot`, a sequence `watermark`, and an awaitable `dispose()`.
+Registration, snapshot and watermark are captured together on the foreground;
+subsequent events have larger sequence numbers. The listener is installed before
+queued deliveries can enter it, and the observing activation/command root finishes
+first. Observe before windows exist to see their later attachment.
+
+Events distinguish document open/change/close, window open/close, presentation
+changes, workspace changes and active-target changes (including null). Document
+changes carry current metadata, not buffer edit payloads. Events describe committed
+changes; a query inside a listener can already see newer state. They do not promise
+one event per gesture or a cross-restart layout record. There is no replay/retry
+protocol; dispose and observe again for a fresh baseline.
+
+Listeners run as asynchronous FIFO scheduler roots. They can await queries, buffer
+mutations or their own disposer. Exceptions are isolated. Native commits finish
+without awaiting listeners; local disposal prevents queued author callbacks and
+its promise acknowledges native release. Unload, failed activation and host release
+also release observation ownership.
+
+The checked [application observer](../examples/extensions/@example/application-state/dist/main.js)
+loads through the product host. Run `example.application-state` to copy its initial
+counts, current document/presentation metadata and event history for inspection.
+
 ## Package and check your code
 
 Installed packages use a `knot.jsonc` manifest and built `.js`/`.mjs` files.

@@ -171,7 +171,7 @@ impl DocumentCollection {
         &mut self,
         title: impl Into<SharedString>,
         model: Entity<BufferModel>,
-        cx: &App,
+        cx: &mut App,
     ) -> DocumentId {
         let clean_revision = model.read(cx).revision();
         self.insert(
@@ -179,6 +179,7 @@ impl DocumentCollection {
             model,
             DocumentState::Untitled { clean_revision },
             None,
+            cx,
         )
     }
 
@@ -188,8 +189,9 @@ impl DocumentCollection {
         title: impl Into<SharedString>,
         model: Entity<BufferModel>,
         uri: ResourceUri,
+        cx: &mut App,
     ) -> DocumentId {
-        self.insert_resource(title, model, DocumentState::Destination { uri })
+        self.insert_resource(title, model, DocumentState::Destination { uri }, cx)
     }
 
     pub(crate) fn create_persisted(
@@ -199,6 +201,7 @@ impl DocumentCollection {
         uri: ResourceUri,
         persisted_revision: u64,
         version: ResourceVersion,
+        cx: &mut App,
     ) -> DocumentId {
         self.insert_resource(
             title,
@@ -208,6 +211,7 @@ impl DocumentCollection {
                 persisted_revision,
                 version,
             },
+            cx,
         )
     }
 
@@ -215,19 +219,22 @@ impl DocumentCollection {
         &mut self,
         title: impl Into<SharedString>,
         model: Entity<BufferModel>,
+        cx: &mut App,
     ) -> DocumentId {
-        self.insert(title, model, DocumentState::Generated, None)
+        self.insert(title, model, DocumentState::Generated, None, cx)
     }
 
     pub(crate) fn create_search_results(
         &mut self,
         controller: SearchResultsController,
+        cx: &mut App,
     ) -> DocumentId {
         self.insert(
             controller.title(),
             controller.model().clone(),
             DocumentState::Generated,
             Some(controller),
+            cx,
         )
     }
 
@@ -255,6 +262,7 @@ impl DocumentCollection {
         if let Some(uri) = document.resource_uri() {
             self.resources.remove(uri);
         }
+        super::application_observation::changed(cx);
         true
     }
 
@@ -290,10 +298,11 @@ impl DocumentCollection {
         id: DocumentId,
         model: &Entity<BufferModel>,
         capture: &PersistenceCapture,
-        title: impl Into<SharedString>,
-        uri: ResourceUri,
+        resource: (impl Into<SharedString>, ResourceUri),
         persisted_state: (ResourceVersion, u64),
+        cx: &mut App,
     ) -> bool {
+        let (title, uri) = resource;
         let (version, revision) = persisted_state;
         if self
             .resources
@@ -323,6 +332,7 @@ impl DocumentCollection {
             version,
         };
         self.resources.insert(uri, id);
+        super::application_observation::changed(cx);
         true
     }
 
@@ -331,6 +341,7 @@ impl DocumentCollection {
         title: impl Into<SharedString>,
         model: Entity<BufferModel>,
         state: DocumentState,
+        cx: &mut App,
     ) -> DocumentId {
         let uri = state
             .resource_uri()
@@ -339,7 +350,7 @@ impl DocumentCollection {
         if let Some(existing) = self.document_for_resource(&uri) {
             return existing;
         }
-        let id = self.insert(title, model, state, None);
+        let id = self.insert(title, model, state, None, cx);
         self.resources.insert(uri, id);
         id
     }
@@ -350,6 +361,7 @@ impl DocumentCollection {
         model: Entity<BufferModel>,
         state: DocumentState,
         search_results: Option<SearchResultsController>,
+        cx: &mut App,
     ) -> DocumentId {
         let id = DocumentId(self.next_id);
         self.next_id = self
@@ -365,6 +377,7 @@ impl DocumentCollection {
             search_results,
             persistence_generation: 0,
         });
+        super::application_observation::changed(cx);
         id
     }
 }
@@ -425,16 +438,25 @@ mod tests {
 
         let untitled_id =
             cx.update(|cx| documents.create_untitled("Untitled", untitled.clone(), cx));
-        let destination_id =
-            documents.create_destination("new.txt", destination.clone(), destination_uri.clone());
-        let persisted_id = documents.create_persisted(
-            "saved.txt",
-            persisted.clone(),
-            persisted_uri.clone(),
-            0,
-            version(1),
-        );
-        let generated_id = documents.create_generated("Generated", generated);
+        let destination_id = cx.update(|cx| {
+            documents.create_destination(
+                "new.txt",
+                destination.clone(),
+                destination_uri.clone(),
+                cx,
+            )
+        });
+        let persisted_id = cx.update(|cx| {
+            documents.create_persisted(
+                "saved.txt",
+                persisted.clone(),
+                persisted_uri.clone(),
+                0,
+                version(1),
+                cx,
+            )
+        });
+        let generated_id = cx.update(|cx| documents.create_generated("Generated", generated, cx));
 
         assert!(matches!(
             documents.get(untitled_id).unwrap().state(),
@@ -461,14 +483,14 @@ mod tests {
         let capture = documents
             .begin_persistence(destination_id, &destination)
             .unwrap();
-        assert!(documents.finish_persistence(
+        assert!(cx.update(|cx| documents.finish_persistence(
             destination_id,
             &destination,
             &capture,
-            "new.txt",
-            destination_uri.clone(),
+            ("new.txt", destination_uri.clone()),
             (version(2), 0),
-        ));
+            cx
+        )));
         assert!(matches!(
             documents.get(destination_id).unwrap().state(),
             DocumentState::Persisted { .. }
@@ -477,14 +499,14 @@ mod tests {
 
         let untitled_revision = untitled.read_with(cx, |model, _| model.revision());
         let capture = documents.begin_persistence(untitled_id, &untitled).unwrap();
-        assert!(documents.finish_persistence(
+        assert!(cx.update(|cx| documents.finish_persistence(
             untitled_id,
             &untitled,
             &capture,
-            "untitled.txt",
-            untitled_uri.clone(),
+            ("untitled.txt", untitled_uri.clone()),
             (version(3), untitled_revision),
-        ));
+            cx
+        )));
         let document = documents.get(untitled_id).unwrap();
         assert_eq!(document.title(), "untitled.txt");
         assert_eq!(document.resource_uri(), Some(&untitled_uri));
@@ -500,9 +522,12 @@ mod tests {
         let untitled_model = cx.new(|_| BufferModel::from_text("untitled"));
         let mut documents = DocumentCollection::new();
 
-        let first = documents.create_destination("notes.txt", first_model.clone(), uri.clone());
-        let duplicate =
-            documents.create_persisted("notes.txt", duplicate_model, uri.clone(), 0, version(1));
+        let first = cx.update(|cx| {
+            documents.create_destination("notes.txt", first_model.clone(), uri.clone(), cx)
+        });
+        let duplicate = cx.update(|cx| {
+            documents.create_persisted("notes.txt", duplicate_model, uri.clone(), 0, version(1), cx)
+        });
 
         assert_eq!(first, duplicate);
         assert_eq!(documents.documents().count(), 1);
@@ -517,14 +542,14 @@ mod tests {
         let capture = documents
             .begin_persistence(untitled, &untitled_model)
             .unwrap();
-        assert!(!documents.finish_persistence(
+        assert!(!cx.update(|cx| documents.finish_persistence(
             untitled,
             &untitled_model,
             &capture,
-            "notes.txt",
-            uri.clone(),
+            ("notes.txt", uri.clone()),
             (version(2), 0),
-        ));
+            cx
+        )));
         assert!(matches!(
             documents.get(untitled).unwrap().state(),
             DocumentState::Untitled { .. }
@@ -532,13 +557,16 @@ mod tests {
 
         assert!(cx.update(|cx| documents.remove(first, cx)));
         assert_eq!(documents.document_for_resource(&uri), None);
-        let reopened = documents.create_persisted(
-            "notes.txt",
-            cx.new(|_| BufferModel::from_text("reopened")),
-            uri,
-            0,
-            version(3),
-        );
+        let reopened = cx.update(|cx| {
+            documents.create_persisted(
+                "notes.txt",
+                cx.new(|_| BufferModel::from_text("reopened")),
+                uri,
+                0,
+                version(3),
+                cx,
+            )
+        });
         assert_ne!(reopened, first);
         assert_ne!(documents.get(reopened).unwrap().identity(), first_identity);
     }
@@ -549,27 +577,29 @@ mod tests {
         let model = cx.new(|_| BufferModel::from_text("notes"));
         let other_model = cx.new(|_| BufferModel::from_text("other"));
         let mut documents = DocumentCollection::new();
-        let id = documents.create_persisted("notes.txt", model.clone(), uri.clone(), 0, version(1));
+        let id = cx.update(|cx| {
+            documents.create_persisted("notes.txt", model.clone(), uri.clone(), 0, version(1), cx)
+        });
 
         assert!(documents.begin_persistence(id, &other_model).is_none());
         let stale = documents.begin_persistence(id, &model).unwrap();
         let current = documents.begin_persistence(id, &model).unwrap();
-        assert!(!documents.finish_persistence(
+        assert!(!cx.update(|cx| documents.finish_persistence(
             id,
             &model,
             &stale,
-            "notes.txt",
-            uri.clone(),
+            ("notes.txt", uri.clone()),
             (version(2), 1),
-        ));
-        assert!(!documents.finish_persistence(
+            cx
+        )));
+        assert!(!cx.update(|cx| documents.finish_persistence(
             DocumentId(u64::MAX),
             &model,
             &current,
-            "notes.txt",
-            uri.clone(),
+            ("notes.txt", uri.clone()),
             (version(2), 1),
-        ));
+            cx
+        )));
         assert_eq!(
             documents.get(id).unwrap().state().persisted_revision(),
             Some(0)
@@ -582,19 +612,20 @@ mod tests {
         let new_uri = ResourceUri::parse("mem://workspace/new.txt").unwrap();
         let model = cx.new(|_| BufferModel::from_text("notes"));
         let mut documents = DocumentCollection::new();
-        let id =
-            documents.create_persisted("old.txt", model.clone(), old_uri.clone(), 0, version(1));
+        let id = cx.update(|cx| {
+            documents.create_persisted("old.txt", model.clone(), old_uri.clone(), 0, version(1), cx)
+        });
         let identity = documents.get(id).unwrap().identity();
         let capture = documents.begin_persistence(id, &model).unwrap();
 
-        assert!(documents.finish_persistence(
+        assert!(cx.update(|cx| documents.finish_persistence(
             id,
             &model,
             &capture,
-            "new.txt",
-            new_uri.clone(),
+            ("new.txt", new_uri.clone()),
             (version(2), 0),
-        ));
+            cx
+        )));
         assert_eq!(documents.document_for_resource(&old_uri), None);
         assert_eq!(documents.document_for_resource(&new_uri), Some(id));
         assert_eq!(documents.get(id).unwrap().title(), "new.txt");
@@ -606,21 +637,23 @@ mod tests {
         let uri = ResourceUri::parse("mem://workspace/notes.txt").unwrap();
         let model = cx.new(|_| BufferModel::from_text("notes"));
         let mut documents = DocumentCollection::new();
-        let id = documents.create_persisted("notes.txt", model.clone(), uri.clone(), 0, version(1));
+        let id = cx.update(|cx| {
+            documents.create_persisted("notes.txt", model.clone(), uri.clone(), 0, version(1), cx)
+        });
 
         model.update(cx, |model, _| model.replace(0..0, "first ").unwrap());
         let captured_revision = model.read_with(cx, |model, _| model.revision());
         model.update(cx, |model, _| model.replace(0..0, "second ").unwrap());
 
         let capture = documents.begin_persistence(id, &model).unwrap();
-        assert!(documents.finish_persistence(
+        assert!(cx.update(|cx| documents.finish_persistence(
             id,
             &model,
             &capture,
-            "notes.txt",
-            uri.clone(),
+            ("notes.txt", uri.clone()),
             (version(2), captured_revision),
-        ));
+            cx
+        )));
         let document = documents.get(id).unwrap();
         assert_eq!(
             document.state().persisted_revision(),

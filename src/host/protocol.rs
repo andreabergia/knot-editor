@@ -487,6 +487,68 @@ pub enum ApplicationQueryResult {
     Workspace(Option<WorkspaceInfo>),
 }
 
+/// One lifecycle-owned application observer.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, serde::Serialize)]
+pub struct WorkbenchSubscriptionId(u64);
+impl WorkbenchSubscriptionId {
+    pub(crate) fn new(value: u64) -> Self {
+        Self(value)
+    }
+    pub(crate) fn value(self) -> u64 {
+        self.0
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApplicationEvent {
+    pub sequence: u64,
+    #[serde(flatten)]
+    pub change: ApplicationChange,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum ApplicationChange {
+    DocumentOpened {
+        document: DocumentInfo,
+    },
+    DocumentChanged {
+        document: DocumentInfo,
+    },
+    DocumentClosed {
+        document: String,
+    },
+    WindowOpened {
+        window: WindowInfo,
+    },
+    WindowClosed {
+        window: WindowTarget,
+    },
+    PresentationsChanged {
+        window: WindowInfo,
+    },
+    WorkspaceChanged {
+        workspace: WorkspaceInfo,
+    },
+    ActiveTargetChanged {
+        active_window: Option<WindowTarget>,
+        active_target: Option<PresentationTarget>,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkbenchObservation {
+    pub subscription: WorkbenchSubscriptionId,
+    pub snapshot: ApplicationSnapshot,
+    pub watermark: u64,
+}
+
 /// A request sent by one extension runtime to the editor foreground owner.
 #[derive(Clone, Debug, PartialEq)]
 pub struct HostRequest {
@@ -500,6 +562,10 @@ pub struct HostRequest {
 /// Editor operations available to the initial buffer API boundary.
 #[derive(Clone, Debug, PartialEq)]
 pub enum HostOperation {
+    ObserveWorkbench,
+    UnobserveWorkbench {
+        subscription: WorkbenchSubscriptionId,
+    },
     ApplicationQuery(ApplicationQuery),
     MutateKeybindings {
         mutations: Vec<KeybindingMutation>,
@@ -584,6 +650,8 @@ pub struct HostResponse {
 /// Successful values returned by [`HostOperation`].
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum HostResponseValue {
+    WorkbenchObserved(WorkbenchObservation),
+    WorkbenchUnobserved,
     ApplicationQuery(ApplicationQueryResult),
     KeybindingsApplied {
         error: Option<String>,

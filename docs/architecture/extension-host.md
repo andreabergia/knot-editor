@@ -314,3 +314,29 @@ command captures. Window-local targets include the workbench identity and exact
 presentation entity, preventing replacement or transfer from selecting another view.
 Queries require a live extension lifecycle and honor command cancellation, but do
 not require command context or promise future validity of returned targets.
+
+## Application observation
+
+The foreground product host owns a metadata comparison baseline, session sequence
+and lifecycle-scoped workbench subscriptions. The application's foreground signal
+receives document collection creation/removal/persistence commits, product shell
+notifications, tab focus/blur, native activation and window closure. Comparison
+publishes only relevant metadata changes, excluding repaint-only updates. Workspace
+replacement/clear and tab relocation flow through the existing shell owners.
+
+Every application document is tracked independently of author buffer lookup. One
+buffer-commit drain routes edit payloads to buffer subscriptions; application
+observation compares revision/dirty metadata without consuming those edits a second
+time. Initial buffer admission discards pre-subscription pending edits. Explicit
+final removal closes the model and releases transport/subscription ownership even
+when a retained editor keeps its entity alive.
+
+Observe refreshes the committed baseline before capturing registration, initial
+snapshot and watermark in one foreground request. Events enter existing unrelated
+FIFO scheduler roots. The engine installs the author listener during the observing
+root before any queued notification root can run. Application listeners share the
+existing async callback executor, error isolation, cancellation and lifecycle
+finalizer. Self-disposal acknowledges native removal without waiting for the
+executing callback; local listener removal suppresses already queued deliveries.
+Application event queues use the scheduler diagnostics and have no separate
+backpressure, dropping, replay or recovery policy.
