@@ -1,7 +1,6 @@
 # Production extension APIs and JavaScript project management
 
-Status: ⏳ D046 implementation verified, awaiting review gates; checkpoints 2–10
-not started.
+Status: ✅ D046 complete and approved on 2026-10-15; checkpoints 2–10 not started.
 
 Source: the project-management design discussion of 2026-10-13 and the
 [prioritized roadmap](../roadmap.md). Work identifiers: D046–D052 and promoted
@@ -294,7 +293,7 @@ references as behavior lands; record validated rationale in decisions. Split
 coherent implementation work into logical commits without conventional titles.
 Run `cargo fmt` once at the end of Rust work, before committing.
 
-### 1. Production public API foundation — D046 ⏳ implemented; review pending
+### 1. Production public API foundation — D046 ✅ complete
 
 Detailed execution: [D046 public API foundation plan](d046-public-api-foundation-plan.md).
 
@@ -308,8 +307,10 @@ Detailed execution: [D046 public API foundation plan](d046-public-api-foundation
 - **Validation:** JS boundary tests for arguments, error conversion, cancellation,
   disposal/unload, and existing command/buffer/keymap/provider behavior; verify
   declaration examples against the shipped facade.
-- **Review gate:** approve namespaces, context, identities, error/disposal rules,
-  compatibility strategy, and remaining scoped cleanup before expanding the API.
+- **Review gate:** ✅ approved on 2026-10-15, including namespaces, context,
+  identities, error/disposal rules, compatibility strategy and scoped cleanup.
+  Validation passed: 559 library tests, 5 example tests, Clippy with warnings
+  denied, the pinned authoring checker and manual product smoke checks.
 
 ### 2. Observable application state — D047 ⬜
 

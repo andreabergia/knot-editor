@@ -1,7 +1,7 @@
 # D046 — Public API foundation
 
-Status: ✅ checkpoint 1 approved; ✅ checkpoint 2 implemented, awaiting review;
-✅ checkpoint 3 implemented, awaiting review; ✅ checkpoint 4 implemented, awaiting final review.
+Status: ✅ complete. Checkpoint 1 approved on 2026-10-14; checkpoints 2–4
+approved by the user on 2026-10-15 after passing manual smoke checks.
 
 Source: [extension platform plan](extension-platform-and-projects-plan.md),
 [D046 roadmap entry](../roadmap.md).
@@ -39,7 +39,7 @@ scheduling quotas, rendering changes, source maps or a generic command schema.
 
 Validation: `scripts/check-extension-api.sh` and `git diff --check` passed.
 
-## 2. Captured context — ✅ implemented; ⏳ review pending
+## 2. Captured context — ✅ complete
 
 - ✅ Convey opaque command capture through product roots, nested commands,
   same-lifecycle inline calls and cross-lifecycle handlers.
@@ -76,9 +76,9 @@ Unused activation-time fixture proxies were removed; buffer-dependent runtime
 fixtures now acquire proxies in native-admitted setup commands. Context failures
 carry codes; full coded-error conversion and decoder alignment remain checkpoint 3.
 
-⏳ Review gate: inspect the JS command fixture, target validity and failure distinctions.
+✅ Review gate approved on 2026-10-15: inspect the JS command fixture, target validity and failure distinctions.
 
-## 3. Failures and lifecycle acknowledgements — ✅ implemented; ⏳ review pending
+## 3. Failures and lifecycle acknowledgements — ✅ complete
 
 - ✅ Align facade and native decoding with the declarations. Construct coded public
   errors from typed boundary failures; eliminate diagnostic-string inference.
@@ -121,10 +121,10 @@ hooks; cancellation listeners validate their interface, prevent replay and isola
 callback failures. Package version admission and final authoring integration remain
 checkpoint 4.
 
-⏳ Review gate: verify contracts against declarations, no discarded cleanup/invalidation
+✅ Review gate approved on 2026-10-15: verify contracts against declarations, no discarded cleanup/invalidation
 promises, and no deadlock or double release.
 
-## 4. Package admission and authoring baseline — ✅ implemented; ⏳ review pending
+## 4. Package admission and authoring baseline — ✅ complete
 
 - ✅ Enforce required positive integer `apiVersion`, exactly `1`, before installed
   entry evaluation. Preserve recoverable package identity for duplicate/dependency
@@ -160,7 +160,7 @@ Mechanical Clippy fixes preserve existing view/relocation behavior. The parent p
 and roadmap retain D047–D049 application queries/events, live targets, real buffer
 removal, resource operations, storage and new contribution protocols.
 
-⏳ Review gate: review runtime imports/context/errors/cleanup/version admission against
+✅ Review gate approved on 2026-10-15: review runtime imports/context/errors/cleanup/version admission against
 its documented contract. Only after all four gates pass, mark D046 complete in the
 parent plan and roadmap. Commit completion documentation separately; stop before D047.
 Delete this temporary plan after completion and fix links that pointed to it.
@@ -176,9 +176,9 @@ nonexistent `extensions` destination had initially omitted that scope directory.
 
 ## Audit result
 
-✅ All implementation audit gaps are closed. Review acceptance for checkpoints
-2–4 remains pending; completion bookkeeping and retirement of this temporary plan
-follow acceptance. D047 is not started.
+✅ All implementation audit gaps are closed, all four review gates are accepted,
+and manual smoke checks passed. D046 is complete in the parent plan and roadmap.
+D047 is not started.
 
 Completion requires all audit gaps closed, every public operation matched to its
 reference, automated coverage of important context/lifecycle/command/provider/keymap
