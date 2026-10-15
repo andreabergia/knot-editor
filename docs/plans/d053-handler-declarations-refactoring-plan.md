@@ -1,7 +1,7 @@
 # D053 — Handler-defined operations, errors, and commands
 
-Status: 🟡 checkpoints 1 and 2 approved on 2026-10-15; checkpoint 3 implemented
-and locally verified, awaiting product review. Remote platform checks remain pending.
+Status: 🟡 checkpoints 1–3 approved on 2026-10-15; checkpoint 4 in progress.
+Remote platform checks remain pending.
 Execute after D047 is approved and archived, before D048 adds more host APIs.
 This is a separate refactoring, not another D047 acceptance requirement.
 
@@ -216,7 +216,7 @@ Checkpoint 2 implementation evidence:
 - ✅ Review gate: user approved complete capability coverage, removed parallel
   registries, and representative JS consumer behavior on 2026-10-15.
 
-### 3. Migrate native command declarations 🟡
+### 3. Migrate native command declarations ✅
 
 - ✅ Automatically discover annotated native command handlers and catalog metadata.
   Migrate native commands across editor views, workbench and application routing;
@@ -269,9 +269,9 @@ Checkpoint 3 implementation evidence and choices:
   A comparison with the previous catalog confirms all 53 names/titles are preserved.
 - ⏳ Remote Linux/Windows checks remain pending; no remote run exists for these
   local changes.
-- ⏳ Product review gate: representative declarations, palette, keymap/menu, async
-  Open/Save and extension composition. UI automation is excluded by the user's
-  repository instructions. Checkpoint 4 has not started.
+- ✅ Product review gate: user accepted checkpoint 3 on 2026-10-15 after reviewing
+  native declarations and product behavior. UI automation was excluded by the
+  user's repository instructions.
 
 ### 4. Cleanup, documentation and completion ⬜
 
