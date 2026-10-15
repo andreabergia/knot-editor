@@ -317,6 +317,8 @@ pub(crate) struct ProductExtensionHost {
     lifecycles: HashSet<ExtensionKey>,
     buffers: ExtensionBufferBridge,
     application_observation: super::application_observation::ApplicationObservation,
+    #[cfg(test)]
+    application_events: Vec<crate::host::protocol::ApplicationEvent>,
     _application_window_closed: Subscription,
     _application_signal: Subscription,
     buffer_observers: HashMap<crate::host::protocol::BufferHandle, Subscription>,
@@ -388,6 +390,8 @@ impl ProductExtensionHost {
             lifecycles: HashSet::new(),
             buffers: ExtensionBufferBridge::new(),
             application_observation: Default::default(),
+            #[cfg(test)]
+            application_events: Vec::new(),
             _application_window_closed: cx.on_window_closed(application_changed),
             _application_signal: cx.observe(&application_signal, |host, _, cx| {
                 host.refresh_application_observation(cx)
@@ -738,6 +742,13 @@ impl ProductExtensionHost {
             self.commands.admit_lifecycle(key.extension, key.lifecycle);
             self.semantics.admit_lifecycle(key.extension, key.lifecycle);
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn take_test_application_events(
+        &mut self,
+    ) -> Vec<crate::host::protocol::ApplicationEvent> {
+        std::mem::take(&mut self.application_events)
     }
 
     #[cfg(test)]
@@ -1575,6 +1586,8 @@ impl ProductExtensionHost {
     fn refresh_application_observation(&mut self, cx: &mut Context<Self>) {
         let snapshot = self.application_snapshot(cx);
         let events = self.application_observation.commit(snapshot);
+        #[cfg(test)]
+        self.application_events.extend(events.iter().cloned());
         for event in events {
             for (subscription, key) in self.application_observation.subscriptions() {
                 let _ = self

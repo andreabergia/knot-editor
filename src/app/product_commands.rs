@@ -156,20 +156,25 @@ pub(crate) struct ProductCommandTarget {
     pub(crate) pane: super::workbench::PaneId,
     pub(crate) tab: super::workbench::TabId,
     pub(crate) surface: super::workbench::TabSurfaceId,
+    pub(crate) presentation: Option<EntityId>,
     pub(crate) focus: WeakFocusHandle,
     pub(crate) view: Option<ViewId>,
 }
 
 impl ProductCommandTarget {
-    /// Validate the captured tab and its surface before using its contents.
+    /// Validate the owning window/workbench and exact captured presentation.
     pub(crate) fn validate_tab(&self, cx: &App) -> Result<(), CommandOutcome> {
         let workbench = self
             .workbench
             .upgrade()
             .ok_or(CommandOutcome::InvalidTarget)?;
-        if workbench
-            .read(cx)
-            .contains_surface(self.pane, self.tab, self.surface)
+        if super::product::workbench_is_live(self.window, &workbench, cx)
+            && workbench
+                .read(cx)
+                .capture_tab_move(self.pane, self.tab)
+                .is_some_and(|capture| {
+                    capture.tab.surface == self.surface && capture.presentation == self.presentation
+                })
         {
             Ok(())
         } else {
@@ -189,6 +194,7 @@ impl ProductCommandTarget {
     }
 
     pub(crate) fn command_view(&self, cx: &App) -> Option<super::workbench::CommandView> {
+        self.validate_tab(cx).ok()?;
         if let Some(view) = self.view {
             return self
                 .shell

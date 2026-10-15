@@ -75,8 +75,10 @@ window-close requests are vetoed until this flow authorizes programmatic
 removal; Quit enters the same flow before asking gpui to terminate.
 
 Each native product window renders one workbench recursively as tabbed panes
-and horizontal or vertical splits. A shell-wide weak workbench registry counts
-document views across windows without owning window lifetime. Clean final-tab
+and horizontal or vertical splits. A shell-wide weak workbench registry binds each current workbench to its native
+window and counts document views only in live windows. Replacement drops the old
+registration, so retained shells/workbenches cannot keep a final document open.
+The registry owns neither workbench nor window lifetime. Clean final-tab
 closure removes the final-view document and immediately installs a new
 untitled document and workbench; dirty final views remain pending for the
 protected-closure flow.

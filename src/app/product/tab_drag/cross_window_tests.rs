@@ -55,7 +55,8 @@ fn pair(
                                 }
                                 workbench
                             });
-                            cx.global::<ApplicationWorkbenches>().register(&workbench);
+                            cx.global::<ApplicationWorkbenches>()
+                                .register(&workbench, window.window_handle());
                             let shell = cx.new(|_| ProductShell::new(workbench));
                             shell.read(cx).focus_active_surface(window, cx);
                             shell

@@ -163,11 +163,11 @@ impl ProductShell {
                     return CommandOutcome::InvalidTarget;
                 };
                 if moved.source_is_empty {
-                    self.replace_empty_workbench(cx);
+                    self.replace_empty_workbench(window.window_handle(), cx);
                 }
                 if matches!(destination.tab, TabMoveDestination::Empty) {
                     cx.global::<ApplicationWorkbenches>()
-                        .register(&destination_workbench);
+                        .register(&destination_workbench, destination_window.window_handle());
                 }
                 shell.focus_relocated_surface(destination_window, cx);
                 if !matches!(destination.tab, TabMoveDestination::Empty) {

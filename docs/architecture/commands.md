@@ -17,7 +17,10 @@ The window routes the command to the captured focused view, then the workbench,
 then the application. A participant declines, finishes with an outcome, or
 starts pending work. If all decline, the command is unavailable. Focus changes
 cannot redirect an admitted command; closed or replaced targets are invalid.
-Pending work revalidates its captured target before applying results.
+Pending work revalidates its captured target before applying results. Native
+Open and Save include exact presentation identity as well as tab/document identity,
+and reject results after the captured native window closes. Reordering within a
+pane preserves its capture; replacement or transfer invalidates it.
 GPUI enters the captured window after the current update releases it, during
 that update's effect cycle and before the invocation turn returns.
 

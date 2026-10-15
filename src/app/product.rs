@@ -48,7 +48,7 @@ use super::{
     },
 };
 
-struct ApplicationWorkbenches(RefCell<Vec<WeakEntity<Workbench>>>);
+struct ApplicationWorkbenches(RefCell<Vec<(AnyWindowHandle, WeakEntity<Workbench>)>>);
 
 impl Global for ApplicationWorkbenches {}
 
@@ -208,37 +208,71 @@ struct ApplicationSaveDialog(Arc<dyn ProductSaveDialog>);
 impl Global for ApplicationSaveDialog {}
 
 impl ApplicationWorkbenches {
-    fn register(&self, workbench: &Entity<Workbench>) {
-        self.0.borrow_mut().push(workbench.downgrade());
+    fn register(&self, workbench: &Entity<Workbench>, window: AnyWindowHandle) {
+        let mut workbenches = self.0.borrow_mut();
+        workbenches.retain(|(registered, _)| *registered != window);
+        workbenches.push((window, workbench.downgrade()));
+    }
+
+    fn window_for(&self, workbench: &Entity<Workbench>) -> Option<AnyWindowHandle> {
+        self.0.borrow().iter().find_map(|(window, registered)| {
+            (registered.upgrade().as_ref() == Some(workbench)).then_some(*window)
+        })
     }
 
     fn view_count(&self, document: DocumentId, cx: &App) -> usize {
         let mut workbenches = self.0.borrow_mut();
-        workbenches.retain(|workbench| workbench.upgrade().is_some());
+        let windows = cx.windows();
+        workbenches.retain(|(window, workbench)| {
+            windows.contains(window) && workbench.upgrade().is_some()
+        });
         workbenches
             .iter()
-            .filter_map(WeakEntity::upgrade)
+            .filter_map(|(_, workbench)| workbench.upgrade())
             .map(|workbench| workbench.read(cx).view_count(document))
             .sum()
     }
 }
 
+pub(super) fn workbench_is_live(
+    window: AnyWindowHandle,
+    workbench: &Entity<Workbench>,
+    cx: &App,
+) -> bool {
+    cx.windows().contains(&window)
+        && cx.global::<ApplicationWorkbenches>().window_for(workbench) == Some(window)
+}
+
 #[derive(Clone)]
 struct OpenTarget {
+    window: AnyWindowHandle,
     workbench: WeakEntity<Workbench>,
     pane: PaneId,
     tab: TabId,
     surface: TabSurfaceId,
+    presentation: Option<EntityId>,
 }
 
 impl OpenTarget {
     fn from_command(target: &ProductCommandTarget) -> Self {
         Self {
+            window: target.window,
             workbench: target.workbench.clone(),
             pane: target.pane,
             tab: target.tab,
             surface: target.surface,
+            presentation: target.presentation,
         }
+    }
+
+    fn matches_presentation(&self, workbench: &Entity<Workbench>, cx: &App) -> bool {
+        self.workbench.upgrade().as_ref() == Some(workbench)
+            && workbench
+                .read(cx)
+                .capture_tab_move(self.pane, self.tab)
+                .is_some_and(|capture| {
+                    capture.tab.surface == self.surface && capture.presentation == self.presentation
+                })
     }
 }
 
@@ -557,6 +591,10 @@ impl ProductShell {
             pane: pane.id(),
             tab: tab.id(),
             surface: tab.surface_id(),
+            presentation: tab
+                .editor()
+                .map(Entity::entity_id)
+                .or_else(|| tab.terminal_view().map(Entity::entity_id)),
             focus: focus.downgrade(),
             view,
         })
@@ -580,6 +618,10 @@ impl ProductShell {
             pane: pane.id(),
             tab: tab.id(),
             surface: tab.surface_id(),
+            presentation: tab
+                .editor()
+                .map(Entity::entity_id)
+                .or_else(|| tab.terminal_view().map(Entity::entity_id)),
             focus: tab
                 .editor()
                 .map(|editor| editor.focus_handle(cx).downgrade())
@@ -789,6 +831,7 @@ impl ProductShell {
                                         pane: snapshot.pane_id,
                                         tab: snapshot.tab_id,
                                         surface: snapshot.surface,
+                                        presentation: Some(editor.entity_id()),
                                         focus: editor.focus_handle(cx).downgrade(),
                                         view: None,
                                     }),
@@ -913,11 +956,17 @@ impl ProductShell {
     }
 
     fn target_is_live(&self, target: &ProductCommandTarget, cx: &App) -> bool {
-        target.workbench.upgrade() == Some(self.workbench.clone())
-            && self
-                .workbench
-                .read(cx)
-                .contains_surface(target.pane, target.tab, target.surface)
+        cx.windows().contains(&target.window)
+            && target.workbench.upgrade() == Some(self.workbench.clone())
+            && target.validate_tab(cx).is_ok()
+            && if let Some(view) = target.view {
+                self.extension_command_view(view, cx)
+                    .is_some_and(|view| target.focus.upgrade() == Some(view.focus_handle(cx)))
+            } else {
+                target
+                    .command_view(cx)
+                    .is_some_and(|view| view.matches_focus(&target.focus, cx))
+            }
     }
 
     pub(crate) fn start_save_command(
@@ -1575,12 +1624,7 @@ impl ProductShell {
         completion: Option<CommandCompletion>,
         cx: &mut Context<Self>,
     ) {
-        if target.workbench.upgrade() != Some(self.workbench.clone())
-            || !self
-                .workbench
-                .read(cx)
-                .contains_surface(target.pane, target.tab, target.surface)
-        {
+        if !target.matches_presentation(&self.workbench, cx) {
             if let Some(completion) = completion {
                 self.finish_open_command(
                     completion,
@@ -1600,12 +1644,9 @@ impl ProductShell {
             if this
                 .update(cx, |this, cx| {
                     let outcome = if this.open_generation != generation
-                        || target.workbench.upgrade() != Some(this.workbench.clone())
-                        || !this.workbench.read(cx).contains_surface(
-                            target.pane,
-                            target.tab,
-                            target.surface,
-                        ) {
+                        || !workbench_is_live(target.window, &this.workbench, cx)
+                        || !target.matches_presentation(&this.workbench, cx)
+                    {
                         crate::host::protocol::CommandOutcome::InvalidTarget
                     } else {
                         this.apply_open_result(result, &target, replace_target, cx)
@@ -1694,37 +1735,39 @@ impl ProductShell {
             pane.tabs()
                 .iter()
                 .find(|tab| tab.document_id() == Some(document))
-                .map(|tab| (pane.id(), tab.id(), tab.editor().unwrap().clone()))
+                .map(|tab| (pane.id(), tab.id()))
         });
-        if let Some((pane, tab, _)) = existing {
+        if let Some((pane, tab)) = existing {
             self.workbench.update(cx, |workbench, _| {
                 workbench.activate_tab(pane, tab);
             });
-            return;
-        }
-
-        let documents = Self::documents(cx);
-        let model = documents.read(cx).get(document).unwrap().model().clone();
-        if replace_target && let TabSurfaceId::Document(previous) = target.surface {
-            let replaced = self.workbench.update(cx, |workbench, cx| {
-                workbench.replace_tab_document(target.pane, target.tab, document, model, cx)
-            });
-            if replaced
-                && previous != document
-                && cx
-                    .global::<ApplicationWorkbenches>()
-                    .view_count(previous, cx)
-                    == 0
-            {
-                documents.update(cx, |documents, cx| {
-                    documents.remove(previous, cx);
+        } else {
+            let documents = Self::documents(cx);
+            let model = documents.read(cx).get(document).unwrap().model().clone();
+            if replace_target && let TabSurfaceId::Document(previous) = target.surface {
+                let replaced = self.workbench.update(cx, |workbench, cx| {
+                    workbench.replace_tab_document(target.pane, target.tab, document, model, cx)
+                });
+                if replaced
+                    && previous != document
+                    && cx
+                        .global::<ApplicationWorkbenches>()
+                        .view_count(previous, cx)
+                        == 0
+                {
+                    documents.update(cx, |documents, cx| {
+                        documents.remove(previous, cx);
+                    });
+                }
+            } else {
+                self.workbench.update(cx, |workbench, cx| {
+                    workbench.open_tab_for_document(target.pane, document, model, cx);
                 });
             }
-        } else {
-            self.workbench.update(cx, |workbench, cx| {
-                workbench.open_tab_for_document(target.pane, document, model, cx);
-            });
         }
+        let _ = cx.update_window(target.window, |_, window, cx| {
+            self.focus_active_surface(window, cx)
+        });
     }
 
     fn install_workspace(&mut self, root: super::resource::ResourceUri, cx: &mut Context<Self>) {
@@ -1781,10 +1824,18 @@ impl ProductShell {
                     return;
                 };
                 let target = OpenTarget {
+                    window: cx
+                        .global::<ApplicationWorkbenches>()
+                        .window_for(&self.workbench)
+                        .unwrap(),
                     workbench: self.workbench.downgrade(),
                     pane: pane.id(),
                     tab: tab.id(),
                     surface: TabSurfaceId::Document(document),
+                    presentation: tab
+                        .editor()
+                        .map(Entity::entity_id)
+                        .or_else(|| tab.terminal_view().map(Entity::entity_id)),
                 };
                 self.start_open_request(
                     OpenRequest::from_uri_for_product(uri),
@@ -2382,7 +2433,8 @@ impl ProductShell {
             let replacement = create_untitled_document(&documents, cx);
             let model = documents.read(cx).get(replacement).unwrap().model().clone();
             let workbench = cx.new(|cx| Workbench::new_for_document(replacement, model, cx));
-            cx.global::<ApplicationWorkbenches>().register(&workbench);
+            cx.global::<ApplicationWorkbenches>()
+                .register(&workbench, window.window_handle());
             self.workbench = workbench;
             self.status = "created replacement untitled document".into();
         } else {
@@ -2419,7 +2471,7 @@ impl ProductShell {
             };
             self.close_terminal(session_id, cx);
             if transition.workbench_is_empty() {
-                self.replace_empty_workbench(cx);
+                self.replace_empty_workbench(window_handle, cx);
             }
             let _ = cx.update_window(window_handle, |_, window, cx| {
                 self.focus_active_surface(window, cx)
@@ -2464,7 +2516,7 @@ impl ProductShell {
             });
         }
         if transition.workbench_is_empty() {
-            self.replace_empty_workbench(cx);
+            self.replace_empty_workbench(window_handle, cx);
         } else {
             self.status = "closed tab".into();
         }
@@ -2493,12 +2545,13 @@ impl ProductShell {
         }
     }
 
-    fn replace_empty_workbench(&mut self, cx: &mut App) {
+    fn replace_empty_workbench(&mut self, window: AnyWindowHandle, cx: &mut App) {
         let documents = Self::documents(cx);
         let replacement = create_untitled_document(&documents, cx);
         let model = documents.read(cx).get(replacement).unwrap().model().clone();
         let workbench = cx.new(|cx| Workbench::new_for_document(replacement, model, cx));
-        cx.global::<ApplicationWorkbenches>().register(&workbench);
+        cx.global::<ApplicationWorkbenches>()
+            .register(&workbench, window);
         self.workbench = workbench;
         self.status = "created replacement untitled document".into();
     }
@@ -3194,7 +3247,8 @@ pub(crate) fn open_product_window(request: Option<OpenRequest>, cx: &mut App) {
         },
         move |window, cx| {
             let workbench = cx.new(|cx| Workbench::new_for_document(document, model, cx));
-            cx.global::<ApplicationWorkbenches>().register(&workbench);
+            cx.global::<ApplicationWorkbenches>()
+                .register(&workbench, window.window_handle());
             let shell = cx.new(|_| ProductShell::new(workbench));
             shell.update(cx, |shell, cx| shell.observe_extension_host(window, cx));
             install_protected_window_close(&shell, window, cx);
@@ -3203,10 +3257,15 @@ pub(crate) fn open_product_window(request: Option<OpenRequest>, cx: &mut App) {
                 let pane = shell.read(cx).workbench.read(cx).focused_pane().unwrap();
                 let tab = pane.active_tab();
                 let target = OpenTarget {
+                    window: window.window_handle(),
                     workbench: shell.read(cx).workbench.downgrade(),
                     pane: pane.id(),
                     tab: tab.id(),
                     surface: tab.surface_id(),
+                    presentation: tab
+                        .editor()
+                        .map(Entity::entity_id)
+                        .or_else(|| tab.terminal_view().map(Entity::entity_id)),
                 };
                 shell.update(cx, |shell, cx| {
                     shell.start_open_request(request, target, true, None, cx);
@@ -3428,6 +3487,7 @@ pub(super) fn bind_product_keys(cx: &mut App) {
 
 #[cfg(test)]
 mod tests {
+    mod observation;
     use std::path::Path;
     use std::sync::{Arc, Mutex};
 
@@ -3595,9 +3655,10 @@ mod tests {
         model: Entity<super::BufferModel>,
         cx: &mut TestAppContext,
     ) -> (Entity<ProductShell>, gpui::AnyWindowHandle) {
-        let (shell, _) = cx.add_window_view(|_, cx| {
+        let (shell, _) = cx.add_window_view(|window, cx| {
             let workbench = cx.new(|cx| Workbench::new_for_document(document, model, cx));
-            cx.global::<ApplicationWorkbenches>().register(&workbench);
+            cx.global::<ApplicationWorkbenches>()
+                .register(&workbench, window.window_handle());
             ProductShell::new(workbench)
         });
         let window = *cx.windows().last().unwrap();
@@ -3675,10 +3736,18 @@ mod tests {
         let pane = shell.workbench.read(cx).focused_pane().unwrap();
         let tab = pane.active_tab();
         OpenTarget {
+            window: cx
+                .global::<ApplicationWorkbenches>()
+                .window_for(&shell.workbench)
+                .unwrap(),
             workbench: shell.workbench.downgrade(),
             pane: pane.id(),
             tab: tab.id(),
             surface: tab.surface_id(),
+            presentation: tab
+                .editor()
+                .map(Entity::entity_id)
+                .or_else(|| tab.terminal_view().map(Entity::entity_id)),
         }
     }
 
@@ -8597,9 +8666,10 @@ await commands.registerForView("outline", "copy", async () => {
         let documents = install_globals(cx);
         let document = cx.update(|cx| create_untitled_document(&documents, cx));
         let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
-        let (shell, cx) = cx.add_window_view(|_, cx| {
+        let (shell, cx) = cx.add_window_view(|window, cx| {
             let workbench = cx.new(|cx| Workbench::new_for_document(document, model, cx));
-            cx.global::<ApplicationWorkbenches>().register(&workbench);
+            cx.global::<ApplicationWorkbenches>()
+                .register(&workbench, window.window_handle());
             ProductShell::new(workbench)
         });
 
@@ -8647,9 +8717,10 @@ await commands.registerForView("outline", "copy", async () => {
         let documents = install_globals(cx);
         let document = cx.update(|cx| create_untitled_document(&documents, cx));
         let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
-        let (shell, cx) = cx.add_window_view(|_, cx| {
+        let (shell, cx) = cx.add_window_view(|window, cx| {
             let workbench = cx.new(|cx| Workbench::new_for_document(document, model, cx));
-            cx.global::<ApplicationWorkbenches>().register(&workbench);
+            cx.global::<ApplicationWorkbenches>()
+                .register(&workbench, window.window_handle());
             ProductShell::new(workbench)
         });
 
@@ -8712,9 +8783,10 @@ await commands.registerForView("outline", "copy", async () => {
         let documents = install_globals(cx);
         let original = cx.update(|cx| create_untitled_document(&documents, cx));
         let model = cx.read(|cx| documents.read(cx).get(original).unwrap().model().clone());
-        let (shell, cx) = cx.add_window_view(|_, cx| {
+        let (shell, cx) = cx.add_window_view(|window, cx| {
             let workbench = cx.new(|cx| Workbench::new_for_document(original, model, cx));
-            cx.global::<ApplicationWorkbenches>().register(&workbench);
+            cx.global::<ApplicationWorkbenches>()
+                .register(&workbench, window.window_handle());
             ProductShell::new(workbench)
         });
 
@@ -8755,10 +8827,16 @@ await commands.registerForView("outline", "copy", async () => {
             first.update(cx, |shell, cx| {
                 let pane = shell.workbench.read(cx).focused_pane().unwrap();
                 let target = super::OpenTarget {
+                    window: _window.window_handle(),
                     workbench: shell.workbench.downgrade(),
                     pane: pane.id(),
                     tab: pane.active_tab_id(),
                     surface: pane.active_tab().surface_id(),
+                    presentation: pane
+                        .active_tab()
+                        .editor()
+                        .map(Entity::entity_id)
+                        .or_else(|| pane.active_tab().terminal_view().map(Entity::entity_id)),
                 };
                 shell.present_open_document(replacement, &target, true, cx);
             });
@@ -8777,13 +8855,59 @@ await commands.registerForView("outline", "copy", async () => {
         let documents = install_globals(cx);
         let document = cx.update(|cx| create_untitled_document(&documents, cx));
         let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
-        let first = cx.new(|cx| Workbench::new_for_document(document, model.clone(), cx));
-        let second = cx.new(|cx| Workbench::new_for_document(document, model, cx));
+        let (_first, _) = product_window(document, model.clone(), cx);
+        let (_second, _) = product_window(document, model, cx);
         cx.read(|cx| {
-            let registry = cx.global::<ApplicationWorkbenches>();
-            registry.register(&first);
-            registry.register(&second);
-            assert_eq!(registry.view_count(document, cx), 2);
+            assert_eq!(
+                cx.global::<ApplicationWorkbenches>()
+                    .view_count(document, cx),
+                2
+            )
+        });
+    }
+
+    #[gpui::test]
+    async fn retained_closed_shell_does_not_keep_the_last_live_document_open(
+        cx: &mut TestAppContext,
+    ) {
+        let documents = install_globals(cx);
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        let (closed_shell, closed_window) = product_window(document, model.clone(), cx);
+        let (live_shell, live_window) = product_window(document, model.clone(), cx);
+        assert_eq!(
+            dispatch_product_command(
+                &closed_shell,
+                closed_window,
+                super::CLOSE_WINDOW_COMMAND,
+                cx
+            )
+            .completion
+            .await
+            .unwrap(),
+            CommandOutcome::Completed
+        );
+        cx.read(|cx| {
+            assert_eq!(
+                closed_shell
+                    .read(cx)
+                    .workbench
+                    .read(cx)
+                    .view_count(document),
+                1
+            );
+            assert!(documents.read(cx).get(document).is_some());
+        });
+        assert_eq!(
+            dispatch_product_command(&live_shell, live_window, CLOSE_TAB_COMMAND, cx)
+                .completion
+                .await
+                .unwrap(),
+            CommandOutcome::Completed
+        );
+        cx.read(|cx| {
+            assert!(documents.read(cx).get(document).is_none());
+            assert!(!model.read(cx).is_open());
         });
     }
 
@@ -9344,9 +9468,10 @@ await commands.registerForView("outline", "copy", async () => {
         let document = cx.update(|cx| create_untitled_document(&documents, cx));
         let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
         model.update(cx, |model, _| model.replace(0..0, "unsaved").unwrap());
-        let (shell, window_cx) = cx.add_window_view(|_, cx| {
+        let (shell, window_cx) = cx.add_window_view(|window, cx| {
             let workbench = cx.new(|cx| Workbench::new_for_document(document, model, cx));
-            cx.global::<ApplicationWorkbenches>().register(&workbench);
+            cx.global::<ApplicationWorkbenches>()
+                .register(&workbench, window.window_handle());
             ProductShell::new(workbench)
         });
         window_cx.update(|window, cx| {

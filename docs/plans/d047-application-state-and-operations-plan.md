@@ -1,6 +1,7 @@
 # D047 — Application state and document operations
 
-Status: 🚧 parent checkpoint 2 in progress; review gate not reached.
+Status: ⏳ parent checkpoint 2 implemented; awaiting explicit review approval.
+Parent checkpoint 3 has not started.
 
 Source: checkpoints 2–3 of the
 [extension platform and projects plan](extension-platform-and-projects-plan.md)
@@ -181,7 +182,7 @@ cancellation plumbing; do not add a general cancellation framework.
    captures for the collection/generation model. Derive application queries from
    existing documents and live product shells/workbenches. Add only the live-window
    registration needed to discover targets; avoid a synchronized catalog replica.
-2. **Commit notifications and lifetime.** 🚧 Wire document creation/removal,
+2. **Commit notifications and lifetime.** ✅ Wire document creation/removal,
    persistence/Save As, model content/dirty changes, workspace installation/clear,
    window lifecycle, presentation mutations, and native focus/activation. Include
    new/split/activate/close and tab relocation across panes/windows. Centralize final
@@ -192,7 +193,7 @@ cancellation plumbing; do not add a general cancellation framework.
    bootstrap, facade and declarations. Add snapshot queries, atomic observation,
    ordered delivery, and disposal using existing runtime ownership. Share the
    current document model commit source with buffer observation.
-4. **Usable fixture and documentation.** Add a checked JS observer loaded through
+4. **Usable fixture and documentation.** ✅ Add a checked JS observer loaded through
    the real product host. Demonstrate activation with zero windows, later window
    attachment, and document/presentation updates. Update identity/context guidance
    and affected architecture references; record validated rationale at completion.
@@ -293,8 +294,8 @@ undo, filesystem watching, new resource providers, and terminal restoration.
   stable retained IDs and monotonic replacement generations. Extra roots reject
   atomically; clearing/reinstalling cannot revive directory captures. Native folder
   Open and workspace-tree captures use the model.
-- 🚧 Checkpoint 2 remains unfinished: complete acceptance coverage and review the
-  observer fixture/contracts before the parent gate. No approval recorded.
+- ⏳ Checkpoint 2 implementation and automated acceptance coverage are ready for
+  review. Parent completion still requires explicit approval; none recorded.
 
 Model foundation validation (2026-10-15): `cargo test --all-targets` passed
 (562 library tests and 5 example tests); `cargo clippy --all-targets -- -D warnings`,
@@ -347,10 +348,9 @@ requires commit observation, FIFO delivery/disposal, and the checked observer fi
   later window attachment, edits/undo, shared documents, split/transfer, active
   target, roots/clear/reinstall, closure and disposal run through the product host.
   Author guide, declarations, architecture references and decisions are updated.
-- 🚧 Continue the checkpoint acceptance audit, especially observation assertions
-  around native/CLI/platform Open, failed/stale opens, Save As and save races,
-  reorder and exact live-target invalidation. Do not begin checkpoint 3 or mark
-  the parent checkpoint complete before its explicit review approval.
+- ✅ Completed the checkpoint acceptance audit below, including native/CLI/platform
+  Open, failed/stale opens, Save As/save races, reorder and exact live-target tokens.
+  Do not begin checkpoint 3 or mark the parent checkpoint complete before approval.
 
 Observation implementation validation (2026-10-15): `cargo test --all-targets`
 passed (572 library tests and 5 example tests); `cargo clippy --all-targets -- -D warnings`,
@@ -362,3 +362,47 @@ reinstall and rejected replacement, cross-window transfer, active focus, window/
 closure, unload ownership, and failed installed activation cleanup. The observer
 fixture ran as an installed package through the real product host. The full
 checkpoint acceptance audit and explicit parent review approval remain outstanding.
+
+## Checkpoint 2 acceptance audit — ready for review
+
+Previous goal turns made concrete progress through model/lifetime, queries/targets,
+and observation implementation commits. This audit adds focused product-boundary
+regressions in `src/app/product/tests/observation.rs`, without a production replay log.
+
+| Required behavior | Current evidence |
+| --- | --- |
+| Atomic initial snapshot/watermark; ordered following events without startup gaps | `baseline_watermark_and_ordered_changes_have_no_duplicate_initial_event`; V8 `application_observation_installs_before_queued_delivery_and_self_disposes` queues delivery before the observe response and verifies activation finishes first |
+| First open, additional presentation, existing-tab activation, split, reorder/transfer, native focus and closure | `open_entry_points_share_document_identity_and_publish_only_committed_resources`; `reordering_retains_exact_targets_while_replacement_and_transfer_change_them`; installed observer fixture covers split/cross-window transfer and window/final closure |
+| Empty workbenches and honest non-document/generated surfaces | `empty_workbench_and_generated_surfaces_keep_their_actual_metadata`; public query integration covers terminal/null buffer associations and diagnostic-window exclusion |
+| Native/CLI/platform Open convergence, missing destinations, failed/stale opens | New product observation tests exercise CLI path parsing, platform URL and native picker into one shared document; missing files, invalid UTF-8, provider failure, picker cancellation, superseded reads, same-document view replacement and closed windows |
+| Save As retains identity/transport and publishes URI/title/dirty metadata; racing edits remain dirty | `save_as_and_racing_edits_publish_current_metadata_without_changing_identity`; `save_as_rejects_a_replaced_view_even_when_the_document_and_tab_are_unchanged`; existing provider conflict, persistence and stale-save regressions |
+| Successful save remains observable before later close cancellation | `completed_save_remains_observable_when_a_later_close_prompt_is_cancelled` asserts clean saved metadata while every tab/window remains open |
+| Edits/undo-to-clean; one shared commit source for buffer and metadata listeners | `application_metadata_and_buffer_listeners_share_each_edit_once` runs ordinary JS through the real product host and checks both revision streams and dirty restoration |
+| Final versus nonfinal lifetime, retained entities and transfer | `document_removal_invalidates_retained_models_and_releases_buffer_ownership`; public JS `final_document_close_invalidates_js_buffer_even_with_retained_editor`; new `retained_closed_shell_does_not_keep_the_last_live_document_open`; native/JS transfer regressions |
+| Empty/single roots, retained IDs, extra-root rejection, clear/reinstall generation and stale directory replies | Workspace and workspace-tree contract tests plus installed observer fixture's root retain/clear/reinstall and rejection assertions |
+| Listener await/query/mutation/self-disposal, failure, queued disposal, unload and activation rollback | V8 admission/disposal test; `application_listener_can_query_edit_fail_and_dispose_without_blocking_queued_roots`; installed fixture plus failed observer activation cleanup |
+| Opaque identities, command authority separation, immutable metadata, declarations and checked fixture | Public query/context integration, pinned TypeScript contract checks, declaration/author-guide/runtime agreement; actual checked-in package loaded by the product-host example test |
+
+Audit fixes:
+
+- ✅ Bind weak workbench registrations to live native windows. Closing a retained
+  shell no longer inflates view counts and prevents final-document invalidation.
+- ✅ Native Open retains exact presentation and destination-window identity;
+  native Save and invocation-scoped command captures revalidate exact presentation
+  identity, focused surface identity and window/workbench lifetime.
+  Same-document view replacement and closed-window I/O cannot mutate replacements.
+- ✅ Open focuses its actual selected/created editor in the captured window.
+  Existing-tab activation now publishes matching selection and actual focus.
+
+Review remains required for snapshots, event taxonomy, opaque document/root/live
+identity rules and final-document invalidation. Inspect the checked
+[`@example/application-state` fixture](../../examples/extensions/@example/application-state/dist/main.js)
+and the published [declarations](../../src/host/js/knot.d.ts). No checkpoint 3
+mutations are published, and neither the parent checkpoint nor D047 is marked done.
+
+Final checkpoint 2 automated validation (2026-10-15): `cargo test --all-targets`
+passed (583 library tests and 5 example tests); `cargo clippy --all-targets -- -D warnings`,
+`scripts/check-extension-api.sh`, `git diff --check`, and added Markdown-link
+validation passed. The full product suite includes the checked installed observer
+fixture and both public JS and native commit-boundary tests. Required review is
+still pending; checkpoint 3 and D047 completion remain unapproved.

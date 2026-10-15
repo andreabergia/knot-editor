@@ -314,10 +314,12 @@ Detailed execution: [D046 public API foundation plan](../archive/plans/d046-publ
   Validation passed: 559 library tests, 5 example tests, Clippy with warnings
   denied, the pinned authoring checker and manual product smoke checks.
 
-### 2. Observable application state — D047 ⬜
+### 2. Observable application state — D047 ⏳
 
 Detailed execution: [D047 application state and operations plan](d047-application-state-and-operations-plan.md).
 This also covers checkpoint 3, retaining a separate review gate for each.
+Checkpoint 2 implementation and automated validation are ready; explicit review
+approval is pending. Checkpoint 3 has not started.
 Keep observation small: one foreground snapshot-and-subscribe operation, ordered
 notifications, window-owned workspaces, and existing product lifetime rules.
 

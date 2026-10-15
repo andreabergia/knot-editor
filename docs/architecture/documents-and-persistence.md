@@ -37,8 +37,10 @@ normalized `file://` open request at the platform boundary. A product open
 normalizes and stats the resource asynchronously. Existing files are read and
 UTF-8-decoded before foreground state changes, missing files create a dirty
 destination-associated document, and directories install the window's optional
-workspace and tree. Later opens and destroyed captured tabs reject stale
-completions. Normalized file URIs deduplicate through the application document
+workspace and tree. Later opens and lost or replaced captured presentations reject stale
+completions, even when replacement retains the same tab/document IDs. Open retains
+the destination window and focuses the selected native presentation there after
+commit, without looking up application focus again. Normalized file URIs deduplicate through the application document
 collection; a window reuses an existing tab when it already presents the
 document and otherwise creates an independent view in the captured pane.
 
@@ -105,7 +107,7 @@ Save and Save As still require a document target. Documents retain the observed 
 version with their persisted revision. Save captures document, model, resource,
 text, revision, version, and a persistence generation. A successful create or
 conditional replacement commits the new version and only the captured model
-revision while the captured command tab and document state remain live, so
+revision while the captured command presentation, native window and document state remain live, so
 edits racing the write remain dirty. Save As uses the native save panel, checks
 application-wide resource ownership, and retargets the document only after I/O
 succeeds. Conflicts offer native Reload, Save As, and Cancel choices; Reload
