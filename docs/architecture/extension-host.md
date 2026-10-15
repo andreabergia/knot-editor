@@ -397,3 +397,15 @@ structured errors. A command cancellation rejects its pending JS promises; reque
 with an already queued response retain their native pending entry until that turn
 consumes it without settling the rejected resolver again. This keeps an admitted
 response associated with its root while cancellation callbacks run.
+
+## Native extension record storage
+
+`app::extension_storage` binds application-selected canonical package identities
+and personal config to separate databases under local application data. Binding
+performs no I/O. Record operations execute on gpui's background executor, outside
+V8 and the foreground, and serialize access to a reused connection per database.
+Read distinguishes missing records from JSON null; keys list in binary order.
+Write/delete batches use one ordered transaction and acknowledge after commit.
+Unknown physical schemas and database failures report the affected path and
+cause without replacing data. This native boundary is not yet exposed to JS or
+connected to application shutdown admission/draining.

@@ -1,0 +1,156 @@
+# D048 — Simple durable extension storage
+
+Status: 🚧 Checkpoint 1 implemented and tested; awaiting native-boundary review.
+Checkpoints 2–3 have not started.
+
+Source: checkpoint 4 of the [extension platform and projects plan](extension-platform-and-projects-plan.md).
+Design discussion: 2026-10-15. Relevant current boundaries:
+[architecture](../architecture.md), [decisions](../decisions.md), and the
+[extension host](../architecture/extension-host.md).
+
+## Outcome
+
+JavaScript extensions and personal configuration can persist JSON records across
+Knot restarts through a small `storage` API. Storage is available during activation,
+before any product window exists.
+
+## Agreed design
+
+- Each extension gets its own SQLite database, selected by Knot from its validated
+  canonical package identity. Personal configuration gets a separate stable DB.
+  JavaScript cannot choose another owner or a database path.
+- Databases live under Knot's local application-data directory. Records are
+  application-global, independent of windows, roots, and runtime lifecycle IDs.
+- Use ordinary synchronous SQLite calls on the existing background executor,
+  outside V8 and off the UI thread. Reuse a connection per database and serialize
+  access to that connection. No dedicated storage service, worker, or custom queue.
+- Extend the existing annotated host operations, error transport, and public
+  JavaScript facade. JavaScript calls are async because native disk work runs
+  outside its turn. Storage needs no command or window context.
+- Application-owned data stays separate from extension databases. D048 does not
+  create application metadata tables; document persistence and recovery are D050.
+
+### Records
+
+Keys are strings and values are JSON-compatible data. Publish read, write,
+delete, list, and batch operations with TypeScript declarations and documentation.
+
+- Read distinguishes a missing key from a stored JSON null.
+- Write replaces the value for a key. Delete of an absent key succeeds.
+- List returns keys in deterministic order; no query language or pagination.
+- Batch applies an ordered list of writes/deletes in one SQLite transaction.
+  Invalid input or a database failure leaves none of the batch committed.
+- A successful mutation response means the transaction committed. Awaited calls
+  preserve their natural order. Concurrent calls serialize at the connection;
+  the last committed write wins. Read/modify/write across calls is not atomic.
+- No public record versions or conditional updates. Extensions own the structure
+  and any schema versions inside their JSON values.
+
+### Lifetime and failures
+
+Open databases as needed and initialize the small record schema. Use SQLite's
+normal transaction and durability behavior; do not introduce a tuning framework
+or custom backup system. Select the crate and record the concrete settings in the
+first checkpoint's review.
+
+Use the existing caller-lifetime checks before starting database work. Once a
+transaction starts, finish it normally; cancellation or unload does not undo a
+committed write. A caller that disappears may not receive its result. Reuse the
+existing exact-once host settlement behavior.
+
+Graceful application shutdown stops admitting storage work and waits for admitted
+work to finish before releasing connections. This must not require a final JS
+unload callback or block the foreground thread waiting for disk I/O.
+
+Reload, package updates, and uninstall preserve data. D048 adds no automatic
+cleanup or cleanup UI. Diagnostics identify the affected database and failure;
+corrupt, incompatible, or unwritable storage fails without deleting or replacing
+the database. The rest of the application can continue with that storage
+unavailable. Any future physical schema change needs an explicit migration;
+D048 needs schema initialization and rejection of unsupported schemas, not a
+migration framework.
+
+## Checkpoints
+
+### 1. Native record storage ✅
+
+Implement the per-owner database boundary, connection reuse, schema initialization,
+and synchronous record/transaction operations. Choose the SQLite crate and simple
+connection settings. Keep filesystem/database work on the background executor.
+
+**Validation:** real temporary databases cover read/write/delete/list, JSON null
+versus missing, batch ordering and rollback, owner isolation, reopen, and
+unsupported/corrupt/unwritable storage without destructive replacement.
+
+**Review gate:** inspect the native boundary, schema, dependency, and durability
+settings before connecting the JS API.
+
+✅ Implemented in `app::extension_storage`. Application-selected owners bind a
+validated canonical package name or the separate personal-config identity to
+`storage/packages/@scope/package.sqlite3` or `storage/personal-config.sqlite3`
+under local application data. Binding is I/O-free; operations open lazily and run
+on the existing gpui background executor. Each database reuses one mutex-guarded
+connection. Typed `serde_json::Value` mutations admit only JSON data; the JS input
+validation boundary remains checkpoint 2.
+
+✅ Dependency/settings: `rusqlite` 0.40.2 with bundled SQLite; explicit read/write,
+create and no-mutex open flags (the Rust mutex serializes access), five-second
+busy timeout, rollback journal `DELETE`, and `synchronous=FULL`. Each mutation or
+ordered batch commits a normal SQLite transaction before returning success.
+Schema version 1 uses `application_id=0x4b4e4f54`, `user_version=1`, and a strict
+`records(key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL CHECK(json_valid(value)))`
+table. Only empty unowned databases initialize; mismatched ownership, versions,
+or physical schema fail without replacement. Errors retain database path and cause.
+
+✅ Seven real-database tests cover records and null/missing, stable ordering,
+replacement/delete, reopen/settings, owner isolation and connection reuse,
+concurrent calls, ordered batches and injected SQLite rollback, unsupported
+versions/foreign schemas/corruption, and unwritable locations/read-only files.
+
+✅ Validation: `cargo test --lib extension_storage` passed all seven storage tests;
+`cargo test --lib` passed all 626 tests on the final run. The first full run hit
+an existing provider-unload assertion (`Terminated` versus `Cancelled`); that test
+passed in isolation and the full rerun passed. `cargo fmt` and `git diff --check`
+completed.
+
+⏸️ Native review gate remains open. Host API/lifetime admission and application
+shutdown integration belong to the following checkpoints.
+
+
+### 2. Usable JavaScript API ⬜
+
+Connect storage through existing typed handlers and lifecycle ownership. Publish
+the facade, declarations, and API documentation. Exercise both installed-package
+identity and the personal-config identity; storage must work during activation.
+
+**Validation:** real JS through the product host covers record operations, JSON
+validation, atomic batches, isolated owners, structured errors, and data surviving
+unload/reload. Run the extension API contract checks.
+
+**Review gate:** approve the small public API and demonstrate persistence using an
+ordinary JS fixture with no private application access.
+
+### 3. Shutdown and acceptance ⬜
+
+Integrate graceful shutdown with admitted native storage work and finish lifecycle
+coverage. Update the relevant architecture reference and validated decisions when
+the implementation establishes them. Mark this and the parent plan as work lands.
+
+**Validation:** deterministic tests cover cancellation before work starts, unload
+while a transaction is in flight, shutdown with pending writes, and database reopen
+after a separate process exits or is interrupted. Verify committed data survives
+and interrupted batches never appear partially applied. Run the relevant Rust
+and extension API checks; run `cargo fmt` once at the end of Rust work before
+committing. Use logical commits for the implementation checkpoints.
+
+**Review gate:** review the restart demonstration, failure diagnostics, and passing
+automated checks. Stop for approval before marking D048 complete and archiving
+this plan.
+
+## Exclusions and deferred choices
+
+No multi-process coordination, single-instance enforcement, public versions,
+conditional writes, SQL API, secrets, synchronization, automatic backups, or
+uninstall cleanup. Application metadata, document recovery, and coordination
+between recovery captures and extension records remain D050 decisions. This plan
+does not preselect a cross-database recovery protocol.

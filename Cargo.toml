@@ -26,6 +26,7 @@ unicode-segmentation = "1"
 url = "2"
 uuid = { version = "1", features = ["v4"] }
 v8 = "152.2"
+rusqlite = { version = "0.40.2", features = ["bundled"] }
 
 [dev-dependencies]
 gpui = { version = "0.2", default-features = false, features = ["font-kit", "test-support", "windows-manifest"] }

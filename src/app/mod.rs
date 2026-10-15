@@ -45,6 +45,11 @@ pub(crate) mod extension_package;
 mod extension_semantics;
 #[allow(
     dead_code,
+    reason = "native storage boundary awaiting host API integration"
+)]
+mod extension_storage;
+#[allow(
+    dead_code,
     reason = "retained application boundary outside the current product surface"
 )]
 mod filesystem;

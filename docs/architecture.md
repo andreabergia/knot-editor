@@ -39,6 +39,10 @@ gpui application and views        extension runtimes
   existing XDG location over the platform directory, and captures optional
   phase entries and contained JavaScript sources. The host validates reachable
   static module graphs without evaluating them.
+- `app::extension_storage` owns application-global JSON record databases selected
+  by canonical package identity or personal config. Its native async boundary
+  runs SQLite operations on the background executor with a reused, serialized
+  connection per owner; host API and shutdown integration are not yet connected.
 - `app::extension_load` plans dependency order and records startup outcomes
   using Knot-owned package data and a rollback guard for each attempted load.
 

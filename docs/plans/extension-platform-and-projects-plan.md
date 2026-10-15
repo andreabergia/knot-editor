@@ -2,7 +2,7 @@
 
 Status: ✅ D046, D047 and the D053 maintenance interlude complete, approved
 and archived on 2026-10-15. D048 is the next numbered checkpoint.
-Numbered product checkpoints 4–10 remain unstarted.
+Numbered product checkpoint 4 is in progress; checkpoints 5–10 remain unstarted.
 
 Source: the project-management design discussion of 2026-10-13 and the
 [prioritized roadmap](../roadmap.md). Work identifiers: D046–D052 and promoted
@@ -376,6 +376,10 @@ unstarted. D053 adds no D047 requirement and does not implement D048 storage or
 D020 user automation. The broader extension/project initiative remains in progress.
 
 ### 4. SQLite-backed extension storage — D048 ⬜
+
+🚧 Native storage checkpoint implemented and tested in the focused D048 plan;
+native-boundary review is pending before JS integration. This parent checkpoint
+remains incomplete.
 
 - Finalize and publish the storage namespace with the implemented record API,
   extending the public declarations, documentation, and contract tests.
