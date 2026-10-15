@@ -141,33 +141,38 @@ async fn semantic_open_rejects_a_replaced_presentation_without_creating_a_docume
 use crate::app::extension_host::{self, ProductExtensionHost};
 use crate::host::lifecycle::ExtensionKey;
 
-fn install_operation_fixture(
+pub(super) fn install_operation_fixture(
     host: &Entity<ProductExtensionHost>,
     source: &str,
     ready: &str,
     cx: &mut TestAppContext,
 ) -> ExtensionKey {
     let key = ExtensionKey::new(ExtensionId::new(711), ExtensionLifecycleId::new(1));
+    let activated = std::rc::Rc::new(std::cell::Cell::new(false));
+    let finished = activated.clone();
     host.update(cx, |host, cx| {
         let execution = host.load_test_source(key, source).unwrap();
         cx.spawn(async move |_, _| {
             execution.await.unwrap();
+            finished.set(true);
         })
         .detach();
     });
     wait_for_api_condition(cx, |cx| {
-        cx.global::<ApplicationProductCommands>()
-            .0
-            .read(cx)
-            .catalog()
-            .borrow()
-            .resolve(ready)
-            .is_ok()
+        activated.get()
+            && cx
+                .global::<ApplicationProductCommands>()
+                .0
+                .read(cx)
+                .catalog()
+                .borrow()
+                .resolve(ready)
+                .is_ok()
     });
     key
 }
 
-fn empty_product_window(
+pub(super) fn empty_product_window(
     documents: &Entity<DocumentCollection>,
     cx: &mut TestAppContext,
 ) -> (Entity<ProductShell>, gpui::AnyWindowHandle) {
@@ -486,6 +491,26 @@ fn installed_open_command_consumes_the_committed_result_in_its_originating_windo
         ),
         CommandOutcome::Completed
     );
+    for (command, generation, root_count) in
+        [("example.open-folder", 1, 1), ("example.clear-roots", 2, 0)]
+    {
+        assert_eq!(
+            wait_for_command(
+                dispatch_product_command(&second, second_window, command, cx),
+                cx
+            ),
+            CommandOutcome::Completed
+        );
+        let report: serde_json::Value = cx.read(|cx| {
+            serde_json::from_str(&cx.read_from_clipboard().unwrap().text().unwrap()).unwrap()
+        });
+        assert_eq!(report["generation"], generation);
+        assert_eq!(report["roots"].as_array().unwrap().len(), root_count);
+        assert_eq!(
+            cx.read(|cx| second.read(cx).workbench.read(cx).view_count(document)),
+            1
+        );
+    }
 }
 
 #[gpui::test]

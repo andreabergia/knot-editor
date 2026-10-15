@@ -655,6 +655,18 @@ export async function getWindow(target) {
   const value = await request("getWindow", windowAuthority(target));
   return value === null ? null : windowFromNative(value);
 }
+function workspaceDestination(options) {
+  if (options === undefined) return null;
+  const target = record(options, "workspace options must be an object").target;
+  return target === undefined ? null : windowAuthority(target);
+}
+export async function openFolder(uri, options) {
+  return workspaceFromNative(await request("openFolder", string(uri, "resource URI must be text"), workspaceDestination(options)));
+}
+export async function replaceWorkspaceRoots(roots, options) {
+  const uris = arrayItems(roots, uri => string(uri, "workspace root URI must be text"));
+  return workspaceFromNative(await request("replaceWorkspaceRoots", uris, workspaceDestination(options)));
+}
 export async function getWorkspace(target) {
   const value = await request("getWorkspace", windowAuthority(target));
   return value === null ? null : workspaceFromNative(value);

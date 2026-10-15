@@ -109,8 +109,20 @@ declare module "knot" {
     get(target: WindowTarget): Promise<WindowInfo | null>;
   }>;
   /** Window-owned ordered roots; empty roots are valid. Closed windows return null. */
+  export interface WorkspaceDestinationOptions {
+    /** Omission captures the command's window or active product window at admission. */
+    readonly target?: WindowTarget;
+  }
   export const workspaces: Readonly<{
     get(target: WindowTarget): Promise<WorkspaceInfo | null>;
+    /** Validates an existing directory and replaces this window's roots. Missing
+     * roots reject ResourceNotFound, files reject ResourceWrongKind. */
+    openFolder(uri: string, options?: WorkspaceDestinationOptions): Promise<WorkspaceInfo>;
+    /** Validates zero or one directory URI before committing roots and tree
+     * together. Empty roots clear; retained normalized roots keep their IDs.
+     * More than one root rejects TooManyWorkspaceRoots. Documents remain open.
+     * A newer Open/root request or root generation invalidates pending work. */
+    replaceRoots(roots: readonly string[], options?: WorkspaceDestinationOptions): Promise<WorkspaceInfo>;
   }>;
 
   export interface ApplicationSnapshot {
@@ -157,7 +169,7 @@ declare module "knot" {
     | "InvalidRange" | "InvalidEditBatch" | "RevisionConflict" | "ContributionSetNotFound"
     | "TreeViewNotFound" | "ViewNotFound" | "TreeProviderInUse" | "TreeProviderNotFound"
     | "CompletionProviderNotFound" | "CommandNameInUse" | "CommandNotFound"
-    | "InvalidUri" | "DocumentNotFound" | "ResourceNotFound" | "ResourceWrongKind" | "InvalidUtf8" | "ProviderFailure";
+    | "InvalidUri" | "DocumentNotFound" | "TooManyWorkspaceRoots" | "ResourceNotFound" | "ResourceWrongKind" | "InvalidUtf8" | "ProviderFailure";
   /**
    * Native operation failure. Narrow a caught Error by name === "KnotHostError"
    * and its string code property, then dispatch on code. No error constructor

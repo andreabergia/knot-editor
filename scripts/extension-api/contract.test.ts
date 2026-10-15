@@ -119,6 +119,16 @@ const untitled = await documents.createUntitled({ target: opened.presentation.ta
 await documents.present(untitled.document.id, { target: opened.presentation.target.window });
 // @ts-expect-error untitled options need live destinations
 await documents.createUntitled({ target: {} as CommandTarget });
+const workspace: import("knot").WorkspaceInfo = await workspaces.openFolder("file:///tmp", { target: opened.presentation.target.window });
+await workspaces.replaceRoots([], { target: workspace.window });
+await workspaces.replaceRoots(["file:///tmp"]);
+// @ts-expect-error folder destinations require a window, not a pane
+await workspaces.openFolder("file:///tmp", { target: opened.presentation.target.pane });
+// @ts-expect-error root replacement accepts URI strings, not root metadata
+await workspaces.replaceRoots(workspace.roots);
+// @ts-expect-error root collections must be arrays
+await workspaces.replaceRoots("file:///tmp");
+
 // @ts-expect-error plain URIs are not document identities
 await documents.present("file:///tmp/document.txt");
 

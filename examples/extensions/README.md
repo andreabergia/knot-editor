@@ -27,3 +27,8 @@ Run **example.open-document** in another window to present the first open resour
 there and copy the committed document metadata. From JavaScript, pass an explicit
 URI with `commands.invoke("example.open-document", { uri: "file:///…" })`.
 The operation uses the originating command window captured by the native host.
+
+**example.open-folder** opens the first resource's parent in the originating
+window, or accepts `{ uri }` directory arguments from JavaScript.
+**example.clear-roots** clears that window's roots. Both copy committed roots and
+generation to the clipboard and leave open documents intact.

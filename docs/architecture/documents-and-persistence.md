@@ -135,3 +135,12 @@ without changing the document UUID. Content edits use the existing model commit
 notifications; observation does not require an author to request a buffer first.
 Window root replacement/clear commits roots and generation with tree state, and
 signals through the product shell. Rejected extra roots preserve the prior state.
+
+Programmatic folder Open and root replacement capture the native window without
+depending on its selected document or workbench contents. They normalize and stat
+zero or one directory URI before committing through the same shell root/tree
+transition as native folder Open. Failed validation leaves both owners unchanged.
+Completion revalidates caller lifetime, native window root, Open generation and
+captured workspace generation. Clear/reinstall retains generation safety while
+leaving unrelated documents open. The response uses the committed workspace
+snapshot directly, without a later query or command-status interpretation.

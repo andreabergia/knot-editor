@@ -38,22 +38,50 @@ fn window_target(destination: &DocumentDestination) -> &WindowTarget {
     }
 }
 
-fn capture_destination(
-    destination: &DocumentDestination,
+fn capture_window(
+    target: &WindowTarget,
     cx: &mut App,
-) -> Result<(Entity<ProductShell>, OpenTarget), HostRequestError> {
+) -> Result<(Entity<ProductShell>, AnyWindowHandle), HostRequestError> {
     let window = cx
         .windows()
         .into_iter()
         .find(|window| {
             window.downcast::<ProductShell>().is_some()
-                && window.window_id().as_u64().to_string() == window_target(destination).window
+                && window.window_id().as_u64().to_string() == target.window
         })
         .ok_or(HostRequestError::InvalidTarget)?;
-    cx.update_window(window, |root, _, cx| {
-        let shell = root
-            .downcast::<ProductShell>()
-            .map_err(|_| HostRequestError::InvalidTarget)?;
+    let shell = cx
+        .update_window(window, |root, _, _| root.downcast::<ProductShell>())
+        .map_err(|_| HostRequestError::InvalidTarget)?
+        .map_err(|_| HostRequestError::InvalidTarget)?;
+    Ok((shell, window))
+}
+
+pub(super) fn workspace_info(
+    window: WindowTarget,
+    snapshot: &super::super::workspace::WorkspaceSnapshot,
+) -> crate::host::protocol::WorkspaceInfo {
+    use crate::host::protocol::{WorkspaceInfo, WorkspaceRootInfo};
+    WorkspaceInfo {
+        window,
+        generation: snapshot.generation(),
+        roots: snapshot
+            .roots()
+            .iter()
+            .map(|root| WorkspaceRootInfo {
+                id: root.id.to_string(),
+                uri: root.uri.to_string(),
+            })
+            .collect(),
+    }
+}
+
+fn capture_destination(
+    destination: &DocumentDestination,
+    cx: &mut App,
+) -> Result<(Entity<ProductShell>, OpenTarget), HostRequestError> {
+    let (shell, window) = capture_window(window_target(destination), cx)?;
+    cx.update_window(window, |_, _, cx| {
         let state = shell.read(cx);
         let workbench = state.workbench.read(cx);
         let pane = match destination {
@@ -216,4 +244,78 @@ pub(crate) fn present_document(
         target
     });
     Ok((document, target.public_target()))
+}
+
+pub(crate) fn replace_roots(
+    roots: Vec<String>,
+    window_target: WindowTarget,
+    caller: OperationCaller,
+    completion: impl FnOnce(Result<crate::host::protocol::WorkspaceInfo, HostRequestError>) + 'static,
+    cx: &mut App,
+) -> Result<(), HostRequestError> {
+    if roots.len() > 1 {
+        return Err(HostRequestError::TooManyWorkspaceRoots);
+    }
+    let roots = roots
+        .into_iter()
+        .map(|uri| {
+            super::super::resource::ResourceUri::parse(&uri)
+                .map_err(|_| HostRequestError::InvalidUri)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let (shell, window) = capture_window(&window_target, cx)?;
+    let shell_id = shell.entity_id();
+    shell.update(cx, |shell, cx| {
+        let generation = shell.next_open_generation();
+        let workspace = shell.workspace.snapshot();
+        let providers = ProductShell::filesystems(cx);
+        let task = cx.spawn(async move |this, cx| {
+            let validated = async {
+                let mut validated = Vec::new();
+                for uri in roots {
+                    match super::super::open::load_resource_kind(
+                        providers.clone(),
+                        uri,
+                        Some(ResourceKind::Directory),
+                    )
+                    .await
+                    {
+                        Ok(OpenResource::Directory(uri)) => validated.push(uri),
+                        Ok(_) => return Err(HostRequestError::ResourceWrongKind),
+                        Err(error) => return Err(OpenFailure::Resource(error).host_error()),
+                    }
+                }
+                Ok(validated)
+            }
+            .await;
+            let mut completion = Some(completion);
+            if this
+                .update(cx, |shell, cx| {
+                    let result = if !caller.is_live(cx) {
+                        Err(HostRequestError::Cancelled)
+                    } else if shell.open_generation != generation
+                        || !shell.workspace.is_current(&workspace)
+                        || !cx
+                            .update_window(window, |root, _, _| root.entity_id() == shell_id)
+                            .unwrap_or(false)
+                    {
+                        Err(HostRequestError::InvalidTarget)
+                    } else {
+                        validated.and_then(|roots| {
+                            shell
+                                .replace_workspace_roots(roots, cx)
+                                .map(|snapshot| workspace_info(window_target, &snapshot))
+                                .map_err(|_| HostRequestError::TooManyWorkspaceRoots)
+                        })
+                    };
+                    completion.take().unwrap()(result);
+                })
+                .is_err()
+            {
+                completion.take().unwrap()(Err(HostRequestError::InvalidTarget));
+            }
+        });
+        shell.tasks.push(task);
+    });
+    Ok(())
 }

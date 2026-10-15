@@ -339,6 +339,7 @@ enum HostOperationKind {
     UnobserveWorkbench,
     ApplicationQuery,
     DocumentPresented,
+    WorkspaceUpdated,
     KeybindingBatch,
     ActiveBuffer,
     Snapshot,
@@ -3889,12 +3890,54 @@ fn document_destination_from_v8<'s>(
     }
 }
 
+fn optional_window_target(
+    scope: &mut v8::PinnedRef<'_, v8::HandleScope>,
+    value: v8::Local<'_, v8::Value>,
+) -> Result<Option<super::protocol::WindowTarget>, BoundaryError> {
+    Ok(optional_string(scope, value, "window target must be text")?
+        .map(|window| super::protocol::WindowTarget { window }))
+}
+
+fn workspace_root_uris<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Value>,
+) -> Result<Vec<String>, BoundaryError> {
+    let array = v8::Local::<v8::Array>::try_from(value)
+        .map_err(|_| BoundaryError::Type("workspace roots must be an array"))?;
+    let mut roots = Vec::with_capacity(array.length() as usize);
+    for index in 0..array.length() {
+        let uri = array
+            .get_index(scope, index)
+            .ok_or("invalid workspace root")?;
+        roots.push(required_string(
+            scope,
+            uri,
+            "workspace root URI must be text",
+        )?);
+    }
+    Ok(roots)
+}
+
 fn parse_host_operation<'s, 'i>(
     scope: &mut v8::PinnedRef<'s, v8::HandleScope<'i>>,
     arguments: &v8::FunctionCallbackArguments<'s>,
 ) -> Result<(HostOperation, HostOperationKind), BoundaryError> {
     let operation = required_string(scope, arguments.get(1), "operation must be text")?;
     match operation.as_str() {
+        "openFolder" => Ok((
+            HostOperation::OpenFolder {
+                uri: required_string(scope, arguments.get(2), "resource URI must be text")?,
+                target: optional_window_target(scope, arguments.get(3))?,
+            },
+            HostOperationKind::WorkspaceUpdated,
+        )),
+        "replaceWorkspaceRoots" => Ok((
+            HostOperation::ReplaceWorkspaceRoots {
+                roots: workspace_root_uris(scope, arguments.get(2))?,
+                target: optional_window_target(scope, arguments.get(3))?,
+            },
+            HostOperationKind::WorkspaceUpdated,
+        )),
         "createUntitled" => Ok((
             HostOperation::CreateUntitled {
                 target: document_destination_from_v8(scope, arguments.get(2))?,
@@ -4747,6 +4790,14 @@ fn host_response_to_v8<'s>(
         }
         (HostOperationKind::UnobserveWorkbench, HostResponseValue::WorkbenchUnobserved) => {
             Ok(v8::undefined(scope).into())
+        }
+        (HostOperationKind::WorkspaceUpdated, HostResponseValue::WorkspaceUpdated(value)) => {
+            if value.generation > MAX_JS_INTEGER {
+                return Err("native application integer cannot be represented exactly");
+            }
+            let json = serde_json::to_string(&value).map_err(|_| "UnsupportedOperation")?;
+            let json = v8::String::new(scope, &json).ok_or("UnsupportedOperation")?;
+            v8::json::parse(scope, json).ok_or("UnsupportedOperation")
         }
         (HostOperationKind::DocumentPresented, HostResponseValue::DocumentPresented(value)) => {
             if !application_document_is_exact(&value.document)

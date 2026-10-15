@@ -854,7 +854,16 @@ impl ProductExtensionHost {
             }
             RequestRoute::View => self.dispatch_view_request(request, cx),
             RequestRoute::Application => Some(self.dispatch_application_request(request, cx)),
-            RequestRoute::ApplicationMutation => self.dispatch_document_operation(request, cx),
+            RequestRoute::ApplicationMutation => {
+                if matches!(
+                    &request.operation,
+                    HostOperation::OpenFolder { .. } | HostOperation::ReplaceWorkspaceRoots { .. }
+                ) {
+                    self.dispatch_workspace_operation(request, cx)
+                } else {
+                    self.dispatch_document_operation(request, cx)
+                }
+            }
             RequestRoute::Semantic => {
                 let removed = match &request.operation {
                     HostOperation::UnregisterCompletionProvider { registration } => {
@@ -1673,10 +1682,21 @@ impl ProductExtensionHost {
         cx: &App,
     ) -> Result<crate::host::protocol::DocumentDestination, crate::host::protocol::HostRequestError>
     {
-        use crate::host::protocol::{DocumentDestination, HostRequestError, WindowTarget};
+        use crate::host::protocol::DocumentDestination;
         if let Some(target) = target {
             return Ok(target);
         }
+        Ok(DocumentDestination::Window(
+            self.operation_window(request, cx)?,
+        ))
+    }
+
+    fn operation_window(
+        &self,
+        request: &HostRequest,
+        cx: &App,
+    ) -> Result<crate::host::protocol::WindowTarget, crate::host::protocol::HostRequestError> {
+        use crate::host::protocol::{HostRequestError, WindowTarget};
         let window = if let Some(invocation) = request.invocation {
             let root = self
                 .commands
@@ -1693,9 +1713,59 @@ impl ProductExtensionHost {
         if window.downcast::<ProductShell>().is_none() {
             return Err(HostRequestError::ContextUnavailable);
         }
-        Ok(DocumentDestination::Window(WindowTarget {
+        Ok(WindowTarget {
             window: window.window_id().as_u64().to_string(),
-        }))
+        })
+    }
+
+    fn dispatch_workspace_operation(
+        &mut self,
+        request: HostRequest,
+        cx: &mut Context<Self>,
+    ) -> Option<crate::host::protocol::HostResponse> {
+        use crate::host::protocol::{HostRequestError, HostResponse, HostResponseValue};
+        let key = ExtensionKey::new(request.extension, request.lifecycle);
+        let result = (|| {
+            if !self.operation_is_live(key, request.invocation) {
+                return Err(HostRequestError::Cancelled);
+            }
+            let (roots, target) = match request.operation.clone() {
+                HostOperation::OpenFolder { uri, target } => (vec![uri], target),
+                HostOperation::ReplaceWorkspaceRoots { roots, target } => (roots, target),
+                _ => return Err(HostRequestError::UnsupportedOperation),
+            };
+            let target = match target {
+                Some(target) => target,
+                None => self.operation_window(&request, cx)?,
+            };
+            let caller = product::operations::OperationCaller {
+                host: cx.entity().downgrade(),
+                key,
+                invocation: request.invocation,
+            };
+            let delivered = request.clone();
+            let pool = self.pool.clone();
+            product::operations::replace_roots(
+                roots,
+                target,
+                caller,
+                move |result| {
+                    let _ = pool.respond(HostResponse {
+                        extension: delivered.extension,
+                        lifecycle: delivered.lifecycle,
+                        id: delivered.id,
+                        result: result.map(HostResponseValue::WorkspaceUpdated),
+                    });
+                },
+                cx,
+            )
+        })();
+        result.err().map(|error| HostResponse {
+            extension: request.extension,
+            lifecycle: request.lifecycle,
+            id: request.id,
+            result: Err(error),
+        })
     }
 
     fn document_presentation(
@@ -1885,7 +1955,9 @@ fn request_route(operation: &HostOperation) -> RequestRoute {
     match operation {
         HostOperation::OpenDocument { .. }
         | HostOperation::CreateUntitled { .. }
-        | HostOperation::PresentDocument { .. } => RequestRoute::ApplicationMutation,
+        | HostOperation::PresentDocument { .. }
+        | HostOperation::OpenFolder { .. }
+        | HostOperation::ReplaceWorkspaceRoots { .. } => RequestRoute::ApplicationMutation,
         HostOperation::ApplicationQuery(_)
         | HostOperation::ObserveWorkbench
         | HostOperation::UnobserveWorkbench { .. } => RequestRoute::Application,

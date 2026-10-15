@@ -1,4 +1,4 @@
-import { commands, documents, windows, workbench } from "knot";
+import { commands, documents, windows, workbench, workspaces } from "knot";
 
 /** @type {{ sequence: number, type: string, document: string | null, documentCount: number }[]} */
 const events = [];
@@ -42,4 +42,21 @@ await commands.register("example.open-document", async ({ arguments: args }) => 
   await workbench.writeClipboardText(JSON.stringify({ document: result.document.id,
     title: result.document.title, resourceUri: result.document.resourceUri,
     kind: result.document.kind, dirty: result.document.dirty }, null, 2));
+});
+
+await commands.register("example.open-folder", async ({ arguments: args }) => {
+  let uri;
+  if (args !== null && typeof args === "object" && !Array.isArray(args) && "uri" in args && typeof args.uri === "string") {
+    uri = args.uri;
+  } else if (args === null) {
+    const resource = (await documents.list()).find(document => document.resourceUri !== null)?.resourceUri;
+    if (resource) uri = resource.slice(0, resource.lastIndexOf("/") + 1);
+  }
+  if (typeof uri !== "string") return commands.invalidArguments("Open a file first, or pass { uri: anAbsoluteDirectoryUri }.");
+  const result = await workspaces.openFolder(uri);
+  await workbench.writeClipboardText(JSON.stringify({ roots: result.roots, generation: result.generation }, null, 2));
+});
+await commands.register("example.clear-roots", async () => {
+  const result = await workspaces.replaceRoots([]);
+  await workbench.writeClipboardText(JSON.stringify({ roots: result.roots, generation: result.generation }, null, 2));
 });

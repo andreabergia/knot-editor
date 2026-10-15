@@ -415,6 +415,9 @@ This keeps provider, deduplication, presentation and target-loss behavior togeth
 a command's status string or a later focus query cannot identify its result.
 Capture live destinations at native admission and revalidate exact presentations
 and caller lifetime before commit. File-only extension Open constrains resource
-kind before reading, while ordinary native Open continues dispatching by kind.
+kind before reading, while ordinary native Open continues dispatching by kind. Address root mutations
+by window independently of document presentations, validating the entire root set
+before the shared root/tree transition. Captured Open and workspace generations
+prevent an older validation from overwriting a newer root decision.
 
 Reference: [documents and persistence](architecture/documents-and-persistence.md).

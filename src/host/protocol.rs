@@ -582,6 +582,14 @@ pub enum HostOperation {
         subscription: WorkbenchSubscriptionId,
     },
     ApplicationQuery(ApplicationQuery),
+    OpenFolder {
+        uri: String,
+        target: Option<WindowTarget>,
+    },
+    ReplaceWorkspaceRoots {
+        roots: Vec<String>,
+        target: Option<WindowTarget>,
+    },
     CreateUntitled {
         target: Option<DocumentDestination>,
     },
@@ -680,6 +688,7 @@ pub enum HostResponseValue {
     WorkbenchUnobserved,
     ApplicationQuery(ApplicationQueryResult),
     DocumentPresented(DocumentPresentation),
+    WorkspaceUpdated(WorkspaceInfo),
     KeybindingsApplied {
         error: Option<String>,
     },
@@ -786,6 +795,7 @@ pub enum HostRequestError {
     ContextUnavailable,
     InvalidUri,
     DocumentNotFound,
+    TooManyWorkspaceRoots,
     ResourceNotFound,
     ResourceWrongKind,
     InvalidUtf8,
@@ -815,6 +825,7 @@ impl HostRequestError {
             Self::ContextUnavailable => "ContextUnavailable",
             Self::InvalidUri => "InvalidUri",
             Self::DocumentNotFound => "DocumentNotFound",
+            Self::TooManyWorkspaceRoots => "TooManyWorkspaceRoots",
             Self::ResourceNotFound => "ResourceNotFound",
             Self::ResourceWrongKind => "ResourceWrongKind",
             Self::InvalidUtf8 => "InvalidUtf8",

@@ -230,18 +230,19 @@ adding programmatic mutations. Mark the parent checkpoint complete only on appro
 
 1. **Shared semantic completion.** ⏳ Resource Open now returns typed committed
    document/presentation or workspace data and preserves resource failures; native
-   command dispatch adapts that result. Root/close integration remains.
+   command dispatch adapts that result. Root completion is shared; protected-close
+   integration remains.
    Refactor only the product entry points needed
    to return typed open/present/root/close results. Keep provider work off the
    foreground; keep target capture, generation validation and commit with the
    existing owners. Native and JS callers use the same implementation.
-2. **Open and present.** ⏳ File Open is public through the shared native operation;
-   untitled creation and presenting a live document are also public; folder Open
-   remains. Implement file/folder opening, untitled creation, and
+2. **Open and present.** ✅ File/folder Open, untitled creation, and presenting
+   a live document are public through shared native transitions. Implement file/folder opening, untitled creation, and
    presenting a live document. Admit explicit destinations and optional-window
    capture; return metadata and the actual selected/created presentation. Validate
    after asynchronous work before mutating the captured destination.
-3. **Roots and close.** Expose validated root replacement/clear and exact
+3. **Roots and close.** ⏳ Root replacement/clear is public; protected closure
+   remains. Expose validated root replacement/clear and exact
    presentation closure through current protected closure. No unconditional close,
    direct document removal API, all-window document-close policy, or new window
    management API. Continue publishing through checkpoint 2 commit boundaries.
@@ -474,3 +475,24 @@ Untitled/present validation (2026-10-15): `cargo test --all-targets --quiet` pas
 (593 library tests and 5 example tests); `cargo clippy --all-targets -- -D warnings`,
 `scripts/check-extension-api.sh` and `git diff --check` passed. Folder/root operations,
 protected-close integration and the remaining checkpoint 3 gate are outstanding.
+
+- ✅ `workspaces.openFolder(uri, options)` and `replaceRoots(uris, options)` now
+  validate zero/one directory roots before the common native root/tree transition,
+  returning its committed snapshot. Explicit and implicit window destinations work
+  independently of document tabs, including empty workbenches. Newer Open/root
+  requests, changed roots, window loss and caller cancellation/unload reject
+  pending validation. Retained normalized root IDs and clear/reinstall generations
+  follow the existing model.
+- ✅ Product-host tests cover missing/wrong-kind/provider/URI/extra-root failures,
+  unchanged roots on rejection, retained IDs, clear/reinstall, document preservation,
+  two-window destination capture, gated validation across focus/root/window/lifecycle
+  changes, and an empty workbench. The window fixture now resolves its registered
+  native handle instead of assuming enumeration order after window-slot reuse.
+- ✅ Checked installed `example.open-folder` and `example.clear-roots` commands
+  consume semantic results, with real product-host coverage and authoring checks.
+
+Folder/root validation (2026-10-15): `cargo test --all-targets --quiet` passed
+(596 library tests and 5 example tests); `cargo clippy --all-targets -- -D warnings`,
+`scripts/check-extension-api.sh` and `git diff --check` passed. The fixture waits
+for activation completion before teardown, in addition to command registration.
+Protected closure and the checkpoint 3 acceptance/manual gate remain outstanding.

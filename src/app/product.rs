@@ -439,7 +439,7 @@ impl ProductShell {
     ) -> crate::host::protocol::WindowInfo {
         use crate::host::protocol::{
             PaneInfo, PaneTarget, PresentationInfo, PresentationTarget, SurfaceKind, WindowInfo,
-            WindowTarget, WorkspaceInfo, WorkspaceRootInfo,
+            WindowTarget,
         };
         let target = WindowTarget {
             window: window.window_handle().window_id().as_u64().to_string(),
@@ -511,18 +511,7 @@ impl ProductShell {
             target: target.clone(),
             panes,
             current_target,
-            workspace: WorkspaceInfo {
-                window: target,
-                generation: workspace.generation(),
-                roots: workspace
-                    .roots()
-                    .iter()
-                    .map(|root| WorkspaceRootInfo {
-                        id: root.id.to_string(),
-                        uri: root.uri.to_string(),
-                    })
-                    .collect(),
-            },
+            workspace: operations::workspace_info(target, &workspace),
         }
     }
 
@@ -1757,8 +1746,7 @@ impl ProductShell {
     ) -> Result<OpenCommit, super::open::OpenResourceError> {
         let committed = match result {
             Ok(OpenResource::Directory(root)) => {
-                self.install_workspace(root, cx);
-                OpenCommit::Workspace(self.workspace.snapshot())
+                OpenCommit::Workspace(self.install_workspace(root, cx))
             }
             Ok(OpenResource::Missing(uri)) => {
                 let documents = Self::documents(cx);
@@ -1881,28 +1869,32 @@ impl ProductShell {
         }
     }
 
-    fn install_workspace(&mut self, root: super::resource::ResourceUri, cx: &mut Context<Self>) {
+    fn install_workspace(
+        &mut self,
+        root: super::resource::ResourceUri,
+        cx: &mut Context<Self>,
+    ) -> super::workspace::WorkspaceSnapshot {
         self.replace_workspace_roots(vec![root], cx)
-            .expect("one workspace root is supported");
+            .expect("one workspace root is supported")
     }
 
     fn replace_workspace_roots(
         &mut self,
         roots: Vec<super::resource::ResourceUri>,
         cx: &mut Context<Self>,
-    ) -> Result<(), super::workspace::TooManyWorkspaceRoots> {
+    ) -> Result<super::workspace::WorkspaceSnapshot, super::workspace::TooManyWorkspaceRoots> {
         let workspace = self.workspace.replace_roots(roots)?;
         if workspace.roots().is_empty() {
             self.workspace_tree_subscription = None;
             self.workspace_tree = None;
             self.status = "workspace cleared".into();
             cx.notify();
-            return Ok(());
+            return Ok(workspace);
         }
         if let Some(tree) = &self.workspace_tree {
-            tree.update(cx, |tree, cx| tree.set_workspace(workspace, cx));
+            tree.update(cx, |tree, cx| tree.set_workspace(workspace.clone(), cx));
         } else {
-            let tree = cx.new(|cx| WorkspaceTree::new(workspace, cx));
+            let tree = cx.new(|cx| WorkspaceTree::new(workspace.clone(), cx));
             self.workspace_tree_subscription = Some(cx.subscribe(
                 &tree,
                 |this, _tree, event: &WorkspaceTreeEvent, cx| {
@@ -1915,7 +1907,7 @@ impl ProductShell {
         }
         self.status = "workspace opened".into();
         cx.notify();
-        Ok(())
+        Ok(workspace)
     }
 
     fn handle_workspace_tree_event(&mut self, event: WorkspaceTreeEvent, cx: &mut Context<Self>) {
@@ -3609,6 +3601,7 @@ pub(super) fn bind_product_keys(cx: &mut App) {
 mod tests {
     mod observation;
     mod operations;
+    mod workspaces;
     use std::path::Path;
     use std::sync::{Arc, Mutex};
 
@@ -3782,7 +3775,11 @@ mod tests {
                 .register(&workbench, window.window_handle());
             ProductShell::new(workbench)
         });
-        let window = *cx.windows().last().unwrap();
+        let window = cx.read(|cx| {
+            cx.global::<ApplicationWorkbenches>()
+                .window_for(&shell.read(cx).workbench)
+                .unwrap()
+        });
         cx.update_window(window, |_, native_window, cx| {
             shell.update(cx, |shell, cx| {
                 shell.observe_extension_host(native_window, cx)

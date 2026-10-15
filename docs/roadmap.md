@@ -44,7 +44,8 @@ Explicit follow-up tasks within the selected initiative:
   [D047 plan](plans/d047-application-state-and-operations-plan.md).
 - **D047, checkpoint 3:** file Open now uses explicit window/pane/view targets or
   an admission-time captured command/active window. Folder/root operations,
-  untitled creation, presenting documents, and protected closure remain in progress.
+  untitled creation, and presenting documents are implemented; protected closure
+  and checkpoint acceptance remain in progress.
 - **D048, checkpoint 4:** publish the storage namespace with its implemented
   record operations and ownership contracts.
 - **D049, checkpoint 5:** finalize native contribution APIs and pass originating

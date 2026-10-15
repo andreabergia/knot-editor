@@ -106,6 +106,20 @@ document's final presentation closes. Both accept the same captured destinations
 and return the same `{ document, presentation }` result as Open. Creating or
 presenting from a terminal preserves the terminal and selects a document tab.
 
+`workspaces.openFolder(uri, options)` validates an existing directory and returns
+the window's committed roots/generation. `workspaces.replaceRoots(uris, options)`
+accepts zero or one directory URI; an empty array clears the roots and tree.
+`options.target` accepts a live window, with the same command/active-window capture
+on omission. These operations do not depend on a document presentation and work in
+an empty product workbench. They preserve open documents and never resolve focus
+after validation starts. A newer Open/root request, changed root generation,
+closed/replaced window or cancelled caller rejects pending work before commit.
+
+Missing folders reject `ResourceNotFound`, files reject `ResourceWrongKind`, and
+more than one root rejects `TooManyWorkspaceRoots`. All validation finishes before
+changing either roots or tree. Retained normalized roots keep their IDs; generation
+increases on replacement, including clear/reinstall, which allocates a new root ID.
+
 `await workbench.observe(listener)` registers application-wide observation and
 returns an initial `snapshot`, a sequence `watermark`, and an awaitable `dispose()`.
 Registration, snapshot and watermark are captured together on the foreground;
