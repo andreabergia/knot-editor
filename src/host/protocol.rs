@@ -81,7 +81,7 @@ impl CommandInvocationId {
 }
 
 /// An opaque identity for one buffer-change subscription.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, serde::Serialize)]
 pub struct BufferSubscriptionId(u64);
 
 impl BufferSubscriptionId {
@@ -95,7 +95,7 @@ impl BufferSubscriptionId {
 }
 
 /// An opaque identity for one tree data-provider registration.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, serde::Serialize)]
 pub struct TreeProviderRegistrationId(u64);
 
 impl TreeProviderRegistrationId {
@@ -205,6 +205,22 @@ pub enum KeybindingMutation {
         view: Option<String>,
     },
     Invalid(String),
+}
+
+/// Ordered native keymap mutations admitted after one JavaScript turn.
+#[derive(Clone, Debug, PartialEq)]
+pub struct KeybindingArguments {
+    pub mutations: Vec<KeybindingMutation>,
+}
+
+impl super::declarations::HostArguments for KeybindingArguments {
+    fn decode(
+        _: &mut dyn super::declarations::ArgumentReader,
+    ) -> Result<Self, super::declarations::DecodeError> {
+        Err(super::declarations::DecodeError::Type(
+            "keybinding batches require native turn admission",
+        ))
+    }
 }
 
 /// The stable result of attempting to invoke a command.
@@ -468,25 +484,6 @@ pub struct ApplicationSnapshot {
     pub active_target: Option<PresentationTarget>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub enum ApplicationQuery {
-    Documents,
-    Document { id: String },
-    Windows,
-    Window { target: WindowTarget },
-    Workspace { target: WindowTarget },
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
-#[serde(untagged)]
-pub enum ApplicationQueryResult {
-    Documents(Vec<DocumentInfo>),
-    Document(Option<DocumentInfo>),
-    Windows(Vec<WindowInfo>),
-    Window(Option<WindowInfo>),
-    Workspace(Option<WorkspaceInfo>),
-}
-
 /// Destination captured when a resource operation is admitted.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DocumentDestination {
@@ -571,6 +568,33 @@ pub struct WorkbenchObservation {
     pub watermark: u64,
 }
 
+/// Owned identity of a provider whose queued mutations precede disposal acknowledgement.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProviderIdentity {
+    Tree(TreeProviderRegistrationId),
+    Completion(CompletionProviderRegistrationId),
+}
+
+/// Authority metadata shared by foreground capability implementations.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RequestContext {
+    pub extension: ExtensionId,
+    pub lifecycle: ExtensionLifecycleId,
+    pub id: RequestId,
+    pub invocation: Option<CommandInvocationId>,
+}
+
+impl HostRequest {
+    pub fn context(&self) -> RequestContext {
+        RequestContext {
+            extension: self.extension,
+            lifecycle: self.lifecycle,
+            id: self.id,
+            invocation: self.invocation,
+        }
+    }
+}
+
 /// A request sent by one extension runtime to the editor foreground owner.
 #[derive(Clone, Debug, PartialEq)]
 pub struct HostRequest {
@@ -578,102 +602,7 @@ pub struct HostRequest {
     pub lifecycle: ExtensionLifecycleId,
     pub id: RequestId,
     pub invocation: Option<CommandInvocationId>,
-    pub operation: HostOperation,
-}
-
-/// Editor operations available to the initial buffer API boundary.
-#[derive(Clone, Debug, PartialEq)]
-pub enum HostOperation {
-    Declared(super::declarations::DeclaredRequest),
-    ObserveWorkbench,
-    UnobserveWorkbench {
-        subscription: WorkbenchSubscriptionId,
-    },
-    ApplicationQuery(ApplicationQuery),
-    ClosePresentation {
-        target: PresentationTarget,
-    },
-    OpenFolder {
-        uri: String,
-        target: Option<WindowTarget>,
-    },
-    ReplaceWorkspaceRoots {
-        roots: Vec<String>,
-        target: Option<WindowTarget>,
-    },
-    CreateUntitled {
-        target: Option<DocumentDestination>,
-    },
-    PresentDocument {
-        id: String,
-        target: Option<DocumentDestination>,
-    },
-    MutateKeybindings {
-        mutations: Vec<KeybindingMutation>,
-    },
-    ActiveBuffer {
-        target: Option<CommandInvocationId>,
-    },
-    Snapshot {
-        buffer: BufferHandle,
-        range: Option<ByteRange>,
-    },
-    ApplyEdits {
-        buffer: BufferHandle,
-        edits: Vec<TextEdit>,
-        if_revision: u64,
-    },
-    RegisterCommand {
-        name: CommandName,
-        title: String,
-    },
-    RegisterViewCommand {
-        view_kind: String,
-        name: CommandName,
-    },
-    SelectedViewText {
-        target: Option<CommandInvocationId>,
-    },
-    UnregisterCommand {
-        registration: CommandRegistrationId,
-    },
-    InvokeCommand {
-        command: Command,
-    },
-    CompleteInlineCommand {
-        invocation: CommandInvocationId,
-        outcome: CommandOutcome,
-    },
-    SubscribeBufferChanges {
-        buffer: BufferHandle,
-    },
-    UnsubscribeBufferChanges {
-        subscription: BufferSubscriptionId,
-    },
-    ReplaceEditorContributions {
-        buffer: BufferHandle,
-        contributions: Vec<EditorContribution>,
-        if_revision: u64,
-    },
-    DisposeEditorContributions {
-        buffer: BufferHandle,
-    },
-    RegisterTreeProvider {
-        view_id: String,
-    },
-    InvalidateTreeProvider {
-        registration: TreeProviderRegistrationId,
-        parent_id: Option<String>,
-    },
-    UnregisterTreeProvider {
-        registration: TreeProviderRegistrationId,
-    },
-    RegisterCompletionProvider {
-        label: String,
-    },
-    UnregisterCompletionProvider {
-        registration: CompletionProviderRegistrationId,
-    },
+    pub operation: super::declarations::DeclaredRequest,
 }
 
 /// A reply sent back to the extension runtime for one [`HostRequest`].
@@ -682,64 +611,7 @@ pub struct HostResponse {
     pub extension: ExtensionId,
     pub lifecycle: ExtensionLifecycleId,
     pub id: RequestId,
-    pub result: Result<HostResponseValue, HostRequestError>,
-}
-
-/// Successful values returned by [`HostOperation`].
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum HostResponseValue {
-    Declared(super::declarations::DeclaredResponse),
-    WorkbenchObserved(WorkbenchObservation),
-    WorkbenchUnobserved,
-    ApplicationQuery(ApplicationQueryResult),
-    DocumentPresented(DocumentPresentation),
-    WorkspaceUpdated(WorkspaceInfo),
-    PresentationClosed(PresentationCloseOutcome),
-    KeybindingsApplied {
-        error: Option<String>,
-    },
-    ActiveBuffer(Option<BufferHandle>),
-    Snapshot(TextSnapshot),
-    AppliedEdits {
-        revision: u64,
-    },
-    CommandRegistered {
-        registration: CommandRegistrationId,
-    },
-    ViewCommandRegistered {
-        registration: CommandRegistrationId,
-    },
-    SelectedViewText(Option<String>),
-    CommandUnregistered {
-        registration: CommandRegistrationId,
-    },
-    CommandInvoked {
-        dispatch: CommandInvokeDispatch,
-    },
-    InlineCommandCompleted {
-        invocation: CommandInvocationId,
-    },
-    BufferChangesSubscribed {
-        subscription: BufferSubscriptionId,
-    },
-    BufferChangesUnsubscribed {
-        subscription: BufferSubscriptionId,
-    },
-    EditorContributionsReplaced,
-    EditorContributionsDisposed,
-    TreeProviderRegistered {
-        registration: TreeProviderRegistrationId,
-    },
-    TreeProviderInvalidated,
-    TreeProviderUnregistered {
-        registration: TreeProviderRegistrationId,
-    },
-    CompletionProviderRegistered {
-        registration: CompletionProviderRegistrationId,
-    },
-    CompletionProviderUnregistered {
-        registration: CompletionProviderRegistrationId,
-    },
+    pub result: Result<super::declarations::DeclaredResponse, super::declarations::HostFailure>,
 }
 
 /// Opaque presentation authority shared by one admitted command tree.
@@ -793,83 +665,14 @@ pub struct BufferChange {
     pub edits: Vec<TextEdit>,
 }
 
-/// Stable failures at the host boundary.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, knot_handler_macros::HostError)]
-#[serde(rename_all = "PascalCase")]
-pub enum HostRequestError {
-    #[error(code = "ContextUnavailable", message = "ContextUnavailable")]
-    ContextUnavailable,
-    #[error(code = "InvalidUri", message = "InvalidUri")]
-    InvalidUri,
-    #[error(code = "DocumentNotFound", message = "DocumentNotFound")]
-    DocumentNotFound,
-    #[error(code = "TooManyWorkspaceRoots", message = "TooManyWorkspaceRoots")]
-    TooManyWorkspaceRoots,
-    #[error(code = "OperationInProgress", message = "OperationInProgress")]
-    OperationInProgress,
-    #[error(code = "PersistenceFailed", message = "PersistenceFailed")]
-    PersistenceFailed,
-    #[error(code = "ResourceNotFound", message = "ResourceNotFound")]
-    ResourceNotFound,
-    #[error(code = "ResourceWrongKind", message = "ResourceWrongKind")]
-    ResourceWrongKind,
-    #[error(code = "InvalidUtf8", message = "InvalidUtf8")]
-    InvalidUtf8,
-    #[error(code = "ProviderFailure", message = "ProviderFailure")]
-    ProviderFailure,
-    #[error(code = "InvalidTarget", message = "InvalidTarget")]
-    InvalidTarget,
-    #[error(code = "OwnershipDisposed", message = "OwnershipDisposed")]
-    OwnershipDisposed,
-    #[error(code = "UnsupportedOperation", message = "UnsupportedOperation")]
-    UnsupportedOperation,
-    #[error(code = "BufferClosed", message = "BufferClosed")]
-    BufferClosed,
-    #[error(code = "BufferReadOnly", message = "BufferReadOnly")]
-    BufferReadOnly,
-    #[error(code = "InvalidRange", message = "InvalidRange")]
-    InvalidRange,
-    #[error(code = "InvalidEditBatch", message = "InvalidEditBatch")]
-    InvalidEditBatch,
-    #[error(code = "RevisionConflict", message = "RevisionConflict")]
-    RevisionConflict,
-    #[error(code = "ContributionSetNotFound", message = "ContributionSetNotFound")]
-    ContributionSetNotFound,
-    #[error(code = "TreeViewNotFound", message = "TreeViewNotFound")]
-    TreeViewNotFound,
-    #[error(code = "ViewNotFound", message = "ViewNotFound")]
-    ViewNotFound,
-    #[error(code = "TreeProviderInUse", message = "TreeProviderInUse")]
-    TreeProviderInUse,
-    #[error(code = "TreeProviderNotFound", message = "TreeProviderNotFound")]
-    TreeProviderNotFound,
-    #[error(
-        code = "CompletionProviderNotFound",
-        message = "CompletionProviderNotFound"
-    )]
-    CompletionProviderNotFound,
-    #[error(code = "CommandNameInUse", message = "CommandNameInUse")]
-    CommandNameInUse,
-    #[error(code = "CommandNotFound", message = "CommandNotFound")]
-    CommandNotFound,
-    #[error(code = "Cancelled", message = "Cancelled")]
-    Cancelled,
-}
-
-impl HostRequestError {
-    pub(crate) fn code(self) -> &'static str {
-        super::declarations::HostError::code(&self)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
         BufferHandle, ByteRange, Command, CommandArgumentValue, CommandInvocationId,
         CommandInvokeDispatch, CommandOutcome, CommandRegistrationId, ExtensionId,
-        ExtensionLifecycleId, HostOperation, HostRequest, HostRequestError, HostResponse,
-        HostResponseValue, RequestId, TextEdit,
+        ExtensionLifecycleId, HostRequest, HostResponse, RequestId, TextEdit,
     };
+    use crate::host::declarations::HostError;
 
     #[test]
     fn command_round_trips_json_compatible_arguments() {
@@ -908,21 +711,21 @@ mod tests {
 
     #[test]
     fn response_keeps_the_extension_and_request_identity() {
+        use crate::app::declared_host::{ContextArguments, active_buffer};
+        use crate::host::declarations::{DeclaredRequest, Responder};
         let request = HostRequest {
             extension: ExtensionId::new(7),
             lifecycle: ExtensionLifecycleId::new(3),
             id: RequestId::new(11),
             invocation: None,
-            operation: HostOperation::ActiveBuffer { target: None },
+            operation: DeclaredRequest::new::<active_buffer>(ContextArguments { target: None }),
         };
-
         let response = HostResponse {
             extension: request.extension,
             lifecycle: request.lifecycle,
             id: request.id,
-            result: Ok(HostResponseValue::ActiveBuffer(Some(BufferHandle::new(3)))),
+            result: Ok(Responder::<active_buffer>::new().respond(Ok(Some(BufferHandle::new(3))))),
         };
-
         assert_eq!(response.extension, request.extension);
         assert_eq!(response.lifecycle, request.lifecycle);
         assert_eq!(response.id, request.id);
@@ -971,7 +774,12 @@ mod tests {
             })
         );
         assert_eq!(
-            serde_json::to_value(HostRequestError::RevisionConflict).unwrap(),
+            serde_json::to_value(
+                crate::app::declared_host::BufferError::RevisionConflict
+                    .into_failure()
+                    .code
+            )
+            .unwrap(),
             serde_json::json!("RevisionConflict")
         );
     }

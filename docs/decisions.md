@@ -146,9 +146,11 @@ futures. Keep V8 field decoding in the host and application mutation in the app.
 Explicit error-code attributes survive Rust variant renames; transparent error
 composition shares failures without a central membership enum. Check the closed
 TypeScript code union from descriptor metadata rather than another native list.
-Clipboard and document Open validate this authoring shape; the remaining
-capabilities and native commands are still scheduled by
-[D053](plans/d053-handler-declarations-refactoring-plan.md).
+All host capabilities use this mechanism, including native-turn keymap batching.
+Keep foreground owners independent of response envelopes and use typed completion
+channels for nested command work. This preserves command-tree ownership without
+keeping transport dispatch tables in the application. Native command declarations
+remain scheduled by [D053](plans/d053-handler-declarations-refactoring-plan.md).
 
 ## Installed extension directories
 

@@ -17,21 +17,25 @@ use std::{
 use url::Url;
 
 #[cfg(test)]
+use super::protocol::{
+    CommandInvokeDispatch, CommandRegistrationId, CompletionProviderRegistrationId,
+    TreeProviderRegistrationId,
+};
+#[cfg(test)]
 use std::sync::mpsc;
 
 use super::{
+    declarations::{HostError, HostFailure, TransportError},
     lifecycle::{ExtensionKey, Failure},
     module_graph::{ConfigPhase, ModuleGraph},
     protocol::{
-        ApplicationChange, ApplicationEvent, ApplicationQuery, ApplicationQueryResult,
-        BufferChange, BufferHandle, BufferSubscriptionId, ByteRange, Command, CommandArgumentValue,
-        CommandInvocation, CommandInvocationId, CommandInvokeDispatch, CommandOutcome,
-        CommandRegistrationId, CompletionProviderError, CompletionProviderRegistrationId,
-        CompletionRequest, CompletionResponse, CompletionResultItem, DecorationToken,
-        EditorContribution, ExtensionId, GutterToken, HostOperation, HostRequest, HostRequestError,
-        HostResponse, HostResponseValue, KeybindingMutation, RequestId, SnapshotText, TextEdit,
-        TextSnapshot, TreeChildrenRequest, TreeChildrenResponse, TreeCollapsibleState, TreeIcon,
-        TreeItem, TreeProviderError, TreeProviderRegistrationId, WorkbenchSubscriptionId,
+        ApplicationChange, ApplicationEvent, BufferChange, BufferHandle, BufferSubscriptionId,
+        ByteRange, Command, CommandArgumentValue, CommandInvocation, CommandInvocationId,
+        CommandOutcome, CompletionProviderError, CompletionRequest, CompletionResponse,
+        CompletionResultItem, DecorationToken, EditorContribution, ExtensionId, GutterToken,
+        HostRequest, HostResponse, KeybindingMutation, ProviderIdentity, RequestId, SnapshotText,
+        TextEdit, TextSnapshot, TreeChildrenRequest, TreeChildrenResponse, TreeCollapsibleState,
+        TreeIcon, TreeItem, TreeProviderError, WorkbenchSubscriptionId,
     },
     scheduler::{
         CompletionOutcome, CompletionReceiver, PoolConfig, RootId, SchedulerError, SchedulerHandle,
@@ -251,7 +255,7 @@ struct RuntimeLocalState {
     keybinding_batch_pending: Mutex<Option<RequestId>>,
     deferred_responses: Mutex<Vec<HostResponse>>,
     #[cfg(test)]
-    host_error: Mutex<Option<HostRequestError>>,
+    host_error: Mutex<Option<HostFailure>>,
     #[cfg(test)]
     barrier: Mutex<Option<Arc<TestGate>>>,
     #[cfg(test)]
@@ -327,40 +331,10 @@ impl RuntimeLocalState {
 struct PendingRequest {
     root: RootId,
     invocation: Option<CommandInvocationId>,
-    operation: HostOperationKind,
+    operation: &'static str,
     resolver: Option<v8::Global<v8::PromiseResolver>>,
     response_queued: bool,
     provider_mutation: Option<ProviderIdentity>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum HostOperationKind {
-    Declared(&'static str),
-    ObserveWorkbench,
-    UnobserveWorkbench,
-    ApplicationQuery,
-    DocumentPresented,
-    WorkspaceUpdated,
-    PresentationClosed,
-    KeybindingBatch,
-    ActiveBuffer,
-    Snapshot,
-    ApplyEdits,
-    SubscribeBufferChanges,
-    UnsubscribeBufferChanges,
-    ReplaceEditorContributions,
-    DisposeEditorContributions,
-    RegisterCommand,
-    RegisterViewCommand,
-    SelectedViewText,
-    UnregisterCommand,
-    InvokeCommand,
-    CompleteInlineCommand,
-    RegisterTreeProvider,
-    InvalidateTreeProvider,
-    UnregisterTreeProvider,
-    RegisterCompletionProvider,
-    UnregisterCompletionProvider,
 }
 
 struct ActiveExecution {
@@ -1481,11 +1455,15 @@ impl RuntimeCapsule {
             *self.local_state.current_root.lock().unwrap() = None;
             return TurnOutcome::Fatal(Failure::new("host response lost its pending request"));
         };
-        if pending.operation == HostOperationKind::KeybindingBatch {
+        if batch_id == Some(response.id) {
             *self.local_state.keybinding_batch_pending.lock().unwrap() = None;
             let error = match response.result {
-                Ok(HostResponseValue::KeybindingsApplied { error }) => error,
-                Err(error) => Some(format!("keybinding batch was rejected: {error:?}")),
+                Ok(reply) if reply.operation == pending.operation => match reply.result {
+                    Ok(Ok(super::declarations::EncodedValue::Undefined)) => None,
+                    Err(error) => Some(error.message),
+                    _ => Some("invalid keybinding batch response".into()),
+                },
+                Err(error) => Some(format!("keybinding batch was rejected: {}", error.code)),
                 _ => Some("invalid keybinding batch response".into()),
             };
             if let Some(message) = error {
@@ -1549,43 +1527,22 @@ impl RuntimeCapsule {
             return;
         };
         let resolver = v8::Local::new(scope, &resolver);
-        if let (HostOperationKind::Declared(name), Ok(HostResponseValue::Declared(response))) =
-            (pending.operation, &response.result)
-        {
-            let value = if name != response.operation {
-                Err(boundary_exception(
-                    scope,
-                    BoundaryError::Host(HostRequestError::UnsupportedOperation),
-                ))
-            } else {
-                declared_response_to_v8(scope, response)
-            };
-            match value {
-                Ok(value) => {
-                    resolver.resolve(scope, value);
-                }
-                Err(error) => {
-                    resolver.reject(scope, error);
-                }
+        let value = match response.result {
+            Ok(response) if pending.operation == response.operation => {
+                declared_response_to_v8(scope, &response)
             }
-            return;
-        }
-        match response.result {
-            Ok(value) => match host_response_to_v8(scope, pending.operation, value) {
-                Ok(value) => {
-                    resolver.resolve(scope, value);
-                }
-                Err(_) => {
-                    let value = boundary_exception(
-                        scope,
-                        BoundaryError::Host(HostRequestError::UnsupportedOperation),
-                    );
-                    resolver.reject(scope, value);
-                }
-            },
+            Ok(_) => Err(boundary_exception(
+                scope,
+                BoundaryError::Host(TransportError::UnsupportedOperation),
+            )),
+            Err(error) => Err(host_failure_exception(scope, &error)),
+        };
+        match value {
+            Ok(value) => {
+                resolver.resolve(scope, value);
+            }
             Err(error) => {
-                let value = boundary_exception(scope, BoundaryError::Host(error));
-                resolver.reject(scope, value);
+                resolver.reject(scope, error);
             }
         }
     }
@@ -1798,12 +1755,16 @@ impl RuntimeCapsule {
                 RuntimeError::fatal(RuntimeErrorKind::Engine, "request identity exhausted")
             })?;
         let id = RequestId::new(request_value);
+        let operation = super::declarations::registry()
+            .get("mutateKeybindings")
+            .expect("native keymap handler")
+            .request(super::protocol::KeybindingArguments { mutations });
         self.local_state.pending.lock().unwrap().insert(
             id,
             PendingRequest {
                 root,
                 invocation: None,
-                operation: HostOperationKind::KeybindingBatch,
+                operation: operation.descriptor.name,
                 resolver: None,
                 response_queued: false,
                 provider_mutation: None,
@@ -1818,7 +1779,7 @@ impl RuntimeCapsule {
                     lifecycle: self.key.lifecycle,
                     id,
                     invocation: None,
-                    operation: HostOperation::MutateKeybindings { mutations },
+                    operation,
                 }))
                 .is_ok()
         });
@@ -1848,7 +1809,7 @@ impl RuntimeCapsule {
             if let Some(resolver) = pending.resolver {
                 let resolver = v8::Local::new(scope, &resolver);
                 let cancelled =
-                    boundary_exception(scope, BoundaryError::Host(HostRequestError::Cancelled));
+                    boundary_exception(scope, BoundaryError::Host(TransportError::Cancelled));
                 resolver.reject(scope, cancelled);
             }
         }
@@ -1883,7 +1844,7 @@ impl RuntimeCapsule {
         for resolver in pending {
             let resolver = v8::Local::new(scope, &resolver);
             let cancelled =
-                boundary_exception(scope, BoundaryError::Host(HostRequestError::Cancelled));
+                boundary_exception(scope, BoundaryError::Host(TransportError::Cancelled));
             resolver.reject(scope, cancelled);
         }
         scope.perform_microtask_checkpoint();
@@ -2036,7 +1997,7 @@ impl RuntimeCapsule {
                         let resolver = v8::Local::new(scope, &resolver);
                         let cancelled = boundary_exception(
                             scope,
-                            BoundaryError::Host(HostRequestError::Cancelled),
+                            BoundaryError::Host(TransportError::Cancelled),
                         );
                         resolver.reject(scope, cancelled);
                     }
@@ -2119,7 +2080,7 @@ impl RuntimeCapsule {
     }
 
     #[cfg(test)]
-    fn set_test_host_error(&self, error: HostRequestError) {
+    fn set_test_host_error(&self, error: HostFailure) {
         *self.local_state.host_error.lock().unwrap() = Some(error);
     }
 }
@@ -2351,25 +2312,6 @@ pub(crate) struct RuntimeProviderExecution<T> {
 }
 
 impl<T> Unpin for RuntimeProviderExecution<T> {}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ProviderIdentity {
-    Tree(TreeProviderRegistrationId),
-    Completion(CompletionProviderRegistrationId),
-}
-
-fn provider_mutation(operation: &HostOperation) -> Option<ProviderIdentity> {
-    match operation {
-        HostOperation::InvalidateTreeProvider { registration, .. }
-        | HostOperation::UnregisterTreeProvider { registration } => {
-            Some(ProviderIdentity::Tree(*registration))
-        }
-        HostOperation::UnregisterCompletionProvider { registration } => {
-            Some(ProviderIdentity::Completion(*registration))
-        }
-        _ => None,
-    }
-}
 
 struct ProviderCancellation {
     provider: ProviderIdentity,
@@ -3646,7 +3588,7 @@ fn resolve_module_callback<'s>(
 enum BoundaryError {
     Type(&'static str),
     Range(&'static str),
-    Host(HostRequestError),
+    Host(TransportError),
 }
 
 impl From<&'static str> for BoundaryError {
@@ -3694,10 +3636,10 @@ fn host_request_callback<'s, 'i>(
         .get_slot::<Arc<RuntimeLocalState>>()
         .and_then(|state| state.host_error.lock().ok()?.take());
     #[cfg(not(test))]
-    let configured_error: Option<HostRequestError> = None;
+    let configured_error: Option<HostFailure> = None;
     let resolver = v8::PromiseResolver::new(scope).unwrap();
     if let Some(error) = configured_error {
-        let exception = boundary_exception(scope, BoundaryError::Host(error));
+        let exception = host_failure_exception(scope, &error);
         resolver.reject(scope, exception);
         result.set(resolver.get_promise(scope).into());
         return;
@@ -3705,14 +3647,14 @@ fn host_request_callback<'s, 'i>(
     let Some(state) = scope.get_slot::<Arc<RuntimeLocalState>>().cloned() else {
         let exception = boundary_exception(
             scope,
-            BoundaryError::Host(HostRequestError::UnsupportedOperation),
+            BoundaryError::Host(TransportError::UnsupportedOperation),
         );
         resolver.reject(scope, exception);
         result.set(resolver.get_promise(scope).into());
         return;
     };
     if state.status.load(Ordering::Acquire) != ACTIVE {
-        let exception = boundary_exception(scope, BoundaryError::Host(HostRequestError::Cancelled));
+        let exception = boundary_exception(scope, BoundaryError::Host(TransportError::Cancelled));
         resolver.reject(scope, exception);
         result.set(resolver.get_promise(scope).into());
         return;
@@ -3741,7 +3683,7 @@ fn host_request_callback<'s, 'i>(
     let (Some(sender), Some(root)) = (sender, root) else {
         let exception = boundary_exception(
             scope,
-            BoundaryError::Host(HostRequestError::UnsupportedOperation),
+            BoundaryError::Host(TransportError::UnsupportedOperation),
         );
         resolver.reject(scope, exception);
         result.set(resolver.get_promise(scope).into());
@@ -3756,7 +3698,7 @@ fn host_request_callback<'s, 'i>(
     else {
         let exception = boundary_exception(
             scope,
-            BoundaryError::Host(HostRequestError::UnsupportedOperation),
+            BoundaryError::Host(TransportError::UnsupportedOperation),
         );
         resolver.reject(scope, exception);
         result.set(resolver.get_promise(scope).into());
@@ -3771,7 +3713,7 @@ fn host_request_callback<'s, 'i>(
             operation: kind,
             resolver: Some(v8::Global::new(scope, resolver)),
             response_queued: false,
-            provider_mutation: provider_mutation(&operation),
+            provider_mutation: operation.provider_mutation(),
         },
     );
     if sender
@@ -3785,7 +3727,7 @@ fn host_request_callback<'s, 'i>(
         .is_err()
     {
         state.pending.lock().unwrap().remove(&id);
-        let exception = boundary_exception(scope, BoundaryError::Host(HostRequestError::Cancelled));
+        let exception = boundary_exception(scope, BoundaryError::Host(TransportError::Cancelled));
         resolver.reject(scope, exception);
     }
     result.set(resolver.get_promise(scope).into());
@@ -3877,18 +3819,6 @@ fn parse_keybinding_mutation<'s, 'i>(
     }
 }
 
-fn optional_invocation<'s, 'i>(
-    scope: &mut v8::PinnedRef<'s, v8::HandleScope<'i>>,
-    value: v8::Local<'s, v8::Value>,
-) -> Result<Option<CommandInvocationId>, BoundaryError> {
-    if value.is_null_or_undefined() {
-        return Ok(None);
-    }
-    value_u64(scope, value, "InvalidTarget")
-        .map(CommandInvocationId::new)
-        .map(Some)
-}
-
 fn document_destination_from_v8<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
@@ -3922,14 +3852,6 @@ fn document_destination_from_v8<'s>(
     }
 }
 
-fn optional_window_target(
-    scope: &mut v8::PinnedRef<'_, v8::HandleScope>,
-    value: v8::Local<'_, v8::Value>,
-) -> Result<Option<super::protocol::WindowTarget>, BoundaryError> {
-    Ok(optional_string(scope, value, "window target must be text")?
-        .map(|window| super::protocol::WindowTarget { window }))
-}
-
 fn workspace_root_uris<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
@@ -3956,6 +3878,67 @@ struct DeclarationReader<'a, 's, 'i> {
 }
 
 impl super::declarations::ArgumentReader for DeclarationReader<'_, '_, '_> {
+    fn optional_integer(
+        &mut self,
+        index: usize,
+    ) -> Result<Option<u64>, super::declarations::DecodeError> {
+        optional_u64(
+            self.scope,
+            self.arguments.get(index as i32),
+            "InvalidTarget",
+        )
+        .map_err(declaration_decode_error)
+    }
+    fn command_arguments(
+        &mut self,
+        index: usize,
+    ) -> Result<CommandArgumentValue, super::declarations::DecodeError> {
+        command_argument_from_v8(self.scope, self.arguments.get(index as i32))
+            .map_err(declaration_decode_error)
+    }
+    fn outcome(
+        &mut self,
+        index: usize,
+    ) -> Result<CommandOutcome, super::declarations::DecodeError> {
+        command_outcome_from_v8(self.scope, self.arguments.get(index as i32))
+            .map_err(|_| super::declarations::DecodeError::Type("UnsupportedOperation"))
+    }
+
+    fn range(
+        &mut self,
+        index: usize,
+    ) -> Result<Option<ByteRange>, super::declarations::DecodeError> {
+        optional_byte_range(self.scope, self.arguments.get(index as i32))
+            .map_err(declaration_decode_error)
+    }
+    fn edits(&mut self, index: usize) -> Result<Vec<TextEdit>, super::declarations::DecodeError> {
+        text_edits(self.scope, self.arguments.get(index as i32)).map_err(declaration_decode_error)
+    }
+    fn contributions(
+        &mut self,
+        index: usize,
+    ) -> Result<Vec<EditorContribution>, super::declarations::DecodeError> {
+        editor_contributions(self.scope, self.arguments.get(index as i32))
+            .map_err(declaration_decode_error)
+    }
+
+    fn optional_text(
+        &mut self,
+        index: usize,
+        message: &'static str,
+    ) -> Result<Option<String>, super::declarations::DecodeError> {
+        optional_string(self.scope, self.arguments.get(index as i32), message)
+            .map_err(declaration_decode_error)
+    }
+    fn text_list(&mut self, index: usize) -> Result<Vec<String>, super::declarations::DecodeError> {
+        workspace_root_uris(self.scope, self.arguments.get(index as i32))
+            .map_err(declaration_decode_error)
+    }
+
+    fn integer(&mut self, index: usize) -> Result<u64, super::declarations::DecodeError> {
+        argument_u64(self.scope, self.arguments, index as i32).map_err(declaration_decode_error)
+    }
+
     fn text(
         &mut self,
         index: usize,
@@ -3987,6 +3970,7 @@ impl From<super::declarations::DecodeError> for BoundaryError {
         match error {
             super::declarations::DecodeError::Type(message) => Self::Type(message),
             super::declarations::DecodeError::Range(message) => Self::Range(message),
+            super::declarations::DecodeError::Host(error) => Self::Host(error),
         }
     }
 }
@@ -3994,216 +3978,13 @@ impl From<super::declarations::DecodeError> for BoundaryError {
 fn parse_host_operation<'s, 'i>(
     scope: &mut v8::PinnedRef<'s, v8::HandleScope<'i>>,
     arguments: &v8::FunctionCallbackArguments<'s>,
-) -> Result<(HostOperation, HostOperationKind), BoundaryError> {
+) -> Result<(super::declarations::DeclaredRequest, &'static str), BoundaryError> {
     let operation = required_string(scope, arguments.get(1), "operation must be text")?;
     if let Some(descriptor) = super::declarations::registry().get(&operation) {
         let request = descriptor.decode(&mut DeclarationReader { scope, arguments })?;
-        return Ok((
-            HostOperation::Declared(request),
-            HostOperationKind::Declared(descriptor.name),
-        ));
+        return Ok((request, descriptor.name));
     }
-    match operation.as_str() {
-        "closePresentation" => {
-            let Some(super::protocol::DocumentDestination::View(target)) =
-                document_destination_from_v8(scope, arguments.get(2))?
-            else {
-                return Err(BoundaryError::Type("close requires an exact view target"));
-            };
-            Ok((
-                HostOperation::ClosePresentation { target },
-                HostOperationKind::PresentationClosed,
-            ))
-        }
-        "openFolder" => Ok((
-            HostOperation::OpenFolder {
-                uri: required_string(scope, arguments.get(2), "resource URI must be text")?,
-                target: optional_window_target(scope, arguments.get(3))?,
-            },
-            HostOperationKind::WorkspaceUpdated,
-        )),
-        "replaceWorkspaceRoots" => Ok((
-            HostOperation::ReplaceWorkspaceRoots {
-                roots: workspace_root_uris(scope, arguments.get(2))?,
-                target: optional_window_target(scope, arguments.get(3))?,
-            },
-            HostOperationKind::WorkspaceUpdated,
-        )),
-        "createUntitled" => Ok((
-            HostOperation::CreateUntitled {
-                target: document_destination_from_v8(scope, arguments.get(2))?,
-            },
-            HostOperationKind::DocumentPresented,
-        )),
-        "presentDocument" => Ok((
-            HostOperation::PresentDocument {
-                id: required_string(scope, arguments.get(2), "document identity must be text")?,
-                target: document_destination_from_v8(scope, arguments.get(3))?,
-            },
-            HostOperationKind::DocumentPresented,
-        )),
-        "observeWorkbench" => Ok((
-            HostOperation::ObserveWorkbench,
-            HostOperationKind::ObserveWorkbench,
-        )),
-        "unobserveWorkbench" => Ok((
-            HostOperation::UnobserveWorkbench {
-                subscription: WorkbenchSubscriptionId::new(argument_u64(scope, arguments, 2)?),
-            },
-            HostOperationKind::UnobserveWorkbench,
-        )),
-        "listDocuments" => Ok((
-            HostOperation::ApplicationQuery(ApplicationQuery::Documents),
-            HostOperationKind::ApplicationQuery,
-        )),
-        "getDocument" => Ok((
-            HostOperation::ApplicationQuery(ApplicationQuery::Document {
-                id: required_string(scope, arguments.get(2), "document identity must be text")?,
-            }),
-            HostOperationKind::ApplicationQuery,
-        )),
-        "listWindows" => Ok((
-            HostOperation::ApplicationQuery(ApplicationQuery::Windows),
-            HostOperationKind::ApplicationQuery,
-        )),
-        "getWindow" | "getWorkspace" => {
-            let target = super::protocol::WindowTarget {
-                window: required_string(scope, arguments.get(2), "window target must be text")?,
-            };
-            Ok((
-                HostOperation::ApplicationQuery(if operation == "getWindow" {
-                    ApplicationQuery::Window { target }
-                } else {
-                    ApplicationQuery::Workspace { target }
-                }),
-                HostOperationKind::ApplicationQuery,
-            ))
-        }
-        "activeBuffer" => Ok((
-            HostOperation::ActiveBuffer {
-                target: optional_invocation(scope, arguments.get(2))?,
-            },
-            HostOperationKind::ActiveBuffer,
-        )),
-        "snapshot" => Ok((
-            HostOperation::Snapshot {
-                buffer: BufferHandle::new(argument_u64(scope, arguments, 2)?),
-                range: optional_byte_range(scope, arguments.get(3))?,
-            },
-            HostOperationKind::Snapshot,
-        )),
-        "applyEdits" => Ok((
-            HostOperation::ApplyEdits {
-                buffer: BufferHandle::new(argument_u64(scope, arguments, 2)?),
-                edits: text_edits(scope, arguments.get(3))?,
-                if_revision: value_u64(scope, arguments.get(4), "InvalidEditBatch")?,
-            },
-            HostOperationKind::ApplyEdits,
-        )),
-        "subscribeBufferChanges" => Ok((
-            HostOperation::SubscribeBufferChanges {
-                buffer: BufferHandle::new(argument_u64(scope, arguments, 2)?),
-            },
-            HostOperationKind::SubscribeBufferChanges,
-        )),
-        "unsubscribeBufferChanges" => Ok((
-            HostOperation::UnsubscribeBufferChanges {
-                subscription: BufferSubscriptionId::new(argument_u64(scope, arguments, 2)?),
-            },
-            HostOperationKind::UnsubscribeBufferChanges,
-        )),
-        "replaceEditorContributions" => Ok((
-            HostOperation::ReplaceEditorContributions {
-                buffer: BufferHandle::new(argument_u64(scope, arguments, 2)?),
-                contributions: editor_contributions(scope, arguments.get(3))?,
-                if_revision: value_u64(scope, arguments.get(4), "UnsupportedOperation")?,
-            },
-            HostOperationKind::ReplaceEditorContributions,
-        )),
-        "disposeEditorContributions" => Ok((
-            HostOperation::DisposeEditorContributions {
-                buffer: BufferHandle::new(argument_u64(scope, arguments, 2)?),
-            },
-            HostOperationKind::DisposeEditorContributions,
-        )),
-        "registerCommand" => Ok((
-            HostOperation::RegisterCommand {
-                name: required_string(scope, arguments.get(2), "UnsupportedOperation")?.into(),
-                title: required_string(scope, arguments.get(3), "UnsupportedOperation")?,
-            },
-            HostOperationKind::RegisterCommand,
-        )),
-        "registerViewCommand" => Ok((
-            HostOperation::RegisterViewCommand {
-                view_kind: required_string(scope, arguments.get(2), "UnsupportedOperation")?,
-                name: required_string(scope, arguments.get(3), "UnsupportedOperation")?.into(),
-            },
-            HostOperationKind::RegisterViewCommand,
-        )),
-        "selectedViewText" => Ok((
-            HostOperation::SelectedViewText {
-                target: optional_invocation(scope, arguments.get(2))?,
-            },
-            HostOperationKind::SelectedViewText,
-        )),
-        "unregisterCommand" => Ok((
-            HostOperation::UnregisterCommand {
-                registration: CommandRegistrationId::new(argument_u64(scope, arguments, 2)?),
-            },
-            HostOperationKind::UnregisterCommand,
-        )),
-        "invokeCommand" => Ok((
-            HostOperation::InvokeCommand {
-                command: Command {
-                    name: required_string(scope, arguments.get(2), "UnsupportedOperation")?.into(),
-                    arguments: command_argument_from_v8(scope, arguments.get(3))?,
-                },
-            },
-            HostOperationKind::InvokeCommand,
-        )),
-        "completeInlineCommand" => Ok((
-            HostOperation::CompleteInlineCommand {
-                invocation: CommandInvocationId::new(argument_u64(scope, arguments, 2)?),
-                outcome: command_outcome_from_v8(scope, arguments.get(3))
-                    .map_err(|_| "UnsupportedOperation")?,
-            },
-            HostOperationKind::CompleteInlineCommand,
-        )),
-        "registerTreeDataProvider" => Ok((
-            HostOperation::RegisterTreeProvider {
-                view_id: required_string(scope, arguments.get(2), "UnsupportedOperation")?,
-            },
-            HostOperationKind::RegisterTreeProvider,
-        )),
-        "invalidateTreeDataProvider" => Ok((
-            HostOperation::InvalidateTreeProvider {
-                registration: TreeProviderRegistrationId::new(argument_u64(scope, arguments, 2)?),
-                parent_id: optional_string(scope, arguments.get(3), "UnsupportedOperation")?,
-            },
-            HostOperationKind::InvalidateTreeProvider,
-        )),
-        "unregisterTreeDataProvider" => Ok((
-            HostOperation::UnregisterTreeProvider {
-                registration: TreeProviderRegistrationId::new(argument_u64(scope, arguments, 2)?),
-            },
-            HostOperationKind::UnregisterTreeProvider,
-        )),
-        "registerCompletionProvider" => Ok((
-            HostOperation::RegisterCompletionProvider {
-                label: required_string(scope, arguments.get(2), "UnsupportedOperation")?,
-            },
-            HostOperationKind::RegisterCompletionProvider,
-        )),
-        "unregisterCompletionProvider" => Ok((
-            HostOperation::UnregisterCompletionProvider {
-                registration: CompletionProviderRegistrationId::new(argument_u64(
-                    scope, arguments, 2,
-                )?),
-            },
-            HostOperationKind::UnregisterCompletionProvider,
-        )),
-        _ => Err(BoundaryError::Host(HostRequestError::UnsupportedOperation)),
-    }
+    Err(BoundaryError::Host(TransportError::UnsupportedOperation))
 }
 
 fn optional_u64(
@@ -4753,23 +4534,6 @@ fn completion_response_from_v8<'s>(
     }
 }
 
-fn command_dispatch_to_v8<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    dispatch: &CommandInvokeDispatch,
-) -> Result<v8::Local<'s, v8::Value>, &'static str> {
-    if let CommandInvokeDispatch::Inline {
-        invocation,
-        registration,
-    } = dispatch
-        && (invocation.value() > MAX_JS_INTEGER || registration.value() > MAX_JS_INTEGER)
-    {
-        return Err("native command identity cannot be represented exactly");
-    }
-    let json = serde_json::to_string(dispatch).map_err(|_| "UnsupportedOperation")?;
-    let json = v8::String::new(scope, &json).ok_or("UnsupportedOperation")?;
-    v8::json::parse(scope, json).ok_or("UnsupportedOperation")
-}
-
 const MAX_JS_INTEGER: u64 = 9_007_199_254_740_991;
 
 fn exact_number<'s>(
@@ -4792,36 +4556,6 @@ fn application_window_is_exact(info: &super::protocol::WindowInfo) -> bool {
                 .is_none_or(|buffer| buffer.value() <= MAX_JS_INTEGER)
         })
 }
-fn application_query_to_v8<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: &ApplicationQueryResult,
-) -> Result<v8::Local<'s, v8::Value>, &'static str> {
-    let exact = match value {
-        ApplicationQueryResult::Documents(infos) => infos.iter().all(application_document_is_exact),
-        ApplicationQueryResult::Document(info) => {
-            info.as_ref().is_none_or(application_document_is_exact)
-        }
-        ApplicationQueryResult::Windows(infos) => infos.iter().all(application_window_is_exact),
-        ApplicationQueryResult::Window(info) => {
-            info.as_ref().is_none_or(application_window_is_exact)
-        }
-        ApplicationQueryResult::Workspace(info) => info
-            .as_ref()
-            .is_none_or(|info| info.generation <= MAX_JS_INTEGER),
-    };
-    if !exact {
-        return Err("native application integer cannot be represented exactly");
-    }
-    let json = serde_json::to_string(value).map_err(|_| "UnsupportedOperation")?;
-    let json = v8::String::new(scope, &json).ok_or("UnsupportedOperation")?;
-    v8::json::parse(scope, json).ok_or("UnsupportedOperation")
-}
-
-fn application_snapshot_is_exact(snapshot: &super::protocol::ApplicationSnapshot) -> bool {
-    snapshot.documents.iter().all(application_document_is_exact)
-        && snapshot.windows.iter().all(application_window_is_exact)
-}
-
 fn application_event_to_v8<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event: &ApplicationEvent,
@@ -4849,6 +4583,28 @@ fn application_event_to_v8<'s>(
     v8::json::parse(scope, json).ok_or("UnsupportedOperation")
 }
 
+fn host_failure_exception<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    error: &super::declarations::HostFailure,
+) -> v8::Local<'s, v8::Value> {
+    if let Err(error) = super::declarations::encode_json(&error.details) {
+        return boundary_exception(scope, error.into());
+    }
+
+    let message = v8::String::new(scope, &error.message).unwrap();
+    let exception = v8::Exception::error(scope, message);
+    let object = v8::Local::<v8::Object>::try_from(exception).unwrap();
+    let name = v8::String::new(scope, "KnotHostError").unwrap();
+    let code = v8::String::new(scope, error.code).unwrap();
+    set_property(scope, object, "name", name.into()).expect("error name");
+    set_property(scope, object, "code", code.into()).expect("error code");
+    let json = serde_json::to_string(&error.details).unwrap();
+    let json = v8::String::new(scope, &json).unwrap();
+    let details = v8::json::parse(scope, json).unwrap();
+    set_property(scope, object, "details", details).expect("error details");
+    exception
+}
+
 fn declared_response_to_v8<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     response: &super::declarations::DeclaredResponse,
@@ -4861,148 +4617,22 @@ fn declared_response_to_v8<'s>(
         v8::json::parse(scope, json).ok_or_else(|| {
             boundary_exception(
                 scope,
-                BoundaryError::Host(HostRequestError::UnsupportedOperation),
+                BoundaryError::Host(TransportError::UnsupportedOperation),
             )
         })
     };
     match &response.result {
         Ok(Ok(EncodedValue::Undefined)) => Ok(v8::undefined(scope).into()),
+        Ok(Ok(EncodedValue::Snapshot(snapshot))) => snapshot_to_v8(scope, snapshot.clone())
+            .map_err(|_| {
+                boundary_exception(
+                    scope,
+                    BoundaryError::Host(TransportError::UnsupportedOperation),
+                )
+            }),
         Ok(Ok(EncodedValue::Json(value))) => json_value(scope, value),
         Ok(Err(error)) => Err(boundary_exception(scope, (*error).into())),
-        Err(error) => {
-            let details = json_value(scope, &error.details)?;
-            let message = v8::String::new(scope, &error.message).unwrap();
-            let exception = v8::Exception::error(scope, message);
-            let object = v8::Local::<v8::Object>::try_from(exception).unwrap();
-            let name = v8::String::new(scope, "KnotHostError").unwrap();
-            let code = v8::String::new(scope, error.code).unwrap();
-            set_property(scope, object, "name", name.into()).expect("error name");
-            set_property(scope, object, "code", code.into()).expect("error code");
-            set_property(scope, object, "details", details).expect("error details");
-            Err(exception)
-        }
-    }
-}
-
-fn host_response_to_v8<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    operation: HostOperationKind,
-    response: HostResponseValue,
-) -> Result<v8::Local<'s, v8::Value>, &'static str> {
-    match (operation, response) {
-        (HostOperationKind::ObserveWorkbench, HostResponseValue::WorkbenchObserved(value)) => {
-            if value.watermark > MAX_JS_INTEGER
-                || value.subscription.value() > MAX_JS_INTEGER
-                || !application_snapshot_is_exact(&value.snapshot)
-            {
-                return Err("native application integer cannot be represented exactly");
-            }
-            let json = serde_json::to_string(&value).map_err(|_| "UnsupportedOperation")?;
-            let json = v8::String::new(scope, &json).ok_or("UnsupportedOperation")?;
-            v8::json::parse(scope, json).ok_or("UnsupportedOperation")
-        }
-        (HostOperationKind::UnobserveWorkbench, HostResponseValue::WorkbenchUnobserved) => {
-            Ok(v8::undefined(scope).into())
-        }
-        (HostOperationKind::PresentationClosed, HostResponseValue::PresentationClosed(value)) => {
-            let json = serde_json::to_string(&value).map_err(|_| "UnsupportedOperation")?;
-            let json = v8::String::new(scope, &json).ok_or("UnsupportedOperation")?;
-            v8::json::parse(scope, json).ok_or("UnsupportedOperation")
-        }
-        (HostOperationKind::WorkspaceUpdated, HostResponseValue::WorkspaceUpdated(value)) => {
-            if value.generation > MAX_JS_INTEGER {
-                return Err("native application integer cannot be represented exactly");
-            }
-            let json = serde_json::to_string(&value).map_err(|_| "UnsupportedOperation")?;
-            let json = v8::String::new(scope, &json).ok_or("UnsupportedOperation")?;
-            v8::json::parse(scope, json).ok_or("UnsupportedOperation")
-        }
-        (HostOperationKind::DocumentPresented, HostResponseValue::DocumentPresented(value)) => {
-            if !application_document_is_exact(&value.document)
-                || value
-                    .presentation
-                    .buffer
-                    .is_some_and(|buffer| buffer.value() > MAX_JS_INTEGER)
-            {
-                return Err("native application integer cannot be represented exactly");
-            }
-            let json = serde_json::to_string(&value).map_err(|_| "UnsupportedOperation")?;
-            let json = v8::String::new(scope, &json).ok_or("UnsupportedOperation")?;
-            v8::json::parse(scope, json).ok_or("UnsupportedOperation")
-        }
-        (HostOperationKind::ApplicationQuery, HostResponseValue::ApplicationQuery(value)) => {
-            application_query_to_v8(scope, &value)
-        }
-        (HostOperationKind::ActiveBuffer, HostResponseValue::ActiveBuffer(None)) => {
-            Ok(v8::null(scope).into())
-        }
-        (HostOperationKind::ActiveBuffer, HostResponseValue::ActiveBuffer(Some(buffer))) => {
-            Ok(exact_number(scope, buffer.value())?)
-        }
-        (HostOperationKind::Snapshot, HostResponseValue::Snapshot(snapshot)) => {
-            snapshot_to_v8(scope, snapshot)
-        }
-        (HostOperationKind::ApplyEdits, HostResponseValue::AppliedEdits { revision }) => {
-            Ok(exact_number(scope, revision)?)
-        }
-        (
-            HostOperationKind::SubscribeBufferChanges,
-            HostResponseValue::BufferChangesSubscribed { subscription },
-        ) => Ok(exact_number(scope, subscription.value())?),
-        (
-            HostOperationKind::UnsubscribeBufferChanges,
-            HostResponseValue::BufferChangesUnsubscribed { .. },
-        )
-        | (
-            HostOperationKind::ReplaceEditorContributions,
-            HostResponseValue::EditorContributionsReplaced,
-        )
-        | (
-            HostOperationKind::DisposeEditorContributions,
-            HostResponseValue::EditorContributionsDisposed,
-        ) => Ok(v8::undefined(scope).into()),
-        (
-            HostOperationKind::RegisterCommand,
-            HostResponseValue::CommandRegistered { registration },
-        )
-        | (
-            HostOperationKind::RegisterViewCommand,
-            HostResponseValue::ViewCommandRegistered { registration },
-        ) => Ok(exact_number(scope, registration.value())?),
-        (HostOperationKind::SelectedViewText, HostResponseValue::SelectedViewText(None)) => {
-            Ok(v8::null(scope).into())
-        }
-        (HostOperationKind::SelectedViewText, HostResponseValue::SelectedViewText(Some(text))) => {
-            Ok(v8::String::new(scope, &text)
-                .ok_or("UnsupportedOperation")?
-                .into())
-        }
-        (HostOperationKind::UnregisterCommand, HostResponseValue::CommandUnregistered { .. })
-        | (
-            HostOperationKind::CompleteInlineCommand,
-            HostResponseValue::InlineCommandCompleted { .. },
-        ) => Ok(v8::undefined(scope).into()),
-        (HostOperationKind::InvokeCommand, HostResponseValue::CommandInvoked { dispatch }) => {
-            command_dispatch_to_v8(scope, &dispatch)
-        }
-        (
-            HostOperationKind::RegisterTreeProvider,
-            HostResponseValue::TreeProviderRegistered { registration },
-        ) => Ok(exact_number(scope, registration.value())?),
-        (HostOperationKind::InvalidateTreeProvider, HostResponseValue::TreeProviderInvalidated)
-        | (
-            HostOperationKind::UnregisterTreeProvider,
-            HostResponseValue::TreeProviderUnregistered { .. },
-        )
-        | (
-            HostOperationKind::UnregisterCompletionProvider,
-            HostResponseValue::CompletionProviderUnregistered { .. },
-        ) => Ok(v8::undefined(scope).into()),
-        (
-            HostOperationKind::RegisterCompletionProvider,
-            HostResponseValue::CompletionProviderRegistered { registration },
-        ) => Ok(exact_number(scope, registration.value())?),
-        _ => Err("UnsupportedOperation"),
+        Err(error) => Err(host_failure_exception(scope, error)),
     }
 }
 
@@ -5375,9 +5005,92 @@ fn test_entered_callback(
 
 #[cfg(test)]
 mod tests {
-    fn clipboard_operation(text: &str) -> HostOperation {
+    fn test_failure(code: &'static str) -> HostFailure {
+        HostFailure {
+            code,
+            message: code.into(),
+            details: serde_json::Value::Null,
+        }
+    }
+
+    use crate::app::declared_host as declared;
+    use crate::host::declarations::{DeclaredRequest, Handler, Responder};
+    fn operation<H: Handler>(args: H::Arguments) -> DeclaredRequest {
+        DeclaredRequest::new::<H>(args)
+    }
+    fn success<H: Handler>(value: H::Success) -> super::super::declarations::DeclaredResponse {
+        Responder::<H>::new().respond(Ok(value))
+    }
+
+    fn keybindings_applied(error: Option<String>) -> super::super::declarations::DeclaredResponse {
+        Responder::<declared::mutate_keybindings>::new().respond(error.map_or(Ok(()), |message| {
+            Err(declared::KeymapError::invalid(message))
+        }))
+    }
+
+    fn clipboard_operation(text: &str) -> DeclaredRequest {
         struct Reader(String);
         impl super::super::declarations::ArgumentReader for Reader {
+            fn optional_integer(
+                &mut self,
+                _: usize,
+            ) -> Result<Option<u64>, super::super::declarations::DecodeError> {
+                unreachable!()
+            }
+            fn command_arguments(
+                &mut self,
+                _: usize,
+            ) -> Result<CommandArgumentValue, super::super::declarations::DecodeError> {
+                unreachable!()
+            }
+            fn outcome(
+                &mut self,
+                _: usize,
+            ) -> Result<CommandOutcome, super::super::declarations::DecodeError> {
+                unreachable!()
+            }
+
+            fn range(
+                &mut self,
+                _: usize,
+            ) -> Result<Option<ByteRange>, super::super::declarations::DecodeError> {
+                unreachable!()
+            }
+            fn edits(
+                &mut self,
+                _: usize,
+            ) -> Result<Vec<TextEdit>, super::super::declarations::DecodeError> {
+                unreachable!()
+            }
+            fn contributions(
+                &mut self,
+                _: usize,
+            ) -> Result<Vec<EditorContribution>, super::super::declarations::DecodeError>
+            {
+                unreachable!()
+            }
+
+            fn optional_text(
+                &mut self,
+                _: usize,
+                _: &'static str,
+            ) -> Result<Option<String>, super::super::declarations::DecodeError> {
+                unreachable!()
+            }
+            fn text_list(
+                &mut self,
+                _: usize,
+            ) -> Result<Vec<String>, super::super::declarations::DecodeError> {
+                unreachable!()
+            }
+
+            fn integer(
+                &mut self,
+                _: usize,
+            ) -> Result<u64, super::super::declarations::DecodeError> {
+                unreachable!()
+            }
+
             fn text(
                 &mut self,
                 _: usize,
@@ -5395,20 +5108,18 @@ mod tests {
                 unreachable!()
             }
         }
-        HostOperation::Declared(
-            super::super::declarations::registry()
-                .get("writeClipboardText")
-                .unwrap()
-                .decode(&mut Reader(text.into()))
-                .unwrap(),
-        )
+        super::super::declarations::registry()
+            .get("writeClipboardText")
+            .unwrap()
+            .decode(&mut Reader(text.into()))
+            .unwrap()
     }
 
-    fn clipboard_written() -> HostResponseValue {
-        HostResponseValue::Declared(super::super::declarations::DeclaredResponse {
+    fn clipboard_written() -> super::super::declarations::DeclaredResponse {
+        super::super::declarations::DeclaredResponse {
             operation: "writeClipboardText",
             result: Ok(Ok(super::super::declarations::EncodedValue::Undefined)),
-        })
+        }
     }
 
     use super::*;
@@ -5422,8 +5133,7 @@ mod tests {
 
     use crate::host::lifecycle::ExtensionState;
     use crate::host::protocol::{
-        BufferHandle, ExtensionId, ExtensionLifecycleId, HostRequestError, HostResponse,
-        HostResponseValue, RequestId,
+        BufferHandle, ExtensionId, ExtensionLifecycleId, HostResponse, RequestId,
     };
 
     fn key(extension: u64) -> ExtensionKey {
@@ -5474,9 +5184,11 @@ mod tests {
         let request = pool
             .receive_request_timeout(Duration::from_secs(1))
             .unwrap();
-        let HostOperation::MutateKeybindings { mutations } = request.operation else {
-            panic!("expected keybinding batch");
-        };
+        let mutations = &request
+            .operation
+            .arguments::<declared::mutate_keybindings>()
+            .expect("keybinding batch")
+            .mutations;
         assert_eq!(mutations.len(), 3);
         assert!(
             matches!(&mutations[0], KeybindingMutation::Set { key, view: None, command: Some(command) } if key == "Cmd-C" && command.name.as_ref() == "copy")
@@ -5491,7 +5203,7 @@ mod tests {
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: request.id,
-            result: Ok(HostResponseValue::KeybindingsApplied { error: None }),
+            result: Ok(keybindings_applied(None)),
         })
         .unwrap();
         execution.wait().unwrap();
@@ -5525,16 +5237,17 @@ mod tests {
         let second = pool
             .receive_request_timeout(Duration::from_secs(1))
             .unwrap();
-        let (host_request, batch) = if matches!(&first.operation, HostOperation::Declared(operation) if operation.descriptor.name == "writeClipboardText")
-        {
+        let (host_request, batch) = if first.operation.descriptor.name == "writeClipboardText" {
             (first, second)
         } else {
             (second, first)
         };
-        assert!(matches!(
-            batch.operation,
-            HostOperation::MutateKeybindings { .. }
-        ));
+        assert!(
+            batch
+                .operation
+                .arguments::<declared::mutate_keybindings>()
+                .is_some()
+        );
         pool.respond(HostResponse {
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
@@ -5550,22 +5263,20 @@ mod tests {
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: batch.id,
-            result: Ok(HostResponseValue::KeybindingsApplied { error: None }),
+            result: Ok(keybindings_applied(None)),
         })
         .unwrap();
         let next = pool
             .receive_request_timeout(Duration::from_secs(1))
             .unwrap();
         assert!(
-            matches!(&next.operation, HostOperation::MutateKeybindings { mutations } if matches!(&mutations[..], [KeybindingMutation::Set { key, .. }] if key == "cmd-b"))
+            matches!(next.operation.arguments::<declared::mutate_keybindings>(), Some(declared::KeybindingArguments { mutations }) if matches!(&mutations[..], [KeybindingMutation::Set { key, .. }] if key == "cmd-b"))
         );
         pool.respond(HostResponse {
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: next.id,
-            result: Ok(HostResponseValue::KeybindingsApplied {
-                error: Some("invalid view kind".into()),
-            }),
+            result: Ok(keybindings_applied(Some("invalid view kind".into()))),
         })
         .unwrap();
         let error = execution.wait().unwrap_err();
@@ -5593,7 +5304,7 @@ mod tests {
             .receive_request_timeout(Duration::from_secs(1))
             .unwrap();
         assert!(
-            matches!(&request.operation, HostOperation::MutateKeybindings { mutations }
+            matches!(request.operation.arguments::<declared::mutate_keybindings>(), Some(declared::KeybindingArguments { mutations })
             if matches!(&mutations[..], [KeybindingMutation::Set { .. }, KeybindingMutation::Invalid(message)]
                 if message.contains("command must be a string or object")))
         );
@@ -5601,9 +5312,9 @@ mod tests {
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: request.id,
-            result: Ok(HostResponseValue::KeybindingsApplied {
-                error: Some("keybinding operation 2: command must be a string or object".into()),
-            }),
+            result: Ok(keybindings_applied(Some(
+                "keybinding operation 2: command must be a string or object".into(),
+            ))),
         })
         .unwrap();
         let error = execution.wait().unwrap_err();
@@ -5626,7 +5337,7 @@ mod tests {
             .receive_request_timeout(Duration::from_secs(1))
             .unwrap();
         assert!(
-            matches!(&request.operation, HostOperation::MutateKeybindings { mutations }
+            matches!(request.operation.arguments::<declared::mutate_keybindings>(), Some(declared::KeybindingArguments { mutations })
             if matches!(&mutations[..], [KeybindingMutation::Invalid(message)]
                 if message.contains("finite numbers")))
         );
@@ -5634,11 +5345,9 @@ mod tests {
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: request.id,
-            result: Ok(HostResponseValue::KeybindingsApplied {
-                error: Some(
-                    "keybinding operation 1: command arguments require finite numbers".into(),
-                ),
-            }),
+            result: Ok(keybindings_applied(Some(
+                "keybinding operation 1: command arguments require finite numbers".into(),
+            ))),
         })
         .unwrap();
         assert!(
@@ -5684,18 +5393,18 @@ mod tests {
         };
         assert_eq!(
             request.operation,
-            HostOperation::RegisterCommand {
+            operation::<declared::register_command>(declared::RegisterCommandArguments {
                 name: "knot.config.test".into(),
                 title: "knot.config.test".into(),
-            }
+            })
         );
         pool.respond(HostResponse {
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: request.id,
-            result: Ok(HostResponseValue::CommandRegistered {
-                registration: CommandRegistrationId::new(100),
-            }),
+            result: Ok(success::<declared::register_command>(
+                CommandRegistrationId::new(100),
+            )),
         })
         .unwrap();
         pre.wait().unwrap();
@@ -6157,15 +5866,17 @@ mod tests {
             .unwrap();
         let registration_request = pool.receive_request().unwrap();
         let registration = CommandRegistrationId::new(900);
-        assert!(matches!(
-            registration_request.operation,
-            HostOperation::RegisterCommand { .. }
-        ));
+        assert!(
+            registration_request
+                .operation
+                .arguments::<declared::register_command>()
+                .is_some()
+        );
         pool.respond(HostResponse {
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: registration_request.id,
-            result: Ok(HostResponseValue::CommandRegistered { registration }),
+            result: Ok(success::<declared::register_command>(registration)),
         })
         .unwrap();
         setup.wait().unwrap();
@@ -6209,21 +5920,23 @@ mod tests {
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: active.id,
-            result: Ok(HostResponseValue::ActiveBuffer(Some(BufferHandle::new(3)))),
+            result: Ok(success::<declared::active_buffer>(Some(BufferHandle::new(
+                3,
+            )))),
         })
         .unwrap();
         let subscribe = pool.receive_request().unwrap();
         assert_eq!(
             subscribe.operation,
-            HostOperation::SubscribeBufferChanges {
+            operation::<declared::subscribe_buffer_changes>(declared::BufferArguments {
                 buffer: BufferHandle::new(3)
-            }
+            })
         );
         pool.respond(HostResponse {
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: subscribe.id,
-            result: Ok(HostResponseValue::BufferChangesSubscribed { subscription }),
+            result: Ok(success::<declared::subscribe_buffer_changes>(subscription)),
         })
         .unwrap();
         assert_eq!(execution.wait().unwrap(), CommandOutcome::Completed);
@@ -6287,16 +6000,23 @@ mod tests {
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: active.id,
-            result: Ok(HostResponseValue::ActiveBuffer(Some(BufferHandle::new(3)))),
+            result: Ok(success::<declared::active_buffer>(Some(BufferHandle::new(
+                3,
+            )))),
         })
         .unwrap();
         let snapshot = pool.receive_request().unwrap();
-        assert!(matches!(snapshot.operation, HostOperation::Snapshot { .. }));
+        assert!(
+            snapshot
+                .operation
+                .arguments::<declared::snapshot>()
+                .is_some()
+        );
         pool.respond(HostResponse {
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: snapshot.id,
-            result: Ok(HostResponseValue::Snapshot(TextSnapshot {
+            result: Ok(success::<declared::snapshot>(TextSnapshot {
                 text: SnapshotText::from_utf8("😀"),
                 range: ByteRange {
                     start_byte_offset: 0,
@@ -6337,19 +6057,13 @@ mod tests {
             "#,
             );
             let responses = [
-                HostResponseValue::ActiveBuffer(Some(BufferHandle::new(3))),
-                HostResponseValue::CommandRegistered {
-                    registration: CommandRegistrationId::new(901),
-                },
-                HostResponseValue::BufferChangesSubscribed {
-                    subscription: BufferSubscriptionId::new(902),
-                },
-                HostResponseValue::TreeProviderRegistered {
-                    registration: TreeProviderRegistrationId::new(903),
-                },
-                HostResponseValue::CompletionProviderRegistered {
-                    registration: CompletionProviderRegistrationId::new(904),
-                },
+                success::<declared::active_buffer>(Some(BufferHandle::new(3))),
+                success::<declared::register_command>(CommandRegistrationId::new(901)),
+                success::<declared::subscribe_buffer_changes>(BufferSubscriptionId::new(902)),
+                success::<declared::register_tree_provider>(TreeProviderRegistrationId::new(903)),
+                success::<declared::register_completion_provider>(
+                    CompletionProviderRegistrationId::new(904),
+                ),
             ];
             for value in responses {
                 let request = pool.receive_request().unwrap();
@@ -6382,32 +6096,24 @@ mod tests {
             "#).unwrap();
             let operations = [
                 (
-                    HostResponseValue::CommandUnregistered {
-                        registration: CommandRegistrationId::new(901),
-                    },
-                    HostRequestError::CommandNotFound,
+                    success::<declared::unregister_command>(()),
+                    test_failure("CommandNotFound"),
                 ),
                 (
-                    HostResponseValue::BufferChangesUnsubscribed {
-                        subscription: BufferSubscriptionId::new(902),
-                    },
-                    HostRequestError::OwnershipDisposed,
+                    success::<declared::unsubscribe_buffer_changes>(()),
+                    test_failure("OwnershipDisposed"),
                 ),
                 (
-                    HostResponseValue::EditorContributionsDisposed,
-                    HostRequestError::BufferClosed,
+                    success::<declared::dispose_editor_contributions>(()),
+                    test_failure("BufferClosed"),
                 ),
                 (
-                    HostResponseValue::TreeProviderUnregistered {
-                        registration: TreeProviderRegistrationId::new(903),
-                    },
-                    HostRequestError::TreeProviderNotFound,
+                    success::<declared::unregister_tree_provider>(()),
+                    test_failure("TreeProviderNotFound"),
                 ),
                 (
-                    HostResponseValue::CompletionProviderUnregistered {
-                        registration: CompletionProviderRegistrationId::new(904),
-                    },
-                    HostRequestError::CompletionProviderNotFound,
+                    success::<declared::unregister_completion_provider>(()),
+                    test_failure("CompletionProviderNotFound"),
                 ),
             ];
             for (value, error) in operations {
@@ -6506,9 +6212,9 @@ mod tests {
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: request.id,
-            result: Ok(HostResponseValue::TreeProviderRegistered {
-                registration: TreeProviderRegistrationId::new(905),
-            }),
+            result: Ok(success::<declared::register_tree_provider>(
+                TreeProviderRegistrationId::new(905),
+            )),
         })
         .unwrap();
         setup.wait().unwrap();
@@ -6528,21 +6234,23 @@ mod tests {
             .unwrap();
         let invalidate = pool.receive_request().unwrap();
         let dispose = pool.receive_request().unwrap();
-        assert!(matches!(
-            invalidate.operation,
-            HostOperation::InvalidateTreeProvider { .. }
-        ));
-        assert!(matches!(
-            dispose.operation,
-            HostOperation::UnregisterTreeProvider { .. }
-        ));
+        assert!(
+            invalidate
+                .operation
+                .arguments::<declared::invalidate_tree_provider>()
+                .is_some()
+        );
+        assert!(
+            dispose
+                .operation
+                .arguments::<declared::unregister_tree_provider>()
+                .is_some()
+        );
         pool.respond(HostResponse {
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: dispose.id,
-            result: Ok(HostResponseValue::TreeProviderUnregistered {
-                registration: TreeProviderRegistrationId::new(905),
-            }),
+            result: Ok(success::<declared::unregister_tree_provider>(())),
         })
         .unwrap();
         assert!(
@@ -6553,7 +6261,7 @@ mod tests {
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: invalidate.id,
-            result: Ok(HostResponseValue::TreeProviderInvalidated),
+            result: Ok(success::<declared::invalidate_tree_provider>(())),
         })
         .unwrap();
         let acknowledgement = pool.receive_request().unwrap();
@@ -6593,7 +6301,9 @@ mod tests {
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: request.id,
-            result: Ok(HostResponseValue::ActiveBuffer(Some(BufferHandle::new(3)))),
+            result: Ok(success::<declared::active_buffer>(Some(BufferHandle::new(
+                3,
+            )))),
         })
         .unwrap();
         let request = pool.receive_request().unwrap();
@@ -6601,7 +6311,7 @@ mod tests {
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: request.id,
-            result: Ok(HostResponseValue::Snapshot(TextSnapshot {
+            result: Ok(success::<declared::snapshot>(TextSnapshot {
                 text: SnapshotText::from_utf8(""),
                 range: ByteRange {
                     start_byte_offset: 0,
@@ -6632,12 +6342,10 @@ mod tests {
           });
         "#).unwrap();
         for value in [
-            HostResponseValue::TreeProviderRegistered {
-                registration: TreeProviderRegistrationId::new(906),
-            },
-            HostResponseValue::CompletionProviderRegistered {
-                registration: CompletionProviderRegistrationId::new(907),
-            },
+            success::<declared::register_tree_provider>(TreeProviderRegistrationId::new(906)),
+            success::<declared::register_completion_provider>(
+                CompletionProviderRegistrationId::new(907),
+            ),
         ] {
             let request = pool.receive_request().unwrap();
             pool.respond(HostResponse {
@@ -6660,10 +6368,12 @@ mod tests {
             )
             .unwrap();
         let release = pool.receive_request().unwrap();
-        assert!(matches!(
-            release.operation,
-            HostOperation::UnregisterTreeProvider { .. }
-        ));
+        assert!(
+            release
+                .operation
+                .arguments::<declared::unregister_tree_provider>()
+                .is_some()
+        );
         let queued = pool
             .request_tree_children(
                 runtime,
@@ -6681,9 +6391,7 @@ mod tests {
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: release.id,
-            result: Ok(HostResponseValue::TreeProviderUnregistered {
-                registration: TreeProviderRegistrationId::new(906),
-            }),
+            result: Ok(success::<declared::unregister_tree_provider>(())),
         })
         .unwrap();
         assert_eq!(
@@ -6713,18 +6421,18 @@ mod tests {
             )
             .unwrap();
         let release = pool.receive_request().unwrap();
-        assert!(matches!(
-            release.operation,
-            HostOperation::UnregisterCompletionProvider { .. }
-        ));
+        assert!(
+            release
+                .operation
+                .arguments::<declared::unregister_completion_provider>()
+                .is_some()
+        );
         drop(completion);
         pool.respond(HostResponse {
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: release.id,
-            result: Ok(HostResponseValue::CompletionProviderUnregistered {
-                registration: CompletionProviderRegistrationId::new(907),
-            }),
+            result: Ok(success::<declared::unregister_completion_provider>(())),
         })
         .unwrap();
         assert_eq!(
@@ -6781,12 +6489,10 @@ mod tests {
           });
         "#).unwrap();
         for value in [
-            HostResponseValue::TreeProviderRegistered {
-                registration: TreeProviderRegistrationId::new(908),
-            },
-            HostResponseValue::CompletionProviderRegistered {
-                registration: CompletionProviderRegistrationId::new(909),
-            },
+            success::<declared::register_tree_provider>(TreeProviderRegistrationId::new(908)),
+            success::<declared::register_completion_provider>(
+                CompletionProviderRegistrationId::new(909),
+            ),
         ] {
             let request = pool.receive_request().unwrap();
             pool.respond(HostResponse {
@@ -6883,18 +6589,28 @@ mod tests {
                 RuntimeErrorKind::Cancelled
             );
             let value = match request.operation {
-                HostOperation::RegisterCommand { .. } => HostResponseValue::CommandRegistered {
-                    registration: CommandRegistrationId::new(1),
-                },
-                HostOperation::RegisterCompletionProvider { .. } => {
-                    HostResponseValue::CompletionProviderRegistered {
-                        registration: CompletionProviderRegistrationId::new(1),
-                    }
+                operation
+                    if operation
+                        .arguments::<declared::register_command>()
+                        .is_some() =>
+                {
+                    success::<declared::register_command>(CommandRegistrationId::new(1))
                 }
-                HostOperation::RegisterTreeProvider { .. } => {
-                    HostResponseValue::TreeProviderRegistered {
-                        registration: TreeProviderRegistrationId::new(1),
-                    }
+                operation
+                    if operation
+                        .arguments::<declared::register_completion_provider>()
+                        .is_some() =>
+                {
+                    success::<declared::register_completion_provider>(
+                        CompletionProviderRegistrationId::new(1),
+                    )
+                }
+                operation
+                    if operation
+                        .arguments::<declared::register_tree_provider>()
+                        .is_some() =>
+                {
+                    success::<declared::register_tree_provider>(TreeProviderRegistrationId::new(1))
                 }
                 _ => unreachable!(),
             };
@@ -6930,7 +6646,10 @@ const observation = await workbench.observe(async (event) => {
 globalThis.activationFinished = true;
 "#).unwrap();
         let admission = pool.receive_request().unwrap();
-        assert_eq!(admission.operation, HostOperation::ObserveWorkbench);
+        assert_eq!(
+            admission.operation,
+            operation::<declared::observe_workbench>(())
+        );
         let subscription = WorkbenchSubscriptionId::new(911);
         let event = |sequence| ApplicationEvent {
             sequence,
@@ -6944,40 +6663,39 @@ globalThis.activationFinished = true;
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: admission.id,
-            result: Ok(HostResponseValue::WorkbenchObserved(WorkbenchObservation {
-                subscription,
-                snapshot: ApplicationSnapshot::default(),
-                watermark: 7,
-            })),
+            result: Ok(success::<declared::observe_workbench>(
+                WorkbenchObservation {
+                    subscription,
+                    snapshot: ApplicationSnapshot::default(),
+                    watermark: 7,
+                },
+            )),
         })
         .unwrap();
         setup.wait().unwrap();
         let query = pool.receive_request().unwrap();
-        assert_eq!(
-            query.operation,
-            HostOperation::ApplicationQuery(ApplicationQuery::Documents)
-        );
+        assert_eq!(query.operation, operation::<declared::list_documents>(()));
         pool.dispatch_application_change(runtime, subscription, event(9))
             .unwrap();
         pool.respond(HostResponse {
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: query.id,
-            result: Ok(HostResponseValue::ApplicationQuery(
-                ApplicationQueryResult::Documents(vec![]),
-            )),
+            result: Ok(success::<declared::list_documents>(vec![])),
         })
         .unwrap();
         let disposal = pool.receive_request().unwrap();
         assert_eq!(
             disposal.operation,
-            HostOperation::UnobserveWorkbench { subscription }
+            operation::<declared::unobserve_workbench>(declared::WorkbenchSubscription {
+                subscription
+            })
         );
         pool.respond(HostResponse {
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: disposal.id,
-            result: Ok(HostResponseValue::WorkbenchUnobserved),
+            result: Ok(success::<declared::unobserve_workbench>(())),
         })
         .unwrap();
         assert_eq!(
@@ -7016,10 +6734,8 @@ globalThis.activationFinished = true;
         "#,
         );
         for value in [
-            HostResponseValue::ActiveBuffer(Some(BufferHandle::new(3))),
-            HostResponseValue::BufferChangesSubscribed {
-                subscription: BufferSubscriptionId::new(910),
-            },
+            success::<declared::active_buffer>(Some(BufferHandle::new(3))),
+            success::<declared::subscribe_buffer_changes>(BufferSubscriptionId::new(910)),
         ] {
             let request = pool.receive_request().unwrap();
             pool.respond(HostResponse {
@@ -7045,17 +6761,17 @@ globalThis.activationFinished = true;
             .unwrap();
         }
         let release = pool.receive_request().unwrap();
-        assert!(matches!(
-            release.operation,
-            HostOperation::UnsubscribeBufferChanges { .. }
-        ));
+        assert!(
+            release
+                .operation
+                .arguments::<declared::unsubscribe_buffer_changes>()
+                .is_some()
+        );
         pool.respond(HostResponse {
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: release.id,
-            result: Ok(HostResponseValue::BufferChangesUnsubscribed {
-                subscription: BufferSubscriptionId::new(910),
-            }),
+            result: Ok(success::<declared::unsubscribe_buffer_changes>(())),
         })
         .unwrap();
         assert_eq!(
@@ -7102,7 +6818,9 @@ globalThis.activationFinished = true;
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: request.id,
-            result: Ok(HostResponseValue::ActiveBuffer(Some(BufferHandle::new(3)))),
+            result: Ok(success::<declared::active_buffer>(Some(BufferHandle::new(
+                3,
+            )))),
         })
         .unwrap();
         assert_eq!(setup.wait().unwrap(), CommandOutcome::Completed);
@@ -7122,19 +6840,23 @@ globalThis.activationFinished = true;
             .unwrap();
         let replace = pool.receive_request().unwrap();
         let dispose = pool.receive_request().unwrap();
-        assert!(matches!(
-            replace.operation,
-            HostOperation::ReplaceEditorContributions { .. }
-        ));
-        assert!(matches!(
-            dispose.operation,
-            HostOperation::DisposeEditorContributions { .. }
-        ));
+        assert!(
+            replace
+                .operation
+                .arguments::<declared::replace_editor_contributions>()
+                .is_some()
+        );
+        assert!(
+            dispose
+                .operation
+                .arguments::<declared::dispose_editor_contributions>()
+                .is_some()
+        );
         pool.respond(HostResponse {
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: dispose.id,
-            result: Ok(HostResponseValue::EditorContributionsDisposed),
+            result: Ok(success::<declared::dispose_editor_contributions>(())),
         })
         .unwrap();
         assert!(
@@ -7145,7 +6867,7 @@ globalThis.activationFinished = true;
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: replace.id,
-            result: Ok(HostResponseValue::EditorContributionsReplaced),
+            result: Ok(success::<declared::replace_editor_contributions>(())),
         })
         .unwrap();
         let acknowledged = pool.receive_request().unwrap();
@@ -7182,9 +6904,11 @@ globalThis.activationFinished = true;
         "#,
         );
         let request = pool.receive_request().unwrap();
-        let HostOperation::InvokeCommand { command } = &request.operation else {
-            panic!("expected command data");
-        };
+        let command = &request
+            .operation
+            .arguments::<declared::invoke_command>()
+            .expect("command invocation")
+            .command;
         let mut data = &command.arguments;
         for _ in 0..300 {
             let CommandArgumentValue::Object(object) = data else {
@@ -7218,11 +6942,11 @@ globalThis.activationFinished = true;
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: request.id,
-            result: Ok(HostResponseValue::CommandInvoked {
-                dispatch: CommandInvokeDispatch::Outcome {
+            result: Ok(success::<declared::invoke_command>(
+                CommandInvokeDispatch::Outcome {
                     outcome: CommandOutcome::Completed,
                 },
-            }),
+            )),
         })
         .unwrap();
         assert_eq!(execution.wait().unwrap(), CommandOutcome::Completed);
@@ -7483,7 +7207,7 @@ globalThis.activationFinished = true;
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: request.id,
-            result: Err(HostRequestError::UnsupportedOperation),
+            result: Err(test_failure("UnsupportedOperation")),
         })
         .unwrap();
         let unsupported = unsupported.wait().unwrap_err();
@@ -7522,26 +7246,28 @@ globalThis.activationFinished = true;
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: active.id,
-            result: Ok(HostResponseValue::ActiveBuffer(Some(BufferHandle::new(3)))),
+            result: Ok(success::<declared::active_buffer>(Some(BufferHandle::new(
+                3,
+            )))),
         })
         .unwrap();
 
         let request = pool.receive_request().unwrap();
         assert_eq!(
             request.operation,
-            HostOperation::Snapshot {
+            operation::<declared::snapshot>(declared::SnapshotArguments {
                 buffer: BufferHandle::new(3),
                 range: Some(ByteRange {
                     start_byte_offset: 1,
                     end_byte_offset: 7
                 }),
-            }
+            })
         );
         pool.respond(HostResponse {
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: request.id,
-            result: Ok(HostResponseValue::Snapshot(TextSnapshot {
+            result: Ok(success::<declared::snapshot>(TextSnapshot {
                 text: SnapshotText::from_utf8("é中z"),
                 range: ByteRange {
                     start_byte_offset: 1,
@@ -7555,7 +7281,7 @@ globalThis.activationFinished = true;
         let request = pool.receive_request().unwrap();
         assert_eq!(
             request.operation,
-            HostOperation::ApplyEdits {
+            operation::<declared::apply_edits>(declared::EditArguments {
                 buffer: BufferHandle::new(3),
                 edits: vec![TextEdit {
                     range: ByteRange {
@@ -7565,20 +7291,20 @@ globalThis.activationFinished = true;
                     text: "λ".into(),
                 }],
                 if_revision: 7,
-            }
+            })
         );
         pool.respond(HostResponse {
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: request.id,
-            result: Ok(HostResponseValue::AppliedEdits { revision: 8 }),
+            result: Ok(success::<declared::apply_edits>(8)),
         })
         .unwrap();
 
         let request = pool.receive_request().unwrap();
         assert_eq!(
             request.operation,
-            HostOperation::ReplaceEditorContributions {
+            operation::<declared::replace_editor_contributions>(declared::ContributionArguments {
                 buffer: BufferHandle::new(3),
                 contributions: vec![EditorContribution {
                     range: ByteRange {
@@ -7590,55 +7316,57 @@ globalThis.activationFinished = true;
                     command: Some("fixture.command".into()),
                 }],
                 if_revision: 8,
-            }
+            })
         );
         pool.respond(HostResponse {
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: request.id,
-            result: Ok(HostResponseValue::EditorContributionsReplaced),
+            result: Ok(success::<declared::replace_editor_contributions>(())),
         })
         .unwrap();
 
         let request = pool.receive_request().unwrap();
         assert_eq!(
             request.operation,
-            HostOperation::SubscribeBufferChanges {
+            operation::<declared::subscribe_buffer_changes>(declared::BufferArguments {
                 buffer: BufferHandle::new(3)
-            }
+            })
         );
         let subscription = BufferSubscriptionId::new(12);
         pool.respond(HostResponse {
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: request.id,
-            result: Ok(HostResponseValue::BufferChangesSubscribed { subscription }),
+            result: Ok(success::<declared::subscribe_buffer_changes>(subscription)),
         })
         .unwrap();
         let request = pool.receive_request().unwrap();
         assert_eq!(
             request.operation,
-            HostOperation::UnsubscribeBufferChanges { subscription }
+            operation::<declared::unsubscribe_buffer_changes>(declared::SubscriptionArguments {
+                subscription
+            })
         );
         pool.respond(HostResponse {
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: request.id,
-            result: Ok(HostResponseValue::BufferChangesUnsubscribed { subscription }),
+            result: Ok(success::<declared::unsubscribe_buffer_changes>(())),
         })
         .unwrap();
         let request = pool.receive_request().unwrap();
         assert_eq!(
             request.operation,
-            HostOperation::DisposeEditorContributions {
+            operation::<declared::dispose_editor_contributions>(declared::BufferArguments {
                 buffer: BufferHandle::new(3)
-            }
+            })
         );
         pool.respond(HostResponse {
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: request.id,
-            result: Ok(HostResponseValue::EditorContributionsDisposed),
+            result: Ok(success::<declared::dispose_editor_contributions>(())),
         })
         .unwrap();
         assert_eq!(execution.wait().unwrap(), CommandOutcome::Completed);
@@ -7672,7 +7400,9 @@ globalThis.activationFinished = true;
                 extension: runtime.extension,
                 lifecycle: runtime.lifecycle,
                 id: active.id,
-                result: Ok(HostResponseValue::ActiveBuffer(Some(BufferHandle::new(1)))),
+                result: Ok(success::<declared::active_buffer>(Some(BufferHandle::new(
+                    1,
+                )))),
             })
             .unwrap();
             let request = pool.receive_request().unwrap();
@@ -7680,7 +7410,7 @@ globalThis.activationFinished = true;
                 extension: runtime.extension,
                 lifecycle: runtime.lifecycle,
                 id: request.id,
-                result: Ok(HostResponseValue::Snapshot(TextSnapshot {
+                result: Ok(success::<declared::snapshot>(TextSnapshot {
                     text: SnapshotText(Arc::clone(&text)),
                     range: ByteRange {
                         start_byte_offset: 0,
@@ -7804,7 +7534,7 @@ globalThis.activationFinished = true;
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: request.id,
-            result: Ok(HostResponseValue::Snapshot(TextSnapshot {
+            result: Ok(success::<declared::snapshot>(TextSnapshot {
                 text: SnapshotText::from_utf8(""),
                 range: ByteRange {
                     start_byte_offset: 0,
@@ -7883,7 +7613,7 @@ globalThis.activationFinished = true;
             extension: waiting.extension,
             lifecycle: waiting.lifecycle,
             id: request.id,
-            result: Ok(HostResponseValue::Snapshot(TextSnapshot {
+            result: Ok(success::<declared::snapshot>(TextSnapshot {
                 text: SnapshotText::from_utf8(""),
                 range: ByteRange {
                     start_byte_offset: 0,
@@ -7946,7 +7676,7 @@ globalThis.activationFinished = true;
                 extension: runtime.extension,
                 lifecycle: runtime.lifecycle,
                 id: request.id,
-                result: Ok(HostResponseValue::Snapshot(TextSnapshot {
+                result: Ok(success::<declared::snapshot>(TextSnapshot {
                     text: SnapshotText::from_utf8(""),
                     range: ByteRange {
                         start_byte_offset: 0,
@@ -8053,7 +7783,19 @@ globalThis.activationFinished = true;
                         serde_json::json!({"revision": MAX_JS_INTEGER + 1}),
                     ))),
                 },
-                r#"if (!(error instanceof RangeError)) throw error;"#,
+                r#"if (error.name !== "KnotHostError" || error.code !== "UnsupportedOperation") throw error;"#,
+            ),
+            (
+                "error-detail-precision",
+                DeclaredResponse {
+                    operation: "writeClipboardText",
+                    result: Err(crate::host::declarations::HostFailure {
+                        code: "ProbeFailed",
+                        message: "probe diagnostic".into(),
+                        details: serde_json::json!({"revision": MAX_JS_INTEGER + 1}),
+                    }),
+                },
+                r#"if (error.code !== "UnsupportedOperation") throw error;"#,
             ),
             (
                 "pairing",
@@ -8088,7 +7830,7 @@ globalThis.activationFinished = true;
                 extension: request.extension,
                 lifecycle: request.lifecycle,
                 id: request.id,
-                result: Ok(HostResponseValue::Declared(response)),
+                result: Ok(response),
             })
             .unwrap();
             execution.wait().unwrap();
@@ -8113,7 +7855,7 @@ globalThis.activationFinished = true;
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: request.id,
-            result: Err(HostRequestError::RevisionConflict),
+            result: Err(test_failure("RevisionConflict")),
         })
         .unwrap();
         let error = execution.wait().unwrap_err();
@@ -8223,7 +7965,7 @@ globalThis.activationFinished = true;
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: first.id,
-            result: Err(HostRequestError::BufferClosed),
+            result: Err(test_failure("BufferClosed")),
         })
         .unwrap();
         let error = execution.wait().unwrap_err();
@@ -8393,7 +8135,7 @@ globalThis.activationFinished = true;
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: request.id,
-            result: Ok(HostResponseValue::EditorContributionsDisposed),
+            result: Ok(success::<declared::dispose_editor_contributions>(())),
         })
         .unwrap();
         let error = execution.wait().unwrap_err();
@@ -8627,36 +8369,13 @@ globalThis.activationFinished = true;
     #[test]
     fn facade_maps_every_host_error_to_a_stable_javascript_name() {
         let capsule = RuntimeCapsule::new(key(1), IsolateConfig::default()).unwrap();
-        let cases = [
-            (HostRequestError::ViewNotFound, "KnotHostError"),
-            (HostRequestError::OwnershipDisposed, "KnotHostError"),
-            (HostRequestError::BufferReadOnly, "KnotHostError"),
-            (HostRequestError::ContextUnavailable, "KnotHostError"),
-            (HostRequestError::InvalidTarget, "KnotHostError"),
-            (HostRequestError::UnsupportedOperation, "KnotHostError"),
-            (HostRequestError::BufferClosed, "KnotHostError"),
-            (HostRequestError::InvalidRange, "KnotHostError"),
-            (HostRequestError::InvalidEditBatch, "KnotHostError"),
-            (HostRequestError::RevisionConflict, "KnotHostError"),
-            (HostRequestError::ContributionSetNotFound, "KnotHostError"),
-            (HostRequestError::TreeViewNotFound, "KnotHostError"),
-            (HostRequestError::TreeProviderInUse, "KnotHostError"),
-            (HostRequestError::TreeProviderNotFound, "KnotHostError"),
-            (
-                HostRequestError::CompletionProviderNotFound,
-                "KnotHostError",
-            ),
-            (HostRequestError::CommandNameInUse, "KnotHostError"),
-            (HostRequestError::CommandNotFound, "KnotHostError"),
-            (HostRequestError::Cancelled, "KnotHostError"),
-        ];
-        for (index, (error, expected_name)) in cases.into_iter().enumerate() {
-            let wire_name = serde_json::to_value(error)
-                .unwrap()
-                .as_str()
-                .unwrap()
-                .to_owned();
-            capsule.set_test_host_error(error);
+        for (index, wire_name) in super::super::declarations::registry()
+            .error_codes()
+            .into_iter()
+            .enumerate()
+        {
+            let expected_name = "KnotHostError";
+            capsule.set_test_host_error(test_failure(wire_name));
             let report = capsule
                 .execute_fixture_module(
                     &format!("file:///fixtures/host-error-{index}.js"),
@@ -9112,17 +8831,17 @@ globalThis.activationFinished = true;
             .unwrap();
         assert_eq!(
             tree.operation,
-            HostOperation::RegisterTreeProvider {
+            operation::<declared::register_tree_provider>(declared::TreeArguments {
                 view_id: "outline".into()
-            }
+            })
         );
         pool.respond(HostResponse {
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: tree.id,
-            result: Ok(HostResponseValue::TreeProviderRegistered {
-                registration: tree_registration,
-            }),
+            result: Ok(success::<declared::register_tree_provider>(
+                tree_registration,
+            )),
         })
         .unwrap();
         let completion = pool
@@ -9130,17 +8849,17 @@ globalThis.activationFinished = true;
             .unwrap();
         assert_eq!(
             completion.operation,
-            HostOperation::RegisterCompletionProvider {
+            operation::<declared::register_completion_provider>(declared::CompletionArguments {
                 label: "fixture".into()
-            }
+            })
         );
         pool.respond(HostResponse {
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: completion.id,
-            result: Ok(HostResponseValue::CompletionProviderRegistered {
-                registration: completion_registration,
-            }),
+            result: Ok(success::<declared::register_completion_provider>(
+                completion_registration,
+            )),
         })
         .unwrap();
         setup.wait().unwrap();
@@ -9252,16 +8971,16 @@ globalThis.activationFinished = true;
             .unwrap();
         assert_eq!(
             request.operation,
-            HostOperation::InvalidateTreeProvider {
+            operation::<declared::invalidate_tree_provider>(declared::TreeInvalidationArguments {
                 registration: tree_registration,
                 parent_id: Some("root".into()),
-            }
+            })
         );
         pool.respond(HostResponse {
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: request.id,
-            result: Ok(HostResponseValue::TreeProviderInvalidated),
+            result: Ok(success::<declared::invalidate_tree_provider>(())),
         })
         .unwrap();
         invalidate.wait().unwrap();
@@ -9432,23 +9151,33 @@ globalThis.activationFinished = true;
             )
             .unwrap();
         for expected in [
-            HostOperation::UnregisterTreeProvider {
+            operation::<declared::unregister_tree_provider>(declared::TreeRegistrationArguments {
                 registration: tree_registration,
-            },
-            HostOperation::UnregisterCompletionProvider {
-                registration: completion_registration,
-            },
+            }),
+            operation::<declared::unregister_completion_provider>(
+                declared::CompletionRegistrationArguments {
+                    registration: completion_registration,
+                },
+            ),
         ] {
             let request = pool
                 .receive_request_timeout(Duration::from_secs(1))
                 .unwrap();
             assert_eq!(request.operation, expected);
             let result = match request.operation {
-                HostOperation::UnregisterTreeProvider { registration } => {
-                    HostResponseValue::TreeProviderUnregistered { registration }
+                operation
+                    if operation
+                        .arguments::<declared::unregister_tree_provider>()
+                        .is_some() =>
+                {
+                    success::<declared::unregister_tree_provider>(())
                 }
-                HostOperation::UnregisterCompletionProvider { registration } => {
-                    HostResponseValue::CompletionProviderUnregistered { registration }
+                operation
+                    if operation
+                        .arguments::<declared::unregister_completion_provider>()
+                        .is_some() =>
+                {
+                    success::<declared::unregister_completion_provider>(())
                 }
                 _ => unreachable!(),
             };
@@ -9529,7 +9258,7 @@ globalThis.activationFinished = true;
                 extension: unload_runtime.extension,
                 lifecycle: unload_runtime.lifecycle,
                 id: unload_request.id,
-                result: Ok(HostResponseValue::Snapshot(TextSnapshot {
+                result: Ok(success::<declared::snapshot>(TextSnapshot {
                     text: SnapshotText::from_utf8(""),
                     range: ByteRange {
                         start_byte_offset: 0,
@@ -9571,16 +9300,16 @@ globalThis.activationFinished = true;
         assert_eq!(request.invocation, None);
         assert_eq!(
             request.operation,
-            HostOperation::RegisterCommand {
+            operation::<declared::register_command>(declared::RegisterCommandArguments {
                 name: "knot.fixture.arguments".into(),
                 title: "knot.fixture.arguments".into(),
-            }
+            })
         );
         pool.respond(HostResponse {
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: request.id,
-            result: Ok(HostResponseValue::CommandRegistered { registration }),
+            result: Ok(success::<declared::register_command>(registration)),
         })
         .unwrap();
         setup.wait().unwrap();
@@ -9617,16 +9346,16 @@ globalThis.activationFinished = true;
         assert_eq!(snapshot.invocation, Some(invocation));
         assert_eq!(
             snapshot.operation,
-            HostOperation::Snapshot {
+            operation::<declared::snapshot>(declared::SnapshotArguments {
                 buffer: BufferHandle::new(17),
                 range: None,
-            }
+            })
         );
         pool.respond(HostResponse {
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: snapshot.id,
-            result: Ok(HostResponseValue::Snapshot(TextSnapshot {
+            result: Ok(success::<declared::snapshot>(TextSnapshot {
                 text: SnapshotText::from_utf8("captured"),
                 range: ByteRange {
                     start_byte_offset: 0,
@@ -9681,7 +9410,7 @@ globalThis.activationFinished = true;
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: request.id,
-            result: Err(HostRequestError::CommandNameInUse),
+            result: Err(test_failure("CommandNameInUse")),
         })
         .unwrap();
         let error = duplicate.wait().unwrap_err();
@@ -9709,7 +9438,7 @@ globalThis.activationFinished = true;
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: request.id,
-            result: Ok(HostResponseValue::CommandRegistered { registration }),
+            result: Ok(success::<declared::register_command>(registration)),
         })
         .unwrap();
         setup.wait().unwrap();
@@ -9726,13 +9455,15 @@ globalThis.activationFinished = true;
             .unwrap();
         assert_eq!(
             request.operation,
-            HostOperation::UnregisterCommand { registration }
+            operation::<declared::unregister_command>(declared::CommandRegistrationArguments {
+                registration
+            })
         );
         pool.respond(HostResponse {
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: request.id,
-            result: Ok(HostResponseValue::CommandUnregistered { registration }),
+            result: Ok(success::<declared::unregister_command>(())),
         })
         .unwrap();
         disposal.wait().unwrap();
@@ -9802,7 +9533,7 @@ globalThis.activationFinished = true;
                 extension: runtime.extension,
                 lifecycle: runtime.lifecycle,
                 id: request.id,
-                result: Ok(HostResponseValue::CommandRegistered { registration }),
+                result: Ok(success::<declared::register_command>(registration)),
             })
             .unwrap();
         }
@@ -9828,20 +9559,22 @@ globalThis.activationFinished = true;
             .receive_request_timeout(Duration::from_secs(1))
             .unwrap();
         assert_eq!(invoke.invocation, Some(outer));
-        assert!(matches!(
-            invoke.operation,
-            HostOperation::InvokeCommand { .. }
-        ));
+        assert!(
+            invoke
+                .operation
+                .arguments::<declared::invoke_command>()
+                .is_some()
+        );
         pool.respond(HostResponse {
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: invoke.id,
-            result: Ok(HostResponseValue::CommandInvoked {
-                dispatch: CommandInvokeDispatch::Inline {
+            result: Ok(success::<declared::invoke_command>(
+                CommandInvokeDispatch::Inline {
                     invocation: inner,
                     registration: inner_registration,
                 },
-            }),
+            )),
         })
         .unwrap();
 
@@ -9851,16 +9584,16 @@ globalThis.activationFinished = true;
         assert_eq!(snapshot.invocation, Some(inner));
         assert_eq!(
             snapshot.operation,
-            HostOperation::Snapshot {
+            operation::<declared::snapshot>(declared::SnapshotArguments {
                 buffer: BufferHandle::new(23),
                 range: None,
-            }
+            })
         );
         pool.respond(HostResponse {
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: snapshot.id,
-            result: Ok(HostResponseValue::Snapshot(TextSnapshot {
+            result: Ok(success::<declared::snapshot>(TextSnapshot {
                 text: SnapshotText::from_utf8("nested"),
                 range: ByteRange {
                     start_byte_offset: 0,
@@ -9877,16 +9610,16 @@ globalThis.activationFinished = true;
         assert_eq!(completion.invocation, Some(inner));
         assert_eq!(
             completion.operation,
-            HostOperation::CompleteInlineCommand {
+            operation::<declared::complete_inline_command>(declared::InlineArguments {
                 invocation: inner,
                 outcome: CommandOutcome::Completed,
-            }
+            })
         );
         pool.respond(HostResponse {
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: completion.id,
-            result: Ok(HostResponseValue::InlineCommandCompleted { invocation: inner }),
+            result: Ok(success::<declared::complete_inline_command>(())),
         })
         .unwrap();
 
@@ -9896,13 +9629,15 @@ globalThis.activationFinished = true;
         assert_eq!(active.invocation, Some(outer));
         assert_eq!(
             active.operation,
-            HostOperation::ActiveBuffer { target: None }
+            operation::<declared::active_buffer>(declared::ContextArguments { target: None })
         );
         pool.respond(HostResponse {
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: active.id,
-            result: Ok(HostResponseValue::ActiveBuffer(Some(BufferHandle::new(23)))),
+            result: Ok(success::<declared::active_buffer>(Some(BufferHandle::new(
+                23,
+            )))),
         })
         .unwrap();
         assert_eq!(execution.wait().unwrap(), CommandOutcome::Completed);
@@ -9970,7 +9705,7 @@ globalThis.activationFinished = true;
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: request.id,
-            result: Ok(HostResponseValue::CommandRegistered { registration }),
+            result: Ok(success::<declared::register_command>(registration)),
         })
         .unwrap();
         setup.wait().unwrap();
@@ -10017,7 +9752,7 @@ globalThis.activationFinished = true;
                 extension: runtime.extension,
                 lifecycle: runtime.lifecycle,
                 id: suspended.id,
-                result: Ok(HostResponseValue::Snapshot(TextSnapshot {
+                result: Ok(success::<declared::snapshot>(TextSnapshot {
                     text: SnapshotText::from_utf8("late"),
                     range: ByteRange {
                         start_byte_offset: 0,
@@ -10065,7 +9800,7 @@ await commands.register("cancel-response", async () => {
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: request.id,
-            result: Ok(HostResponseValue::CommandRegistered { registration }),
+            result: Ok(success::<declared::register_command>(registration)),
         })
         .unwrap();
         setup.wait().unwrap();
@@ -10112,17 +9847,15 @@ await commands.register("cancel-response", async () => {
         gate.wait();
         blocked.wait().unwrap();
         let followup = pool.receive_request().unwrap();
-        assert!(matches!(
+        assert_eq!(
             followup.operation,
-            HostOperation::ApplicationQuery(ApplicationQuery::Documents)
-        ));
+            operation::<declared::list_documents>(())
+        );
         pool.respond(HostResponse {
             extension: runtime.extension,
             lifecycle: runtime.lifecycle,
             id: followup.id,
-            result: Ok(HostResponseValue::ApplicationQuery(
-                ApplicationQueryResult::Documents(vec![]),
-            )),
+            result: Ok(success::<declared::list_documents>(vec![])),
         })
         .unwrap();
         assert_eq!(execution.wait().unwrap(), CommandOutcome::Cancelled);
@@ -10168,7 +9901,7 @@ await commands.register("cancel-response", async () => {
                 extension: runtime.extension,
                 lifecycle: runtime.lifecycle,
                 id: request.id,
-                result: Ok(HostResponseValue::CommandRegistered { registration }),
+                result: Ok(success::<declared::register_command>(registration)),
             })
             .unwrap();
         }
@@ -10281,7 +10014,7 @@ await commands.register("cancel-response", async () => {
             extension: runaway.extension,
             lifecycle: runaway.lifecycle,
             id: request.id,
-            result: Ok(HostResponseValue::CommandRegistered { registration }),
+            result: Ok(success::<declared::register_command>(registration)),
         })
         .unwrap();
         setup.wait().unwrap();

@@ -1,7 +1,7 @@
 # D053 — Handler-defined operations, errors, and commands
 
 Status: 🟡 checkpoint 1 authoring shape approved on 2026-10-15; checkpoint 2
-in progress. Remote platform checks remain pending.
+implemented and locally verified, awaiting review. Remote platform checks remain pending.
 Execute after D047 is approved and archived, before D048 adds more host APIs.
 This is a separate refactoring, not another D047 acceptance requirement.
 
@@ -122,7 +122,8 @@ Checkpoint 1 implementation evidence and choices:
   operation variants and clipboard result/kind entries are removed. Shared
   document-presentation results still serve Create/Present. The common existing
   request envelope retains identity and invocation/cancellation metadata.
-- ✅ `HostContext` owns a weak host, async application handle and admitted request.
+- ✅ `HostContext` owns a weak host, async application handle and admitted request
+  authority metadata.
   Its short foreground closures check lifecycle/cancellation and return owned
   results. Open awaits a native completion, retaining destination/caller authority,
   and checks the exact resulting presentation again before replying.
@@ -131,9 +132,9 @@ Checkpoint 1 implementation evidence and choices:
   enforce result/error pairing; runtime resolver checks retain operation identity.
 - ✅ `HostError` uses explicit `code`/`message` attributes, named structured details,
   and a single-field `transparent` composition form. Descriptor error codes plus
-  derived codes for the unmigrated error enum check the closed TypeScript union.
-  That enum remains only for existing handlers and shared product-operation
-  failures; Open has a bounded typed translation of those failures.
+  derived codes for the initially unmigrated error enum checked the closed
+  TypeScript union. Checkpoint 2 removes that enum and the bounded Open failure
+  adapter; native operation failures now return their local/shared types directly.
 - ✅ Coverage includes compile-fail declarations/replies, sorted discovery and
   duplicate/context diagnostics, structured errors through V8, precision and
   operation pairing, actual async suspension, immediate foreground mutation and
@@ -157,12 +158,12 @@ Checkpoint 1 implementation evidence and choices:
 
 ### 2. Migrate the host capability boundary 🟡
 
-- Migrate every existing JS-to-native capability, including buffer/query/mutation,
+- ✅ Migrate every existing JS-to-native capability, including buffer/query/mutation,
   observation/disposal, clipboard/context, commands, providers, and keymap batches.
   Preserve synchronous public keybinding batching despite the internal async model.
-- Remove the per-operation `HostOperation`, `HostResponseValue`, `HostOperationKind`
+- ✅ Remove the per-operation `HostOperation`, `HostResponseValue`, `HostOperationKind`
   mirrors and their handwritten decode/encode/dispatch tables once unused.
-- Replace central `HostRequestError` membership with handler-local/shared errors
+- ✅ Replace central `HostRequestError` membership with handler-local/shared errors
   and the common envelope. Keep current public codes, names, messages/details
   semantics and closed declaration coverage synchronized through descriptors.
 - **Validation:** existing D046/D047 boundary and product-host regressions; invalid
@@ -170,6 +171,50 @@ Checkpoint 1 implementation evidence and choices:
   and queued responses, self-disposal, failed activation, unload and host release.
 - **Review gate:** verify every current capability uses its declaration, no parallel
   operation/error registry remains, and representative JS consumers behave the same.
+
+Checkpoint 2 implementation evidence:
+
+- ✅ All 33 existing native capabilities are discovered from annotations. The
+  separate product-library integration binary derives expected request names from
+  the checked JS facade and compares the entire discovered registry, including
+  inline completion and the native-turn keybinding batch. No handwritten operation
+  registration list or per-operation transport sum/codec/foreground dispatch table
+  remains.
+- ✅ Buffer and semantic-provider owners expose typed methods; their lower-level
+  revision, cancellation, ownership and cleanup tests exercise those methods.
+  Snapshots keep the external UTF-16 representation. Provider identities remain
+  owned metadata for invalidation/disposal barriers.
+- ✅ Resource operations return shared/local typed failures directly. Command
+  composition awaits typed channels retaining caller ownership; lifecycle cleanup,
+  inline frames and window-handled children still use the existing command tree.
+  Dynamic JS registrations continue using the same application catalog.
+- ✅ Native keybinding batches use the same async contract while public calls stay
+  synchronous/void. Batch admission remains after a V8 turn, atomic application and
+  response ordering are preserved, and typed diagnostic messages retain native
+  failure reasons without parsing status/message strings.
+- ✅ The public error-code union is checked from handler descriptors and common
+  runtime transport errors. No central `HostRequestError` membership remains.
+  Argument conversion still uses the existing direct field readers. Native output
+  precision failures retain `UnsupportedOperation`; bad JS numeric arguments retain
+  `RangeError`. Structured error details receive the same precision checks.
+- ✅ Local macOS validation: `cargo test --workspace --all-targets` (615 library
+  tests, 2 macro tests, complete facade/product-library registration coverage,
+  and 5 example tests); `cargo test --doc` (4 compile-fail cases plus the positive
+  authoring example); `cargo clippy --workspace --all-targets -- -D warnings`;
+  `scripts/check-extension-api.sh`; `scripts/build-macos-app.sh`;
+  `git diff --check`; and 56 local Markdown links in changed documents.
+  `cargo fmt --all` ran once after Rust edits and before final checks. The removed
+  routing-table unit test is superseded by the complete facade/registry check;
+  durable model, lifecycle and command coverage remains exercised.
+- ✅ Existing D046/D047 product-host regressions pass through declarations:
+  direct field validation/coercion, precision, captured/exact targets, missing
+  context, racing I/O, cancellation and queued replies, self-disposal, failed
+  activation, unload and host release. Searches confirm no obsolete
+  operation/result/kind/query/error mirrors remain in Rust source or tests.
+- ⏳ Remote Linux/Windows checks remain pending; no remote run exists for these
+  local changes.
+- ⏳ Review gate: verify complete capability coverage, removed parallel registries,
+  and unchanged representative JS consumers before checkpoint 3.
 
 ### 3. Migrate native command declarations ⬜
 

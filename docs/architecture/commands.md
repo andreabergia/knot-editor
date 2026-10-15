@@ -82,7 +82,10 @@ The foreground extension command bridge and pooled V8 runtime preserve serial
 root trees, captured presentation authority and buffers, structured outcomes,
 cancellation, and nested composition. Same-lifecycle children run within their parent's scheduler root;
 window-handled and cross-lifecycle children await foreground outcomes. Extension
-registrations and pending work are tied to their lifecycle.
+registrations and pending work are tied to their lifecycle. The declared async
+host invocation handler awaits a typed completion channel from this bridge.
+Pending children retain caller ownership for unload/cancellation; transport
+adapters pair their semantic dispatch result with the originating request.
 
 Command outcomes report execution status, not semantic values. Direct JavaScript
 functions remain available when command lookup and focus routing are unnecessary.

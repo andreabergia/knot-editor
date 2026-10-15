@@ -208,9 +208,14 @@ fn expand_error(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
             _ => quote! { Self::#ident { .. } },
         };
         code_arms.push(quote! { #code_pattern => #code });
+        let diagnostic = if message.value().contains('{') {
+            quote! { format!(#message) }
+        } else {
+            quote! { #message.into() }
+        };
         arms.push(
             quote! { #pattern => crate::host::declarations::HostFailure {
-                code: #code, message: #message.into(), details: #details,
+                code: #code, message: #diagnostic, details: #details,
             } },
         );
         codes.push(quote! { result.push(#code); });

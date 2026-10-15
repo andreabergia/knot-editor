@@ -4,17 +4,44 @@ use std::collections::{HashMap, HashSet};
 
 use gpui::{App, Entity, WeakEntity};
 
-#[cfg(test)]
 use crate::host::protocol::CompletionProviderRegistrationId;
 use crate::host::protocol::{
-    ExtensionId, ExtensionLifecycleId, HostOperation, HostRequest, HostRequestError, HostResponse,
-    HostResponseValue, TreeChildrenResponse, TreeProviderRegistrationId, ViewId,
+    ExtensionId, ExtensionLifecycleId, RequestContext, TreeChildrenResponse,
+    TreeProviderRegistrationId, ViewId,
 };
+
+use super::extension_host::handlers::{
+    AccessError, CompletionArguments, CompletionRegistrationArguments, TreeArguments,
+    TreeInvalidationArguments, TreeRegistrationArguments,
+};
+use crate::host::declarations::HostError;
 
 use super::{
     completion::{CompletionProviderRegistration, CompletionProviderRegistry},
     tree_view::{TreeProviderIdentity, TreeView, TreeViewRegistrationError},
 };
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, HostError)]
+pub(crate) enum SemanticError {
+    #[error(transparent)]
+    Access(AccessError),
+    #[error(code = "TreeViewNotFound", message = "TreeViewNotFound")]
+    TreeViewNotFound,
+    #[error(code = "TreeProviderInUse", message = "TreeProviderInUse")]
+    TreeProviderInUse,
+    #[error(code = "TreeProviderNotFound", message = "TreeProviderNotFound")]
+    TreeProviderNotFound,
+    #[error(
+        code = "CompletionProviderNotFound",
+        message = "CompletionProviderNotFound"
+    )]
+    CompletionProviderNotFound,
+}
+impl From<AccessError> for SemanticError {
+    fn from(error: AccessError) -> Self {
+        Self::Access(error)
+    }
+}
 
 type Lifecycle = (ExtensionId, ExtensionLifecycleId);
 
@@ -91,122 +118,142 @@ impl ExtensionSemanticBridge {
         }
     }
 
-    pub(crate) fn dispatch(&mut self, request: HostRequest, cx: &mut App) -> HostResponse {
-        let identity = (request.extension, request.lifecycle);
-        let result = if self.lifecycles.contains(&identity) {
-            self.dispatch_live(&request, cx)
+    fn validate(&self, request: &RequestContext) -> Result<(), SemanticError> {
+        if self
+            .lifecycles
+            .contains(&(request.extension, request.lifecycle))
+        {
+            Ok(())
         } else {
-            Err(HostRequestError::Cancelled)
-        };
-        HostResponse {
+            Err(AccessError::Cancelled.into())
+        }
+    }
+
+    pub(crate) fn register_tree_provider(
+        &mut self,
+        request: &RequestContext,
+        arguments: TreeArguments,
+        cx: &mut App,
+    ) -> Result<TreeProviderRegistrationId, SemanticError> {
+        self.validate(request)?;
+        let TreeArguments { view_id } = &arguments;
+
+        if !self.tree_kinds.contains(view_id) {
+            return Err(SemanticError::TreeViewNotFound);
+        }
+        if self
+            .tree_registrations
+            .values()
+            .any(|entry| entry.kind == *view_id)
+        {
+            return Err(SemanticError::TreeProviderInUse);
+        }
+        let registration = TreeProviderRegistrationId::new(self.next_tree_registration);
+        let identity = TreeProviderIdentity {
             extension: request.extension,
             lifecycle: request.lifecycle,
-            id: request.id,
-            result,
+            registration,
+        };
+        for view in self.live_tree_views(view_id) {
+            view.update(cx, |tree, cx| tree.register_provider(view_id, identity, cx))
+                .map_err(map_tree_error)?;
         }
+        self.next_tree_registration = self
+            .next_tree_registration
+            .checked_add(1)
+            .expect("tree registration space exhausted");
+        self.tree_registrations.insert(
+            registration,
+            TreeRegistration {
+                kind: view_id.clone(),
+                identity,
+            },
+        );
+        Ok(registration)
     }
-
-    fn dispatch_live(
+    pub(crate) fn invalidate_tree_provider(
         &mut self,
-        request: &HostRequest,
+        request: &RequestContext,
+        arguments: TreeInvalidationArguments,
         cx: &mut App,
-    ) -> Result<HostResponseValue, HostRequestError> {
-        match &request.operation {
-            HostOperation::RegisterTreeProvider { view_id } => {
-                if !self.tree_kinds.contains(view_id) {
-                    return Err(HostRequestError::TreeViewNotFound);
-                }
-                if self
-                    .tree_registrations
-                    .values()
-                    .any(|entry| entry.kind == *view_id)
-                {
-                    return Err(HostRequestError::TreeProviderInUse);
-                }
-                let registration = TreeProviderRegistrationId::new(self.next_tree_registration);
-                let identity = TreeProviderIdentity {
-                    extension: request.extension,
-                    lifecycle: request.lifecycle,
-                    registration,
-                };
-                for view in self.live_tree_views(view_id) {
-                    view.update(cx, |tree, cx| tree.register_provider(view_id, identity, cx))
-                        .map_err(map_tree_error)?;
-                }
-                self.next_tree_registration = self
-                    .next_tree_registration
-                    .checked_add(1)
-                    .expect("tree registration space exhausted");
-                self.tree_registrations.insert(
-                    registration,
-                    TreeRegistration {
-                        kind: view_id.clone(),
-                        identity,
-                    },
-                );
-                Ok(HostResponseValue::TreeProviderRegistered { registration })
-            }
-            HostOperation::InvalidateTreeProvider {
-                registration,
-                parent_id,
-            } => {
-                let kind = self.owned_tree_kind(*registration, request)?;
-                for view in self.live_tree_views(&kind) {
-                    view.update(cx, |tree, cx| {
-                        tree.invalidate(*registration, parent_id.clone(), cx)
-                    })
-                    .map_err(map_tree_error)?;
-                }
-                Ok(HostResponseValue::TreeProviderInvalidated)
-            }
-            HostOperation::UnregisterTreeProvider { registration } => {
-                let kind = self.owned_tree_kind(*registration, request)?;
-                for view in self.live_tree_views(&kind) {
-                    view.update(cx, |tree, cx| tree.unregister_provider(*registration, cx))
-                        .map_err(map_tree_error)?;
-                }
-                self.tree_registrations.remove(registration);
-                Ok(HostResponseValue::TreeProviderUnregistered {
-                    registration: *registration,
-                })
-            }
-            HostOperation::RegisterCompletionProvider { label } => {
-                let registration = self.completion_providers.register(
-                    request.extension,
-                    request.lifecycle,
-                    label.clone(),
-                );
-                Ok(HostResponseValue::CompletionProviderRegistered { registration })
-            }
-            HostOperation::UnregisterCompletionProvider { registration } => {
-                if !self.completion_providers.unregister(
-                    *registration,
-                    request.extension,
-                    request.lifecycle,
-                ) {
-                    return Err(HostRequestError::CompletionProviderNotFound);
-                }
-                Ok(HostResponseValue::CompletionProviderUnregistered {
-                    registration: *registration,
-                })
-            }
-            _ => Err(HostRequestError::UnsupportedOperation),
-        }
-    }
+    ) -> Result<(), SemanticError> {
+        self.validate(request)?;
+        let TreeInvalidationArguments {
+            registration,
+            parent_id,
+        } = &arguments;
 
+        let kind = self.owned_tree_kind(*registration, request)?;
+        for view in self.live_tree_views(&kind) {
+            view.update(cx, |tree, cx| {
+                tree.invalidate(*registration, parent_id.clone(), cx)
+            })
+            .map_err(map_tree_error)?;
+        }
+        Ok(())
+    }
+    pub(crate) fn unregister_tree_provider(
+        &mut self,
+        request: &RequestContext,
+        arguments: TreeRegistrationArguments,
+        cx: &mut App,
+    ) -> Result<(), SemanticError> {
+        self.validate(request)?;
+        let TreeRegistrationArguments { registration } = &arguments;
+
+        let kind = self.owned_tree_kind(*registration, request)?;
+        for view in self.live_tree_views(&kind) {
+            view.update(cx, |tree, cx| tree.unregister_provider(*registration, cx))
+                .map_err(map_tree_error)?;
+        }
+        self.tree_registrations.remove(registration);
+        Ok(())
+    }
+    pub(crate) fn register_completion_provider(
+        &mut self,
+        request: &RequestContext,
+        arguments: CompletionArguments,
+        _cx: &mut App,
+    ) -> Result<CompletionProviderRegistrationId, SemanticError> {
+        self.validate(request)?;
+        let CompletionArguments { label } = &arguments;
+
+        let registration =
+            self.completion_providers
+                .register(request.extension, request.lifecycle, label.clone());
+        Ok(registration)
+    }
+    pub(crate) fn unregister_completion_provider(
+        &mut self,
+        request: &RequestContext,
+        arguments: CompletionRegistrationArguments,
+        _cx: &mut App,
+    ) -> Result<(), SemanticError> {
+        self.validate(request)?;
+        let CompletionRegistrationArguments { registration } = &arguments;
+
+        if !self.completion_providers.unregister(
+            *registration,
+            request.extension,
+            request.lifecycle,
+        ) {
+            return Err(SemanticError::CompletionProviderNotFound);
+        }
+        Ok(())
+    }
     fn owned_tree_kind(
         &self,
         registration: TreeProviderRegistrationId,
-        request: &HostRequest,
-    ) -> Result<String, HostRequestError> {
+        request: &RequestContext,
+    ) -> Result<String, SemanticError> {
         let entry = self
             .tree_registrations
             .get(&registration)
-            .ok_or(HostRequestError::TreeProviderNotFound)?;
+            .ok_or(SemanticError::TreeProviderNotFound)?;
         if (entry.identity.extension, entry.identity.lifecycle)
             != (request.extension, request.lifecycle)
         {
-            return Err(HostRequestError::TreeProviderNotFound);
+            return Err(SemanticError::TreeProviderNotFound);
         }
         Ok(entry.kind.clone())
     }
@@ -274,11 +321,11 @@ impl Default for ExtensionSemanticBridge {
     }
 }
 
-fn map_tree_error(error: TreeViewRegistrationError) -> HostRequestError {
+fn map_tree_error(error: TreeViewRegistrationError) -> SemanticError {
     match error {
-        TreeViewRegistrationError::WrongView => HostRequestError::TreeViewNotFound,
-        TreeViewRegistrationError::ProviderInUse => HostRequestError::TreeProviderInUse,
-        TreeViewRegistrationError::ProviderNotFound => HostRequestError::TreeProviderNotFound,
+        TreeViewRegistrationError::WrongView => SemanticError::TreeViewNotFound,
+        TreeViewRegistrationError::ProviderInUse => SemanticError::TreeProviderInUse,
+        TreeViewRegistrationError::ProviderNotFound => SemanticError::TreeProviderNotFound,
     }
 }
 
@@ -293,18 +340,12 @@ mod tests {
 
     use super::*;
 
-    fn request(
-        extension: ExtensionId,
-        lifecycle: ExtensionLifecycleId,
-        id: u64,
-        operation: HostOperation,
-    ) -> HostRequest {
-        HostRequest {
+    fn request(extension: ExtensionId, lifecycle: ExtensionLifecycleId, id: u64) -> RequestContext {
+        RequestContext {
             extension,
             lifecycle,
             id: RequestId::new(id),
             invocation: None,
-            operation,
         }
     }
 
@@ -320,22 +361,14 @@ mod tests {
             bridge.add_tree_view("outline", tree.clone(), cx).unwrap();
             bridge.admit_lifecycle(extension, lifecycle);
 
-            let registered = bridge.dispatch(
-                request(
-                    extension,
-                    lifecycle,
-                    1,
-                    HostOperation::RegisterTreeProvider {
-                        view_id: "outline".into(),
-                    },
-                ),
+            let registered = bridge.register_tree_provider(
+                &request(extension, lifecycle, 1),
+                TreeArguments {
+                    view_id: "outline".into(),
+                },
                 cx,
             );
-            let HostResponseValue::TreeProviderRegistered { registration } =
-                registered.result.unwrap()
-            else {
-                panic!("expected tree registration");
-            };
+            let registration = registered.unwrap();
             assert!(
                 tree.read(cx)
                     .owns_provider(registration, extension, lifecycle)
@@ -358,23 +391,14 @@ mod tests {
                 cx,
             ));
 
-            let completion = bridge.dispatch(
-                request(
-                    extension,
-                    lifecycle,
-                    2,
-                    HostOperation::RegisterCompletionProvider {
-                        label: "fixture".into(),
-                    },
-                ),
+            let completion = bridge.register_completion_provider(
+                &request(extension, lifecycle, 2),
+                CompletionArguments {
+                    label: "fixture".into(),
+                },
                 cx,
             );
-            let HostResponseValue::CompletionProviderRegistered {
-                registration: completion,
-            } = completion.result.unwrap()
-            else {
-                panic!("expected completion registration");
-            };
+            let completion = completion.unwrap();
             assert!(bridge.owns_completion_provider(completion, extension, lifecycle));
             assert_eq!(bridge.completion_snapshot()[0].id, completion);
 
@@ -404,37 +428,25 @@ mod tests {
             let mut bridge = ExtensionSemanticBridge::new();
             bridge.add_tree_view("outline", tree, cx).unwrap();
             assert_eq!(
-                bridge
-                    .dispatch(
-                        request(
-                            extension,
-                            lifecycle,
-                            1,
-                            HostOperation::RegisterTreeProvider {
-                                view_id: "outline".into(),
-                            },
-                        ),
-                        cx,
-                    )
-                    .result,
-                Err(HostRequestError::Cancelled)
+                bridge.register_tree_provider(
+                    &request(extension, lifecycle, 1),
+                    TreeArguments {
+                        view_id: "outline".into(),
+                    },
+                    cx
+                ),
+                Err(SemanticError::Access(AccessError::Cancelled))
             );
             bridge.admit_lifecycle(extension, lifecycle);
             assert_eq!(
-                bridge
-                    .dispatch(
-                        request(
-                            extension,
-                            lifecycle,
-                            2,
-                            HostOperation::UnregisterCompletionProvider {
-                                registration: CompletionProviderRegistrationId::new(99),
-                            },
-                        ),
-                        cx,
-                    )
-                    .result,
-                Err(HostRequestError::CompletionProviderNotFound)
+                bridge.unregister_completion_provider(
+                    &request(extension, lifecycle, 2),
+                    CompletionRegistrationArguments {
+                        registration: CompletionProviderRegistrationId::new(99),
+                    },
+                    cx
+                ),
+                Err(SemanticError::CompletionProviderNotFound)
             );
         });
     }

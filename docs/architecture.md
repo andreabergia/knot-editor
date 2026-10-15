@@ -23,7 +23,9 @@ gpui application and views        extension runtimes
 - `app` owns the gpui shell, foreground models, and native views.
 - `host` contains V8 and the typed extension transport. Its declaration adapters
   discover annotated operations automatically; `app` supplies owned foreground
-  contexts and handlers. `knot-handler-macros` generates adapters without depending
+  contexts and handlers. Foreground resource owners expose typed methods, and
+  declaration adapters own response transport. `knot-handler-macros` generates
+  adapters without depending
   on V8, gpui, or editor models.
 - `host::module_graph` validates Knot-owned, immutable package source graphs
   and personal-config source graphs before they enter an isolate.

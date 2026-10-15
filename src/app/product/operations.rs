@@ -1,11 +1,11 @@
 //! Destination admission and semantic product operations for extension requests.
 
+use super::super::extension_host::handlers::{AccessError, CloseError, OpenError, WorkspaceError};
 use super::*;
 use crate::host::{
     lifecycle::ExtensionKey,
     protocol::{
-        CommandInvocationId, DocumentDestination, HostRequestError, PaneTarget, PresentationTarget,
-        WindowTarget,
+        CommandInvocationId, DocumentDestination, PaneTarget, PresentationTarget, WindowTarget,
     },
 };
 
@@ -42,7 +42,7 @@ fn window_target(destination: &DocumentDestination) -> &WindowTarget {
 fn capture_window(
     target: &WindowTarget,
     cx: &mut App,
-) -> Result<(Entity<ProductShell>, AnyWindowHandle), HostRequestError> {
+) -> Result<(Entity<ProductShell>, AnyWindowHandle), AccessError> {
     let window = cx
         .windows()
         .into_iter()
@@ -50,11 +50,11 @@ fn capture_window(
             window.downcast::<ProductShell>().is_some()
                 && window.window_id().as_u64().to_string() == target.window
         })
-        .ok_or(HostRequestError::InvalidTarget)?;
+        .ok_or(AccessError::InvalidTarget)?;
     let shell = cx
         .update_window(window, |root, _, _| root.downcast::<ProductShell>())
-        .map_err(|_| HostRequestError::InvalidTarget)?
-        .map_err(|_| HostRequestError::InvalidTarget)?;
+        .map_err(|_| AccessError::InvalidTarget)?
+        .map_err(|_| AccessError::InvalidTarget)?;
     Ok((shell, window))
 }
 
@@ -80,7 +80,7 @@ pub(super) fn workspace_info(
 fn capture_destination(
     destination: &DocumentDestination,
     cx: &mut App,
-) -> Result<(Entity<ProductShell>, OpenTarget), HostRequestError> {
+) -> Result<(Entity<ProductShell>, OpenTarget), AccessError> {
     let (shell, window) = capture_window(window_target(destination), cx)?;
     cx.update_window(window, |_, _, cx| {
         let state = shell.read(cx);
@@ -90,7 +90,7 @@ fn capture_destination(
             DocumentDestination::Pane(target)
             | DocumentDestination::View(PresentationTarget { pane: target, .. }) => {
                 if target.workbench != state.workbench.entity_id().as_u64().to_string() {
-                    return Err(HostRequestError::InvalidTarget);
+                    return Err(AccessError::InvalidTarget);
                 }
                 workbench
                     .panes()
@@ -98,7 +98,7 @@ fn capture_destination(
                     .find(|pane| pane.id().value().to_string() == target.pane)
             }
         }
-        .ok_or(HostRequestError::InvalidTarget)?;
+        .ok_or(AccessError::InvalidTarget)?;
         let tab = match destination {
             DocumentDestination::View(target) => pane
                 .tabs()
@@ -106,7 +106,7 @@ fn capture_destination(
                 .find(|tab| tab.id().value().to_string() == target.tab),
             _ => Some(pane.active_tab()),
         }
-        .ok_or(HostRequestError::InvalidTarget)?;
+        .ok_or(AccessError::InvalidTarget)?;
         let presentation = tab
             .editor()
             .map(Entity::entity_id)
@@ -117,7 +117,7 @@ fn capture_destination(
                 .unwrap_or_default()
                 != target.presentation
         {
-            return Err(HostRequestError::InvalidTarget);
+            return Err(AccessError::InvalidTarget);
         }
         let target = OpenTarget {
             window,
@@ -129,7 +129,7 @@ fn capture_destination(
         };
         Ok((shell, target))
     })
-    .map_err(|_| HostRequestError::InvalidTarget)?
+    .map_err(|_| AccessError::InvalidTarget)?
 }
 
 impl OpenTarget {
@@ -152,17 +152,17 @@ impl OpenTarget {
 }
 
 impl OpenFailure {
-    fn host_error(self) -> HostRequestError {
+    fn host_error(self) -> OpenError {
         use super::super::open::OpenResourceError;
         match self {
-            Self::InvalidTarget => HostRequestError::InvalidTarget,
-            Self::Cancelled => HostRequestError::Cancelled,
-            Self::Resource(OpenResourceError::InvalidUtf8 { .. }) => HostRequestError::InvalidUtf8,
+            Self::InvalidTarget => OpenError::Access(AccessError::InvalidTarget),
+            Self::Cancelled => OpenError::Access(AccessError::Cancelled),
+            Self::Resource(OpenResourceError::InvalidUtf8 { .. }) => OpenError::InvalidUtf8,
             Self::Resource(OpenResourceError::Provider(error)) => match error {
-                ResourceError::InvalidUri { .. } => HostRequestError::InvalidUri,
-                ResourceError::NotFound { .. } => HostRequestError::ResourceNotFound,
-                ResourceError::WrongKind { .. } => HostRequestError::ResourceWrongKind,
-                _ => HostRequestError::ProviderFailure,
+                ResourceError::InvalidUri { .. } => OpenError::InvalidUri,
+                ResourceError::NotFound { .. } => OpenError::ResourceNotFound,
+                ResourceError::WrongKind { .. } => OpenError::ResourceWrongKind,
+                _ => OpenError::ProviderFailure,
             },
         }
     }
@@ -171,7 +171,7 @@ impl OpenFailure {
 pub(crate) fn validate_presentation(
     target: &PresentationTarget,
     cx: &mut App,
-) -> Result<(), HostRequestError> {
+) -> Result<(), AccessError> {
     capture_destination(&DocumentDestination::View(target.clone()), cx).map(|_| ())
 }
 
@@ -179,12 +179,11 @@ pub(crate) fn open_document(
     uri: String,
     destination: DocumentDestination,
     caller: OperationCaller,
-    completion: impl FnOnce(Result<(DocumentId, PresentationTarget), HostRequestError>, &mut App)
-    + 'static,
+    completion: impl FnOnce(Result<(DocumentId, PresentationTarget), OpenError>, &mut App) + 'static,
     cx: &mut App,
-) -> Result<(), HostRequestError> {
-    let uri = super::super::resource::ResourceUri::parse(&uri)
-        .map_err(|_| HostRequestError::InvalidUri)?;
+) -> Result<(), OpenError> {
+    let uri =
+        super::super::resource::ResourceUri::parse(&uri).map_err(|_| OpenError::InvalidUri)?;
     let (shell, target) = capture_destination(&destination, cx)?;
     shell.update(cx, |shell, cx| {
         shell.start_resource_operation(
@@ -203,7 +202,7 @@ pub(crate) fn open_document(
                             OpenCommit::Document { document, target } => {
                                 Ok((document, target.public_target()))
                             }
-                            OpenCommit::Workspace(_) => Err(HostRequestError::ResourceWrongKind),
+                            OpenCommit::Workspace(_) => Err(OpenError::ResourceWrongKind),
                         }),
                     cx,
                 )
@@ -217,31 +216,31 @@ pub(crate) fn open_document(
 pub(crate) fn create_untitled(
     destination: DocumentDestination,
     cx: &mut App,
-) -> Result<(DocumentId, PresentationTarget), HostRequestError> {
+) -> Result<(DocumentId, PresentationTarget), OpenError> {
     let (shell, target) = capture_destination(&destination, cx)?;
     cx.update_window(target.window, |_, window, cx| {
         shell.update(cx, |shell, cx| {
             let (document, target) = shell
                 .new_document_in_pane(target.pane, window, cx)
-                .ok_or(HostRequestError::InvalidTarget)?;
+                .ok_or(OpenError::Access(AccessError::InvalidTarget))?;
             Ok((document, target.public_target()))
         })
     })
-    .map_err(|_| HostRequestError::InvalidTarget)?
+    .map_err(|_| OpenError::Access(AccessError::InvalidTarget))?
 }
 
 pub(crate) fn present_document(
     id: String,
     destination: DocumentDestination,
     cx: &mut App,
-) -> Result<(DocumentId, PresentationTarget), HostRequestError> {
+) -> Result<(DocumentId, PresentationTarget), OpenError> {
     let (shell, target) = capture_destination(&destination, cx)?;
     let document = ProductShell::documents(cx)
         .read(cx)
         .documents()
         .find(|document| document.identity().to_string() == id)
         .map(|document| document.id())
-        .ok_or(HostRequestError::DocumentNotFound)?;
+        .ok_or(OpenError::DocumentNotFound)?;
     let target = shell.update(cx, |shell, cx| {
         shell.next_open_generation();
         let target = shell.present_open_document(document, &target, false, cx);
@@ -258,17 +257,17 @@ pub(crate) fn replace_roots(
     roots: Vec<String>,
     window_target: WindowTarget,
     caller: OperationCaller,
-    completion: impl FnOnce(Result<crate::host::protocol::WorkspaceInfo, HostRequestError>) + 'static,
+    completion: impl FnOnce(Result<crate::host::protocol::WorkspaceInfo, WorkspaceError>) + 'static,
     cx: &mut App,
-) -> Result<(), HostRequestError> {
+) -> Result<(), WorkspaceError> {
     if roots.len() > 1 {
-        return Err(HostRequestError::TooManyWorkspaceRoots);
+        return Err(WorkspaceError::TooManyWorkspaceRoots);
     }
     let roots = roots
         .into_iter()
         .map(|uri| {
             super::super::resource::ResourceUri::parse(&uri)
-                .map_err(|_| HostRequestError::InvalidUri)
+                .map_err(|_| WorkspaceError::Resource(OpenError::InvalidUri))
         })
         .collect::<Result<Vec<_>, _>>()?;
     let (shell, window) = capture_window(&window_target, cx)?;
@@ -289,8 +288,14 @@ pub(crate) fn replace_roots(
                     .await
                     {
                         Ok(OpenResource::Directory(uri)) => validated.push(uri),
-                        Ok(_) => return Err(HostRequestError::ResourceWrongKind),
-                        Err(error) => return Err(OpenFailure::Resource(error).host_error()),
+                        Ok(_) => {
+                            return Err(WorkspaceError::Resource(OpenError::ResourceWrongKind));
+                        }
+                        Err(error) => {
+                            return Err(WorkspaceError::Resource(
+                                OpenFailure::Resource(error).host_error(),
+                            ));
+                        }
                     }
                 }
                 Ok(validated)
@@ -300,27 +305,33 @@ pub(crate) fn replace_roots(
             if this
                 .update(cx, |shell, cx| {
                     let result = if !caller.is_live(cx) {
-                        Err(HostRequestError::Cancelled)
+                        Err(WorkspaceError::Resource(OpenError::Access(
+                            AccessError::Cancelled,
+                        )))
                     } else if shell.open_generation != generation
                         || !shell.workspace.is_current(&workspace)
                         || !cx
                             .update_window(window, |root, _, _| root.entity_id() == shell_id)
                             .unwrap_or(false)
                     {
-                        Err(HostRequestError::InvalidTarget)
+                        Err(WorkspaceError::Resource(OpenError::Access(
+                            AccessError::InvalidTarget,
+                        )))
                     } else {
                         validated.and_then(|roots| {
                             shell
                                 .replace_workspace_roots(roots, cx)
                                 .map(|snapshot| workspace_info(window_target, &snapshot))
-                                .map_err(|_| HostRequestError::TooManyWorkspaceRoots)
+                                .map_err(|_| WorkspaceError::TooManyWorkspaceRoots)
                         })
                     };
                     completion.take().unwrap()(result);
                 })
                 .is_err()
             {
-                completion.take().unwrap()(Err(HostRequestError::InvalidTarget));
+                completion.take().unwrap()(Err(WorkspaceError::Resource(OpenError::Access(
+                    AccessError::InvalidTarget,
+                ))));
             }
         });
         shell.tasks.push(task);
@@ -331,15 +342,15 @@ pub(crate) fn replace_roots(
 pub(crate) fn close_presentation(
     presentation: PresentationTarget,
     caller: OperationCaller,
-    completion: impl FnOnce(Result<crate::host::protocol::PresentationCloseOutcome, HostRequestError>)
+    completion: impl FnOnce(Result<crate::host::protocol::PresentationCloseOutcome, CloseError>)
     + 'static,
     cx: &mut App,
-) -> Result<(), HostRequestError> {
+) -> Result<(), CloseError> {
     let (shell, target) = capture_destination(&DocumentDestination::View(presentation), cx)?;
     let workbench = target
         .workbench
         .upgrade()
-        .ok_or(HostRequestError::InvalidTarget)?;
+        .ok_or(CloseError::Access(AccessError::InvalidTarget))?;
     let focus = workbench
         .read(cx)
         .pane(target.pane)
@@ -349,7 +360,7 @@ pub(crate) fn close_presentation(
                 .map(|editor| editor.focus_handle(cx))
                 .or_else(|| tab.terminal_view().map(|view| view.focus_handle(cx)))
         })
-        .ok_or(HostRequestError::InvalidTarget)?;
+        .ok_or(CloseError::Access(AccessError::InvalidTarget))?;
     let origin = ProductCommandTarget {
         window: target.window,
         shell: shell.downgrade(),
@@ -368,12 +379,12 @@ pub(crate) fn close_presentation(
         Some(caller),
         Box::new(move |result, _| {
             completion(result.map_err(|error| match error {
-                ProtectedCloseFailure::InvalidTarget => HostRequestError::InvalidTarget,
-                ProtectedCloseFailure::InProgress => HostRequestError::OperationInProgress,
-                ProtectedCloseFailure::Cancelled => HostRequestError::Cancelled,
-                ProtectedCloseFailure::PersistenceFailed { .. } => {
-                    HostRequestError::PersistenceFailed
+                ProtectedCloseFailure::InvalidTarget => {
+                    CloseError::Access(AccessError::InvalidTarget)
                 }
+                ProtectedCloseFailure::InProgress => CloseError::OperationInProgress,
+                ProtectedCloseFailure::Cancelled => CloseError::Access(AccessError::Cancelled),
+                ProtectedCloseFailure::PersistenceFailed { .. } => CloseError::PersistenceFailed,
             }));
         }),
         cx,

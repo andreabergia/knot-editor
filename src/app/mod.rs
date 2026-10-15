@@ -29,6 +29,8 @@ mod entry;
 mod extension_buffers;
 mod extension_commands;
 mod extension_host;
+#[cfg(test)]
+pub(crate) use extension_host::handlers as declared_host;
 #[allow(
     dead_code,
     reason = "dependency planning is exercised by its contract tests"

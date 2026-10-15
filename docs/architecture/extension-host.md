@@ -199,32 +199,38 @@ application registries and models
 
 ## Handler declarations
 
-Native clipboard writes and document Open are annotated async handlers alongside
-an application-owned context. The macro contributes a descriptor through
-`inventory`; registry assembly sorts names and rejects duplicates before product
-host startup. Startup also validates each handler's context type. The common
-request envelope retains extension, lifecycle, request and invocation identity;
-invocation cancellation remains owned by the command bridge.
+Every JS-to-native capability is an annotated async application handler. The macro
+contributes a descriptor through `inventory`; registry assembly sorts names and
+rejects duplicates before product host startup. Startup also validates each
+handler's context type. Generic adapters pair the argument decoder, success and
+error types; requests and replies retain operation identity and extension,
+lifecycle, request and invocation metadata. There are no per-operation transport
+sums or central decode/encode/foreground routing tables.
 
-The owned context retains a weak host and an async application handle. Short
-foreground closures check caller lifecycle and cancellation and cannot return
-borrowed model state. Document Open captures its destination before awaiting
-provider work, uses the shared product operation's commit checks, then revalidates
-the presentation before constructing its response. Immediate handlers follow the
-same future contract. Worker messages contain only owned Knot data.
+The owned application context retains a weak host, an async application handle and
+request authority metadata. Short foreground closures check caller lifecycle and
+cancellation and return owned results. Foreground buffer, command and provider
+owners expose typed methods independently of response transport. Native command
+composition awaits typed completion channels; the command owner retains caller
+identity for cancellation and lifecycle cleanup. Command dispatch/cancellation
+remain application events, while generic declaration adapters deliver replies.
 
-Argument codecs read recognized V8 fields through a host-owned reader. Success
-codecs and structured error details reject integer precision loss before entering
-V8. Attribute-generated adapters pair each argument decoder with the handler and
-its typed responder; the resolver additionally checks operation identity.
-`HostError` derives explicit public codes, diagnostics and named structured
-details, with transparent composition for shared errors. Descriptor codes and the
-remaining enum's derived codes check the closed TypeScript declaration.
+Resource operations capture destinations before awaiting native work, retain the
+shared product commit checks, and revalidate exact presentations before producing
+Open results. Closure distinguishes user cancellation from caller cancellation.
+Provider mutation identity travels with owned arguments so queued invalidations
+still precede disposal acknowledgement. Synchronous public keybinding calls feed
+one ordered native-turn batch through its declaration; the existing batch barrier
+holds earlier host responses until atomic foreground application completes.
 
-Other capabilities still use the operation/result/kind enums and their codec and
-foreground routing tables. Document Open's bounded error adapter translates only
-the shared product operation's current failures into its local/shared errors.
-Native commands retain their existing catalog and routing.
+Host-owned argument readers decode recognized V8 fields directly. Semantic result
+codecs preserve external UTF-16 snapshots and native numeric precision. Invalid JS
+numbers remain `RangeError`; unrepresentable native integers remain
+`UnsupportedOperation` host errors. Local/shared error derives retain explicit
+stable codes, diagnostic messages and typed structured details. Descriptor codes
+plus the common transport failures check the closed TypeScript declaration,
+without a separate error membership registry. Native commands retain their
+existing catalog and routing.
 
 ## Boundary contracts
 

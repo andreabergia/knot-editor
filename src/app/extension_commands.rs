@@ -8,14 +8,17 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::host::protocol::{
     BufferHandle, Command, CommandInvocation, CommandInvocationId, CommandInvokeDispatch,
-    CommandOutcome, ExtensionId, ExtensionLifecycleId, HostOperation, HostRequest,
-    HostRequestError, HostResponse, HostResponseValue, RequestId,
+    CommandName, CommandOutcome, CommandRegistrationId, ExtensionId, ExtensionLifecycleId,
+    RequestContext,
 };
 
+use super::extension_host::handlers::AccessError;
 #[cfg(test)]
 use super::model::CommandCatalog;
 #[cfg(test)]
 use super::model::CommandDefinition;
+use crate::host::declarations::HostError;
+
 use super::{
     CommandCompletion, CommandExecution,
     model::{CommandCatalogError, CommandTarget, SharedCommandCatalog},
@@ -38,7 +41,27 @@ pub(crate) enum RoutedCommandTarget {
 struct PendingHostResponse {
     extension: ExtensionId,
     lifecycle: ExtensionLifecycleId,
-    request: RequestId,
+    reply: CommandReply,
+}
+
+pub(crate) type CommandReply =
+    tokio::sync::oneshot::Sender<Result<CommandInvokeDispatch, AccessError>>;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, HostError)]
+pub(crate) enum CommandError {
+    #[error(transparent)]
+    Access(AccessError),
+    #[error(code = "CommandNameInUse", message = "CommandNameInUse")]
+    CommandNameInUse,
+    #[error(code = "CommandNotFound", message = "CommandNotFound")]
+    CommandNotFound,
+    #[error(code = "ViewNotFound", message = "ViewNotFound")]
+    ViewNotFound,
+}
+impl From<AccessError> for CommandError {
+    fn from(error: AccessError) -> Self {
+        Self::Access(error)
+    }
 }
 
 struct InvocationNode {
@@ -67,7 +90,6 @@ pub(crate) enum ExtensionCommandEvent {
         lifecycle: ExtensionLifecycleId,
         invocation: CommandInvocationId,
     },
-    HostResponse(HostResponse),
 }
 
 /// Foreground-authoritative command catalog and serial invocation tree.
@@ -131,82 +153,88 @@ impl ExtensionCommandBridge {
         self.enqueue_extension_root_for(command, buffer, handler)
     }
 
-    /// Handles registration and inline completion protocol operations.
-    pub(crate) fn handle_host_request(&mut self, request: HostRequest) -> HostResponse {
-        let identity = (request.extension, request.lifecycle);
-        if !self.lifecycles.contains(&identity) {
-            return response(&request, Err(HostRequestError::Cancelled));
+    fn validate_request(&self, request: &RequestContext) -> Result<(), AccessError> {
+        if self
+            .lifecycles
+            .contains(&(request.extension, request.lifecycle))
+        {
+            Ok(())
+        } else {
+            Err(AccessError::Cancelled)
         }
+    }
 
-        match request.operation.clone() {
-            HostOperation::RegisterCommand { name, title } => response(
-                &request,
-                self.catalog
-                    .borrow_mut()
-                    .register_extension(name, title, request.extension, request.lifecycle)
-                    .map(|registration| HostResponseValue::CommandRegistered { registration })
-                    .map_err(map_catalog_error),
-            ),
-            HostOperation::RegisterViewCommand { view_kind, name } => response(
-                &request,
-                self.catalog
-                    .borrow_mut()
-                    .register_view_handler(view_kind, name, request.extension, request.lifecycle)
-                    .map(|registration| HostResponseValue::ViewCommandRegistered { registration })
-                    .map_err(map_catalog_error),
-            ),
-            HostOperation::UnregisterCommand { registration } => response(
-                &request,
-                self.catalog
-                    .borrow_mut()
-                    .unregister(registration, request.extension, request.lifecycle)
-                    .map(|()| HostResponseValue::CommandUnregistered { registration })
-                    .map_err(map_catalog_error),
-            ),
-            HostOperation::CompleteInlineCommand {
-                invocation,
-                outcome,
-            } => {
-                let authorized = request.invocation == Some(invocation)
-                    && self.invocations.get(&invocation).is_some_and(|node| {
-                        matches!(node.target, InvocationTarget::Extension(target)
-                            if (target.extension, target.lifecycle) == identity)
-                    });
-                if !authorized {
-                    return response(&request, Err(HostRequestError::Cancelled));
-                }
-                self.complete(invocation, outcome);
-                response(
-                    &request,
-                    Ok(HostResponseValue::InlineCommandCompleted { invocation }),
-                )
-            }
-            _ => response(&request, Err(HostRequestError::UnsupportedOperation)),
+    pub(crate) fn register_command(
+        &mut self,
+        request: &RequestContext,
+        name: CommandName,
+        title: String,
+    ) -> Result<CommandRegistrationId, CommandError> {
+        self.validate_request(request)?;
+        self.catalog
+            .borrow_mut()
+            .register_extension(name, title, request.extension, request.lifecycle)
+            .map_err(map_catalog_error)
+    }
+
+    pub(crate) fn register_view_command(
+        &mut self,
+        request: &RequestContext,
+        view_kind: String,
+        name: CommandName,
+    ) -> Result<CommandRegistrationId, CommandError> {
+        self.validate_request(request)?;
+        self.catalog
+            .borrow_mut()
+            .register_view_handler(view_kind, name, request.extension, request.lifecycle)
+            .map_err(map_catalog_error)
+    }
+
+    pub(crate) fn unregister_command(
+        &mut self,
+        request: &RequestContext,
+        registration: CommandRegistrationId,
+    ) -> Result<(), CommandError> {
+        self.validate_request(request)?;
+        self.catalog
+            .borrow_mut()
+            .unregister(registration, request.extension, request.lifecycle)
+            .map_err(map_catalog_error)
+    }
+
+    pub(crate) fn complete_inline(
+        &mut self,
+        request: &RequestContext,
+        invocation: CommandInvocationId,
+        outcome: CommandOutcome,
+    ) -> Result<(), AccessError> {
+        self.validate_request(request)?;
+        let identity = (request.extension, request.lifecycle);
+        let authorized = request.invocation == Some(invocation) && self.invocations.get(&invocation).is_some_and(|node| {
+            matches!(node.target, InvocationTarget::Extension(target) if (target.extension, target.lifecycle) == identity)
+        });
+        if !authorized {
+            return Err(AccessError::Cancelled);
         }
+        self.complete(invocation, outcome);
+        Ok(())
     }
 
     pub(crate) fn handle_routed_child(
         &mut self,
-        request: &HostRequest,
+        request: &RequestContext,
+        command: Command,
         target: RoutedCommandTarget,
-    ) -> (Option<HostResponse>, Option<CommandInvocationId>) {
-        let identity = (request.extension, request.lifecycle);
-        if !self.lifecycles.contains(&identity) {
-            return (
-                Some(response(request, Err(HostRequestError::Cancelled))),
-                None,
-            );
+        reply: &mut Option<CommandReply>,
+    ) -> (
+        Option<Result<CommandInvokeDispatch, AccessError>>,
+        Option<CommandInvocationId>,
+    ) {
+        if let Err(error) = self.validate_request(request) {
+            return (Some(Err(error)), None);
         }
-        let (Some(parent), HostOperation::InvokeCommand { command }) =
-            (request.invocation, &request.operation)
-        else {
-            return (
-                Some(response(
-                    request,
-                    Err(HostRequestError::UnsupportedOperation),
-                )),
-                None,
-            );
+        let Some(parent) = request.invocation else {
+            return (Some(Err(AccessError::ContextUnavailable)), None);
         };
         let (target, already_started) = match target {
             RoutedCommandTarget::Window => (InvocationTarget::Window, true),
@@ -216,21 +244,15 @@ impl ExtensionCommandBridge {
         };
         match self.enqueue_child_with_target(
             parent,
-            command.clone(),
-            identity,
-            Some(request),
+            command,
+            (request.extension, request.lifecycle),
+            reply,
             target,
             already_started,
         ) {
-            Ok((Some(dispatch), id)) => (
-                Some(response(
-                    request,
-                    Ok(HostResponseValue::CommandInvoked { dispatch }),
-                )),
-                Some(id),
-            ),
+            Ok((Some(dispatch), id)) => (Some(Ok(dispatch)), Some(id)),
             Ok((None, id)) => (None, Some(id)),
-            Err(outcome) => (Some(command_outcome_response(request, outcome)), None),
+            Err(outcome) => (Some(Ok(CommandInvokeDispatch::Outcome { outcome })), None),
         }
     }
 
@@ -344,32 +366,32 @@ impl ExtensionCommandBridge {
 
     pub(crate) fn authorize_context(
         &self,
-        request: &HostRequest,
+        request: &RequestContext,
         explicit: Option<CommandInvocationId>,
-    ) -> Result<CommandInvocationId, HostRequestError> {
+    ) -> Result<CommandInvocationId, AccessError> {
         let invocation = request.invocation.ok_or(if explicit.is_some() {
-            HostRequestError::InvalidTarget
+            AccessError::InvalidTarget
         } else {
-            HostRequestError::ContextUnavailable
+            AccessError::ContextUnavailable
         })?;
         let node = self
             .invocations
             .get(&invocation)
-            .ok_or(HostRequestError::InvalidTarget)?;
+            .ok_or(AccessError::InvalidTarget)?;
         if !matches!(node.target, InvocationTarget::Extension(handler)
             if (handler.extension, handler.lifecycle) == (request.extension, request.lifecycle))
         {
-            return Err(HostRequestError::InvalidTarget);
+            return Err(AccessError::InvalidTarget);
         }
         if node.cancelled {
-            return Err(HostRequestError::Cancelled);
+            return Err(AccessError::Cancelled);
         }
         if node.handler_outcome.is_some() {
-            return Err(HostRequestError::InvalidTarget);
+            return Err(AccessError::InvalidTarget);
         }
         let root = self.root_for(invocation);
         if explicit.is_some_and(|authority| authority != root) {
-            return Err(HostRequestError::InvalidTarget);
+            return Err(AccessError::InvalidTarget);
         }
         Ok(root)
     }
@@ -419,7 +441,7 @@ impl ExtensionCommandBridge {
         parent: CommandInvocationId,
         command: Command,
         caller: Lifecycle,
-        request: Option<&HostRequest>,
+        reply: &mut Option<CommandReply>,
         target: InvocationTarget,
         already_started: bool,
     ) -> Result<(Option<CommandInvokeDispatch>, CommandInvocationId), CommandOutcome> {
@@ -450,11 +472,6 @@ impl ExtensionCommandBridge {
         let id = self.allocate_invocation();
         let (completion, _receiver) = CommandCompletion::new();
         let buffer = self.invocations[&parent].buffer;
-        let host_response = request.map(|request| PendingHostResponse {
-            extension: request.extension,
-            lifecycle: request.lifecycle,
-            request: request.id,
-        });
         self.invocations.insert(
             id,
             InvocationNode {
@@ -464,7 +481,15 @@ impl ExtensionCommandBridge {
                 parent: Some(parent),
                 child: None,
                 completion,
-                host_response: if same_runtime { None } else { host_response },
+                host_response: if same_runtime {
+                    None
+                } else {
+                    reply.take().map(|reply| PendingHostResponse {
+                        extension: caller.0,
+                        lifecycle: caller.1,
+                        reply,
+                    })
+                },
                 handler_outcome: None,
                 started: same_runtime || already_started,
                 cancelled: false,
@@ -578,18 +603,10 @@ impl ExtensionCommandBridge {
             CommandOutcome::Unavailable
         });
         node.completion.complete(outcome.clone());
-        if let Some(pending) = node.host_response {
-            self.events
-                .push_back(ExtensionCommandEvent::HostResponse(HostResponse {
-                    extension: pending.extension,
-                    lifecycle: pending.lifecycle,
-                    id: pending.request,
-                    result: Ok(HostResponseValue::CommandInvoked {
-                        dispatch: CommandInvokeDispatch::Outcome {
-                            outcome: outcome.clone(),
-                        },
-                    }),
-                }));
+        if let Some(reply) = node.host_response {
+            let _ = reply.reply.send(Ok(CommandInvokeDispatch::Outcome {
+                outcome: outcome.clone(),
+            }));
         }
         if let Some(parent) = node.parent {
             let parent_ready = self.invocations.get_mut(&parent).is_some_and(|parent| {
@@ -626,32 +643,11 @@ impl Default for ExtensionCommandBridge {
     }
 }
 
-fn response(
-    request: &HostRequest,
-    result: Result<HostResponseValue, HostRequestError>,
-) -> HostResponse {
-    HostResponse {
-        extension: request.extension,
-        lifecycle: request.lifecycle,
-        id: request.id,
-        result,
-    }
-}
-
-fn command_outcome_response(request: &HostRequest, outcome: CommandOutcome) -> HostResponse {
-    response(
-        request,
-        Ok(HostResponseValue::CommandInvoked {
-            dispatch: CommandInvokeDispatch::Outcome { outcome },
-        }),
-    )
-}
-
-fn map_catalog_error(error: CommandCatalogError) -> HostRequestError {
+fn map_catalog_error(error: CommandCatalogError) -> CommandError {
     match error {
-        CommandCatalogError::NameInUse => HostRequestError::CommandNameInUse,
-        CommandCatalogError::NotFound => HostRequestError::CommandNotFound,
-        CommandCatalogError::ViewNotFound => HostRequestError::ViewNotFound,
+        CommandCatalogError::NameInUse => CommandError::CommandNameInUse,
+        CommandCatalogError::NotFound => CommandError::CommandNotFound,
+        CommandCatalogError::ViewNotFound => CommandError::ViewNotFound,
     }
 }
 
@@ -662,6 +658,12 @@ mod tests {
     };
 
     use super::*;
+    use crate::app::declared_host as declared;
+    use crate::host::declarations::{DeclaredRequest, Handler};
+    use crate::host::protocol::{HostRequest, RequestId};
+    fn operation<H: Handler>(args: H::Arguments) -> DeclaredRequest {
+        DeclaredRequest::new::<H>(args)
+    }
 
     fn key(extension: u64) -> Lifecycle {
         (
@@ -681,7 +683,7 @@ mod tests {
         identity: Lifecycle,
         id: u64,
         invocation: Option<CommandInvocationId>,
-        operation: HostOperation,
+        operation: crate::host::declarations::DeclaredRequest,
     ) -> HostRequest {
         HostRequest {
             extension: identity.0,
@@ -698,19 +700,18 @@ mod tests {
         name: &str,
         id: u64,
     ) -> CommandRegistrationId {
-        let response = bridge.handle_host_request(request(
-            identity,
-            id,
-            None,
-            HostOperation::RegisterCommand {
-                name: name.into(),
-                title: name.into(),
-            },
-        ));
-        let Ok(HostResponseValue::CommandRegistered { registration }) = response.result else {
-            panic!("command registration failed")
-        };
-        registration
+        bridge
+            .register_command(
+                &RequestContext {
+                    extension: identity.0,
+                    lifecycle: identity.1,
+                    id: RequestId::new(id),
+                    invocation: None,
+                },
+                name.into(),
+                name.into(),
+            )
+            .unwrap()
     }
 
     fn enqueue_registered_root(
@@ -726,19 +727,33 @@ mod tests {
         bridge.enqueue_extension_root(command, target, buffer)
     }
 
-    fn routed(
-        bridge: &mut ExtensionCommandBridge,
-        request: &HostRequest,
-    ) -> (Option<HostResponse>, Option<CommandInvocationId>) {
-        let HostOperation::InvokeCommand { command } = &request.operation else {
-            unreachable!()
-        };
+    type RoutedTestResult = (
+        Option<Result<CommandInvokeDispatch, AccessError>>,
+        Option<CommandInvocationId>,
+        tokio::sync::oneshot::Receiver<Result<CommandInvokeDispatch, AccessError>>,
+    );
+
+    fn routed(bridge: &mut ExtensionCommandBridge, request: &HostRequest) -> RoutedTestResult {
+        let command = request
+            .operation
+            .arguments::<declared::invoke_command>()
+            .unwrap()
+            .command
+            .clone();
         let target = bridge
             .catalog
             .borrow()
             .resolve_extension(command.name.as_ref())
             .unwrap();
-        bridge.handle_routed_child(request, RoutedCommandTarget::Extension(target))
+        let (send, receive) = tokio::sync::oneshot::channel();
+        let mut reply = Some(send);
+        let (response, child) = bridge.handle_routed_child(
+            &request.context(),
+            command,
+            RoutedCommandTarget::Extension(target),
+            &mut reply,
+        );
+        (response, child, receive)
     }
 
     #[test]
@@ -750,29 +765,29 @@ mod tests {
         bridge.admit_lifecycle(other.0, other.1);
         let registration = register(&mut bridge, owner, "fixture.command", 1);
         assert!(matches!(
-            bridge
-                .handle_host_request(request(
-                    other,
-                    2,
-                    None,
-                    HostOperation::RegisterCommand {
-                        name: "fixture.command".into(),
-                        title: "duplicate".into(),
-                    },
-                ),)
-                .result,
-            Err(HostRequestError::CommandNameInUse)
+            bridge.register_command(
+                &RequestContext {
+                    extension: other.0,
+                    lifecycle: other.1,
+                    id: RequestId::new(2),
+                    invocation: None
+                },
+                "fixture.command".into(),
+                "duplicate".into()
+            ),
+            Err(CommandError::CommandNameInUse)
         ));
         assert!(matches!(
-            bridge
-                .handle_host_request(request(
-                    other,
-                    3,
-                    None,
-                    HostOperation::UnregisterCommand { registration },
-                ),)
-                .result,
-            Err(HostRequestError::CommandNotFound)
+            bridge.unregister_command(
+                &RequestContext {
+                    extension: other.0,
+                    lifecycle: other.1,
+                    id: RequestId::new(3),
+                    invocation: None
+                },
+                registration
+            ),
+            Err(CommandError::CommandNotFound)
         ));
         bridge.remove_lifecycle(owner.0, owner.1);
         register(&mut bridge, other, "fixture.command", 4);
@@ -846,47 +861,41 @@ mod tests {
             first,
             4,
             Some(root.id),
-            HostOperation::InvokeCommand {
+            operation::<declared::invoke_command>(declared::InvokeArguments {
                 command: command("fixture.inner"),
-            },
+            }),
         );
-        let (response, child) = routed(&mut bridge, &inline);
+        let (response, child, _pending_reply) = routed(&mut bridge, &inline);
         let child = child.unwrap();
         assert!(
-            matches!(response.unwrap().result, Ok(HostResponseValue::CommandInvoked {
-            dispatch: CommandInvokeDispatch::Inline { invocation, .. }
-        }) if invocation == child)
+            matches!(response.unwrap(), Ok(CommandInvokeDispatch::Inline { invocation, .. }) if invocation == child)
         );
         let duplicate = request(
             first,
             5,
             Some(root.id),
-            HostOperation::InvokeCommand {
+            operation::<declared::invoke_command>(declared::InvokeArguments {
                 command: command("fixture.inner"),
-            },
+            }),
         );
         assert!(matches!(
-            routed(&mut bridge, &duplicate).0.unwrap().result,
-            Ok(HostResponseValue::CommandInvoked {
-                dispatch: CommandInvokeDispatch::Outcome {
-                    outcome: CommandOutcome::Unavailable
-                }
+            routed(&mut bridge, &duplicate).0.unwrap(),
+            Ok(CommandInvokeDispatch::Outcome {
+                outcome: CommandOutcome::Unavailable
             })
         ));
         let recursive = request(
             first,
             6,
             Some(child),
-            HostOperation::InvokeCommand {
+            operation::<declared::invoke_command>(declared::InvokeArguments {
                 command: command("fixture.outer"),
-            },
+            }),
         );
         assert!(matches!(
-            routed(&mut bridge, &recursive).0.unwrap().result,
-            Ok(HostResponseValue::CommandInvoked {
-                dispatch: CommandInvokeDispatch::Outcome {
-                    outcome: CommandOutcome::Unavailable
-                }
+            routed(&mut bridge, &recursive).0.unwrap(),
+            Ok(CommandInvokeDispatch::Outcome {
+                outcome: CommandOutcome::Unavailable
             })
         ));
         bridge.complete(child, CommandOutcome::Completed);
@@ -902,11 +911,11 @@ mod tests {
             first,
             7,
             Some(root.id),
-            HostOperation::InvokeCommand {
+            operation::<declared::invoke_command>(declared::InvokeArguments {
                 command: command("fixture.other"),
-            },
+            }),
         );
-        let (response, child) = routed(&mut bridge, &cross);
+        let (response, child, mut pending_reply) = routed(&mut bridge, &cross);
         assert!(response.is_none());
         let child = child.unwrap();
         assert!(
@@ -918,25 +927,22 @@ mod tests {
             second,
             8,
             Some(child),
-            HostOperation::InvokeCommand {
+            operation::<declared::invoke_command>(declared::InvokeArguments {
                 command: command("fixture.outer"),
-            },
+            }),
         );
         assert!(matches!(
-            routed(&mut bridge, &cycle).0.unwrap().result,
-            Ok(HostResponseValue::CommandInvoked {
-                dispatch: CommandInvokeDispatch::Outcome {
-                    outcome: CommandOutcome::Unavailable
-                }
+            routed(&mut bridge, &cycle).0.unwrap(),
+            Ok(CommandInvokeDispatch::Outcome {
+                outcome: CommandOutcome::Unavailable
             })
         ));
         bridge.complete(child, CommandOutcome::Completed);
-        assert!(
-            matches!(bridge.drain_events().next(), Some(ExtensionCommandEvent::HostResponse(
-            HostResponse { id, result: Ok(HostResponseValue::CommandInvoked {
-                dispatch: CommandInvokeDispatch::Outcome { outcome: CommandOutcome::Completed }
-            }), .. }
-        )) if id == RequestId::new(7))
+        assert_eq!(
+            pending_reply.try_recv().unwrap(),
+            Ok(CommandInvokeDispatch::Outcome {
+                outcome: CommandOutcome::Completed
+            })
         );
     }
 
@@ -952,21 +958,32 @@ mod tests {
             owner,
             2,
             Some(root.id),
-            HostOperation::InvokeCommand {
+            operation::<declared::invoke_command>(declared::InvokeArguments {
                 command: command("file.new"),
-            },
+            }),
         );
-        let (response, child) = bridge.handle_routed_child(&nested, RoutedCommandTarget::Window);
+        let (send, mut pending_reply) = tokio::sync::oneshot::channel();
+        let command = nested
+            .operation
+            .arguments::<declared::invoke_command>()
+            .unwrap()
+            .command
+            .clone();
+        let (response, child) = bridge.handle_routed_child(
+            &nested.context(),
+            command,
+            RoutedCommandTarget::Window,
+            &mut Some(send),
+        );
         assert!(response.is_none());
         let child = child.unwrap();
         assert!(bridge.drain_events().next().is_none());
         bridge.complete(child, CommandOutcome::Completed);
-        assert!(
-            matches!(bridge.drain_events().next(), Some(ExtensionCommandEvent::HostResponse(
-            HostResponse { id, result: Ok(HostResponseValue::CommandInvoked {
-                dispatch: CommandInvokeDispatch::Outcome { outcome: CommandOutcome::Completed }
-            }), .. }
-        )) if id == RequestId::new(2))
+        assert_eq!(
+            pending_reply.try_recv().unwrap(),
+            Ok(CommandInvokeDispatch::Outcome {
+                outcome: CommandOutcome::Completed
+            })
         );
     }
 
@@ -1027,57 +1044,65 @@ mod tests {
             first,
             4,
             Some(root.id),
-            HostOperation::ActiveBuffer { target: None },
+            operation::<declared::active_buffer>(declared::ContextArguments { target: None }),
         );
-        assert_eq!(bridge.authorize_context(&contextual, None), Ok(root.id));
         assert_eq!(
-            bridge.authorize_context(&contextual, Some(root.id)),
+            bridge.authorize_context(&contextual.context(), None),
             Ok(root.id)
         );
         assert_eq!(
-            bridge.authorize_context(&contextual, Some(CommandInvocationId::new(999))),
-            Err(HostRequestError::InvalidTarget)
+            bridge.authorize_context(&contextual.context(), Some(root.id)),
+            Ok(root.id)
+        );
+        assert_eq!(
+            bridge.authorize_context(&contextual.context(), Some(CommandInvocationId::new(999))),
+            Err(AccessError::InvalidTarget)
         );
         let foreign = request(
             second,
             5,
             Some(root.id),
-            HostOperation::ActiveBuffer { target: None },
+            operation::<declared::active_buffer>(declared::ContextArguments { target: None }),
         );
         assert_eq!(
-            bridge.authorize_context(&foreign, None),
-            Err(HostRequestError::InvalidTarget)
+            bridge.authorize_context(&foreign.context(), None),
+            Err(AccessError::InvalidTarget)
         );
-        let unrelated = request(first, 6, None, HostOperation::ActiveBuffer { target: None });
-        assert_eq!(
-            bridge.authorize_context(&unrelated, None),
-            Err(HostRequestError::ContextUnavailable)
+        let unrelated = request(
+            first,
+            6,
+            None,
+            operation::<declared::active_buffer>(declared::ContextArguments { target: None }),
         );
         assert_eq!(
-            bridge.authorize_context(&unrelated, Some(root.id)),
-            Err(HostRequestError::InvalidTarget)
+            bridge.authorize_context(&unrelated.context(), None),
+            Err(AccessError::ContextUnavailable)
+        );
+        assert_eq!(
+            bridge.authorize_context(&unrelated.context(), Some(root.id)),
+            Err(AccessError::InvalidTarget)
         );
         for (owner, name) in [(first, "fixture.inner"), (second, "fixture.other")] {
             let nested = request(
                 first,
                 7,
                 Some(root.id),
-                HostOperation::InvokeCommand {
+                operation::<declared::invoke_command>(declared::InvokeArguments {
                     command: command(name),
-                },
+                }),
             );
-            let (_, child) = routed(&mut bridge, &nested);
+            let (_, child, _pending_reply) = routed(&mut bridge, &nested);
             let child = child.unwrap();
             let contextual = request(
                 owner,
                 8,
                 Some(child),
-                HostOperation::ActiveBuffer {
+                operation::<declared::active_buffer>(declared::ContextArguments {
                     target: Some(root.id),
-                },
+                }),
             );
             assert_eq!(
-                bridge.authorize_context(&contextual, Some(root.id)),
+                bridge.authorize_context(&contextual.context(), Some(root.id)),
                 Ok(root.id)
             );
             assert_eq!(bridge.captured_buffer(child), Some(BufferHandle::new(4)));
@@ -1085,32 +1110,33 @@ mod tests {
         }
         bridge.cancel(root.id);
         assert_eq!(
-            bridge.authorize_context(&contextual, None),
-            Err(HostRequestError::Cancelled)
+            bridge.authorize_context(&contextual.context(), None),
+            Err(AccessError::Cancelled)
         );
         bridge.complete(root.id, CommandOutcome::Cancelled);
         assert_eq!(
-            bridge.authorize_context(&contextual, Some(root.id)),
-            Err(HostRequestError::InvalidTarget)
+            bridge.authorize_context(&contextual.context(), Some(root.id)),
+            Err(AccessError::InvalidTarget)
         );
     }
 
     #[test]
-    fn direct_invoke_requests_are_unsupported() {
+    fn direct_invocation_requires_command_context() {
         let mut bridge = ExtensionCommandBridge::new();
         let caller = key(1);
         bridge.admit_lifecycle(caller.0, caller.1);
-        let invoke = request(
-            caller,
-            1,
-            None,
-            HostOperation::InvokeCommand {
-                command: command("file.new"),
-            },
+        let request = RequestContext {
+            extension: caller.0,
+            lifecycle: caller.1,
+            id: RequestId::new(1),
+            invocation: None,
+        };
+        let result = bridge.handle_routed_child(
+            &request,
+            command("file.new"),
+            RoutedCommandTarget::Window,
+            &mut None,
         );
-        assert_eq!(
-            bridge.handle_host_request(invoke).result,
-            Err(HostRequestError::UnsupportedOperation)
-        );
+        assert_eq!(result.0.unwrap(), Err(AccessError::ContextUnavailable));
     }
 }
