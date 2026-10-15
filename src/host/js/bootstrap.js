@@ -630,6 +630,12 @@ function documentPresentationFromNative(value) {
     presentation: Object.freeze({ target: presentationTarget(presentation.target), kind: presentation.kind,
       document: presentation.document, buffer: bufferFor(presentation.buffer) }) });
 }
+export async function createUntitled(options) {
+  return documentPresentationFromNative(await request("createUntitled", destinationAuthority(options)));
+}
+export async function presentDocument(id, options) {
+  return documentPresentationFromNative(await request("presentDocument", string(id, "document identity must be text"), destinationAuthority(options)));
+}
 export async function openDocument(uri, options) {
   const value = await request("openDocument", string(uri, "resource URI must be text"), destinationAuthority(options));
   return documentPresentationFromNative(value);

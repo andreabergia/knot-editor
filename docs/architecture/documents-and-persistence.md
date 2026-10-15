@@ -40,7 +40,11 @@ The extension host uses the same operation with a file-only resource constraint,
 converts failures to structured host codes, and captures document metadata plus
 its exact presentation at commit. Window/pane/view destinations are validated on
 admission; asynchronous completion revalidates the captured native presentation
-and caller lifecycle/cancellation without looking up focus again.
+and caller lifecycle/cancellation without looking up focus again. Untitled creation
+uses the native New path and returns its committed document/presentation pair;
+there is no headless document lease. Presenting an existing document shares its
+model, reuses its existing window-local tab, or creates another native editor view.
+Both use the same live destination admission as file Open.
 A product open
 normalizes and stats the resource asynchronously. Existing files are read and
 UTF-8-decoded before foreground state changes, missing files create a dirty

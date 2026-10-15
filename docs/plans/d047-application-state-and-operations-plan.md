@@ -230,13 +230,14 @@ adding programmatic mutations. Mark the parent checkpoint complete only on appro
 
 1. **Shared semantic completion.** ⏳ Resource Open now returns typed committed
    document/presentation or workspace data and preserves resource failures; native
-   command dispatch adapts that result. Present/root/close integration remains.
+   command dispatch adapts that result. Root/close integration remains.
    Refactor only the product entry points needed
    to return typed open/present/root/close results. Keep provider work off the
    foreground; keep target capture, generation validation and commit with the
    existing owners. Native and JS callers use the same implementation.
 2. **Open and present.** ⏳ File Open is public through the shared native operation;
-   folder Open, untitled creation, and presenting a live document remain. Implement file/folder opening, untitled creation, and
+   untitled creation and presenting a live document are also public; folder Open
+   remains. Implement file/folder opening, untitled creation, and
    presenting a live document. Admit explicit destinations and optional-window
    capture; return metadata and the actual selected/created presentation. Validate
    after asynchronous work before mutating the captured destination.
@@ -427,8 +428,8 @@ its review gate and D047 completion remain outstanding.
 - ✅ Focused product tests cover created/reused presentation results, committed
   roots, preserved decode/provider errors, and replacement during a gated read
   without leaked documents. The existing startup and native command tests pass.
-- ⏳ Public mutations, shared present/root/close completion, cancellation admission,
-  declarations, checked command and checkpoint 3 acceptance remain unfinished.
+- ⏳ Folder/root APIs, shared protected-close completion, and the remaining
+  checkpoint 3 acceptance/manual review remain unfinished.
 
 Semantic Open foundation validation (2026-10-15): `cargo test --all-targets --quiet`
 passed (586 library tests and 5 example tests); Clippy with warnings denied and
@@ -459,3 +460,17 @@ Public file Open validation (2026-10-15): `cargo test --all-targets --quiet` pas
 `scripts/check-extension-api.sh` and `git diff --check` passed. Folder/root, untitled,
 present and protected-close APIs plus the remaining checkpoint 3 acceptance/manual
 gate are still outstanding.
+
+- ✅ `documents.createUntitled(options)` and `documents.present(id, options)` now
+  use the shared captured destinations and semantic document/presentation response.
+  Native New returns its actual committed pair; no headless document is created.
+  Present shares the model, reuses a window-local tab, and rejects missing/closed
+  identities with `DocumentNotFound`.
+- ✅ Public-host coverage checks clean untitled metadata, dirty edits and undo back
+  to clean, two-window sharing/reuse, missing identity rejection without leaks,
+  terminal preservation during untitled creation and file Open, and declarations.
+
+Untitled/present validation (2026-10-15): `cargo test --all-targets --quiet` passed
+(593 library tests and 5 example tests); `cargo clippy --all-targets -- -D warnings`,
+`scripts/check-extension-api.sh` and `git diff --check` passed. Folder/root operations,
+protected-close integration and the remaining checkpoint 3 gate are outstanding.

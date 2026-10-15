@@ -854,7 +854,7 @@ impl ProductExtensionHost {
             }
             RequestRoute::View => self.dispatch_view_request(request, cx),
             RequestRoute::Application => Some(self.dispatch_application_request(request, cx)),
-            RequestRoute::ApplicationMutation => self.dispatch_document_open(request, cx),
+            RequestRoute::ApplicationMutation => self.dispatch_document_operation(request, cx),
             RequestRoute::Semantic => {
                 let removed = match &request.operation {
                     HostOperation::UnregisterCompletionProvider { registration } => {
@@ -1593,45 +1593,38 @@ impl ProductExtensionHost {
         self.lifecycles.contains(&key) && !self.commands.is_cancelled(invocation)
     }
 
-    fn dispatch_document_open(
+    fn dispatch_document_operation(
         &mut self,
         request: HostRequest,
         cx: &mut Context<Self>,
     ) -> Option<crate::host::protocol::HostResponse> {
-        use crate::host::protocol::{
-            DocumentDestination, HostRequestError, HostResponse, HostResponseValue, WindowTarget,
-        };
+        use crate::host::protocol::{HostRequestError, HostResponse, HostResponseValue};
         let key = ExtensionKey::new(request.extension, request.lifecycle);
         let result = (|| {
             if !self.operation_is_live(key, request.invocation) {
                 return Err(HostRequestError::Cancelled);
             }
-            let HostOperation::OpenDocument { uri, target } = request.operation.clone() else {
-                return Err(HostRequestError::UnsupportedOperation);
+            let target = match &request.operation {
+                HostOperation::OpenDocument { target, .. }
+                | HostOperation::CreateUntitled { target }
+                | HostOperation::PresentDocument { target, .. } => target.clone(),
+                _ => return Err(HostRequestError::UnsupportedOperation),
             };
-            let destination = match target {
-                Some(target) => target,
-                None => {
-                    let window = if let Some(invocation) = request.invocation {
-                        let root = self
-                            .commands
-                            .root_of(invocation)
-                            .ok_or(HostRequestError::InvalidTarget)?;
-                        self.command_targets
-                            .get(&root)
-                            .ok_or(HostRequestError::InvalidTarget)?
-                            .window
-                    } else {
-                        cx.active_window()
-                            .ok_or(HostRequestError::ContextUnavailable)?
-                    };
-                    if window.downcast::<ProductShell>().is_none() {
-                        return Err(HostRequestError::ContextUnavailable);
-                    }
-                    DocumentDestination::Window(WindowTarget {
-                        window: window.window_id().as_u64().to_string(),
-                    })
+            let destination = self.document_destination(&request, target, cx)?;
+            let uri = match request.operation.clone() {
+                HostOperation::CreateUntitled { .. } => {
+                    let (document, target) = product::operations::create_untitled(destination, cx)?;
+                    let value = self.document_presentation(document, target, cx)?;
+                    return Ok(Some(HostResponseValue::DocumentPresented(value)));
                 }
+                HostOperation::PresentDocument { id, .. } => {
+                    let (document, target) =
+                        product::operations::present_document(id, destination, cx)?;
+                    let value = self.document_presentation(document, target, cx)?;
+                    return Ok(Some(HostResponseValue::DocumentPresented(value)));
+                }
+                HostOperation::OpenDocument { uri, .. } => uri,
+                _ => unreachable!(),
             };
             let host = cx.entity().downgrade();
             let caller = product::operations::OperationCaller {
@@ -1662,14 +1655,47 @@ impl ProductExtensionHost {
                     });
                 },
                 cx,
-            )
+            )?;
+            Ok(None)
         })();
-        result.err().map(|error| HostResponse {
+        result.transpose().map(|result| HostResponse {
             extension: request.extension,
             lifecycle: request.lifecycle,
             id: request.id,
-            result: Err(error),
+            result,
         })
+    }
+
+    fn document_destination(
+        &self,
+        request: &HostRequest,
+        target: Option<crate::host::protocol::DocumentDestination>,
+        cx: &App,
+    ) -> Result<crate::host::protocol::DocumentDestination, crate::host::protocol::HostRequestError>
+    {
+        use crate::host::protocol::{DocumentDestination, HostRequestError, WindowTarget};
+        if let Some(target) = target {
+            return Ok(target);
+        }
+        let window = if let Some(invocation) = request.invocation {
+            let root = self
+                .commands
+                .root_of(invocation)
+                .ok_or(HostRequestError::InvalidTarget)?;
+            self.command_targets
+                .get(&root)
+                .ok_or(HostRequestError::InvalidTarget)?
+                .window
+        } else {
+            cx.active_window()
+                .ok_or(HostRequestError::ContextUnavailable)?
+        };
+        if window.downcast::<ProductShell>().is_none() {
+            return Err(HostRequestError::ContextUnavailable);
+        }
+        Ok(DocumentDestination::Window(WindowTarget {
+            window: window.window_id().as_u64().to_string(),
+        }))
     }
 
     fn document_presentation(
@@ -1857,7 +1883,9 @@ fn application_document_info(
 
 fn request_route(operation: &HostOperation) -> RequestRoute {
     match operation {
-        HostOperation::OpenDocument { .. } => RequestRoute::ApplicationMutation,
+        HostOperation::OpenDocument { .. }
+        | HostOperation::CreateUntitled { .. }
+        | HostOperation::PresentDocument { .. } => RequestRoute::ApplicationMutation,
         HostOperation::ApplicationQuery(_)
         | HostOperation::ObserveWorkbench
         | HostOperation::UnobserveWorkbench { .. } => RequestRoute::Application,

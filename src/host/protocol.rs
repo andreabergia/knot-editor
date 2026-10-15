@@ -582,6 +582,13 @@ pub enum HostOperation {
         subscription: WorkbenchSubscriptionId,
     },
     ApplicationQuery(ApplicationQuery),
+    CreateUntitled {
+        target: Option<DocumentDestination>,
+    },
+    PresentDocument {
+        id: String,
+        target: Option<DocumentDestination>,
+    },
     OpenDocument {
         uri: String,
         target: Option<DocumentDestination>,
@@ -778,6 +785,7 @@ pub struct BufferChange {
 pub enum HostRequestError {
     ContextUnavailable,
     InvalidUri,
+    DocumentNotFound,
     ResourceNotFound,
     ResourceWrongKind,
     InvalidUtf8,
@@ -806,6 +814,7 @@ impl HostRequestError {
         match self {
             Self::ContextUnavailable => "ContextUnavailable",
             Self::InvalidUri => "InvalidUri",
+            Self::DocumentNotFound => "DocumentNotFound",
             Self::ResourceNotFound => "ResourceNotFound",
             Self::ResourceWrongKind => "ResourceWrongKind",
             Self::InvalidUtf8 => "InvalidUtf8",

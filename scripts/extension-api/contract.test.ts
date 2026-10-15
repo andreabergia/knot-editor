@@ -115,6 +115,13 @@ await documents.open(42);
 // @ts-expect-error options cannot fabricate a live target
 await documents.open("file:///tmp/document.txt", { target: {} });
 
+const untitled = await documents.createUntitled({ target: opened.presentation.target.pane });
+await documents.present(untitled.document.id, { target: opened.presentation.target.window });
+// @ts-expect-error untitled options need live destinations
+await documents.createUntitled({ target: {} as CommandTarget });
+// @ts-expect-error plain URIs are not document identities
+await documents.present("file:///tmp/document.txt");
+
 // @ts-expect-error plain URIs are not document identities
 await documents.get("file:///tmp/document.txt");
 

@@ -177,3 +177,43 @@ pub(crate) fn open_document(
     });
     Ok(())
 }
+
+pub(crate) fn create_untitled(
+    destination: DocumentDestination,
+    cx: &mut App,
+) -> Result<(DocumentId, PresentationTarget), HostRequestError> {
+    let (shell, target) = capture_destination(&destination, cx)?;
+    cx.update_window(target.window, |_, window, cx| {
+        shell.update(cx, |shell, cx| {
+            let (document, target) = shell
+                .new_document_in_pane(target.pane, window, cx)
+                .ok_or(HostRequestError::InvalidTarget)?;
+            Ok((document, target.public_target()))
+        })
+    })
+    .map_err(|_| HostRequestError::InvalidTarget)?
+}
+
+pub(crate) fn present_document(
+    id: String,
+    destination: DocumentDestination,
+    cx: &mut App,
+) -> Result<(DocumentId, PresentationTarget), HostRequestError> {
+    let (shell, target) = capture_destination(&destination, cx)?;
+    let document = ProductShell::documents(cx)
+        .read(cx)
+        .documents()
+        .find(|document| document.identity().to_string() == id)
+        .map(|document| document.id())
+        .ok_or(HostRequestError::DocumentNotFound)?;
+    let target = shell.update(cx, |shell, cx| {
+        shell.next_open_generation();
+        let target = shell.present_open_document(document, &target, false, cx);
+        let _ = cx.update_window(target.window, |_, window, cx| {
+            shell.focus_active_surface(window, cx)
+        });
+        cx.notify();
+        target
+    });
+    Ok((document, target.public_target()))
+}

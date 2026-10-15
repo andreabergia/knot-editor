@@ -2002,11 +2002,9 @@ impl ProductShell {
         pane: PaneId,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> bool {
+    ) -> Option<(DocumentId, OpenTarget)> {
         self.next_open_generation();
-        if self.workbench.read(cx).pane(pane).is_none() {
-            return false;
-        }
+        self.workbench.read(cx).pane(pane)?;
         let documents = Self::documents(cx);
         let model = cx.new(|_| BufferModel::from_text(""));
         let document = documents.update(cx, |documents, cx| {
@@ -2026,7 +2024,18 @@ impl ProductShell {
         editor.focus_handle(cx).focus(window);
         self.status = "new untitled document".into();
         cx.notify();
-        true
+        let tab = self.workbench.read(cx).pane(pane).unwrap().active_tab_id();
+        Some((
+            document,
+            OpenTarget {
+                window: window.window_handle(),
+                workbench: self.workbench.downgrade(),
+                pane,
+                tab,
+                surface: TabSurfaceId::Document(document),
+                presentation: Some(editor.entity_id()),
+            },
+        ))
     }
 
     fn new_terminal_in_pane(
@@ -2729,7 +2738,7 @@ impl ProductShell {
                 CommandClaim::Finished(CommandOutcome::Completed)
             }
             NEW_COMMAND => {
-                if self.new_document_in_pane(target.pane, window, cx) {
+                if self.new_document_in_pane(target.pane, window, cx).is_some() {
                     CommandClaim::Finished(CommandOutcome::Completed)
                 } else {
                     CommandClaim::Finished(CommandOutcome::InvalidTarget)

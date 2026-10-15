@@ -96,6 +96,11 @@ declare module "knot" {
      * window, otherwise creates one in the captured pane. Focus changes during I/O
      * never retarget the request. Resolves after commit without awaiting observers. */
     open(uri: string, options?: DocumentDestinationOptions): Promise<DocumentPresentation>;
+    /** Creates a clean, empty ordinary document together with its native tab. */
+    createUntitled(options?: DocumentDestinationOptions): Promise<DocumentPresentation>;
+    /** Presents a shared live document, reusing its tab in the destination window.
+     * Rejects DocumentNotFound after final closure. */
+    present(id: DocumentId, options?: DocumentDestinationOptions): Promise<DocumentPresentation>;
   }>;
   /** Only product windows; diagnostic and startup-error windows are excluded.
    * get returns null after closure; fabricated/command targets reject InvalidTarget. */
@@ -152,7 +157,7 @@ declare module "knot" {
     | "InvalidRange" | "InvalidEditBatch" | "RevisionConflict" | "ContributionSetNotFound"
     | "TreeViewNotFound" | "ViewNotFound" | "TreeProviderInUse" | "TreeProviderNotFound"
     | "CompletionProviderNotFound" | "CommandNameInUse" | "CommandNotFound"
-    | "InvalidUri" | "ResourceNotFound" | "ResourceWrongKind" | "InvalidUtf8" | "ProviderFailure";
+    | "InvalidUri" | "DocumentNotFound" | "ResourceNotFound" | "ResourceWrongKind" | "InvalidUtf8" | "ProviderFailure";
   /**
    * Native operation failure. Narrow a caught Error by name === "KnotHostError"
    * and its string code property, then dispatch on code. No error constructor

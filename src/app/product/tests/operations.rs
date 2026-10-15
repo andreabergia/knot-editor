@@ -487,3 +487,94 @@ fn installed_open_command_consumes_the_committed_result_in_its_originating_windo
         CommandOutcome::Completed
     );
 }
+
+#[gpui::test]
+fn public_untitled_creation_and_present_share_native_tabs_and_dirty_state(cx: &mut TestAppContext) {
+    let documents = install_globals(cx);
+    let (filesystems, _) = memory_filesystems_with_provider();
+    cx.set_global(ApplicationFileSystems(filesystems));
+    let host = cx.update(extension_host::install);
+    let key = install_operation_fixture(
+        &host,
+        r#"
+import { commands, documents, windows, workbench } from "knot";
+try { await documents.createUntitled(); throw new Error("missing window accepted"); }
+catch (error) { if (error.code !== "ContextUnavailable") throw error; }
+let created;
+await commands.register("operations.create", async () => {
+  const wins = await windows.list();
+  const pane = wins[1].panes[0];
+  const terminal = pane.tabs.find(tab => tab.kind === "terminal");
+  created = await documents.createUntitled({ target: terminal.target });
+  if (created.document.kind !== "untitled" || created.document.dirty || created.document.revision !== 0 || created.document.resourceUri !== null) throw new Error("untitled metadata");
+  if ((await created.document.buffer.snapshot()).text !== "" || created.presentation.target.pane !== pane.target) throw new Error("untitled presentation");
+  const changed = await windows.get(wins[1].target);
+  if (!changed.panes[0].tabs.some(tab => tab.target === terminal.target)) throw new Error("terminal replaced");
+  await created.document.buffer.applyEdits([{ range: { startByteOffset: 0, endByteOffset: 0 }, text: "edit" }], { ifRevision: 0 });
+  if (!(await documents.get(created.document.id)).dirty) throw new Error("untitled edit clean");
+  const shared = await documents.present(created.document.id, { target: wins[0].target });
+  if (shared.document.id !== created.document.id || shared.document.buffer !== created.document.buffer || !shared.document.dirty) throw new Error("present metadata");
+  const again = await documents.present(created.document.id, { target: shared.presentation.target });
+  if (again.presentation.target !== shared.presentation.target) throw new Error("present did not reuse tab");
+  try { await documents.present("closed-document", { target: pane.target }); throw new Error("missing document accepted"); }
+  catch (error) { if (error.code !== "DocumentNotFound") throw error; }
+  const fromTerminal = await documents.open("mem://product/notes.txt", { target: terminal.target });
+  if (fromTerminal.presentation.target.pane !== pane.target || !(await windows.get(wins[1].target)).panes[0].tabs.some(tab => tab.target === terminal.target)) throw new Error("Open replaced terminal");
+  if ((await documents.list()).length !== 4) throw new Error("headless document leaked");
+  await workbench.writeClipboardText(created.document.id);
+});
+await commands.register("operations.clean", async () => {
+  const current = await documents.get(created.document.id);
+  if (current.dirty || current.revision !== 2 || (await current.buffer.snapshot()).text !== "") throw new Error("undo did not restore clean state");
+});
+"#,
+        "operations.clean",
+        cx,
+    );
+    let (first, window) = empty_product_window(&documents, cx);
+    let (second, second_window) = empty_product_window(&documents, cx);
+    assert_eq!(
+        wait_for_command(
+            dispatch_product_command(&second, second_window, NEW_TERMINAL_COMMAND, cx),
+            cx
+        ),
+        CommandOutcome::Completed
+    );
+    assert_eq!(
+        wait_for_command(
+            dispatch_product_command(&first, window, "operations.create", cx),
+            cx
+        ),
+        CommandOutcome::Completed
+    );
+    let identity = cx.read(|cx| cx.read_from_clipboard().unwrap().text().unwrap());
+    let (document, model) = cx.read(|cx| {
+        let document = documents
+            .read(cx)
+            .documents()
+            .find(|document| document.identity().to_string() == identity)
+            .unwrap();
+        assert_eq!(
+            first.read(cx).workbench.read(cx).view_count(document.id()),
+            1
+        );
+        assert_eq!(
+            second.read(cx).workbench.read(cx).view_count(document.id()),
+            1
+        );
+        (document.id(), document.model().clone())
+    });
+    model.update(cx, |model, cx| {
+        model.undo().unwrap();
+        cx.notify();
+    });
+    assert!(!cx.read(|cx| documents.read(cx).get(document).unwrap().is_dirty(cx)));
+    assert_eq!(
+        wait_for_command(
+            dispatch_product_command(&first, window, "operations.clean", cx),
+            cx
+        ),
+        CommandOutcome::Completed
+    );
+    host.update(cx, |host, cx| host.unload(key, cx).unwrap());
+}

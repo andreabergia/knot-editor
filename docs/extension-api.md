@@ -98,6 +98,14 @@ mutation. Results contain committed metadata and opaque live targets, not render
 surfaces. Operations finish without awaiting observation listeners; listeners can
 open using explicit targets.
 
+`documents.createUntitled(options)` creates a clean, empty ordinary document and
+its native tab together. Edits make it dirty; undo to its initial content makes it
+clean again. `documents.present(id, options)` shares a live document in another
+window or selects its existing tab there. It rejects `DocumentNotFound` after the
+document's final presentation closes. Both accept the same captured destinations
+and return the same `{ document, presentation }` result as Open. Creating or
+presenting from a terminal preserves the terminal and selects a document tab.
+
 `await workbench.observe(listener)` registers application-wide observation and
 returns an initial `snapshot`, a sequence `watermark`, and an awaitable `dispose()`.
 Registration, snapshot and watermark are captured together on the foreground;

@@ -3895,6 +3895,19 @@ fn parse_host_operation<'s, 'i>(
 ) -> Result<(HostOperation, HostOperationKind), BoundaryError> {
     let operation = required_string(scope, arguments.get(1), "operation must be text")?;
     match operation.as_str() {
+        "createUntitled" => Ok((
+            HostOperation::CreateUntitled {
+                target: document_destination_from_v8(scope, arguments.get(2))?,
+            },
+            HostOperationKind::DocumentPresented,
+        )),
+        "presentDocument" => Ok((
+            HostOperation::PresentDocument {
+                id: required_string(scope, arguments.get(2), "document identity must be text")?,
+                target: document_destination_from_v8(scope, arguments.get(3))?,
+            },
+            HostOperationKind::DocumentPresented,
+        )),
         "openDocument" => Ok((
             HostOperation::OpenDocument {
                 uri: required_string(scope, arguments.get(2), "resource URI must be text")?,
