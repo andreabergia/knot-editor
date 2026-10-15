@@ -6414,6 +6414,9 @@ mod tests {
                 .execute_fixture_module(runtime, "file:///fixtures/late-registration.js", source)
                 .unwrap();
             let request = pool.receive_request().unwrap();
+            // Request delivery precedes the worker yielding; unload cancels a
+            // parked root but can terminate JavaScript that is still running.
+            wait_for_state(&pool, runtime, ExtensionState::AwaitingHostWork);
             pool.unload(runtime).unwrap();
             assert_eq!(
                 registration.wait().unwrap_err().kind(),
