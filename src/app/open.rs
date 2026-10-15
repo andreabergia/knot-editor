@@ -46,9 +46,41 @@ pub(crate) async fn load_resource(
     providers: Arc<FileSystemProviderRegistry>,
     uri: ResourceUri,
 ) -> Result<OpenResource, OpenResourceError> {
+    load_resource_kind(providers, uri, None).await
+}
+
+/// File-only opens admit missing destinations; directory-only opens require a root.
+pub(crate) async fn load_resource_kind(
+    providers: Arc<FileSystemProviderRegistry>,
+    uri: ResourceUri,
+    expected: Option<ResourceKind>,
+) -> Result<OpenResource, OpenResourceError> {
     let uri = providers.normalize(uri).await?;
     let provider = providers.provider(&uri)?;
-    match provider.stat(uri.clone()).await? {
+    let stat = provider.stat(uri.clone()).await?;
+    match (expected, &stat) {
+        (Some(ResourceKind::Directory), ResourceStat::Missing) => {
+            return Err(ResourceError::NotFound { uri }.into());
+        }
+        (Some(ResourceKind::File), ResourceStat::Directory) => {
+            return Err(ResourceError::WrongKind {
+                uri,
+                expected: ResourceKind::File,
+                actual: ResourceKind::Directory,
+            }
+            .into());
+        }
+        (Some(ResourceKind::Directory), ResourceStat::File) => {
+            return Err(ResourceError::WrongKind {
+                uri,
+                expected: ResourceKind::Directory,
+                actual: ResourceKind::File,
+            }
+            .into());
+        }
+        _ => {}
+    }
+    match stat {
         ResourceStat::Missing => Ok(OpenResource::Missing(uri)),
         ResourceStat::Directory => Ok(OpenResource::Directory(uri)),
         ResourceStat::File => {
@@ -149,6 +181,48 @@ mod tests {
             OpenResource::Directory(ResourceUri::parse("mem://open/src").unwrap())
         );
         assert_eq!(root.to_string(), "mem://open/");
+    }
+
+    #[test]
+    fn resource_kind_is_checked_before_reading_or_admitting_missing_roots() {
+        let (providers, _) = fixture();
+        for (uri, kind, expected_error) in [
+            ("mem://open/src", ResourceKind::File, "wrong kind"),
+            (
+                "mem://open/invalid.txt",
+                ResourceKind::Directory,
+                "wrong kind",
+            ),
+            ("mem://open/missing", ResourceKind::Directory, "missing"),
+        ] {
+            let error = pollster::block_on(load_resource_kind(
+                providers.clone(),
+                ResourceUri::parse(uri).unwrap(),
+                Some(kind),
+            ))
+            .unwrap_err();
+            assert!(
+                matches!(
+                    (&error, expected_error),
+                    (
+                        OpenResourceError::Provider(ResourceError::WrongKind { .. }),
+                        "wrong kind"
+                    ) | (
+                        OpenResourceError::Provider(ResourceError::NotFound { .. }),
+                        "missing"
+                    )
+                ),
+                "{error:?}"
+            );
+        }
+        assert!(matches!(
+            pollster::block_on(load_resource_kind(
+                providers,
+                ResourceUri::parse("mem://open/missing").unwrap(),
+                Some(ResourceKind::File)
+            )),
+            Ok(OpenResource::Missing(_))
+        ));
     }
 
     #[test]

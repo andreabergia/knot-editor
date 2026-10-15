@@ -406,3 +406,15 @@ state, so no replay log, public transaction, acknowledgement or recovery protoco
 is needed for ordinary editor observation.
 
 Reference: [extension host](architecture/extension-host.md).
+
+## Semantic resource operations
+
+Return committed resource/document/presentation data from the shared product Open
+path and adapt it independently for native command outcomes and extension results.
+This keeps provider, deduplication, presentation and target-loss behavior together;
+a command's status string or a later focus query cannot identify its result.
+Capture live destinations at native admission and revalidate exact presentations
+and caller lifetime before commit. File-only extension Open constrains resource
+kind before reading, while ordinary native Open continues dispatching by kind.
+
+Reference: [documents and persistence](architecture/documents-and-persistence.md).

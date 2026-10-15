@@ -338,6 +338,7 @@ enum HostOperationKind {
     ObserveWorkbench,
     UnobserveWorkbench,
     ApplicationQuery,
+    DocumentPresented,
     KeybindingBatch,
     ActiveBuffer,
     Snapshot,
@@ -3855,12 +3856,52 @@ fn optional_invocation<'s, 'i>(
         .map(Some)
 }
 
+fn document_destination_from_v8<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Value>,
+) -> Result<Option<super::protocol::DocumentDestination>, BoundaryError> {
+    use super::protocol::{DocumentDestination, PaneTarget, PresentationTarget, WindowTarget};
+    if value.is_null_or_undefined() {
+        return Ok(None);
+    }
+    let object = v8::Local::<v8::Object>::try_from(value)
+        .map_err(|_| BoundaryError::Type("invalid destination"))?;
+    let window = WindowTarget {
+        window: string_property(scope, object, "window")?,
+    };
+    let kind = string_property(scope, object, "kind")?;
+    if kind == "window" {
+        return Ok(Some(DocumentDestination::Window(window)));
+    }
+    let pane = PaneTarget {
+        window,
+        workbench: string_property(scope, object, "workbench")?,
+        pane: string_property(scope, object, "pane")?,
+    };
+    match kind.as_str() {
+        "pane" => Ok(Some(DocumentDestination::Pane(pane))),
+        "view" => Ok(Some(DocumentDestination::View(PresentationTarget {
+            pane,
+            tab: string_property(scope, object, "tab")?,
+            presentation: string_property(scope, object, "presentation")?,
+        }))),
+        _ => Err(BoundaryError::Type("invalid destination kind")),
+    }
+}
+
 fn parse_host_operation<'s, 'i>(
     scope: &mut v8::PinnedRef<'s, v8::HandleScope<'i>>,
     arguments: &v8::FunctionCallbackArguments<'s>,
 ) -> Result<(HostOperation, HostOperationKind), BoundaryError> {
     let operation = required_string(scope, arguments.get(1), "operation must be text")?;
     match operation.as_str() {
+        "openDocument" => Ok((
+            HostOperation::OpenDocument {
+                uri: required_string(scope, arguments.get(2), "resource URI must be text")?,
+                target: document_destination_from_v8(scope, arguments.get(3))?,
+            },
+            HostOperationKind::DocumentPresented,
+        )),
         "observeWorkbench" => Ok((
             HostOperation::ObserveWorkbench,
             HostOperationKind::ObserveWorkbench,
@@ -4693,6 +4734,19 @@ fn host_response_to_v8<'s>(
         }
         (HostOperationKind::UnobserveWorkbench, HostResponseValue::WorkbenchUnobserved) => {
             Ok(v8::undefined(scope).into())
+        }
+        (HostOperationKind::DocumentPresented, HostResponseValue::DocumentPresented(value)) => {
+            if !application_document_is_exact(&value.document)
+                || value
+                    .presentation
+                    .buffer
+                    .is_some_and(|buffer| buffer.value() > MAX_JS_INTEGER)
+            {
+                return Err("native application integer cannot be represented exactly");
+            }
+            let json = serde_json::to_string(&value).map_err(|_| "UnsupportedOperation")?;
+            let json = v8::String::new(scope, &json).ok_or("UnsupportedOperation")?;
+            v8::json::parse(scope, json).ok_or("UnsupportedOperation")
         }
         (HostOperationKind::ApplicationQuery, HostResponseValue::ApplicationQuery(value)) => {
             application_query_to_v8(scope, &value)

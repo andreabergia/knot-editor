@@ -854,6 +854,7 @@ impl ProductExtensionHost {
             }
             RequestRoute::View => self.dispatch_view_request(request, cx),
             RequestRoute::Application => Some(self.dispatch_application_request(request, cx)),
+            RequestRoute::ApplicationMutation => self.dispatch_document_open(request, cx),
             RequestRoute::Semantic => {
                 let removed = match &request.operation {
                     HostOperation::UnregisterCompletionProvider { registration } => {
@@ -1517,8 +1518,8 @@ impl ProductExtensionHost {
         &mut self,
         cx: &mut Context<Self>,
     ) -> crate::host::protocol::ApplicationSnapshot {
-        use super::documents::{ApplicationDocuments, DocumentState};
-        use crate::host::protocol::{ApplicationSnapshot, DocumentInfo, DocumentKind};
+        use super::documents::ApplicationDocuments;
+        use crate::host::protocol::ApplicationSnapshot;
         let Some(documents) = cx
             .try_global::<ApplicationDocuments>()
             .map(|global| global.0.clone())
@@ -1540,20 +1541,7 @@ impl ProductExtensionHost {
         let document_infos = documents
             .read(cx)
             .documents()
-            .map(|document| DocumentInfo {
-                id: document.identity().to_string(),
-                title: document.title().to_string(),
-                kind: match document.state() {
-                    DocumentState::Untitled { .. } => DocumentKind::Untitled,
-                    DocumentState::Destination { .. } => DocumentKind::Destination,
-                    DocumentState::Persisted { .. } => DocumentKind::Persisted,
-                    DocumentState::Generated => DocumentKind::Generated,
-                },
-                resource_uri: document.resource_uri().map(ToString::to_string),
-                dirty: document.is_dirty(cx),
-                revision: document.model().read(cx).revision(),
-                buffer: buffers[&document.id()],
-            })
+            .map(|document| application_document_info(document, buffers[&document.id()], cx))
             .collect();
         let active = cx.active_window();
         let mut snapshot = ApplicationSnapshot {
@@ -1595,6 +1583,128 @@ impl ProductExtensionHost {
                     .dispatch_application_change(key, subscription, event.clone());
             }
         }
+    }
+
+    pub(crate) fn operation_is_live(
+        &self,
+        key: ExtensionKey,
+        invocation: Option<CommandInvocationId>,
+    ) -> bool {
+        self.lifecycles.contains(&key) && !self.commands.is_cancelled(invocation)
+    }
+
+    fn dispatch_document_open(
+        &mut self,
+        request: HostRequest,
+        cx: &mut Context<Self>,
+    ) -> Option<crate::host::protocol::HostResponse> {
+        use crate::host::protocol::{
+            DocumentDestination, HostRequestError, HostResponse, HostResponseValue, WindowTarget,
+        };
+        let key = ExtensionKey::new(request.extension, request.lifecycle);
+        let result = (|| {
+            if !self.operation_is_live(key, request.invocation) {
+                return Err(HostRequestError::Cancelled);
+            }
+            let HostOperation::OpenDocument { uri, target } = request.operation.clone() else {
+                return Err(HostRequestError::UnsupportedOperation);
+            };
+            let destination = match target {
+                Some(target) => target,
+                None => {
+                    let window = if let Some(invocation) = request.invocation {
+                        let root = self
+                            .commands
+                            .root_of(invocation)
+                            .ok_or(HostRequestError::InvalidTarget)?;
+                        self.command_targets
+                            .get(&root)
+                            .ok_or(HostRequestError::InvalidTarget)?
+                            .window
+                    } else {
+                        cx.active_window()
+                            .ok_or(HostRequestError::ContextUnavailable)?
+                    };
+                    if window.downcast::<ProductShell>().is_none() {
+                        return Err(HostRequestError::ContextUnavailable);
+                    }
+                    DocumentDestination::Window(WindowTarget {
+                        window: window.window_id().as_u64().to_string(),
+                    })
+                }
+            };
+            let host = cx.entity().downgrade();
+            let caller = product::operations::OperationCaller {
+                host: host.clone(),
+                key,
+                invocation: request.invocation,
+            };
+            let delivered = request.clone();
+            let pool = self.pool.clone();
+            product::operations::open_document(
+                uri,
+                destination,
+                caller,
+                move |result, cx| {
+                    let result = result
+                        .and_then(|(document, target)| {
+                            let host = host.upgrade().ok_or(HostRequestError::Cancelled)?;
+                            host.update(cx, |host, cx| {
+                                host.document_presentation(document, target, cx)
+                            })
+                        })
+                        .map(HostResponseValue::DocumentPresented);
+                    let _ = pool.respond(HostResponse {
+                        extension: delivered.extension,
+                        lifecycle: delivered.lifecycle,
+                        id: delivered.id,
+                        result,
+                    });
+                },
+                cx,
+            )
+        })();
+        result.err().map(|error| HostResponse {
+            extension: request.extension,
+            lifecycle: request.lifecycle,
+            id: request.id,
+            result: Err(error),
+        })
+    }
+
+    fn document_presentation(
+        &mut self,
+        id: super::documents::DocumentId,
+        target: crate::host::protocol::PresentationTarget,
+        cx: &mut Context<Self>,
+    ) -> Result<crate::host::protocol::DocumentPresentation, crate::host::protocol::HostRequestError>
+    {
+        use super::documents::ApplicationDocuments;
+        use crate::host::protocol::{
+            DocumentPresentation, HostRequestError, PresentationInfo, SurfaceKind,
+        };
+        let documents = cx.global::<ApplicationDocuments>().0.clone();
+        let model = documents
+            .read(cx)
+            .get(id)
+            .ok_or(HostRequestError::BufferClosed)?
+            .model()
+            .clone();
+        let buffer = self.track_buffer(&model, cx);
+        let document = documents
+            .read(cx)
+            .get(id)
+            .ok_or(HostRequestError::BufferClosed)?;
+        let info = application_document_info(document, buffer, cx);
+        Ok(DocumentPresentation {
+            presentation: PresentationInfo {
+                target,
+                kind: SurfaceKind::Document,
+                document: Some(info.id.clone()),
+                buffer: Some(buffer),
+            },
+            document: info,
+        })
     }
 
     fn dispatch_application_request(
@@ -1718,11 +1828,36 @@ enum RequestRoute {
     Command,
     View,
     Semantic,
+    ApplicationMutation,
     Keymap,
+}
+
+fn application_document_info(
+    document: &super::documents::Document,
+    buffer: crate::host::protocol::BufferHandle,
+    cx: &App,
+) -> crate::host::protocol::DocumentInfo {
+    use super::documents::DocumentState;
+    use crate::host::protocol::{DocumentInfo, DocumentKind};
+    DocumentInfo {
+        id: document.identity().to_string(),
+        title: document.title().to_string(),
+        kind: match document.state() {
+            DocumentState::Untitled { .. } => DocumentKind::Untitled,
+            DocumentState::Destination { .. } => DocumentKind::Destination,
+            DocumentState::Persisted { .. } => DocumentKind::Persisted,
+            DocumentState::Generated => DocumentKind::Generated,
+        },
+        resource_uri: document.resource_uri().map(ToString::to_string),
+        dirty: document.is_dirty(cx),
+        revision: document.model().read(cx).revision(),
+        buffer,
+    }
 }
 
 fn request_route(operation: &HostOperation) -> RequestRoute {
     match operation {
+        HostOperation::OpenDocument { .. } => RequestRoute::ApplicationMutation,
         HostOperation::ApplicationQuery(_)
         | HostOperation::ObserveWorkbench
         | HostOperation::UnobserveWorkbench { .. } => RequestRoute::Application,

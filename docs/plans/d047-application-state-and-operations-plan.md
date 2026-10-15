@@ -230,11 +230,13 @@ adding programmatic mutations. Mark the parent checkpoint complete only on appro
 
 1. **Shared semantic completion.** ⏳ Resource Open now returns typed committed
    document/presentation or workspace data and preserves resource failures; native
-   command dispatch adapts that result. Present/root/close integration remains. Refactor only the product entry points needed
+   command dispatch adapts that result. Present/root/close integration remains.
+   Refactor only the product entry points needed
    to return typed open/present/root/close results. Keep provider work off the
    foreground; keep target capture, generation validation and commit with the
    existing owners. Native and JS callers use the same implementation.
-2. **Open and present.** Implement file/folder opening, untitled creation, and
+2. **Open and present.** ⏳ File Open is public through the shared native operation;
+   folder Open, untitled creation, and presenting a live document remain. Implement file/folder opening, untitled creation, and
    presenting a live document. Admit explicit destinations and optional-window
    capture; return metadata and the actual selected/created presentation. Validate
    after asynchronous work before mutating the captured destination.
@@ -412,8 +414,8 @@ Manual product validation (2026-10-15): user reports confirmed shared document
 identity across presentations, contiguous event sequences, Save As from `justfile`
 to `foot` preserving UUID and revision while becoming clean, and observer disposal
 freezing event history while live queries continued updating. The user explicitly
-approved checkpoint 2 after these checks. Checkpoint 3 has not started; its review
-gate and D047 completion remain outstanding.
+approved checkpoint 2 after these checks. Checkpoint 3 was unstarted at approval;
+its review gate and D047 completion remain outstanding.
 
 ## Checkpoint 3 implementation evidence
 
@@ -432,3 +434,28 @@ Semantic Open foundation validation (2026-10-15): `cargo test --all-targets --qu
 passed (586 library tests and 5 example tests); Clippy with warnings denied and
 `scripts/check-extension-api.sh` passed. This is intermediate evidence, not
 checkpoint 3 acceptance.
+
+- ✅ `documents.open(uri, options)` now crosses the typed protocol, native product
+  operation, V8 boundary, private bootstrap and public facade. It returns committed
+  document/presentation metadata, a shared buffer proxy and exact live targets.
+  File-only validation rejects directories before reading; missing file
+  destinations retain ordinary dirty/deduplication behavior.
+- ✅ Explicit live window/pane/view destinations are captured at admission; omitted
+  destinations capture the command's window or active product window. Missing
+  context, fabricated command/live targets, stale presentations and caller unload
+  reject without mutation. Native provider/decode failures map to structured host
+  codes. Metadata queries and results share one document-info conversion.
+- ✅ Public-host tests cover cross-window sharing, existing-tab reuse, missing
+  destinations, immutable results, error conversion, focus changes during a gated
+  read, exact replacement, unloaded callers, explicit activation/listener opens,
+  and self-disposal after a listener awaits Open.
+- ✅ Checked `example.open-document` consumes the semantic result in its native-
+  captured originating window. It accepts `{ uri }` command arguments or opens
+  the first application resource for palette smoke testing. A real installed-
+  package test verifies its shared document, destination and clipboard report.
+
+Public file Open validation (2026-10-15): `cargo test --all-targets --quiet` passed
+(592 library tests and 5 example tests); `cargo clippy --all-targets -- -D warnings`,
+`scripts/check-extension-api.sh` and `git diff --check` passed. Folder/root, untitled,
+present and protected-close APIs plus the remaining checkpoint 3 acceptance/manual
+gate are still outstanding.

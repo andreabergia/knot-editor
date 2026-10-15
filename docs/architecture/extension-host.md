@@ -83,7 +83,7 @@ run. The engine captures the command, cancellation, listener and provider dispat
 functions as private persistent handles and removes their temporary globals.
 Extension code cannot invoke or replace native dispatch to fabricate contexts or
 buffer proxies. The public module exposes `editor`, `commands`, `workbench`,
-`keybinding` and `removeKeybinding`.
+`documents`, `windows`, `workspaces`, `keybinding` and `removeKeybinding`.
 The facade's buffer API crosses a pool-owned typed request inbox. Its native
 callback allocates a lifecycle-scoped request identity, retains only a
 persistent V8 promise resolver, and returns the promise without waiting on the
@@ -340,3 +340,11 @@ finalizer. Self-disposal acknowledges native removal without waiting for the
 executing callback; local listener removal suppresses already queued deliveries.
 Application event queues use the scheduler diagnostics and have no separate
 backpressure, dropping, replay or recovery policy.
+
+Resource Open requests capture their destination on foreground admission, using an
+explicit live target or the originating command window/active product window. The
+product owner retains generation and exact-presentation checks during provider
+work. Before commit it verifies caller lifecycle/cancellation; after commit the
+host builds the typed document/presentation response directly from that result,
+without invoking a command or querying window focus. Resource failures map from
+native variants to stable host codes. Listener delivery is outside completion.

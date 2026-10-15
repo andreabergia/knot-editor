@@ -42,9 +42,9 @@ Explicit follow-up tasks within the selected initiative:
 - **D047, checkpoint 2:** document/window/workspace queries, live target types
   and application observation are complete and approved on 2026-10-15 in the
   [D047 plan](plans/d047-application-state-and-operations-plan.md).
-- **D047, checkpoint 3:** implement explicit window/pane/view targets and
-  admission-time active-window convenience; reject unavailable or stale targets,
-  including activation before product windows exist.
+- **D047, checkpoint 3:** file Open now uses explicit window/pane/view targets or
+  an admission-time captured command/active window. Folder/root operations,
+  untitled creation, presenting documents, and protected closure remain in progress.
 - **D048, checkpoint 4:** publish the storage namespace with its implemented
   record operations and ownership contracts.
 - **D049, checkpoint 5:** finalize native contribution APIs and pass originating

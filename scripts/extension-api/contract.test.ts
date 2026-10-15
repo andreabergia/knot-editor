@@ -104,6 +104,17 @@ for (const window of await windows.list()) {
   await windows.get({} as CommandTarget);
   void forgedWindow;
 }
+const opened: import("knot").DocumentPresentation = await documents.open("file:///tmp/document.txt");
+await documents.open("file:///tmp/document.txt", { target: opened.presentation.target });
+await documents.open("file:///tmp/document.txt", { target: opened.presentation.target.pane });
+await documents.open("file:///tmp/document.txt", { target: opened.presentation.target.window });
+// @ts-expect-error invocation targets do not grant discoverable live authority
+await documents.open("file:///tmp/document.txt", { target: {} as CommandTarget });
+// @ts-expect-error URI must be text
+await documents.open(42);
+// @ts-expect-error options cannot fabricate a live target
+await documents.open("file:///tmp/document.txt", { target: {} });
+
 // @ts-expect-error plain URIs are not document identities
 await documents.get("file:///tmp/document.txt");
 

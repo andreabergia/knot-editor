@@ -29,3 +29,17 @@ await commands.register("example.application-state", async () => {
 await commands.register("example.stop-application-observer", async () => {
   await observation.dispose();
 });
+
+await commands.register("example.open-document", async ({ arguments: args }) => {
+  let uri;
+  if (args !== null && typeof args === "object" && !Array.isArray(args) && "uri" in args && typeof args.uri === "string") {
+    uri = args.uri;
+  } else if (args === null) {
+    uri = (await documents.list()).find(document => document.resourceUri !== null)?.resourceUri;
+  }
+  if (typeof uri !== "string") return commands.invalidArguments("Open a file first, or pass { uri: anAbsoluteResourceUri }.");
+  const result = await documents.open(uri);
+  await workbench.writeClipboardText(JSON.stringify({ document: result.document.id,
+    title: result.document.title, resourceUri: result.document.resourceUri,
+    kind: result.document.kind, dirty: result.document.dirty }, null, 2));
+});

@@ -79,6 +79,25 @@ representations. They are separate from invocation-scoped command targets and
 cannot be passed to contextual buffer/selection APIs. Replacing a workbench or
 tab, or transferring a view to another pane/window, invalidates its old exact target.
 
+`documents.open(uri, { target })` opens a file through its registered provider and
+returns `{ document, presentation }` after foreground commit. `target` can be a live
+window, pane or exact view. A window/pane captures its selected presentation at
+admission. Omit options to use the originating command window, or the active product
+window outside a command. Without a product window it rejects `ContextUnavailable`;
+it never waits for a future window. Focus changes during I/O cannot retarget it,
+and closure, replacement or transfer of the captured presentation rejects
+`InvalidTarget` before mutation.
+
+Open reuses an existing tab for that document in the destination window; otherwise
+it creates a native editor tab in the captured pane, preserving terminal tabs.
+A missing file becomes a dirty destination-associated document. Directories reject
+`ResourceWrongKind`; malformed URIs, invalid UTF-8 and provider failures reject
+`InvalidUri`, `InvalidUtf8` and `ProviderFailure`. A provider resource disappearing
+after stat rejects `ResourceNotFound`. Cancellation or unload before commit prevents
+mutation. Results contain committed metadata and opaque live targets, not rendering
+surfaces. Operations finish without awaiting observation listeners; listeners can
+open using explicit targets.
+
 `await workbench.observe(listener)` registers application-wide observation and
 returns an initial `snapshot`, a sequence `watermark`, and an awaitable `dispose()`.
 Registration, snapshot and watermark are captured together on the foreground;

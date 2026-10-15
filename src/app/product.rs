@@ -11,6 +11,7 @@ use std::{
 
 use gpui::{prelude::FluentBuilder, *};
 
+pub(super) mod operations;
 mod relocate;
 mod tab_drag;
 
@@ -289,6 +290,7 @@ enum OpenCommit {
 #[derive(Debug)]
 enum OpenFailure {
     InvalidTarget,
+    Cancelled,
     Resource(super::open::OpenResourceError),
 }
 
@@ -297,6 +299,7 @@ impl OpenFailure {
         use crate::host::protocol::CommandOutcome;
         match self {
             Self::InvalidTarget => CommandOutcome::InvalidTarget,
+            Self::Cancelled => CommandOutcome::Cancelled,
             Self::Resource(error) => CommandOutcome::HandlerFailure {
                 message: error.to_string(),
             },
@@ -1682,32 +1685,67 @@ impl ProductShell {
         cx: &mut Context<Self>,
     ) -> tokio::sync::oneshot::Receiver<Result<OpenCommit, OpenFailure>> {
         let (completion, result) = tokio::sync::oneshot::channel();
+        self.start_resource_operation(
+            request,
+            target,
+            operations::OpenOptions {
+                replace_target,
+                ..Default::default()
+            },
+            move |outcome, _| {
+                let _ = completion.send(outcome);
+            },
+            cx,
+        );
+        result
+    }
+
+    fn start_resource_operation(
+        &mut self,
+        request: OpenRequest,
+        target: OpenTarget,
+        options: operations::OpenOptions,
+        completion: impl FnOnce(Result<OpenCommit, OpenFailure>, &mut App) + 'static,
+        cx: &mut Context<Self>,
+    ) {
         if !target.matches_presentation(&self.workbench, cx) {
-            let _ = completion.send(Err(OpenFailure::InvalidTarget));
-            return result;
+            completion(Err(OpenFailure::InvalidTarget), cx);
+            return;
         }
         let generation = self.next_open_generation();
         let uri = request.uri().clone();
         self.status = format!("opening {uri}").into();
         let providers = Self::filesystems(cx);
         let task = cx.spawn(async move |this, cx| {
-            let loaded = load_resource(providers, uri).await;
-            let _ = this.update(cx, |this, cx| {
-                let outcome = if this.open_generation != generation
-                    || !workbench_is_live(target.window, &this.workbench, cx)
-                    || !target.matches_presentation(&this.workbench, cx)
-                {
-                    Err(OpenFailure::InvalidTarget)
-                } else {
-                    this.apply_open_result(loaded, &target, replace_target, cx)
-                        .map_err(OpenFailure::Resource)
-                };
-                let _ = completion.send(outcome);
-            });
+            let loaded = super::open::load_resource_kind(providers, uri, options.kind).await;
+            let mut completion = Some(completion);
+            if this
+                .update(cx, |this, cx| {
+                    let outcome = if options
+                        .caller
+                        .as_ref()
+                        .is_some_and(|caller| !caller.is_live(cx))
+                    {
+                        Err(OpenFailure::Cancelled)
+                    } else if this.open_generation != generation
+                        || !workbench_is_live(target.window, &this.workbench, cx)
+                        || !target.matches_presentation(&this.workbench, cx)
+                    {
+                        Err(OpenFailure::InvalidTarget)
+                    } else {
+                        this.apply_open_result(loaded, &target, options.replace_target, cx)
+                            .map_err(OpenFailure::Resource)
+                    };
+                    completion.take().unwrap()(outcome, cx);
+                })
+                .is_err()
+            {
+                let _ =
+                    cx.update(|cx| completion.take().unwrap()(Err(OpenFailure::InvalidTarget), cx));
+            }
         });
         self.tasks.push(task);
         cx.notify();
-        result
     }
 
     fn apply_open_result(

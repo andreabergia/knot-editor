@@ -22,3 +22,8 @@ and ordered event summary to the clipboard. Paste it into an untitled document
 for inspection. Terminal tabs appear without document/buffer associations. Run
 **example.stop-application-observer** to await disposal; later reports still query
 current state while their event history stays unchanged.
+
+Run **example.open-document** in another window to present the first open resource
+there and copy the committed document metadata. From JavaScript, pass an explicit
+URI with `commands.invoke("example.open-document", { uri: "file:///…" })`.
+The operation uses the originating command window captured by the native host.

@@ -36,6 +36,11 @@ CLI paths, native Open selections, and macOS open events become the same
 normalized `file://` open request at the platform boundary. The product Open operation returns committed document/presentation or workspace
 data independently of command outcomes; native command dispatch adapts that typed
 completion. Resource failures retain their native variants until that adapter.
+The extension host uses the same operation with a file-only resource constraint,
+converts failures to structured host codes, and captures document metadata plus
+its exact presentation at commit. Window/pane/view destinations are validated on
+admission; asynchronous completion revalidates the captured native presentation
+and caller lifecycle/cancellation without looking up focus again.
 A product open
 normalizes and stats the resource asynchronously. Existing files are read and
 UTF-8-decoded before foreground state changes, missing files create a dirty

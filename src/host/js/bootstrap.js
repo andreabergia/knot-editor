@@ -611,6 +611,30 @@ function windowFromNative(value) {
     }))),
   });
 }
+function destinationAuthority(options) {
+  if (options === undefined) return null;
+  const target = record(options, "destination options must be an object").target;
+  if (target === undefined) return null;
+  const window = liveWindows.get(target);
+  if (window) return { kind: "window", window: window.window };
+  const pane = livePanes.get(target);
+  if (pane) return { kind: "pane", window: pane.window.window, workbench: pane.workbench, pane: pane.pane };
+  const view = livePresentations.get(target);
+  if (view) return { kind: "view", window: view.pane.window.window, workbench: view.pane.workbench,
+    pane: view.pane.pane, tab: view.tab, presentation: view.presentation };
+  hostError("InvalidTarget");
+}
+function documentPresentationFromNative(value) {
+  const presentation = value.presentation;
+  return Object.freeze({ document: documentFromNative(value.document),
+    presentation: Object.freeze({ target: presentationTarget(presentation.target), kind: presentation.kind,
+      document: presentation.document, buffer: bufferFor(presentation.buffer) }) });
+}
+export async function openDocument(uri, options) {
+  const value = await request("openDocument", string(uri, "resource URI must be text"), destinationAuthority(options));
+  return documentPresentationFromNative(value);
+}
+
 export async function listDocuments() {
   return Object.freeze((await request("listDocuments")).map(documentFromNative));
 }

@@ -487,6 +487,21 @@ pub enum ApplicationQueryResult {
     Workspace(Option<WorkspaceInfo>),
 }
 
+/// Destination captured when a resource operation is admitted.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DocumentDestination {
+    Window(WindowTarget),
+    Pane(PaneTarget),
+    View(PresentationTarget),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentPresentation {
+    pub document: DocumentInfo,
+    pub presentation: PresentationInfo,
+}
+
 /// One lifecycle-owned application observer.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, serde::Serialize)]
 pub struct WorkbenchSubscriptionId(u64);
@@ -567,6 +582,10 @@ pub enum HostOperation {
         subscription: WorkbenchSubscriptionId,
     },
     ApplicationQuery(ApplicationQuery),
+    OpenDocument {
+        uri: String,
+        target: Option<DocumentDestination>,
+    },
     MutateKeybindings {
         mutations: Vec<KeybindingMutation>,
     },
@@ -653,6 +672,7 @@ pub enum HostResponseValue {
     WorkbenchObserved(WorkbenchObservation),
     WorkbenchUnobserved,
     ApplicationQuery(ApplicationQueryResult),
+    DocumentPresented(DocumentPresentation),
     KeybindingsApplied {
         error: Option<String>,
     },
@@ -757,6 +777,11 @@ pub struct BufferChange {
 #[serde(rename_all = "PascalCase")]
 pub enum HostRequestError {
     ContextUnavailable,
+    InvalidUri,
+    ResourceNotFound,
+    ResourceWrongKind,
+    InvalidUtf8,
+    ProviderFailure,
     InvalidTarget,
     OwnershipDisposed,
     UnsupportedOperation,
@@ -780,6 +805,11 @@ impl HostRequestError {
     pub(crate) const fn code(self) -> &'static str {
         match self {
             Self::ContextUnavailable => "ContextUnavailable",
+            Self::InvalidUri => "InvalidUri",
+            Self::ResourceNotFound => "ResourceNotFound",
+            Self::ResourceWrongKind => "ResourceWrongKind",
+            Self::InvalidUtf8 => "InvalidUtf8",
+            Self::ProviderFailure => "ProviderFailure",
             Self::InvalidTarget => "InvalidTarget",
             Self::OwnershipDisposed => "OwnershipDisposed",
             Self::UnsupportedOperation => "UnsupportedOperation",

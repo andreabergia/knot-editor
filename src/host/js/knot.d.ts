@@ -79,9 +79,23 @@ declare module "knot" {
   }
   /** Current metadata queries do not grant future target validity. Valid during
    * activation, including before any product window exists. */
+  export interface DocumentDestinationOptions {
+    /** Captured at request admission. Omission uses the command's window, or the
+     * active product window outside a command; missing context rejects. */
+    readonly target?: WindowTarget | PaneTarget | ViewTarget;
+  }
+  export interface DocumentPresentation {
+    readonly document: DocumentInfo;
+    readonly presentation: PresentationInfo;
+  }
   export const documents: Readonly<{
     list(): Promise<readonly DocumentInfo[]>;
     get(id: DocumentId): Promise<DocumentInfo | null>;
+    /** File-only Open through the registered provider. Missing files become dirty
+     * destinations; directories reject. Reuses an existing tab in the destination
+     * window, otherwise creates one in the captured pane. Focus changes during I/O
+     * never retarget the request. Resolves after commit without awaiting observers. */
+    open(uri: string, options?: DocumentDestinationOptions): Promise<DocumentPresentation>;
   }>;
   /** Only product windows; diagnostic and startup-error windows are excluded.
    * get returns null after closure; fabricated/command targets reject InvalidTarget. */
@@ -137,7 +151,8 @@ declare module "knot" {
     | "Cancelled" | "UnsupportedOperation" | "BufferClosed" | "BufferReadOnly"
     | "InvalidRange" | "InvalidEditBatch" | "RevisionConflict" | "ContributionSetNotFound"
     | "TreeViewNotFound" | "ViewNotFound" | "TreeProviderInUse" | "TreeProviderNotFound"
-    | "CompletionProviderNotFound" | "CommandNameInUse" | "CommandNotFound";
+    | "CompletionProviderNotFound" | "CommandNameInUse" | "CommandNotFound"
+    | "InvalidUri" | "ResourceNotFound" | "ResourceWrongKind" | "InvalidUtf8" | "ProviderFailure";
   /**
    * Native operation failure. Narrow a caught Error by name === "KnotHostError"
    * and its string code property, then dispatch on code. No error constructor
