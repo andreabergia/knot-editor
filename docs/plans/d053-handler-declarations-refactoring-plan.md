@@ -1,7 +1,7 @@
 # D053 — Handler-defined operations, errors, and commands
 
-Status: 🟡 checkpoint 1 implemented and locally verified; authoring-shape review
-and remote platform checks remain open. Later checkpoints remain unstarted.
+Status: 🟡 checkpoint 1 authoring shape approved on 2026-10-15; checkpoint 2
+in progress. Remote platform checks remain pending.
 Execute after D047 is approved and archived, before D048 adds more host APIs.
 This is a separate refactoring, not another D047 acceptance requirement.
 
@@ -97,7 +97,7 @@ Implement one checkpoint per request, keep this plan updated with ✅ and eviden
 and stop at each gate. Split logical commits without conventional commit titles.
 Run `cargo fmt` once at the end of Rust work before committing.
 
-### 1. Typed async handler declarations and automatic registration 🟡
+### 1. Typed async handler declarations and automatic registration ✅
 
 - ✅ Introduce the minimal macros, typed adapters, common envelope, and automatic
   registry assembly. Keep request/result/error pairing local to the definition.
@@ -151,10 +151,11 @@ Checkpoint 1 implementation evidence and choices:
   product builds on macOS/Windows.
 - ⏳ Remote Linux/Windows build/linking results remain unverified; only the
   installed `aarch64-apple-darwin` target has been executed locally.
-- ⏳ Review gate remains open: approve representative handler/error syntax,
-  context ownership, adapters and automatic linking before checkpoint 2.
+- ✅ Review gate: user approved representative handler/error syntax, context
+  ownership, adapters and automatic linking on 2026-10-15. Remote build evidence
+  remains pending and is carried into checkpoint 2 validation.
 
-### 2. Migrate the host capability boundary ⬜
+### 2. Migrate the host capability boundary 🟡
 
 - Migrate every existing JS-to-native capability, including buffer/query/mutation,
   observation/disposal, clipboard/context, commands, providers, and keymap batches.
