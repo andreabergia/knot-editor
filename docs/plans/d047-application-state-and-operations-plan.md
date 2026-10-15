@@ -1,7 +1,7 @@
 # D047 — Application state and document operations
 
 Status: ✅ parent checkpoint 2 complete and approved on 2026-10-15.
-Parent checkpoint 3 has not started.
+Parent checkpoint 3 is in progress.
 
 Source: checkpoints 2–3 of the
 [extension platform and projects plan](extension-platform-and-projects-plan.md)
@@ -228,7 +228,9 @@ adding programmatic mutations. Mark the parent checkpoint complete only on appro
 
 ## Parent checkpoint 3 — Programmatic resources and documents ⬜
 
-1. **Shared semantic completion.** Refactor only the product entry points needed
+1. **Shared semantic completion.** ⏳ Resource Open now returns typed committed
+   document/presentation or workspace data and preserves resource failures; native
+   command dispatch adapts that result. Present/root/close integration remains. Refactor only the product entry points needed
    to return typed open/present/root/close results. Keep provider work off the
    foreground; keep target capture, generation validation and commit with the
    existing owners. Native and JS callers use the same implementation.
@@ -412,3 +414,21 @@ to `foot` preserving UUID and revision while becoming clean, and observer dispos
 freezing event history while live queries continued updating. The user explicitly
 approved checkpoint 2 after these checks. Checkpoint 3 has not started; its review
 gate and D047 completion remain outstanding.
+
+## Checkpoint 3 implementation evidence
+
+- ✅ Resource Open has a semantic completion channel returning the committed
+  document and exact selected/created presentation, or committed workspace roots.
+  Native command outcomes adapt that result; provider/decode failures remain typed
+  until adaptation. Admission from window construction remains supported, with
+  live-window and exact-presentation validation before commit.
+- ✅ Focused product tests cover created/reused presentation results, committed
+  roots, preserved decode/provider errors, and replacement during a gated read
+  without leaked documents. The existing startup and native command tests pass.
+- ⏳ Public mutations, shared present/root/close completion, cancellation admission,
+  declarations, checked command and checkpoint 3 acceptance remain unfinished.
+
+Semantic Open foundation validation (2026-10-15): `cargo test --all-targets --quiet`
+passed (586 library tests and 5 example tests); Clippy with warnings denied and
+`scripts/check-extension-api.sh` passed. This is intermediate evidence, not
+checkpoint 3 acceptance.

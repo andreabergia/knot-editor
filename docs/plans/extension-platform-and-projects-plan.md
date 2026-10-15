@@ -1,7 +1,7 @@
 # Production extension APIs and JavaScript project management
 
 Status: ✅ D046 and D047 checkpoint 2 complete and approved on 2026-10-15;
-checkpoints 3–10 not started.
+checkpoint 3 in progress; checkpoints 4–10 not started.
 
 Source: the project-management design discussion of 2026-10-13 and the
 [prioritized roadmap](../roadmap.md). Work identifiers: D046–D052 and promoted
@@ -321,7 +321,7 @@ Detailed execution: [D047 application state and operations plan](d047-applicatio
 This also covers checkpoint 3, retaining a separate review gate for each.
 Checkpoint 2 is complete and explicitly approved on 2026-10-15 after automated
 validation and manual observer, shared-identity, Save As, and disposal smoke checks.
-Checkpoint 3 has not started.
+Checkpoint 3 is in progress.
 Keep observation small: one foreground snapshot-and-subscribe operation, ordered
 notifications, window-owned workspaces, and existing product lifetime rules.
 
@@ -343,7 +343,7 @@ notifications, window-owned workspaces, and existing product lifetime rules.
   root/identity model, live targets, and final-document invalidation, exercised
   through the observing JS fixture.
 
-### 3. Programmatic resources and documents — D047 ⬜
+### 3. Programmatic resources and documents — D047 ⏳
 
 - Expose explicit file/folder opening, root-set replacement, untitled creation,
   document presentation, and protected closure through existing product flows.

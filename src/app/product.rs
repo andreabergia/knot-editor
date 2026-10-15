@@ -276,6 +276,34 @@ impl OpenTarget {
     }
 }
 
+/// State committed by resource Open, independent of command dispatch outcomes.
+#[derive(Clone)]
+enum OpenCommit {
+    Document {
+        document: DocumentId,
+        target: OpenTarget,
+    },
+    Workspace(super::workspace::WorkspaceSnapshot),
+}
+
+#[derive(Debug)]
+enum OpenFailure {
+    InvalidTarget,
+    Resource(super::open::OpenResourceError),
+}
+
+impl OpenFailure {
+    fn command_outcome(self) -> crate::host::protocol::CommandOutcome {
+        use crate::host::protocol::CommandOutcome;
+        match self {
+            Self::InvalidTarget => CommandOutcome::InvalidTarget,
+            Self::Resource(error) => CommandOutcome::HandlerFailure {
+                message: error.to_string(),
+            },
+        }
+    }
+}
+
 fn target_document(target: &ProductCommandTarget) -> Option<DocumentId> {
     match target.surface {
         TabSurfaceId::Document(document) => Some(document),
@@ -1624,45 +1652,62 @@ impl ProductShell {
         completion: Option<CommandCompletion>,
         cx: &mut Context<Self>,
     ) {
-        if !target.matches_presentation(&self.workbench, cx) {
+        let result = self.start_open_operation(request, target, replace_target, cx);
+        let task = cx.spawn(async move |this, cx| {
+            let outcome = match result.await {
+                Ok(Ok(_)) => crate::host::protocol::CommandOutcome::Completed,
+                Ok(Err(error)) => error.command_outcome(),
+                Err(_) => crate::host::protocol::CommandOutcome::InvalidTarget,
+            };
             if let Some(completion) = completion {
-                self.finish_open_command(
-                    completion,
-                    crate::host::protocol::CommandOutcome::InvalidTarget,
-                    cx,
-                );
+                let fallback = completion.clone();
+                if this
+                    .update(cx, |this, cx| {
+                        this.finish_open_command(completion, outcome, cx)
+                    })
+                    .is_err()
+                {
+                    fallback.complete(crate::host::protocol::CommandOutcome::InvalidTarget);
+                }
             }
-            return;
+        });
+        self.tasks.push(task);
+    }
+
+    fn start_open_operation(
+        &mut self,
+        request: OpenRequest,
+        target: OpenTarget,
+        replace_target: bool,
+        cx: &mut Context<Self>,
+    ) -> tokio::sync::oneshot::Receiver<Result<OpenCommit, OpenFailure>> {
+        let (completion, result) = tokio::sync::oneshot::channel();
+        if !target.matches_presentation(&self.workbench, cx) {
+            let _ = completion.send(Err(OpenFailure::InvalidTarget));
+            return result;
         }
         let generation = self.next_open_generation();
         let uri = request.uri().clone();
         self.status = format!("opening {uri}").into();
         let providers = Self::filesystems(cx);
         let task = cx.spawn(async move |this, cx| {
-            let result = load_resource(providers, uri).await;
-            let fallback = completion.clone();
-            if this
-                .update(cx, |this, cx| {
-                    let outcome = if this.open_generation != generation
-                        || !workbench_is_live(target.window, &this.workbench, cx)
-                        || !target.matches_presentation(&this.workbench, cx)
-                    {
-                        crate::host::protocol::CommandOutcome::InvalidTarget
-                    } else {
-                        this.apply_open_result(result, &target, replace_target, cx)
-                    };
-                    if let Some(completion) = completion {
-                        this.finish_open_command(completion, outcome, cx);
-                    }
-                })
-                .is_err()
-                && let Some(completion) = fallback
-            {
-                completion.complete(crate::host::protocol::CommandOutcome::InvalidTarget);
-            }
+            let loaded = load_resource(providers, uri).await;
+            let _ = this.update(cx, |this, cx| {
+                let outcome = if this.open_generation != generation
+                    || !workbench_is_live(target.window, &this.workbench, cx)
+                    || !target.matches_presentation(&this.workbench, cx)
+                {
+                    Err(OpenFailure::InvalidTarget)
+                } else {
+                    this.apply_open_result(loaded, &target, replace_target, cx)
+                        .map_err(OpenFailure::Resource)
+                };
+                let _ = completion.send(outcome);
+            });
         });
         self.tasks.push(task);
         cx.notify();
+        result
     }
 
     fn apply_open_result(
@@ -1671,13 +1716,11 @@ impl ProductShell {
         target: &OpenTarget,
         replace_target: bool,
         cx: &mut Context<Self>,
-    ) -> crate::host::protocol::CommandOutcome {
-        use crate::host::protocol::CommandOutcome;
-
-        match result {
+    ) -> Result<OpenCommit, super::open::OpenResourceError> {
+        let committed = match result {
             Ok(OpenResource::Directory(root)) => {
                 self.install_workspace(root, cx);
-                CommandOutcome::Completed
+                OpenCommit::Workspace(self.workspace.snapshot())
             }
             Ok(OpenResource::Missing(uri)) => {
                 let documents = Self::documents(cx);
@@ -1686,10 +1729,8 @@ impl ProductShell {
                 let document = documents.update(cx, |documents, cx| {
                     documents.create_destination(title, model, uri.clone(), cx)
                 });
-                self.present_open_document(document, target, replace_target, cx);
-                self.status = format!("new file {uri}").into();
-                cx.notify();
-                CommandOutcome::Completed
+                let target = self.present_open_document(document, target, replace_target, cx);
+                OpenCommit::Document { document, target }
             }
             Ok(OpenResource::File { uri, text, version }) => {
                 let documents = Self::documents(cx);
@@ -1709,19 +1750,39 @@ impl ProductShell {
                             )
                         })
                     };
-                self.present_open_document(document, target, replace_target, cx);
-                self.status = format!("opened {uri}").into();
-                cx.notify();
-                CommandOutcome::Completed
+                let target = self.present_open_document(document, target, replace_target, cx);
+                OpenCommit::Document { document, target }
             }
             Err(error) => {
                 self.status = format!("open failed: {error}").into();
                 cx.notify();
-                CommandOutcome::HandlerFailure {
-                    message: error.to_string(),
-                }
+                return Err(error);
+            }
+        };
+        match &committed {
+            OpenCommit::Document { document, target } => {
+                let documents = Self::documents(cx);
+                let document = documents.read(cx).get(*document).unwrap();
+                self.status = format!(
+                    "{} {}",
+                    if matches!(document.state(), DocumentState::Destination { .. }) {
+                        "new file"
+                    } else {
+                        "opened"
+                    },
+                    document.resource_uri().unwrap()
+                )
+                .into();
+                let _ = cx.update_window(target.window, |_, window, cx| {
+                    self.focus_active_surface(window, cx)
+                });
+            }
+            OpenCommit::Workspace(workspace) => {
+                self.status = format!("workspace opened {}", workspace.root().unwrap()).into();
             }
         }
+        cx.notify();
+        Ok(committed)
     }
 
     fn present_open_document(
@@ -1730,17 +1791,18 @@ impl ProductShell {
         target: &OpenTarget,
         replace_target: bool,
         cx: &mut Context<Self>,
-    ) {
+    ) -> OpenTarget {
         let existing = self.workbench.read(cx).panes().iter().find_map(|pane| {
             pane.tabs()
                 .iter()
                 .find(|tab| tab.document_id() == Some(document))
                 .map(|tab| (pane.id(), tab.id()))
         });
-        if let Some((pane, tab)) = existing {
+        let (pane, tab) = if let Some((pane, tab)) = existing {
             self.workbench.update(cx, |workbench, _| {
                 workbench.activate_tab(pane, tab);
             });
+            (pane, tab)
         } else {
             let documents = Self::documents(cx);
             let model = documents.read(cx).get(document).unwrap().model().clone();
@@ -1759,15 +1821,26 @@ impl ProductShell {
                         documents.remove(previous, cx);
                     });
                 }
+                (target.pane, target.tab)
             } else {
-                self.workbench.update(cx, |workbench, cx| {
-                    workbench.open_tab_for_document(target.pane, document, model, cx);
-                });
+                let tab = self
+                    .workbench
+                    .update(cx, |workbench, cx| {
+                        workbench.open_tab_for_document(target.pane, document, model, cx)
+                    })
+                    .expect("validated destination pane");
+                (target.pane, tab)
             }
+        };
+        let capture = self.workbench.read(cx).capture_tab_move(pane, tab).unwrap();
+        OpenTarget {
+            window: target.window,
+            workbench: self.workbench.downgrade(),
+            pane,
+            tab,
+            surface: capture.tab.surface,
+            presentation: capture.presentation,
         }
-        let _ = cx.update_window(target.window, |_, window, cx| {
-            self.focus_active_surface(window, cx)
-        });
     }
 
     fn install_workspace(&mut self, root: super::resource::ResourceUri, cx: &mut Context<Self>) {
@@ -3488,6 +3561,7 @@ pub(super) fn bind_product_keys(cx: &mut App) {
 #[cfg(test)]
 mod tests {
     mod observation;
+    mod operations;
     use std::path::Path;
     use std::sync::{Arc, Mutex};
 
