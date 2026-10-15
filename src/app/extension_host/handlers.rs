@@ -13,6 +13,7 @@
 //! Keep V8 conversion in the host adapters and update the checked TypeScript
 //! facade/declarations when exposing or changing a public capability.
 
+use super::super::extension_storage::{Mutation, OwnerStorage, StorageError};
 use super::*;
 use crate::host::declarations::{
     ArgumentReader, DecodeError, EncodedValue, HostArguments, HostError, HostSuccess, encode_json,
@@ -1039,6 +1040,153 @@ pub(crate) async fn mutate_keybindings(
         }
         result.map(|_| ()).map_err(KeymapError::invalid)
     })?
+}
+
+#[derive(Debug, HostError)]
+pub(crate) enum RecordError {
+    #[error(transparent)]
+    Access(AccessError),
+    #[error(code = "StorageUnavailable", message = "Storage {database}: {cause}")]
+    Unavailable { database: String, cause: String },
+}
+
+impl From<AccessError> for RecordError {
+    fn from(error: AccessError) -> Self {
+        Self::Access(error)
+    }
+}
+
+impl From<StorageError> for RecordError {
+    fn from(error: StorageError) -> Self {
+        Self::Unavailable {
+            database: error.database.display().to_string(),
+            cause: error.cause,
+        }
+    }
+}
+
+impl HostContext {
+    fn records(&self) -> Result<OwnerStorage, RecordError> {
+        self.foreground(|host, _| {
+            let key = ExtensionKey::new(self.request.extension, self.request.lifecycle);
+            let owner = host
+                .storage_owners
+                .get(&key)
+                .ok_or(AccessError::ContextUnavailable)?;
+            let storage = host
+                .storage
+                .as_ref()
+                .map_err(|cause| RecordError::Unavailable {
+                    database: "local application-data directory".into(),
+                    cause: cause.clone(),
+                })?;
+            Ok(storage.for_owner(owner.clone()))
+        })?
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct RecordKey {
+    key: String,
+}
+impl HostArguments for RecordKey {
+    fn decode(reader: &mut dyn ArgumentReader) -> Result<Self, DecodeError> {
+        Ok(Self {
+            key: reader.text(2, "storage key must be text")?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct RecordWrite {
+    key: String,
+    value: serde_json::Value,
+}
+impl HostArguments for RecordWrite {
+    fn decode(reader: &mut dyn ArgumentReader) -> Result<Self, DecodeError> {
+        Ok(Self {
+            key: reader.text(2, "storage key must be text")?,
+            value: serde_json::to_value(reader.command_arguments(3)?).expect("validated JSON"),
+        })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct RecordBatch {
+    operations: Vec<Mutation>,
+}
+impl HostArguments for RecordBatch {
+    fn decode(reader: &mut dyn ArgumentReader) -> Result<Self, DecodeError> {
+        let value = serde_json::to_value(reader.command_arguments(2)?).expect("validated JSON");
+        let items = value
+            .as_array()
+            .ok_or(DecodeError::Type("storage batch must be an array"))?;
+        let operations = items
+            .iter()
+            .map(|item| {
+                let key = item
+                    .get("key")
+                    .and_then(|key| key.as_str())
+                    .ok_or(DecodeError::Type("storage key must be text"))?
+                    .to_owned();
+                match item.get("type").and_then(|kind| kind.as_str()) {
+                    Some("write") => Ok(Mutation::Write {
+                        key,
+                        value: item
+                            .get("value")
+                            .ok_or(DecodeError::Type("storage write requires a value"))?
+                            .clone(),
+                    }),
+                    Some("delete") => Ok(Mutation::Delete { key }),
+                    _ => Err(DecodeError::Type(
+                        "storage operation must be write or delete",
+                    )),
+                }
+            })
+            .collect::<Result<_, _>>()?;
+        Ok(Self { operations })
+    }
+}
+
+pub(crate) struct RecordResult(Option<serde_json::Value>);
+impl HostSuccess for RecordResult {
+    fn encode(self) -> Result<EncodedValue, DecodeError> {
+        match self.0 {
+            Some(value) => encode_json(serde_json::json!({ "found": true, "value": value })),
+            None => encode_json(serde_json::json!({ "found": false })),
+        }
+    }
+}
+
+#[host_operation("storageRead")]
+async fn storage_read(
+    context: HostContext,
+    arguments: RecordKey,
+) -> Result<RecordResult, RecordError> {
+    Ok(RecordResult(context.records()?.read(arguments.key).await?))
+}
+
+#[host_operation("storageWrite")]
+async fn storage_write(context: HostContext, arguments: RecordWrite) -> Result<(), RecordError> {
+    Ok(context
+        .records()?
+        .write(arguments.key, arguments.value)
+        .await?)
+}
+
+#[host_operation("storageDelete")]
+async fn storage_delete(context: HostContext, arguments: RecordKey) -> Result<(), RecordError> {
+    Ok(context.records()?.delete(arguments.key).await?)
+}
+
+#[host_operation("storageList")]
+async fn storage_list(context: HostContext, _: ()) -> Result<Vec<String>, RecordError> {
+    Ok(context.records()?.list().await?)
+}
+
+#[host_operation("storageBatch")]
+async fn storage_batch(context: HostContext, arguments: RecordBatch) -> Result<(), RecordError> {
+    Ok(context.records()?.batch(arguments.operations).await?)
 }
 
 #[cfg(test)]

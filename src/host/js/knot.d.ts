@@ -163,6 +163,33 @@ declare module "knot" {
    */
   export type JsonValue = null | boolean | number | string | readonly JsonValue[]
     | { readonly [key: string]: JsonValue };
+
+  /** Missing keys are distinct from stored JSON null. */
+  export type StorageRead = { readonly found: false }
+    | { readonly found: true; readonly value: JsonValue };
+  export type StorageMutation = { readonly type: "write"; readonly key: string; readonly value: JsonValue }
+    | { readonly type: "delete"; readonly key: string };
+  /** Application-global private records for this package or personal config.
+   * Available during activation, without a window or command context. Data survives
+   * reload, package updates and uninstall. Keys are exact strings, including empty.
+   * TypeError for invalid JSON/types; StorageUnavailable includes database/cause
+   * diagnostics. Cancellation may reject after a write has committed.
+   */
+  export const storage: {
+    readonly read: (key: string) => Promise<StorageRead>;
+    /** Replace a record. Success acknowledges commit. */
+    readonly write: (key: string, value: JsonValue) => Promise<void>;
+    /** Deleting a missing key succeeds. */
+    readonly delete: (key: string) => Promise<void>;
+    /** All keys in deterministic binary order. */
+    readonly list: () => Promise<readonly string[]>;
+    /** Apply writes/deletes in order in one transaction. Invalid input or a DB
+     * failure commits none. Concurrent calls serialize; last committed write wins.
+     * Read/modify/write across calls is not atomic. No transaction spans JS awaits.
+     */
+    readonly batch: (operations: readonly StorageMutation[]) => Promise<void>;
+  };
+
   /** Stable host failure codes; names, messages and stacks are diagnostics.
    * Checked against native handler descriptors and common transport failures. */
   export type HostErrorCode = "ContextUnavailable" | "InvalidTarget" | "OwnershipDisposed"
@@ -170,7 +197,7 @@ declare module "knot" {
     | "InvalidRange" | "InvalidEditBatch" | "RevisionConflict" | "ContributionSetNotFound"
     | "TreeViewNotFound" | "ViewNotFound" | "TreeProviderInUse" | "TreeProviderNotFound"
     | "CompletionProviderNotFound" | "CommandNameInUse" | "CommandNotFound"
-    | "InvalidUri" | "DocumentNotFound" | "TooManyWorkspaceRoots" | "OperationInProgress" | "PersistenceFailed" | "ResourceNotFound" | "ResourceWrongKind" | "InvalidUtf8" | "ProviderFailure";
+    | "InvalidUri" | "DocumentNotFound" | "TooManyWorkspaceRoots" | "OperationInProgress" | "PersistenceFailed" | "ResourceNotFound" | "ResourceWrongKind" | "InvalidUtf8" | "ProviderFailure" | "StorageUnavailable";
   /**
    * Native operation failure. Narrow a caught Error by name === "KnotHostError"
    * and its string code property, then dispatch on code. No error constructor

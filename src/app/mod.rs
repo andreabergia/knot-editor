@@ -43,10 +43,6 @@ mod extension_load;
 )]
 pub(crate) mod extension_package;
 mod extension_semantics;
-#[allow(
-    dead_code,
-    reason = "native storage boundary awaiting host API integration"
-)]
 mod extension_storage;
 #[allow(
     dead_code,

@@ -452,3 +452,27 @@ already queued host responses under the same root, avoiding duplicate settlement
 or lifecycle failure from an admitted delivery.
 
 Reference: [documents and persistence](architecture/documents-and-persistence.md).
+
+## Extension record storage
+
+Select separate SQLite databases from canonical package identity, with a distinct
+stable personal-config database. Runtime lifecycles and installed directories
+can change without changing durable ownership, and extension data remains separate
+from application-owned metadata. Application admission supplies the owner; the
+public API cannot name another owner or database path.
+
+Use bundled SQLite through `rusqlite`, synchronous calls on the existing gpui
+background executor, and one mutex-serialized connection per database. Normal
+rollback journaling with FULL synchronization keeps committed-write acknowledgement
+simple without a dedicated service, worker, queue, or backup protocol. Initialize
+only empty unowned databases, and reject unsupported physical schemas without
+replacement; future schema changes require explicit migration.
+
+Expose async JSON read/write/delete/list and ordered atomic write/delete batches
+through existing typed host operations. Distinguish missing records from stored
+null, share JSON validation/copying with command arguments, and leave record shape
+and value schema versions to extensions. Concurrent requests serialize at the
+connection with last-committed-write semantics; cross-call read/modify/write is
+not atomic. Reload, updates and uninstall preserve data.
+
+Reference: [extension host](architecture/extension-host.md).

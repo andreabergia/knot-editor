@@ -63,7 +63,7 @@ impl std::fmt::Display for StorageError {
 
 impl std::error::Error for StorageError {}
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Mutation {
     Write { key: String, value: Value },
     Delete { key: String },

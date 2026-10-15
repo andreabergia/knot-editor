@@ -253,3 +253,54 @@ in the [host handler module](../src/app/extension_host/handlers.rs) and
 ownership and routing are documented in the
 [extension host](architecture/extension-host.md) and
 [command architecture](architecture/commands.md) references.
+
+## Durable storage
+
+`storage` persists private JSON records for the installed package's canonical
+identity. Personal config has its own stable database. Records are application-global,
+independent of windows, roots and runtime lifecycle IDs, and available during
+activation before a product window exists. Extensions cannot select an owner or path.
+
+```js
+import { storage } from "knot";
+const result = await storage.read("preferences");
+const preferences = result.found ? result.value : { schema: 1 };
+await storage.write("preferences", preferences);
+await storage.batch([
+  { type: "write", key: "optional", value: null },
+  { type: "delete", key: "obsolete" },
+]);
+const keys = await storage.list();
+await storage.delete("absent"); // succeeds
+```
+
+Read returns `{ found: false }` for a missing key and `{ found: true, value }`
+for a stored value, including JSON null. Keys are exact strings, including empty
+strings; list returns all keys in deterministic binary order. Writes replace a
+record. JSON values use the same finite-number, dense-array and plain-object
+validation as command arguments; undefined, cycles, symbols, bigint, functions,
+nonplain objects and custom JSON conversion are rejected with `TypeError`.
+Returned values are detached, read-only JSON data.
+
+Batch applies the ordered writes/deletes in one SQLite transaction. Invalid
+recognized fields or any database failure commit none of the batch. Unknown
+operation fields are ignored. A successful mutation acknowledges commit; awaited
+calls preserve their natural order. Concurrent calls serialize on the connection,
+and the last committed write wins. Read/modify/write across calls is not atomic;
+there are no public record versions, conditional updates, or transactions spanning
+JavaScript awaits. Extensions own their JSON structure and schema versions.
+
+Cancellation or unload may prevent a caller receiving a result, including after a
+write committed; rejection does not imply rollback. Native work checks caller
+lifetime at admission. Once a transaction starts, it finishes normally.
+`StorageUnavailable` reports database/cause diagnostics in `HostError.details`.
+Corrupt, incompatible or unwritable databases fail without being deleted or
+replaced, and other owners remain available. Local application data holds a
+separate SQLite database for each owner, with normal rollback journaling and FULL
+synchronization. Storage is not a secrets or synchronization service. Reload,
+package updates and uninstall preserve data; there is no automatic cleanup or
+backup API.
+
+The ordinary [storage demo](../examples/extensions/@example/storage-demo/dist/main.js)
+uses only the public API. Run `example.storage-report`, paste its clipboard JSON,
+restart Knot, and run it again: `activations` increases and the records remain.

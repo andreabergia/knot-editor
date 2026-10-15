@@ -377,9 +377,9 @@ D020 user automation. The broader extension/project initiative remains in progre
 
 ### 4. SQLite-backed extension storage — D048 ⬜
 
-🚧 Native storage checkpoint implemented and tested in the focused D048 plan;
-native-boundary review is pending before JS integration. This parent checkpoint
-remains incomplete.
+🚧 Native storage and public JS API checkpoints implemented and tested in the
+focused D048 plan; public API review is pending. Shutdown/lifecycle acceptance
+remains, so this parent checkpoint is incomplete.
 
 - Finalize and publish the storage namespace with the implemented record API,
   extending the public declarations, documentation, and contract tests.

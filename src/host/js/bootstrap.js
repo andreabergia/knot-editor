@@ -6,7 +6,7 @@ export function keybinding(key, command, options) {
     try {
       command = {
         name: command.name,
-        arguments: command.arguments === undefined ? null : validateCommandArguments(command.arguments),
+        arguments: command.arguments === undefined ? null : validateJsonValue(command.arguments),
       };
     } catch (error) {
       nativeBindings.keybinding("invalid", String(error));
@@ -351,7 +351,7 @@ export async function invokeCommand(name, commandArguments) {
     throw new TypeError("commands.invoke requires a command name");
   }
   const arguments_ = commandArguments === undefined ? null : commandArguments;
-  const normalized = validateCommandArguments(arguments_);
+  const normalized = validateJsonValue(arguments_);
   const dispatch = await request("invokeCommand", name, normalized);
   if (dispatch.kind === "outcome") return Object.freeze(dispatch.outcome);
 
@@ -371,18 +371,18 @@ export async function invokeCommand(name, commandArguments) {
   return Object.freeze(outcome);
 }
 
-function validateCommandArguments(value, seen = new Set()) {
+function validateJsonValue(value, seen = new Set()) {
   if (value === null || typeof value === "string" || typeof value === "boolean") return value;
   if (typeof value === "number") {
     if (Number.isFinite(value)) return value;
-    throw new TypeError("command arguments require finite numbers");
+    throw new TypeError("JSON values require finite numbers");
   }
-  if (typeof value !== "object") throw new TypeError("command arguments must be JSON-compatible");
-  if (seen.has(value)) throw new TypeError("command arguments cannot contain cycles");
+  if (typeof value !== "object") throw new TypeError("values must be JSON-compatible");
+  if (seen.has(value)) throw new TypeError("JSON values cannot contain cycles");
   const prototype = Object.getPrototypeOf(value);
   if ((Array.isArray(value) ? prototype !== Array.prototype : prototype !== null && prototype !== Object.prototype) ||
       typeof value.toJSON === "function" || Object.getOwnPropertySymbols(value).length !== 0) {
-    throw new TypeError("command arguments require plain JSON data");
+    throw new TypeError("values require plain JSON data");
   }
   seen.add(value);
   let copy;
@@ -390,16 +390,16 @@ function validateCommandArguments(value, seen = new Set()) {
     if (Object.keys(value).some((key) => {
       const index = Number(key);
       return !Number.isInteger(index) || index < 0 || index >= value.length || String(index) !== key;
-    })) throw new TypeError("command arrays must contain only indexed data");
+    })) throw new TypeError("JSON arrays must contain only indexed data");
     copy = [];
     Object.defineProperty(copy, "toJSON", { value: undefined });
     for (let index = 0; index < value.length; index++) {
-      if (!Object.hasOwn(value, index)) throw new TypeError("command arrays must be dense");
-      copy.push(validateCommandArguments(value[index], seen));
+      if (!Object.hasOwn(value, index)) throw new TypeError("JSON arrays must be dense");
+      copy.push(validateJsonValue(value[index], seen));
     }
   } else {
     copy = Object.create(null);
-    for (const key of Object.keys(value)) copy[key] = validateCommandArguments(value[key], seen);
+    for (const key of Object.keys(value)) copy[key] = validateJsonValue(value[key], seen);
   }
   seen.delete(value);
   return Object.freeze(copy);
@@ -438,7 +438,7 @@ async function invokeRegisteredCommand(
       await handler(Object.freeze({
         target,
         buffer: activeHandle === null ? null : bufferFor(activeHandle),
-        arguments: validateCommandArguments(commandArguments),
+        arguments: validateJsonValue(commandArguments),
         signal: controller.signal,
       }));
       return controller.signal.aborted
@@ -712,3 +712,31 @@ globalThis.__knotDispatchApplicationChange = async (subscription, value) => {
   }
   await listener(Object.freeze({ type: value.type, sequence: value.sequence, ...payload }));
 };
+
+export async function storageRead(key) {
+  const result = await request("storageRead", string(key, "storage key must be text"));
+  return Object.freeze(result.found ? { found: true, value: validateJsonValue(result.value) } : { found: false });
+}
+export async function storageWrite(key, value) {
+  await request("storageWrite", string(key, "storage key must be text"), validateJsonValue(value));
+}
+export async function storageDelete(key) {
+  await request("storageDelete", string(key, "storage key must be text"));
+}
+export async function storageList() {
+  return Object.freeze(await request("storageList"));
+}
+export async function storageBatch(operations) {
+  if (!Array.isArray(operations)) throw new TypeError("storage batch must be an array");
+  const normalized = [];
+  for (let index = 0; index < operations.length; index++) {
+    if (!Object.hasOwn(operations, index)) throw new TypeError("storage batch must be dense");
+    const operation = record(operations[index], "storage operation must be an object");
+    const type = operation.type;
+    const key = string(operation.key, "storage key must be text");
+    if (type === "write") normalized.push({ type, key, value: validateJsonValue(operation.value) });
+    else if (type === "delete") normalized.push({ type, key });
+    else throw new TypeError("storage operation must be write or delete");
+  }
+  await request("storageBatch", normalized);
+}

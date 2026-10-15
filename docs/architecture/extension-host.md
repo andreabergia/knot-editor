@@ -86,7 +86,7 @@ run. The engine captures the command, cancellation, listener and provider dispat
 functions as private persistent handles and removes their temporary globals.
 Extension code cannot invoke or replace native dispatch to fabricate contexts or
 buffer proxies. The public module exposes `editor`, `commands`, `workbench`,
-`documents`, `windows`, `workspaces`, `keybinding` and `removeKeybinding`.
+`documents`, `windows`, `workspaces`, `storage`, `keybinding` and `removeKeybinding`.
 The facade's buffer API crosses a pool-owned typed request inbox. Its native
 callback allocates a lifecycle-scoped request identity, retains only a
 persistent V8 promise resolver, and returns the promise without waiting on the
@@ -398,7 +398,7 @@ with an already queued response retain their native pending entry until that tur
 consumes it without settling the rejected resolver again. This keeps an admitted
 response associated with its root while cancellation callbacks run.
 
-## Native extension record storage
+## Extension record storage
 
 `app::extension_storage` binds application-selected canonical package identities
 and personal config to separate databases under local application data. Binding
@@ -407,5 +407,18 @@ V8 and the foreground, and serialize access to a reused connection per database.
 Read distinguishes missing records from JSON null; keys list in binary order.
 Write/delete batches use one ordered transaction and acknowledge after commit.
 Unknown physical schemas and database failures report the affected path and
-cause without replacing data. This native boundary is not yet exposed to JS or
-connected to application shutdown admission/draining.
+cause without replacing data.
+
+Installed admission binds the validated canonical manifest identity to the loaded
+lifecycle before foreground requests can run; personal config binds its separate
+stable owner before either startup phase. Runtime IDs and installation paths do
+not determine durable ownership. Lifecycle teardown removes the binding while
+retaining the application-owned connection and records. Diagnostic source-only
+lifecycles have no implicit durable owner.
+
+The public `storage` facade validates and copies JSON data through the shared JSON
+validation boundary. Annotated record handlers use the ordinary caller-lifetime
+checks without requiring command or window context, then await native background
+work. Results and `StorageUnavailable` diagnostics use existing host response and
+exact-once settlement transport. Native transactions never span a JavaScript
+await. Application shutdown admission/draining is not yet integrated.

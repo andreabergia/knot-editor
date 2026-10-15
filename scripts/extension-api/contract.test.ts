@@ -159,6 +159,39 @@ void [watermark, observedWindows];
 // @ts-expect-error an application observer requires a listener
 await workbench.observe();
 
+
+import { storage } from "knot";
+import type { JsonValue, StorageRead, StorageMutation } from "knot";
+const stored: StorageRead = await storage.read("settings");
+if (stored.found) {
+  const value: JsonValue = stored.value;
+  void value;
+} else {
+  // @ts-expect-error missing results have no value
+  void stored.value;
+}
+const storageChanges: readonly StorageMutation[] = [
+  { type: "write", key: "settings", value: { schema: 1, optional: null } },
+  { type: "delete", key: "obsolete" },
+];
+await storage.batch(storageChanges);
+await storage.write("null", null);
+await storage.delete("absent");
+const storageKeys: readonly string[] = await storage.list();
+void storageKeys;
+// @ts-expect-error keys are strings
+await storage.read(1);
+// @ts-expect-error writes require a value
+await storage.write("missing");
+// @ts-expect-error JSON data excludes undefined
+await storage.write("undefined", undefined);
+// @ts-expect-error JSON data excludes functions
+await storage.write("function", () => {});
+// @ts-expect-error write batch items require a value
+await storage.batch([{ type: "write", key: "missing" }]);
+// @ts-expect-error operation names are closed
+await storage.batch([{ type: "clear", key: "all" }]);
+
 // @ts-expect-error invalid-argument helper requires a string
 commands.invalidArguments(1);
 // @ts-expect-error no application namespace is declared

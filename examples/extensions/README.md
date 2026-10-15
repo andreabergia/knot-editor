@@ -47,3 +47,9 @@ To inspect programmatic operations in the product:
    while the captured presentation in A closes.
 4. Run **example.application-state** to inspect document/presentation events and
    the workspace generations.
+
+The `storage-demo` package writes records during activation, before a window
+exists. Run **example.storage-report** and paste the clipboard JSON into an untitled
+document. Restart Knot and repeat: `activations` increases, JSON null stays distinct
+from the missing record, and sorted keys remain. Its source uses only public APIs;
+records belong to `@example/storage-demo` independently of its installation path.

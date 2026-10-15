@@ -311,6 +311,8 @@ fn route_nested_command(
 pub(crate) struct ProductExtensionHost {
     pool: Arc<ExtensionPool>,
     lifecycles: HashSet<ExtensionKey>,
+    storage: Result<super::extension_storage::ExtensionStorage, String>,
+    storage_owners: HashMap<ExtensionKey, super::extension_storage::StorageOwner>,
     buffers: ExtensionBufferBridge,
     application_observation: super::application_observation::ApplicationObservation,
     #[cfg(test)]
@@ -384,6 +386,13 @@ impl ProductExtensionHost {
         Self {
             pool,
             lifecycles: HashSet::new(),
+            storage: super::extension_storage::ExtensionStorage::user_root().map(|root| {
+                super::extension_storage::ExtensionStorage::new(
+                    root,
+                    cx.background_executor().clone(),
+                )
+            }),
+            storage_owners: HashMap::new(),
             buffers: ExtensionBufferBridge::new(),
             application_observation: Default::default(),
             #[cfg(test)]
@@ -414,6 +423,14 @@ impl ProductExtensionHost {
             personal_config_key: None,
             next_extension_id: Arc::new(AtomicU64::new(1)),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_test_storage_root(&mut self, root: PathBuf, cx: &Context<Self>) {
+        self.storage = Ok(super::extension_storage::ExtensionStorage::new(
+            root,
+            cx.background_executor().clone(),
+        ));
     }
 
     #[cfg(test)]
@@ -475,8 +492,13 @@ impl ProductExtensionHost {
                             ExtensionKey::new(ExtensionId::new(id), ExtensionLifecycleId::new(1));
                         let graph = graph_for_package(package);
                         let execution = graph.and_then(|graph| {
-                            this.update(cx, |host, _| host.load_package(key, graph))
-                                .map_err(|error| error.to_string())?
+                            this.update(cx, |host, _| {
+                                let owner = super::extension_storage::StorageOwner::package(
+                                    &package.manifest.name,
+                                )?;
+                                host.load_package(key, graph, Some(owner))
+                            })
+                            .map_err(|error| error.to_string())?
                         });
                         let rollback_pool = pool.clone();
                         let rollback_host = this.clone();
@@ -680,6 +702,10 @@ impl ProductExtensionHost {
         self.pool
             .load_personal_config(key, ExtensionConfig::default(), graph)
             .map_err(|error| error.to_string())?;
+        self.storage_owners.insert(
+            key,
+            super::extension_storage::StorageOwner::personal_config(),
+        );
         self.personal_config_key = Some(key);
         self.admit_lifecycle(key);
         Ok(())
@@ -708,12 +734,16 @@ impl ProductExtensionHost {
         &mut self,
         key: ExtensionKey,
         graph: ModuleGraph,
+        owner: Option<super::extension_storage::StorageOwner>,
     ) -> Result<ExtensionExecution, String> {
         let execution = self
             .pool
             .load_package(key, ExtensionConfig::default(), graph)
             .map_err(|error| error.to_string())?;
         self.admit_lifecycle(key);
+        if let Some(owner) = owner {
+            self.storage_owners.insert(key, owner);
+        }
         Ok(execution)
     }
 
@@ -729,7 +759,7 @@ impl ProductExtensionHost {
             BTreeMap::from([("main.js".into(), Arc::from(source))]),
         )
         .map_err(|error| error.to_string())?;
-        self.load_package(key, graph)
+        self.load_package(key, graph, None)
     }
 
     fn admit_lifecycle(&mut self, key: ExtensionKey) {
@@ -772,7 +802,7 @@ impl ProductExtensionHost {
                 BTreeMap::from([("main.js".into(), Arc::from(source))]),
             )
             .expect("test fixture graph is valid");
-            let execution = self.load_package(key, graph);
+            let execution = self.load_package(key, graph, None);
             match execution {
                 Ok(execution) => {
                     let name = name.to_owned();
@@ -1553,6 +1583,7 @@ impl ProductExtensionHost {
         if !self.lifecycles.remove(&key) {
             return;
         }
+        self.storage_owners.remove(&key);
         self.application_observation.remove_lifecycle(key);
         let personal = self.personal_config_key == Some(key);
         if cx.has_global::<super::keymaps::ApplicationKeymaps>() {
@@ -1846,3 +1877,6 @@ mod tests {
         cx.run_until_parked();
     }
 }
+
+#[cfg(test)]
+mod storage_tests;

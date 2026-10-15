@@ -7170,11 +7170,14 @@ globalThis.activationFinished = true;
                 if (typeof globalThis.__knotNativeBindings !== "undefined") {
                     throw new Error("private native bindings are exposed");
                 }
-                if (Object.keys(knot).sort().join(",") !== "commands,documents,editor,keybinding,removeKeybinding,windows,workbench,workspaces") {
+                if (Object.keys(knot).sort().join(",") !== "commands,documents,editor,keybinding,removeKeybinding,storage,windows,workbench,workspaces") {
                     throw new Error("unexpected public exports");
                 }
-                if (!Object.isFrozen(knot.editor) || !Object.isFrozen(knot.commands) || !Object.isFrozen(knot.workbench)) {
+                if (!Object.isFrozen(knot.editor) || !Object.isFrozen(knot.commands) || !Object.isFrozen(knot.workbench) || !Object.isFrozen(knot.storage)) {
                     throw new Error("facade objects are mutable");
+                }
+                if (Object.keys(knot.storage).sort().join(",") !== "batch,delete,list,read,write") {
+                    throw new Error("storage facade is incomplete");
                 }
                 if (typeof knot.editor.activeBuffer !== "function"
                     || typeof knot.keybinding !== "function"

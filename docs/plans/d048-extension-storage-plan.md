@@ -1,7 +1,7 @@
 # D048 — Simple durable extension storage
 
-Status: 🚧 Checkpoint 1 implemented and tested; awaiting native-boundary review.
-Checkpoints 2–3 have not started.
+Status: 🚧 Checkpoints 1–2 implemented and tested; awaiting public API review.
+Checkpoint 3 has not started.
 
 Source: checkpoint 4 of the [extension platform and projects plan](extension-platform-and-projects-plan.md).
 Design discussion: 2026-10-15. Relevant current boundaries:
@@ -113,11 +113,14 @@ an existing provider-unload assertion (`Terminated` versus `Cancelled`); that te
 passed in isolation and the full rerun passed. `cargo fmt` and `git diff --check`
 completed.
 
-⏸️ Native review gate remains open. Host API/lifetime admission and application
-shutdown integration belong to the following checkpoints.
+✅ Native-boundary inspection completed on continuation: canonical-owner path
+selection, lazy connection reuse, strict schema/owner/version rejection, transaction
+rollback and settings were inspected; the seven focused tests passed again. No
+blocking finding remained before connecting the JS API. Application shutdown and
+work-start cancellation coverage remain checkpoint 3.
 
 
-### 2. Usable JavaScript API ⬜
+### 2. Usable JavaScript API ✅
 
 Connect storage through existing typed handlers and lifecycle ownership. Publish
 the facade, declarations, and API documentation. Exercise both installed-package
@@ -129,6 +132,38 @@ unload/reload. Run the extension API contract checks.
 
 **Review gate:** approve the small public API and demonstrate persistence using an
 ordinary JS fixture with no private application access.
+
+✅ Added `storage.read/write/delete/list/batch` to the frozen public facade,
+TypeScript declarations and author guide. Read returns `{ found: false }` or
+`{ found: true, value }`; values use the shared plain JSON validation/copying
+boundary. Batch operations are `{ type: "write", key, value }` and
+`{ type: "delete", key }`. All batch fields validate before native admission.
+`StorageUnavailable` retains structured database/cause diagnostics through the
+existing error transport.
+
+✅ Product admission binds validated canonical package names and the separate
+personal-config owner to live lifecycles. Annotated handlers use existing caller
+checks, require no command/window context, and await the native storage boundary.
+Unload removes caller ownership while preserving the database and its connection.
+No new transport operation table, service or worker was introduced.
+
+✅ Four real-JS product-host tests cover activation without windows, installed
+owner isolation, reload/new host/relocated package persistence, both personal-config
+phases and reload, immutable JSON copying/validation, null versus missing, sorted
+keys, replacement/deletion, ordered atomic batches and SQLite-failure rollback,
+and structured corruption failures with preserved bytes and an independent owner.
+The checked-in `@example/storage-demo` runs through the product command bridge:
+its public command copies records and activation counts, then repeats after reload.
+The fixture uses only public `knot` exports.
+
+✅ Validation: all four focused product-host storage tests passed;
+`cargo test --lib` passed all 630 tests, including the ordinary demo's command
+and reload demonstration. `sh scripts/check-extension-api.sh` passed the public
+TypeScript contract and checked JavaScript examples. `cargo fmt` and
+`git diff --check` completed.
+
+⏸️ Public API review gate remains open. The fixture and automated demonstration
+are ready; checkpoint 3 shutdown integration and lifecycle acceptance remain.
 
 ### 3. Shutdown and acceptance ⬜
 

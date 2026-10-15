@@ -42,7 +42,9 @@ gpui application and views        extension runtimes
 - `app::extension_storage` owns application-global JSON record databases selected
   by canonical package identity or personal config. Its native async boundary
   runs SQLite operations on the background executor with a reused, serialized
-  connection per owner; host API and shutdown integration are not yet connected.
+  connection per owner. The product host binds storage to admitted package and
+  personal-config lifecycles and exposes it through typed async handlers.
+  Graceful shutdown draining is not yet integrated.
 - `app::extension_load` plans dependency order and records startup outcomes
   using Knot-owned package data and a rollback guard for each attempted load.
 

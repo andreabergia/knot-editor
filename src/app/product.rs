@@ -5348,15 +5348,21 @@ mod tests {
     fn checked_in_extension_example_runs_through_the_product_command_bridge(
         cx: &mut TestAppContext,
     ) {
+        let storage = tempfile::tempdir().unwrap();
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/extensions");
         let documents = install_globals(cx);
         let host = cx.update(super::super::extension_host::install);
+        host.update(cx, |host, cx| {
+            host.set_test_storage_root(storage.path().to_owned(), cx)
+        });
         let document = cx.update(|cx| create_untitled_document(&documents, cx));
         let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
         let (shell, window) = product_window(document, model.clone(), cx);
-        host.update(cx, |host, cx| host.start_installed_extensions(root, cx));
+        host.update(cx, |host, cx| {
+            host.start_installed_extensions(root.clone(), cx)
+        });
         let report = wait_for_extension_report(&host, cx);
-        assert_eq!(report.report.entries.len(), 3);
+        assert_eq!(report.report.entries.len(), 4);
         assert!(
             report
                 .report
@@ -5384,6 +5390,41 @@ mod tests {
             }
         }
         assert_eq!(cx.read(|cx| model.read(cx).text()), "Hello ");
+        for activations in 1..=2 {
+            if activations == 2 {
+                host.update(cx, |host, cx| {
+                    host.start_installed_extensions(root.clone(), cx)
+                });
+                let report = wait_for_extension_report(&host, cx);
+                assert!(
+                    report
+                        .report
+                        .entries
+                        .iter()
+                        .all(|entry| entry.result
+                            == super::super::extension_load::LoadResult::Loaded)
+                );
+            }
+            let execution = dispatch_product_command(&shell, window, "example.storage-report", cx);
+            assert_eq!(wait_for_command(execution, cx), CommandOutcome::Completed);
+            let report: serde_json::Value = cx.read(|cx| {
+                serde_json::from_str(&cx.read_from_clipboard().unwrap().text().unwrap()).unwrap()
+            });
+            assert_eq!(report["activations"]["found"], true);
+            assert_eq!(
+                report["activations"]["value"].as_f64(),
+                Some(f64::from(activations))
+            );
+            assert_eq!(
+                report["example"]["value"]["optional"],
+                serde_json::Value::Null
+            );
+            assert_eq!(report["missing"], serde_json::json!({"found": false}));
+            assert_eq!(
+                report["keys"],
+                serde_json::json!(["activations", "example"])
+            );
+        }
     }
 
     struct FixedOpenDialog(OpenDialogOutcome);
