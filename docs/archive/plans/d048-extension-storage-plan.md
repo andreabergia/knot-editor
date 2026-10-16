@@ -1,12 +1,12 @@
 # D048 — Simple durable extension storage
 
 Status: ✅ Complete and approved on 2026-10-16. All three checkpoints and final
-acceptance passed.
+acceptance passed. Archived on 2026-10-16.
 
-Source: checkpoint 4 of the [extension platform and projects plan](extension-platform-and-projects-plan.md).
+Source: checkpoint 4 of the [extension platform and projects plan](../../plans/extension-platform-and-projects-plan.md).
 Design discussion: 2026-10-15. Relevant current boundaries:
-[architecture](../architecture.md), [decisions](../decisions.md), and the
-[extension host](../architecture/extension-host.md).
+[architecture](../../architecture.md), [decisions](../../decisions.md), and the
+[extension host](../../architecture/extension-host.md).
 
 ## Outcome
 

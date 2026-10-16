@@ -1,9 +1,9 @@
 # Production extension APIs and JavaScript project management
 
 Status: ✅ D046, D047 and the D053 maintenance interlude complete, approved
-and archived on 2026-10-15. D048 is complete and approved on 2026-10-16.
+and archived on 2026-10-15. D048 is complete, approved and archived on 2026-10-16.
 Numbered product checkpoints 5–10 remain unstarted; D049 is next. The focused
-[D048 storage plan](d048-extension-storage-plan.md) records the completed storage slice.
+[D048 storage plan](../archive/plans/d048-extension-storage-plan.md) records the completed storage slice.
 
 Source: the project-management design discussion of 2026-10-13 and the
 [prioritized roadmap](../roadmap.md). Work identifiers: D046–D052 and promoted
@@ -182,7 +182,7 @@ retain semantic information for D030.
 
 ### Durable extension storage — D048
 
-The focused [D048 plan](d048-extension-storage-plan.md) records the agreed simpler
+The focused [D048 plan](../archive/plans/d048-extension-storage-plan.md) records the agreed simpler
 scope. Each extension has its own SQLite database selected by validated canonical
 package identity; personal config has a separate stable database. Initial storage
 is application-global. Reload, updates, and uninstall preserve data.
@@ -376,7 +376,7 @@ automation. The broader extension/project initiative remains in progress.
 process interruption/reopen coverage, and the four-operation public API.
 All 640 library tests and extension API checks passed.
 
-The [focused D048 plan](d048-extension-storage-plan.md) tracks the four-operation
+The [focused D048 plan](../archive/plans/d048-extension-storage-plan.md) tracks the four-operation
 record API and completed acceptance evidence.
 
 - Publish the storage namespace, declarations, documentation, and contract tests.
