@@ -266,10 +266,8 @@ import { storage } from "knot";
 const result = await storage.read("preferences");
 const preferences = result.found ? result.value : { schema: 1 };
 await storage.write("preferences", preferences);
-await storage.batch([
-  { type: "write", key: "optional", value: null },
-  { type: "delete", key: "obsolete" },
-]);
+await storage.write("optional", null);
+await storage.delete("obsolete");
 const keys = await storage.list();
 await storage.delete("absent"); // succeeds
 ```
@@ -282,13 +280,11 @@ validation as command arguments; undefined, cycles, symbols, bigint, functions,
 nonplain objects and custom JSON conversion are rejected with `TypeError`.
 Returned values are detached, read-only JSON data.
 
-Batch applies the ordered writes/deletes in one SQLite transaction. Invalid
-recognized fields or any database failure commit none of the batch. Unknown
-operation fields are ignored. A successful mutation acknowledges commit; awaited
-calls preserve their natural order. Concurrent calls serialize on the connection,
-and the last committed write wins. Read/modify/write across calls is not atomic;
-there are no public record versions, conditional updates, or transactions spanning
-JavaScript awaits. Extensions own their JSON structure and schema versions.
+Each write atomically replaces one JSON record. Keep related state in one record
+when it must change together. A successful write or delete acknowledges commit;
+awaited calls preserve their natural order. Concurrent calls serialize on the
+connection, and the last committed write wins. Read/modify/write across calls is
+not atomic. Extensions own their JSON structure and schema versions.
 
 Cancellation or unload may prevent a caller receiving a result, including after a
 write committed; rejection does not imply rollback. Native work checks caller

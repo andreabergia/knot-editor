@@ -63,12 +63,6 @@ impl std::fmt::Display for StorageError {
 
 impl std::error::Error for StorageError {}
 
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) enum Mutation {
-    Write { key: String, value: Value },
-    Delete { key: String },
-}
-
 /// Constructing and binding owners performs no I/O. All operations, including lazy
 /// schema initialization and connection locking, run on the background executor.
 pub(crate) struct ExtensionStorage {
@@ -156,25 +150,18 @@ impl OwnerStorage {
     }
 
     pub(crate) fn write(&self, key: String, value: Value) -> Task<Result<(), StorageError>> {
-        self.batch(vec![Mutation::Write { key, value }])
+        self.run(move |connection| {
+            connection.execute(
+                "INSERT INTO records (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                params![key, serde_json::to_string(&value)?],
+            )?;
+            Ok(())
+        })
     }
 
     pub(crate) fn delete(&self, key: String) -> Task<Result<(), StorageError>> {
-        self.batch(vec![Mutation::Delete { key }])
-    }
-
-    pub(crate) fn batch(&self, mutations: Vec<Mutation>) -> Task<Result<(), StorageError>> {
         self.run(move |connection| {
-            let transaction = connection.transaction()?;
-            for mutation in mutations {
-                match mutation {
-                    Mutation::Write { key, value } => {
-                        transaction.execute("INSERT INTO records (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value", params![key, serde_json::to_string(&value)?])?;
-                    }
-                    Mutation::Delete { key } => { transaction.execute("DELETE FROM records WHERE key = ?1", [key])?; }
-                }
-            }
-            transaction.commit()?;
+            connection.execute("DELETE FROM records WHERE key = ?1", [key])?;
             Ok(())
         })
     }
@@ -320,46 +307,26 @@ mod tests {
     }
 
     #[gpui::test]
-    async fn batch_order_and_database_failure_are_atomic(cx: &mut TestAppContext) {
+    async fn failed_write_preserves_the_existing_record(cx: &mut TestAppContext) {
         let root = tempfile::tempdir().unwrap();
-        let records = store(root.path(), cx).for_owner(package("@one/batch"));
+        let records = store(root.path(), cx).for_owner(package("@one/records"));
         records
-            .batch(vec![
-                Mutation::Write {
-                    key: "a".into(),
-                    value: json!(1),
-                },
-                Mutation::Delete { key: "a".into() },
-                Mutation::Write {
-                    key: "a".into(),
-                    value: json!(2),
-                },
-            ])
+            .write("a".into(), json!({"old": true}))
             .await
             .unwrap();
-        assert_eq!(records.read("a".into()).await.unwrap(), Some(json!(2)));
         records.run(|connection| {
-            connection.execute_batch("CREATE TEMP TRIGGER reject_write BEFORE INSERT ON records WHEN NEW.key = 'fail' BEGIN SELECT RAISE(ABORT, 'injected write failure'); END")?;
+            connection.execute_batch("CREATE TEMP TRIGGER reject_write BEFORE UPDATE ON records BEGIN SELECT RAISE(ABORT, 'injected write failure'); END")?;
             Ok(())
         }).await.unwrap();
         let error = records
-            .batch(vec![
-                Mutation::Delete { key: "a".into() },
-                Mutation::Write {
-                    key: "new".into(),
-                    value: json!(3),
-                },
-                Mutation::Write {
-                    key: "fail".into(),
-                    value: json!(4),
-                },
-            ])
+            .write("a".into(), json!({"new": true}))
             .await
             .unwrap_err();
         assert!(error.cause.contains("injected write failure"));
-        assert_eq!(records.list().await.unwrap(), ["a"]);
-        assert_eq!(records.read("a".into()).await.unwrap(), Some(json!(2)));
-        records.batch(vec![]).await.unwrap();
+        assert_eq!(
+            records.read("a".into()).await.unwrap(),
+            Some(json!({"old": true}))
+        );
     }
 
     #[gpui::test]

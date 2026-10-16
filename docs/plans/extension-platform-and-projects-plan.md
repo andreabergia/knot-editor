@@ -181,32 +181,26 @@ retain semantic information for D030.
 
 ### Durable extension storage — D048
 
-The Rust application owns SQLite access off the foreground and outside V8.
-Expose async extension-private record operations: read/write/delete/list and
-atomic batches. JSON-compatible values describe extension records; SQLite is
-the durability backend. Public callers do not get connections, SQL, or private
-application tables.
+The focused [D048 plan](d048-extension-storage-plan.md) records the agreed simpler
+scope. Each extension has its own SQLite database selected by validated canonical
+package identity; personal config has a separate stable database. Initial storage
+is application-global. Reload, updates, and uninstall preserve data.
 
-Namespace by validated canonical package identity, not runtime IDs, directory
-paths, or caller-supplied ownership strings. Personal config has a reserved stable
-namespace. Runtime unload/reload and package updates preserve data. Uninstallation
-does not implicitly destroy recovery or extension records; explicit cleanup policy
-is reviewed at checkpoint 4. Initial storage is application-global. JS can key
-records by stable project ID; avoid a mutable current-folder storage scope.
+Use ordinary synchronous SQLite calls on the existing background executor, off
+the foreground and outside V8. Reuse a connection per database and serialize its
+access; no dedicated storage service or custom queue. Expose async JSON record
+read/write/delete/list through the existing host bridge. Each write atomically
+replaces one JSON record; related state lives in one record. Writes acknowledge
+after commit. Concurrent writes use last-committed-write semantics; no public versions or conditional updates. Transactions never span JS
+awaits. Graceful shutdown drains admitted native storage work.
 
-Define atomic batch behavior, write ordering, conflicting writes, committed-write
-acknowledgement, cancellation before/after commit, and shutdown drain. A serial
-service may order writes, but read/modify/write is not automatically atomic:
-provide an expected-version conditional write/batch for records that require it.
-Do not hold a database transaction open across arbitrary JS awaits.
-
-The application owns physical schema migrations and storage diagnostics; the
-extension owns versions/migrations of its values. Test reopen, migration failure,
-unwritable storage, corruption handling, and interruption. Preserve problematic
-data rather than silently replacing it with an empty database. Finalize connection
-layout, journal/durability settings, backup/recovery policy, SQLite crate, and
-multi-process contention handling at the storage gate. This initiative does not
-add synchronization, secrets storage, or a general database API.
+Initialize the record schema and report storage errors without replacing damaged
+or incompatible databases. Extensions own the structure and schema versions of
+their JSON values. D048 adds no automatic backups, cleanup UI, or multi-process
+coordination. Application-owned data belongs in separate storage; application
+metadata and recovery coordination remain D050 work. Public callers do not get
+connections, SQL, or another owner's data. Concrete crate/settings and API names
+are reviewed in the focused plan's implementation gates.
 
 ### Unsaved-document recovery — D050
 
@@ -381,18 +375,22 @@ D020 user automation. The broader extension/project initiative remains in progre
 focused D048 plan; public API review is pending. Shutdown/lifecycle acceptance
 remains, so this parent checkpoint is incomplete.
 
-- Finalize and publish the storage namespace with the implemented record API,
-  extending the public declarations, documentation, and contract tests.
-- Implement stable owner namespaces, async records, conditional updates, and
-  atomic batches; persist application identity metadata behind a separate boundary.
-- Implement schema initialization/migration, committed-write acknowledgement,
-  storage diagnostics, shutdown drain, and preservation on recovery failures.
-- Specify multi-process writer behavior without taking on D015 document handoff.
-- **Validation:** temporary real DB reopen across lifecycles/process runs; namespace
-  isolation; transaction rollback; conflicting writes; cancellation races; shutdown;
-  migration failure; corruption/unwritable database and preserved diagnostics.
-- **Review gate:** approve public storage semantics, durability/backup policy,
-  cleanup behavior, and application/extension table separation.
+The [focused D048 plan](d048-extension-storage-plan.md) tracks the four-operation
+record API and remaining shutdown/lifecycle acceptance.
+
+- Publish the storage namespace, declarations, documentation, and contract tests.
+- Implement per-owner databases and async JSON read/write/delete/list using
+  synchronous SQLite calls on the existing background executor. Atomically replace
+  one record per write; keep related state in one record.
+- Implement schema initialization, committed-write acknowledgement, diagnostics,
+  shutdown drain, and preservation of damaged or incompatible databases.
+- Application metadata/recovery remains D050. No conditional updates, dedicated
+  storage service, multi-record batches, multi-process coordination, or automatic cleanup/backups.
+- **Validation:** real DB reopen across lifecycles and sequential process runs;
+  owner isolation; failed-write preservation; cancellation/unload; shutdown;
+  interruption; unsupported schemas; corruption/unwritable database and diagnostics.
+- **Review gate:** approve public semantics, concrete SQLite durability settings,
+  retained data on uninstall, and application/extension database separation.
 
 ### 5. Production native UI contributions — D049 ⬜
 

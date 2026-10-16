@@ -13,7 +13,7 @@
 //! Keep V8 conversion in the host adapters and update the checked TypeScript
 //! facade/declarations when exposing or changing a public capability.
 
-use super::super::extension_storage::{Mutation, OwnerStorage, StorageError};
+use super::super::extension_storage::{OwnerStorage, StorageError};
 use super::*;
 use crate::host::declarations::{
     ArgumentReader, DecodeError, EncodedValue, HostArguments, HostError, HostSuccess, encode_json,
@@ -1111,43 +1111,6 @@ impl HostArguments for RecordWrite {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct RecordBatch {
-    operations: Vec<Mutation>,
-}
-impl HostArguments for RecordBatch {
-    fn decode(reader: &mut dyn ArgumentReader) -> Result<Self, DecodeError> {
-        let value = serde_json::to_value(reader.command_arguments(2)?).expect("validated JSON");
-        let items = value
-            .as_array()
-            .ok_or(DecodeError::Type("storage batch must be an array"))?;
-        let operations = items
-            .iter()
-            .map(|item| {
-                let key = item
-                    .get("key")
-                    .and_then(|key| key.as_str())
-                    .ok_or(DecodeError::Type("storage key must be text"))?
-                    .to_owned();
-                match item.get("type").and_then(|kind| kind.as_str()) {
-                    Some("write") => Ok(Mutation::Write {
-                        key,
-                        value: item
-                            .get("value")
-                            .ok_or(DecodeError::Type("storage write requires a value"))?
-                            .clone(),
-                    }),
-                    Some("delete") => Ok(Mutation::Delete { key }),
-                    _ => Err(DecodeError::Type(
-                        "storage operation must be write or delete",
-                    )),
-                }
-            })
-            .collect::<Result<_, _>>()?;
-        Ok(Self { operations })
-    }
-}
-
 pub(crate) struct RecordResult(Option<serde_json::Value>);
 impl HostSuccess for RecordResult {
     fn encode(self) -> Result<EncodedValue, DecodeError> {
@@ -1182,11 +1145,6 @@ async fn storage_delete(context: HostContext, arguments: RecordKey) -> Result<()
 #[host_operation("storageList")]
 async fn storage_list(context: HostContext, _: ()) -> Result<Vec<String>, RecordError> {
     Ok(context.records()?.list().await?)
-}
-
-#[host_operation("storageBatch")]
-async fn storage_batch(context: HostContext, arguments: RecordBatch) -> Result<(), RecordError> {
-    Ok(context.records()?.batch(arguments.operations).await?)
 }
 
 #[cfg(test)]

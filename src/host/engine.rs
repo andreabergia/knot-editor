@@ -7176,7 +7176,7 @@ globalThis.activationFinished = true;
                 if (!Object.isFrozen(knot.editor) || !Object.isFrozen(knot.commands) || !Object.isFrozen(knot.workbench) || !Object.isFrozen(knot.storage)) {
                     throw new Error("facade objects are mutable");
                 }
-                if (Object.keys(knot.storage).sort().join(",") !== "batch,delete,list,read,write") {
+                if (Object.keys(knot.storage).sort().join(",") !== "delete,list,read,write") {
                     throw new Error("storage facade is incomplete");
                 }
                 if (typeof knot.editor.activeBuffer !== "function"

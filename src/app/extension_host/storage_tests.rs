@@ -123,7 +123,7 @@ fn installed_storage_is_usable_during_activation_and_survives_reload(cx: &mut Te
 }
 
 #[gpui::test]
-fn storage_json_validation_and_atomic_batches_cross_the_product_host(cx: &mut TestAppContext) {
+fn storage_json_validation_and_failed_writes_cross_the_product_host(cx: &mut TestAppContext) {
     let root = tempfile::tempdir().unwrap();
     let packages = root.path().join("extensions");
     let data = root.path().join("storage");
@@ -145,12 +145,12 @@ fn storage_json_validation_and_atomic_batches_cross_the_product_host(cx: &mut Te
           if (!failed) throw Error('invalid JSON accepted');
         }
         if (conversions !== 0) throw Error('toJSON invoked');
-        for (const operations of [null, {}, [null], [,], [{ type: 'write', key: 'x' }],
-          [{ type: 'delete', key: 1 }], [{ type: 'unknown', key: 'x' }],
-          [{ type: 'write', key: 'leaked', value: 1 }, { type: 'write', key: 'bad', value: cyclic }]]) {
-          let failed = false;
-          try { await storage.batch(operations); } catch (error) { if (!(error instanceof TypeError)) throw error; failed = true; }
-          if (!failed) throw Error('invalid batch accepted');
+        for (const key of [undefined, null, 1, {}]) {
+          for (const operation of [() => storage.read(key), () => storage.write(key, 1), () => storage.delete(key)]) {
+            let failed = false;
+            try { await operation(); } catch (error) { if (!(error instanceof TypeError)) throw error; failed = true; }
+            if (!failed) throw Error('invalid key accepted');
+          }
         }
         if ((await storage.list()).length !== 0) throw Error('invalid input mutated DB');
         const value = { items: [1, null, true, 'λ'], nested: { ok: true } };
@@ -159,14 +159,11 @@ fn storage_json_validation_and_atomic_batches_cross_the_product_host(cx: &mut Te
         await pending;
         const copied = await storage.read('b');
         if (!Object.isFrozen(copied) || !Object.isFrozen(copied.value.items) || copied.value.items[0] !== 1) throw Error('record was not copied');
-        await storage.batch([
-          { type: 'write', key: 'a', value: 1 },
-          { type: 'delete', key: 'a' },
-          { type: 'write', key: 'a', value: null, ignored: () => {} },
-        ]);
+        await storage.write('a', 1);
+        await storage.delete('a');
+        await storage.write('a', null);
         await storage.write('', false);
         await storage.delete('absent');
-        await storage.batch([]);
         const listed = await storage.list();
         if (!Object.isFrozen(listed) || listed.join(',') !== ',a,b') throw Error('key order changed');
         const nullable = await storage.read('a');
@@ -179,14 +176,14 @@ fn storage_json_validation_and_atomic_batches_cross_the_product_host(cx: &mut Te
 
         let failed = false;
         try {
-          await storage.batch([{ type: 'delete', key: 'a' }, { type: 'write', key: 'new', value: 1 }, { type: 'write', key: 'fail', value: 2 }]);
+          await storage.write('a', 43);
         } catch (error) {
           if (error.name !== 'KnotHostError' || error.code !== 'StorageUnavailable' ||
               !error.details.database.endsWith('validation.sqlite3') ||
               !error.details.cause.includes('injected storage failure')) throw error;
           failed = true;
         }
-        if (!failed || (await storage.read('a')).value !== 42 || (await storage.read('new')).found) throw Error('partial transaction committed');
+        if (!failed || (await storage.read('a')).value !== 42) throw Error('failed write changed the record');
     "#,
     );
     let host = host(&data, cx);
@@ -209,7 +206,7 @@ fn storage_json_validation_and_atomic_batches_cross_the_product_host(cx: &mut Te
     }
     let database = data.join("packages/@example/validation.sqlite3");
     let connection = rusqlite::Connection::open(&database).unwrap();
-    connection.execute_batch("CREATE TRIGGER reject_write BEFORE INSERT ON records WHEN NEW.key = 'fail' BEGIN SELECT RAISE(ABORT, 'injected storage failure'); END").unwrap();
+    connection.execute_batch("CREATE TRIGGER reject_write BEFORE INSERT ON records WHEN NEW.key = 'a' BEGIN SELECT RAISE(ABORT, 'injected storage failure'); END").unwrap();
     host.update(cx, |host, cx| {
         host.hold_clipboard_writes = false;
         for request in std::mem::take(&mut host.deferred_view_requests) {

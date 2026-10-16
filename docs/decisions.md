@@ -468,8 +468,8 @@ simple without a dedicated service, worker, queue, or backup protocol. Initializ
 only empty unowned databases, and reject unsupported physical schemas without
 replacement; future schema changes require explicit migration.
 
-Expose async JSON read/write/delete/list and ordered atomic write/delete batches
-through existing typed host operations. Distinguish missing records from stored
+Expose only async JSON read/write/delete/list through existing typed host
+operations. Keep related state in one JSON record for atomic replacement. Distinguish missing records from stored
 null, share JSON validation/copying with command arguments, and leave record shape
 and value schema versions to extensions. Concurrent requests serialize at the
 connection with last-committed-write semantics; cross-call read/modify/write is

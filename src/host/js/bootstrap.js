@@ -726,17 +726,3 @@ export async function storageDelete(key) {
 export async function storageList() {
   return Object.freeze(await request("storageList"));
 }
-export async function storageBatch(operations) {
-  if (!Array.isArray(operations)) throw new TypeError("storage batch must be an array");
-  const normalized = [];
-  for (let index = 0; index < operations.length; index++) {
-    if (!Object.hasOwn(operations, index)) throw new TypeError("storage batch must be dense");
-    const operation = record(operations[index], "storage operation must be an object");
-    const type = operation.type;
-    const key = string(operation.key, "storage key must be text");
-    if (type === "write") normalized.push({ type, key, value: validateJsonValue(operation.value) });
-    else if (type === "delete") normalized.push({ type, key });
-    else throw new TypeError("storage operation must be write or delete");
-  }
-  await request("storageBatch", normalized);
-}

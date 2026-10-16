@@ -1,6 +1,6 @@
 import {
   activeBuffer,
-  storageRead, storageWrite, storageDelete, storageList, storageBatch,
+  storageRead, storageWrite, storageDelete, storageList,
   observeWorkbench, closePresentation,
   openDocument, createUntitled, presentDocument, listDocuments, getDocument, listWindows, getWindow, getWorkspace, openFolder, replaceWorkspaceRoots,
   invalidCommandArguments,
@@ -41,4 +41,4 @@ export const documents = Object.freeze({ list: listDocuments, get: getDocument, 
 export const windows = Object.freeze({ list: listWindows, get: getWindow });
 export const workspaces = Object.freeze({ get: getWorkspace, openFolder, replaceRoots: replaceWorkspaceRoots });
 
-export const storage = Object.freeze({ read: storageRead, write: storageWrite, delete: storageDelete, list: storageList, batch: storageBatch });
+export const storage = Object.freeze({ read: storageRead, write: storageWrite, delete: storageDelete, list: storageList });

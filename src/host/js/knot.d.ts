@@ -167,8 +167,6 @@ declare module "knot" {
   /** Missing keys are distinct from stored JSON null. */
   export type StorageRead = { readonly found: false }
     | { readonly found: true; readonly value: JsonValue };
-  export type StorageMutation = { readonly type: "write"; readonly key: string; readonly value: JsonValue }
-    | { readonly type: "delete"; readonly key: string };
   /** Application-global private records for this package or personal config.
    * Available during activation, without a window or command context. Data survives
    * reload, package updates and uninstall. Keys are exact strings, including empty.
@@ -177,17 +175,14 @@ declare module "knot" {
    */
   export const storage: {
     readonly read: (key: string) => Promise<StorageRead>;
-    /** Replace a record. Success acknowledges commit. */
+    /** Atomically replace one record. Success acknowledges commit. Concurrent
+     * calls serialize; last committed write wins. Read/modify/write is not atomic.
+     */
     readonly write: (key: string, value: JsonValue) => Promise<void>;
     /** Deleting a missing key succeeds. */
     readonly delete: (key: string) => Promise<void>;
     /** All keys in deterministic binary order. */
     readonly list: () => Promise<readonly string[]>;
-    /** Apply writes/deletes in order in one transaction. Invalid input or a DB
-     * failure commits none. Concurrent calls serialize; last committed write wins.
-     * Read/modify/write across calls is not atomic. No transaction spans JS awaits.
-     */
-    readonly batch: (operations: readonly StorageMutation[]) => Promise<void>;
   };
 
   /** Stable host failure codes; names, messages and stacks are diagnostics.
