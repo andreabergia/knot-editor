@@ -1,511 +1,302 @@
 # Architecture Decisions
 
-Durable choices and their rationale, validated by implementation and exploration.
-[Architecture](architecture.md) and its subsystem references describe behavior;
-essential supporting measurements are retained here. Production directions
-are labeled explicitly. [Deferred work](roadmap.md) tracks open scope and
-reconsideration triggers, and [active plans](plans/) track implementation.
+Validated choices, their rationale, and essential supporting evidence.
+[Architecture](architecture.md) and its subsystem references own current runtime
+behavior; API contracts live in code. [Roadmap](roadmap.md) and
+[active plans](plans/) own deferred and proposed work.
 
 ## Platform and UI
 
-gpui 0.2.2 supplies the editor and shell through public APIs, avoiding a separate
-renderer despite Skia's stronger standalone rendering result. Its macOS text
-path passed the fixture corpus; incomplete public bidirectional-text ergonomics
-require Knot's RTL alignment and logical-index mapping over glyph data.
+Use gpui through public APIs so the editor and shell share a framework rather
+than maintaining a separate renderer. Its macOS text path passed styled,
+viewport-culled text, selection, IME geometry, annotation, split-pane, Arabic,
+CJK, emoji, long-line, and large-file fixtures. Public bidirectional-text
+limitations require Knot's RTL alignment and logical-index mapping.
 
-Initial product dogfooding targets macOS. Windows 11 is also a local dogfooding
-target after native startup, personal configuration, editor, persistence,
-command, terminal, and protected-closure checks on one desktop session. This
-does not establish a Windows distribution or broad hardware certification.
-Linux passed a limited framework and native product smoke checkpoint on
-Omarchy/Hyprland Wayland, using personal clipboard and palette bindings.
-Broader Linux production claims still require validation.
+In separate rendering-primitive benchmarks on Apple M1 Pro/macOS release builds,
+Skia had lower p50 times on every fixture but higher and less predictable p99
+spikes. Those measurements did not compare complete frameworks; gpui met the
+product bar, so iced and floem were not evaluated.
 
-Use ordinary Windows Control shortcuts for product defaults. When a platform's
-native picker cannot select files and folders together, ask which kind the user
-wants before opening its single-kind picker. This preserves both Open flows
-through gpui's public platform capability without replacing the picker.
-
-Local macOS builds package the Rust binary as `Knot.app` with the supplied
-application icon and a plain-text document declaration. A small repository
-script keeps local packaging independent of distribution credentials and lets
-the product use gpui's activation, open-URL, and reopen callbacks. Signing and
-notarization remain distribution work.
-
-The public-API framework evaluation covered styled viewport-culled text,
-selection, macOS IME geometry, annotation underlines, split panes, and Arabic,
-CJK, emoji, long-line, and large-file fixtures. iced and floem were not evaluated
-after gpui cleared that bar. In the separate rendering-primitive benchmark on
-Apple M1 Pro/macOS release builds, Skia had lower p50 frame times on every
-fixture, but higher and less predictable p99 spikes. Those results did not
-measure complete UI frameworks.
+macOS is the initial dogfooding platform. Windows 11 passed local startup,
+config, editing, persistence, commands, terminal, and protected-closure checks
+on one desktop session. Linux passed limited framework and native product smoke
+checks on Omarchy/Hyprland Wayland. These establish bounded local evidence, not
+broad platform certification. Local macOS packaging stays independent of signing
+and distribution credentials.
 
 Reference: [workbench and lifecycle](architecture/workbench-and-lifecycle.md).
 
 ## Text buffer and stable positions
 
-Use a hand-built stable-ID piece table to retain direct control over edit events
-and stable positions. Keep the core single-threaded and UTF-8-native; the
-foreground owner serializes mutation, while presentation handles graphemes and
-the extension boundary adapts strings. Measurements do not justify replacing
-the line-start index or introducing a UTF-16 core.
+Use a hand-built stable-ID piece table for direct control over edit events and
+stable positions. A single-threaded UTF-8 core matches foreground ownership;
+presentation handles graphemes and the extension boundary adapts strings.
 
-On Apple M1 Pro/macOS release builds with a 1,001,395-line, 29 MiB Rust
-fixture, edits measured p50 678 µs with the line index and 75 µs without it.
-Linear suffix shifts accounted for about 88% of indexed edit latency; position
-issuance and resolution were sub-microsecond. These prototype measurements
-support deferring index replacement until real editing workloads justify it;
-absolute tail values included system noise.
+On Apple M1 Pro/macOS release builds with a 1,001,395-line, 29 MiB Rust fixture,
+edits measured p50 678 µs with the line index and 75 µs without it. Linear suffix
+shifts accounted for about 88% of indexed latency; position issuance and
+resolution were sub-microsecond. This supports deferring index replacement until
+real workloads justify it; absolute tails included system noise.
 
 Reference: [core and buffers](architecture/core-and-buffers.md).
 
 ## Anchored ranges and contributions
 
-Keep stable geometry in core and source, feature, lifecycle, and presentation
-policy in the application. This lets overlapping features share one edit stream
-without privileged coordination in core. Query indexes remain derived caches;
-undo restores text through ordinary edits rather than reviving provider state.
+Keep stable geometry in core and feature, source, lifecycle, and presentation
+policy in the application. Independent features can share one edit stream
+without privileged coordination. Query indexes remain derived caches.
 
 On Apple M4 Pro/macOS 15 release builds with 10,000 annotations on a million-line
 buffer, token stabilization measured p50 12.2–12.4 µs per edit versus
 69.5–69.7 µs for offset remapping across three and six sources. Token p99 was
-higher (165–171 µs versus 88–90 µs); resolving all annotations cost about
-1.79 ms. This supports inline stabilization at the tested scale without claiming
-uniform tail improvement.
+higher (165–171 µs versus 88–90 µs); resolving all annotations cost about 1.79 ms.
+This supports inline stabilization at the tested scale, not uniform tail gains.
 
 Reference: [core and buffers](architecture/core-and-buffers.md).
 
 ## Reversible edits
 
-Use ordinary buffer mutations for undo and redo so reversal follows the same
-edit-log and anchor-stabilization path as forward editing. The reversible edit
-primitive is separate from history management, grouping, and view restoration.
+Undo uses ordinary mutations so it shares forward editing's edit-log and anchor
+repair path. Session-local history belongs to the shared buffer model so every
+view sees one edit history. View snapshots use byte offsets: replay restores the
+exact content state, so persistent anchors would add lifetime complexity without
+improving stability. View identities avoid retaining closed view entities.
 
-Keep session-local linear history in the document's shared `BufferModel`, not
-in an editor view. This makes edits and history common to every view of a
-document while view identity remains an input to grouping and replay. Group
-only adjacent typing and same-direction deletion within a short interaction
-interval; focus, movement, paste, and explicit commands are predictable
-boundaries. Store the originating view's caret and selection as plain byte
-offsets on each entry: replay returns to the entry's exact content state, so
-persistent anchors would add lifetime complexity without improving stability.
-The model publishes the snapshot by view identity rather than retaining a view
-entity, allowing another view to invoke replay without moving itself or keeping
-a closed origin alive. Persistent or branching history and persistent
-view-state recovery remain deferred until their recovery value justifies the
-additional state model.
-Track content-state identity separately from the monotonic public revision so
-undo can return a document to its initial or persisted clean state without
-weakening revision-based conflict and notification ordering.
+Track content identity separately from monotonic public revisions so undo can
+return to clean content without weakening revision-based conflict detection.
+History persistence and branching await a demonstrated recovery benefit.
 
 Reference: [core and buffers](architecture/core-and-buffers.md).
 
 ## Extension runtime
 
-Use JavaScript on V8, with Knot-owned protocols insulating the editor from
-runtime machinery. The Deno prototype and its thread-per-extension runtime have
-been removed. The host now depends directly on V8 152, owns process
-initialization, and runs persistent shared isolates through a bounded worker
-pool. Each turn enters the isolate under a V8 locker and drains explicit
-microtasks before yielding it.
+Use JavaScript on direct V8, with Knot-owned protocols insulating editor models
+from runtime machinery. Persistent isolates preserve author state; a bounded
+worker pool fixes thread cost as extension count grows. Locked turns permit
+worker migration without a Knot-owned unsafe mobility wrapper. Serial callback
+roots simplify ownership, while yielding for host work preserves pool capacity.
+Forced interruption is fatal to the affected lifecycle, giving cleanup a definite
+boundary.
 
-Size the pool to `min(available_parallelism, 4)` by default and allow an
-explicit worker count for tests and diagnostics. This fixes thread cost as
-extension count grows while still allowing independent extensions to execute
-in parallel. Moving a persistent isolate only between locked turns preserves
-its JavaScript globals and enables FIFO scheduling across workers without a
-Knot-owned unsafe mobility wrapper.
+An application-owned pool and awaitable inbox avoid periodic wake loops and
+per-extension transport threads. Authoritative teardown releases foreground
+resources even when JavaScript cannot run cleanup. Local disposer inactivity
+prevents queued callbacks; native acknowledgement orders accepted mutations
+without waiting for a self-disposing callback to finish.
 
-Own one pool at the application boundary and deliver requests and terminal
-lifecycle events through an awaitable inbox. This keeps foreground mutation on
-gpui, avoids periodic wake loops and per-extension transport threads, and gives
-runtime and foreground resources one exact-once teardown signal.
+Immutable external UTF-16 snapshots serve V8 without changing the UTF-8 core.
+A prototype V8 149/deno_core benchmark on Apple M1 Pro/macOS release builds
+measured 10 MiB Unicode marshaling at p50 36.0 ms versus 10.6 ms for cold external
+UTF-16 and 321 µs cached. A whole-document UTF-16 boundary-table adapter exceeded
+its 32 MiB isolate heap cap. This supports revision/range-scoped snapshots and
+caching, not a public byte-array API or a current pool-performance claim.
 
-Serial callbacks within an extension simplify ownership; independent runtimes
-progress through the bounded pool. Forced interruption is fatal to that
-extension so cleanup has a definite lifecycle boundary. Immutable shared
-UTF-16 snapshots serve V8 without exposing mutable storage or changing the
-UTF-8 core. The prototype V8 149/deno_core benchmark on Apple M1 Pro/macOS
-release builds measured 10 MiB Unicode string marshaling at p50 36.0 ms versus
-10.6 ms for cold external UTF-16 and 321 µs when cached. A whole-document
-UTF-16 boundary-table adapter exceeded its 32 MiB isolate heap cap. These
-prototype results support revision/range-scoped snapshots and caching, rather
-than a public byte-array text API; they are not current pool performance claims.
-
-Host operations retain V8 promise resolvers and yield the worker until a typed
-response makes the isolate runnable again. This keeps asynchronous native work
-from consuming pool capacity. The scheduler runs one non-preemptive JavaScript
-turn per dequeue, preserves unrelated roots in extension-local FIFO order, and
-admits same-tree continuations while a root is pending. It applies no automatic
-quotas, deadlines, event dropping, or backpressure; those policies remain D019.
-
-Installed packages supply a validated, immutable source graph to the host before
-entry evaluation. Generated file URLs identify modules and preserve useful
-failure locations, while graph membership and a package-root check prevent
-imports from reaching another package or native filesystem paths. V8 retains
-compiled modules and values inside its isolate; the application handles disk
-discovery and passes only Knot-owned sources into the host.
-
-Treat disposal as immediate local inactivity followed by native acknowledgement.
-Keep one result, including rejection, for repeated calls so a failed cleanup does
-not silently become success or create a second mutation. Earlier accepted
-mutations/invalidation settle before cleanup acknowledgement; executing callbacks
-are excluded from that barrier so self-disposal cannot deadlock. Authoritative
-teardown releases remaining foreground ownership without depending on JavaScript
-finally blocks or a disposer retry. Host release uses the same cleanup while
-buffer models and views may still be retained.
-
-Decode boundary data by recognized typed fields rather than JSON conversion
-hooks or diagnostic strings. Public host error codes come from native failure
-variants; type and numeric errors remain author-side categories. Preserve native
-integer precision instead of silently rounding identities, revisions or offsets.
-A bad callback or item remains a recoverable failure of its request.
+Immutable captured module graphs separate filesystem discovery from execution
+and preserve useful source locations without granting cross-package imports.
+Private native dispatch handles prevent author globals from fabricating callback
+context. Typed field decoding and error variants avoid JSON conversion hooks,
+diagnostic-string protocols, and silent numeric precision loss.
 
 Reference: [extension host](architecture/extension-host.md).
 
-Use annotated async native handlers with linked descriptors to keep operation
-arguments, semantic results and errors paired at their definition. A small
-proc-macro crate generates the adapters; `inventory` avoids a parallel handwritten
-registration list, and sorted assembly makes discovery and duplicate diagnostics
-deterministic. Owned foreground contexts keep gpui borrows out of suspended
-futures. Keep V8 field decoding in the host and application mutation in the app.
-Explicit error-code attributes survive Rust variant renames; transparent error
-composition shares failures without a central membership enum. Check the closed
-TypeScript code union from descriptor metadata rather than another native list.
-All host capabilities use this mechanism, including native-turn keymap batching.
-Keep foreground owners independent of response envelopes and use typed completion
-channels for nested command work. This preserves command-tree ownership without
-keeping transport dispatch tables in the application.
+## Handler declarations
 
-Use the same typed async call contract for annotated native commands, with
-command-specific argument and outcome adapters. Native declarations own catalog
-metadata and generated name constants; distinct participants may share a name
-only with consistent titles. Keep synchronous claim predicates and the existing
-focus precedence so extension routing can select inline children before scheduling.
-Drive short foreground requests in the current dispatch turn, handing suspended
-futures to the executor only when necessary. This preserves key-command/text-input
-ordering without retaining foreground borrows across awaits. Dynamic extension
-registration and ownership stay in the application catalog.
+Annotated async handlers keep argument, result, and error types paired at their
+definition. Generated adapters and linked descriptors avoid parallel registration
+and transport tables. Deterministic assembly diagnoses duplicates; descriptor
+metadata checks the TypeScript error union without another membership list.
+Explicit error codes survive Rust renames.
+
+Host operations and native commands share the owned async call contract, while
+foreground owners remain independent of response transport. Short foreground
+requests run in the dispatch turn to preserve key-command/text-input ordering;
+suspended work holds no gpui borrow. Synchronous participant selection preserves
+focus precedence and inline extension composition.
+
+References: [extension host](architecture/extension-host.md) and
+[commands](architecture/commands.md).
 
 ## Installed extension directories
 
-Use the platform's local application-data `Knot/extensions` root and canonical
-`@scope/package` directory names. Built JavaScript and a small JSONC manifest
-make installation inspectable and keep package management outside the editor.
-Discover and capture sources off gpui's foreground thread, then load eagerly in
-deterministic dependency order. A dependency establishes startup order and
-command availability without granting module access across isolates. Keep
-explicit command names in one global namespace so invocation semantics do not
-change with packaging.
+Use inspectable installed directories containing built JavaScript and a JSONC
+manifest; package management stays outside the editor. Dependencies establish
+startup order and command availability, not module access across isolates.
+A global command namespace keeps invocation independent of packaging.
 
-Retain the load result for every package in an application-owned startup report
-and expose it in each product window. The report makes malformed manifests and
-runtime failures visible while independent packages continue. Reuse exact-once
-lifecycle teardown for startup rollback so commands and semantic providers do
-not outlive a failed entry.
+Require an explicit API version before evaluation, separate from package version.
+Recoverable manifest identity must survive validation failure so rejected
+packages cannot conceal duplicates or appear as missing dependencies. Retained
+startup outcomes expose failures while independent packages remain usable.
 
-Require an explicit installed-package API version before entry evaluation. API
-version describes host contracts; package version and dependencies describe the
-package itself. Retain recoverable identity before field validation so version
-failures cannot conceal duplicates or turn a known rejected dependency into a
-missing package. Personal configuration deliberately stays manifest-free.
-
-Keep native dispatch functions in engine-owned persistent handles, outside the
-author's global namespace. Native callback context and buffer proxy construction
-must come from admitted native work, and replacing a global function must not
-redirect dispatch. Release those handles with the isolate's other owned state.
+Reference: [extension host](architecture/extension-host.md).
 
 ## Personal configuration
 
-Use two optional JavaScript entry modules in one selected per-user config
-directory. Prefer an existing `XDG_CONFIG_HOME/knot`, then an existing
-`~/.config/knot`, then the platform config directory for `Knot` (spelled `knot`
-on Linux), so a launch has one
-unambiguous source root on every platform. Keep config separate from installed
-packages: it has no manifest, has its own lifecycle identity, and its pre-init
-and post-init turns share JavaScript state across extension startup.
+Use one manifest-free config directory with optional pre-init and post-init
+modules sharing JavaScript state. Prefer an existing XDG location so users have
+one unambiguous source root across platforms.
 
-Treat config failure as fatal to startup because continuing after only part of
-a personal setup ran would leave the editor in an unpredictable state. Hold
-product windows and launch requests until both phases succeed; on failure,
-unload all startup lifecycles and present an error window that stays available
-for copying the diagnostic or quitting. Installed-package failures keep their
-independent reporting and do not stop other packages or post-init.
+Config failure is fatal to startup: partially applied personal setup would leave
+unpredictable behavior. Installed-package failures remain independent. Product
+windows wait for both phases, and a dedicated error window keeps diagnostics
+available when config startup fails.
 
-Reference: [extension host](architecture/extension-host.md) and
+References: [extension host](architecture/extension-host.md) and
 [workbench lifecycle](architecture/workbench-and-lifecycle.md).
 
 ## Commands and keymaps
 
-Use one Knot-owned command namespace and dispatcher across invocation sources.
-The captured window focus path lets native views claim or decline before
-workbench and application behavior. Captured targets make palette and delayed
-execution preserve user intent across focus changes.
-Extensions may handle an existing command for a declared view kind without
-owning another public command name. Each live view instance is bound and
-validated by Knot; the application participant handles global extension
-commands only after the focused view and workbench decline.
-Nested extension invocation reuses the parent's captured window for handler
-selection, then keeps the bridge's inline same-lifecycle execution and
-one-child ancestry rules. This preserves composition without a second window
-dispatch for native children.
+Use one semantic namespace and dispatcher across keys, menus, palette, and
+scripts. Captured presentation authority preserves intent across focus changes
+and awaits without granting ambient access to whichever window is active later.
+Explicit buffer access remains useful independently of a presentation.
 
-Contextual extension operations use the native-admitted command tree capture,
-including across awaits and inline or cross-lifecycle children. Keep explicit
-contextual target arguments as authority checks rather than a focus lookup:
-copying or retaining a target does not grant access outside its live tree.
-Validate the exact presentation as well as tab identity so replacing an editor
-under the same document or transferring it cannot retarget requests. Valid
-nontext captures have a null buffer; missing context, stale authority, unsupported
-selection and cancellation remain distinct failures. Activation and unrelated
-callbacks must use explicit buffers; clipboard writes are application-scoped.
-This preserves invocation intent without giving asynchronous roots ambient
-access to whichever window happens to be focused.
+Bounded awaited command composition supports reuse without a general task graph:
+inline same-extension children avoid self-queue deadlock, while ancestry and
+one-child rules constrain composition. Outcomes describe execution; ordinary
+functions remain preferable when semantic return values are needed.
 
-Awaited command composition runs one root tree at a time. Nested same-extension
-frames avoid self-queue deadlock; ancestry checks and one unfinished child per
-parent bound composition without introducing a general task scheduler. Commands
-return structured execution outcomes, not semantic values; ordinary JavaScript
-functions remain preferable when command lookup and routing are unnecessary.
-
-Keep one application-owned keymap registry with a merged effective map. Native,
-extension, and personal registrations retain owner records so replacement,
-unbinding, failed startup, and unload can reveal lower-priority bindings.
-Personal config outranks extensions, which outrank native defaults. Within one
-source, view-specific bindings outrank global bindings, and later registrations
-win remaining ties. This order is resolved by Knot because gpui's context
-depth cannot express source priority. gpui recognizes keys and scopes, while
-the command dispatcher handles the selected semantic command. A null unbind
-leaves raw view input available. Menus and the palette invoke commands without
-consulting the keymap; a global `copy` binding routes to different handlers by
-focused view. Raw input protocols stay outside registered commands.
-Apply JavaScript mutations as one ordered batch per V8 turn so invalid input
-cannot leave a partial keymap and startup readiness follows foreground state.
+Resolve keymap precedence in Knot because gpui context depth cannot express
+personal-over-extension-over-native priority. Retain owner slots so removal
+reveals lower-priority bindings. Atomic per-turn JavaScript batches prevent
+partial keymaps and make startup readiness follow foreground state.
 
 Reference: [commands](architecture/commands.md).
 
 ## Views and extension UI
 
-Share text and contributions through buffer models while keeping interaction
-and presentation per view. Extensions publish surface-specific semantic data;
-native views retain rendering and input ownership so JavaScript cannot block
-painting. A general declarative widget tree is not planned; a WebView remains a
-possible escape hatch if a concrete arbitrary-UI need appears.
+Share text and contributions through buffer models; keep interaction per view.
+Surface-specific semantic data lets extensions customize behavior without
+blocking native painting. A general widget tree or WebView needs a concrete
+unmet use case first.
 
-Keep horizontal movement and deletion on grapheme boundaries, word navigation
-on Unicode word boundaries, and vertical movement on a remembered shaped x
-coordinate. Byte columns remain storage coordinates; they cannot preserve the
-visual column across ASCII, combining text, CJK, and emoji lines.
+Grapheme-aware horizontal movement and shaped-x vertical movement preserve
+visual behavior that byte columns cannot express across combining text, CJK,
+and emoji.
 
-Reference: [semantic ui](architecture/semantic-ui.md).
+References: [semantic UI](architecture/semantic-ui.md) and
+[editor views](architecture/workbench-and-lifecycle.md#editor-views).
 
 ## Workbench layout and view lifetime
 
 Use a binary split tree with tabbed leaves and stable pane/tab identities.
-Application-owned documents can outlive individual views; application-wide
-last-view knowledge is therefore required for correct closure.
+Application-wide last-view knowledge protects shared documents. One protected
+closure flow defers presentation changes until all decisions and saves succeed,
+avoiding partial closure on cancellation. Empty-workbench replacement is shell
+policy rather than a layout invariant.
 
-Coordinate tab, window, and quit closure through one application-level flow.
-Defer presentation changes until all decisions and saves succeed, preventing
-partial closure on cancellation or failure. Empty-workbench replacement is
-product-shell policy, not a layout invariant.
-
-Relocate tabs through typed workbench transitions and an application foreground
-coordinator. Capture the presentation entity as well as pane, tab, and surface
-identities so replacement under unchanged document identity is still stale.
-Revalidate and prepare the destination before mutation, keeping transfer
-independent of protected closure. Retain document editor entities to preserve
-their view state; hand off terminal attachments across windows while preserving
-the registered session. Destination-local identities keep captured commands
-from retargeting a transferred tab. Creating a destination window first keeps
-creation failure from removing the source presentation.
-
-Coordinate drag delivery with a transient application-wide foreground state.
-macOS continues delivering pressed drag events to the originating window, so
-map its content coordinates to the screen pointer and hit-test painted targets
-in the foremost Knot window. Compensate the shared gpui preview for stale mouse
-positions in other windows. Clear visual state before deferring the transfer
-past input dispatch, allowing either endpoint to receive the release without
-borrowing a destination during its own update. Outside-frame releases create
-a destination near the pointer before moving the source; invalid space inside
-Knot frames does not create a window. Exact endpoint validation remains the
-relocation coordinator's responsibility.
+Tab relocation preserves editor state and terminal sessions independently of
+closure. Exact presentation captures reject replacement and transfer; preparing
+a new destination window first preserves the source if creation fails.
+Application-wide drag coordination handles macOS delivering pressed drags to the
+originating window, including cross-window hit testing and preview placement.
 
 Reference: [workbench and lifecycle](architecture/workbench-and-lifecycle.md).
 
 ## Terminal
 
-Use a native terminal surface backed by `alacritty_terminal`, separate from
-text buffers. Ghostty VT offered no concrete behavioral advantage sufficient to
-offset separate PTY integration, pre-1.0 FFI, Zig packaging, integration size,
-and poor debug parsing performance.
+Use `alacritty_terminal` as a native surface separate from text buffers. Ghostty
+VT offered insufficient behavioral advantage to offset separate PTY integration,
+pre-1.0 FFI, Zig packaging, integration size, and poor debug parsing performance.
+The Alacritty adapter met the required behavior without copying Zed code; Zed
+remains an attributed reference for later concrete compatibility gaps.
 
-The application owns a registry of stable terminal sessions; each workbench
-terminal tab owns the sole attached view. The process and grid survive view
-reconstruction and transfer to another window. One attached view keeps resize
-authority unambiguous. Releasing a view does not stop its session. Successful
-tab, window, and application closure removes affected sessions from the registry
-and shuts them down after dirty-document decisions; natural exit leaves the
-final grid visible until the tab is closed or restarted. PTY shutdown and child
-reaping run away from the foreground thread.
+An application-owned session outlives its presentation. One attachment keeps
+resize and input authority unambiguous. Ordered generation-scoped protocol events
+preserve emulator replies while repaint wakeups coalesce. Gesture ownership from
+press through release prevents modifier changes from leaving reported buttons
+pressed. A session-local mouse toggle makes selection and Copy usable inside TUIs.
 
-Use Alacritty's parser-produced device, cursor, color, and size replies through
-an ordered generation-scoped foreground queue; coalesce only repaint wakeups.
-This keeps terminal protocol interpretation in the emulator and PTY writes in
-the session's existing asynchronous channel. Keyboard encoding reads emulator
-modes after product command precedence. Focus reports follow both view focus
-and native window activation. Physical application-keypad support remains
-[D040](roadmap.md) until gpui retains its native identity; the user chose this
-bounded limitation over vendoring the framework.
-
-Provide an enabled-by-default, per-terminal mouse-reporting toggle through the
-shared command system. Disabling reporting supports ordinary drag + native Copy
-inside TUIs, while preserving application-requested modes for re-enabling.
-Keep this session-local preference across restart and attachment handoff.
-
-Choose a mouse gesture's recipient on press and retain it through release.
-Shift chooses local selection; ongoing application gestures retain their paired
-release even if modifiers change. Wheels use their current route independently.
-This gives each pointer gesture one owner and prevents a modifier change or
-attachment handoff from leaving a reported button pressed. Report viewport
-cells separately from scrollback selection coordinates, and suppress coordinates
-that a requested legacy encoding cannot represent.
-
-Keep hyperlink recognition in the view's displayed-grid adapter. OSC 8 identity
-is authoritative; HTTP(S) detection follows soft wraps and emulator cell widths.
-Restrict the initial native opener to HTTP(S), normalize destinations with the
-existing URL parser, and trim sentence punctuation while retaining balanced path
-delimiters. Modifier-click owns the whole gesture before application reporting;
-release revalidates the captured grid and geometry so output or lifecycle changes
-cannot open an old destination. Visible-grid detection avoids inventing a
-truncated URL at the viewport edge; explicit OSC 8 destinations remain complete.
-
-The existing Alacritty adapter supplied the required session and product
-behavior without copying Zed code. Zed's GPL-compatible implementation remains
-an attributed reference for concrete input, rendering, or event behavior if
-later compatibility work exposes a gap.
+HTTP(S)-only opening bounds link policy. Explicit OSC 8 identity takes precedence
+over detected text, and release-time validation prevents changing output from
+opening a stale destination. Physical application-keypad support remains deferred
+rather than vendoring gpui solely to recover its missing native key identity.
 
 Reference: [workbench and lifecycle](architecture/workbench-and-lifecycle.md).
 
 ## Generated text surfaces
 
-Use ordinary buffers and editor views when generated output remains useful as
-selectable, scrollable, copyable text. Editability belongs to application policy,
-and surface controllers retain semantic identity instead of parsing displayed
-text. Search validated this boundary without special cases in generic buffer
-ownership or a second generated surface.
+Use ordinary buffers and views when generated output benefits from text
+interaction. Controllers retain semantic identities instead of parsing displayed
+text. Search validated this boundary without adding feature semantics to generic
+buffer ownership or a second presentation model.
 
-Reference: [semantic ui](architecture/semantic-ui.md).
+Reference: [semantic UI](architecture/semantic-ui.md).
 
 ## Capability aggregation
 
-Keep completion aggregation feature-specific and view-owned. Deterministic
-merging makes results independent of provider arrival order, while local provider
-failure preserves other results. Stable semantic item identities let native
-presentations be replaced without restarting provider work or recovering
-semantics from labels.
+Keep aggregation feature-specific and view-owned. Deterministic merging removes
+arrival-order dependence; provider-local failure preserves other results. Stable
+semantic item identities allow presentation replacement without restarting work
+or recovering semantics from labels.
 
-Reference: [semantic ui](architecture/semantic-ui.md).
+Reference: [semantic UI](architecture/semantic-ui.md).
 
 ## URI workspaces and filesystem providers
 
-Use normalized URIs and one asynchronous byte-oriented provider boundary so
-generic document and workspace code is independent of platform paths. Local and
-memory providers validate the same contract. Product documents are independent
-of workspace containment because Open and Save As can select any user resource.
+Normalized URIs and an async byte-oriented provider boundary keep generic
+workspace and document code independent of platform paths. Documents remain
+independent of workspace containment so Open and Save As can select any resource.
+Local roots are trusted application boundaries, not symlink sandboxes.
 
-Use no-clobber creation, conditional replacement, and atomic local installation
-to protect existing content and expose external conflicts. Commit persistence
-identity only after successful I/O, and mark only the captured revision saved
-so racing edits stay dirty. Resource ownership is application-wide to avoid
-multiple open documents claiming the same normalized destination.
-
-Local workspace roots are trusted application boundaries, not security
-sandboxes: symlinks deliberately remain usable even when they lead outside the
-root.
+No-clobber creation, conditional replacement, and atomic local installation
+protect existing content. Persistence identity changes only after successful I/O;
+saving the captured content state leaves racing edits dirty. Application-wide URI
+ownership prevents two open documents from claiming the same destination.
 
 Reference: [documents and persistence](architecture/documents-and-persistence.md).
 
 ## Application document and root identity
 
-Allocate a UUID per open application document separately from its session-local
-collection ID and transport handle. Resource association changes preserve that
-identity; reopening after closure allocates another. This supports future durable
-metadata without deriving identity from a mutable URI or promising recovery now.
-
-Keep workspace roots owned by each window, including an empty root set. Ordered
-root records retain their IDs while their normalized URI is retained. A window's
-root-set generation survives clear/reinstall so old asynchronous directory work
-cannot become current again. The model accepts at most one root.
+Document UUIDs separate logical identity from mutable URIs, collection IDs, and
+transport handles without promising restart recovery before durable metadata
+exists. Window-owned root identities and monotonic generations prevent
+clear/reinstall from making old asynchronous directory work current again.
 
 Reference: [documents and persistence](architecture/documents-and-persistence.md).
 
 ## Application observation
 
-Capture observation registration, initial metadata and a session sequence watermark
-in one foreground operation. Compare native metadata at committed transitions
-rather than copying application ownership into a second catalog or exposing buffer
-edits as application events. A retained baseline exists only to detect changes;
-queries always describe the current native owners.
+Atomic registration, initial snapshot, and sequence watermark prevent gaps.
+Compare metadata at committed transitions instead of creating a second catalog
+or exposing text-edit payloads as application events. Queries derive current
+state from its existing owners.
 
-Deliver notifications as existing unrelated FIFO scheduler roots, preserving the
-observing root's admission order and allowing listeners to await host requests or
-self-disposal. Reuse local inactivity plus native cleanup acknowledgement for
-queued callback suppression and lifecycle teardown. A later query may see newer
-state, so no replay log, public transaction, acknowledgement or recovery protocol
-is needed for ordinary editor observation.
+Existing asynchronous FIFO roots let listeners await host work or self-disposal
+without blocking commits. A query may see newer state than its event; ordinary
+editor observation does not require replay, acknowledgement, or recovery logs.
 
 Reference: [extension host](architecture/extension-host.md).
 
 ## Semantic resource operations
 
-Return committed resource/document/presentation data from the shared product Open
-path and adapt it independently for native command outcomes and extension results.
-This keeps provider, deduplication, presentation and target-loss behavior together;
-a command's status string or a later focus query cannot identify its result.
-Capture live destinations at native admission and revalidate exact presentations
-and caller lifetime before commit. File-only extension Open constrains resource
-kind before reading, while ordinary native Open continues dispatching by kind. Address root mutations
-by window independently of document presentations, validating the entire root set
-before the shared root/tree transition. Captured Open and workspace generations
-prevent an older validation from overwriting a newer root decision. Protected
-closure returns a semantic result from its foreground transition, preserving
-native dirty-document decisions and exact presentation checks. User Cancel differs
-from caller cancellation; accepted saves remain committed even when closure does
-not follow. Cancelling a command rejects JS authority immediately while consuming
-already queued host responses under the same root, avoiding duplicate settlement
-or lifecycle failure from an admitted delivery.
+Share product operations between native commands and extension APIs, returning
+committed semantic data independently of execution outcomes. A status string or
+later focus query cannot reliably identify an opened presentation. Root mutations
+address windows independently of selected documents; protected closure preserves
+native dirty-document decisions. Caller cancellation prevents later mutation but
+does not roll back a save already accepted by the shared persistence path.
 
-Reference: [documents and persistence](architecture/documents-and-persistence.md).
+References: [documents](architecture/documents-and-persistence.md) and
+[protected closure](architecture/workbench-and-lifecycle.md#workbench-and-protected-closure).
 
 ## Extension record storage
 
-Select separate SQLite databases from canonical package identity, with a distinct
-stable personal-config database. Runtime lifecycles and installed directories
-can change without changing durable ownership, and extension data remains separate
-from application-owned metadata. Application admission supplies the owner; the
-public API cannot name another owner or database path.
+Separate SQLite databases by canonical package identity, with a distinct config
+owner, so durable ownership survives reload and installation-path changes.
+Application-selected owners keep extensions out of other databases and separate
+extension records from application recovery metadata.
 
-Use bundled SQLite through `rusqlite`, synchronous calls on the existing gpui
-background executor, and one mutex-serialized connection per database. Normal
-rollback journaling with FULL synchronization keeps committed-write acknowledgement
-simple without a dedicated service, worker, queue, or backup protocol. Initialize
-only empty unowned databases, and reject unsupported physical schemas without
-replacement; future schema changes require explicit migration.
+Bundled SQLite, serialized reused connections, and synchronous calls on the
+existing background executor avoid a dedicated storage service. Rollback
+journaling with FULL synchronization provides committed-write acknowledgement.
+One JSON record is the atomic replacement unit; extensions own value schemas.
+Incompatible or damaged databases fail without replacement.
 
-Expose only async JSON read/write/delete/list through existing typed host
-operations. Keep related state in one JSON record for atomic replacement. Distinguish missing records from stored
-null, share JSON validation/copying with command arguments, and leave record shape
-and value schema versions to extensions. Concurrent requests serialize at the
-connection with last-committed-write semantics; cross-call read/modify/write is
-not atomic. Reload, updates and uninstall preserve data.
+Drain admitted work before calling gpui quit because its final shutdown hook's
+short foreground wait cannot supply this guarantee. The drain runs independently
+of its awaiting caller, preserving accepted native work without a final JS
+callback.
 
-Reference: [extension host](architecture/extension-host.md).
-
-Drain extension storage before calling gpui quit: gpui's final shutdown hook has
-a short foreground wait, so it cannot provide this contract. Close admission
-synchronously and use admitted-task completion guards to await native work and
-release connections on the existing executor. Keep the drain independent of its
-awaiting caller. Reuse foreground lifetime/cancellation checks through weak per-call
-flags, rechecked after the connection lock; once work starts it finishes normally.
-This needs no storage worker, work queue, final JS callback, or public transaction.
+Reference: [extension host](architecture/extension-host.md#extension-record-storage).

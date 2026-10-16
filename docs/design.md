@@ -1,579 +1,125 @@
-# Knot - A Modern Programmable Editor
-
-## Introduction
-
-This project aims to build Knot, a modern programmable editor inspired by the philosophy of Emacs while embracing contemporary expectations regarding user interface, performance, asynchronous execution, and language tooling.
-
-The goal is not to recreate Emacs, nor to build another IDE. Instead, the objective is to create a programmable editing environment where:
-
-- the editor itself is programmable;
-- commands are first-class objects;
-- user-visible editor behavior is exposed through the extension API;
-- the user interface is customizable;
-- text remains central;
-- modern tooling such as Tree-sitter and LSP integrate naturally.
-
-The editor should feel lightweight, fast, inspectable, and extensible.
-
----
-
-# Philosophy
-
-## Everything is programmable
-
-The editor is fundamentally an embedded runtime wrapped around a small native core.
-
-Configuration, extensions, commands, keybindings, UI customizations, and workflows are written in the embedded language.
-
-There is no strong distinction between:
-
-- user configuration;
-- packages;
-- built-in functionality.
-
-Packages are simply collections of code.
-
-The native core provides the performance-critical substrate: buffers, rendering integration, scheduling, capability aggregation, and the host API. Built-in behavior should be authored against the same public APIs exposed to extensions wherever practical. The important invariant is not that every byte of editor implementation is scripted, but that built-ins do not rely on privileged editor APIs unavailable to users.
-
----
-
-## Text remains important
-
-Text is the primary representation for most editor functionality.
-
-Features such as:
-
-- file browsers;
-- search results;
-- version control interfaces;
-- help systems;
-- diagnostics;
-- logs;
-
-should preferably be represented as editable or inspectable text buffers.
-
-This preserves the flexibility and discoverability that made Emacs successful.
-
----
-
-## The filesystem is the workspace
-
-The editor does not introduce a separate project model.
-
-A workspace is simply:
-
-- one or more folders;
-- optionally individual files.
-
-Resources are identified by URI, allowing the filesystem abstraction to extend beyond local files. The built-in local filesystem provider is the default implementation. Extensions may register providers for other URI schemes.
-
-Examples:
-
-- `file:///home/user/foo.rs` — local file;
-- `ssh://host/path/to/file` — remote file;
-- `zip:///archive.zip!/entry.txt` — archive entry.
-
-A `FileSystemProvider` interface defines the operations needed for filesystems to participate in editor workflows. The minimum surface includes open, read, write, watch, stat, directory enumeration, URI normalization, and capability discovery. Providers may also expose optimized operations such as search, atomic write/rename, and remote process integration. This allows remote and virtual filesystems to participate naturally without changing the core workspace model.
-
-Workspaces are created implicitly when a file or folder is open, though multiple files and folders can be added to a workspace. A workspace can be saved as a simple text file in the filesystem, if they contain more than one root directory or files.
-
----
-
-## Asynchronous by default
-
-Potentially expensive operations must never block the interface.
-
-Examples include:
-
-- language servers;
-- indexing;
-- search;
-- git operations;
-- AI services;
-- external commands.
-
----
-
-## The UI is extensively customizable
-
-Extensions can contribute custom views, panels, sidebars, popups, status items,
-annotations, decorations, gutters, and contextual actions. Selected high-level
-surfaces, such as completion, hover, and the command palette, are replaceable.
-
-The native platform shell and the fundamental text editor view are part of the
-trusted core. Extensions are not expected to reimplement text shaping, hit
-testing, selection, IME, accessibility, or low-level rendering. Instead, the
-text view exposes public contribution points that allow extensions to alter its
-presentation and behavior substantially.
-
-Built-in high-level behavior should use the same editor-state and contribution
-APIs exposed to extensions wherever practical. This is a promise of
-user-visible extensibility, not literal access to native Rust, gpui, GPU, or
-platform internals.
-
----
-
-# Core Models
-
-## Workspace
-
-A workspace is a collection of filesystem roots, addressed by URI.
-
-```text
-Workspace
-    roots[]  (URIs)
-```
-
----
-
-## Buffers
-
-Buffers represent editable or inspectable text. The prototype has one buffer
-type: `TextBuffer`.
-
-Represents editable text.
-
-Examples:
-
-- source files;
-- markdown;
-- logs;
-- directory listings;
-- git status;
-- search results.
-
-Binary resources and terminals do not need to implement a common buffer
-abstraction merely to participate in the UI. Introduce another buffer type only
-if a future resource demonstrates useful buffer semantics.
-
----
-
-## Views
-
-Views are the primary content instances placed in windows. Some views render a
-buffer; others own a surface-specific model.
-
-An `EditorView` renders a `TextBuffer`. A single text buffer may have multiple
-editor views with independent presentation state.
-
-Examples:
-
-- two editors displaying the same file;
-- source and preview views;
-- different zoom levels;
-- minimaps.
-
-Views contain presentation and interaction state:
-
-- scroll position;
-- cursor state;
-- selections;
-- rendering options.
-
-A `TerminalView` is the sole presentation of an application-owned
-`TerminalSession`. The session owns the pseudoterminal, process, emulator state,
-and authoritative grid size; the view owns presentation and input state. A
-terminal is not a `Buffer`. The view can be rebuilt or moved to another window
-without restarting the session. Sharing one session between simultaneous views
-is intentionally unsupported because independently sized or focused views
-would introduce ambiguous resize and input semantics.
-
-Terminal support remains a core editor capability, not an optional extension
-or text-buffer emulation. Knot should reuse a mature terminal parser/state
-machine rather than implement escape-sequence handling from scratch.
-
----
-
-## Windows
-
-Windows are layout containers.
-
-Windows contain views.
-
-Windows may:
-
-- split horizontally;
-- split vertically;
-- be arranged in trees;
-- participate in tabs or workspaces.
-
----
-
-## Widgets
-
-The editor discourages specialized UI components that bypass its native view
-and semantic-surface APIs. Text-oriented content should normally remain
-buffer-backed. Native views may own a surface-specific model where text-buffer
-semantics do not fit, as with terminals and trees. Widgets are used where there
-is no independent content view, for example an autocompletion popup triggered
-by an editor view.
-
----
-
-# Commands
-
-Commands are first-class objects representing reusable semantic editor
-operations.
-
-Commands are distinct from raw input events such as pointer motion, scroll
-deltas, focus changes, and IME composition updates. Input handlers and widgets
-may translate interactions into commands where doing so is useful.
-
-Examples:
-
-- save-buffer
-- split-window
-- next-error
-- rename-symbol
-
-Commands may:
-
-- appear in command palettes;
-- receive key bindings;
-- be invoked programmatically;
-- be composed.
-
-A command invocation captures context rather than assuming every operation
-targets a buffer. The context identifies the focused view, its optional
-associated `TextBuffer`, the containing window and workspace, and the
-invocation itself. The captured target remains stable across asynchronous
-work; implementations revalidate it before mutation rather than retargeting a
-command when focus changes.
-
-Native commands route from the focused widget through its view, window,
-workspace, and global scopes. This lets generic commands such as copy,
-select-all, and close-view acquire surface-appropriate behavior without making
-terminal, tree, and editor state implement one data model. Extension APIs
-receive semantic context and opaque handles, never native view or gpui objects.
-
----
-
-# Capabilities
-
-The editor defines a fixed, small set of well-known capabilities that the core understands and can coordinate. Extensions may define additional custom capabilities beyond this set.
-
-Well-known capabilities include:
-
-- diagnostics;
-- completion;
-- formatting;
-- folding;
-- hover;
-- references;
-- renaming.
-
-This hybrid model ensures interoperability between extensions while preserving flexibility. For example, two independent completion extensions can both contribute results to a single shared completion UI, because the core knows how to aggregate completion providers.
-
-## UI Surfaces vs. Capability Providers
-
-A key distinction governs how capabilities are rendered:
-
-- **Capability providers** (completion sources, diagnostic sources, formatters): multiple providers may be active simultaneously; the core aggregates their results.
-- **UI surfaces** (completion popup, command palette, hover tooltip, diagnostic display): one active provider at a time, replaceable by extensions.
-
-The editor ships with default UI surface implementations. An extension may replace any surface by registering a new provider for it. The UI surface simply renders whatever the aggregated capability providers return.
-
-This means, for example, that the completion popup is overridable — a plugin can replace the built-in popup entirely — while multiple completion sources continue to contribute results regardless of which popup is active.
-
----
-
-# Languages and Features
-
-The editor separates language support from editor features.
-
-## Language
-
-A language provider is responsible for:
-
-- syntax highlighting;
-- indentation;
-- parsing;
-- embedded languages;
-- text objects.
-
-Examples:
-
-- Rust
-- Markdown
-- HTML
-
----
-
-## Features
-
-Features provide additional functionality.
-
-Examples:
-
-- diagnostics
-- completion
-- formatting
-- spell checking
-- git integration
-- AI assistance
-
-A buffer may have many active features.
-
-This replaces the traditional distinction Emacs has between major and minor modes.
-
----
-
-# Semantic Information
-
-The editor enriches documents through independent providers.
-
-```text
-Tree-sitter ─┐
-LSP         ├─→ capability aggregation ─→ views and commands
-Providers   ─┘
-```
-
-Providers may run concurrently, operate on different document revisions,
-overlap in what they contribute, or be temporarily unavailable. The model does
-not assume that one provider consumes or supersedes another; composition rules
-belong to each capability.
-
-Tree-sitter provides:
-
-- syntax trees;
-- folding;
-- structural selections;
-- symbols.
-
-LSP provides:
-
-- diagnostics;
-- references;
-- renaming;
-- completion.
-
-Additional providers may contribute further information.
-
----
-
-# Annotations
-
-Annotations are attached to buffers.
-
-Examples include:
-
-- diagnostics;
-- search matches;
-- git changes;
-- bookmarks;
-- folding regions;
-- breakpoints;
-- highlights.
-
-Annotations do not modify the underlying text.
-
-Views decide how annotations are rendered.
-
-This allows features to compose naturally.
-
-Some annotations describe shared facts about a buffer, while views own presentation choices. For example, a folding provider may contribute foldable regions as annotations, but whether a particular region is currently collapsed belongs to each view. Rich visual conflict policy between overlapping annotations is a UI concern that can evolve after the storage and query model is proven.
-
----
-
-# Extension System
-
-Extensions execute in isolated runtime contexts. Independent extensions may
-run concurrently and must not block the user interface.
-
-There is no strict distinction between:
-
-- configuration;
-- packages;
-- built-in code.
-
-Extensions may provide:
-
-- commands;
-- views;
-- language support;
-- features;
-- annotations;
-- keymaps;
-- filesystem providers;
-- UI surface implementations;
-- capability providers.
-
-## Built-in mechanics and bundled extensions
-
-Knot distinguishes inseparable editor mechanics from opinionated product
-workflows. Text editing, current-buffer Find, document persistence, and
-workbench ownership are built into the native application because the editor
-cannot function coherently without them.
-
-Workflows whose policy is meaningfully replaceable ship as bundled extensions.
-Examples include Go to File, recent-file navigation, and search across files,
-where users may reasonably prefer different matching engines, scope rules,
-ignore behavior, ordering, or presentation.
-
-A bundled extension is a normal extension with a distribution relationship to
-Knot:
-
-- it ships and updates with Knot;
-- it is enabled by default, remains visible, and can be disabled independently;
-- users may replace it by disabling it and installing another extension;
-- it uses only the typed public APIs available to user-installed extensions;
-  and
-- disabling it removes all of its commands, keybindings, providers, and
-  contributions through the ordinary extension lifecycle.
-
-Bundled origin grants no privileged editor API. If bundled behavior requires a
-private host path, the public extension boundary is incomplete. The native
-application may still provide durable primitives such as recent-resource
-history, provider-neutral workspace file queries, resource opening, and native
-presentation. Extensions compose those primitives into replaceable workflows.
-
-Current-file Find remains built in because it is a direct interaction with one
-editor buffer. Search across files is bundled behavior because choosing grep,
-vimgrep, ripgrep, fuzzy matching, ignore semantics, workspace scope, and result
-presentation is product policy rather than a fundamental text-model operation.
-
-## Isolation and cancellation
-
-Runtime isolation is not by itself a security boundary. A misbehaving extension
-must not be able to freeze the editor indefinitely, exhaust resources
-unchecked, corrupt core state, or prevent cancellation of work it started.
-The current scheduling, interruption, and lifecycle mechanisms are described in
-the [extension host architecture](architecture/extension-host.md), with rationale
-in [decisions](decisions.md#extension-runtime). Quotas, backpressure,
-slow-consumer policy, and timeouts remain deferred under D019 in the
-[roadmap](roadmap.md).
-
----
-
-# Session Persistence
-
-Session persistence does not belong to the storage-independent core model.
-Extensions own project membership and session restoration policy. The Rust
-application layer owns durable preservation and recovery of unsaved document
-contents, independently of extension health.
-
-The intended application API lets extensions serialize and restore:
-
-- open buffers;
-- window layouts;
-- view state.
-
-Extensions store persistent document references and presentation metadata rather
-than maintaining the sole recovery copy of unsaved text. Users can choose
-restoration policies from reopening recent files to full workspace restoration.
-Application-owned recovery remains available when an extension fails or its
-session metadata is unavailable. These APIs and guarantees are planned in the
-[extension platform and project management plan](plans/extension-platform-and-projects-plan.md);
+# Knot — A Modern Programmable Editor
+
+Knot is a programmable editing environment inspired by Emacs, with a modern
+native interface, asynchronous execution, and language tooling. It should feel
+lightweight, fast, inspectable, and extensible.
+
+This document describes product direction, including capabilities still to be
+built. [Architecture](architecture.md) describes the current implementation;
+[decisions](decisions.md) explains validated choices, and the
+[roadmap](roadmap.md) identifies selected and deferred work.
+
+## Programmability
+
+Configuration, extensions, keybindings, and workflows use JavaScript. Built-in
+high-level behavior should use the same public APIs available to extensions
+wherever practical. Bundled origin must not grant privileged editor APIs.
+
+The native core supplies inseparable mechanics: text editing, shaping, input,
+document persistence, workbench ownership, scheduling, and capability
+aggregation. User-visible programmability does not require exposing Rust, gpui,
+GPU, or platform objects, or implementing every feature in script.
+
+Configuration is ordinary code, with its own startup and failure policy.
+Packages add distribution and lifecycle ownership, rather than a different
+programming model.
+
+## Text and views
+
+Text is the preferred representation when content benefits from ordinary
+selection, scrolling, copying, and editing: search results, logs, help, and many
+version-control workflows. Semantic controllers retain identity and actions;
+features should not recover semantics by parsing displayed text.
+
+Use concrete native surfaces where text-buffer semantics do not fit, such as
+terminals and trees. Do not force them into a common polymorphic buffer model.
+A buffer may have several views with independent cursor, selection, folding,
+scroll, and zoom state. Shared annotations describe buffer facts; views decide
+how to present them.
+
+Terminal support is a native editor capability backed by a mature emulator.
+The session survives view reconstruction and window transfer. Simultaneous
+views of one terminal session are outside current scope because resize and
+input authority would need another policy.
+
+## Filesystem and workspaces
+
+A workspace is a set of URI-addressed filesystem roots, not a privileged project
+object. Documents can be opened independently of those roots. Local files are
+the default; provider boundaries should also accommodate remote or virtual
+resources without changing generic document ownership.
+
+Named projects, membership, and restoration policy belong to extensions. A
+project can combine roots, document references, and presentation metadata without
+making the native application understand project names or workflow policy.
+
+## Commands and responsiveness
+
+Commands are reusable semantic operations, discoverable in the palette, bound
+to keys, callable from scripts, and composable. Raw input protocols such as IME,
+pointer motion, scrolling, and terminal bytes remain native view behavior.
+Commands capture their target before focus changes and preserve that intent
+across asynchronous work.
+
+Expensive work must not block the interface: language servers, indexing,
+search, Git, external commands, and optional AI services all cross asynchronous
+boundaries. Independent extensions may progress concurrently. Runtime isolation
+alone is not a security boundary; cancellation and resource policy must reflect
+real workloads. Current mechanisms and remaining policy work are described in
+[extension host architecture](architecture/extension-host.md) and the roadmap.
+
+## Extension UI and capabilities
+
+Extensions contribute semantic content, actions, decorations, gutters, native
+views, panels, and transient interactions. Native code owns rendering, shaping,
+hit testing, IME, and raw input. Selected high-level surfaces, such as completion,
+hover, and the palette, should be replaceable without requiring extensions to
+reimplement low-level editor mechanics.
+
+Distinguish capability providers from their presentation. Several completion or
+diagnostic sources may contribute together, while one selected surface presents
+the aggregate. Composition rules belong to each capability, not a universal
+provider framework. A general declarative widget tree is not planned; arbitrary
+UI needs must first demonstrate why semantic surfaces are insufficient.
+
+Language support and editing features remain independent. A language provider
+can supply syntax, indentation, parsing, embedded languages, and text objects.
+Features such as diagnostics, completion, formatting, spelling, Git, and AI can
+combine on the same buffer. Tree-sitter and LSP contribute complementary
+information rather than defining exclusive modes.
+
+## Native mechanics and bundled workflows
+
+Current-buffer Find, editing, persistence, and workbench ownership are native
+mechanics. Replaceable workflows such as Go to File, recent-file navigation,
+and cross-file search should ship as ordinary bundled extensions using public
+primitives. Users should be able to disable or replace them independently.
+
+For example, cross-file search can vary its matching engine, ignore rules,
+scope, ordering, and presentation. Those choices belong in the extension;
+provider-neutral resource access and opening remain native primitives. If a
+bundled workflow needs a private host bypass, the public boundary is incomplete.
+
+## Recovery and session policy
+
+The Rust application owns durable preservation and recovery of unsaved content,
+independently of extension health. Extensions own project membership and session
+restoration policy, storing document references and presentation metadata rather
+than the only recovery copy of text.
+
+The intended APIs support restoring documents, layouts, and view state. Native
+recovery must remain available when an extension or its session metadata fails.
+These guarantees are planned in the
+[extension platform initiative](plans/extension-platform-and-projects-plan.md);
 they are not yet implemented.
 
----
+## Non-goals
 
-# User Interface
-
-The interface should be:
-
-- modern;
-- responsive;
-- GPU accelerated;
-- highly configurable.
-
-Extensions can contribute UI elements through the public view and contribution
-APIs. High-level surfaces intended for replacement use the same editor-state
-APIs whether their implementation is built in or supplied by an extension.
-
-Examples of replaceable UI surfaces:
-
-- status bars;
-- panels;
-- sidebars;
-- popups;
-- command palettes;
-- completion popups;
-- hover tooltips.
-
----
-
-# Open Questions
-
-## Embedded language
-
-Candidates include:
-
-- V8 / JavaScript / TypeScript
-- JavaScriptCore
-- WebAssembly with a standard SDK
-
-Questions:
-
-- startup time;
-- memory usage;
-- API design;
-- packaging;
-- type safety.
-
----
-
-## Structured buffers
-
-The current design intentionally keeps buffers text-specific and avoids both
-general structured buffers and a common polymorphic resource model.
-
-Future experience may reveal whether additional buffer types are necessary.
-
----
-
-# Rejected Ideas
-
-## Collaborative editing
-
-Real-time collaborative editing is not a goal for Knot. The editor will not
-adopt CRDTs or another shared-document model, and its buffer, position, history,
-workspace, and extension APIs should not be designed around future
-collaborative-editing requirements.
-
-Screen sharing and external communication tools are sufficient for the
-collaborative workflows Knot intends to support.
-
----
-
-## Everything is a generic model
-
-Too abstract.
-
-The editor prefers concrete, surface-specific models. Shared abstraction should
-come from demonstrated common semantics rather than requiring terminals,
-trees, binary resources, and editable text to look alike.
-
----
-
-## Plugin processes
-
-Running extensions out-of-process adds complexity.
-
-The current design prefers in-process isolation. A process boundary remains an
-option where stronger isolation proves necessary.
-
----
-
-## AI as a central editor concept
-
-The current design avoids making AI a mandatory architectural component.
-
-AI services may eventually become standardized capabilities, but this remains optional.
-
----
-
-# Summary
-
-The editor can currently be described as:
-
-- programmable;
-- text-centric;
-- command-oriented;
-- asynchronous;
-- filesystem-based (URI-addressed);
-- view-driven;
-- annotation-based;
-- capability-structured with replaceable UI surfaces.
-
-The project aims to preserve the flexibility and inspectability of Emacs while adopting modern rendering, tooling, and extension mechanisms.
+- Real-time collaborative editing and CRDTs. External screen sharing and
+  communication cover the intended collaborative workflows.
+- A generic model abstraction shared by editable text, terminals, trees, and
+  binary resources. Shared abstractions need demonstrated common semantics.
+- Out-of-process extensions by default. A process boundary remains an option
+  if stronger isolation proves necessary.
+- AI as a mandatory editor concept. AI integrations may become optional
+  capabilities when concrete workflows justify them.

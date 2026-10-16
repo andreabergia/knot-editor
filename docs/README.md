@@ -13,11 +13,19 @@ Current sources of truth:
   register of deferred work. The current initiative is
   [production extension APIs and JavaScript projects](plans/extension-platform-and-projects-plan.md).
 - [plans/](plans/) contains active executable slice plans.
-- [extension-api.md](extension-api.md) is the draft extension-author guide; API reference
-  documentation lives beside the TypeScript declarations.
+- [extension-api.md](extension-api.md) is the extension-author guide for setup and common
+  workflows; precise API contracts live beside the TypeScript declarations.
 - [development.md](development.md) covers local checks, CI, and the Rust
   toolchain.
 
 Completed plans and exploration reports are retained in Git history. Preserve
 durable behavior in the architecture references and rationale and essential
 measurements in decisions before removing a completed plan.
+
+Keep each fact in its authoritative home. Summaries may repeat enough context
+for orientation, then link to the owner rather than reproducing its contract.
+Architecture references retain ownership, cross-boundary flows, and constraints
+that are difficult to infer from one module. Constants, field-level API rules,
+and local algorithms belong beside code and tests. Decisions retain the choice,
+its reason, and evidence needed to assess it. Plans retain unfinished work and
+review gates; reduce completed checkpoints to completion notes and current links.
