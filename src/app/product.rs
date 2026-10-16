@@ -2588,7 +2588,7 @@ impl ProductShell {
                     }),
                     cx,
                 );
-                cx.quit();
+                super::extension_host::quit_after_storage(cx);
                 Ok(())
             }
         }

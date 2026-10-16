@@ -132,6 +132,21 @@ pub(crate) fn completion_provider_count(cx: &App) -> usize {
         .unwrap_or_default()
 }
 
+pub(crate) fn quit_after_storage(cx: &mut App) {
+    let Some(host) = entity(cx) else {
+        cx.quit();
+        return;
+    };
+    let Some(drain) = host.update(cx, |host, _| host.shutdown_storage()) else {
+        return;
+    };
+    cx.spawn(async move |cx| {
+        drain.await;
+        let _ = cx.update(|cx| cx.quit());
+    })
+    .detach();
+}
+
 pub(crate) fn install(cx: &mut App) -> Entity<ProductExtensionHost> {
     crate::host::declarations::registry()
         .validate_context::<handlers::HostContext>()
@@ -313,6 +328,11 @@ pub(crate) struct ProductExtensionHost {
     lifecycles: HashSet<ExtensionKey>,
     storage: Result<super::extension_storage::ExtensionStorage, String>,
     storage_owners: HashMap<ExtensionKey, super::extension_storage::StorageOwner>,
+    storage_stopping: bool,
+    storage_callers: Vec<(
+        crate::host::protocol::RequestContext,
+        std::sync::Weak<std::sync::atomic::AtomicBool>,
+    )>,
     buffers: ExtensionBufferBridge,
     application_observation: super::application_observation::ApplicationObservation,
     #[cfg(test)]
@@ -367,6 +387,9 @@ impl ProductExtensionHost {
             this.handle_tree_event(event, cx)
         });
         let release_subscription = cx.on_release(|host, cx| {
+            if let Some(drain) = host.shutdown_storage() {
+                drain.detach();
+            }
             let lifecycles = host.lifecycles.iter().copied().collect::<Vec<_>>();
             for key in lifecycles {
                 let _ = host.pool.unload(key);
@@ -393,6 +416,8 @@ impl ProductExtensionHost {
                 )
             }),
             storage_owners: HashMap::new(),
+            storage_stopping: false,
+            storage_callers: Vec::new(),
             buffers: ExtensionBufferBridge::new(),
             application_observation: Default::default(),
             #[cfg(test)]
@@ -423,6 +448,42 @@ impl ProductExtensionHost {
             personal_config_key: None,
             next_extension_id: Arc::new(AtomicU64::new(1)),
         }
+    }
+
+    pub(crate) fn shutdown_storage(&mut self) -> Option<Task<()>> {
+        if self.storage_stopping {
+            return None;
+        }
+        self.storage_stopping = true;
+        Some(
+            match std::mem::replace(
+                &mut self.storage,
+                Err("application is shutting down".into()),
+            ) {
+                Ok(storage) => storage.shutdown(),
+                Err(_) => Task::ready(()),
+            },
+        )
+    }
+
+    fn refresh_storage_callers(&mut self) {
+        let callers = std::mem::take(&mut self.storage_callers);
+        self.storage_callers = callers
+            .into_iter()
+            .filter(|(request, caller)| {
+                let Some(caller) = caller.upgrade() else {
+                    return false;
+                };
+                if !self.operation_is_live(
+                    ExtensionKey::new(request.extension, request.lifecycle),
+                    request.invocation,
+                ) {
+                    caller.store(false, Ordering::Release);
+                    return false;
+                }
+                true
+            })
+            .collect();
     }
 
     #[cfg(test)]
@@ -1013,6 +1074,7 @@ impl ProductExtensionHost {
         }
         self.view_command_handlers
             .retain(|invocation, _| self.commands.contains_invocation(*invocation));
+        self.refresh_storage_callers();
     }
 
     fn validate_view_command_outcome(
@@ -1583,6 +1645,7 @@ impl ProductExtensionHost {
         if !self.lifecycles.remove(&key) {
             return;
         }
+        self.refresh_storage_callers();
         self.storage_owners.remove(&key);
         self.application_observation.remove_lifecycle(key);
         let personal = self.personal_config_key == Some(key);

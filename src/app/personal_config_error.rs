@@ -56,7 +56,7 @@ impl Render for PersonalConfigErrorView {
                     {
                         _this.quit_requested = true;
                     }
-                    cx.quit();
+                    super::extension_host::quit_after_storage(cx);
                 }
             }))
             .size_full()
@@ -109,7 +109,7 @@ impl Render for PersonalConfigErrorView {
                             .py_1()
                             .text_color(rgb(0x80c0ff))
                             .child("Quit")
-                            .on_click(|_, _, cx| cx.quit()),
+                            .on_click(|_, _, cx| super::extension_host::quit_after_storage(cx)),
                     ),
             )
     }

@@ -1,7 +1,7 @@
 # D048 — Simple durable extension storage
 
-Status: 🚧 Checkpoints 1–2 implemented and tested; awaiting public API review.
-Checkpoint 3 has not started.
+Status: 🚧 All three checkpoints implemented; final acceptance review remains.
+The plan remains active until that approval; it is not yet archived.
 
 Source: checkpoint 4 of the [extension platform and projects plan](extension-platform-and-projects-plan.md).
 Design discussion: 2026-10-15. Relevant current boundaries:
@@ -168,10 +168,11 @@ batch operations and their native mutation abstraction. The API has four record
 operations; atomic replacement of one JSON record covers current consumers.
 All 630 library tests and the extension API checks passed after simplification.
 
-⏸️ Public API review gate remains open. The fixture and automated demonstration
-are ready; checkpoint 3 shutdown integration and lifecycle acceptance remain.
+✅ Public API review simplified storage to four record operations at the user's
+request. The ordinary fixture demonstrates persistence through those operations;
+shutdown/lifecycle work resumed with the goal.
 
-### 3. Shutdown and acceptance ⬜
+### 3. Shutdown and acceptance ✅
 
 Integrate graceful shutdown with admitted native storage work and finish lifecycle
 coverage. Update the relevant architecture reference and validated decisions when
@@ -187,6 +188,36 @@ committing. Use logical commits for the implementation checkpoints.
 **Review gate:** review the restart demonstration, failure diagnostics, and passing
 automated checks. Stop for approval before marking D048 complete and archiving
 this plan.
+
+✅ Product quit and the personal-config error window now stop storage admission
+and await admitted work and connection release before calling gpui quit. Connection
+closure stays on the existing background executor. Host release also starts an
+independent native drain; it does not depend on a surviving JS caller. Admission
+uses a small count and completion guard, with no new queue, service, or worker.
+
+✅ Pending calls carry weak cancellation flags updated by the existing command
+and lifecycle checks. Native work checks its flag after acquiring the connection,
+before opening or running SQLite. Started work finishes normally. Native cancellation
+maps to the existing `Cancelled` host error and uses ordinary exact-once settlement.
+
+✅ Deterministic tests cover cancellation before opening a DB, queued command
+cancellation, unload before execution and during an open transaction, rejection
+after shutdown admission closes, a drain waiting for pending work and releasing
+connections, and quit returning control to the foreground while a transaction waits.
+A separate writer process commits and exits; another process replaces that record
+in a transaction large enough to spill to disk and is killed before commit.
+Reopen recovers the previously committed JSON record, with no partial replacement.
+The child uses ordinary SQLite settings and the same native owner/storage boundary.
+
+✅ Validation on 2026-10-16: `cargo test --lib` passed all 640 tests, including
+cancellation/unload, shutdown/connection release, the public JS restart demo,
+failure diagnostics, and the separate-process interruption test.
+`sh scripts/check-extension-api.sh` passed; `cargo fmt` and `git diff --check`
+completed. Architecture, lifetime documentation, and validated decisions match
+the implemented ownership and quit flow.
+
+⏸️ Final acceptance review remains open. Do not mark D048 complete or archive it
+until the user approves the restart/interruption evidence, diagnostics, and checks.
 
 ## Exclusions and deferred choices
 

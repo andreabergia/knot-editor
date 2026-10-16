@@ -419,6 +419,16 @@ lifecycles have no implicit durable owner.
 The public `storage` facade validates and copies JSON data through the shared JSON
 validation boundary. Annotated record handlers use the ordinary caller-lifetime
 checks without requiring command or window context, then await native background
-work. Results and `StorageUnavailable` diagnostics use existing host response and
+work. Weak per-call cancellation flags follow those existing foreground checks
+through command cancellation and lifecycle removal. Database work rechecks its
+flag after acquiring the connection, before opening or executing SQLite. Results and `StorageUnavailable` diagnostics use existing host response and
 exact-once settlement transport. Native transactions never span a JavaScript
-await. Application shutdown admission/draining is not yet integrated.
+await. Once native work starts, cancellation does not interrupt its transaction.
+
+Product and personal-config diagnostic quit paths synchronously stop storage
+admission, then await the existing executor's admitted work and connection release
+before calling gpui quit. No foreground disk wait or final JS unload callback is
+required. Host release also detaches a native drain. An admitted task retains its
+completion guard until it finishes or is cancelled before execution; the drain
+closes each connection only after every admitted task has released that guard.
+The native drain runs independently of the caller awaiting shutdown.

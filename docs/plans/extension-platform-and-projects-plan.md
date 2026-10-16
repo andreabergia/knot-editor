@@ -372,12 +372,12 @@ D048 storage or D020 user automation. The broader extension/project initiative r
 
 ### 4. SQLite-backed extension storage — D048 ⬜
 
-🚧 Native storage and public JS API checkpoints implemented and tested in the
-focused D048 plan; public API review is pending. Shutdown/lifecycle acceptance
-remains, so this parent checkpoint is incomplete.
+🚧 All focused D048 implementation checkpoints are implemented and tested,
+including asynchronous shutdown and process interruption/reopen coverage. Final
+acceptance review remains, so this parent checkpoint is incomplete.
 
 The [focused D048 plan](d048-extension-storage-plan.md) tracks the four-operation
-record API and remaining shutdown/lifecycle acceptance.
+record API and final acceptance review.
 
 - Publish the storage namespace, declarations, documentation, and contract tests.
 - Implement per-owner databases and async JSON read/write/delete/list using

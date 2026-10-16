@@ -1058,9 +1058,12 @@ impl From<AccessError> for RecordError {
 
 impl From<StorageError> for RecordError {
     fn from(error: StorageError) -> Self {
-        Self::Unavailable {
-            database: error.database.display().to_string(),
-            cause: error.cause,
+        match error {
+            StorageError::Cancelled => Self::Access(AccessError::Cancelled),
+            StorageError::Unavailable { database, cause } => Self::Unavailable {
+                database: database.display().to_string(),
+                cause,
+            },
         }
     }
 }
@@ -1068,6 +1071,9 @@ impl From<StorageError> for RecordError {
 impl HostContext {
     fn records(&self) -> Result<OwnerStorage, RecordError> {
         self.foreground(|host, _| {
+            if host.storage_stopping {
+                return Err(AccessError::Cancelled.into());
+            }
             let key = ExtensionKey::new(self.request.extension, self.request.lifecycle);
             let owner = host
                 .storage_owners
@@ -1080,7 +1086,11 @@ impl HostContext {
                     database: "local application-data directory".into(),
                     cause: cause.clone(),
                 })?;
-            Ok(storage.for_owner(owner.clone()))
+            let records = storage.for_owner(owner.clone());
+            let caller = Arc::new(std::sync::atomic::AtomicBool::new(true));
+            host.storage_callers
+                .push((self.request, Arc::downgrade(&caller)));
+            Ok(records.with_caller(caller))
         })?
     }
 }
@@ -1204,5 +1214,194 @@ mod tests {
                 "application"
             )
         });
+    }
+    fn storage_context(
+        root: &std::path::Path,
+        cx: &mut TestAppContext,
+    ) -> (Entity<ProductExtensionHost>, HostContext, ExtensionKey) {
+        let key = ExtensionKey::new(ExtensionId::new(703), ExtensionLifecycleId::new(1));
+        cx.update(|cx| {
+            let commands =
+                cx.new(super::super::super::product_commands::ProductCommandDispatcher::new);
+            cx.set_global(ApplicationProductCommands(commands));
+            let host = install(cx);
+            let context = host.update(cx, |host, cx| {
+                host.load(key, ExtensionConfig::default()).unwrap();
+                host.set_test_storage_root(root.to_owned(), cx);
+                host.storage_owners.insert(
+                    key,
+                    super::super::super::extension_storage::StorageOwner::personal_config(),
+                );
+                HostContext::new(
+                    crate::host::protocol::RequestContext {
+                        extension: key.extension,
+                        lifecycle: key.lifecycle,
+                        id: RequestId::new(1),
+                        invocation: None,
+                    },
+                    cx,
+                )
+            });
+            (host, context, key)
+        })
+    }
+
+    #[gpui::test]
+    async fn unload_before_storage_starts_cancels_without_creating_a_database(
+        cx: &mut TestAppContext,
+    ) {
+        let root = tempfile::tempdir().unwrap();
+        let (host, context, key) = storage_context(root.path(), cx);
+        let pending = context
+            .records()
+            .unwrap()
+            .write("key".into(), serde_json::json!(1));
+        host.update(cx, |host, cx| host.unload(key, cx).unwrap());
+        assert!(matches!(pending.await, Err(StorageError::Cancelled)));
+        assert!(!root.path().join("personal-config.sqlite3").exists());
+    }
+
+    #[gpui::test]
+    async fn command_cancellation_invalidates_queued_storage(cx: &mut TestAppContext) {
+        let root = tempfile::tempdir().unwrap();
+        let (host, mut context, key) = storage_context(root.path(), cx);
+        let invocation = host.update(cx, |host, _| {
+            let registration = host
+                .commands
+                .register_command(
+                    &context.request,
+                    "storage-test".into(),
+                    "Storage test".into(),
+                )
+                .unwrap();
+            host.commands
+                .enqueue_extension_root(
+                    crate::host::protocol::Command {
+                        name: "storage-test".into(),
+                        arguments: crate::host::protocol::CommandArgumentValue::Null,
+                    },
+                    CommandTarget {
+                        registration,
+                        extension: key.extension,
+                        lifecycle: key.lifecycle,
+                    },
+                    None,
+                )
+                .id
+        });
+        context.request.invocation = Some(invocation);
+        let pending = context
+            .records()
+            .unwrap()
+            .write("key".into(), serde_json::json!(1));
+        host.update(cx, |host, cx| {
+            host.commands.cancel(invocation);
+            host.drain_command_events(cx);
+        });
+        assert!(matches!(pending.await, Err(StorageError::Cancelled)));
+        assert!(!root.path().join("personal-config.sqlite3").exists());
+    }
+
+    #[gpui::test]
+    fn unload_during_storage_transaction_preserves_commit(cx: &mut TestAppContext) {
+        let root = tempfile::tempdir().unwrap();
+        let (host, context, key) = storage_context(root.path(), cx);
+        host.update(cx, |host, _| {
+            host.storage = Ok(
+                super::super::super::extension_storage::ExtensionStorage::new(
+                    root.path().to_owned(),
+                    super::super::super::extension_storage::test_executor(),
+                ),
+            );
+        });
+        let (started, ready) = std::sync::mpsc::channel();
+        let (resume, gate) = std::sync::mpsc::channel();
+        let pending = context.records().unwrap().write_with_gate(started, gate);
+        ready
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        host.update(cx, |host, cx| host.unload(key, cx).unwrap());
+        resume.send(()).unwrap();
+        pollster::block_on(pending).unwrap();
+        let drain = host.update(cx, |host, _| host.shutdown_storage().unwrap());
+        pollster::block_on(drain);
+        let reopened = super::super::super::extension_storage::ExtensionStorage::new(
+            root.path().to_owned(),
+            super::super::super::extension_storage::test_executor(),
+        );
+        assert_eq!(
+            pollster::block_on(
+                reopened
+                    .for_owner(
+                        super::super::super::extension_storage::StorageOwner::personal_config()
+                    )
+                    .read("key".into())
+            )
+            .unwrap(),
+            Some(serde_json::json!(42))
+        );
+        pollster::block_on(reopened.shutdown());
+    }
+
+    #[gpui::test]
+    async fn shutdown_rejects_new_host_storage_requests(cx: &mut TestAppContext) {
+        let root = tempfile::tempdir().unwrap();
+        let (host, context, _) = storage_context(root.path(), cx);
+        let pending = context
+            .records()
+            .unwrap()
+            .write("key".into(), serde_json::json!(1));
+        let drain = host.update(cx, |host, _| host.shutdown_storage().unwrap());
+        assert!(matches!(
+            storage_write(
+                context,
+                RecordWrite {
+                    key: "late".into(),
+                    value: serde_json::json!(2)
+                }
+            )
+            .await,
+            Err(RecordError::Access(AccessError::Cancelled))
+        ));
+        pending.await.unwrap();
+        drain.await;
+        assert!(host.update(cx, |host, _| host.shutdown_storage()).is_none());
+    }
+
+    #[gpui::test]
+    fn product_quit_drains_storage_without_blocking_foreground(cx: &mut TestAppContext) {
+        let root = tempfile::tempdir().unwrap();
+        let (host, context, _) = storage_context(root.path(), cx);
+        host.update(cx, |host, _| {
+            host.storage = Ok(
+                super::super::super::extension_storage::ExtensionStorage::new(
+                    root.path().to_owned(),
+                    super::super::super::extension_storage::test_executor(),
+                ),
+            );
+        });
+        let (started, ready) = std::sync::mpsc::channel();
+        let (resume, gate) = std::sync::mpsc::channel();
+        let records = context.records().unwrap();
+        let pending = records.write_with_gate(started, gate);
+        ready
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        cx.update(quit_after_storage);
+        cx.update(quit_after_storage);
+        cx.run_until_parked();
+        cx.update(|cx| {
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                "foreground remains responsive".into(),
+            ))
+        });
+        assert!(cx.read(|cx| host.read(cx).storage_stopping));
+        assert!(matches!(
+            pollster::block_on(records.write("late".into(), serde_json::json!(1))),
+            Err(StorageError::Cancelled)
+        ));
+        resume.send(()).unwrap();
+        pollster::block_on(pending).unwrap();
+        cx.run_until_parked();
     }
 }

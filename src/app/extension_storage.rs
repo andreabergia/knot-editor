@@ -3,7 +3,10 @@
 use std::{
     collections::BTreeMap,
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 
@@ -50,14 +53,19 @@ impl StorageOwner {
 }
 
 #[derive(Debug)]
-pub(crate) struct StorageError {
-    pub(crate) database: PathBuf,
-    pub(crate) cause: String,
+pub(crate) enum StorageError {
+    Cancelled,
+    Unavailable { database: PathBuf, cause: String },
 }
 
 impl std::fmt::Display for StorageError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "storage {}: {}", self.database.display(), self.cause)
+        match self {
+            Self::Cancelled => write!(f, "storage caller cancelled"),
+            Self::Unavailable { database, cause } => {
+                write!(f, "storage {}: {cause}", database.display())
+            }
+        }
     }
 }
 
@@ -69,6 +77,7 @@ pub(crate) struct ExtensionStorage {
     root: PathBuf,
     executor: BackgroundExecutor,
     databases: Mutex<BTreeMap<StorageOwner, Arc<Database>>>,
+    work: Arc<Mutex<WorkState>>,
 }
 
 impl ExtensionStorage {
@@ -83,6 +92,11 @@ impl ExtensionStorage {
             root,
             executor,
             databases: Mutex::new(BTreeMap::new()),
+            work: Arc::new(Mutex::new(WorkState {
+                accepting: true,
+                pending: 0,
+                drained: None,
+            })),
         }
     }
 
@@ -102,6 +116,55 @@ impl ExtensionStorage {
         OwnerStorage {
             database,
             executor: self.executor.clone(),
+            work: self.work.clone(),
+            caller: None,
+        }
+    }
+
+    /// Stop admission synchronously; wait and close connections on the executor.
+    pub(crate) fn shutdown(self) -> Task<()> {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        {
+            let mut work = self.work.lock().unwrap();
+            work.accepting = false;
+            if work.pending == 0 {
+                let _ = sender.send(());
+            } else {
+                work.drained = Some(sender);
+            }
+        }
+        let databases = self.databases.into_inner().unwrap();
+        let (closed, completion) = tokio::sync::oneshot::channel();
+        self.executor
+            .spawn(async move {
+                let _ = receiver.await;
+                for database in databases.into_values() {
+                    database.connection.lock().unwrap().take();
+                }
+                let _ = closed.send(());
+            })
+            .detach();
+        self.executor.spawn(async move {
+            let _ = completion.await;
+        })
+    }
+}
+
+struct WorkState {
+    accepting: bool,
+    pending: usize,
+    drained: Option<tokio::sync::oneshot::Sender<()>>,
+}
+
+struct AdmittedWork(Arc<Mutex<WorkState>>);
+impl Drop for AdmittedWork {
+    fn drop(&mut self) {
+        let mut work = self.0.lock().unwrap();
+        work.pending -= 1;
+        if work.pending == 0
+            && let Some(sender) = work.drained.take()
+        {
+            let _ = sender.send(());
         }
     }
 }
@@ -110,19 +173,61 @@ impl ExtensionStorage {
 pub(crate) struct OwnerStorage {
     database: Arc<Database>,
     executor: BackgroundExecutor,
+    work: Arc<Mutex<WorkState>>,
+    caller: Option<Arc<AtomicBool>>,
 }
 
 impl OwnerStorage {
+    pub(crate) fn with_caller(mut self, caller: Arc<AtomicBool>) -> Self {
+        self.caller = Some(caller);
+        self
+    }
+
     fn run<T: Send + 'static>(
         &self,
         work: impl FnOnce(&mut Connection) -> anyhow::Result<T> + Send + 'static,
     ) -> Task<Result<T, StorageError>> {
+        let admitted = {
+            let mut state = self.work.lock().unwrap();
+            if !state.accepting {
+                return Task::ready(Err(StorageError::Cancelled));
+            }
+            state.pending += 1;
+            AdmittedWork(self.work.clone())
+        };
         let database = self.database.clone();
+        let caller = self.caller.clone();
         self.executor.spawn(async move {
-            database.run(work).map_err(|error| StorageError {
-                database: database.path.clone(),
-                cause: error.to_string(),
-            })
+            let _admitted = admitted;
+            let mut connection = database.connection.lock().unwrap();
+            if caller
+                .as_ref()
+                .is_some_and(|caller| !caller.load(Ordering::Acquire))
+            {
+                return Err(StorageError::Cancelled);
+            }
+            database
+                .run(&mut connection, work)
+                .map_err(|error| StorageError::Unavailable {
+                    database: database.path.clone(),
+                    cause: error.to_string(),
+                })
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn write_with_gate(
+        &self,
+        started: std::sync::mpsc::Sender<()>,
+        resume: std::sync::mpsc::Receiver<()>,
+    ) -> Task<Result<(), StorageError>> {
+        self.run(move |connection| {
+            let transaction = connection.transaction()?;
+            transaction.execute("INSERT INTO records VALUES ('key', '42')", [])?;
+            started.send(()).unwrap();
+            resume.recv_timeout(Duration::from_secs(5)).unwrap();
+            transaction.commit()?;
+            Ok(())
         })
     }
 
@@ -173,8 +278,11 @@ struct Database {
 }
 
 impl Database {
-    fn run<T>(&self, work: impl FnOnce(&mut Connection) -> anyhow::Result<T>) -> anyhow::Result<T> {
-        let mut connection = self.connection.lock().unwrap();
+    fn run<T>(
+        &self,
+        connection: &mut Option<Connection>,
+        work: impl FnOnce(&mut Connection) -> anyhow::Result<T>,
+    ) -> anyhow::Result<T> {
         if connection.is_none() {
             *connection = Some(self.open()?);
         }
@@ -218,6 +326,12 @@ impl Database {
         connection.pragma_update(None, "journal_mode", "DELETE")?;
         Ok(connection)
     }
+}
+
+#[cfg(test)]
+pub(crate) fn test_executor() -> BackgroundExecutor {
+    static EXECUTOR: std::sync::OnceLock<BackgroundExecutor> = std::sync::OnceLock::new();
+    EXECUTOR.get_or_init(gpui::background_executor).clone()
 }
 
 #[cfg(test)]
@@ -322,7 +436,7 @@ mod tests {
             .write("a".into(), json!({"new": true}))
             .await
             .unwrap_err();
-        assert!(error.cause.contains("injected write failure"));
+        assert!(error.to_string().contains("injected write failure"));
         assert_eq!(
             records.read("a".into()).await.unwrap(),
             Some(json!({"old": true}))
@@ -365,8 +479,11 @@ mod tests {
             drop(connection);
             let before = std::fs::read(&path).unwrap();
             let error = records.list().await.unwrap_err();
-            assert_eq!(error.database, path);
-            assert!(error.cause.contains("unsupported storage schema"));
+            let StorageError::Unavailable { database, cause } = error else {
+                panic!("unexpected cancellation")
+            };
+            assert_eq!(database, path);
+            assert!(cause.contains("unsupported storage schema"));
             assert_eq!(std::fs::read(&path).unwrap(), before);
         }
         let corrupt = storage.for_owner(package("@one/corrupt"));
@@ -391,7 +508,10 @@ mod tests {
         std::fs::write(&obstruction, b"keep").unwrap();
         let records = store(&obstruction, cx).for_owner(StorageOwner::personal_config());
         let error = records.write("key".into(), json!(1)).await.unwrap_err();
-        assert_eq!(error.database, obstruction.join("personal-config.sqlite3"));
+        let StorageError::Unavailable { database, .. } = error else {
+            panic!("unexpected cancellation")
+        };
+        assert_eq!(database, obstruction.join("personal-config.sqlite3"));
         assert_eq!(std::fs::read(obstruction).unwrap(), b"keep");
     }
 
@@ -412,5 +532,169 @@ mod tests {
         assert!(records.write("key".into(), json!(2)).await.is_err());
         assert_eq!(std::fs::read(&path).unwrap(), before);
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    #[gpui::test]
+    async fn cancellation_before_execution_does_not_open_the_database(cx: &mut TestAppContext) {
+        let root = tempfile::tempdir().unwrap();
+        let storage = store(root.path(), cx);
+        let caller = Arc::new(AtomicBool::new(true));
+        let records = storage
+            .for_owner(StorageOwner::personal_config())
+            .with_caller(caller.clone());
+        let write = records.write("key".into(), json!(1));
+        caller.store(false, Ordering::Release);
+        assert!(matches!(write.await, Err(StorageError::Cancelled)));
+        assert!(!records.database.path.exists());
+        storage.shutdown().await;
+    }
+
+    #[test]
+    fn shutdown_drains_admitted_work_and_closes_connections() {
+        let root = tempfile::tempdir().unwrap();
+        let storage = ExtensionStorage::new(root.path().to_owned(), test_executor());
+        let caller = Arc::new(AtomicBool::new(true));
+        let records = storage
+            .for_owner(StorageOwner::personal_config())
+            .with_caller(caller.clone());
+        let (started, ready) = std::sync::mpsc::channel();
+        let (resume, gate) = std::sync::mpsc::channel();
+        let write = records.write_with_gate(started, gate);
+        ready.recv_timeout(Duration::from_secs(5)).unwrap();
+        // Once started, caller cancellation cannot undo this transaction.
+        caller.store(false, Ordering::Release);
+        let mut drain = storage.shutdown();
+        assert!(matches!(
+            pollster::block_on(records.write("late".into(), json!(9))),
+            Err(StorageError::Cancelled)
+        ));
+        assert!(pollster::block_on(async {
+            std::future::poll_fn(|cx| {
+                std::task::Poll::Ready(
+                    std::future::Future::poll(std::pin::Pin::new(&mut drain), cx).is_pending(),
+                )
+            })
+            .await
+        }));
+        resume.send(()).unwrap();
+        pollster::block_on(write).unwrap();
+        pollster::block_on(drain);
+        assert!(records.database.connection.lock().unwrap().is_none());
+        let reopened = ExtensionStorage::new(root.path().to_owned(), test_executor());
+        assert_eq!(
+            pollster::block_on(
+                reopened
+                    .for_owner(StorageOwner::personal_config())
+                    .read("key".into())
+            )
+            .unwrap(),
+            Some(json!(42))
+        );
+        pollster::block_on(reopened.shutdown());
+    }
+
+    #[test]
+    fn shutdown_closes_connections_after_the_waiter_is_dropped() {
+        let root = tempfile::tempdir().unwrap();
+        let storage = ExtensionStorage::new(root.path().to_owned(), test_executor());
+        let records = storage.for_owner(StorageOwner::personal_config());
+        pollster::block_on(records.write("key".into(), json!(1))).unwrap();
+        drop(storage.shutdown());
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while records.database.connection.lock().unwrap().is_some() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "connection was not closed"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    #[test]
+    fn storage_process_writer() {
+        let Some(root) = std::env::var_os("KNOT_STORAGE_TEST_ROOT") else {
+            return;
+        };
+        let root = PathBuf::from(root);
+        let storage = ExtensionStorage::new(root.clone(), test_executor());
+        let records = storage.for_owner(StorageOwner::personal_config());
+        if std::env::var_os("KNOT_STORAGE_TEST_INTERRUPT").is_some() {
+            pollster::block_on(records.run::<()>(move |connection| {
+                let transaction = connection.transaction()?;
+                transaction.execute(
+                    "UPDATE records SET value = ?1 WHERE key = 'key'",
+                    [serde_json::to_string(&"x".repeat(8_000_000))?],
+                )?;
+                std::fs::write(root.join("uncommitted-ready"), [])?;
+                loop {
+                    std::thread::park();
+                }
+            }))
+            .unwrap();
+        } else {
+            pollster::block_on(records.write("key".into(), json!({"committed": true}))).unwrap();
+            pollster::block_on(storage.shutdown());
+        }
+    }
+
+    #[test]
+    fn reopen_after_process_exit_and_interrupted_replacement() {
+        use std::process::{Command, Stdio};
+        let root = tempfile::tempdir().unwrap();
+        let child = |interrupt: bool| {
+            let mut command = Command::new(std::env::current_exe().unwrap());
+            command
+                .args([
+                    "--exact",
+                    "app::extension_storage::tests::storage_process_writer",
+                    "--nocapture",
+                ])
+                .env("KNOT_STORAGE_TEST_ROOT", root.path())
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped());
+            if interrupt {
+                command.env("KNOT_STORAGE_TEST_INTERRUPT", "1");
+            }
+            command.spawn().unwrap()
+        };
+        let output = child(false).wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "writer failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let mut interrupted = child(true);
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !root.path().join("uncommitted-ready").exists() {
+            assert!(
+                interrupted.try_wait().unwrap().is_none(),
+                "writer exited before transaction"
+            );
+            if std::time::Instant::now() >= deadline {
+                interrupted.kill().unwrap();
+                interrupted.wait().unwrap();
+                panic!("writer did not start transaction");
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let journal_exists = root.path().join("personal-config.sqlite3-journal").exists();
+        let spilled = std::fs::metadata(root.path().join("personal-config.sqlite3"))
+            .is_ok_and(|metadata| metadata.len() > 1_000_000);
+        interrupted.kill().unwrap();
+        interrupted.wait().unwrap();
+        assert!(
+            journal_exists && spilled,
+            "interruption must exercise on-disk rollback"
+        );
+        let storage = ExtensionStorage::new(root.path().to_owned(), test_executor());
+        assert_eq!(
+            pollster::block_on(
+                storage
+                    .for_owner(StorageOwner::personal_config())
+                    .read("key".into())
+            )
+            .unwrap(),
+            Some(json!({"committed": true}))
+        );
+        pollster::block_on(storage.shutdown());
     }
 }

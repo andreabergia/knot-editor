@@ -476,3 +476,11 @@ connection with last-committed-write semantics; cross-call read/modify/write is
 not atomic. Reload, updates and uninstall preserve data.
 
 Reference: [extension host](architecture/extension-host.md).
+
+Drain extension storage before calling gpui quit: gpui's final shutdown hook has
+a short foreground wait, so it cannot provide this contract. Close admission
+synchronously and use admitted-task completion guards to await native work and
+release connections on the existing executor. Keep the drain independent of its
+awaiting caller. Reuse foreground lifetime/cancellation checks through weak per-call
+flags, rechecked after the connection lock; once work starts it finishes normally.
+This needs no storage worker, work queue, final JS callback, or public transaction.

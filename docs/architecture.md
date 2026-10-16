@@ -44,7 +44,8 @@ gpui application and views        extension runtimes
   runs SQLite operations on the background executor with a reused, serialized
   connection per owner. The product host binds storage to admitted package and
   personal-config lifecycles and exposes it through typed async handlers.
-  Graceful shutdown draining is not yet integrated.
+  Product quit stops storage admission and awaits pending work and connection
+  release asynchronously before exiting.
 - `app::extension_load` plans dependency order and records startup outcomes
   using Knot-owned package data and a rollback guard for each attempted load.
 

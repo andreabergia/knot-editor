@@ -288,7 +288,9 @@ not atomic. Extensions own their JSON structure and schema versions.
 
 Cancellation or unload may prevent a caller receiving a result, including after a
 write committed; rejection does not imply rollback. Native work checks caller
-lifetime at admission. Once a transaction starts, it finishes normally.
+lifetime at admission and before starting database work. Once a transaction starts,
+it finishes normally. Graceful quit stops admission and waits for admitted native
+work and connection release asynchronously, without a final JavaScript callback.
 `StorageUnavailable` reports database/cause diagnostics in `HostError.details`.
 Corrupt, incompatible or unwritable databases fail without being deleted or
 replaced, and other owners remain available. Local application data holds a
