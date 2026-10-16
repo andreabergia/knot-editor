@@ -1,8 +1,7 @@
 # Extension host
 
 Part of the [architecture](../architecture.md). Design rationale is recorded in
-[decisions](../decisions.md); validation evidence lives in
-[D017](../archive/plans/d017-v8-isolate-pool-plan.md).
+[decisions](../decisions.md).
 
 ## Boundaries
 

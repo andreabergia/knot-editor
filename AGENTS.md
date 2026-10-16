@@ -7,9 +7,10 @@ Use @docs/architecture.md for current boundaries and @docs/decisions.md for
 validated choices and rationale. Load the linked @docs/architecture subsystem
 references only when the task needs their runtime flows or behavioral constraints.
 Read @docs/design.md only when product vision is relevant,
-and @docs/product-slices.md only for product sequencing. Active execution plans
-live under @docs/plans. Load archived exploration plans and benchmark evidence
-only when the task depends on them.
+and @docs/roadmap.md for product sequencing and deferred work. Active execution
+plans live under @docs/plans. Remove completed plans after preserving durable
+behavior, rationale, and essential evidence in the current docs; Git retains
+the execution history.
 
 The architecture exploration is complete. Product development evolves the
 validated prototype in place through end-to-end usable slices. Knot is now

@@ -238,8 +238,7 @@ workbench applies its ordinary empty-workbench replacement policy. Subsequent
 window closure sees only the tabs still in that window; destination resize and
 input belong to the new view. On macOS the destination stays hidden until its
 terminal content has been laid out, then becomes the active window.
-The diagnostic window continues to exercise view rebuilding; see the
-[D024 plan](../archive/plans/d024-terminal-session-plan.md).
+The diagnostic window continues to exercise view rebuilding.
 
 Terminal pointer input honors Alacritty click (1000), drag (1002), and all-motion
 (1003) tracking with legacy, UTF-8 (1005), or SGR (1006) encoding. The view

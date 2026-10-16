@@ -437,10 +437,11 @@ presentation is product policy rather than a fundamental text-model operation.
 Runtime isolation is not by itself a security boundary. A misbehaving extension
 must not be able to freeze the editor indefinitely, exhaust resources
 unchecked, corrupt core state, or prevent cancellation of work it started.
-The scheduling and enforcement mechanisms are implementation decisions to be
-validated by the prototype. The current runtime experiments and candidate
-mechanisms are recorded in the archived
-[V8 runtime exploration](archive/exploration/step7-v8-runtime.md).
+The current scheduling, interruption, and lifecycle mechanisms are described in
+the [extension host architecture](architecture/extension-host.md), with rationale
+in [decisions](decisions.md#extension-runtime). Quotas, backpressure,
+slow-consumer policy, and timeouts remain deferred under D019 in the
+[roadmap](roadmap.md).
 
 ---
 

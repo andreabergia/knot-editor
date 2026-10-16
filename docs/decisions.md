@@ -2,7 +2,7 @@
 
 Durable choices and their rationale, validated by implementation and exploration.
 [Architecture](architecture.md) and its subsystem references describe behavior;
-linked exploration reports retain supporting evidence. Production directions
+essential supporting measurements are retained here. Production directions
 are labeled explicitly. [Deferred work](roadmap.md) tracks open scope and
 reconsideration triggers, and [active plans](plans/) track implementation.
 
@@ -20,8 +20,6 @@ does not establish a Windows distribution or broad hardware certification.
 Linux passed a limited framework and native product smoke checkpoint on
 Omarchy/Hyprland Wayland, using personal clipboard and palette bindings.
 Broader Linux production claims still require validation.
-Evidence: [Windows product checkpoint](archive/plans/d029-windows-product-polish-plan.md)
-and [Linux framework checkpoint](archive/plans/d028-linux-framework-plan.md).
 
 Use ordinary Windows Control shortcuts for product defaults. When a platform's
 native picker cannot select files and folders together, ask which kind the user
@@ -34,7 +32,15 @@ script keeps local packaging independent of distribution credentials and lets
 the product use gpui's activation, open-URL, and reopen callbacks. Signing and
 notarization remain distribution work.
 
-Reference: [workbench and lifecycle](architecture/workbench-and-lifecycle.md). Evidence: [renderer benchmark](archive/exploration/step2-renderer-benchmark.md),[framework comparison](archive/exploration/step3-framework-comparison.md).
+The public-API framework evaluation covered styled viewport-culled text,
+selection, macOS IME geometry, annotation underlines, split panes, and Arabic,
+CJK, emoji, long-line, and large-file fixtures. iced and floem were not evaluated
+after gpui cleared that bar. In the separate rendering-primitive benchmark on
+Apple M1 Pro/macOS release builds, Skia had lower p50 frame times on every
+fixture, but higher and less predictable p99 spikes. Those results did not
+measure complete UI frameworks.
+
+Reference: [workbench and lifecycle](architecture/workbench-and-lifecycle.md).
 
 ## Text buffer and stable positions
 
@@ -44,7 +50,14 @@ foreground owner serializes mutation, while presentation handles graphemes and
 the extension boundary adapts strings. Measurements do not justify replacing
 the line-start index or introducing a UTF-16 core.
 
-Reference: [core and buffers](architecture/core-and-buffers.md). Evidence: [buffer benchmark](archive/exploration/step4-buffer-benchmark.md).
+On Apple M1 Pro/macOS release builds with a 1,001,395-line, 29 MiB Rust
+fixture, edits measured p50 678 µs with the line index and 75 µs without it.
+Linear suffix shifts accounted for about 88% of indexed edit latency; position
+issuance and resolution were sub-microsecond. These prototype measurements
+support deferring index replacement until real editing workloads justify it;
+absolute tail values included system noise.
+
+Reference: [core and buffers](architecture/core-and-buffers.md).
 
 ## Anchored ranges and contributions
 
@@ -53,7 +66,14 @@ policy in the application. This lets overlapping features share one edit stream
 without privileged coordination in core. Query indexes remain derived caches;
 undo restores text through ordinary edits rather than reviving provider state.
 
-Reference: [core and buffers](architecture/core-and-buffers.md). Evidence: [annotation benchmark](archive/exploration/step5-annotation-benchmark.md).
+On Apple M4 Pro/macOS 15 release builds with 10,000 annotations on a million-line
+buffer, token stabilization measured p50 12.2–12.4 µs per edit versus
+69.5–69.7 µs for offset remapping across three and six sources. Token p99 was
+higher (165–171 µs versus 88–90 µs); resolving all annotations cost about
+1.79 ms. This supports inline stabilization at the tested scale without claiming
+uniform tail improvement.
+
+Reference: [core and buffers](architecture/core-and-buffers.md).
 
 ## Reversible edits
 
@@ -105,7 +125,13 @@ Serial callbacks within an extension simplify ownership; independent runtimes
 progress through the bounded pool. Forced interruption is fatal to that
 extension so cleanup has a definite lifecycle boundary. Immutable shared
 UTF-16 snapshots serve V8 without exposing mutable storage or changing the
-UTF-8 core.
+UTF-8 core. The prototype V8 149/deno_core benchmark on Apple M1 Pro/macOS
+release builds measured 10 MiB Unicode string marshaling at p50 36.0 ms versus
+10.6 ms for cold external UTF-16 and 321 µs when cached. A whole-document
+UTF-16 boundary-table adapter exceeded its 32 MiB isolate heap cap. These
+prototype results support revision/range-scoped snapshots and caching, rather
+than a public byte-array text API; they are not current pool performance claims.
+
 Host operations retain V8 promise resolvers and yield the worker until a typed
 response makes the isolate runnable again. This keeps asynchronous native work
 from consuming pool capacity. The scheduler runs one non-preemptive JavaScript
@@ -135,7 +161,7 @@ variants; type and numeric errors remain author-side categories. Preserve native
 integer precision instead of silently rounding identities, revisions or offsets.
 A bad callback or item remains a recoverable failure of its request.
 
-Reference: [extension host](architecture/extension-host.md). Evidence: [v8 runtime](archive/exploration/step7-v8-runtime.md).
+Reference: [extension host](architecture/extension-host.md).
 
 Use annotated async native handlers with linked descriptors to keep operation
 arguments, semantic results and errors paired at their definition. A small
@@ -159,8 +185,7 @@ focus precedence so extension routing can select inline children before scheduli
 Drive short foreground requests in the current dispatch turn, handing suspended
 futures to the executor only when necessary. This preserves key-command/text-input
 ordering without retaining foreground borrows across awaits. Dynamic extension
-registration and ownership stay in the application catalog. Evidence and accepted
-authoring shape: [D053](archive/plans/d053-handler-declarations-refactoring-plan.md).
+registration and ownership stay in the application catalog.
 
 ## Installed extension directories
 
@@ -257,7 +282,7 @@ focused view. Raw input protocols stay outside registered commands.
 Apply JavaScript mutations as one ordered batch per V8 turn so invalid input
 cannot leave a partial keymap and startup readiness follows foreground state.
 
-Reference: [commands](architecture/commands.md). Evidence: [D003b keymap plan](archive/plans/d003b-keymaps-plan.md).
+Reference: [commands](architecture/commands.md).
 
 ## Views and extension UI
 
@@ -360,7 +385,7 @@ behavior without copying Zed code. Zed's GPL-compatible implementation remains
 an attributed reference for concrete input, rendering, or event behavior if
 later compatibility work exposes a gap.
 
-Reference: [workbench and lifecycle](architecture/workbench-and-lifecycle.md). Evidence: [terminal plan](archive/exploration/step9-terminal-plan.md).
+Reference: [workbench and lifecycle](architecture/workbench-and-lifecycle.md).
 
 ## Generated text surfaces
 
@@ -370,7 +395,7 @@ and surface controllers retain semantic identity instead of parsing displayed
 text. Search validated this boundary without special cases in generic buffer
 ownership or a second generated surface.
 
-Reference: [semantic ui](architecture/semantic-ui.md). Evidence: [text surface plan](archive/exploration/step10-text-surface-plan.md).
+Reference: [semantic ui](architecture/semantic-ui.md).
 
 ## Capability aggregation
 
@@ -380,7 +405,7 @@ failure preserves other results. Stable semantic item identities let native
 presentations be replaced without restarting provider work or recovering
 semantics from labels.
 
-Reference: [semantic ui](architecture/semantic-ui.md). Evidence: [capability aggregation plan](archive/exploration/step12-capability-aggregation-plan.md).
+Reference: [semantic ui](architecture/semantic-ui.md).
 
 ## URI workspaces and filesystem providers
 
@@ -399,7 +424,7 @@ Local workspace roots are trusted application boundaries, not security
 sandboxes: symlinks deliberately remain usable even when they lead outside the
 root.
 
-Reference: [documents and persistence](architecture/documents-and-persistence.md). Evidence: [uri filesystem plan](archive/exploration/step13-uri-filesystem-plan.md).
+Reference: [documents and persistence](architecture/documents-and-persistence.md).
 
 ## Application document and root identity
 

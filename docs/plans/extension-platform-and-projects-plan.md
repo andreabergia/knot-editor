@@ -1,9 +1,8 @@
 # Production extension APIs and JavaScript project management
 
 Status: ✅ D046, D047 and the D053 maintenance interlude complete, approved
-and archived on 2026-10-15. D048 is complete, approved and archived on 2026-10-16.
-Numbered product checkpoints 5–10 remain unstarted; D049 is next. The focused
-[D048 storage plan](../archive/plans/d048-extension-storage-plan.md) records the completed storage slice.
+on 2026-10-15. D048 is complete and approved on 2026-10-16.
+Numbered product checkpoints 5–10 remain unstarted; D049 is next.
 D049 execution is split into [docking and automatic tool-layout memory](d049-dockable-workbench-plan.md)
 and [native extension UI](d049-native-extension-ui-plan.md) plans, in that order.
 
@@ -210,8 +209,7 @@ retain semantic information for D030.
 
 ### Durable extension storage — D048
 
-The focused [D048 plan](../archive/plans/d048-extension-storage-plan.md) records the agreed simpler
-scope. Each extension has its own SQLite database selected by validated canonical
+Each extension has its own SQLite database selected by validated canonical
 package identity; personal config has a separate stable database. Initial storage
 is application-global. Reload, updates, and uninstall preserve data.
 
@@ -324,8 +322,6 @@ Run `cargo fmt` once at the end of Rust work, before committing.
 
 ### 1. Production public API foundation — D046 ✅ complete
 
-Detailed execution: [D046 public API foundation plan](../archive/plans/d046-public-api-foundation-plan.md).
-
 - Audit all existing JS operations and identify prototype coupling, implicit
   context, swallowed asynchronous errors, and missing lifecycle contracts.
 - Publish the API contract/types and an identity/context matrix. Implement the
@@ -343,8 +339,6 @@ Detailed execution: [D046 public API foundation plan](../archive/plans/d046-publ
 
 ### 2. Observable application state — D047 ✅
 
-Detailed execution: [D047 application state and operations plan](../archive/plans/d047-application-state-and-operations-plan.md).
-This also covers checkpoint 3, retaining a separate review gate for each.
 Checkpoint 2 is complete and explicitly approved on 2026-10-15 after automated
 validation and manual observer, shared-identity, Save As, and disposal smoke checks.
 Checkpoint 3 is complete and explicitly approved on 2026-10-15 following automated
@@ -387,12 +381,11 @@ notifications, window-owned workspaces, and existing product lifetime rules.
 
 ### Maintenance interlude — Handler declarations refactoring, D053 ✅
 
-The separate [D053 plan](../archive/plans/d053-handler-declarations-refactoring-plan.md)
-is complete, approved and archived on 2026-10-15. All 33 host capabilities and
+✅ Complete and approved on 2026-10-15. All 33 host capabilities and
 53 native command definitions come from annotated typed async handlers, without
 parallel transport or handwritten registration tables. Native participant routing
-and dynamic JS lifecycle ownership are preserved. Its archive records the passing
-local checks and unverified remote Linux/Windows build/linking results.
+and dynamic JS lifecycle ownership are preserved. Local checks passed; remote
+Linux/Windows build/linking results were not verified for this interlude.
 
 D048 is complete and approved; resume numbered checkpoint 5 (D049) next.
 Checkpoints 5–10 remain unstarted. D053 added no D047 requirement or D020 user
@@ -403,9 +396,6 @@ automation. The broader extension/project initiative remains in progress.
 ✅ Complete and approved on 2026-10-16, including asynchronous shutdown,
 process interruption/reopen coverage, and the four-operation public API.
 All 640 library tests and extension API checks passed.
-
-The [focused D048 plan](../archive/plans/d048-extension-storage-plan.md) tracks the four-operation
-record API and completed acceptance evidence.
 
 - Publish the storage namespace, declarations, documentation, and contract tests.
 - Implement per-owner databases and async JSON read/write/delete/list using
@@ -533,7 +523,8 @@ windows. Current implementation is not a constraint on the design.
   resources; extension/config failure; invalid session versions; changed displays;
   missing surfaces and terminal omission; no duplication on repeated restoration.
 - **Review gate:** review the complete product workflow and API documentation,
-  then mark the initiative complete and archive this plan in a separate commit.
+  then mark the initiative complete. Preserve durable details in current docs
+  and remove this plan in a separate commit; Git retains its execution history.
 
 ## Completion and scope limits
 

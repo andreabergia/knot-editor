@@ -1,8 +1,7 @@
 # Commands and keymaps
 
 Part of the [architecture](../architecture.md). [Decisions](../decisions.md)
-records rationale; [D003a](../archive/plans/d003a-command-routing-plan.md)
-records the completed routing work.
+records rationale.
 
 ## Dispatch
 

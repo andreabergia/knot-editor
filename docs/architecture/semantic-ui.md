@@ -1,7 +1,7 @@
 # Semantic UI and generated text
 
 Part of the [architecture](../architecture.md). Design rationale is recorded in
-[decisions](../decisions.md); deferred work lives in [deferred.md](../deferred.md).
+[decisions](../decisions.md); deferred work lives in [deferred.md](../roadmap.md).
 
 ## Boundary
 

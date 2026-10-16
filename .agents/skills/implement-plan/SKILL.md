@@ -13,4 +13,4 @@ description: Implement the next unfinished checkpoint of a named Knot execution 
 
 ## Completing a whole plan
 
-When the selected checkpoint is the **last** one and every completion criterion and required gate has passed, finish implementation, tests, documentation, and their commits first. Then move the completed plan from `docs/plans/` to `docs/archive/plans/` in a **separate final commit**. Include any link fixes caused by the move in that commit. Do not archive while another checkpoint or gate remains open.
+When the selected checkpoint is the **last** one and every completion criterion and required gate has passed, finish implementation, tests, documentation, and their commits first. Then preserve durable behavior, rationale, and essential evidence in the current architecture and decisions docs, and remove the completed plan from `docs/plans/` in a **separate final commit**. Update references to the removed plan in that commit; Git retains its execution history. Do not remove a plan while another checkpoint or gate remains open.

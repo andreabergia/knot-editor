@@ -16,7 +16,7 @@ uses a JavaScript project manager to establish production application APIs,
 native semantic UI contributions, durable extension storage, multi-root
 workspaces, and session restoration including unsaved documents. D046 is complete
 and approved on 2026-10-15. D047 checkpoints 2–3 are complete and approved on
-2026-10-15. D053 is complete, approved and archived. D048 is complete, approved and archived
+2026-10-15. D053 is complete and approved. D048 is complete and approved
 on 2026-10-16. Resume numbered checkpoint 5 (D049) next; the broader initiative
 remains in progress.
 Execute one checkpoint at a time and stop at its review gate.
@@ -35,30 +35,27 @@ Execute one checkpoint at a time and stop at its review gate.
 | 9 | Multiple workspace roots | D052 | Root collections supported throughout UI and opening flows |
 | 10 | Layout and startup restoration | D005, D051 | Project/session restoration of windows, panes, tabs, and view state |
 
-The [detailed D046 plan](archive/plans/d046-public-api-foundation-plan.md) retains the
-current namespaces, exposes captured command context, and removes global-focus
-fallback. There is no backward-compatibility requirement: contracts and repository
-consumers change together, with unsupported package API versions diagnosed before
-evaluation.
+The public API retains the current namespaces, exposes captured command context,
+and removes global-focus fallback. There is no backward-compatibility
+requirement: contracts and repository consumers change together, with unsupported
+package API versions diagnosed before evaluation.
 
 Explicit follow-up tasks within the selected initiative:
 
 - **D047, checkpoint 2:** document/window/workspace queries, live target types
-  and application observation are complete and approved on 2026-10-15 in the
-  [D047 plan](archive/plans/d047-application-state-and-operations-plan.md).
+  and application observation are complete and approved on 2026-10-15.
 - **D047, checkpoint 3:** file Open now uses explicit window/pane/view targets or
   an admission-time captured command/active window. Folder/root operations,
   untitled creation, presenting documents and protected closure are implemented;
   automated acceptance passes, and the user approved completion on 2026-10-15.
-- **D053, separate maintenance interlude:** the
-  [handler declarations refactoring](archive/plans/d053-handler-declarations-refactoring-plan.md)
-  is complete, approved and archived on 2026-10-15. All current host capabilities
+- **D053, separate maintenance interlude:** handler declarations refactoring
+  is complete and approved on 2026-10-15. All current host capabilities
   and native commands use annotated typed async handlers with automatic registration.
   Focus routing and dynamic JS registration retain their existing ownership.
   Remote Linux/Windows results remain an explicitly recorded validation limitation
   of the D053 interlude.
-- **D048, checkpoint 4:** complete and approved on 2026-10-16 in the
-  [D048 plan](archive/plans/d048-extension-storage-plan.md). Private JSON read/write/delete/list,
+- **D048, checkpoint 4:** complete and approved on 2026-10-16.
+  Private JSON read/write/delete/list,
   stable per-owner databases, asynchronous shutdown drain, and interruption/reopen
   validation are implemented. Related state uses atomic replacement of one record.
 - **D049, checkpoint 5:** finalize native contribution APIs and pass originating
