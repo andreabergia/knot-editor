@@ -277,3 +277,72 @@ async fn tools_do_not_bypass_dirty_document_or_terminal_protection(cx: &mut Test
         )
     });
 }
+
+#[gpui::test]
+fn explorer_docks_have_visible_geometry_and_open_files_by_click(cx: &mut TestAppContext) {
+    for dock in DockLocation::ALL {
+        let documents = install_globals(cx);
+        cx.set_global(ApplicationFileSystems(memory_filesystems()));
+        let (shell, window) = empty_product_window(&documents, cx);
+        shell.update(cx, |shell, cx| {
+            shell.install_workspace(ResourceUri::parse("mem://product/").unwrap(), cx);
+            let id = shell.explorer_frame(cx).unwrap();
+            shell.workbench.update(cx, |workbench, _| {
+                assert!(workbench.place_tool(id, ToolPlacement::Dock(dock)));
+                assert_eq!(workbench.tool_tab(id).unwrap().0.value(), 3);
+            });
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let mut visual = VisualTestContext::from_window(window, cx);
+        let explorer = visual.debug_bounds("pane-3").unwrap();
+        let editor = visual.debug_bounds("pane-1").unwrap();
+        match dock {
+            DockLocation::Left | DockLocation::Right => {
+                assert_eq!(explorer.size.width, px(240.), "{dock:?}: {explorer:?}");
+                assert!(explorer.size.height > px(100.));
+            }
+            DockLocation::Bottom => {
+                assert_eq!(explorer.size.height, px(220.), "{explorer:?}");
+                assert!(explorer.size.width > px(100.));
+            }
+        }
+        assert!(editor.size.width > px(100.));
+        assert!(editor.size.height > px(100.));
+        shell.update(&mut visual, |shell, cx| {
+            let id = shell.explorer_frame(cx).unwrap();
+            shell.workbench.update(cx, |workbench, _| {
+                assert!(workbench.hide_tool(id));
+            });
+            cx.notify();
+        });
+        visual.run_until_parked();
+        assert!(visual.debug_bounds("workspace-tree-row-2").is_none());
+        shell.update(&mut visual, |shell, cx| {
+            let id = shell.explorer_frame(cx).unwrap();
+            shell.workbench.update(cx, |workbench, _| {
+                workbench.show_tool(id).unwrap();
+            });
+            cx.notify();
+        });
+        visual.run_until_parked();
+        let reopened = visual.debug_bounds("pane-4").unwrap();
+        assert_eq!(reopened.size, explorer.size);
+        let file = visual.debug_bounds("workspace-tree-row-2").unwrap();
+        assert!(file.size.width > px(100.));
+        assert!(file.size.height > px(0.));
+        assert!(explorer.contains(&file.center()));
+        visual.simulate_click(file.center(), Modifiers::default());
+        visual.run_until_parked();
+        visual.read(|cx| {
+            let state = shell.read(cx);
+            let pane = state.workbench.read(cx).focused_pane().unwrap();
+            let document = pane.active_tab().document_id().unwrap();
+            assert_eq!(
+                documents.read(cx).get(document).unwrap().resource_uri(),
+                Some(&ResourceUri::parse("mem://product/notes.txt").unwrap())
+            );
+            assert!(state.workbench.read(cx).dock_location(pane.id()).is_none());
+        });
+    }
+}

@@ -2911,7 +2911,7 @@ impl ProductShell {
                     .min_h_0()
                     .child(
                         div()
-                            .flex_1()
+                            .when(first_extent.is_none(), |element| element.flex_1())
                             .min_w_0()
                             .min_h_0()
                             .when_some(first_extent, |element, extent| {
@@ -2938,7 +2938,7 @@ impl ProductShell {
                     )
                     .child(
                         div()
-                            .flex_1()
+                            .when(second_extent.is_none(), |element| element.flex_1())
                             .min_w_0()
                             .min_h_0()
                             .when_some(second_extent, |element, extent| {

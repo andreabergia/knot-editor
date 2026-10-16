@@ -364,6 +364,7 @@ impl Render for WorkspaceTree {
                         let is_selected = selected.as_ref() == Some(&entry.uri);
                         div()
                             .id(("workspace-tree-row", index))
+                            .debug_selector(move || format!("workspace-tree-row-{index}"))
                             .w_full()
                             .pl(px(8. + *depth as f32 * 14.))
                             .pr_2()

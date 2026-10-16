@@ -125,7 +125,7 @@ Implementation evidence:
   Closing the last document with a visible tool leaves a tool-only window;
   closing the last document with hidden tools preserves their definitions while
   creating the ordinary untitled replacement. Tools cannot transfer windows.
-- ✅ `cargo test --all-targets --locked` passed (647 library tests plus the
+- ✅ `cargo test --all-targets --locked` passed (648 library tests plus the
   binary, facade integration, and drag-delivery example targets), as did
   `cargo clippy --all-targets --locked -- -D warnings`,
   `scripts/check-extension-api.sh`, and `git diff --check`. Ran `cargo fmt`.
@@ -135,6 +135,12 @@ Implementation evidence:
   verifies focus transfers to the surviving tool.
 - ✅ Built `target/debug/Knot.app` for native review. No native interaction
   has been claimed as verified; no UI automation was used.
+- ✅ Fixed native review regression: docks inherited a zero flex basis and
+  collapsed despite their explicit size. Flexible editor branches and fixed
+  dock branches now choose sizing independently. A rendered gpui regression
+  reproduced the zero-width sidebar before the fix, then verifies left/right
+  widths, bottom height, hide/reopen geometry, and opening a file by clicking
+  a visible explorer row. Native review remains pending on the rebuilt app.
 - ⏳ Native review pending. Use **Toggle Explorer**, **Move Explorer to Editor
   Tabs**, **Move Explorer to Left/Right Sidebar**, **Move Explorer to Bottom
   Dock**, and dock toggle commands from the palette. Inspect hide/reopen and
