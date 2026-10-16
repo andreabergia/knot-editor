@@ -33,6 +33,8 @@ updated. Use ✅ and other emoji to mark executed steps.
   @docs/architecture subsystem reference when runtime flows or behavioral
   constraints change. Keep rationale in @docs/decisions.md and implementation
   details and API contracts in the code.
+- Follow @docs/README.md for documentation ownership. Link to authoritative
+  contracts rather than duplicating them; repeat only enough context for orientation.
 - Code comments and module documentation must describe the current design and
   behavior only. Do not record migrations, previous locations, roadmap phases,
   or implementation history in code; Git history is the source for that.
