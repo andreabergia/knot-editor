@@ -2,7 +2,8 @@
 
 Status: ✅ D046, D047 and the D053 maintenance interlude complete, approved
 and archived on 2026-10-15. D048 is the next numbered checkpoint.
-Numbered product checkpoint 4 is in progress; checkpoints 5–10 remain unstarted.
+Numbered product checkpoint 4 is in progress; checkpoints 5–10 remain unstarted. The focused
+[D048 storage plan](d048-extension-storage-plan.md) is drafted for review.
 
 Source: the project-management design discussion of 2026-10-13 and the
 [prioritized roadmap](../roadmap.md). Work identifiers: D046–D052 and promoted
@@ -46,7 +47,7 @@ Read [architecture](../architecture.md), [decisions](../decisions.md), and the
   D047 implements separate live targets and application queries.
 - D047 document UUIDs are separate from session-local collection IDs and buffer/view
   handles. Identity is preserved across Save As; persistence across restarts is
-  still D048/D050 work.
+  still D050 work.
 - Each shell owns zero/one ordered root records with retained IDs and a monotonic
   generation. Workspace/directory generations reject stale tree results.
 - Extension trees use predeclared kinds; the shell hardcodes an `outline` tree.
@@ -330,7 +331,7 @@ notifications, window-owned workspaces, and existing product lifetime rules.
 - Implement document/window/workspace/presentation queries and atomic initial
   observation with ordered post-commit events.
 - Introduce persistent document identity and ordered root records in the model
-  and protocol, with one-root enforcement. Durable metadata follows checkpoint 4;
+  and protocol, with one-root enforcement. Durable document metadata follows checkpoint 7 (D050);
   no cross-restart promise until it is persisted.
 - Route native Open, CLI/platform requests, Save As, activation, and close commits
   through common event boundaries. Complete actual document/buffer lifetime
@@ -365,9 +366,9 @@ parallel transport or handwritten registration tables. Native participant routin
 and dynamic JS lifecycle ownership are preserved. Its archive records the passing
 local checks and unverified remote Linux/Windows build/linking results.
 
-Resume numbered checkpoint 4 (D048) next. Keep checkpoints 4–10 unchanged and
-unstarted. D053 adds no D047 requirement and does not implement D048 storage or
-D020 user automation. The broader extension/project initiative remains in progress.
+Resume numbered checkpoint 4 (D048) next using its focused plan. Checkpoints
+4–10 remain unstarted. D053 adds no D047 requirement and does not implement
+D048 storage or D020 user automation. The broader extension/project initiative remains in progress.
 
 ### 4. SQLite-backed extension storage — D048 ⬜
 
@@ -504,8 +505,8 @@ from JS, collaboration/sync, settings/secrets systems, archive installation,
 and unrelated explorer editing features. These exclusions do not excuse missing
 failure, cancellation, and lifecycle contracts in the APIs implemented here.
 
-Physical storage schema/settings, exact facade names, UI placement, recovery
-cadence/retention, multi-window project activation, and detailed startup precedence
+Concrete storage schema/settings and API names are reviewed in the focused D048
+plan. UI placement, recovery cadence/retention, multi-window project activation, and detailed startup precedence
 are deliberately finalized at their stated gates. No unresolved choice may be
 silently baked into earlier public or persisted schemas. Add a focused subsidiary
 design if a checkpoint exposes a materially larger problem; retain this initiative's

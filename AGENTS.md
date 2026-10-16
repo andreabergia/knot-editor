@@ -40,5 +40,7 @@ updated. Use ✅ and other emoji to mark executed steps.
 - Don't use conventional commits.
 - Run `cargo fmt` once at the end of Rust work, before committing. Do not use
   `cargo fmt --check` or manually format individual files.
+- Keep the design simple. Let's not build overly complex abstractions "just in
+case".
 - There's a thing as being _too_ careful. This is a text editor, used by
 humans. Incredibily unlikely edge cases shouldn't be handled.
