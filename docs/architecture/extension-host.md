@@ -1,188 +1,21 @@
 # Extension host
 
-Part of the [architecture](../architecture.md). Design rationale is recorded in
-[decisions](../decisions.md).
+Part of the [architecture](../architecture.md). [Decisions](../decisions.md)
+records rationale; public API contracts live in [knot.d.ts](../../src/host/js/knot.d.ts).
 
 ## Boundaries
 
-`host` owns seven boundaries:
-
-- `protocol` contains Knot-owned transport identities, requests, responses,
-  contribution data, and errors. It depends on neither gpui nor concrete core
-  models.
-- `declarations` owns typed async handler contracts, error descriptors and linked
-  operation discovery. Its transport adapters erase owned payloads, while native
-  handler signatures retain their argument/success/error pairing.
-- `scheduler` owns bounded worker scheduling independently of V8 mechanics.
-- `engine` owns direct `v8` initialization, isolates, contexts, bindings, and
-  all V8 types.
-- `lifecycle` defines extension identity, scheduler-visible state, and failure
-  data. The engine owns exact-once teardown.
-- `pool` exposes the V8-free application control, event-inbox, completion,
-  watchdog, diagnostics, and shutdown surface.
-- `module_graph` validates generated file URLs, one or more entry modules, and
-  captured directory-local sources without V8 or filesystem access.
-
-A package load binds its immutable source graph to one isolate before scheduling
-entry as a root turn. Static imports may resolve only `knot` or relative
-URLs that remain within the package root and name a captured source. Dynamic
-imports reject. Compilation and runtime failures carry generated source URL,
-line, and column as Knot-owned data. Package entry failure remains a failed
-startup attempt for the application to roll back through lifecycle unload.
-The application also removes every keymap slot owned by that lifecycle during
-unload, including after failed startup.
-
-Installed admission requires positive integer `apiVersion`, exactly `1`, before
-entry capture/evaluation. Package semantic version and dependency names are
-independent. Discovery retains a recoverable manifest name when validation fails,
-so duplicate identities still invalidate every peer and dependencies report the
-rejected package's cause. Diagnostics include expected and declared API versions;
-independent packages remain eligible. Personal config stays manifest-free and
-uses the running API with its existing fatal-startup policy.
-
-The scheduler owns a V8-independent state machine and a fixed worker pool of
-`min(available_parallelism, 4)` threads by default. Tests and diagnostics may
-set the worker count explicitly.
-Each loaded lifecycle has one authoritative state, one FIFO root queue, and at
-most one active logical command tree. A cloneable handle admits lifecycles,
-queues roots, wakes continuations, and requests stop; the pool owner shuts down
-and joins its workers. The engine composes this scheduler with one persistent
-runtime capsule per loaded lifecycle. One application-global
-`ProductExtensionHost` owns the pool, foreground protocol bridges, and an
-awaitable event-inbox task. Product integration tests load source fixtures
-through the same package graph API.
-Filesystem discovery runs on gpui's background executor. The application
-plans dependencies, admits each lifecycle on the foreground, and awaits entry
-completion before loading its dependents. A failed or cancelled entry unloads
-its isolate and clears foreground command and provider registrations before
-another package starts. The product publishes each startup outcome to the
-ordered report and stderr as it becomes known, including invalid packages and
-runtime failures. Known outcomes remain visible while a later entry awaits
-completion.
-
-V8 process initialization is idempotent and owned by `engine`. It must happen
-before creating scheduler workers, because every thread that may lock a shared
-isolate must be created after initialization. The host composition point must
-initialize the engine before constructing a pool whose executor enters V8.
-
-Each runtime capsule owns a `SharedIsolate`, persistent context, lifecycle
-identity, explicit microtask state, heap-limit state, and only thread-safe
-embedder data. A worker holds the capsule's locker only for one JavaScript turn:
-it enters the persistent context, compiles and executes the script, drains the
-explicit microtask checkpoint, converts any exception or unhandled rejection
-to a Knot-owned report, and leaves all scopes before releasing the locker.
-Synchronous exceptions and unhandled rejections fail only that turn. Forced
-termination and heap-limit termination are fatal to the lifecycle.
-
-Package entry modules run as scheduler root turns. Each capsule owns an
-immutable in-memory source graph and persistent compiled-module cache. Static
-imports use URL resolution and can reach only sources already embedded in that
-graph; bare, missing, and private-bootstrap imports fail resolution. The engine
-eagerly evaluates a private `knot:bootstrap` module and the public
-`knot` module when it creates the capsule. Bootstrap captures the native
-request callback and removes its temporary global before extension work can
-run. The engine captures the command, cancellation, listener and provider dispatch
-functions as private persistent handles and removes their temporary globals.
-Extension code cannot invoke or replace native dispatch to fabricate contexts or
-buffer proxies. The public module exposes `editor`, `commands`, `workbench`,
-`documents`, `windows`, `workspaces`, `storage`, `keybinding` and `removeKeybinding`.
-The facade's buffer API crosses a pool-owned typed request inbox. Its native
-callback allocates a lifecycle-scoped request identity, retains only a
-persistent V8 promise resolver, and returns the promise without waiting on the
-worker. Cached JavaScript buffer proxies expose revisioned snapshots, batched
-edits, change subscriptions, and one replaceable contribution set. The engine
-converts these values directly at the V8 boundary; immutable UTF-16 snapshot
-storage is externalized with one `Arc` reference retained until V8 releases it.
-
-The facade validates recognized data fields and copies command JSON before native
-admission. Native decoding uses Knot-owned typed values without invoking JSON
-conversion hooks. Numeric boundaries reject coercion and precision loss; native
-numbers that cannot be represented exactly are rejected before reaching JavaScript.
-Native failures construct `KnotHostError` instances from typed codes, while
-argument types and numeric limits use `TypeError` and `RangeError`. New requests
-during runtime teardown reject with `Cancelled` before native admission.
-
-Registration and contribution disposers become locally inactive immediately and
-retain one cleanup promise, including its rejection. Native acknowledgement
-settles cleanup after earlier accepted mutations or invalidations have settled.
-There is no retry after cleanup failure. Listener/provider callbacks are outside
-that acknowledgement barrier, so a callback can await its own disposal. Native
-unregistration cancels pending provider receivers; a self-mutation's response is
-allowed to finish its active callback before releasing the scheduler root.
-Queued callbacks whose local registration is gone cannot enter author code.
-
-Personal config uses one capsule with optional pre-init and post-init graph
-entries. Loading the graph evaluates neither entry; the application schedules
-each entry as a separate awaited root turn. Compiled modules, JavaScript state,
-and registrations remain in the capsule between turns. Pre-init cannot import
-post-init, including through another local module, so the later entry cannot
-run during the earlier phase. Either entry may be absent. Unload uses the same
-exact-once lifecycle finalizer as installed extensions.
-The application reserves a distinct config lifecycle identity. It captures
-sources on the background executor before loading that lifecycle, awaits
-pre-init, then the installed-package dependency plan, then post-init. A config
-root may be a symlink to a directory; source containment uses the resolved root.
-An invalid or dangling root symlink is a discovery error. A capture or
-validation error associated with post-init is retained until that
-phase; pre-init errors stop startup before extension loading. A config
-failure unloads the config and every installed lifecycle admitted during that
-launch and removes their foreground registrations. Installed-package failures
-retain their independent report outcomes and do not interrupt post-init.
-Config and installed extensions retain their own keybinding slots across these
-phases. Personal slots outrank extension slots in the foreground merged map,
-including when an extension later registers the same key; failed startup or
-unload removes the affected lifecycle's slots.
-
-Command handlers remain persistent JavaScript functions keyed by opaque
-foreground-issued registrations. Native-to-extension invocation enters as
-scheduler root work with explicit JSON-compatible arguments, captured buffer and
-opaque presentation authority. Handler outcomes cross back as Knot-owned
-structured results rather than V8 values.
-View-scoped handlers use the same JavaScript execution path. The foreground
-catalog binds a handler to live Knot-owned view instances; a focused view starts
-its handler only after it claims the command in the originating window. The
-foreground validates the captured view, registration, and lifecycle before
-serving view requests or accepting completion.
-
-Tree and completion providers remain persistent JavaScript objects keyed by
-opaque foreground-issued registrations. Native child and completion requests
-enter as unrelated scheduler roots and return only typed semantic data with
-their registration, generation, and revision identities preserved. Callback
-throws and invalid results become recoverable per-request provider failures;
-they do not fail the extension lifecycle.
-Tree providers are registered by declared kind even before a product window
-opens. Each window owns its tree surface; provider registration and invalidation
-fan out to live surfaces, and responses are checked against each surface's
-generation. Window closure detaches that surface from foreground routing.
-
-The engine retains the root script or module promise independently from its
-host-request promises. A pending root with no runnable JavaScript yields its
-worker in `AwaitingHostWork`. A validated response is queued against that
-root, settles the persistent resolver inside a later locked isolate turn, and
-drains microtasks before the root is inspected again. Multiple requests may be
-pending and may settle out of order; unrelated roots remain queued until the
-active root and its detached native requests have all settled.
-
-Synchronous JavaScript keybinding calls queue Knot-owned mutations in the
-runtime. After the current V8 turn, the engine sends one ordered batch and
-waits for the foreground to validate and apply it atomically. Responses to
-earlier host requests wait until the batch settles, so an `await` continuation
-cannot run before its preceding keybindings take effect. A batch error fails
-the current script turn; a command handler receives a handler-failure outcome.
-Config startup treats the error as fatal, while an installed extension failure
-is isolated to that lifecycle.
-
-Unload first marks the scheduler lifecycle stopping and terminates any running
-JavaScript through a thread-safe control handle. Startup rollback, unload,
-fatal termination, heap failure, caught worker panic, and pool shutdown all
-remove and dispose a capsule through one exact-once lifecycle finalizer. The
-finalizer emits a terminal lifecycle event so the foreground removes command,
-buffer, tree, completion, subscription, and contribution ownership once.
-Disposal waits for the running locker to leave, then releases persistent
-handles and callback state while locked before dropping the shared isolate.
-Immutable external UTF-16 strings transfer one `Arc` reference to V8 and
-release it on garbage collection or isolate disposal, including when disposal
-happens on a pool worker.
+| Owner | Responsibility |
+| --- | --- |
+| `host::protocol` | Knot-owned identities, semantic payloads, and failures; no gpui or concrete core models |
+| `host::declarations` | Typed async handler contracts, linked discovery, and response transport |
+| `host::scheduler` | V8-independent lifecycle state and bounded worker scheduling |
+| `host::engine` | V8 initialization, persistent isolates, contexts, bindings, and exact-once runtime teardown |
+| `host::lifecycle` | Extension identity, scheduler-visible state, and failure data |
+| `host::pool` | V8-free application control, awaitable event inbox, diagnostics, and shutdown |
+| `host::module_graph` | Validation of immutable captured sources without V8 or filesystem access |
+| `app::extension_package`, `personal_config`, `extension_load` | Background source discovery, admission, startup ordering, and outcomes |
+| `app::extension_host` | Foreground routing, resource ownership, observation, and lifecycle cleanup |
 
 ```text
 extension JavaScript
@@ -196,238 +29,183 @@ application-owned gpui foreground bridge
 application registries and models
 ```
 
-## Handler declarations
+## Package admission and startup
 
-Every JS-to-native capability is an annotated async application handler. The macro
-contributes a descriptor through `inventory`; registry assembly sorts names and
-rejects duplicates before product host startup. Startup also validates each
-handler's context type. Generic adapters pair the argument decoder, success and
-error types; requests and replies retain operation identity and extension,
-lifecycle, request and invocation metadata. There are no per-operation transport
-sums or central decode/encode/foreground routing tables.
+Installed packages provide a manifest and immutable package-local source graph.
+The application validates the supported API version before capturing/evaluating
+an entry, retaining recoverable package identity even on validation failure so
+duplicates and rejected dependencies remain diagnosable. Discovery runs on gpui's
+background executor; the foreground admits valid packages in dependency order
+and awaits entry completion before loading dependents.
 
-The owned application context retains a weak host, an async application handle and
-request authority metadata. Short foreground closures check caller lifecycle and
-cancellation and return owned results. Foreground buffer, command and provider
-owners expose typed methods independently of response transport. Native command
-composition awaits typed completion channels; the command owner retains caller
-identity for cancellation and lifecycle cleanup. Command dispatch/cancellation
-remain application events, while generic declaration adapters deliver replies.
+The application retains an ordered startup report, publishing outcomes as they
+become known so one pending entry does not hide earlier failures. Failed or
+cancelled entry rolls back its runtime and foreground registrations before the
+next package starts; independent packages remain eligible.
 
-Resource operations capture destinations before awaiting native work, retain the
-shared product commit checks, and revalidate exact presentations before producing
-Open results. Closure distinguishes user cancellation from caller cancellation.
-Provider mutation identity travels with owned arguments so queued invalidations
-still precede disposal acknowledgement. Synchronous public keybinding calls feed
-one ordered native-turn batch through its declaration; the existing batch barrier
-holds earlier host responses until atomic foreground application completes.
+Static imports resolve only the public `knot` module or relative captured sources
+within the package root. Dynamic imports reject. Generated source URLs preserve
+failure locations; V8 compilation and values stay inside the isolate. Private
+bootstrap and dispatch handles cannot be invoked or replaced through author
+globals to fabricate callback context or buffer proxies.
 
-Host-owned argument readers decode recognized V8 fields directly. Semantic result
-codecs preserve external UTF-16 snapshots and native numeric precision. Invalid JS
-numbers remain `RangeError`; unrepresentable native integers remain
-`UnsupportedOperation` host errors. Local/shared error derives retain explicit
-stable codes, diagnostic messages and typed structured details. Descriptor codes
-plus the common transport failures check the closed TypeScript declaration,
-without a separate error membership registry. Native command declarations share
-the async call contract, with application-owned command adapters retaining catalog
-ownership and captured participant routing. See [commands](commands.md) for
-synchronous claim selection and foreground execution ordering.
+Personal config uses one manifest-free lifecycle with optional pre-init and
+post-init entries sharing globals, compiled modules, and registrations. The
+application selects one existing XDG config directory in preference to the
+platform directory; exact discovery rules live in
+[personal_config.rs](../../src/app/personal_config.rs). Capture resolves a
+symlinked root and validates source containment. Pre-init cannot import post-init,
+even indirectly. Post-init capture/validation errors are retained until that
+phase rather than preventing valid pre-init work.
 
-## Boundary contracts
+Startup awaits pre-init, installed extensions, then post-init. A config failure
+unloads every startup lifecycle; installed-package failures do not stop post-init.
+Window admission and fatal diagnostics belong to
+[product launch](workbench-and-lifecycle.md#product-application-launch).
 
-Extension requests cross the application boundary only as Knot-owned semantic
-data and opaque extension, lifecycle, request, registration, invocation,
-subscription, and buffer identities. The foreground owner revalidates captured
-identity, revision, generation, and lifecycle before mutation.
+## Runtime and scheduler flow
 
-Buffer ranges and edits remain UTF-8 byte based. Snapshot storage supplies an
-immutable external UTF-16 representation to V8 without changing the UTF-8
-core.
+One application-owned `ProductExtensionHost` owns the pool, foreground bridges,
+and awaitable event-inbox task. Each lifecycle has a persistent runtime capsule,
+one FIFO root queue, and at most one active logical command tree. The pool has
+fixed worker capacity; defaults and state transitions live in
+[scheduler.rs](../../src/host/scheduler.rs).
 
-## Scheduler flow
+V8 initialization must precede worker creation: every thread that may lock a
+shared isolate must be created after initialization. A worker locks a capsule
+for one turn, enters its persistent context, runs JavaScript, drains explicit
+microtasks, records failures, and leaves V8 scopes before releasing the locker.
+Only thread-safe embedder state travels with the capsule. Ordinary callback
+exceptions fail that request/turn; forced interruption and heap failure are fatal
+to the lifecycle.
 
-A newly admitted lifecycle starts in `Loading`. Successful loading moves it to
-`Idle`, or to `Queued` when roots arrived during loading. `Queued` is also the
-ready-queue deduplication bit. A worker takes one FIFO turn and changes the
-lifecycle to `Running`; its result completes the active root, tail-queues one
-continuation turn, yields in `AwaitingHostWork`, or fails that lifecycle.
-Stop changes the lifecycle to `Stopping`; normal cleanup removes it, while a
-fatal outcome records `Failed`. The pool admits another lifecycle
-independently of a failed one.
+Host requests retain persistent promise resolvers and yield the worker while
+awaiting native work. A validated response queues a continuation under the same
+root, settles its resolver in a later locked turn, then drains microtasks.
+Multiple requests can settle out of order. Unrelated roots remain queued until
+the active root and its detached native requests settle. Responses racing with
+a running turn are retained for the next continuation; request and turn identities
+reject stale or duplicate delivery. Forced termination also wakes an awaiting
+root, so it does not depend on a later host response.
 
-Scheduler diagnostics are read-only evidence: they report configured worker
-count, lifecycle states, current and maximum queue depths, turn counts, worker
-movements, and maximum enqueue-to-start lag. They do not trigger quotas,
-timeouts, dropping, coalescing, or backpressure.
+Buffer listeners, application listeners, and semantic providers enter as unrelated
+FIFO roots. They may await host work without retaining a worker. Callback failure
+is isolated so later roots still run. Dropping a native provider receiver cancels
+queued work or wakes active work to release retained promises. Diagnostics measure
+queue depth, lag, and worker movement; quotas, dropping, coalescing, deadlines,
+and backpressure remain [D019](../roadmap.md).
 
-Unrelated roots remain behind the active command tree. A continuation must
-name that tree and may wake an awaiting lifecycle; a response that races with
-the running turn is retained and queued when the turn yields. Stop and shutdown
-cancel queued work immediately and settle a running root when its outstanding
-turn returns. Root completion senders are consumed on settlement so accepted
-root work completes exactly once. Extension and lifecycle identity plus
-per-turn identity reject stale work and late or duplicate turn results.
-Response admission additionally validates extension, lifecycle, and request
-identity and reserves the request before scheduling, so duplicate responses
-cannot enqueue twice. Unload, fatal failure, forced termination, and pool
-shutdown reject retained resolvers under the isolate locker and settle the
-native root completion exactly once before disposal.
-The pool-issued termination handle also queues a continuation for an awaiting
-root, so forced termination does not depend on a later host response to wake a
-parked lifecycle.
+The foreground command bridge owns admitted invocation trees and completion
+channels; the host schedules their JavaScript. Routing, inherited presentation
+authority, inline children, ancestry limits, and contextual access belong to
+[commands](commands.md#extension-execution).
 
-Buffer-change notifications enter the scheduler as unrelated FIFO roots. Each
-callback may yield for host work without holding a worker, and a rejected
-listener completes only that callback so later notifications still run. The
-runtime records maximum queued callback depth and enqueue-to-start lag as
-evidence; it does not cap, drop, coalesce, or delay notifications as policy.
+## Handler declarations and transport
 
-Semantic provider callbacks use the same unrelated-root queue. A provider call
-therefore waits behind an active command, buffer listener, or provider call,
-while an asynchronous provider that awaits host work releases its worker.
-Dropping the native receiver cancels a queued call before entry or wakes an
-active call to release its persistent promise and pending host resolvers.
-Unregistration removes the JavaScript provider synchronously, and unload or
-pool shutdown settles outstanding native callback completions during the
-ordinary lifecycle teardown. Completion unregistration and lifecycle removal also
-cancel retained editor requests and remove that provider's aggregate results.
+JS-to-native capabilities are annotated async application handlers. Linked
+descriptors pair typed arguments, results, and errors; assembly rejects duplicate
+operations and invalid context types before startup. Foreground resource owners
+expose semantic methods independently of request envelopes. Generated adapters
+own decoding and response transport rather than per-operation routing tables.
+Native commands share this async contract with command-specific adapters.
+Implementation contracts live in
+[declarations](../../src/host/declarations.rs) and
+[application handlers](../../src/app/extension_host/handlers.rs).
 
-The foreground command bridge shares the application's lifecycle-scoped catalog
-and owns one serial invocation tree. It retains the admitted presentation and
-its buffer on the root, inherits both through children, returns same-lifecycle
-children to JavaScript as inline continuations, and defers cross-lifecycle or
-native outcomes until their work settles. Product nested commands are offered to the captured window before a
-child is admitted; the bridge then preserves one-child and ancestry checks for
-the selected handler. The shared catalog supplies lifecycle registrations for
-palette and keybinding discovery, while the application bridge retains the captured native
-target for the whole root tree. Each parent has at most one unfinished child,
-and ancestry cycles are rejected as unavailable. Cancellation marks the tree,
-wakes a suspended isolate turn, aborts its JavaScript signal, rejects its
-pending host requests, and rejects late responses. Cancellation also covers
-the interval between a command issuing host work and publishing its active
-execution: publication consumes an earlier cancellation, while later
-cancellation wakes the recorded execution. Forced V8 interruption
-remains fatal only to the affected lifecycle.
+Owned contexts retain weak host/application access and caller authority. Short
+foreground closures revalidate lifecycle, cancellation, and resource identity,
+then return owned results; no foreground borrow crosses an await. Mutations
+revalidate immediately before commit. Shared product operations return committed
+semantic data, which handlers adapt without invoking commands or querying focus
+afterward. Open/save/root behavior belongs to [documents](documents-and-persistence.md);
+closure belongs to [workbench lifecycle](workbench-and-lifecycle.md).
 
-The product host resolves contextual buffer and selection requests against the
-admitted tree capture, never request-delivery focus. It validates the calling
-frame, target authority and exact live presentation before returning contextual
-data. Nontext captures return a null buffer; unsupported selection surfaces,
-missing command context, invalid presentations and cancellation are distinct
-failures. Activation, buffer listeners and semantic providers have no implicit
-command context. Application clipboard access remains available to these roots.
+The V8 boundary decodes recognized typed fields without conversion hooks and
+rejects numeric precision loss. Typed native failures supply stable public codes;
+argument and numeric errors stay author-side categories. Descriptor metadata
+checks the TypeScript error union. Immutable external UTF-16 snapshot storage
+retains a shared reference until V8 garbage collection or isolate disposal,
+without changing the UTF-8 core.
 
-The foreground buffer bridge owns explicit-buffer access, lifecycle-scoped
-subscriptions, revision validation, model mutation, contribution ownership,
-and change fan-out. It revalidates cancellation inside the foreground update
-immediately before mutation. Model observers route committed changes back to
-the pool without a periodic wake loop.
+Synchronous JavaScript keybinding calls collect an ordered batch per V8 turn.
+The engine holds earlier host responses until atomic foreground batch application
+settles, so an await continuation cannot overtake preceding keymap mutations.
+A batch failure fails the current turn. Binding ownership and precedence belong
+to [commands](commands.md#keymaps).
 
-The foreground semantic bridge owns lifecycle admission, tree registration
-routing, and the shell-wide completion registry. Native tree invalidations and
-view-owned completion sessions dispatch awaitable provider calls through the
-application pool. Those native owners remain authoritative for parent,
-registration, generation, buffer-revision, and lifecycle validation, so late
-or stale provider results are ignored without involving V8.
+## Disposal, cancellation, and teardown
 
-Releasing the product host unloads its remaining isolates and removes foreground
-ownership while retained buffer models and editor views are still live. Startup
-rollback, explicit unload, terminal lifecycle events and host release share the
-same idempotent foreground cleanup. Cleanup removes command/keymap ownership,
-subscriptions, contributions and semantic registrations independently of final
-JavaScript callbacks or cleanup awaits. Cancellation listeners have a validated,
-read-only signal/event surface; a throwing listener is diagnosed independently
-and cannot prevent delivery to the remaining listeners.
+Disposal immediately prevents new local callback admission and retains one
+native-cleanup promise, including failure. Earlier accepted mutations and
+invalidations settle before acknowledgement; executing callbacks are outside that
+barrier so self-disposal cannot deadlock. Queued callbacks cannot enter removed
+author registrations. Native provider removal cancels pending receivers; its
+surface effects belong to [semantic UI](semantic-ui.md).
+
+Command cancellation wakes suspended execution, aborts its signal, and rejects
+pending JS requests. Admission/publication races retain cancellation until the
+execution is recorded. An already queued native response keeps its pending entry
+until its admitted turn consumes it without settling the rejected resolver again.
+This preserves root ownership while cancellation callbacks run. Accepted commits
+are not rolled back.
+
+Unload, startup rollback, fatal termination, heap failure, caught worker panic,
+and pool shutdown converge on one runtime finalizer. Stop prevents queued work
+and terminates running JavaScript. Once its locker leaves, the finalizer releases
+persistent handles while locked, settles accepted native work exactly once, and
+drops the isolate. A terminal lifecycle event triggers foreground cleanup.
+
+Foreground cleanup is shared by lifecycle events, startup rollback, explicit
+unload, and host release. It removes command/keymap registrations, subscriptions,
+contributions, and semantic providers even when buffer models or views are still
+retained. No final author callback or disposer retry is required. Cancellation
+listener failure cannot prevent other listeners from receiving cancellation.
 
 ## Application metadata queries
 
-The product host derives document metadata from the application collection and
-window/pane/tab associations from live product shells. It reads gpui's live window
-roots rather than maintaining a synchronized catalog. Only product shell windows
-participate, so diagnostics and startup errors are excluded. Native focus determines
-the current tab target; non-document terminals carry no document or buffer.
+Queries derive documents from the application collection and windows, panes,
+tabs, roots, and focus from live product shells. Diagnostic windows are excluded;
+terminals are non-document surfaces. No synchronized window catalog is maintained.
 
-Typed query responses become immutable author metadata with shared buffer proxies.
-Discoverable window/pane/presentation targets are separate opaque objects from
-command captures. Window-local targets include the workbench identity and exact
-presentation entity, preventing replacement or transfer from selecting another view.
-Queries require a live extension lifecycle and honor command cancellation, but do
-not require command context or promise future validity of returned targets.
+Discoverable targets are distinct from command captures. They qualify identities
+with the workbench and exact presentation so replacement or transfer cannot
+retarget them. Queries require a live lifecycle, honor command cancellation, and
+work without command context; returned targets reserve no future validity.
 
 ## Application observation
 
-The foreground product host owns a metadata comparison baseline, session sequence
-and lifecycle-scoped workbench subscriptions. The application's foreground signal
-receives document collection creation/removal/persistence commits, product shell
-notifications, tab focus/blur, native activation and window closure. Comparison
-publishes only relevant metadata changes, excluding repaint-only updates. Workspace
-replacement/clear and tab relocation flow through the existing shell owners.
+The foreground host owns a comparison baseline, session sequence, and
+lifecycle-scoped subscriptions. Document commits, shell transitions, tab focus,
+native activation, and window closure signal comparison; repaint-only changes do
+not publish metadata events. All documents are tracked independently of author
+buffer lookup. One buffer-commit drain routes text edits to buffer subscribers;
+application observation compares metadata without consuming those edits again.
 
-Every application document is tracked independently of author buffer lookup. One
-buffer-commit drain routes edit payloads to buffer subscriptions; application
-observation compares revision/dirty metadata without consuming those edits a second
-time. Initial buffer admission discards pre-subscription pending edits. Explicit
-final removal closes the model and releases transport/subscription ownership even
-when a retained editor keeps its entity alive.
-
-Observe refreshes the committed baseline before capturing registration, initial
-snapshot and watermark in one foreground request. Events enter existing unrelated
-FIFO scheduler roots. The engine installs the author listener during the observing
-root before any queued notification root can run. Application listeners share the
-existing async callback executor, error isolation, cancellation and lifecycle
-finalizer. Self-disposal acknowledges native removal without waiting for the
-executing callback; local listener removal suppresses already queued deliveries.
-Application event queues use the scheduler diagnostics and have no separate
-backpressure, dropping, replay or recovery policy.
-
-Resource Open requests capture their destination on foreground admission, using an
-explicit live target or the originating command window/active product window. The
-product owner retains generation and exact-presentation checks during provider
-work. Before commit it verifies caller lifecycle/cancellation; after commit the
-host builds the typed document/presentation response directly from that result,
-without invoking a command or querying window focus. Resource failures map from
-native variants to stable host codes. Listener delivery is outside completion.
-
-Protected presentation closure returns its semantic result through the typed
-bridge, using the product coordinator independently of command invocation.
-Cancelled callers cannot commit closure. User cancellation is a successful
-cancelled outcome; stale targets, concurrent closure and persistence failures are
-structured errors. A command cancellation rejects its pending JS promises; requests
-with an already queued response retain their native pending entry until that turn
-consumes it without settling the rejected resolver again. This keeps an admitted
-response associated with its root while cancellation callbacks run.
+Observation refreshes the committed baseline and captures registration, snapshot,
+and watermark in one foreground request. The engine installs the author listener
+before that root finishes; subsequent notifications run through the ordinary FIFO
+callback path. Commits never await listeners, and a listener may await host work
+or its own disposal. Queries can see newer state than an event. No separate replay,
+recovery, or backpressure mechanism is introduced.
 
 ## Extension record storage
 
-`app::extension_storage` binds application-selected canonical package identities
-and personal config to separate databases under local application data. Binding
-performs no I/O. Record operations execute on gpui's background executor, outside
-V8 and the foreground, and serialize access to a reused connection per database.
-Read distinguishes missing records from JSON null; keys list in binary order.
-Each write/delete is one atomic SQLite statement and acknowledges after commit.
-Unknown physical schemas and database failures report the affected path and
-cause without replacing data.
+`app::extension_storage` owns separate SQLite databases selected by canonical
+package identity or personal config, independently of lifecycle IDs and installation
+paths. Admission binds the owner before startup requests can run; source-only
+diagnostic lifecycles have no implicit durable owner. Teardown removes lifecycle
+bindings while retaining application-owned connections and records.
 
-Installed admission binds the validated canonical manifest identity to the loaded
-lifecycle before foreground requests can run; personal config binds its separate
-stable owner before either startup phase. Runtime IDs and installation paths do
-not determine durable ownership. Lifecycle teardown removes the binding while
-retaining the application-owned connection and records. Diagnostic source-only
-lifecycles have no implicit durable owner.
+Binding performs no I/O. Async handlers await background operations serialized
+through a reused connection per database. Native transactions never span a JS
+await. Caller lifetime is checked before database work starts; once started,
+work finishes normally even if its caller disappears. Failures preserve damaged
+or incompatible databases. Public value, ordering, and error contracts live in
+[knot.d.ts](../../src/host/js/knot.d.ts); implementation and physical schema live in
+[extension_storage.rs](../../src/app/extension_storage.rs).
 
-The public `storage` facade validates and copies JSON data through the shared JSON
-validation boundary. Annotated record handlers use the ordinary caller-lifetime
-checks without requiring command or window context, then await native background
-work. Weak per-call cancellation flags follow those existing foreground checks
-through command cancellation and lifecycle removal. Database work rechecks its
-flag after acquiring the connection, before opening or executing SQLite. Results and `StorageUnavailable` diagnostics use existing host response and
-exact-once settlement transport. Native transactions never span a JavaScript
-await. Once native work starts, cancellation does not interrupt its transaction.
-
-Product and personal-config diagnostic quit paths synchronously stop storage
-admission, then await the existing executor's admitted work and connection release
-before calling gpui quit. No foreground disk wait or final JS unload callback is
-required. Host release also detaches a native drain. An admitted task retains its
-completion guard until it finishes or is cancelled before execution; the drain
-closes each connection only after every admitted task has released that guard.
-The native drain runs independently of the caller awaiting shutdown.
+Product and config-diagnostic quit stop storage admission synchronously, then
+await admitted work and connection release before gpui quit. Host release also
+detaches a drain. Task completion guards keep connections alive through admitted
+work; the drain runs independently of the caller awaiting shutdown. No foreground
+disk wait or final JavaScript callback is needed.

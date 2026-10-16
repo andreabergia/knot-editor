@@ -1,124 +1,80 @@
 # Commands and keymaps
 
 Part of the [architecture](../architecture.md). [Decisions](../decisions.md)
-records rationale.
+records rationale. Public API contracts live in [knot.d.ts](../../src/host/js/knot.d.ts).
 
 ## Dispatch
 
-The application owns one foreground catalog for command definitions, name
-ownership, and invocation admission. Keybindings, palette choices, native menus,
-and scripts carry the same Knot-owned command and structured outcome. The
-palette retains the origin captured before it takes focus.
+The application owns one foreground catalog for definitions, name ownership,
+and admission. Keys, palette, menus, and scripts invoke the same semantic commands
+and structured outcomes. The palette captures its origin before taking focus.
 
-Native command handlers declare their name, title, routing participant and typed
-async signature with `#[command(...)]`. Repeated declarations can share an
-implementation. Automatically linked descriptors provide catalog definitions and
-argument/result adapters; sorted assembly rejects duplicate participant entries
-and conflicting titles. Editor and terminal handlers can share a public name and
-title. Native name constants are generated from their declarations for menus and
-keymaps. There is no separate native registration list.
+Annotated native handlers declare metadata and typed async signatures; linked
+adapters assemble catalog entries and generated name constants. Distinct routing
+participants may share a name/title. Assembly rejects duplicate participant
+entries or conflicting titles. Dynamic extension ownership remains in the
+application catalog. Declaration contracts live in
+[command_declarations.rs](../../src/app/command_declarations.rs).
 
-Optional synchronous claim predicates retain explicit participant decline before
-starting native work. Typed command arguments decode after a participant claims;
-failures become structured command outcomes. Native handlers use the same owned
-async call contract as host operations, with command-specific conversion traits.
-Existing native routines reuse `CommandOutcome` for status and failure reporting.
-The advertised Find commands retain their explicit unavailable behavior.
+An invocation captures window, focus, workbench, tab, surface, and exact presentation.
+Routing offers it to the captured focused view, then workbench, then application.
+Participants synchronously claim/decline before starting typed async work; all
+declining produces unavailable. Raw text, IME, pointer, scroll, and terminal bytes
+remain view input protocols. Find commands currently report unavailable.
 
-Each native product invocation captures its window, focus, workbench, tab, and surface.
-An extension-backed focused view also contributes its Knot-owned view identity.
-The window routes the command to the captured focused view, then the workbench,
-then the application. A participant declines, finishes with an outcome, or
-starts pending work. If all decline, the command is unavailable. Focus changes
-cannot redirect an admitted command; closed or replaced targets are invalid.
-Pending work revalidates its captured target before applying results. Native
-Open and Save include exact presentation identity as well as tab/document identity,
-and reject results after the captured native window closes. Reordering within a
-pane preserves its capture; replacement or transfer invalidates it.
-GPUI enters the captured window after the current update releases it, during
-that update's effect cycle and before the invocation turn returns.
+Focus changes cannot redirect an admitted command. Pending work revalidates the
+captured window and presentation before foreground access. Same-pane reorder
+preserves authority; replacement or transfer invalidates it even under unchanged
+document identity. No foreground borrow crosses an await.
 
-Owned command contexts submit short foreground closures returning owned results.
-The adapter drives those closures in the current dispatch turn, preserving order
-with subsequent key events and raw text input. Only a genuinely suspended future
-moves to gpui's executor. After suspension, foreground access revalidates the
-captured window, tab, presentation and view; no editor borrow crosses an await.
-Native dialog/protected-close handlers await the existing completion channels.
-This keeps extension participant selection synchronous, including inline children.
-
-The catalog retains one public definition per command name. An extension can
-register a handler for an existing name and a declared view kind. The foreground
-binds that handler to each live instance of the kind, while the focused view
-claims or declines the command during window dispatch. Disposal, lifecycle
-teardown, and window closure remove the corresponding bindings. Extension
-requests and late results validate the captured instance and lifecycle.
-Globally registered extension commands reach the application participant after
-the focused view and workbench have declined. Script invocation requires an
-admitted command frame; activation and unrelated callbacks receive `ContextUnavailable` instead of borrowing product focus.
-Nested script invocation reuses its parent's captured window. The window selects
-the participant before the extension bridge schedules a child or returns an
-inline same-lifecycle handler. A window-handled child reports its result to the bridge
-without routing the command a second time.
-
-The workbench exposes the tab's typed command view to this routing path.
-Participants decide which names and arguments they handle. Raw text input,
-IME, pointer events, scrolling, and terminal bytes remain view input protocols.
+Owned command contexts run short foreground closures in the current dispatch
+turn, after the active window update releases its borrow, preserving order with
+subsequent key events and raw text input. Only suspended futures move to gpui's
+executor. This also keeps extension participant selection synchronous, including
+inline children. Dialog and protected-close handlers await semantic completion.
 
 ## Keymaps
 
-The application owns one registry for native, installed-extension, and personal
-binding slots. A slot contains an owner, key sequence, optional focused view
-kind, and a command or unbind rule. Personal slots outrank extension slots,
-which outrank native defaults. Within one source, a view-specific slot outranks
-an application-wide slot; later registrations break remaining ties. Unloading
-a lifecycle removes its slots. Mutations refresh one merged effective map;
-command routing reads that map directly. An unavailable command does not
-select another binding.
-Native product defaults use Control shortcuts on Windows and Command shortcuts
-on macOS; Windows editor navigation uses Control with arrows for words and
-Control with Home/End for document boundaries. Personal and extension bindings
-can still override those defaults through the same registry.
+One application-owned registry retains native, installed-extension, and personal
+slots, then derives a merged effective map. Personal bindings outrank extensions,
+which outrank native defaults. Within a source, view-specific bindings outrank
+global bindings; later registration breaks remaining ties. Removing ownership
+reveals lower-priority slots. An unavailable command does not select another
+binding. Null unbinds leave raw input available.
 
-The public `knot` module exposes synchronous, void `keybinding` and
-`removeKeybinding` calls. Bindings accept a command name or a command with
-JSON-compatible arguments, plus an optional view kind. A null command unbinds
-the key in that scope and leaves input available to the focused view. JavaScript
-sends ordered mutations after each V8 turn;
-the application validates and applies each batch atomically, rebuilding GPUI
-bindings only when the merged map changes.
+GPUI recognizes keys and scoped sequences, then one Knot action consults the map
+and enters command dispatch. Scoped prefixes remain local to their views; the
+palette retains its own input context. Menus and palette commands bypass keymaps.
+Native defaults follow platform modifiers; fixed config-error bindings remain
+available independently of product windows.
 
-GPUI recognizes keys in product windows and invokes one Knot keymap action per
-effective key and scope. The action uses the focused view kind to read the
-effective map and enters the captured command dispatcher. The same global
-`copy` binding reaches the editor's native handler or an extension view's
-handler according to focus. GPUI contexts limit scoped bindings to their views,
-so unrelated input and sequence prefixes reach their original view. The command
-palette retains its own input context; palette and menu command invocation do
-not consult keymaps. Every changed
-effective map rebuilds GPUI bindings from the registry, plus fixed bindings for
-the config-error window, across all windows.
+Synchronous JavaScript keybinding calls form an ordered atomic batch per V8 turn.
+Changed effective maps rebuild bindings across windows; host-response ordering is
+specified in [transport](extension-host.md#handler-declarations-and-transport).
 
 ## Extension execution
 
-The foreground extension command bridge and pooled V8 runtime preserve serial
-root trees, captured presentation authority and buffers, structured outcomes,
-cancellation, and nested composition. Same-lifecycle children run within their parent's scheduler root;
-window-handled and cross-lifecycle children await foreground outcomes. Extension
-registrations and pending work are tied to their lifecycle. The declared async
-host invocation handler awaits a typed completion channel from this bridge.
-Pending children retain caller ownership for unload/cancellation; transport
-adapters pair their semantic dispatch result with the originating request.
+The foreground bridge owns one serial invocation tree, admitted presentation
+authority, buffer capture, cancellation, and completion channels. The pooled
+runtime schedules JavaScript. Nested invocation first selects a participant in
+the parent's captured window; window-handled outcomes return to the bridge
+without dispatching twice. Same-lifecycle children run inline under the parent's
+scheduler root; cross-lifecycle children await foreground completion. Each parent
+has at most one unfinished child, and ancestry cycles are unavailable.
 
-Command outcomes report execution status, not semantic values. Direct JavaScript
-functions remain available when command lookup and focus routing are unnecessary.
-Command argument schemas, aliases, and general handler priorities remain deferred.
+View-scoped extension handlers bind to live instances of a declared kind. The
+focused instance claims before global extension handlers reach the application
+participant. Disposal, lifecycle teardown, and window closure remove bindings;
+late results validate instance and lifecycle.
 
-Each handler receives a read-only target with opaque window and optional extension
-view identities. Root, inline and cross-lifecycle frames retain the same tree
-capture. Contextual buffer and selection requests validate the live invocation,
-lifecycle, explicit target authority and exact presentation; focus changes do not
-retarget them. A closed, replaced or transferred presentation is `InvalidTarget`;
-a valid nontext capture resolves to a null buffer. Selection is supported only
-for admitted outline view handlers. Explicit buffer proxies remain independent
-of presentation lifetime. Clipboard requests are application-scoped and validate
-lifecycle and command cancellation without requiring a captured view.
+Contextual buffer/selection access validates the live invocation, caller lifecycle,
+target authority, and exact presentation. Roots and children inherit the same
+capture. Activation and unrelated callbacks cannot borrow command focus. A valid
+nontext target has a null buffer; current selection support is limited to admitted
+outline handlers. Explicit buffer access remains independent of presentation
+lifetime; clipboard access is application-scoped.
+
+Outcomes report execution status rather than semantic values. Resource APIs return
+committed data directly; ordinary functions suit composition that needs return
+values without command routing. Cancellation and exactly-once response settlement
+belong to [host lifecycle](extension-host.md#disposal-cancellation-and-teardown).

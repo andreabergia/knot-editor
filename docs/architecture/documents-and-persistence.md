@@ -1,146 +1,104 @@
 # Documents, workspaces, and persistence
 
-Part of the [architecture](../architecture.md). Design rationale is recorded in
-[decisions](../decisions.md); deferred work lives in [deferred.md](../roadmap.md).
+Part of the [architecture](../architecture.md). [Decisions](../decisions.md)
+records rationale; deferred work lives in the [roadmap](../roadmap.md).
 
 ## Document ownership
 
-`BufferRegistry` assigns monotonic transport handles and holds weak model
-references. Its active-buffer entry is the prototype command context.
-An application-global `DocumentCollection` assigns document identities,
-strongly owns every open document and its model, and deduplicates normalized
-resource URIs across the application. Each document also has an application-allocated
-UUID independent of its session-local collection ID and buffer transport handle.
-That opaque identity survives Save As and additional presentations; closure and
-reopening allocate a new identity, with no restart reuse guarantee. Shell selection is presentation state
-and remains outside the collection; `BufferRegistry` remains only a
-transport-handle registry. Final document removal closes the model explicitly,
-invalidates transport access even if a stale view retains the entity, and releases
-anchored contributions and pending buffer changes. The product host then removes
-buffer subscription ownership and its model observer. Nonfinal presentation closure
-and tab transfer leave the shared model open.
+The application-global `DocumentCollection` strongly owns every open document
+and model, deduplicating normalized resource URIs. Each document has a UUID
+independent of collection IDs and transport handles. Save As and additional
+presentations preserve it; closure/reopening allocates another, with no restart
+reuse guarantee. `BufferRegistry` only maps monotonic transport handles to weak
+model references; shell selection remains presentation state.
 
-A document explicitly records whether it is untitled,
-destination-associated-but-uncreated, persisted, or generated. Untitled dirty
-state compares the model's current content identity with the identity recorded
-at its initial clean revision; a destination-associated document is dirty until
-persistence succeeds; a persisted document compares against the content
-identity at its last successfully persisted revision; and generated documents
-are never persistable. This lets undo return to a clean content state while
-public model revisions remain monotonic. URI and provider state never enter
-`BufferModel` or `core`.
+Final document removal explicitly closes the model, invalidates transport access,
+and releases contributions and pending changes even if a stale view retains the
+entity. The product host removes subscriptions and model observation. Nonfinal
+presentation closure and tab transfer keep the shared model open; final-view
+coordination belongs to [protected closure](workbench-and-lifecycle.md#workbench-and-protected-closure).
+
+Documents distinguish untitled, destination-associated-but-uncreated, persisted,
+and generated state. Untitled cleanliness compares against initial content;
+associated-but-uncreated documents remain dirty until saved; persisted documents
+compare against their saved content identity. Undo can return to clean content
+without making public revisions non-monotonic. Generated documents cannot be
+persisted. Resource identity and provider state never enter `BufferModel` or `core`.
 
 ## Opening resources
 
-CLI paths, native Open selections, and macOS open events become the same
-normalized `file://` open request at the platform boundary. The product Open operation returns committed document/presentation or workspace
-data independently of command outcomes; native command dispatch adapts that typed
-completion. Resource failures retain their native variants until that adapter.
-The extension host uses the same operation with a file-only resource constraint,
-converts failures to structured host codes, and captures document metadata plus
-its exact presentation at commit. Window/pane/view destinations are validated on
-admission; asynchronous completion revalidates the captured native presentation
-and caller lifecycle/cancellation without looking up focus again. Untitled creation
-uses the native New path and returns its committed document/presentation pair;
-there is no headless document lease. Presenting an existing document shares its
-model, reuses its existing window-local tab, or creates another native editor view.
-Both use the same live destination admission as file Open.
-A product open
-normalizes and stats the resource asynchronously. Existing files are read and
-UTF-8-decoded before foreground state changes, missing files create a dirty
-destination-associated document, and directories install the window's optional
-workspace and tree. Later opens and lost or replaced captured presentations reject stale
-completions, even when replacement retains the same tab/document IDs. Open retains
-the destination window and focuses the selected native presentation there after
-commit, without looking up application focus again. Normalized file URIs deduplicate through the application document
-collection; a window reuses an existing tab when it already presents the
-document and otherwise creates an independent view in the captured pane.
+CLI paths, native Open, and macOS events converge on normalized resource requests.
+The shared product operation returns committed document/presentation or workspace
+data; native commands and extension handlers independently adapt that result.
+Extension file Open constrains resource kind before reading rather than interpreting
+a command outcome or looking up focus later.
 
-## URI workspaces and persistence
+Admission captures the destination window/pane/exact presentation. Provider work
+normalizes and stats asynchronously, then reads and UTF-8-decodes existing files
+before changing foreground state. Missing files create dirty destination-associated
+documents; native directory Open installs roots and tree. Completion revalidates
+caller lifecycle/cancellation, Open generation, native window, and exact
+presentation. Later opens, replacement, or transfer reject stale work even if
+tab/document IDs are unchanged.
 
-`ResourceUri` is the application boundary for persisted resources. It parses
-absolute hierarchical URIs and provides stable equality, scheme access, and
-segment-aware containment. Scheme-specific providers own normalization. Only
-the local-folder provider converts between `file://` URIs and platform paths;
-generic workspace, tree, buffer, and shell state contains no `Path`.
+A window reuses its existing tab for an open document or creates an independent
+view in the captured pane. Opening from a terminal preserves the terminal.
+Untitled creation and presenting a known document use the same destination
+admission and return committed document/presentation pairs; neither creates a
+headless document lease. Successful operations focus their destination without
+resolving application focus again.
 
-The application owns a registry that routes each operation by URI scheme.
-Providers implement one asynchronous byte-oriented contract: normalize,
-enumerate immediate children, versioned read, no-clobber create, conditional
-replace, and stat. Versions are provider-owned opaque values. The memory and
-local-folder providers implement the same Knot-owned results and structured
-errors. Local creates and replacements write and flush a temporary sibling,
-then install it atomically; replacements preserve permissions and reject a
-version mismatch. The local provider dispatches native I/O through a Tokio
-runtime and converts paths only at that boundary. Product use is unscoped so
-user-selected documents do not inherit workspace containment. A scoped local
-provider remains available for trusted workspace consumers and fixtures; its
-lexical root is an application boundary rather than a sandbox and filesystem
-operations follow symlinks.
+## URI providers
 
-```text
-Application-owned provider registry
-        scheme -> provider
-                |
-       WorkspaceState
-       roots + generation
-          /          \
-         v            v
- WorkspaceTree   resource open/save
- cached UI       captured revision
-                         |
-                         v
-                    Document
-                         |
-                         v
-                    BufferModel
-```
+`ResourceUri` identifies resources through normalized hierarchical URIs. Providers
+own scheme-specific normalization and opaque versions. Only the local provider
+converts file URIs to paths; generic workspace, tree, document, and shell state
+remains path-independent.
 
-A window-local `WorkspaceState` lives for the entire window lifetime, including
-when its root set is empty. It owns ordered root records and a monotonic root-set
-generation; zero or one root is supported. Retaining a normalized root retains
-its opaque root ID. Clearing and reinstalling allocates a fresh root ID without
-resetting the generation. Replacements reject extra roots without changing state.
-Workspace-tree requests capture the roots and generation and revalidate both
-before applying foreground results; clearing also clears cached tree state. Document opens
-use the application provider directly and are deliberately independent of the
-workspace root.
-`WorkspaceTree` additionally versions each directory request. Enumeration is
-sorted in application code with directories before files and deterministic
-name and URI ordering. Painting and input use only its cached entries,
-loading, selection, expansion, and error state.
+The application registry routes normalization, enumeration, versioned read,
+no-clobber create, conditional replace, and stat by scheme. Memory and local
+providers implement the same typed results/errors. Local writes flush a temporary
+sibling and install atomically; replacement preserves permissions and rejects
+version mismatch. Native filesystem I/O uses a background Tokio runtime.
 
-Opening a file awaits normalization, stat, versioned byte read, and UTF-8
-decoding before creating or selecting any model. A later open or captured-tab
-replacement rejects the stale result. Open accepts document or terminal surfaces
-and revalidates the captured surface identity before presenting results. From a
-terminal it opens a document tab in the captured pane and preserves the terminal.
-Save and Save As still require a document target. Documents retain the observed provider
-version with their persisted revision. Save captures document, model, resource,
-text, revision, version, and a persistence generation. A successful create or
-conditional replacement commits the new version and only the captured model
-revision while the captured command presentation, native window and document state remain live, so
-edits racing the write remain dirty. Save As uses the native save panel, checks
-application-wide resource ownership, and retargets the document only after I/O
-succeeds. Conflicts offer native Reload, Save As, and Cancel choices; Reload
-also rejects edits racing its asynchronous read.
+Product documents use unscoped providers so user-selected resources need not lie
+inside workspace roots. Scoped local providers remain trusted application
+boundaries, not sandboxes; symlinks may lead outside the lexical root.
 
-Native Save As provides overwrite consent, but replacement still checks the
-observed provider version so a later external change becomes a conflict.
-Live filesystem watching, binary buffers, and encoding detection remain deferred.
+## Workspaces and resource trees
 
-Creation, final removal and successful persistence signal application metadata
-observation on the foreground. Persistence changes title/resource/dirty metadata
-without changing the document UUID. Content edits use the existing model commit
-notifications; observation does not require an author to request a buffer first.
-Window root replacement/clear commits roots and generation with tree state, and
-signals through the product shell. Rejected extra roots preserve the prior state.
+Each window retains one `WorkspaceState`, including while empty. It owns ordered
+root records and a monotonic generation; currently zero or one root is supported.
+Retaining a normalized root preserves its ID. Clear/reinstall allocates another
+ID without resetting generation. Invalid replacement preserves existing state.
 
-Programmatic folder Open and root replacement capture the native window without
-depending on its selected document or workbench contents. They normalize and stat
-zero or one directory URI before committing through the same shell root/tree
-transition as native folder Open. Failed validation leaves both owners unchanged.
-Completion revalidates caller lifetime, native window root, Open generation and
-captured workspace generation. Clear/reinstall retains generation safety while
-leaving unrelated documents open. The response uses the committed workspace
-snapshot directly, without a later query or command-status interpretation.
+Folder Open and root replacement address the native window independently of any
+selected document. They normalize/stat every proposed directory before one shared
+root/tree commit, revalidating caller lifetime, window, Open generation, and root
+set generation. Unrelated documents stay open. Results use the committed snapshot.
+
+`WorkspaceTree` owns cached entries, expansion, selection, loading, and errors.
+Enumeration checks captured roots, root generation, and per-directory request
+generation before applying results; clearing roots clears the cache. Painting
+and input use cached foreground state only. Documents open through the application
+provider independently of root containment.
+
+## Saving
+
+Save and Save As require a document presentation. Save captures document/model,
+resource, text, content revision, provider version, and persistence generation.
+Successful create/conditional replacement records the new provider version and
+only the captured content state after revalidating the presentation, native window,
+and document. Edits racing I/O therefore remain dirty.
+
+Save As uses the native panel, checks application-wide URI ownership, and changes
+resource association only after successful I/O. Overwrite consent does not bypass
+provider-version checks. Conflicts offer Reload, Save As, and Cancel; Reload also
+rejects edits racing its read. Watching and automatic reload remain deferred.
+
+## Observation
+
+Creation, final removal, persistence, and root/tree commits signal
+[application observation](extension-host.md#application-observation). Content edits
+use model commits. Persistence can change resource/title/dirty metadata while
+preserving document UUID; observation does not depend on author buffer lookup.

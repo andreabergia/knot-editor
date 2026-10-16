@@ -1,8 +1,41 @@
 # Writing extensions for Knot
 
 The [TypeScript declarations](../src/host/js/knot.d.ts) are the API version 1
-reference: parameter meanings, defaults, errors, completion and lifetime rules
-live beside their types.
+reference for parameters, defaults, errors, completion, and lifetime rules.
+This guide covers setup and common workflows. Knot runs JavaScript; TypeScript
+is optional authoring tooling, not a runtime.
+
+## Package and check your code
+
+Install a directory containing `knot.jsonc` and built `.js`/`.mjs` sources under
+the platform's local application-data `Knot/extensions` root. For example:
+
+```json
+{
+  "name": "@example/tools",
+  "apiVersion": 1,
+  "version": "1.0.0",
+  "main": "dist/main.js"
+}
+```
+
+Use the [manifest schema](schemas/knot.schema.json) for tooling and the
+[installed examples](../examples/extensions/) for directory layout. The host
+accepts API version 1 before evaluation; package version and dependency ordering
+are separate. Static relative imports stay inside captured package sources;
+dynamic imports reject. Startup diagnostics report rejected or failed packages
+while independent packages continue.
+
+Personal config has no manifest. Its optional `pre-init.js` and `post-init.js`
+entries share one lifecycle around installed-package startup; config failure
+stops product startup. Directory selection and loading are described in
+[host startup](architecture/extension-host.md#package-admission-and-startup).
+
+Run `scripts/check-extension-api.sh` with Node/npm to check declarations and
+JavaScript examples using the lockfile-pinned TypeScript compiler. The
+[checked examples](../scripts/extension-api/examples/) cover commands, providers,
+cleanup, errors, and keybindings. This check runs in CI; Rust/V8 tests separately
+validate runtime behavior.
 
 ## Register a command
 
@@ -71,195 +104,67 @@ buffers support asynchronous work while live; retained command targets do not
 extend the invocation's authority. Lifecycle teardown releases ownership without
 requiring the extension to await cleanup or receive a final callback.
 
-## Inspect application state
+## Inspect and change application state
 
-`documents.list()` and `documents.get(id)` return current metadata and a shared
-buffer proxy. Read text through that buffer. Document IDs survive Save As and
-additional presentations; reopening after closure allocates a fresh ID. No
-cross-restart identity reuse is promised yet.
+Use `documents` for metadata and shared buffers, `windows` for live product
+presentations, and `workspaces` for window-owned roots. Queries work during
+activation and callbacks, including before product windows exist. Document IDs
+survive Save As but have no restart reuse guarantee. Retain returned live target
+objects rather than serializing or reconstructing them.
 
-`windows.list()` and `windows.get(target)` return product windows, panes, ordered
-tabs, selected tabs and the actual focused tab target. A terminal tab has kind
-`terminal` and null document/buffer fields. Focus outside tabs has a null current
-target. Diagnostic and startup-error windows are excluded.
+Use `documents.open` for files, `createUntitled` for new documents, and `present`
+for another presentation of a live document. These return committed document and
+presentation data. Use `workspaces.openFolder` or `replaceRoots` for directory
+roots; currently zero or one root is supported. Documents remain independent of
+workspace containment. A missing file opens as a dirty destination-associated
+document rather than failing.
 
-`workspaces.get(windowTarget)` returns that window's ordered roots and generation.
-An empty root set is valid; the model accepts at most one root. A retained normalized
-root keeps its ID. Clearing/reinstalling changes the generation and root identity.
+Pass an explicit live target when acting on a previously selected window, pane,
+or presentation. Omitting it captures the command's originating window, or the
+active product window outside a command, at admission. It never waits for a
+future window or follows later focus. Stale targets reject before commit.
+Discoverable targets and invocation-scoped command targets are different objects;
+consult the declarations for accepted target types.
 
-Queries work during activation and callbacks, including before windows exist.
-They describe current state without reserving targets for later use. A closed
-document/window lookup returns null. Discoverable window, pane and view targets
-are opaque live objects: retain the returned objects, not copies or serialized
-representations. They are separate from invocation-scoped command targets and
-cannot be passed to contextual buffer/selection APIs. Replacing a workbench or
-tab, or transferring a view to another pane/window, invalidates its old exact target.
+`workbench.close` uses native protected closure, including dirty-document prompts.
+Check its closed/cancelled result. Final document closure invalidates retained
+buffers; closing a terminal stops its session. A save already accepted during
+closure can remain committed even if the later close cancels.
 
-`documents.open(uri, { target })` opens a file through its registered provider and
-returns `{ document, presentation }` after foreground commit. `target` can be a live
-window, pane or exact view. A window/pane captures its selected presentation at
-admission. Omit options to use the originating command window, or the active product
-window outside a command. Without a product window it rejects `ContextUnavailable`;
-it never waits for a future window. Focus changes during I/O cannot retarget it,
-and closure, replacement or transfer of the captured presentation rejects
-`InvalidTarget` before mutation.
-
-Open reuses an existing tab for that document in the destination window; otherwise
-it creates a native editor tab in the captured pane, preserving terminal tabs.
-A missing file becomes a dirty destination-associated document. Directories reject
-`ResourceWrongKind`; malformed URIs, invalid UTF-8 and provider failures reject
-`InvalidUri`, `InvalidUtf8` and `ProviderFailure`. A provider resource disappearing
-after stat rejects `ResourceNotFound`. Cancellation or unload before commit prevents
-mutation. Results contain committed metadata and opaque live targets, not rendering
-surfaces. Operations finish without awaiting observation listeners; listeners can
-open using explicit targets.
-
-`documents.createUntitled(options)` creates a clean, empty ordinary document and
-its native tab together. Edits make it dirty; undo to its initial content makes it
-clean again. `documents.present(id, options)` shares a live document in another
-window or selects its existing tab there. It rejects `DocumentNotFound` after the
-document's final presentation closes. Both accept the same captured destinations
-and return the same `{ document, presentation }` result as Open. Creating or
-presenting from a terminal preserves the terminal and selects a document tab.
-
-`workspaces.openFolder(uri, options)` validates an existing directory and returns
-the window's committed roots/generation. `workspaces.replaceRoots(uris, options)`
-accepts zero or one directory URI; an empty array clears the roots and tree.
-`options.target` accepts a live window, with the same command/active-window capture
-on omission. These operations do not depend on a document presentation and work in
-an empty product workbench. They preserve open documents and never resolve focus
-after validation starts. A newer Open/root request, changed root generation,
-closed/replaced window or cancelled caller rejects pending work before commit.
-
-Missing folders reject `ResourceNotFound`, files reject `ResourceWrongKind`, and
-more than one root rejects `TooManyWorkspaceRoots`. All validation finishes before
-changing either roots or tree. Retained normalized roots keep their IDs; generation
-increases on replacement, including clear/reinstall, which allocates a new root ID.
-
-`workbench.close(viewTarget)` closes that exact tab through protected closure.
-A dirty document's final presentation offers Save / Don't Save / Cancel; other
-presentations keep its shared model live without prompting. Cancel resolves to
-`{ kind: "cancelled" }`, and a committed close resolves to `{ kind: "closed" }`.
-The final document close invalidates retained buffer proxies; an empty workbench
-receives the ordinary untitled replacement. Terminal closure stops that session
-without removing unrelated documents.
-
-A fabricated, replaced, transferred or closed target rejects `InvalidTarget`;
-concurrent protected closure rejects `OperationInProgress`. A failed save or an
-edit racing the save rejects `PersistenceFailed` and leaves the presentation
-intact. Caller cancellation/unload prevents the close before commit. A save already
-accepted during the flow may persist content and remains observable even if the
-later close is cancelled. Close never waits for observation listeners and can be
-awaited from a listener, followed by that listener's own disposal. Closing a
-presentation invalidates command context captured from that presentation; existing
-command target-validity and outcome rules still apply.
-
-`await workbench.observe(listener)` registers application-wide observation and
-returns an initial `snapshot`, a sequence `watermark`, and an awaitable `dispose()`.
-Registration, snapshot and watermark are captured together on the foreground;
-subsequent events have larger sequence numbers. The listener is installed before
-queued deliveries can enter it, and the observing activation/command root finishes
-first. Observe before windows exist to see their later attachment.
-
-Events distinguish document open/change/close, window open/close, presentation
-changes, workspace changes and active-target changes (including null). Document
-changes carry current metadata, not buffer edit payloads. Events describe committed
-changes; a query inside a listener can already see newer state. They do not promise
-one event per gesture or a cross-restart layout record. There is no replay/retry
-protocol; dispose and observe again for a fresh baseline.
-
-Listeners run as asynchronous FIFO scheduler roots. They can await queries, buffer
-mutations or their own disposer. Exceptions are isolated. Native commits finish
-without awaiting listeners; local disposal prevents queued author callbacks and
-its promise acknowledges native release. Unload, failed activation and host release
-also release observation ownership.
+For change-driven features, call `workbench.observe` before querying separately:
+it returns an atomic initial snapshot, sequence watermark, and disposer. Later
+events describe committed metadata changes; read text through buffer APIs.
+Listeners can await host work or their own disposal because commits do not wait
+for listeners. A query may already see newer state than the event. Dispose and
+observe again when a fresh baseline is needed.
 
 The checked [application observer](../examples/extensions/@example/application-state/dist/main.js)
-loads through the product host. Run `example.application-state` to copy its initial
-counts, current document/presentation metadata and event history for inspection.
-
-## Package and check your code
-
-Installed packages use a `knot.jsonc` manifest and built `.js`/`.mjs` files.
-The manifest requires the positive integer `apiVersion: 1`, independent of the
-package’s `version` and dependency `requires`. The running host accepts exactly
-API version 1 before capturing/evaluating an installed entry. Personal config has no manifest
-and uses the running application’s API. Its optional `pre-init.js` and
-`post-init.js` entries share one lifecycle; configuration failure is fatal to
-startup.
-
-Version diagnostics distinguish missing, malformed and unsupported declarations
-and report the expected and declared versions. Rejected packages are not evaluated;
-dependents fail while independent packages may load. Duplicate package identities
-remain errors even when a manifest also has an invalid API version.
-
-Static relative imports stay within the package/config source graph; dynamic
-imports reject. TypeScript is optional authoring tooling, not a runtime.
-
-The [installed examples](../examples/extensions/) demonstrate package layout.
-The [checked examples](../scripts/extension-api/examples/) show captured
-commands, providers, cleanup, error handling and keybinding batching.
-
-Run `scripts/check-extension-api.sh` with Node/npm available to check the
-declarations and JavaScript examples using the lockfile-pinned compiler.
-Runtime correctness is validated separately by Rust/V8 tests.
-
-A minimal manifest is:
-
-```json
-{
-  "name": "@example/tools",
-  "apiVersion": 1,
-  "version": "1.0.0",
-  "main": "dist/main.js"
-}
-```
-
-Use the [manifest schema](schemas/knot.schema.json) for editor tooling.
-The authoring checker runs in CI alongside Rust verification. Its checked examples
-are also installed through the real product host in integration tests.
+loads through the product host. Run `example.application-state` to copy current
+metadata and event history for inspection.
 
 ## Acknowledge cleanup and handle failures
 
-A disposer makes its object inactive immediately; await its shared promise to
-observe native release. Repeated calls retain the same success or rejection.
-There is no automatic retry. Await tree invalidation to observe native acceptance;
-fetching and painting happen separately. Earlier accepted mutations/invalidation
-settle before cleanup acknowledgement. A callback can await its own disposal.
+Await disposal to observe native release. It makes an object locally inactive
+immediately and repeated calls share the same result, including failure. A
+callback may await its own disposal. Await tree invalidation for native acceptance;
+fetching and painting happen separately. Lifecycle teardown releases registrations
+without requiring a final callback.
 
-Narrow an `Error` by `name === "KnotHostError"` and its `code`, as in the
-[error example](../scripts/extension-api/examples/errors.js). A `RevisionConflict`
-means the captured revision is no longer current; choose whether to abandon the
-operation or deliberately read a new snapshot. Optional `details` contains
-handler-specific JSON diagnostics and can be null; narrow its value and fields
-before reading them. Choose failure categories by `code`, independently of Rust
-variant names or diagnostic message text. The closed TypeScript code union is
-checked against native declarations. `Cancelled` does not roll back a
-commit that already succeeded. Invalid argument types use `TypeError`; invalid
-numeric limits and snapshot conversion coordinates use `RangeError`.
+Handle `KnotHostError` by stable `code`, as in the
+[error example](../scripts/extension-api/examples/errors.js), rather than matching
+message text. Narrow optional diagnostic `details` before reading fields. On
+`RevisionConflict`, choose whether to abandon work or deliberately read a new
+snapshot. Cancellation does not roll back a commit that already succeeded.
 
-The [activation example](../scripts/extension-api/examples/activation.js) combines
-captured commands, explicit-buffer callbacks, providers, awaitable cleanup and
-synchronous keybindings. Keybindings registered during one V8 turn form one atomic
-batch: invalid input fails that entire batch through its turn result.
-
-Current contextual selection supports admitted outline handlers. Restart-stable
-document identity, durable storage and new native contribution protocols remain
-follow-up work; retaining an ID does not extend its lifetime or grant authority.
-
-Native contributors can find the annotation, argument/result and error contracts
-in the [host handler module](../src/app/extension_host/handlers.rs) and
-[command declarations module](../src/app/command_declarations.rs). Runtime
-ownership and routing are documented in the
-[extension host](architecture/extension-host.md) and
-[command architecture](architecture/commands.md) references.
+Keybinding registration is synchronous; mutations from one V8 turn apply as one
+atomic batch. Invalid input fails the batch. The activation example demonstrates
+registration and cleanup through the public API.
 
 ## Durable storage
 
-`storage` persists private JSON records for the installed package's canonical
-identity. Personal config has its own stable database. Records are application-global,
-independent of windows, roots and runtime lifecycle IDs, and available during
-activation before a product window exists. Extensions cannot select an owner or path.
+`storage` keeps private, application-global JSON records for the package's
+canonical identity; personal config has its own owner. Storage works during
+activation without a window and survives reload, updates, and uninstall.
 
 ```js
 import { storage } from "knot";
@@ -269,36 +174,25 @@ await storage.write("preferences", preferences);
 await storage.write("optional", null);
 await storage.delete("obsolete");
 const keys = await storage.list();
-await storage.delete("absent"); // succeeds
 ```
 
-Read returns `{ found: false }` for a missing key and `{ found: true, value }`
-for a stored value, including JSON null. Keys are exact strings, including empty
-strings; list returns all keys in deterministic binary order. Writes replace a
-record. JSON values use the same finite-number, dense-array and plain-object
-validation as command arguments; undefined, cycles, symbols, bigint, functions,
-nonplain objects and custom JSON conversion are rejected with `TypeError`.
-Returned values are detached, read-only JSON data.
+Missing records differ from stored null. Keep related state in one record for
+atomic replacement: read/modify/write across calls is not atomic. Extensions own
+value shapes and schema versions. Awaited writes acknowledge commit; rejection
+following cancellation does not establish whether a write committed. Damaged or
+incompatible databases fail without replacement.
 
-Each write atomically replaces one JSON record. Keep related state in one record
-when it must change together. A successful write or delete acknowledges commit;
-awaited calls preserve their natural order. Concurrent calls serialize on the
-connection, and the last committed write wins. Read/modify/write across calls is
-not atomic. Extensions own their JSON structure and schema versions.
+The [storage demo](../examples/extensions/@example/storage-demo/dist/main.js) uses
+only public APIs. Run `example.storage-report`, restart Knot, and run it again:
+its activation count increases and records remain. Precise JSON validation,
+ordering, cancellation, and failure contracts live in the TypeScript reference;
+SQLite ownership and shutdown belong to
+[host architecture](architecture/extension-host.md#extension-record-storage).
 
-Cancellation or unload may prevent a caller receiving a result, including after a
-write committed; rejection does not imply rollback. Native work checks caller
-lifetime at admission and before starting database work. Once a transaction starts,
-it finishes normally. Graceful quit stops admission and waits for admitted native
-work and connection release asynchronously, without a final JavaScript callback.
-`StorageUnavailable` reports database/cause diagnostics in `HostError.details`.
-Corrupt, incompatible or unwritable databases fail without being deleted or
-replaced, and other owners remain available. Local application data holds a
-separate SQLite database for each owner, with normal rollback journaling and FULL
-synchronization. Storage is not a secrets or synchronization service. Reload,
-package updates and uninstall preserve data; there is no automatic cleanup or
-backup API.
+## Native contributors
 
-The ordinary [storage demo](../examples/extensions/@example/storage-demo/dist/main.js)
-uses only the public API. Run `example.storage-report`, paste its clipboard JSON,
-restart Knot, and run it again: `activations` increases and the records remain.
+Handler annotation and conversion contracts live in the
+[host handler module](../src/app/extension_host/handlers.rs) and
+[command declarations](../src/app/command_declarations.rs). See
+[host architecture](architecture/extension-host.md) and
+[commands](architecture/commands.md) for ownership and routing.

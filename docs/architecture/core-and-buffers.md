@@ -1,7 +1,7 @@
 # Core and buffer models
 
 Part of the [architecture](../architecture.md). Design rationale is recorded in
-[decisions](../decisions.md); deferred work lives in [deferred.md](../roadmap.md).
+[decisions](../decisions.md); deferred work lives in [roadmap](../roadmap.md).
 
 ## Core editor model
 
@@ -47,13 +47,9 @@ access policy; read-only models still permit snapshots, view anchors,
 contributions, and closure. `core::TextBuffer` remains unconditionally mutable.
 
 Extension buffer proxies remain usable independently of subscription and
-contribution ownership. Disposal makes each owner locally inactive and awaits
-native release; repeated calls share the same success or failure. Accepted
-contribution replacements precede cleanup acknowledgement. Subscription disposal
-prevents new admission and discards queued unowned listener deliveries without
-waiting for an executing callback. Lifecycle teardown and product-host release
-remove remaining owners from live models. Cancellation before mutation prevents
-the commit; teardown after an acknowledged commit does not undo its text.
+contribution ownership. Closed models reject transport access even when retained
+by stale views. Disposal, cancellation, and host release follow the shared
+[host lifecycle](extension-host.md#disposal-cancellation-and-teardown).
 
 ## Stable positions and edit behavior
 
@@ -64,10 +60,9 @@ the commit; teardown after an acknowledged commit does not undo its text.
   and allocate a right piece ID; edit-log records repair affected stale
   positions. Unrelated positions require no work.
 - The line-start index is intentionally replaceable. Its linear suffix update
-  dominates large-buffer edit cost, but the prototype has not demonstrated a
-  need to replace it.
-- Inserted backing storage and the edit log are append-only during the
-  prototype. Compaction and reclamation are deferred.
+  dominates large-buffer edit cost; replacement remains deferred pending
+  real workload evidence.
+- Inserted backing storage and the edit log are append-only. Compaction and reclamation are deferred.
 
 ## Anchored ranges
 

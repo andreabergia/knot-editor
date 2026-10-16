@@ -1,7 +1,7 @@
 # Semantic UI and generated text
 
 Part of the [architecture](../architecture.md). Design rationale is recorded in
-[decisions](../decisions.md); deferred work lives in [deferred.md](../roadmap.md).
+[decisions](../decisions.md); deferred work lives in [roadmap](../roadmap.md).
 
 ## Boundary
 
@@ -48,10 +48,6 @@ generation and lifecycle validation
 native cached presentation
 ```
 
-Responses apply only while registration, parent, generation, and extension
-lifecycle still match. JavaScript never participates synchronously in painting
-or input.
-
 Completion providers use the same asynchronous reverse-runtime direction but
 remain completion-specific: the shell snapshots ordered registrations, the
 view-owned controller tracks one-shot provider states and merge policy, and a
@@ -85,10 +81,9 @@ the current immutable snapshot without restarting provider work. Acceptance
 resolves the selected identity through the controller and performs one
 revision-checked prefix replacement.
 
-- Completion composition is deliberately feature-specific. ASCII prefix
-  filtering, case-sensitive then case-insensitive ranking, registration order,
-  provider-local order, and insertion-text deduplication produce results that
-  do not depend on arrival timing.
+- Completion composition is feature-specific and independent of arrival timing.
+  Filtering, ranking, and deduplication rules live in the
+  [completion controller](../../src/app/completion.rs).
 - Recoverable failure is local to one provider and request. Other candidates
   remain visible, and the provider participates again on the next invocation
   without re-registration.
@@ -113,14 +108,12 @@ command path.
 Semantic tree state retains accessibility information, but gpui 0.2.2 lacks
 the required public platform bridge.
 
-Provider disposal removes local callback admission immediately and awaits native
-unregistration. Tree invalidation is acknowledged independently of subsequent
-fetch/paint, and accepted invalidations settle before cleanup acknowledgement.
-Native unregistration cancels retained requests across live surfaces. Completion
-removal also removes that provider's candidates from active aggregates, including
-already-completed results; other providers retain their state. A callback may
-await its own disposal without requiring its stack to unwind first. Invalid
-iterables or recognized item fields fail only the affected provider request.
+Provider disposal follows the shared
+[host lifecycle](extension-host.md#disposal-cancellation-and-teardown). Native
+unregistration cancels retained requests across live surfaces. Completion removal
+also removes that provider's already-completed aggregate results; other providers
+retain their state. Tree invalidation acknowledges native acceptance separately
+from later fetch/paint. Invalid provider results fail only their request.
 
 ## Generated text
 

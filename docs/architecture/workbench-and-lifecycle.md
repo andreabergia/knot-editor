@@ -1,325 +1,166 @@
 # Workbench and view lifecycle
 
-Part of the [architecture](../architecture.md). Design rationale is recorded in
-[decisions](../decisions.md); deferred work lives in [roadmap.md](../roadmap.md).
+Part of the [architecture](../architecture.md). [Decisions](../decisions.md)
+records rationale; deferred work lives in the [roadmap](../roadmap.md).
 
 ## Product application launch
 
-The local macOS build packages the product binary and icon in `Knot.app`.
-At startup the application consumes an already-delivered file-open request for
-the initial window and queues it while personal config and installed extensions
-start. Later file-open events and dock reopens join the same launch queue.
-Successful startup opens the queued product windows, or one empty product
-window when no requests arrived, then activates the app. A fatal personal
-config error discards the queue and opens a dedicated diagnostic window with
-Copy and Quit controls. The editor does not open in that launch; the diagnostic
-window takes keyboard focus and accepts the Quit command, including Cmd-Q. It
-stays open until Quit.
+The macOS product is packaged as `Knot.app` for native activation, file-open,
+and reopen callbacks. CLI and platform requests join a launch queue while
+[personal config and extensions](extension-host.md#package-admission-and-startup)
+start. Successful startup opens queued product windows, or one empty window,
+then activates the app. Fatal config failure discards the queue and opens a
+focused diagnostic window with Copy and Quit; product windows remain unavailable
+for that launch.
 
 ## Editor views
 
-Each `EditorView` owns cursor, selection, scroll, focus, IME, rendering choices,
-its persistent selection range, and at most one completion controller and
-surface. Multiple views may observe one model while retaining independent
-presentation state. Completion request state and merged semantic candidates
-belong to the controller; the replaceable list and compact surfaces own only
-selection, layout, and rendering.
+Each `EditorView` owns cursor, selection, scroll, focus, IME, rendering policy,
+and its completion controller/surface. Multiple views share a model while
+retaining independent presentation state. Completion ownership is detailed in
+[semantic UI](semantic-ui.md#completion-ownership-and-aggregation).
 
-Editor commands mutate the captured tab's view. Cursor and selection use
-grapheme boundaries, vertical navigation retains a shaped horizontal position,
-and page movement uses the pane's viewport. Each view owns both scroll axes;
-editing and navigation reveal its caret, while wheel scrolling can move away
-from it. Text, selections, caret, mouse hit-testing, and IME candidate bounds
-share the same text shaping and horizontal offset.
-
-Native clipboard operations use the selected source text. Tab expansion is a
-rendering projection and never changes buffer bytes. Platform text input and
-IME ranges are UTF-16; the view converts them to UTF-8 model edits and refreshes
-its projection synchronously before resolving the resulting caret. Model
-notifications then update the other views through their persistent positions.
+Movement and deletion respect grapheme boundaries; word navigation uses Unicode
+word boundaries and vertical movement retains a shaped x coordinate. Text,
+selection, caret, hit testing, and IME bounds share one shaping projection and
+horizontal offset. Editing/navigation reveal the caret; wheel scrolling may move
+away from it. Clipboard operations use source text; expanded tabs are only a
+rendering projection. UTF-16 platform input is converted to UTF-8 model edits,
+with a synchronous projection refresh before resolving the resulting caret.
+Other views update through their persistent positions.
 
 ## Workbench and protected closure
 
-`Workbench` is the window-local layout model. It owns a binary split tree,
-stable pane and tab identities, the focused pane, and ordered tabs within each
-pane. Split-tree leaves refer to panes. A document tab refers to an
-application-owned document and strongly owns one `EditorView`; a terminal tab
-refers to an application-owned session and owns its sole `TerminalView`. It has
-no document or buffer model. Splitting a
-document pane creates a new view of its active document. The terminal split
-policy allocates a distinct terminal identity for the new pane. Empty panes
-are removed and their split branch collapses; closing the last tab produces
-an explicit empty-workbench transition for the product shell to handle.
+`Workbench` owns a window-local binary split tree, stable pane/tab identities,
+ordered tabs, and focused pane. A document tab strongly owns one `EditorView`
+of an application-owned document. A terminal tab owns the sole attached view of
+an application-owned session, with no document model. Splitting a document
+creates another view; splitting a terminal creates another session. Empty panes
+collapse; final-tab closure returns an empty-workbench transition to the shell.
 
-Workbench closure stays independent of native dialogs. The application-wide
-view count determines whether a tab is the last view of its document. A dirty
-last view returns a pending close tied to the exact pane, tab, and document;
-confirmation revalidates those identities and the current application-wide
-view count before applying the transition. A closed final view requests
-document closure but does not remove the application-owned document itself.
-This keeps window-local presentation mutation separate from application-level
-document and confirmation coordination. Final application-level removal explicitly
-closes the buffer model, so retained views cannot preserve transport access.
+One application-level coordinator protects tab, window, and quit closure. It
+captures exact window, workbench, tab, surface, and presentation identities,
+counts live document views across windows, and deduplicates dirty documents
+losing their final view. Native Save / Don't Save / Cancel prompts run serially;
+Save reuses the ordinary persistence path.
 
-Protected closure is application-coordinated across tab, window, and quit
-scopes. It snapshots exact window, workbench, tab, surface and presentation
-identities, determines which dirty
-documents would lose their final application-wide view, deduplicates them, and
-presents native Save / Don't Save / Cancel alerts serially. Save reuses the ordinary
-captured persistence path. View and window mutation is deferred until every
-decision succeeds, then the snapshot and approved document revisions are
-revalidated before one scope transition is applied. Cancellation, persistence
-failure, racing edits, stale views, and concurrent closure attempts leave the
-presentation intact. Terminal tabs participate in the scope and its stale
-identity checks, but not document view counts or dirty prompts. Native
-window-close requests are vetoed until this flow authorizes programmatic
-removal; Quit enters the same flow before asking gpui to terminate.
+Presentation mutation waits until all decisions succeed, then revalidates the
+capture, view counts, and approved content revisions. Cancellation, persistence
+failure, racing edits, stale targets, and concurrent closure leave presentations
+intact. An already accepted save remains committed if closure later cancels.
+Terminal sessions stop only after the scope transition succeeds. Native close
+requests are vetoed until authorized; Quit uses the same flow.
 
-The shared protected operation returns a semantic closed/cancelled result or typed
-failure; native dispatch adapts it to command outcomes. Extension closure admits
-an exact live presentation and uses the same coordinator, prompts, save path and
-final-view invalidation. It revalidates caller lifecycle/cancellation before
-starting a save and before committing closure. A completed save remains visible
-if a later close is cancelled; accepted I/O is not rolled back. Operation
-completion follows the foreground close transition without awaiting listeners.
+Workbench transitions remain independent of dialogs and document removal. A weak
+shell-wide registry counts views in live windows without retaining windows or
+workbenches. Final application document removal explicitly closes its model,
+invalidating transport access even if a stale view retains the entity. Nonfinal
+view closure leaves the shared document open. An empty surviving product
+workbench receives a new untitled document.
 
-Each native product window renders one workbench recursively as tabbed panes
-and horizontal or vertical splits. A shell-wide weak workbench registry binds each current workbench to its native
-window and counts document views only in live windows. Replacement drops the old
-registration, so retained shells/workbenches cannot keep a final document open.
-The registry owns neither workbench nor window lifetime. Clean final-tab
-closure removes the final-view document and immediately installs a new
-untitled document and workbench; dirty final views remain pending for the
-protected-closure flow.
+Native commands and extension APIs adapt the coordinator's semantic result.
+Extension closure additionally revalidates caller lifecycle/cancellation before
+save and close admission. Completion follows the foreground transition without
+awaiting observation listeners.
 
 ## Tab relocation
 
-The product shell owns tab drag state and painted pane/tab-bar geometry. Tab
-labels carry exact relocation captures without activating an inactive source.
-Bar midpoints select insertion slots; the pane body accepts append in its
-center and a split along the nearest normalized edge in its outer band. A
-floating title and a painted insertion line or destination region show the
-pending drop without changing the workbench. Left-button release hit-tests
-its delivered position and commits through the relocation coordinator. Escape
-is captured above editor and terminal input in either product window.
+`Workbench` owns typed reorder, insertion, and edge-split transitions. The product
+shell coordinates transfers across workbenches on the foreground. Captures
+include pane, tab, surface, and exact presentation; destinations retain a live
+insertion/split anchor. Both endpoints and document/session ownership are checked
+before mutation. Capturing or abandoning a move changes neither ownership nor
+focus.
 
-A transient application-wide coordinator retains weak source and destination
-identities and each shell's painted geometry. It maps delivered window-local
-events through the current native content origin into screen coordinates and
-selects the foremost Knot window frame using platform stacking order. It
-hit-tests that window's pane geometry for insertion or docking. Title bars,
-toolbars, sidebars, non-product windows, and product overlays reject drops.
-A release outside all Knot window frames tears the tab into a new window near
-the pointer, constrained to the containing display. Each release recomputes
-its destination from the delivered position; the transfer runs after input
-dispatch so both endpoint windows are available for exact revalidation.
+Same-pane reorder preserves tab identity. Moving between panes preserves the
+payload, collapses empty source panes, and allocates destination-local tab/pane
+identities. Editors retain their view entity and scroll state; pending caret
+reveals still apply. Terminal cross-window moves hand off the sole attachment to
+a destination view of the same session; same-window moves retain their view.
+Replacement or pane/window transfer invalidates old exact command targets.
 
-The floating title uses the shared screen pointer and compensates for each
-window's stale local mouse position. Every pointer update repaints feedback,
-including movement within one unchanged target. Completion, invalid release,
-or Escape clears the pointer and all previews. Closing a source window cancels
-the shared and framework drag before removal, including when it is the final
-window. Closing a destination removes its geometry. The coordinator
-owns neither shell nor workbench lifetime. When platform stacking order is
-unavailable, the receiving window is checked first.
+Transfers do not enter protected closure or remove documents/sessions. An emptied
+source receives ordinary untitled replacement. New-window transfer creates and
+validates an empty destination before removing the source; failure preserves the
+source and removes an unused new destination. The destination activates and
+focuses the moved tab. On macOS a new terminal window is laid out before showing.
 
-A relocated editor keeps deliberate scroll offsets through its first destination
-layout, subject to viewport clamping. Pending caret reveals from editing still
-apply; later ordinary resizes resume caret reveal behavior.
+A transient application-wide drag coordinator holds weak endpoints and painted
+window-local geometry. macOS delivers pressed drags to the originating window,
+so events map to screen coordinates for hit testing against the foremost Knot
+window and for preview positioning. Transfers run after input dispatch so both
+windows are available for revalidation. Source closure or Escape cancels drag
+state; destination closure removes its geometry. No coordinator owns window
+lifetime.
 
-`Workbench` owns typed reorder, insertion, and four-edge split transitions.
-Relocation captures exact pane, tab, surface, and presentation entity identities;
-the destination captures an existing tab as an insertion or split anchor.
-Both captures are checked before mutation. Moving into the same pane preserves
-its tab identity and adjusts insertion indices after removal. Moving to another
-pane preserves the payload and collapses an emptied source pane, including a
-single-tab edge move whose original pane disappears.
-
-The product shell coordinates transfers between distinct workbenches in one
-foreground operation. It validates the source shell, both workbench entities,
-the destination window and root, captured tabs/presentations, and the registered
-document or attached terminal session. Documents retain their `EditorView`
-entity and buffer ownership; each destination workbench allocates its own tab
-identity and any new pane identity. Cross-window moves and moves to another
-pane invalidate old captured command targets; reordering within the same pane
-retains an exact target to the same view. Capturing and abandoning a move
-changes neither ownership nor focus.
-
-Moves do not enter protected closure or remove documents or sessions. The
-application-wide document view count is unchanged after a transfer. A source
-that becomes empty receives the ordinary untitled-workbench replacement. A
-new-window transfer opens an empty destination shell before removing the source;
-creation failure or a stale endpoint leaves the source intact and removes any
-newly created unused destination. Existing windows are retained on failure.
-The destination activates and focuses the moved tab. The shell's tab relocation
-coordinator supplies the transition boundary used by Move Terminal to New Window.
+Tab bars accept insertion and pane bodies accept append or edge splits. Invalid
+space inside Knot frames rejects a drop; release outside all Knot frames creates
+a window near the pointer. Preview rendering, hit-test thresholds, and coordinate
+fallbacks live in the [relocation code](../../src/app/product/tab_drag.rs).
 
 ## Native resource tree
 
-`WorkspaceTree` is a separate native surface for application-owned filesystem
-resources. It owns the same kinds of foreground presentation state, but emits
-requests containing normalized resource identities and workspace generations
-to the shell. It has no extension provider identity and does not share the
-extension-owned `TreeView` protocol.
+`WorkspaceTree` owns cached native filesystem presentation state. It emits
+normalized resource requests and workspace generations to the shell, independently
+of the extension `TreeView` provider protocol. Root and directory request
+validation belongs to [documents and workspaces](documents-and-persistence.md).
 
-Open keeps its captured product target while the user chooses a path. Where the
-native picker cannot select files and folders together, the shell first asks
-which kind to open and then uses the corresponding picker. Cancelling either
-choice leaves the workbench intact.
+Native Open retains its captured target through the picker. Platforms unable to
+select files and folders together first ask which kind to open; cancellation
+leaves the workbench intact.
 
 ## Terminal sessions and views
 
-`TerminalSession` is a stable gpui foreground model that owns one local PTY,
-Alacritty emulator grid, process status, authoritative grid size, and one
-coalesced wakeup path. Alacritty's event loop reads, parses, and writes on a
-background thread. Repaint wakeups coalesce, while emulator writes, color and
-size requests, and child exit stay in an ordered semantic queue. The foreground
-session drains that queue against the captured process generation and sends
-replies through its live PTY channel. Color replies share the drawing palette;
-size replies use the authoritative grid and physical cell dimensions. Title,
-bell, and OSC 52 events do not access application features or the clipboard.
-The view observes session changes for repaint. A session survives release or
-reconstruction of that view. Shutdown sends the event-loop signal and joins its thread on a
-background thread; restart replaces the process and grid. Generation checks
-prevent old process events from changing the replacement.
+The application registry owns stable `TerminalSession`s. A session owns its PTY,
+Alacritty grid, process status, authoritative size, session preferences, and event
+delivery. Alacritty reads, parses, and writes on its background event loop.
+Repaint wakeups coalesce; protocol requests, replies, and child exit retain order
+in a process-generation-scoped queue. Restart replaces the process/grid and
+rejects old events. Shutdown and child reaping run off the foreground.
 
-`TerminalView` owns focus, scroll interaction, layout, and gpui drawing.
-The editor and terminal share application font defaults: 14 logical pixels,
-Menlo, and the Arabic/CJK/emoji fallback cascade. Each terminal layout measures
-the resolved primary font's advance, ascent, and absolute descent distance,
-rounding cell width and height up to whole physical pixels for the destination
-window's scale.
-This view-owned geometry supplies drawing, baseline, pointer-to-cell conversion,
-viewport dimensions, and PTY physical cell dimensions. Fallback glyphs align to
-the primary baseline and remain clipped to the emulator's one- or two-cell
-allocation; combining marks stay with their base cell. Selection converts
-viewport rows to grid rows using the current scrollback offset. Every prepaint
-remeasures geometry, including after resize or cross-window attachment. Before
-first layout a session uses an 80×11 bootstrap grid with placeholder pixel
-metrics; the sole attached view supplies the measured size.
+`TerminalView` owns focus, layout, scroll interaction, drawing, and input. An
+attachment lease gives one view input/resize authority. Releasing it does not stop
+the session; natural exit retains the final grid, and startup failure remains
+visible and restartable. Protected closure removes affected registry entries and
+stops their sessions after document decisions succeed.
 
-An attachment lease permits one view per session and can be released explicitly
-before a handoff; releasing the view also releases its lease. The view sends
-input and size changes to its session, and the session retains the final grid
-and exit status after natural process exit. Startup failure remains visible as
-a status and can be retried by restarting. Restart is a view-local action that
-replaces the session's process and grid while keeping its registry identity.
-Keyboard input reads current emulator modes after command/keymap precedence.
-Normal cursor/Home/End keys use CSI; application cursor mode uses SS3.
-Function keys F1–F12, Insert/Delete/Page keys, and Shift/Alt/Control combinations
-use legacy xterm encodings. Alt uses an Escape prefix for text/control keys;
-on ASCII keys it sends the key identity rather than an Option-composed glyph.
-Physical Space input is sent as a space byte even when the platform key event
-has no text character. Physical application-keypad input is deferred because
-gpui does not retain numeric-keypad identity. Advanced keyboard protocols are
-disabled. Nonempty keyboard and paste input reveal the live grid; focus reports
-and emulator replies preserve the displayed scrollback position.
+Measured view geometry supplies drawing, baseline, cell hit testing, viewport
+size, and PTY pixel dimensions at the destination window's scale. Fallback glyphs
+stay within emulator cell allocations. Selection uses scrollback grid coordinates;
+application mouse reports use viewport cells. Geometry is remeasured after resize
+or attachment handoff. Typography, bootstrap metrics, and encoding rules live in
+[terminal layout](../../src/app/terminal_layout.rs),
+[session](../../src/app/terminal_session.rs), and
+[keyboard input](../../src/app/terminal_input.rs).
 
-Terminal focus is the conjunction of its exact focus handle and native window
-activation. Focus/blur and activation subscriptions update emulator focus and
-send CSI I/O only on actual transitions when reporting is requested. Detach or
-release reports focus loss before relinquishing the lease; a new attachment
-reports its own focus. Restart retains actual focus without inventing a new
-transition. View input checks the current attachment and process generation;
-stopped or detached views cannot write input.
-New Terminal creates a registered
-session and one tab presentation in the captured pane. Tab switching retains
-both; splitting a terminal allocates an independent session. A successful
-protected tab, window, or application close removes the affected registry
-entries and shuts their sessions down after dirty-document decisions complete.
-Move Terminal to New Window opens an empty destination shell, then revalidates
-the captured source tab, view, and registered session through the common tab
-relocation coordinator. In one foreground transition it moves the payload,
-releases the source attachment, attaches a destination view to the same session
-and grid, and focuses the new view. Same-window terminal relocation retains its
-view and attachment. Failure to
-create or validate the destination leaves the source attached. The source
-workbench applies its ordinary empty-workbench replacement policy. Subsequent
-window closure sees only the tabs still in that window; destination resize and
-input belong to the new view. On macOS the destination stays hidden until its
-terminal content has been laid out, then becomes the active window.
-The diagnostic window continues to exercise view rebuilding.
+Keyboard input follows command/keymap precedence and current emulator modes.
+Focus reports require both exact view focus and native window activation. Detach
+reports focus loss before handoff; stopped or detached views cannot write input.
+Keyboard/paste reveals the live grid, while focus reports and emulator replies
+preserve scrollback. Paste uses the PTY channel, normalizing plain input and
+sanitizing bracketed paste. OSC 52, title, and bell events do not access product
+features or the clipboard; additional protocols remain deferred in the roadmap.
 
-Terminal pointer input honors Alacritty click (1000), drag (1002), and all-motion
-(1003) tracking with legacy, UTF-8 (1005), or SGR (1006) encoding. The view
-clamps reporting to measured viewport cells without applying scrollback offsets;
-selection uses grid coordinates separately. Reports beyond the legacy or UTF-8
-wire coordinate limit are suppressed instead of wrapping to another cell. A
-release beyond that limit balances an owned press at its last representable cell. Wide
-spacers retain their distinct reporting columns; local selection expands them
-through the emulator's selection logic.
+A mouse press chooses application reporting or local selection through release,
+even if modifiers change. Shift forces local interaction. Wheels choose their
+current route independently. The session-local reporting toggle survives restart
+and handoff without changing application-requested modes. Disabling it balances
+active reports before local selection takes over. Focus, geometry, detach, restart,
+and mode changes invalidate gestures without sending old-process releases to a
+replacement. Wire formats and coordinate limits live in
+[terminal_mouse.rs](../../src/app/terminal_mouse.rs); the
+[mouse fixture](../../scripts/terminal-mouse-fixture.py) supports native acceptance.
 
-Each session retains an enabled-by-default mouse-reporting preference.
-`terminal.toggle-mouse-reporting` is a shared native command claimed by the
-captured attached terminal view; the terminal header shows its state. Disabling
-it balances active reports before switching ordinary drags to local selection
-and shared Copy. The emulator still retains application-requested modes for
-re-enabling. The preference survives restart and view handoff, is independent
-between sessions, and is not persisted. Alternate-screen cursor-key scrolling
-remains available when mouse reporting is disabled; Shift still forces local
-wheel scrolling.
-
-A press chooses one gesture owner. Shift, disabled reporting, or no tracking starts local left-button
-selection; an application press owns its motion/release even if modifiers change
-later. Unowned drags/releases never reach the PTY. Motion reports deduplicate
-cell/button/modifier state; drag and all-motion modes permit motion while click
-tracking only reports buttons and wheels. Reported drags and local selections
-retain release ownership outside the view, with coordinates clamped to its grid.
-
-Wheels honor the current tracking request and Shift override. Fractional line
-or pixel deltas accumulate separately for the current route; route changes,
-mode changes, and restart clear residual movement. Application wheels report
-vertical and horizontal button codes. With no tracking, alternate-screen scroll
-mode emits mode-aware cursor keys; disabling it or holding Shift uses local
-scrolling. Local line deltas scroll rows directly; precise local scrolling
-retains four logical pixels per row. Terminal grids have no local horizontal
-scroll. Mouse reports preserve displayed scrollback rather than revealing the
-live grid.
-
-The session tracks a per-generation pointer revision from emulator mouse-dirty
-notifications so a tracking disable/re-enable cannot preserve an old drag through
-coalesced repaint. Each event revalidates generation, current interaction modes,
-and revision; geometry, focus loss, detach, and restart clear view gestures.
-When cancelling a still-current reported gesture, the view balances its press
-with a release through the old attachment before relinquishing it. Old process
-or changed-mode gestures never emit releases into a replacement. The deterministic
-`scripts/terminal-mouse-fixture.py` exposes report codes, viewport cells, and wire
-bytes for native acceptance without an external TUI configuration.
-
-Terminal link lookup captures the displayed emulator cells and scrollback offset,
-including OSC 8 identity. Explicit HTTP(S) destinations override detected text;
-unsupported explicit schemes suppress detection on their labels. Detection joins
-soft-wrapped rows, keeps hard lines separate, maps wide/combining text to cells,
-and trims sentence punctuation and unmatched closing delimiters. A detected URL
-whose continuation is clipped below the viewport is not actionable.
-
-Hover underlines the destination's displayed cells. Command-click on macOS or
-Control-click elsewhere owns a recognized link gesture before application mouse
-reporting; Shift retains local selection. The native opener receives only HTTP(S)
-URLs with a host and without control characters. Activation occurs on release,
-with at most four logical pixels of movement, and revalidates the complete
-captured grid, scrollback offset, destination identity, process generation, and
-measured geometry. Output notifications, scrolling, geometry/focus changes,
-detach, and restart clear hover and armed targets. A cancelled link gesture
-retains its recipient until release and produces no application mouse packets.
-The opener is injected in programmatic event tests.
-
-The terminal claims the shared Paste command while its session is running and
-sends clipboard text through the existing PTY input channel. Plain paste
-normalizes newlines to carriage returns; bracketed paste preserves newlines,
-removes embedded escape characters, and adds the terminal's bracketed-paste
-markers. A detached or stopped terminal cannot accept paste.
+Link lookup uses displayed emulator cells, soft wraps, and OSC 8 identity.
+Explicit destinations take precedence; unsupported explicit schemes suppress text
+detection. Only complete HTTP(S) destinations are actionable. Modifier-click owns
+the gesture ahead of mouse reporting; release revalidates grid, scrollback,
+process, destination, and geometry. Output or lifecycle changes invalidate armed
+links. Link recognition lives in [terminal_links.rs](../../src/app/terminal_links.rs).
 
 ## Observing product state
 
-Application snapshots read live product shells and their workbenches, qualifying
-pane/tab identities with window, workbench and presentation entity identity.
-Snapshots include ordered tabs, selected tabs, current tab focus, document
-associations and roots, without layout geometry or editor view state. Terminals
-are explicit non-document surfaces. Startup diagnostics are excluded.
-
-Shell commit notifications feed foreground metadata comparison. Native activation
-and tab focus/blur subscriptions cover focus changes independently of repaints.
-Window closure feeds the same signal even when tests or stale callers retain the
-shell. Splits, ordinary replacement and intra-/cross-window relocation keep their
-existing ownership and notify the observer after their transitions commit.
+Snapshots derive associations and focus from live shells/workbenches rather than
+replicating ownership. Committed layout, relocation, focus, activation, and closure
+transitions signal the [application observer](extension-host.md#application-observation).
+Diagnostic windows are excluded; terminals remain explicit non-document surfaces.
