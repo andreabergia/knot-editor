@@ -240,7 +240,18 @@ await commands.register("workspaces.empty-ready", () => {});
         cx,
     );
     cx.read(|cx| {
-        assert!(shell.read(cx).workspace_tree.is_none());
+        assert!(shell.read(cx).workspace_tree.is_some());
+        assert!(
+            shell
+                .read(cx)
+                .workspace_tree
+                .as_ref()
+                .unwrap()
+                .read(cx)
+                .workspace()
+                .roots()
+                .is_empty()
+        );
         assert_eq!(shell.read(cx).workspace.snapshot().generation(), 2);
         assert_eq!(documents.read(cx).documents().count(), 0);
     });

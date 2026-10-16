@@ -55,7 +55,7 @@ declare module "knot" {
   }
   export interface PresentationInfo {
     readonly target: ViewTarget;
-    readonly kind: "document" | "terminal";
+    readonly kind: "document" | "terminal" | "tool";
     readonly document: DocumentId | null;
     readonly buffer: Buffer | null;
   }

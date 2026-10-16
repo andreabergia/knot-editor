@@ -43,8 +43,9 @@ use super::{
     terminal_session::TerminalSession,
     terminal_view::TerminalView,
     workbench::{
-        CloseRequestOutcome, DocumentCloseDisposition, PaneId, SplitDirection, SplitPlacement,
-        TabId, TabSurfaceId, TerminalSessionId, Workbench, WorkbenchLayout,
+        CloseRequestOutcome, DockLocation, DocumentCloseDisposition, PaneId, SplitDirection,
+        SplitPlacement, TabId, TabSurfaceId, TerminalSessionId, ToolContent, ToolFrameId,
+        ToolPlacement, Workbench, WorkbenchLayout,
     },
     workspace::WorkspaceState,
     workspace_tree::{
@@ -343,7 +344,7 @@ impl OpenFailure {
 fn target_document(target: &ProductCommandTarget) -> Option<DocumentId> {
     match target.surface {
         TabSurfaceId::Document(document) => Some(document),
-        TabSurfaceId::Terminal(_) => None,
+        TabSurfaceId::Terminal(_) | TabSurfaceId::Tool(_) => None,
     }
 }
 
@@ -440,6 +441,7 @@ impl ProductShell {
                 tab.editor()
                     .map(|view| view.focus_handle(cx))
                     .or_else(|| tab.terminal_view().map(|view| view.focus_handle(cx)))
+                    .or_else(|| tab.tool_content().map(|content| content.focus_handle(cx)))
             })
             .collect::<Vec<_>>();
         self.application_focus
@@ -494,9 +496,7 @@ impl ProductShell {
                     .iter()
                     .map(|tab| {
                         let presentation = tab
-                            .editor()
-                            .map(|view| view.entity_id())
-                            .or_else(|| tab.terminal_view().map(|view| view.entity_id()))
+                            .presentation()
                             .map(|id| id.as_u64().to_string())
                             .unwrap_or_default();
                         let view_target = PresentationTarget {
@@ -514,10 +514,10 @@ impl ProductShell {
                         let document = tab.document_id();
                         PresentationInfo {
                             target: view_target,
-                            kind: if document.is_some() {
-                                SurfaceKind::Document
-                            } else {
-                                SurfaceKind::Terminal
+                            kind: match tab.surface_id() {
+                                TabSurfaceId::Document(_) => SurfaceKind::Document,
+                                TabSurfaceId::Terminal(_) => SurfaceKind::Terminal,
+                                TabSurfaceId::Tool(_) => SurfaceKind::Tool,
                             },
                             document: document
                                 .and_then(|id| documents.get(id))
@@ -615,6 +615,9 @@ impl ProductShell {
         else {
             return;
         };
+        if let Some(content) = tab.tool_content() {
+            content.focus_handle(cx).focus(window);
+        }
         if let Some(editor) = tab.editor() {
             editor.focus_handle(cx).focus(window);
         }
@@ -644,10 +647,7 @@ impl ProductShell {
             pane: pane.id(),
             tab: tab.id(),
             surface: tab.surface_id(),
-            presentation: tab
-                .editor()
-                .map(Entity::entity_id)
-                .or_else(|| tab.terminal_view().map(Entity::entity_id)),
+            presentation: tab.presentation(),
             focus: focus.downgrade(),
             view,
         })
@@ -671,16 +671,17 @@ impl ProductShell {
             pane: pane.id(),
             tab: tab.id(),
             surface: tab.surface_id(),
-            presentation: tab
-                .editor()
-                .map(Entity::entity_id)
-                .or_else(|| tab.terminal_view().map(Entity::entity_id)),
+            presentation: tab.presentation(),
             focus: tab
                 .editor()
                 .map(|editor| editor.focus_handle(cx).downgrade())
                 .or_else(|| {
                     tab.terminal_view()
                         .map(|view| view.focus_handle(cx).downgrade())
+                })
+                .or_else(|| {
+                    tab.tool_content()
+                        .map(|content| content.focus_handle(cx).downgrade())
                 })
                 .or_else(|| window.focused(cx).map(|focus| focus.downgrade()))?,
             view: None,
@@ -743,6 +744,7 @@ impl ProductShell {
                 view.matches_focus(&target.focus, cx).then(|| match view {
                     super::workbench::CommandView::Editor(_) => "editor".to_owned(),
                     super::workbench::CommandView::Terminal(_) => "terminal".to_owned(),
+                    super::workbench::CommandView::Workspace(_) => "workspace-tree".to_owned(),
                     super::workbench::CommandView::Extension(view) => {
                         view.read(cx).kind().to_owned()
                     }
@@ -803,6 +805,22 @@ impl ProductShell {
     }
 
     fn sync_focused_pane(&self, window: &Window, cx: &mut Context<Self>) {
+        let focused_tool = self.workbench.read(cx).panes().iter().find_map(|pane| {
+            pane.tabs()
+                .iter()
+                .any(|tab| {
+                    tab.tool_content().is_some_and(|content| {
+                        content.focus_handle(cx).contains_focused(window, cx)
+                    })
+                })
+                .then_some(pane.id())
+        });
+        if let Some(pane) = focused_tool {
+            self.workbench.update(cx, |workbench, _| {
+                workbench.focus_pane(pane);
+            });
+            return;
+        }
         if let Some(pane_id) = self.workbench.read(cx).panes().iter().find_map(|pane| {
             pane.tabs().iter().find_map(|tab| {
                 tab.terminal_view()
@@ -1892,13 +1910,16 @@ impl ProductShell {
                 }
                 (target.pane, target.tab)
             } else {
-                let tab = self
-                    .workbench
-                    .update(cx, |workbench, cx| {
-                        workbench.open_tab_for_document(target.pane, document, model, cx)
-                    })
-                    .expect("validated destination pane");
-                (target.pane, tab)
+                self.workbench.update(cx, |workbench, cx| {
+                    if workbench.dock_location(target.pane).is_some() {
+                        workbench.open_document_in_normal_group(document, model, cx)
+                    } else {
+                        let tab = workbench
+                            .open_tab_for_document(target.pane, document, model, cx)
+                            .expect("validated destination pane");
+                        (target.pane, tab)
+                    }
+                })
             }
         };
         let capture = self.workbench.read(cx).capture_tab_move(pane, tab).unwrap();
@@ -1910,6 +1931,33 @@ impl ProductShell {
             surface: capture.tab.surface,
             presentation: capture.presentation,
         }
+    }
+
+    fn explorer_frame(&self, cx: &App) -> Option<ToolFrameId> {
+        let presentation = self.workspace_tree.as_ref()?.entity_id();
+        self.workbench
+            .read(cx)
+            .tools()
+            .iter()
+            .find(|tool| tool.content.presentation() == presentation)
+            .map(|tool| tool.id)
+    }
+
+    fn toggle_explorer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.workspace_tree.is_none() {
+            self.ensure_explorer(cx);
+        } else {
+            let id = self.explorer_frame(cx).unwrap();
+            self.workbench.update(cx, |workbench, _| {
+                if workbench.tool_tab(id).is_some() {
+                    workbench.hide_tool(id);
+                } else {
+                    workbench.show_tool(id);
+                }
+            });
+        }
+        self.focus_active_surface(window, cx);
+        cx.notify();
     }
 
     fn install_workspace(
@@ -1927,30 +1975,47 @@ impl ProductShell {
         cx: &mut Context<Self>,
     ) -> Result<super::workspace::WorkspaceSnapshot, super::workspace::TooManyWorkspaceRoots> {
         let workspace = self.workspace.replace_roots(roots)?;
-        if workspace.roots().is_empty() {
-            self.workspace_tree_subscription = None;
-            self.workspace_tree = None;
-            self.status = "workspace cleared".into();
-            cx.notify();
-            return Ok(workspace);
-        }
         if let Some(tree) = &self.workspace_tree {
             tree.update(cx, |tree, cx| tree.set_workspace(workspace.clone(), cx));
-        } else {
-            let tree = cx.new(|cx| WorkspaceTree::new(workspace.clone(), cx));
-            self.workspace_tree_subscription = Some(cx.subscribe(
-                &tree,
-                |this, _tree, event: &WorkspaceTreeEvent, cx| {
-                    this.handle_workspace_tree_event(event.clone(), cx);
-                },
-            ));
-            let load = tree.clone();
-            cx.defer(move |cx| load.update(cx, |tree, cx| tree.load(cx)));
-            self.workspace_tree = Some(tree);
+        } else if !workspace.roots().is_empty() {
+            self.ensure_explorer(cx);
         }
-        self.status = "workspace opened".into();
+        self.status = if workspace.roots().is_empty() {
+            "workspace cleared"
+        } else {
+            "workspace opened"
+        }
+        .into();
         cx.notify();
         Ok(workspace)
+    }
+
+    fn ensure_explorer(&mut self, cx: &mut Context<Self>) {
+        if self.workspace_tree.is_some() {
+            return;
+        }
+        let tree = cx.new(|cx| WorkspaceTree::new(self.workspace.snapshot(), cx));
+        self.workspace_tree_subscription = Some(cx.subscribe(
+            &tree,
+            |this, _tree, event: &WorkspaceTreeEvent, cx| {
+                this.handle_workspace_tree_event(event.clone(), cx);
+            },
+        ));
+        let load = tree.clone();
+        cx.defer(move |cx| load.update(cx, |tree, cx| tree.load(cx)));
+        self.workbench.update(cx, |workbench, _| {
+            let previous = workbench.focused_pane_id();
+            let id = workbench.register_tool(
+                "Explorer",
+                ToolContent::Workspace(tree.clone()),
+                DockLocation::Left,
+            );
+            workbench.show_tool(id);
+            if let Some(pane) = previous {
+                workbench.focus_pane(pane);
+            }
+        });
+        self.workspace_tree = Some(tree);
     }
 
     fn handle_workspace_tree_event(&mut self, event: WorkspaceTreeEvent, cx: &mut Context<Self>) {
@@ -1962,26 +2027,24 @@ impl ProductShell {
                 if !self.workspace.is_current(&workspace) {
                     return;
                 }
-                let Some(pane) = self.workbench.read(cx).focused_pane() else {
+                let workbench = self.workbench.read(cx);
+                let Some(id) = self.explorer_frame(cx) else {
                     return;
                 };
-                let tab = pane.active_tab();
-                let Some(document) = tab.document_id() else {
+                let Some((pane, tab)) = workbench.tool_tab(id) else {
                     return;
                 };
+                let capture = workbench.capture_tab_move(pane, tab).unwrap();
                 let target = OpenTarget {
                     window: cx
                         .global::<ApplicationWorkbenches>()
                         .window_for(&self.workbench)
                         .unwrap(),
                     workbench: self.workbench.downgrade(),
-                    pane: pane.id(),
-                    tab: tab.id(),
-                    surface: TabSurfaceId::Document(document),
-                    presentation: tab
-                        .editor()
-                        .map(Entity::entity_id)
-                        .or_else(|| tab.terminal_view().map(Entity::entity_id)),
+                    pane,
+                    tab,
+                    surface: capture.tab.surface,
+                    presentation: capture.presentation,
                 };
                 self.start_open_request(
                     OpenRequest::from_uri_for_product(uri),
@@ -2046,20 +2109,28 @@ impl ProductShell {
             documents.create_untitled("Untitled", model, cx)
         });
         let model = documents.read(cx).get(document).unwrap().model().clone();
-        let editor = self.workbench.update(cx, |workbench, cx| {
-            workbench.open_tab_for_document(pane, document, model, cx);
-            workbench
-                .pane(pane)
-                .unwrap()
-                .active_tab()
-                .editor()
-                .unwrap()
-                .clone()
+        let (pane, tab) = self.workbench.update(cx, |workbench, cx| {
+            if workbench.dock_location(pane).is_some() {
+                workbench.open_document_in_normal_group(document, model, cx)
+            } else {
+                let tab = workbench
+                    .open_tab_for_document(pane, document, model, cx)
+                    .unwrap();
+                (pane, tab)
+            }
         });
+        let editor = self
+            .workbench
+            .read(cx)
+            .pane(pane)
+            .unwrap()
+            .active_tab()
+            .editor()
+            .unwrap()
+            .clone();
         editor.focus_handle(cx).focus(window);
         self.status = "new untitled document".into();
         cx.notify();
-        let tab = self.workbench.read(cx).pane(pane).unwrap().active_tab_id();
         Some((
             document,
             OpenTarget {
@@ -2086,7 +2157,11 @@ impl ProductShell {
         if self
             .workbench
             .update(cx, |workbench, _| {
-                workbench.open_terminal_tab(pane, id, view)
+                if workbench.dock_location(pane).is_some() {
+                    workbench.open_terminal_in_normal_group(id, view)
+                } else {
+                    workbench.open_terminal_tab(pane, id, view)
+                }
             })
             .is_none()
         {
@@ -2571,7 +2646,7 @@ impl ProductShell {
                         Self::close_terminal_ids(
                             current_scope.iter().filter_map(|key| match key.surface {
                                 TabSurfaceId::Terminal(id) => Some(id),
-                                TabSurfaceId::Document(_) => None,
+                                TabSurfaceId::Document(_) | TabSurfaceId::Tool(_) => None,
                             }),
                             cx,
                         );
@@ -2584,7 +2659,7 @@ impl ProductShell {
                 Self::close_terminal_ids(
                     current_scope.iter().filter_map(|key| match key.surface {
                         TabSurfaceId::Terminal(id) => Some(id),
-                        TabSurfaceId::Document(_) => None,
+                        TabSurfaceId::Document(_) | TabSurfaceId::Tool(_) => None,
                     }),
                     cx,
                 );
@@ -2668,6 +2743,16 @@ impl ProductShell {
         if !self.workbench.read(cx).contains_surface(pane, tab, surface) {
             return Err(ProtectedCloseFailure::InvalidTarget);
         }
+        if let TabSurfaceId::Tool(id) = surface {
+            self.workbench.update(cx, |workbench, _| {
+                workbench.hide_tool(id);
+            });
+            let _ = cx.update_window(window_handle, |_, window, cx| {
+                self.focus_active_surface(window, cx)
+            });
+            cx.notify();
+            return Ok(());
+        }
         let TabSurfaceId::Document(document) = surface else {
             let TabSurfaceId::Terminal(session_id) = surface else {
                 unreachable!()
@@ -2729,16 +2814,9 @@ impl ProductShell {
         } else {
             self.status = "closed tab".into();
         }
-        let editor = self
-            .workbench
-            .read(cx)
-            .focused_pane()
-            .and_then(|pane| pane.active_tab().editor().cloned());
-        if let Some(editor) = editor {
-            let _ = cx.update_window(window_handle, move |_, window, cx| {
-                editor.focus_handle(cx).focus(window);
-            });
-        }
+        let _ = cx.update_window(window_handle, |_, window, cx| {
+            self.focus_active_surface(window, cx)
+        });
         cx.notify();
         Ok(())
     }
@@ -2758,6 +2836,13 @@ impl ProductShell {
         let documents = Self::documents(cx);
         let replacement = create_untitled_document(&documents, cx);
         let model = documents.read(cx).get(replacement).unwrap().model().clone();
+        if !self.workbench.read(cx).tools().is_empty() {
+            self.workbench.update(cx, |workbench, cx| {
+                workbench.open_document_in_normal_group(replacement, model, cx);
+            });
+            self.status = "created replacement untitled document".into();
+            return;
+        }
         let workbench = cx.new(|cx| Workbench::new_for_document(replacement, model, cx));
         cx.global::<ApplicationWorkbenches>()
             .register(&workbench, window);
@@ -2799,6 +2884,20 @@ impl ProductShell {
                 second,
             } => {
                 let direction = *direction;
+                let dock_extent = |layout: &WorkbenchLayout| match layout {
+                    WorkbenchLayout::Pane(pane) => self
+                        .workbench
+                        .read(cx)
+                        .dock_location(*pane)
+                        .filter(|dock| {
+                            (direction == SplitDirection::Vertical)
+                                == (*dock == DockLocation::Bottom)
+                        })
+                        .map(|dock| self.workbench.read(cx).dock_size(dock)),
+                    _ => None,
+                };
+                let first_extent = dock_extent(first);
+                let second_extent = dock_extent(second);
                 div()
                     .flex()
                     .when(direction == SplitDirection::Horizontal, |element| {
@@ -2815,6 +2914,16 @@ impl ProductShell {
                             .flex_1()
                             .min_w_0()
                             .min_h_0()
+                            .when_some(first_extent, |element, extent| {
+                                element
+                                    .flex_none()
+                                    .when(direction == SplitDirection::Horizontal, |element| {
+                                        element.w(px(extent))
+                                    })
+                                    .when(direction == SplitDirection::Vertical, |element| {
+                                        element.h(px(extent))
+                                    })
+                            })
                             .child(self.render_layout(first, cx)),
                     )
                     .child(
@@ -2832,6 +2941,16 @@ impl ProductShell {
                             .flex_1()
                             .min_w_0()
                             .min_h_0()
+                            .when_some(second_extent, |element, extent| {
+                                element
+                                    .flex_none()
+                                    .when(direction == SplitDirection::Horizontal, |element| {
+                                        element.w(px(extent))
+                                    })
+                                    .when(direction == SplitDirection::Vertical, |element| {
+                                        element.h(px(extent))
+                                    })
+                            })
                             .child(self.render_layout(second, cx)),
                     )
                     .into_any_element()
@@ -2854,6 +2973,13 @@ impl ProductShell {
                     .cloned()
                     .map(|view| view.into_any_element())
             });
+        let active_view = active_view.or_else(|| {
+            pane.active_tab()
+                .tool_content()
+                .map(|content| match content {
+                    ToolContent::Workspace(view) => view.clone().into_any_element(),
+                })
+        });
         let documents = Self::documents(cx);
         let tabs = pane
             .tabs()
@@ -2871,6 +2997,7 @@ impl ProductShell {
                         )
                     }
                     TabSurfaceId::Terminal(_) => "Terminal".to_owned(),
+                    TabSurfaceId::Tool(id) => workbench.tool(id).unwrap().title.to_owned(),
                 };
                 let capture = workbench.capture_tab_move(pane_id, tab_id).unwrap();
                 let source = self.capture_tab_relocation(pane_id, tab_id, cx).unwrap();
@@ -2879,7 +3006,10 @@ impl ProductShell {
                     .id(("tab", tab_id.value()))
                     .debug_selector(move || format!("tab-{}", tab_id.value()))
                     .relative()
-                    .on_drag(source, drag_label)
+                    .when(
+                        !matches!(tab.surface_id(), TabSurfaceId::Tool(_)),
+                        |element| element.on_drag(source, drag_label),
+                    )
                     .child(self.tab_drag_geometry(pane_id, capture))
                     .px_3()
                     .py_1()
@@ -2924,7 +3054,34 @@ impl ProductShell {
                     .child(self.tab_bar_drag_geometry(pane_id))
                     .overflow_hidden()
                     .bg(rgb(0x2d2d2d))
-                    .children(tabs),
+                    .children(tabs)
+                    .when(
+                        matches!(pane.active_tab().surface_id(), TabSurfaceId::Tool(_)),
+                        |element| {
+                            element.child(div().flex_1()).child(
+                                div()
+                                    .id(("hide-tool", pane_id.value()))
+                                    .px_2()
+                                    .cursor_pointer()
+                                    .child("×")
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        let id = this.workbench.read(cx).pane(pane_id).and_then(
+                                            |pane| match pane.active_tab().surface_id() {
+                                                TabSurfaceId::Tool(id) => Some(id),
+                                                _ => None,
+                                            },
+                                        );
+                                        if let Some(id) = id {
+                                            this.workbench.update(cx, |workbench, _| {
+                                                workbench.hide_tool(id);
+                                            });
+                                            this.focus_active_surface(window, cx);
+                                            cx.notify();
+                                        }
+                                    })),
+                            )
+                        },
+                    ),
             )
             .child(
                 div()
@@ -2945,7 +3102,6 @@ impl Render for ProductShell {
         let layout = self.workbench.read(cx).layout().cloned();
         let entity = cx.entity();
         let command_palette = self.command_palette.clone();
-        let workspace_tree = self.workspace_tree.clone();
         let extension_tree = self
             .extension_tree
             .as_ref()
@@ -3037,6 +3193,33 @@ impl Render for ProductShell {
                         &entity,
                         SHOW_EXTENSION_REPORT_COMMAND,
                     ))
+                    .child(
+                        div()
+                            .id("explorer-toggle")
+                            .px_2()
+                            .cursor_pointer()
+                            .child("Explorer")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.toggle_explorer(window, cx);
+                            })),
+                    )
+                    .children(DockLocation::ALL.into_iter().map(|dock| {
+                        div()
+                            .id(("dock-toggle", dock.index()))
+                            .px_2()
+                            .cursor_pointer()
+                            .child(match dock {
+                                DockLocation::Left => "Left",
+                                DockLocation::Right => "Right",
+                                DockLocation::Bottom => "Bottom",
+                            })
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.workbench
+                                    .update(cx, |workbench, _| workbench.toggle_dock(dock));
+                                this.focus_active_surface(window, cx);
+                                cx.notify();
+                            }))
+                    }))
                     .child(div().flex_1())
                     .child(self.status.clone()),
             )
@@ -3047,17 +3230,6 @@ impl Render for ProductShell {
                     .flex_row()
                     .min_h_0()
                     .min_w_0()
-                    .when_some(workspace_tree, |element, tree| {
-                        element.child(
-                            div()
-                                .w(px(240.))
-                                .h_full()
-                                .flex_none()
-                                .border_r_1()
-                                .border_color(rgb(0x454545))
-                                .child(tree),
-                        )
-                    })
                     .when_some(extension_tree, |element, tree| {
                         element.child(
                             div()
@@ -3270,6 +3442,9 @@ fn install_protected_window_close(shell: &Entity<ProductShell>, window: &Window,
         let Some(shell) = shell.upgrade() else {
             return true;
         };
+        if shell.read(cx).workbench.read(cx).panes().is_empty() {
+            return true;
+        }
         let target = shell.update(cx, |shell, cx| shell.window_close_target(window, cx));
         if let Some(target) = target {
             cx.defer(move |cx| {
@@ -3308,10 +3483,7 @@ pub(crate) fn open_product_window(request: Option<OpenRequest>, cx: &mut App) {
                     pane: pane.id(),
                     tab: tab.id(),
                     surface: tab.surface_id(),
-                    presentation: tab
-                        .editor()
-                        .map(Entity::entity_id)
-                        .or_else(|| tab.terminal_view().map(Entity::entity_id)),
+                    presentation: tab.presentation(),
                 };
                 shell.update(cx, |shell, cx| {
                     shell.start_open_request(request, target, true, None, cx);
@@ -3536,6 +3708,7 @@ mod tests {
     mod closure;
     mod observation;
     mod operations;
+    mod tools;
     mod workspaces;
     use std::path::Path;
     use std::sync::{Arc, Mutex};
@@ -3797,10 +3970,7 @@ mod tests {
             pane: pane.id(),
             tab: tab.id(),
             surface: tab.surface_id(),
-            presentation: tab
-                .editor()
-                .map(Entity::entity_id)
-                .or_else(|| tab.terminal_view().map(Entity::entity_id)),
+            presentation: tab.presentation(),
         }
     }
 
@@ -6120,7 +6290,7 @@ await commands.register("api.nontext", async (context) => {
             })
             .collect::<Vec<_>>();
         tabs.sort();
-        assert_eq!(tabs, [1, 2]);
+        assert_eq!(tabs, [2, 2]);
         assert_eq!(updated["documents"][0]["dirty"], false);
         assert_eq!(updated["documents"][0]["revision"], 2);
         assert_eq!(updated["windows"].as_array().unwrap().len(), 2);
@@ -10719,7 +10889,9 @@ await commands.registerForView("outline", "copy", async () => {
             assert_eq!(workbench.panes().len(), 2);
             match workbench.focused_pane().unwrap().active_tab().surface_id() {
                 TabSurfaceId::Terminal(id) => id,
-                TabSurfaceId::Document(_) => panic!("split did not create terminal"),
+                TabSurfaceId::Document(_) | TabSurfaceId::Tool(_) => {
+                    panic!("split did not create terminal")
+                }
             }
         });
         assert_ne!(first_id, second_id);

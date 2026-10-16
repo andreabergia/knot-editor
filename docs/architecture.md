@@ -39,8 +39,9 @@ keymap registry, terminal sessions, and one extension pool.
 
 A document owns persistence identity and a shared `BufferModel`. The model owns
 text, session-local history, anchored geometry, and semantic contributions.
-Each window owns a workbench whose split panes contain typed document or
-terminal tabs. Views own presentation and interaction; terminal sessions own
+Each window owns a workbench whose split panes contain typed document, terminal, or native tool tabs.
+The workbench retains native tool definitions independently of visible tab
+attachments, including dock placement and hide/reopen state. Views own presentation and interaction; terminal sessions own
 PTYs, processes, and emulator state independently of their sole attached view.
 The workbench owns layout transitions; the product shell coordinates windows,
 tab transfers, and application-wide protected closure.

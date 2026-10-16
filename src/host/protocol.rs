@@ -432,6 +432,7 @@ pub struct DocumentInfo {
 pub enum SurfaceKind {
     Document,
     Terminal,
+    Tool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]

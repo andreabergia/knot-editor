@@ -107,10 +107,7 @@ fn capture_destination(
             _ => Some(pane.active_tab()),
         }
         .ok_or(AccessError::InvalidTarget)?;
-        let presentation = tab
-            .editor()
-            .map(Entity::entity_id)
-            .or_else(|| tab.terminal_view().map(Entity::entity_id));
+        let presentation = tab.presentation();
         if let DocumentDestination::View(target) = destination
             && presentation
                 .map(|id| id.as_u64().to_string())
@@ -359,6 +356,7 @@ pub(crate) fn close_presentation(
             tab.editor()
                 .map(|editor| editor.focus_handle(cx))
                 .or_else(|| tab.terminal_view().map(|view| view.focus_handle(cx)))
+                .or_else(|| tab.tool_content().map(|content| content.focus_handle(cx)))
         })
         .ok_or(CloseError::Access(AccessError::InvalidTarget))?;
     let origin = ProductCommandTarget {

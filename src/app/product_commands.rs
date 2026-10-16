@@ -73,7 +73,8 @@ impl ProductCommandTarget {
         self.validate_tab(cx)?;
         match self.surface {
             super::workbench::TabSurfaceId::Document(document) => Ok(document),
-            super::workbench::TabSurfaceId::Terminal(_) => Err(CommandOutcome::Unavailable),
+            super::workbench::TabSurfaceId::Terminal(_)
+            | super::workbench::TabSurfaceId::Tool(_) => Err(CommandOutcome::Unavailable),
         }
     }
 
@@ -395,6 +396,13 @@ pub(crate) fn dispatch_to_captured_target(
             && view.matches_focus(&target.focus, cx)
         {
             let result = match view {
+                CommandView::Workspace(_) => super::command_declarations::registry().dispatch(
+                    super::command_declarations::Participant::WorkspaceTree,
+                    command,
+                    &target,
+                    completion.clone(),
+                    cx,
+                ),
                 CommandView::Extension(view) => {
                     view.update(cx, |view, cx| view.handle_command(command, cx))
                 }

@@ -37,6 +37,7 @@ impl ProductShell {
             return false;
         }
         match source.tab.tab.surface {
+            TabSurfaceId::Tool(_) => true,
             TabSurfaceId::Document(document) => {
                 Self::documents(cx).read(cx).get(document).is_some()
             }
@@ -111,6 +112,9 @@ impl ProductShell {
             cx.notify();
             return CommandOutcome::Completed;
         }
+        if matches!(source.tab.tab.surface, TabSurfaceId::Tool(_)) {
+            return CommandOutcome::Unavailable;
+        }
         if destination.workbench.upgrade() == Some(self.workbench.clone()) {
             return CommandOutcome::InvalidTarget;
         }
@@ -135,7 +139,7 @@ impl ProductShell {
                         .sessions
                         .get(&id)
                         .cloned(),
-                    TabSurfaceId::Document(_) => None,
+                    TabSurfaceId::Document(_) | TabSurfaceId::Tool(_) => None,
                 };
                 let moved = source_workbench.update(cx, |workbench, cx| {
                     let moved = destination_workbench.update(cx, |destination, cx| {
@@ -195,6 +199,9 @@ impl ProductShell {
     ) -> CommandOutcome {
         if !self.relocation_is_live(source, cx) {
             return CommandOutcome::InvalidTarget;
+        }
+        if matches!(source.tab.tab.surface, TabSurfaceId::Tool(_)) {
+            return CommandOutcome::Unavailable;
         }
         let existing = cx.windows();
         let Ok(destination) = create_destination(cx) else {

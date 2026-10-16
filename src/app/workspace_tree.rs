@@ -585,3 +585,26 @@ mod tests {
         });
     }
 }
+
+#[crate::app::command_declarations::command("copy", title = "Copy", id = WORKSPACE_COPY_COMMAND, participant = WorkspaceTree)]
+pub(crate) async fn copy_selected_uri(
+    context: crate::app::command_declarations::CommandContext,
+    (): (),
+) -> Result<(), crate::host::protocol::CommandOutcome> {
+    use crate::host::protocol::CommandOutcome;
+    context
+        .foreground(|target, _, cx| {
+            let Some(crate::app::workbench::CommandView::Workspace(view)) = target.command_view(cx)
+            else {
+                return Err(CommandOutcome::InvalidTarget);
+            };
+            let uri = view
+                .read(cx)
+                .selected()
+                .ok_or(CommandOutcome::Unavailable)?
+                .to_string();
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string(uri));
+            Ok(())
+        })
+        .await
+}

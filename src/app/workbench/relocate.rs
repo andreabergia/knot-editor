@@ -74,10 +74,7 @@ impl Workbench {
             .tabs
             .iter()
             .find(|candidate| candidate.id == tab)?;
-        let presentation = match &tab.payload {
-            WorkbenchTabPayload::Document { editor, .. } => Some(editor.entity_id()),
-            WorkbenchTabPayload::Terminal { view, .. } => view.as_ref().map(Entity::entity_id),
-        };
+        let presentation = tab.presentation();
         Some(TabMoveCapture {
             tab: WorkbenchTabSnapshot {
                 pane_id: pane,
@@ -235,7 +232,9 @@ impl Workbench {
         target: TabMoveDestination,
         handoff: impl FnOnce(Entity<TerminalView>) -> Entity<TerminalView>,
     ) -> Option<TabMoveTransition> {
-        if !self.contains_tab_move(source) {
+        if !self.contains_tab_move(source)
+            || matches!(source.tab.surface, super::TabSurfaceId::Tool(_))
+        {
             return None;
         }
         if let super::TabSurfaceId::Terminal(session) = source.tab.surface

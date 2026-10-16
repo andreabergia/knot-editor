@@ -293,3 +293,93 @@ async fn close_target(
         })
         .await
 }
+
+#[command("workbench.toggle-explorer", title = "Toggle Explorer", id = TOGGLE_EXPLORER_COMMAND, participant = Workbench)]
+pub(crate) async fn toggle_explorer(context: CommandContext, (): ()) -> Result<(), CommandOutcome> {
+    context
+        .shell(|shell, _, window, cx| {
+            shell.toggle_explorer(window, cx);
+            Ok(())
+        })
+        .await
+}
+
+#[command("workbench.toggle-left-sidebar", title = "Toggle Left Sidebar", id = TOGGLE_LEFT_SIDEBAR_COMMAND, participant = Workbench)]
+pub(crate) async fn toggle_left_sidebar(
+    context: CommandContext,
+    (): (),
+) -> Result<(), CommandOutcome> {
+    toggle_dock(context, DockLocation::Left).await
+}
+
+#[command("workbench.toggle-right-sidebar", title = "Toggle Right Sidebar", id = TOGGLE_RIGHT_SIDEBAR_COMMAND, participant = Workbench)]
+pub(crate) async fn toggle_right_sidebar(
+    context: CommandContext,
+    (): (),
+) -> Result<(), CommandOutcome> {
+    toggle_dock(context, DockLocation::Right).await
+}
+
+#[command("workbench.toggle-bottom-dock", title = "Toggle Bottom Dock", id = TOGGLE_BOTTOM_DOCK_COMMAND, participant = Workbench)]
+pub(crate) async fn toggle_bottom_dock(
+    context: CommandContext,
+    (): (),
+) -> Result<(), CommandOutcome> {
+    toggle_dock(context, DockLocation::Bottom).await
+}
+
+async fn toggle_dock(context: CommandContext, dock: DockLocation) -> Result<(), CommandOutcome> {
+    context
+        .shell(move |shell, _, window, cx| {
+            shell
+                .workbench
+                .update(cx, |workbench, _| workbench.toggle_dock(dock));
+            shell.focus_active_surface(window, cx);
+            cx.notify();
+            Ok(())
+        })
+        .await
+}
+
+#[command("workbench.explorer-left", title = "Move Explorer to Left Sidebar", id = EXPLORER_LEFT_COMMAND, participant = Workbench)]
+pub(crate) async fn explorer_left(context: CommandContext, (): ()) -> Result<(), CommandOutcome> {
+    place_explorer(context, ToolPlacement::Dock(DockLocation::Left)).await
+}
+
+#[command("workbench.explorer-right", title = "Move Explorer to Right Sidebar", id = EXPLORER_RIGHT_COMMAND, participant = Workbench)]
+pub(crate) async fn explorer_right(context: CommandContext, (): ()) -> Result<(), CommandOutcome> {
+    place_explorer(context, ToolPlacement::Dock(DockLocation::Right)).await
+}
+
+#[command("workbench.explorer-bottom", title = "Move Explorer to Bottom Dock", id = EXPLORER_BOTTOM_COMMAND, participant = Workbench)]
+pub(crate) async fn explorer_bottom(context: CommandContext, (): ()) -> Result<(), CommandOutcome> {
+    place_explorer(context, ToolPlacement::Dock(DockLocation::Bottom)).await
+}
+
+#[command("workbench.explorer-in-editor", title = "Move Explorer to Editor Tabs", id = EXPLORER_IN_EDITOR_COMMAND, participant = Workbench)]
+pub(crate) async fn explorer_in_editor(
+    context: CommandContext,
+    (): (),
+) -> Result<(), CommandOutcome> {
+    place_explorer(context, ToolPlacement::DocumentGroup).await
+}
+
+async fn place_explorer(
+    context: CommandContext,
+    placement: ToolPlacement,
+) -> Result<(), CommandOutcome> {
+    context
+        .shell(move |shell, _, window, cx| {
+            if shell.workspace_tree.is_none() {
+                shell.toggle_explorer(window, cx);
+            }
+            let id = shell.explorer_frame(cx).unwrap();
+            shell.workbench.update(cx, |workbench, _| {
+                workbench.place_tool(id, placement);
+            });
+            shell.focus_active_surface(window, cx);
+            cx.notify();
+            Ok(())
+        })
+        .await
+}

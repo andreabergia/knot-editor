@@ -192,6 +192,14 @@ a new destination window first preserves the source if creation fails.
 Application-wide drag coordination handles macOS delivering pressed drags to the
 originating window, including cross-window hit testing and preview placement.
 
+Native tool frames retain presentation identity independently of tab attachments.
+Dock groups use the existing split tree and typed tabs so tools share lifecycle,
+observation, and command targeting with document and terminal presentations.
+Keeping hidden definitions in the workbench preserves native state without
+retaining closed documents or rebuilding obsolete document groups. Model and
+gpui integration tests cover these ownership and closure boundaries; native dock
+interaction review remains in the active D049 plan.
+
 Reference: [workbench and lifecycle](architecture/workbench-and-lifecycle.md).
 
 ## Terminal

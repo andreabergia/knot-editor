@@ -1,6 +1,6 @@
 # D049 — Docking and automatic tool-layout memory
 
-Status: ⬜ Planned; implementation has not started.
+Status: 🚧 Checkpoint 1 implemented and automated checks passed; native review pending.
 
 Source: checkpoint 5 of the [extension platform and projects plan](extension-platform-and-projects-plan.md).
 Design discussion: 2026-10-16. Followed by the
@@ -92,7 +92,7 @@ Execute one checkpoint per implementation request and stop at its review gate.
 Keep this plan updated with ✅ deliverables, evidence, and reviewed choices.
 Split coherent changes into logical commits without conventional titles.
 
-### 1. Native tools in the shared workbench ⬜
+### 1. Native tools in the shared workbench 🚧
 
 Establish the native docking model and move the resource explorer into it.
 Provide recognizable sidebar/bottom docks, tool selectors and toggle commands,
@@ -110,6 +110,35 @@ collapse; gpui integration tests for resource opening from a docked explorer,
 focus/Copy routing, application snapshots with non-document tools, and protected
 document/terminal closure with tools present. A tool-only window must behave
 deliberately and retain no closed document.
+
+Implementation evidence:
+
+- ✅ Workbench-owned native tool definitions and live identities, typed tool tabs,
+  dock groups and sizes, mixed groups, and hide/reopen without disposal. The
+  explorer uses this infrastructure; its filesystem protocol remains separate.
+- ✅ Left/right/bottom dock selection and toggle controls; palette commands move
+  the explorer to each dock or the normal editor tabs. Explorer defaults to the
+  left sidebar on first workspace use, or when explicitly opened without a root.
+  Refreshing/clearing roots retains its frame and user placement/visibility.
+- ✅ Tool focus/Copy routing, exact presentation capture, tool snapshots with
+  null document/buffer, and protected closure/replacement paths handle tools.
+  Closing the last document with a visible tool leaves a tool-only window;
+  closing the last document with hidden tools preserves their definitions while
+  creating the ordinary untitled replacement. Tools cannot transfer windows.
+- ✅ `cargo test --all-targets --locked` passed (647 library tests plus the
+  binary, facade integration, and drag-delivery example targets), as did
+  `cargo clippy --all-targets --locked -- -D warnings`,
+  `scripts/check-extension-api.sh`, and `git diff --check`. Ran `cargo fmt`.
+  Tests live in `src/app/workbench/tools.rs` and
+  `src/app/product/tests/tools.rs` alongside existing closure, observation,
+  resource, and relocation regression tests. Final-document closure explicitly
+  verifies focus transfers to the surviving tool.
+- ✅ Built `target/debug/Knot.app` for native review. No native interaction
+  has been claimed as verified; no UI automation was used.
+- ⏳ Native review pending. Use **Toggle Explorer**, **Move Explorer to Editor
+  Tabs**, **Move Explorer to Left/Right Sidebar**, **Move Explorer to Bottom
+  Dock**, and dock toggle commands from the palette. Inspect hide/reopen and
+  resource opening. Divider dragging and frame dragging remain checkpoint 2.
 
 **Review gate:** inspect a real sidebar and a mixed document/tool tab group.
 Approve familiar dock interaction, native ownership, and remembered hide/reopen

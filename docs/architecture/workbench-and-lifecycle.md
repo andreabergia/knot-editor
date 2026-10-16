@@ -34,7 +34,11 @@ Other views update through their persistent positions.
 `Workbench` owns a window-local binary split tree, stable pane/tab identities,
 ordered tabs, and focused pane. A document tab strongly owns one `EditorView`
 of an application-owned document. A terminal tab owns the sole attached view of
-an application-owned session, with no document model. Splitting a document
+an application-owned session, with no document model. A tool tab attaches a
+workbench-owned native frame whose definition and presentation survive hiding.
+Left/right sidebars and bottom docks are identified groups in the same split
+tree, with window-local sizes and selectors. Tools can also share ordinary
+document groups. Splitting a document
 creates another view; splitting a terminal creates another session. Empty panes
 collapse; final-tab closure returns an empty-workbench transition to the shell.
 
@@ -56,7 +60,11 @@ shell-wide registry counts views in live windows without retaining windows or
 workbenches. Final application document removal explicitly closes its model,
 invalidating transport access even if a stale view retains the entity. Nonfinal
 view closure leaves the shared document open. An empty surviving product
-workbench receives a new untitled document.
+workbench receives a new untitled document while retaining hidden tool
+definitions. A workbench with visible tools can remain tool-only after its final
+document closes; closed documents are removed normally. Closing a tool hides
+its attachment without entering document confirmation. Hiding the last visible
+tool can leave an empty window; native window closure needs no document prompt.
 
 Native commands and extension APIs adapt the coordinator's semantic result.
 Extension closure additionally revalidates caller lifecycle/cancellation before
@@ -78,6 +86,8 @@ identities. Editors retain their view entity and scroll state; pending caret
 reveals still apply. Terminal cross-window moves hand off the sole attachment to
 a destination view of the same session; same-window moves retain their view.
 Replacement or pane/window transfer invalidates old exact command targets.
+
+Native tools stay in their owning product window.
 
 Transfers do not enter protected closure or remove documents/sessions. An emptied
 source receives ordinary untitled replacement. New-window transfer creates and
@@ -102,7 +112,14 @@ fallbacks live in the [relocation code](../../src/app/product/tab_drag.rs).
 
 `WorkspaceTree` owns cached native filesystem presentation state. It emits
 normalized resource requests and workspace generations to the shell, independently
-of the extension `TreeView` provider protocol. Root and directory request
+of the extension `TreeView` provider protocol. The explorer is native tool
+content in the workbench; the shell owns its resource event subscription.
+Changing workspace roots refreshes content without changing placement or
+visibility. Hiding preserves selection, expansion, and the live native view.
+Reopening returns to the former live group and tab order, or the remembered
+dock/normal group if that group disappeared; historical document groups are
+never recreated. Files opened from a dock go to the normal document group,
+creating it when the window contains only tools. Root and directory request
 validation belongs to [documents and workspaces](documents-and-persistence.md).
 
 Native Open retains its captured target through the picker. Platforms unable to
@@ -163,4 +180,6 @@ links. Link recognition lives in [terminal_links.rs](../../src/app/terminal_link
 Snapshots derive associations and focus from live shells/workbenches rather than
 replicating ownership. Committed layout, relocation, focus, activation, and closure
 transitions signal the [application observer](extension-host.md#application-observation).
-Diagnostic windows are excluded; terminals remain explicit non-document surfaces.
+Diagnostic windows are excluded; terminals and tools remain explicit
+non-document surfaces with no buffer/document association. Tool focus participates
+in captured command targeting; native explorer Copy copies the selected URI.

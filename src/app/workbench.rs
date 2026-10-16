@@ -49,6 +49,7 @@ pub(crate) struct TerminalSessionId(pub(crate) u64);
 pub(crate) enum TabSurfaceId {
     Document(DocumentId),
     Terminal(TerminalSessionId),
+    Tool(ToolFrameId),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -146,6 +147,10 @@ pub(crate) struct WorkbenchTab {
 }
 
 pub(crate) enum WorkbenchTabPayload {
+    Tool {
+        id: ToolFrameId,
+        content: ToolContent,
+    },
     Document {
         document_id: DocumentId,
         editor: Entity<EditorView>,
@@ -161,6 +166,7 @@ pub(crate) enum CommandView {
     Editor(Entity<EditorView>),
     Terminal(Entity<TerminalView>),
     Extension(Entity<TreeView>),
+    Workspace(Entity<super::workspace_tree::WorkspaceTree>),
 }
 
 impl CommandView {
@@ -169,6 +175,7 @@ impl CommandView {
             Self::Editor(view) => view.focus_handle(cx),
             Self::Terminal(view) => view.focus_handle(cx),
             Self::Extension(view) => view.focus_handle(cx),
+            Self::Workspace(view) => view.focus_handle(cx),
         };
         focus.upgrade() == Some(handle)
     }
@@ -177,6 +184,7 @@ impl CommandView {
 impl WorkbenchTab {
     pub(crate) fn command_view(&self) -> Option<CommandView> {
         match &self.payload {
+            WorkbenchTabPayload::Tool { content, .. } => Some(content.command_view()),
             WorkbenchTabPayload::Document { editor, .. } => {
                 Some(CommandView::Editor(editor.clone()))
             }
@@ -192,6 +200,7 @@ impl WorkbenchTab {
 
     pub(crate) fn surface_id(&self) -> TabSurfaceId {
         match &self.payload {
+            WorkbenchTabPayload::Tool { id, .. } => TabSurfaceId::Tool(*id),
             WorkbenchTabPayload::Document { document_id, .. } => {
                 TabSurfaceId::Document(*document_id)
             }
@@ -202,21 +211,21 @@ impl WorkbenchTab {
     pub(crate) fn document_id(&self) -> Option<DocumentId> {
         match self.surface_id() {
             TabSurfaceId::Document(document_id) => Some(document_id),
-            TabSurfaceId::Terminal(_) => None,
+            TabSurfaceId::Terminal(_) | TabSurfaceId::Tool(_) => None,
         }
     }
 
     pub(crate) fn editor(&self) -> Option<&Entity<EditorView>> {
         match &self.payload {
             WorkbenchTabPayload::Document { editor, .. } => Some(editor),
-            WorkbenchTabPayload::Terminal { .. } => None,
+            WorkbenchTabPayload::Terminal { .. } | WorkbenchTabPayload::Tool { .. } => None,
         }
     }
 
     pub(crate) fn terminal_view(&self) -> Option<&Entity<TerminalView>> {
         match &self.payload {
             WorkbenchTabPayload::Terminal { view, .. } => view.as_ref(),
-            WorkbenchTabPayload::Document { .. } => None,
+            WorkbenchTabPayload::Document { .. } | WorkbenchTabPayload::Tool { .. } => None,
         }
     }
 }
@@ -249,6 +258,10 @@ impl Pane {
 }
 
 pub(crate) struct Workbench {
+    tools: Vec<ToolFrame>,
+    docks: Vec<(PaneId, DockLocation)>,
+    dock_sizes: [f32; 3],
+    dock_selected: [Option<ToolFrameId>; 3],
     next_pane_id: u64,
     next_tab_id: u64,
     layout: Option<WorkbenchLayout>,
@@ -259,6 +272,10 @@ pub(crate) struct Workbench {
 impl Workbench {
     pub(crate) fn empty() -> Self {
         Self {
+            tools: Vec::new(),
+            docks: Vec::new(),
+            dock_sizes: [240., 240., 220.],
+            dock_selected: [None; 3],
             next_pane_id: 1,
             next_tab_id: 1,
             layout: None,
@@ -280,6 +297,10 @@ impl Workbench {
         let pane_id = PaneId(1);
         let tab_id = TabId(1);
         let workbench = Self {
+            tools: Vec::new(),
+            docks: Vec::new(),
+            dock_sizes: [240., 240., 220.],
+            dock_selected: [None; 3],
             next_pane_id: 2,
             next_tab_id: 2,
             layout: Some(WorkbenchLayout::Pane(pane_id)),
@@ -630,6 +651,7 @@ impl Workbench {
         if self.panes[pane_index].tabs.is_empty() {
             let previous_focus = self.focused_pane;
             self.panes.remove(pane_index);
+            self.docks.retain(|(pane, _)| *pane != pane_id);
             self.layout = self
                 .layout
                 .take()
@@ -701,6 +723,16 @@ impl Workbench {
                     .is_none_or(|focused| pane_set.contains(&focused))
             );
 
+            let mut tool_ids = HashSet::new();
+            for pane in &self.panes {
+                for tab in &pane.tabs {
+                    if let TabSurfaceId::Tool(id) = tab.surface_id() {
+                        debug_assert!(self.tool(id).is_some());
+                        debug_assert!(tool_ids.insert(id));
+                    }
+                }
+            }
+            debug_assert!(self.docks.iter().all(|(pane, _)| pane_set.contains(pane)));
             let mut tab_ids = HashSet::new();
             for pane in &self.panes {
                 debug_assert!(!pane.tabs.is_empty());
@@ -715,6 +747,9 @@ struct RemovedTab {
     tab: WorkbenchTab,
     removed_pane: Option<PaneId>,
 }
+
+mod tools;
+pub(crate) use tools::{DockLocation, ToolContent, ToolFrame, ToolFrameId, ToolPlacement};
 
 mod close;
 mod relocate;
