@@ -12,73 +12,33 @@ the item is removed from this register.
 ## Selected initiative: production extension APIs and JavaScript projects
 
 The [extension platform and project management plan](plans/extension-platform-and-projects-plan.md)
-uses a JavaScript project manager to establish production application APIs,
-native semantic UI contributions, durable extension storage, multi-root
-workspaces, and session restoration including unsaved documents. D046 is complete
-and approved on 2026-10-15. D047 checkpoints 2–3 are complete and approved on
-2026-10-15. D053 is complete and approved. D048 is complete and approved
-on 2026-10-16. Resume numbered checkpoint 5 (D049) next; the broader initiative
-remains in progress.
-Execute one checkpoint at a time and stop at its review gate.
+uses an ordinary JavaScript project manager to validate native application APIs,
+extension UI, durable storage, multi-root workspaces, and session restoration
+including unsaved documents. API foundation, application state/operations, handler
+declarations, and extension storage are complete; approval and validation notes
+live in that plan.
 
-| Priority | Checkpoint | Work identifiers | Outcome |
-| --- | --- | --- | --- |
-| 1 | Public API foundation (✅ complete) | D046 | Documented and typed JS contracts; prototype coupling removed at the API boundary |
-| 2 | Application state and events (✅ complete) | D047 | Window/document/workspace queries and race-free observation |
-| 3 | Resource and document operations (✅ complete) | D047 | JS opens resources and manages documents through product flows |
-| 3a | Handler declarations refactoring (✅ complete) | D053 | Function-defined typed async operations/errors/native commands with automatic registration |
-| 4 | Durable extension storage (✅ complete) | D048 | Rust-owned SQLite and lifecycle-independent extension namespaces |
-| 5 | Native extension UI | D049 | Familiar docks, automatic tool-layout memory, extension frames, and picker/input surfaces |
-| 6 | Project registry validation | D051 | A usable JavaScript project manager with one root per workspace |
-| 7 | Unsaved-document recovery | D050 | Durable content recovery independent of extension health |
-| 8 | Safe project switching | D051, D050 | Durable suspension and document restoration without losing edits |
-| 9 | Multiple workspace roots | D052 | Root collections supported throughout UI and opening flows |
-| 10 | Layout and startup restoration | D005, D051 | Project/session restoration of windows, panes, tabs, and view state |
+Remaining order:
 
-The public API retains the current namespaces, exposes captured command context,
-and removes global-focus fallback. There is no backward-compatibility
-requirement: contracts and repository consumers change together, with unsupported
-package API versions diagnosed before evaluation.
+| Checkpoint | Work identifiers | Outcome |
+| --- | --- | --- |
+| 5 | D049 | Native docks, tool-layout memory, extension frames, and picker/input surfaces |
+| 6 | D051 | A usable JavaScript project registry with one root per workspace |
+| 7 | D050 | Unsaved-content recovery independent of extension health |
+| 8 | D051, D050 | Safe project switching with durable suspension/restoration |
+| 9 | D052 | Multiple roots throughout UI and resource operations |
+| 10 | D005, D051 | Layout, view-state, and startup restoration |
 
-Explicit follow-up tasks within the selected initiative:
+Start checkpoint 5 with the [docking plan](plans/d049-dockable-workbench-plan.md),
+then the [native extension UI plan](plans/d049-native-extension-ui-plan.md).
+Execute one checkpoint at a time and stop at its review gate; detailed scope and
+acceptance belong to those plans. The early project registry is an intermediate
+validation point, not initiative completion.
 
-- **D047, checkpoint 2:** document/window/workspace queries, live target types
-  and application observation are complete and approved on 2026-10-15.
-- **D047, checkpoint 3:** file Open now uses explicit window/pane/view targets or
-  an admission-time captured command/active window. Folder/root operations,
-  untitled creation, presenting documents and protected closure are implemented;
-  automated acceptance passes, and the user approved completion on 2026-10-15.
-- **D053, separate maintenance interlude:** handler declarations refactoring
-  is complete and approved on 2026-10-15. All current host capabilities
-  and native commands use annotated typed async handlers with automatic registration.
-  Focus routing and dynamic JS registration retain their existing ownership.
-  Remote Linux/Windows results remain an explicitly recorded validation limitation
-  of the D053 interlude.
-- **D048, checkpoint 4:** complete and approved on 2026-10-16.
-  Private JSON read/write/delete/list,
-  stable per-owner databases, asynchronous shutdown drain, and interruption/reopen
-  validation are implemented. Related state uses atomic replacement of one record.
-- **D049, checkpoint 5:** finalize native contribution APIs and pass originating
-  window/instance context to providers and actions, with cross-window isolation.
-  Execute the [docking and tool-layout memory plan](plans/d049-dockable-workbench-plan.md)
-  before the [native extension UI plan](plans/d049-native-extension-ui-plan.md).
-  Support familiar docks/sidebars and mixed document/tool tab groups; validate
-  content with a Git-status-style fixture. Automatically remember tool-only
-  arrangements for fresh windows without changing already-open windows. Remember
-  hidden tools' locations/sizes; provide Reset Layout. Document splits and empty
-  document placeholders are excluded from tool records. Floating tool windows
-  and exact mixed document/session restoration remain deferred.
-
-Each task includes public declarations, documentation, and boundary tests. Do not
-publish speculative namespaces in D046 or use these deferrals to preserve its
-implicit global context.
-
-This initiative takes priority over the deferred register. The early project
-registry is an intermediate validation checkpoint, not the final scope. D005 is
-promoted into the plan. D012 retains persistent undo/history work; view-state
-restoration belongs to D005. D034 may follow the multi-root work but is not
-required for a fuller file explorer. General widget UI/WebViews (D021), terminal
-restoration (D043), and broad scheduling policy (D019) remain deferred.
+This initiative takes priority over the deferred register. Persistent undo (D012),
+general UI/WebViews (D021), terminal restoration (D043), and broad scheduling
+policy (D019) remain deferred. Exact view-state restoration belongs to selected
+D005; tool-only layout memory belongs to D049.
 
 ## Deferred register
 
@@ -188,9 +148,8 @@ restoration (D043), and broad scheduling policy (D019) remain deferred.
 - **D020 — Public command schemas, aliases, user macros, repetition, and concurrent
   task graphs**
   - Deferred: Ordinary commands and awaited composition cover validated cases.
-    Internal native-handler argument typing, Rust declaration macros and automatic
-    registration are selected under D053; public schema introspection and user
-    automation remain here.
+    Native typed handler declarations are implemented; public schema introspection
+    and user automation remain deferred.
   - Reconsider: A concrete automation workflow cannot be expressed cleanly.
 
 - **D021 — General extension UI or WebView escape hatch**
