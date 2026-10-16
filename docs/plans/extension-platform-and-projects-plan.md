@@ -1,9 +1,9 @@
 # Production extension APIs and JavaScript project management
 
 Status: ✅ D046, D047 and the D053 maintenance interlude complete, approved
-and archived on 2026-10-15. D048 is the next numbered checkpoint.
-Numbered product checkpoint 4 is in progress; checkpoints 5–10 remain unstarted. The focused
-[D048 storage plan](d048-extension-storage-plan.md) is drafted for review.
+and archived on 2026-10-15. D048 is complete and approved on 2026-10-16.
+Numbered product checkpoints 5–10 remain unstarted; D049 is next. The focused
+[D048 storage plan](d048-extension-storage-plan.md) records the completed storage slice.
 
 Source: the project-management design discussion of 2026-10-13 and the
 [prioritized roadmap](../roadmap.md). Work identifiers: D046–D052 and promoted
@@ -366,18 +366,18 @@ parallel transport or handwritten registration tables. Native participant routin
 and dynamic JS lifecycle ownership are preserved. Its archive records the passing
 local checks and unverified remote Linux/Windows build/linking results.
 
-Resume numbered checkpoint 4 (D048) next using its focused plan. Checkpoints
-4–10 remain unstarted. D053 adds no D047 requirement and does not implement
-D048 storage or D020 user automation. The broader extension/project initiative remains in progress.
+D048 is complete and approved; resume numbered checkpoint 5 (D049) next.
+Checkpoints 5–10 remain unstarted. D053 added no D047 requirement or D020 user
+automation. The broader extension/project initiative remains in progress.
 
-### 4. SQLite-backed extension storage — D048 ⬜
+### 4. SQLite-backed extension storage — D048 ✅
 
-🚧 All focused D048 implementation checkpoints are implemented and tested,
-including asynchronous shutdown and process interruption/reopen coverage. Final
-acceptance review remains, so this parent checkpoint is incomplete.
+✅ Complete and approved on 2026-10-16, including asynchronous shutdown,
+process interruption/reopen coverage, and the four-operation public API.
+All 640 library tests and extension API checks passed.
 
 The [focused D048 plan](d048-extension-storage-plan.md) tracks the four-operation
-record API and final acceptance review.
+record API and completed acceptance evidence.
 
 - Publish the storage namespace, declarations, documentation, and contract tests.
 - Implement per-owner databases and async JSON read/write/delete/list using
@@ -505,7 +505,7 @@ from JS, collaboration/sync, settings/secrets systems, archive installation,
 and unrelated explorer editing features. These exclusions do not excuse missing
 failure, cancellation, and lifecycle contracts in the APIs implemented here.
 
-Concrete storage schema/settings and API names are reviewed in the focused D048
+Concrete storage schema/settings and API names are validated in the focused D048
 plan. UI placement, recovery cadence/retention, multi-window project activation, and detailed startup precedence
 are deliberately finalized at their stated gates. No unresolved choice may be
 silently baked into earlier public or persisted schemas. Add a focused subsidiary

@@ -16,8 +16,9 @@ uses a JavaScript project manager to establish production application APIs,
 native semantic UI contributions, durable extension storage, multi-root
 workspaces, and session restoration including unsaved documents. D046 is complete
 and approved on 2026-10-15. D047 checkpoints 2–3 are complete and approved on
-2026-10-15. D053 is complete, approved and archived. Resume numbered checkpoint 4
-(D048) next; the broader initiative remains in progress.
+2026-10-15. D053 is complete, approved and archived. D048 is complete and approved
+on 2026-10-16. Resume numbered checkpoint 5 (D049) next; the broader initiative
+remains in progress.
 Execute one checkpoint at a time and stop at its review gate.
 
 | Priority | Checkpoint | Work identifiers | Outcome |
@@ -26,7 +27,7 @@ Execute one checkpoint at a time and stop at its review gate.
 | 2 | Application state and events (✅ complete) | D047 | Window/document/workspace queries and race-free observation |
 | 3 | Resource and document operations (✅ complete) | D047 | JS opens resources and manages documents through product flows |
 | 3a | Handler declarations refactoring (✅ complete) | D053 | Function-defined typed async operations/errors/native commands with automatic registration |
-| 4 | Durable extension storage | D048 | Rust-owned SQLite and lifecycle-independent extension namespaces |
+| 4 | Durable extension storage (✅ complete) | D048 | Rust-owned SQLite and lifecycle-independent extension namespaces |
 | 5 | Native extension UI | D049 | Extension-created views and native picker/input surfaces |
 | 6 | Project registry validation | D051 | A usable JavaScript project manager with one root per workspace |
 | 7 | Unsaved-document recovery | D050 | Durable content recovery independent of extension health |
@@ -54,10 +55,12 @@ Explicit follow-up tasks within the selected initiative:
   is complete, approved and archived on 2026-10-15. All current host capabilities
   and native commands use annotated typed async handlers with automatic registration.
   Focus routing and dynamic JS registration retain their existing ownership.
-  Numbered checkpoint 4 (D048) is next; storage remains unimplemented. Remote
-  Linux/Windows results remain an explicitly recorded validation limitation.
-- **D048, checkpoint 4:** publish the storage namespace with its implemented
-  record operations and ownership contracts.
+  Remote Linux/Windows results remain an explicitly recorded validation limitation
+  of the D053 interlude.
+- **D048, checkpoint 4:** complete and approved on 2026-10-16 in the
+  [D048 plan](plans/d048-extension-storage-plan.md). Private JSON read/write/delete/list,
+  stable per-owner databases, asynchronous shutdown drain, and interruption/reopen
+  validation are implemented. Related state uses atomic replacement of one record.
 - **D049, checkpoint 5:** finalize native contribution APIs and pass originating
   window/instance context to providers and actions, with cross-window isolation.
 

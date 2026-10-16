@@ -1,7 +1,7 @@
 # D048 — Simple durable extension storage
 
-Status: 🚧 All three checkpoints implemented; final acceptance review remains.
-The plan remains active until that approval; it is not yet archived.
+Status: ✅ Complete and approved on 2026-10-16. All three checkpoints and final
+acceptance passed.
 
 Source: checkpoint 4 of the [extension platform and projects plan](extension-platform-and-projects-plan.md).
 Design discussion: 2026-10-15. Relevant current boundaries:
@@ -216,8 +216,9 @@ failure diagnostics, and the separate-process interruption test.
 completed. Architecture, lifetime documentation, and validated decisions match
 the implemented ownership and quit flow.
 
-⏸️ Final acceptance review remains open. Do not mark D048 complete or archive it
-until the user approves the restart/interruption evidence, diagnostics, and checks.
+✅ Final acceptance approved by the user ("lgtm") on 2026-10-16, including the
+restart/interruption evidence, failure diagnostics, and passing checks. D048 is
+complete; the broader extension/project initiative continues with D049.
 
 ## Exclusions and deferred choices
 
