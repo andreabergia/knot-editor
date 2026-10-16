@@ -4,6 +4,8 @@ Status: ✅ D046, D047 and the D053 maintenance interlude complete, approved
 and archived on 2026-10-15. D048 is complete, approved and archived on 2026-10-16.
 Numbered product checkpoints 5–10 remain unstarted; D049 is next. The focused
 [D048 storage plan](../archive/plans/d048-extension-storage-plan.md) records the completed storage slice.
+D049 execution is split into the [dockable workbench](d049-dockable-workbench-plan.md)
+and [native extension UI](d049-native-extension-ui-plan.md) plans, in that order.
 
 Source: the project-management design discussion of 2026-10-13 and the
 [prioritized roadmap](../roadmap.md). Work identifiers: D046–D052 and promoted
@@ -167,6 +169,17 @@ window-local instances; views own focus, selection, expansion, scrolling, and
 rendering. Declare before windows exist and instantiate when windows attach.
 Provider calls receive the window/instance context, preventing one shared runtime
 from confusing projects in different windows.
+
+Contributions live in draggable native tool frames. Sidebars are supported
+placements, alongside top/bottom splits and tab groups shared with documents and
+terminals. Extend the existing workbench pane/tab and relocation model, including
+resizable splits, rather than building a separate sidebar layout engine. The
+native resource explorer uses that same frame infrastructure while retaining its
+own filesystem protocol. Floating tool windows and cross-window tool movement
+are deferred; existing document/terminal window operations remain supported.
+Validate useful content through a Git-status-style fixture with grouped files,
+status labels, row/group actions, and activation, plus a minimal read-only text
+frame. No actual Git implementation or general widget framework is required.
 
 Define duplicate IDs, placement/order, visibility, show/focus behavior,
 per-window applicability, command context, loading/empty/error states, provider
@@ -395,12 +408,21 @@ record API and completed acceptance evidence.
 
 ### 5. Production native UI contributions — D049 ⬜
 
+Execute the focused [dockable workbench plan](d049-dockable-workbench-plan.md),
+then the [native extension UI plan](d049-native-extension-ui-plan.md). Each has
+its own checkpoints and review gates; completing the layout prerequisite alone
+does not complete D049. The design discussion on 2026-10-16 established draggable
+frames, useful sidebar placements, mixed document/tool tab groups, and deferral
+of floating tool windows.
+
 - Finalize native UI contribution APIs in `workbench`, with explicit originating
   window/instance context for providers and actions. Extend declarations and test
   isolation across windows, including contributions registered before windows exist.
 - Replace hardcoded extension-tree creation with namespaced contribution
-  definitions, placement, and per-window instances. Implement the needed
-  tree/list, picker, input, and confirmation contracts.
+  definitions, placement, and per-window instances. First extend the shared
+  workbench for native tool docking/resizing and move the resource explorer into
+  it. Implement tree/list actions and text frames, picker, input, and confirmation
+  contracts, validated by a Git-status-style fixture.
 - Include show/focus, selection/actions, window context, loading/errors,
   invalidation, command routing, disposal, and failed-startup cleanup.
 - Adapt existing outline fixtures/examples through the supported contract.
