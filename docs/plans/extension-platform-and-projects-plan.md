@@ -4,7 +4,7 @@ Status: ✅ D046, D047 and the D053 maintenance interlude complete, approved
 and archived on 2026-10-15. D048 is complete, approved and archived on 2026-10-16.
 Numbered product checkpoints 5–10 remain unstarted; D049 is next. The focused
 [D048 storage plan](../archive/plans/d048-extension-storage-plan.md) records the completed storage slice.
-D049 execution is split into the [dockable workbench](d049-dockable-workbench-plan.md)
+D049 execution is split into [docking and automatic tool-layout memory](d049-dockable-workbench-plan.md)
 and [native extension UI](d049-native-extension-ui-plan.md) plans, in that order.
 
 Source: the project-management design discussion of 2026-10-13 and the
@@ -171,15 +171,30 @@ Provider calls receive the window/instance context, preventing one shared runtim
 from confusing projects in different windows.
 
 Contributions live in draggable native tool frames. Sidebars are supported
-placements, alongside top/bottom splits and tab groups shared with documents and
-terminals. Extend the existing workbench pane/tab and relocation model, including
-resizable splits, rather than building a separate sidebar layout engine. The
+placements, alongside edge splits and tab groups shared with documents and
+terminals. Provide recognizable docks, tool selectors/toggles, dragging, and
+resizing. Design the layout model for this behavior; replace the prototype where
+needed rather than treating reuse as a constraint. The
 native resource explorer uses that same frame infrastructure while retaining its
 own filesystem protocol. Floating tool windows and cross-window tool movement
 are deferred; existing document/terminal window operations remain supported.
 Validate useful content through a Git-status-style fixture with grouped files,
 status labels, row/group actions, and activation, plus a minimal read-only text
 frame. No actual Git implementation or general widget framework is required.
+
+Automatically persist tool-only layout preferences in application-owned storage:
+tool dock locations, grouping/order, sizes, visibility/selection, and hidden
+tools' remembered locations. Fresh windows inherit the last arrangement the user
+customized; already-open windows retain independent live layouts. Focusing an
+older window, restoring preferences, or an extension automatically showing a tool
+does not update that default. Reset Layout returns to product/contribution
+defaults; no explicit Save Layout workflow is required.
+
+Tool-layout records contain no document tabs, document splits, terminals, or
+empty document placeholders. A tool placed among document tabs reopens in the
+normal document tab group of a fresh window. Exact mixed layouts belong to
+session restoration at checkpoint 10, which takes precedence over fresh-window
+defaults. Basic tool-layout memory is part of D049, not deferred to D005.
 
 Define duplicate IDs, placement/order, visibility, show/focus behavior,
 per-window applicability, command context, loading/empty/error states, provider
@@ -408,27 +423,30 @@ record API and completed acceptance evidence.
 
 ### 5. Production native UI contributions — D049 ⬜
 
-Execute the focused [dockable workbench plan](d049-dockable-workbench-plan.md),
+Execute the focused [docking and tool-layout memory plan](d049-dockable-workbench-plan.md),
 then the [native extension UI plan](d049-native-extension-ui-plan.md). Each has
 its own checkpoints and review gates; completing the layout prerequisite alone
 does not complete D049. The design discussion on 2026-10-16 established draggable
-frames, useful sidebar placements, mixed document/tool tab groups, and deferral
-of floating tool windows.
+frames, familiar docks/sidebars, mixed document/tool tab groups, automatic
+tool-only layout memory, independent open windows, and deferral of floating tool
+windows. Current implementation is not a constraint on the design.
 
 - Finalize native UI contribution APIs in `workbench`, with explicit originating
   window/instance context for providers and actions. Extend declarations and test
   isolation across windows, including contributions registered before windows exist.
 - Replace hardcoded extension-tree creation with namespaced contribution
-  definitions, placement, and per-window instances. First extend the shared
-  workbench for native tool docking/resizing and move the resource explorer into
-  it. Implement tree/list actions and text frames, picker, input, and confirmation
-  contracts, validated by a Git-status-style fixture.
+  definitions, placement, and per-window instances. First establish native tool
+  docking/resizing and automatic tool-layout memory, moving the resource explorer
+  into that model. Implement tree/list actions and text frames, picker, input,
+  and confirmation contracts, validated by a Git-status-style fixture.
 - Include show/focus, selection/actions, window context, loading/errors,
   invalidation, command routing, disposal, and failed-startup cleanup.
 - Adapt existing outline fixtures/examples through the supported contract.
 - **Validation:** gpui integration tests for registration before/after windows,
   multiple contributions/windows, focus/command captures, stale providers,
   cancellation/window closure, unload/recreation, and picker/input dismissal.
+  Include durable tool-layout reopen, fresh-window inheritance, remembered hidden
+  tools, independent open windows, and no document placeholders in tool records.
 - **Review gate:** inspect the native interaction in a product build and approve
   placement and provider/request semantics. Manual review is not a substitute
   for automated lifecycle and routing coverage.
@@ -496,6 +514,10 @@ of floating tool windows.
 
 ### 10. Layout, view state, and startup restoration — D005, D051 ⬜
 
+- Extend D049's tool-layout memory with exact session layout restoration. A
+  restored session uses its own mixed tool/document arrangement instead of the
+  fresh-window default. Tool preferences remain separate from document split/tab
+  structure; do not encode document placeholders into the tool-only records.
 - Expose versioned layout/view capture and restore: windows, split tree, pane/tab
   ordering, selected tabs, focus, cursor/selection, and scroll state. Durable records
   describe structure; do not persist process-local pane/tab/view handles.
@@ -528,8 +550,10 @@ and unrelated explorer editing features. These exclusions do not excuse missing
 failure, cancellation, and lifecycle contracts in the APIs implemented here.
 
 Concrete storage schema/settings and API names are validated in the focused D048
-plan. UI placement, recovery cadence/retention, multi-window project activation, and detailed startup precedence
-are deliberately finalized at their stated gates. No unresolved choice may be
+plan. D049's focused plans establish docking and automatic tool-layout semantics;
+their concrete APIs, storage schema, and sizing details are finalized at their
+review gates. Recovery cadence/retention, multi-window project activation, and
+detailed startup precedence remain at their stated gates. No unresolved choice may be
 silently baked into earlier public or persisted schemas. Add a focused subsidiary
 design if a checkpoint exposes a materially larger problem; retain this initiative's
 ordering and links instead of implementing several unreviewed checkpoints at once.

@@ -1,7 +1,7 @@
 # D049 — Native extension UI
 
 Status: ⬜ Planned; implementation has not started. Depends on the completed
-[dockable workbench plan](d049-dockable-workbench-plan.md).
+[docking and automatic tool-layout memory plan](d049-dockable-workbench-plan.md).
 
 Source: checkpoint 5 of the [extension platform and projects plan](extension-platform-and-projects-plan.md).
 Design discussion: 2026-10-16. Current boundaries:
@@ -15,7 +15,9 @@ Design discussion: 2026-10-16. Current boundaries:
 An ordinary JavaScript extension can define native tool frames before windows
 exist, populate them independently in each window, and expose native picker,
 input, and confirmation/message interactions. Users can dock these frames using
-the shared workbench, including sidebars and mixed document/tool tab groups.
+workbench, including familiar docks and mixed document/tool tab groups. Their
+tool arrangement is remembered automatically across fresh windows and restarts,
+without synchronizing already-open windows.
 
 The concrete acceptance case is a Git-status-style frame: grouped file lists,
 file status labels, stage/unstage-style row actions, group actions, and file
@@ -37,6 +39,16 @@ activation. Use fixture data and commands; implementing Git itself is excluded.
   visibility and deterministic placement order at the first review gate.
 - Duplicate live IDs fail without replacing another registration. Disposing a
   registration removes its instances and ownership; hiding is separate.
+- Stable namespaced contribution IDs reconnect persisted tool preferences to new
+  instances. Remembered user placement/size/visibility overrides registration
+  defaults. Late registration restores that tool's remembered placement without
+  resetting the rest of the window. Unload or failed activation removes live
+  ownership without deleting remembered layout preferences or creating empty
+  frames. No extension receives direct access to application layout storage.
+- Show/hide operations must distinguish user intent from extension-driven
+  presentation at the native boundary. Opening a debugger programmatically is
+  window-local; explicit user layout changes update the fresh-window default.
+  Restore, refresh, and instance recreation never publish defaults themselves.
 - Providers and actions receive explicit live window and instance context.
   Context-free activation can register definitions but cannot borrow active
   focus. Same-window docking preserves instance identity; hide/reopen or window
@@ -99,8 +111,9 @@ commits. Update declarations, authoring examples, and docs alongside each API.
 ### 1. Lifecycle-owned contributed frames ⬜
 
 Connect namespaced registration and per-window instances to the dockable
-workbench. Adapt the outline fixture to that supported path and remove hardcoded
-outline creation, declared-kind tables, and singleton shell routing. Implement
+workbench and automatic layout memory. Adapt the outline fixture to that supported
+path and remove hardcoded outline creation, declared-kind tables, and singleton
+shell routing. Implement
 window-targeted show/hide/focus, provider context, invalidation, disposal, and
 failed-startup cleanup. Extend application snapshots/command captures to represent
 contributed tools without pretending they are document presentations.
@@ -109,10 +122,14 @@ contributed tools without pretending they are document presentations.
 before/after windows, duplicate IDs, multiple contributions/windows, targeted
 invalidation, moving and reopening instances, stale results, window closure,
 disposal from callbacks, unload, startup rollback, and captured command routing.
+Cover preferences surviving reload/restart, late/missing registration, user
+versus automatic show/hide, and independent live layouts in two windows. Verify
+that no provider callback or cleanup overwrites the saved default arrangement.
 
 **Review gate:** inspect outline frames in two windows, including dragging into
 a document tab group. Approve exact public names, IDs, context, visibility,
-placement, hide/reopen, and invalidation semantics before expanding content.
+placement, remembered hide/reopen, restore, and invalidation semantics before
+expanding content.
 
 ### 2. Useful content and actions ⬜
 
@@ -128,7 +145,8 @@ text replacement/disposal. Verify shared docking and focus routing with editor
 and terminal tabs; no fixture-only production bypass.
 
 **Review gate:** manually inspect the Git-status-style frame in sidebar, bottom,
-and mixed tab-group placements. Approve that its information and actions are
+and mixed tab-group placements, including hide/reopen and fresh-window layout
+inheritance. Approve that its information and actions are
 sufficient for a real Git extension, and inspect the text frame's ownership/API.
 
 ### 3. Picker, input, and confirmation/message ⬜
@@ -161,16 +179,20 @@ platform limitations. Manual product review complements automated coverage;
 do not use native-app/browser automation.
 
 **Review gate:** accept the complete extension fixture with two independent
-windows and movable frames; verify unload and failed activation remove ownership
-and settle pending operations. Only then mark parent checkpoint 5 complete.
+windows and movable frames; verify automatic layout memory across new windows
+and application restart, independent open windows, and Reset Layout. Verify
+unload and failed activation remove ownership and settle pending operations
+without erasing tool preferences. Only then mark parent checkpoint 5 complete.
 
 ## Exclusions and deferred choices
 
 No actual Git/debugger/project-manager implementation, general widget tree,
 WebViews, multi-selection, dynamic/streaming picker providers, async input
 validation, floating tool windows, cross-window tool movement, applicability
-predicates, or persisted visibility/layout. Project registry and persistence
-remain D051/D005. Existing document/terminal behavior remains covered.
+predicates, or full document/session restoration. Tool-only layout persistence
+is part of D049; project registry and exact mixed session restoration remain
+D051/D005. No empty document placeholders are saved in tool-layout records.
+Existing document/terminal behavior remains covered.
 
 Choose concrete API names and content/action schemas at their stated review
 gates; do not publish speculative types ahead of working behavior. No cross-restart

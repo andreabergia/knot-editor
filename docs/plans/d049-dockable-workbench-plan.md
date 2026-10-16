@@ -1,4 +1,4 @@
-# D049 — Dockable workbench
+# D049 — Docking and automatic tool-layout memory
 
 Status: ⬜ Planned; implementation has not started.
 
@@ -13,30 +13,36 @@ and [commands](../architecture/commands.md).
 
 Users can arrange native tool frames alongside documents and terminals: drag
 individual frames into tab groups or edge splits, resize them, hide them, and
-reopen them. Sidebars are useful initial placements, not the only locations where
-tools can live. Tools and documents may share a tab group.
+reopen them. Familiar sidebar and bottom docks provide tool selectors, toggle
+commands, and draggable dividers. Tools and documents may also share a tab group.
+Tool arrangements are remembered automatically: fresh windows inherit the last
+arrangement the user customized, while already-open windows remain independent.
 
-This is the layout prerequisite for production extension contributions, not a
-separate docking framework. Both focused plans must complete before D049 closes.
+This is the docking and layout-memory foundation for production extension
+contributions. Both focused plans must complete before D049 closes.
 
 ## Design
 
-- Extend the existing workbench split tree, tab ownership, drag feedback, and
-  relocation transitions. Use one pane/tab model for documents, terminals, and
-  tools, rather than independent sidebar and editor layout engines.
+- Design for recognizable editor behavior, not preservation of the prototype.
+  Replace the existing layout model where necessary. Reuse split, tab, drag, or
+  relocation code only where it fits; no compatibility layer or parallel legacy
+  path is required. Prefer a small coherent model over a generic docking framework.
 - A tool frame supplies native content, title, focus/command participation, and
   a live identity. Use explicit supported content variants; do not introduce a
   general widget/plugin abstraction for arbitrary Rust or JavaScript views.
-- Left/right sidebar and top/bottom placements are initial edge splits around
-  the main content. Center placement uses a normal tab group. User moves take
-  precedence over initial placement; refresh must not reposition a frame.
-- Add draggable split dividers and window-local proportions. Keep size limits
+- Support recognizable left/right sidebars and bottom docks, with tool selection
+  and toggles. Frames can also join document tab groups or create edge splits.
+  User placement takes precedence over contributed defaults; refreshing content
+  must not reposition a frame. Docks must behave as tools users can hide/reopen,
+  not merely narrow editor panes with different content.
+- Add draggable dividers and window-local sizes. Keep size limits
   sufficient for usable panes; no constraint-solving layout system.
 - Move the native resource explorer into the same frame infrastructure. Its
   filesystem model and protocol remain separate from extension providers.
-- Hiding a tool removes its presentation from the layout without disposing its
-  definition. Reopening uses its initial placement unless it remains in a live
-  group. Exact hidden-slot restoration and durable layout records are deferred.
+- Hiding a tool removes it from visible content without disposing its definition.
+  Remember its location and size so reopening returns it there. If its former
+  live tab group has disappeared, use the remembered dock or the normal document
+  group as appropriate; do not recreate empty historical document groups.
 - Closing a tool never enters document Save/Don't Save/Cancel. Dirty document
   protection and terminal ownership retain their existing behavior. Removing
   an empty pane collapses its branch; tools must not accidentally keep an
@@ -47,9 +53,38 @@ separate docking framework. Both focused plans must complete before D049 closes.
 - New tool frames remain within their product window in D049. Existing document
   and terminal cross-window transfer/tear-off behavior remains supported.
 
-No compatibility shims: replace hardcoded shell placement and document/terminal
-assumptions in touched paths directly. Keep ownership explicit and remove obsolete
-special cases instead of retaining two ways to host the same frame.
+### Automatic tool-layout memory
+
+Persist tools only: stable namespaced tool IDs, dock location, tool grouping and
+order, sizes, visibility, selected tool, and hidden tools' remembered locations.
+Do not serialize document tabs, document split structure, terminal contents, or
+empty document placeholders into tool-layout records. A tool placed in a document
+group is remembered as belonging in the normal document tab group of a fresh
+window; the source window's document splits are not reproduced.
+
+- A fresh window uses the last tool arrangement the user customized. Successful
+  user moves, resizes, and show/hide changes update this default automatically.
+  Coalesce divider dragging; do not write on every pointer movement.
+- Already-open windows retain their own live arrangements. Merely activating a
+  window, restoring a layout, or applying defaults does not publish a new default.
+  An extension automatically showing a debugger affects its target window only.
+- Reopening a hidden tool restores its remembered placement and size. Provide
+  Reset Layout to return to product/contribution defaults; no explicit Save
+  Layout step, profiles, or layered preference system is needed.
+- Full session restoration later restores that session's exact mixed layout
+  instead of the fresh-window default. Document/session restoration remains D005;
+  D049 must neither invent a second session identity system nor require it to
+  remember tools across application restarts.
+
+The native application owns these records, separately from extension storage.
+Start with one versioned tool-layout snapshot in application-owned SQLite, written
+off the foreground through a small native boundary. Choose concrete schema and
+write coalescing at checkpoint 3. No event log, custom storage service, or general
+public layout serialization API is needed. Stable contribution IDs reconnect
+saved preferences to fresh live instances; live handles are never persisted.
+Unavailable tools do not create blank frames, and temporary unload/failure does
+not erase their remembered placement. Startup registration and restore must not
+overwrite saved preferences with incomplete defaults.
 
 ## Checkpoints
 
@@ -59,11 +94,12 @@ Split coherent changes into logical commits without conventional titles.
 
 ### 1. Native tools in the shared workbench ⬜
 
-Add tool presentations to the existing workbench and move the native resource
-explorer into that layout. Provide initial edge/center placement, tool activation,
-hide/reopen, and command/focus participation through the existing native command
-path. Audit document-only assumptions in snapshots, last-document closure,
-workbench replacement, and application observation.
+Establish the native docking model and move the resource explorer into it.
+Provide recognizable sidebar/bottom docks, tool selectors and toggle commands,
+mixed document/tool tab groups, initial placement, activation, hide/reopen with
+remembered position/size, and command/focus participation. Audit document-only
+assumptions in snapshots, last-document closure, workbench replacement, and
+application observation. Change the current implementation as needed.
 
 Use the resource explorer as a real end-to-end tool; avoid adding a temporary
 parallel production registry for the old outline slot. The extension registry
@@ -76,15 +112,16 @@ document/terminal closure with tools present. A tool-only window must behave
 deliberately and retain no closed document.
 
 **Review gate:** inspect a real sidebar and a mixed document/tool tab group.
-Approve the native ownership and hide/reopen behavior before extending dragging.
+Approve familiar dock interaction, native ownership, and remembered hide/reopen
+behavior before extending dragging.
 
 ### 2. Frame relocation and resizing ⬜
 
-Extend individual-tab dragging to tool frames: reorder, join a tab group, and
+Implement individual-frame dragging: reorder, join a tab group, and
 create four-edge splits. Add whole-workbench edge drop targets where needed to
 place a sidebar or bottom tool group without splitting only the focused editor
-pane. Reuse the existing drag coordinator and previews. Add resizable dividers
-to the shared split model.
+pane. Provide clear drag previews and resizable dividers; reuse existing code
+where useful, without constraining the new model to it.
 
 Tool drops outside their product window cancel without creating a floating
 window. Do not alter existing document/terminal tear-off semantics. Moving a
@@ -99,7 +136,27 @@ existing document/terminal relocation and cross-window regression coverage.
 into an editor tab group, and back; resize nested splits. Inspect whether the
 shared model remains simple before adding extension ownership.
 
-### 3. Layout cleanup and handoff ⬜
+### 3. Automatic tool-layout persistence ⬜
+
+Implement the tool-only snapshot, native application storage, automatic writes,
+fresh-window restoration, and Reset Layout. Preserve remembered hidden tools;
+flatten tool placement in document groups to the normal fresh-window document
+group, without persisting document structure or creating placeholders. Keep
+user changes distinct from restore, activation, and extension-driven presentation.
+
+**Validation:** snapshot round trips and real database reopen across application
+runs; fresh windows inherit the last user-customized arrangement; existing windows
+do not change; focusing an older window does not overwrite defaults; hidden tools
+return to their size/location; automatic tool activation does not alter defaults;
+mixed document groups produce no inherited document splits or placeholders;
+missing tools, Reset Layout, write failure, and graceful shutdown with a pending
+write. Tests must prove document/terminal state is absent from tool records.
+
+**Review gate:** customize the explorer, hide/reopen it, open another window, and
+restart the product. Inspect the restored experience and stored tool-only data.
+Approve automatic memory before connecting extension definitions to it.
+
+### 4. Layout cleanup and handoff ⬜
 
 Remove superseded fixed sidebar rendering and redundant shell focus/geometry
 paths. Document the shared layout ownership and runtime constraints. Record
@@ -110,17 +167,18 @@ relocation tests, then the library suite and repository-required checks. Run
 `cargo fmt` once at the end of Rust work before committing. Manual review uses
 the product directly; no UI automation tools are required.
 
-**Review gate:** approve the native docking foundation and the concrete tool
-identity/attachment contract consumed by the next plan. Do not mark all of D049
-complete at this gate.
+**Review gate:** approve docking, automatic tool-layout memory, and the native
+tool identity/attachment contract consumed by the next plan. Do not mark all of
+D049 complete at this gate.
 
 ## Exclusions and choices deferred to review
 
 Floating tool windows and cross-window tool transfer, whole-group dragging or
-arbitrary branch reshaping (D037), auto-hide flyouts, persisted docking layouts
+arbitrary branch reshaping (D037), auto-hide flyouts, full document/session layout
 and startup restoration (D005), and general widget UI/WebViews are excluded.
 This does not restrict existing document/terminal window operations.
 
 Choose exact placement ordering, divider limits, reopen commands, and Rust types
-at checkpoint 1/2 review. Do not publish a new layout serialization API. Native
+at checkpoint 1/2 review, and storage details at checkpoint 3. These choices must
+preserve the agreed behavior, not reopen its scope. Native
 resource-tree improvements beyond making its frame movable remain D034.

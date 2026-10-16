@@ -28,7 +28,7 @@ Execute one checkpoint at a time and stop at its review gate.
 | 3 | Resource and document operations (✅ complete) | D047 | JS opens resources and manages documents through product flows |
 | 3a | Handler declarations refactoring (✅ complete) | D053 | Function-defined typed async operations/errors/native commands with automatic registration |
 | 4 | Durable extension storage (✅ complete) | D048 | Rust-owned SQLite and lifecycle-independent extension namespaces |
-| 5 | Native extension UI | D049 | Dockable native tool frames, extension contributions, and picker/input surfaces |
+| 5 | Native extension UI | D049 | Familiar docks, automatic tool-layout memory, extension frames, and picker/input surfaces |
 | 6 | Project registry validation | D051 | A usable JavaScript project manager with one root per workspace |
 | 7 | Unsaved-document recovery | D050 | Durable content recovery independent of extension health |
 | 8 | Safe project switching | D051, D050 | Durable suspension and document restoration without losing edits |
@@ -63,11 +63,14 @@ Explicit follow-up tasks within the selected initiative:
   validation are implemented. Related state uses atomic replacement of one record.
 - **D049, checkpoint 5:** finalize native contribution APIs and pass originating
   window/instance context to providers and actions, with cross-window isolation.
-  Execute the [dockable workbench plan](plans/d049-dockable-workbench-plan.md)
+  Execute the [docking and tool-layout memory plan](plans/d049-dockable-workbench-plan.md)
   before the [native extension UI plan](plans/d049-native-extension-ui-plan.md).
-  Support sidebar placements and mixed document/tool tab groups through the shared
-  split/tab model; validate content with a Git-status-style fixture. Floating
-  tool windows and persisted layout remain deferred.
+  Support familiar docks/sidebars and mixed document/tool tab groups; validate
+  content with a Git-status-style fixture. Automatically remember tool-only
+  arrangements for fresh windows without changing already-open windows. Remember
+  hidden tools' locations/sizes; provide Reset Layout. Document splits and empty
+  document placeholders are excluded from tool records. Floating tool windows
+  and exact mixed document/session restoration remain deferred.
 
 Each task includes public declarations, documentation, and boundary tests. Do not
 publish speculative namespaces in D046 or use these deferrals to preserve its
