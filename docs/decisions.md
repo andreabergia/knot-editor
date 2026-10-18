@@ -197,8 +197,9 @@ Dock groups use the existing split tree and typed tabs so tools share lifecycle,
 observation, and command targeting with document and terminal presentations.
 Keeping hidden definitions in the workbench preserves native state without
 retaining closed documents or rebuilding obsolete document groups. Model and
-gpui integration tests cover these ownership and closure boundaries; native dock
-interaction review remains in the active D049 plan.
+gpui integration tests cover these ownership and closure boundaries, and the
+docking foundation is approved; extension-contributed frames remain in the
+active D049 native extension UI plan.
 
 Automatic tool-layout memory persists one versioned tool-only snapshot in
 application-owned SQLite, separate from extension storage: stable namespaced

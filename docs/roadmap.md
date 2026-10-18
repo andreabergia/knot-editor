@@ -29,11 +29,11 @@ Remaining order:
 | 9 | D052 | Multiple roots throughout UI and resource operations |
 | 10 | D005, D051 | Layout, view-state, and startup restoration |
 
-Start checkpoint 5 with the [docking plan](plans/d049-dockable-workbench-plan.md),
-then the [native extension UI plan](plans/d049-native-extension-ui-plan.md).
-Execute one checkpoint at a time and stop at its review gate; detailed scope and
-acceptance belong to those plans. The early project registry is an intermediate
-validation point, not initiative completion.
+The docking foundation is complete and approved; start checkpoint 5 with the
+[native extension UI plan](plans/d049-native-extension-ui-plan.md). Execute one
+checkpoint at a time and stop at its review gate; detailed scope and acceptance
+belong to that plan. The early project registry is an intermediate validation
+point, not initiative completion.
 
 This initiative takes priority over the deferred register. Persistent undo (D012),
 general UI/WebViews (D021), terminal restoration (D043), and broad scheduling

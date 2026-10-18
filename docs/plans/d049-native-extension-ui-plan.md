@@ -1,8 +1,8 @@
 # D049 — Native extension UI
 
-Status: ⬜ Planned; implementation has not started. Complete the
-[docking and automatic tool-layout memory plan](d049-dockable-workbench-plan.md)
-first.
+Status: ⬜ Planned; implementation has not started. The
+[docking foundation](../architecture/workbench-and-lifecycle.md#automatic-tool-layout-memory)
+is complete and approved.
 
 Source: checkpoint 5 of the [extension platform and projects plan](extension-platform-and-projects-plan.md).
 Design discussion: 2026-10-16. Current boundaries:

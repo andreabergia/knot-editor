@@ -1,8 +1,8 @@
 # Production extension APIs and JavaScript project management
 
 Status: ⬜ In progress. Checkpoints 1–4 and D053 are complete and approved;
-checkpoints 5–10 remain unstarted. Next: D049, executing
-[docking and automatic tool-layout memory](d049-dockable-workbench-plan.md), then
+checkpoints 5–10 remain unstarted. The docking foundation is complete and
+approved; next: D049, executing
 [native extension UI](d049-native-extension-ui-plan.md).
 
 Work identifiers: D046–D052, promoted D005, and completed maintenance interlude
@@ -63,12 +63,13 @@ owns workspaces, not project policy.
 
 ### Extension UI — D049
 
-The focused [docking plan](d049-dockable-workbench-plan.md) owns native frames,
-resizing, relocation, and automatic tool-only layout memory. The following
+The [workbench architecture](../architecture/workbench-and-lifecycle.md) owns
+the completed docking foundation: native frames, resizing, relocation, and
+automatic tool-only layout memory. The
 [native extension UI plan](d049-native-extension-ui-plan.md) owns contributed
 instances/content, explicit window context, picker/input/confirmation APIs, and
-Git-status-style acceptance. Execute both before marking checkpoint 5 complete.
-Their review gates own concrete schemas, placement, and interaction choices.
+Git-status-style acceptance. Complete it before marking checkpoint 5 complete.
+Its review gates own concrete schemas, placement, and interaction choices.
 Exact mixed document/session restoration remains checkpoint 10.
 
 ### Durable extension storage — D048
@@ -206,9 +207,9 @@ and [decisions](../decisions.md#extension-record-storage).
 
 ### 5. Production native UI contributions — D049 ⬜
 
-Execute [docking and tool-layout memory](d049-dockable-workbench-plan.md), then
-[native extension UI](d049-native-extension-ui-plan.md), one focused checkpoint
-and review gate at a time. Those plans own deliverables, validation, and gates.
+The docking foundation is complete and approved. Execute
+[native extension UI](d049-native-extension-ui-plan.md) one focused checkpoint
+and review gate at a time. That plan owns deliverables, validation, and gates.
 D049 completes only after acceptance of the full public-API fixture, independent
 windows, lifecycle cleanup, and tool-layout memory across restart. Docking alone
 does not complete this checkpoint.
