@@ -1,0 +1,248 @@
+//! Automatic tool-layout memory across windows and restarts.
+use super::operations::empty_product_window;
+use super::*;
+use crate::app::tool_layout::{
+    ApplicationToolLayout, EXPLORER_TOOL_ID, StoredLocation, ToolLayoutSnapshot,
+};
+use crate::app::workbench::{DockLocation, ToolFrameId, WorkbenchLayout};
+
+fn stored(cx: &TestAppContext) -> ToolLayoutSnapshot {
+    cx.read(|cx| cx.global::<ApplicationToolLayout>().0.current())
+}
+
+fn explorer_id(shell: &Entity<ProductShell>, cx: &gpui::App) -> ToolFrameId {
+    shell
+        .read(cx)
+        .workbench
+        .read(cx)
+        .tool_by_stable_id(EXPLORER_TOOL_ID)
+        .unwrap()
+}
+
+fn open_workspace(shell: &Entity<ProductShell>, cx: &mut TestAppContext) {
+    cx.set_global(ApplicationFileSystems(memory_filesystems()));
+    shell.update(cx, |shell, cx| {
+        shell.install_workspace(ResourceUri::parse("mem://product/").unwrap(), cx);
+    });
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+fn user_customization_becomes_the_fresh_window_default(cx: &mut TestAppContext) {
+    let documents = install_globals(cx);
+    let (shell, window) = empty_product_window(&documents, cx);
+    open_workspace(&shell, cx);
+    // Automatic presentation on workspace open does not publish a new default.
+    assert_eq!(stored(cx), ToolLayoutSnapshot::product_default());
+    shell.update(cx, |shell, cx| {
+        shell.workbench.update(cx, |workbench, _| {
+            workbench.set_dock_size(DockLocation::Left, 311.);
+            workbench.set_dock_size(DockLocation::Bottom, 300.);
+        });
+    });
+    let moved = dispatch_product_command(&shell, window, "workbench.explorer-bottom", cx);
+    assert_eq!(wait_for_command(moved, cx), CommandOutcome::Completed);
+    let snapshot = stored(cx);
+    let record = snapshot.tool(EXPLORER_TOOL_ID).unwrap();
+    assert_eq!(record.location, StoredLocation::Bottom);
+    assert!(record.visible);
+    assert_eq!(snapshot.dock_sizes[DockLocation::Left.index()], 311.);
+    assert_eq!(snapshot.dock_sizes[DockLocation::Bottom.index()], 300.);
+
+    // A fresh window inherits the customized arrangement.
+    let (fresh, fresh_window) = empty_product_window(&documents, cx);
+    cx.read(|cx| {
+        assert!(
+            fresh
+                .read(cx)
+                .workbench
+                .read(cx)
+                .tool_by_stable_id(EXPLORER_TOOL_ID)
+                .is_none()
+        );
+    });
+    open_workspace(&fresh, cx);
+    cx.read(|cx| {
+        let workbench = fresh.read(cx).workbench.read(cx);
+        let (pane, _) = workbench.tool_tab(explorer_id(&fresh, cx)).unwrap();
+        assert_eq!(workbench.dock_location(pane), Some(DockLocation::Bottom));
+        assert_eq!(workbench.dock_size(DockLocation::Bottom), 300.);
+        assert_eq!(workbench.dock_size(DockLocation::Left), 311.);
+    });
+    let _ = fresh_window;
+}
+
+#[gpui::test]
+fn existing_windows_keep_live_state_and_activation_does_not_publish(cx: &mut TestAppContext) {
+    let documents = install_globals(cx);
+    let (shell, window) = empty_product_window(&documents, cx);
+    open_workspace(&shell, cx);
+    let moved = dispatch_product_command(&shell, window, "workbench.explorer-right", cx);
+    assert_eq!(wait_for_command(moved, cx), CommandOutcome::Completed);
+    let published = stored(cx);
+
+    let (fresh, _) = empty_product_window(&documents, cx);
+    open_workspace(&fresh, cx);
+    // The older window keeps its live arrangement and the fresh window copies it.
+    for (candidate, dock) in [(&shell, DockLocation::Right), (&fresh, DockLocation::Right)] {
+        cx.read(|cx| {
+            let workbench = candidate.read(cx).workbench.read(cx);
+            let (pane, _) = workbench.tool_tab(explorer_id(candidate, cx)).unwrap();
+            assert_eq!(workbench.dock_location(pane), Some(dock));
+        });
+    }
+    // Interacting with the older window without a layout change publishes nothing.
+    cx.update_window(window, |_, window, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.focus_active_surface(window, cx);
+        });
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert_eq!(stored(cx), published);
+}
+
+#[gpui::test]
+fn hidden_tools_restore_placement_and_size_across_windows(cx: &mut TestAppContext) {
+    let documents = install_globals(cx);
+    let (shell, window) = empty_product_window(&documents, cx);
+    open_workspace(&shell, cx);
+    shell.update(cx, |shell, cx| {
+        shell.workbench.update(cx, |workbench, _| {
+            workbench.set_dock_size(DockLocation::Bottom, 300.);
+        });
+    });
+    let moved = dispatch_product_command(&shell, window, "workbench.explorer-bottom", cx);
+    assert_eq!(wait_for_command(moved, cx), CommandOutcome::Completed);
+    let hidden = dispatch_product_command(&shell, window, "workbench.toggle-explorer", cx);
+    assert_eq!(wait_for_command(hidden, cx), CommandOutcome::Completed);
+    let record = stored(cx).tool(EXPLORER_TOOL_ID).unwrap().clone();
+    assert!(!record.visible);
+    assert_eq!(record.location, StoredLocation::Bottom);
+
+    // A fresh window remembers the hidden placement without showing the tool.
+    let (fresh, fresh_window) = empty_product_window(&documents, cx);
+    open_workspace(&fresh, cx);
+    cx.read(|cx| {
+        let workbench = fresh.read(cx).workbench.read(cx);
+        assert!(workbench.tool_tab(explorer_id(&fresh, cx)).is_none());
+        assert_eq!(workbench.dock_size(DockLocation::Bottom), 300.);
+    });
+    // Explicitly reopening returns the tool to its remembered dock and size.
+    let reopened = dispatch_product_command(&fresh, fresh_window, "workbench.toggle-explorer", cx);
+    assert_eq!(wait_for_command(reopened, cx), CommandOutcome::Completed);
+    cx.read(|cx| {
+        let workbench = fresh.read(cx).workbench.read(cx);
+        let (pane, _) = workbench.tool_tab(explorer_id(&fresh, cx)).unwrap();
+        assert_eq!(workbench.dock_location(pane), Some(DockLocation::Bottom));
+        assert_eq!(workbench.dock_size(DockLocation::Bottom), 300.);
+    });
+}
+
+#[gpui::test]
+fn mixed_document_groups_leave_no_splits_or_placeholders(cx: &mut TestAppContext) {
+    let documents = install_globals(cx);
+    let (shell, window) = empty_product_window(&documents, cx);
+    open_workspace(&shell, cx);
+    let moved = dispatch_product_command(&shell, window, "workbench.explorer-in-editor", cx);
+    assert_eq!(wait_for_command(moved, cx), CommandOutcome::Completed);
+    assert_eq!(
+        stored(cx).tool(EXPLORER_TOOL_ID).unwrap().location,
+        StoredLocation::DocumentGroup
+    );
+    // Document splits are not layout changes and never publish.
+    shell.update(cx, |shell, cx| {
+        let (pane, tab) = shell
+            .workbench
+            .read(cx)
+            .panes()
+            .iter()
+            .find_map(|pane| {
+                pane.tabs()
+                    .iter()
+                    .find(|tab| tab.document_id().is_some())
+                    .map(|tab| (pane.id(), tab.id()))
+            })
+            .unwrap();
+        shell.workbench.update(cx, |workbench, _| {
+            workbench.activate_tab(pane, tab);
+        });
+    });
+    let split = dispatch_product_command(&shell, window, "workbench.split-horizontal", cx);
+    assert_eq!(wait_for_command(split, cx), CommandOutcome::Completed);
+    let published = stored(cx);
+
+    let (fresh, _) = empty_product_window(&documents, cx);
+    open_workspace(&fresh, cx);
+    cx.read(|cx| {
+        let workbench = fresh.read(cx).workbench.read(cx);
+        assert!(matches!(workbench.layout(), Some(WorkbenchLayout::Pane(_))));
+        let (pane, _) = workbench.tool_tab(explorer_id(&fresh, cx)).unwrap();
+        assert_eq!(workbench.dock_location(pane), None);
+        assert_eq!(pane, workbench.normal_pane().unwrap());
+        assert!(
+            workbench
+                .pane(pane)
+                .unwrap()
+                .tabs()
+                .iter()
+                .any(|tab| tab.document_id().is_some())
+        );
+    });
+    assert_eq!(stored(cx), published);
+}
+
+#[gpui::test]
+fn reset_layout_restores_product_defaults(cx: &mut TestAppContext) {
+    let documents = install_globals(cx);
+    let (shell, window) = empty_product_window(&documents, cx);
+    open_workspace(&shell, cx);
+    let moved = dispatch_product_command(&shell, window, "workbench.explorer-bottom", cx);
+    assert_eq!(wait_for_command(moved, cx), CommandOutcome::Completed);
+    let hidden = dispatch_product_command(&shell, window, "workbench.toggle-explorer", cx);
+    assert_eq!(wait_for_command(hidden, cx), CommandOutcome::Completed);
+    assert_ne!(stored(cx), ToolLayoutSnapshot::product_default());
+
+    let reset = dispatch_product_command(&shell, window, "workbench.reset-layout", cx);
+    assert_eq!(wait_for_command(reset, cx), CommandOutcome::Completed);
+    assert_eq!(stored(cx), ToolLayoutSnapshot::product_default());
+    cx.read(|cx| {
+        let workbench = shell.read(cx).workbench.read(cx);
+        let (pane, _) = workbench.tool_tab(explorer_id(&shell, cx)).unwrap();
+        assert_eq!(workbench.dock_location(pane), Some(DockLocation::Left));
+        for dock in DockLocation::ALL {
+            assert_eq!(
+                workbench.dock_size(dock),
+                ToolLayoutSnapshot::product_default().dock_sizes[dock.index()]
+            );
+        }
+    });
+}
+
+#[gpui::test]
+fn restore_skips_unknown_tools_without_blank_frames(cx: &mut TestAppContext) {
+    let documents = install_globals(cx);
+    let (shell, _) = empty_product_window(&documents, cx);
+    open_workspace(&shell, cx);
+    let before = stored(cx);
+    let mut snapshot = ToolLayoutSnapshot::product_default();
+    snapshot.tools.push(crate::app::tool_layout::StoredTool {
+        id: "knot.missing".into(),
+        location: StoredLocation::Right,
+        index: 0,
+        visible: true,
+    });
+    snapshot.tools[0].location = StoredLocation::DocumentGroup;
+    shell.update(cx, |shell, cx| {
+        shell.restore_tool_layout(&snapshot, cx);
+    });
+    cx.read(|cx| {
+        let workbench = shell.read(cx).workbench.read(cx);
+        assert_eq!(workbench.tools().len(), 1);
+        let (pane, _) = workbench.tool_tab(explorer_id(&shell, cx)).unwrap();
+        assert_eq!(workbench.dock_location(pane), None);
+        assert_eq!(workbench.panes().len(), 1);
+    });
+    // Restore is never a customization: the stored default is untouched.
+    assert_eq!(stored(cx), before);
+}
