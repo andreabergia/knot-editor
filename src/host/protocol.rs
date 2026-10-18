@@ -64,6 +64,10 @@ impl ViewId {
     pub(crate) const fn new(value: u64) -> Self {
         Self(value)
     }
+
+    pub(crate) const fn value(self) -> u64 {
+        self.0
+    }
 }
 
 /// An opaque identity for one command invocation.
@@ -326,10 +330,12 @@ pub struct TreeItem {
     pub command: Option<String>,
 }
 
-/// One asynchronous child request issued by a native tree view.
+/// One asynchronous child request issued by a native view instance.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TreeChildrenRequest {
     pub registration: TreeProviderRegistrationId,
+    pub window: String,
+    pub view: ViewId,
     pub parent_id: Option<String>,
     pub generation: u64,
 }
@@ -340,10 +346,12 @@ pub struct TreeProviderError {
     pub message: String,
 }
 
-/// One extension callback result returned to a native tree view.
+/// One extension callback result returned to a native view instance.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TreeChildrenResponse {
     pub registration: TreeProviderRegistrationId,
+    pub window: String,
+    pub view: ViewId,
     pub parent_id: Option<String>,
     pub generation: u64,
     pub result: Result<Vec<TreeItem>, TreeProviderError>,
@@ -442,6 +450,8 @@ pub struct PresentationInfo {
     pub kind: SurfaceKind,
     pub document: Option<String>,
     pub buffer: Option<BufferHandle>,
+    /// Stable contribution ID for a contributed tool surface.
+    pub tool: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
@@ -621,6 +631,8 @@ pub struct CommandCapture {
     pub authority: CommandInvocationId,
     pub window: String,
     pub view: Option<String>,
+    /// Stable contribution ID for a captured contributed tool, when any.
+    pub tool: Option<String>,
 }
 
 /// A foreground-authorized command invocation routed to its extension owner.

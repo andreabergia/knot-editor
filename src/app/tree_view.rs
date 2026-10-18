@@ -68,6 +68,7 @@ enum VisibleRow {
 /// Foreground-owned cache and presentation state for one native tree surface.
 pub(crate) struct TreeView {
     view_id: String,
+    window: String,
     instance_id: ViewId,
     provider: Option<TreeProviderIdentity>,
     children: HashMap<Option<String>, ChildrenState>,
@@ -82,9 +83,14 @@ impl TreeView {
         &self.view_id
     }
 
-    pub(crate) fn new(view_id: impl Into<String>, cx: &mut Context<Self>) -> Self {
+    pub(crate) fn new(
+        view_id: impl Into<String>,
+        window: impl Into<String>,
+        cx: &mut Context<Self>,
+    ) -> Self {
         Self {
             view_id: view_id.into(),
+            window: window.into(),
             instance_id: ViewId::new(NEXT_VIEW_ID.fetch_add(1, Ordering::Relaxed)),
             provider: None,
             children: HashMap::new(),
@@ -97,10 +103,6 @@ impl TreeView {
 
     pub(crate) fn instance_id(&self) -> ViewId {
         self.instance_id
-    }
-
-    pub(crate) fn has_provider(&self) -> bool {
-        self.provider.is_some()
     }
 
     pub(crate) fn selected_text(&self) -> Option<String> {
@@ -204,6 +206,8 @@ impl TreeView {
             provider,
             request: TreeChildrenRequest {
                 registration,
+                window: self.window.clone(),
+                view: self.instance_id,
                 parent_id,
                 generation,
             },
@@ -225,6 +229,13 @@ impl TreeView {
         }
         self.clear_provider(cx);
         Ok(())
+    }
+
+    /// Reload root children for a still-registered provider.
+    pub(crate) fn refresh_root(&mut self, cx: &mut Context<Self>) {
+        if let Some(provider) = self.provider {
+            let _ = self.invalidate(provider.registration, None, cx);
+        }
     }
 
     #[cfg(test)]
@@ -287,7 +298,10 @@ impl TreeView {
         let Some(provider) = self.provider else {
             return false;
         };
-        if provider.registration != response.registration {
+        if provider.registration != response.registration
+            || response.window != self.window
+            || response.view != self.instance_id
+        {
             return false;
         }
         let Some(state) = self.children.get_mut(&response.parent_id) else {
@@ -498,6 +512,7 @@ impl Render for TreeView {
                         let is_selected = selected.as_deref() == Some(&item.id);
                         div()
                             .id(("extension-tree-row", index))
+                            .debug_selector(move || format!("extension-tree-row-{index}"))
                             .w_full()
                             .pl(px(8. + *depth as f32 * 14.))
                             .pr_2()
@@ -570,7 +585,7 @@ mod tests {
             lifecycle: ExtensionLifecycleId::new(2),
             registration,
         };
-        let tree = cx.new(|cx| TreeView::new("outline", cx));
+        let tree = cx.new(|cx| TreeView::new("outline", "1", cx));
 
         tree.update(cx, |tree, cx| {
             assert_eq!(
@@ -607,7 +622,7 @@ mod tests {
     #[gpui::test]
     fn stale_and_disposed_tree_responses_are_ignored(cx: &mut TestAppContext) {
         let registration = TreeProviderRegistrationId::new(3);
-        let tree = cx.new(|cx| TreeView::new("outline", cx));
+        let tree = cx.new(|cx| TreeView::new("outline", "1", cx));
         let stale_generation = tree.update(cx, |tree, cx| {
             tree.register_provider(
                 "outline",
@@ -624,10 +639,13 @@ mod tests {
             stale_generation
         });
 
+        let view = cx.read(|cx| tree.read(cx).instance_id());
         tree.update(cx, |tree, cx| {
             assert!(!tree.apply_response(
                 TreeChildrenResponse {
                     registration,
+                    window: "1".into(),
+                    view,
                     parent_id: None,
                     generation: stale_generation,
                     result: Ok(Vec::new()),
@@ -638,6 +656,8 @@ mod tests {
             assert!(tree.apply_response(
                 TreeChildrenResponse {
                     registration,
+                    window: "1".into(),
+                    view,
                     parent_id: None,
                     generation: current_generation,
                     result: Ok(vec![TreeItem {
@@ -656,6 +676,8 @@ mod tests {
             assert!(!tree.apply_response(
                 TreeChildrenResponse {
                     registration,
+                    window: "1".into(),
+                    view,
                     parent_id: None,
                     generation: current_generation,
                     result: Ok(Vec::new()),
@@ -677,6 +699,8 @@ mod tests {
             assert!(!tree.apply_response(
                 TreeChildrenResponse {
                     registration,
+                    window: "1".into(),
+                    view,
                     parent_id: None,
                     generation: lifecycle_generation,
                     result: Ok(Vec::new()),

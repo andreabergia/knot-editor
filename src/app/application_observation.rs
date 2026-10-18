@@ -247,6 +247,7 @@ mod tests {
                     kind: SurfaceKind::Document,
                     document: Some("document".into()),
                     buffer: Some(BufferHandle::new(1)),
+                    tool: None,
                 }],
             }],
             workspace: WorkspaceInfo {

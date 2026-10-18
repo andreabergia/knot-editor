@@ -58,6 +58,8 @@ declare module "knot" {
     readonly kind: "document" | "terminal" | "tool";
     readonly document: DocumentId | null;
     readonly buffer: Buffer | null;
+    /** Stable contribution ID for a tool presentation, otherwise null. */
+    readonly tool: string | null;
   }
   export interface PaneInfo {
     readonly target: PaneTarget;
@@ -151,10 +153,14 @@ declare module "knot" {
    */
   export interface CommandTarget {
     readonly [targetAuthority]: true;
-    /** Originating product window, captured before palette/focus changes. */
+    /** Originating product window identity, captured before palette/focus changes. */
     readonly window: WindowId;
+    /** Live target for the same window, accepted by window-targeted operations. */
+    readonly windowTarget: WindowTarget;
     /** Captured extension-addressable view, or null when none is available. */
     readonly view: ViewId | null;
+    /** Stable contributed view ID, or null for non-contributed surfaces. */
+    readonly tool: string | null;
   }
   /**
    * JSON-compatible data: finite numbers, dense arrays and plain string-keyed
@@ -190,7 +196,8 @@ declare module "knot" {
   export type HostErrorCode = "ContextUnavailable" | "InvalidTarget" | "OwnershipDisposed"
     | "Cancelled" | "UnsupportedOperation" | "BufferClosed" | "BufferReadOnly"
     | "InvalidRange" | "InvalidEditBatch" | "RevisionConflict" | "ContributionSetNotFound"
-    | "TreeViewNotFound" | "ViewNotFound" | "TreeProviderInUse" | "TreeProviderNotFound"
+    | "ViewNotFound" | "ViewIdInUse" | "InvalidViewId"
+    | "ViewRegistrationNotFound"
     | "CompletionProviderNotFound" | "CommandNameInUse" | "CommandNotFound"
     | "InvalidUri" | "DocumentNotFound" | "TooManyWorkspaceRoots" | "OperationInProgress" | "PersistenceFailed" | "ResourceNotFound" | "ResourceWrongKind" | "InvalidUtf8" | "ProviderFailure" | "StorageUnavailable";
   /**
@@ -397,28 +404,70 @@ declare module "knot" {
     readonly collapsibleState: "none" | "collapsed" | "expanded";
     readonly command?: string | null;
   }
+  /** Explicit live context supplied to a contributed view's provider. */
+  export interface ViewContext {
+    /** Window owning this native instance. */
+    readonly window: WindowTarget;
+    /** Opaque native instance identity while this presentation stays live. */
+    readonly instance: ViewId;
+  }
   /** Tree callbacks have no implicit window, active buffer or public signal. */
   export interface TreeDataProvider {
     /**
      * Return children of parentId; null requests roots. Must return an iterable
      * of valid items, not a string or accidental array-like object.
+     * Context identifies the requesting window and native instance explicitly.
      * Throws, rejections and invalid items become isolated request diagnostics.
      * Native generation validation discards stale results. Receiver cancellation
      * releases pending work without promising JavaScript stack unwind.
      */
-    getChildren(parentId: string | null): Iterable<TreeItem> | Promise<Iterable<TreeItem>>;
+    getChildren(parentId: string | null, context: ViewContext): Iterable<TreeItem> | Promise<Iterable<TreeItem>>;
   }
-  /** Registration owns the declared tree kind across its live native surfaces. */
-  export interface TreeRegistration extends Disposable {
+  export type ViewLocation = "left" | "right" | "bottom" | "document";
+  /** Initial placement; remembered user layout overrides it on later windows. */
+  export interface ViewPlacement {
+    /** Dock or document group. Defaults to the left dock. */
+    readonly location?: ViewLocation;
+    /** Deterministic order within a group; defaults after native tools. */
+    readonly order?: number;
+    /** Initial visibility. Defaults to true. */
+    readonly visible?: boolean;
+  }
+  /** One lifecycle-owned native view definition. */
+  export interface ViewContribution {
+    /** Stable, unique, namespaced identity; `knot.` is reserved. */
+    readonly id: string;
+    readonly title: string;
+    /** Native content and the provider populated in every product window. */
+    readonly content: Readonly<{ kind: "tree"; provider: TreeDataProvider }>;
+    readonly placement?: ViewPlacement;
+  }
+  /** Registration owns one contributed view across every live product window. */
+  export interface ViewRegistration extends Disposable {
+    readonly id: string;
+    /**
+     * Show this view in every live product window, or only in one explicit
+     * window. Programmatic presentation never updates the fresh-window default.
+     * @throws HostError with InvalidTarget for a stale window, or Cancelled on
+     * teardown.
+     */
+    show(window?: WindowTarget): Promise<void>;
+    /** Hide this view in every live product window, or only in one window. */
+    hide(window?: WindowTarget): Promise<void>;
+    /** Show if hidden, then focus this view in every window or one window. */
+    focus(window?: WindowTarget): Promise<void>;
     /**
      * Invalidate root children when parentId is omitted/null, otherwise that
-     * parent's children. Resolution acknowledges native invalidation, not fetch
-     * or paint. Calls accepted before disposal retain request order and settle
-     * before cleanup acknowledgement.
+     * parent's children. Omitting window invalidates every live instance; an
+     * explicit window must own a live instance.
+     * Resolution acknowledges native invalidation, not fetch or paint. Calls
+     * accepted before disposal retain request order and settle before cleanup
+     * acknowledgement.
      * @throws HostError with OwnershipDisposed after disposal starts,
-     * TreeProviderNotFound for stale native ownership, or Cancelled on teardown.
+     * ViewRegistrationNotFound for stale native ownership, ViewNotFound for a
+     * window without a live instance, or Cancelled on teardown.
      */
-    invalidate(parentId?: string | null): Promise<void>;
+    invalidate(parentId?: string | null, window?: WindowTarget): Promise<void>;
   }
   /** Native completion request; use its explicit buffer without borrowing focus. */
   export interface CompletionContext {
@@ -473,13 +522,13 @@ declare module "knot" {
      */
     register(name: string, handler: CommandHandler): Promise<Disposable>;
     /**
-     * Handle an existing command for the declared outline view kind. Native
+     * Handle an existing command for one registered contribution ID. Native
      * routing binds live instances and preserves the captured presentation.
      * Resolution acknowledges registration; disposal removes its bindings.
      * @throws HostError with ViewNotFound, CommandNotFound, CommandNameInUse
      * or Cancelled; TypeError for invalid argument types.
      */
-    registerForView(viewKind: "outline", name: string, handler: CommandHandler): Promise<Disposable>;
+    registerForView(viewKind: string, name: string, handler: CommandHandler): Promise<Disposable>;
     /**
      * Invoke a child of the current command; arguments default to null.
      * Inherits the originating window/buffer and resolves with execution status.
@@ -493,7 +542,7 @@ declare module "knot" {
     invalidArguments(message: string): never;
   }>;
   export type PresentationCloseOutcome = Readonly<{ kind: "closed" | "cancelled" }>;
-  /** Native tree registration, supported captured selection and clipboard access. */
+  /** Contributed view registration, captured selection, and clipboard access. */
   export const workbench: Readonly<{
     /** Atomically register and capture current metadata plus sequence watermark.
      * Later committed changes arrive as asynchronous FIFO listener roots after the
@@ -513,17 +562,19 @@ declare module "knot" {
      * accepted save may already have persisted content and cannot be rolled back. */
     close(target: ViewTarget): Promise<PresentationCloseOutcome>;
     /**
-     * Register the declared outline tree provider, even before windows exist.
-     * Resolution acknowledges native ownership on its kind; teardown racing
-     * registration rejects instead of publishing a late callable object.
-     * @throws HostError with TreeViewNotFound, TreeProviderInUse or Cancelled;
-     * TypeError for invalid argument types or a missing getChildren method.
+     * Register a lifecycle-owned native view, even before windows exist. The
+     * contribution ID is the native view kind and command/keybinding scope.
+     * Every product window receives at most one live instance. Resolution
+     * acknowledges native ownership; teardown racing registration rejects
+     * instead of publishing a late callable object.
+     * @throws HostError with ViewIdInUse, InvalidViewId or Cancelled; TypeError
+     * for invalid fields or a missing getChildren method.
      */
-    registerTreeDataProvider(viewKind: "outline", provider: TreeDataProvider): Promise<TreeRegistration>;
+    registerView(contribution: ViewContribution): Promise<ViewRegistration>;
     /**
-     * Read selection for an admitted outline view handler; no selection is null.
-     * Omission uses its current capture; explicit target must be authorized for
-     * that invocation. Native editor/terminal selection is not exposed here.
+     * Read selection for an admitted contributed view handler; no selection is
+     * null. Omission uses its current capture; explicit target must be authorized
+     * for that invocation. Native editor/terminal selection is not exposed here.
      * @throws HostError with ContextUnavailable outside a command, InvalidTarget
      * for invalid captures, UnsupportedOperation for unsupported surfaces,
      * or Cancelled after cancellation.
@@ -537,7 +588,7 @@ declare module "knot" {
     writeClipboardText(text: string): Promise<void>;
   }>;
   /** Optional focused view scope; omission/null means application-wide. */
-  export interface KeybindingOptions { readonly view?: "editor" | "terminal" | "outline" | null; }
+  export interface KeybindingOptions { readonly view?: string | null; }
   /** Command name and JSON arguments, defaulting to null when omitted. */
   export interface KeybindingCommand { readonly name: string; readonly arguments?: JsonValue; }
   /**

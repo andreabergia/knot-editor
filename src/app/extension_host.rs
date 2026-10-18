@@ -59,12 +59,14 @@ await editor.registerCompletionProvider("fixture-primary", {
     return [{ label: `${context.prefix}Primary`, insertText: `${context.prefix}Primary` }];
   },
 });
-await workbench.registerTreeDataProvider("outline", {
-  getChildren(parentId) {
+await workbench.registerView({
+  id: "@fixture/primary.outline",
+  title: "Outline",
+  content: { kind: "tree", provider: { getChildren(parentId) {
     return parentId === null
       ? [{ id: "fixture", label: "Pooled fixture", collapsibleState: "none" }]
       : [];
-  },
+  } } },
 });
 "#;
 
@@ -176,22 +178,48 @@ pub(crate) fn start_completion(
     host.update(cx, |host, cx| host.start_completion(target, cx))
 }
 
-pub(crate) fn attach_tree_view(view: Entity<TreeView>, cx: &mut App) {
-    let Some(host) = entity(cx) else { return };
-    host.update(cx, |host, cx| {
-        let id = view.read(cx).instance_id();
-        host.commands
-            .catalog()
-            .borrow_mut()
-            .bind_view("outline", id)
-            .expect("outline is a declared view kind");
-        host.semantics
-            .add_tree_view("outline", view, cx)
-            .expect("new outline view accepts its provider");
-    });
+pub(crate) fn view_definitions(cx: &App) -> Vec<super::extension_semantics::ViewDefinition> {
+    entity(cx)
+        .map(|host| host.read(cx).semantics.definitions())
+        .unwrap_or_default()
 }
 
-pub(crate) fn detach_tree_view(view: ViewId, cx: &mut App) {
+/// Attach one native view instance to its definition and command catalog.
+/// Returns false when the definition disappeared before attachment.
+pub(crate) fn attach_view_instance(
+    stable_id: String,
+    window_id: String,
+    view: Entity<TreeView>,
+    cx: &mut App,
+) -> bool {
+    let Some(host) = entity(cx) else { return false };
+    host.update(cx, |host, cx| {
+        if !host.semantics.has_definition(&stable_id) {
+            return false;
+        }
+        let view_id = view.read(cx).instance_id();
+        if host
+            .commands
+            .catalog()
+            .borrow_mut()
+            .bind_view(&stable_id, view_id)
+            .is_err()
+        {
+            return false;
+        }
+        if host
+            .semantics
+            .add_tree_view(stable_id, window_id, view, cx)
+            .is_err()
+        {
+            host.commands.catalog().borrow_mut().remove_view(view_id);
+            return false;
+        }
+        true
+    })
+}
+
+pub(crate) fn detach_view_instance(view: ViewId, cx: &mut App) {
     let Some(host) = entity(cx) else { return };
     host.update(cx, |host, cx| {
         host.semantics.remove_tree_view(view, cx);
@@ -358,10 +386,6 @@ pub(crate) struct ProductExtensionHost {
     #[cfg(test)]
     deferred_view_requests: Vec<HostRequest>,
     semantics: ExtensionSemanticBridge,
-    #[cfg(test)]
-    _outline_tree: Entity<TreeView>,
-    #[cfg(test)]
-    _outline_tree_subscription: Subscription,
     _event_task: Task<()>,
     _release_subscription: Subscription,
     startup_report: Option<StartupReportSnapshot>,
@@ -380,20 +404,8 @@ impl ProductExtensionHost {
         let application_signal = super::application_observation::signal(cx);
         let product_commands = cx.global::<ApplicationProductCommands>().0.clone();
         let catalog = product_commands.read(cx).catalog();
-        catalog.borrow_mut().declare_view_kind("outline");
         let commands = ExtensionCommandBridge::with_catalog(catalog);
-        #[cfg(test)]
-        let outline_tree = cx.new(|cx| TreeView::new("outline", cx));
-        let mut semantics = ExtensionSemanticBridge::new();
-        semantics.declare_tree_kind("outline");
-        #[cfg(test)]
-        semantics
-            .add_tree_view("outline", outline_tree.clone(), cx)
-            .unwrap();
-        #[cfg(test)]
-        let outline_tree_subscription = cx.subscribe(&outline_tree, |this, _, event, cx| {
-            this.handle_tree_event(event, cx)
-        });
+        let semantics = ExtensionSemanticBridge::new();
         let release_subscription = cx.on_release(|host, cx| {
             if let Some(drain) = host.shutdown_storage() {
                 drain.detach();
@@ -444,10 +456,6 @@ impl ProductExtensionHost {
             #[cfg(test)]
             deferred_view_requests: Vec::new(),
             semantics,
-            #[cfg(test)]
-            _outline_tree: outline_tree,
-            #[cfg(test)]
-            _outline_tree_subscription: outline_tree_subscription,
             _event_task: event_task,
             _release_subscription: release_subscription,
             startup_report: None,
@@ -1015,11 +1023,12 @@ impl ProductExtensionHost {
         {
             return Err(AccessError::InvalidTarget.into());
         }
-        let shell = target.shell.upgrade().ok_or(AccessError::InvalidTarget)?;
-        let tree = shell
-            .read(cx)
-            .extension_command_view(view, cx)
-            .ok_or(AccessError::InvalidTarget)?;
+        let Some(super::workbench::CommandView::Extension(tree)) = target.command_view(cx) else {
+            return Err(AccessError::InvalidTarget.into());
+        };
+        if tree.read(cx).instance_id() != view {
+            return Err(AccessError::InvalidTarget.into());
+        }
         Ok(tree.read(cx).selected_text())
     }
 
@@ -1050,6 +1059,7 @@ impl ProductExtensionHost {
                                 authority: root,
                                 window: format!("{:?}", target.window.window_id()),
                                 view: target.view.map(|view| format!("{view:?}")),
+                                tool: target.extension_tool_id(cx),
                             }
                         });
                         let id = invocation.id;
@@ -1137,7 +1147,9 @@ impl ProductExtensionHost {
                             let response = execution.await.unwrap_or_else(|error| {
                                 crate::host::protocol::TreeChildrenResponse {
                                     registration: fallback.registration,
-                                    parent_id: fallback.parent_id,
+                                    window: fallback.window.clone(),
+                                    view: fallback.view,
+                                    parent_id: fallback.parent_id.clone(),
                                     generation: fallback.generation,
                                     result: Err(crate::host::protocol::TreeProviderError {
                                         message: error.to_string(),
@@ -1154,7 +1166,9 @@ impl ProductExtensionHost {
                         self.semantics.apply_tree_response(
                             crate::host::protocol::TreeChildrenResponse {
                                 registration: fallback.registration,
-                                parent_id: fallback.parent_id,
+                                window: fallback.window.clone(),
+                                view: fallback.view,
+                                parent_id: fallback.parent_id.clone(),
                                 generation: fallback.generation,
                                 result: Err(crate::host::protocol::TreeProviderError {
                                     message: error.to_string(),
@@ -1306,28 +1320,32 @@ impl ProductExtensionHost {
                 .unwrap_or(crate::host::protocol::CommandOutcome::Cancelled);
             let outcome = cx
                 .update(|cx| {
-                    if let Err(invalid) = target.validate_view(cx) {
-                        return invalid;
-                    }
                     let Some(host) = this.upgrade() else {
                         return crate::host::protocol::CommandOutcome::Cancelled;
                     };
+                    // A dead lifecycle cancels the command even when its frame
+                    // was detached first; a live lifecycle with an invalid
+                    // target is a distinct InvalidTarget result.
                     let host = host.read(cx);
                     if !host
                         .lifecycles
                         .contains(&ExtensionKey::new(handler.extension, handler.lifecycle))
-                        || target.view.is_none_or(|view| {
-                            host.commands
-                                .catalog()
-                                .borrow()
-                                .resolve_view(view, name.as_ref())
-                                != Some(handler)
-                        })
                     {
-                        crate::host::protocol::CommandOutcome::Cancelled
-                    } else {
-                        outcome
+                        return crate::host::protocol::CommandOutcome::Cancelled;
                     }
+                    if let Err(invalid) = target.validate_view(cx) {
+                        return invalid;
+                    }
+                    if target.view.is_none_or(|view| {
+                        host.commands
+                            .catalog()
+                            .borrow()
+                            .resolve_view(view, name.as_ref())
+                            != Some(handler)
+                    }) {
+                        return crate::host::protocol::CommandOutcome::Cancelled;
+                    }
+                    outcome
                 })
                 .unwrap_or(crate::host::protocol::CommandOutcome::InvalidTarget);
             completion.complete(outcome);
@@ -1639,14 +1657,115 @@ impl ProductExtensionHost {
                 kind: SurfaceKind::Document,
                 document: Some(info.id.clone()),
                 buffer: Some(buffer),
+                tool: None,
             },
             document: info,
         })
     }
 
+    pub(crate) fn register_view(
+        &mut self,
+        request: &crate::host::protocol::RequestContext,
+        arguments: handlers::TreeArguments,
+        cx: &mut Context<Self>,
+    ) -> Result<
+        crate::host::protocol::TreeProviderRegistrationId,
+        super::extension_semantics::SemanticError,
+    > {
+        let id = arguments.id.clone();
+        let registration = self
+            .semantics
+            .register_tree_provider(request, arguments, cx)?;
+        self.commands.catalog().borrow_mut().declare_view_kind(&id);
+        if cx.has_global::<super::keymaps::ApplicationKeymaps>() {
+            let _ = cx
+                .global_mut::<super::keymaps::ApplicationKeymaps>()
+                .0
+                .declare_extension_kind(&id);
+        }
+        cx.notify();
+        Ok(registration)
+    }
+
+    pub(crate) fn unregister_view(
+        &mut self,
+        request: &crate::host::protocol::RequestContext,
+        arguments: handlers::TreeRegistrationArguments,
+        cx: &mut Context<Self>,
+    ) -> Result<(), super::extension_semantics::SemanticError> {
+        let id = self.semantics.owned_kind(arguments.registration, request)?;
+        self.semantics
+            .unregister_tree_provider(request, arguments, cx)?;
+        self.remove_view_kind(&id, cx);
+        cx.notify();
+        Ok(())
+    }
+
+    fn remove_view_kind(&mut self, id: &str, cx: &mut App) {
+        self.commands.catalog().borrow_mut().remove_view_kind(id);
+        if cx.has_global::<super::keymaps::ApplicationKeymaps>()
+            && cx
+                .global_mut::<super::keymaps::ApplicationKeymaps>()
+                .0
+                .remove_extension_kind(id)
+        {
+            super::keymaps::rebuild(cx);
+        }
+    }
+
+    /// Show, hide, or focus a live registration in all product windows or in
+    /// one explicit window. Programmatic presentation never publishes defaults.
+    pub(crate) fn present_view(
+        &mut self,
+        request: &crate::host::protocol::RequestContext,
+        registration: crate::host::protocol::TreeProviderRegistrationId,
+        window: Option<&str>,
+        action: super::extension_semantics::ViewPresentation,
+        cx: &mut Context<Self>,
+    ) -> Result<(), super::extension_semantics::SemanticError> {
+        use handlers::AccessError;
+        if !self
+            .lifecycles
+            .contains(&ExtensionKey::new(request.extension, request.lifecycle))
+        {
+            return Err(AccessError::Cancelled.into());
+        }
+        let id = self.semantics.owned_kind(registration, request)?;
+        let handles = match window {
+            Some(window) => {
+                vec![product_window_handle(window, cx).ok_or(AccessError::InvalidTarget)?]
+            }
+            None => cx
+                .windows()
+                .into_iter()
+                .filter(|handle| handle.downcast::<ProductShell>().is_some())
+                .collect(),
+        };
+        for handle in handles {
+            let _ = cx.update_window(handle, |root, window, cx| {
+                let Ok(shell) = root.downcast::<ProductShell>() else {
+                    return;
+                };
+                shell.update(cx, |shell, cx| match action {
+                    super::extension_semantics::ViewPresentation::Show => {
+                        shell.set_contributed_view_visible(&id, true, cx);
+                    }
+                    super::extension_semantics::ViewPresentation::Hide => {
+                        shell.set_contributed_view_visible(&id, false, cx);
+                    }
+                    super::extension_semantics::ViewPresentation::Focus => {
+                        shell.focus_contributed_view(&id, window, cx);
+                    }
+                });
+            });
+        }
+        Ok(())
+    }
+
     fn remove_lifecycle(&mut self, key: ExtensionKey, cx: &mut Context<Self>) {
         self.remove_foreground_lifecycle(key, cx);
         self.drain_command_events(cx);
+        cx.notify();
     }
 
     fn remove_foreground_lifecycle(&mut self, key: ExtensionKey, cx: &mut App) {
@@ -1686,8 +1805,12 @@ impl ProductExtensionHost {
                 self.cancel_completion_provider(provider.id, cx);
             }
         }
-        self.semantics
+        let removed_views = self
+            .semantics
             .remove_lifecycle(key.extension, key.lifecycle, cx);
+        for id in removed_views {
+            self.remove_view_kind(&id, cx);
+        }
     }
 }
 
@@ -1712,6 +1835,13 @@ fn application_document_info(
         revision: document.model().read(cx).revision(),
         buffer,
     }
+}
+
+fn product_window_handle(window: &str, cx: &App) -> Option<gpui::AnyWindowHandle> {
+    cx.windows().into_iter().find(|handle| {
+        handle.window_id().as_u64().to_string() == window
+            && handle.downcast::<ProductShell>().is_some()
+    })
 }
 
 fn capture_product_target(
@@ -1893,7 +2023,7 @@ mod tests {
             if cx.update(|cx| {
                 let host = host.read(cx);
                 host.semantics.completion_snapshot().len() == 2
-                    && host._outline_tree.read(cx).lifecycle_state() == (true, 1, false, 0)
+                    && host.semantics.has_definition("@fixture/primary.outline")
             }) {
                 break;
             }
@@ -1907,10 +2037,9 @@ mod tests {
             let host = host.read(cx);
             assert_eq!(host.lifecycles.len(), 2);
             assert_eq!(host.semantics.completion_snapshot().len(), 2);
-            assert_eq!(
-                host._outline_tree.read(cx).root_labels(),
-                ["Pooled fixture"]
-            );
+            let definitions = host.semantics.definitions();
+            assert_eq!(definitions.len(), 1);
+            assert_eq!(definitions[0].id, "@fixture/primary.outline");
             let definitions = host
                 .commands
                 .definitions()
@@ -1932,10 +2061,7 @@ mod tests {
                 host.unload(first, cx).unwrap();
                 host.unload(second, cx).unwrap();
                 assert!(host.semantics.completion_snapshot().is_empty());
-                assert_eq!(
-                    host._outline_tree.read(cx).lifecycle_state(),
-                    (false, 0, false, 0)
-                );
+                assert!(host.semantics.definitions().is_empty());
                 assert!(
                     !host.commands.definitions().any(|definition| {
                         definition.name.as_ref().starts_with("knot.fixture.")

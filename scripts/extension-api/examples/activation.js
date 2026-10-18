@@ -46,17 +46,24 @@ const nativeChild = await commands.register("guide.select-all", async () => {
   }
 });
 
-const tree = await workbench.registerTreeDataProvider("outline", {
-  getChildren(parentId) {
-    return parentId === null ? [{
-      id: "root", label: "Guide", collapsibleState: "none",
-      description: null, icon: "symbol", command: "guide.annotate",
-    }] : [];
+const tree = await workbench.registerView({
+  id: "guide.outline",
+  title: "Guide",
+  content: {
+    kind: "tree",
+    provider: {
+      getChildren(parentId) {
+        return parentId === null ? [{
+          id: "root", label: "Guide", collapsibleState: "none",
+          description: null, icon: "symbol", command: "guide.annotate",
+        }] : [];
+      },
+    },
   },
 });
 await tree.invalidate();
 
-const viewCommand = await commands.registerForView("outline", "copy", async ({ target }) => {
+const viewCommand = await commands.registerForView("guide.outline", "copy", async ({ target }) => {
   const selected = await workbench.selectedText(target);
   if (selected !== null) await workbench.writeClipboardText(selected);
 });
@@ -71,7 +78,7 @@ const completion = await editor.registerCompletionProvider("guide", {
 
 // These mutations commit together at the end of this V8 turn.
 keybinding("cmd-g", { name: "guide.compose", arguments: { source: "key" } });
-keybinding("cmd-c", "copy", { view: "outline" });
+keybinding("cmd-c", "copy", { view: "guide.outline" });
 keybinding("cmd-alt-g", null, { view: "editor" });
 removeKeybinding("cmd-alt-g", { view: "editor" });
 
@@ -79,7 +86,7 @@ removeKeybinding("cmd-alt-g", { view: "editor" });
 export async function deactivateFeature() {
   active = false;
   removeKeybinding("cmd-g");
-  removeKeybinding("cmd-c", { view: "outline" });
+  removeKeybinding("cmd-c", { view: "guide.outline" });
   await Promise.all([
     ...Array.from(bufferOwnership, (owner) => owner.dispose()),
     command.dispose(), child.dispose(), nativeChild.dispose(), viewCommand.dispose(),

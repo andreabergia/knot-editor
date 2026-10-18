@@ -12,18 +12,21 @@ pub(crate) struct ToolFrameId(EntityId);
 #[derive(Clone)]
 pub(crate) enum ToolContent {
     Workspace(Entity<WorkspaceTree>),
+    Extension(Entity<crate::app::tree_view::TreeView>),
 }
 
 impl ToolContent {
     pub(crate) fn presentation(&self) -> EntityId {
         match self {
             Self::Workspace(view) => view.entity_id(),
+            Self::Extension(view) => view.entity_id(),
         }
     }
 
     pub(crate) fn command_view(&self) -> CommandView {
         match self {
             Self::Workspace(view) => CommandView::Workspace(view.clone()),
+            Self::Extension(view) => CommandView::Extension(view.clone()),
         }
     }
 }
@@ -61,8 +64,8 @@ pub(crate) enum ToolPlacement {
 
 pub(crate) struct ToolFrame {
     pub(crate) id: ToolFrameId,
-    pub(crate) stable_id: &'static str,
-    pub(crate) title: &'static str,
+    pub(crate) stable_id: String,
+    pub(crate) title: String,
     pub(crate) content: ToolContent,
     remembered: ToolPlacement,
     index: usize,
@@ -87,17 +90,18 @@ impl WorkbenchTab {
 impl Workbench {
     pub(crate) fn register_tool(
         &mut self,
-        stable_id: &'static str,
-        title: &'static str,
+        stable_id: impl Into<String>,
+        title: impl Into<String>,
         content: ToolContent,
         dock: DockLocation,
     ) -> ToolFrameId {
+        let stable_id = stable_id.into();
         let id = ToolFrameId(content.presentation());
         if !self.tools.iter().any(|tool| tool.id == id) {
             self.tools.push(ToolFrame {
                 id,
                 stable_id,
-                title,
+                title: title.into(),
                 content,
                 remembered: ToolPlacement::Dock(dock),
                 index: usize::MAX,
@@ -308,6 +312,19 @@ impl Workbench {
                     .find(|pane| self.dock_location(pane.id).is_none())
                     .map(Pane::id)
             })
+    }
+
+    /// Remove a tool definition and its visible attachment. Remembered layout
+    /// records live outside the workbench and are intentionally left untouched.
+    pub(crate) fn unregister_tool(&mut self, id: ToolFrameId) {
+        self.hide_tool(id);
+        self.tools.retain(|tool| tool.id != id);
+        for selected in &mut self.dock_selected {
+            if *selected == Some(id) {
+                *selected = None;
+            }
+        }
+        self.debug_assert_invariants();
     }
 
     pub(crate) fn hide_tool(&mut self, id: ToolFrameId) -> bool {

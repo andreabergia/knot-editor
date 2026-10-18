@@ -12,7 +12,7 @@ import {
   selectedViewText,
   writeClipboardText,
   registerCompletionProvider,
-  registerTreeDataProvider,
+  registerView,
 } from "knot:bootstrap";
 
 export { keybinding, removeKeybinding };
@@ -32,7 +32,7 @@ export const commands = Object.freeze({
 export const workbench = Object.freeze({
   observe: observeWorkbench,
   close: closePresentation,
-  registerTreeDataProvider,
+  registerView,
   selectedText: selectedViewText,
   writeClipboardText,
 });

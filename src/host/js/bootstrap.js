@@ -428,7 +428,10 @@ async function invokeRegisteredCommand(
   }
   const controller = new KnotAbortController();
   const target = capture === null ? null : Object.freeze({
-    window: capture.window, view: capture.view,
+    window: capture.window,
+    windowTarget: windowTarget({ window: capture.window }),
+    view: capture.view,
+    tool: capture.tool,
   });
   if (target) targetAuthorities.set(target, capture.authority);
   const frame = { invocation, controller, buffer: activeHandle, capture, target };
@@ -479,31 +482,85 @@ globalThis.__knotCancelCommand = (invocation) => {
   frame?.controller.abort(new Error("command cancelled"));
 };
 
-export async function registerTreeDataProvider(viewId, provider) {
-  if (typeof viewId !== "string" || typeof provider?.getChildren !== "function") {
-    throw new TypeError("workbench.registerTreeDataProvider requires a view ID and getChildren provider");
+export async function registerView(contribution) {
+  const value = record(contribution, "workbench.registerView requires a contribution object");
+  const id = string(value.id, "view id must be text");
+  if (id.length === 0 || id.startsWith("knot.") || /\s/.test(id)
+      || ["editor", "terminal", "workspace-tree"].includes(id)) {
+    throw new TypeError("view id must be a unique, non-reserved namespaced string");
   }
-  const registration = await request("registerTreeDataProvider", viewId);
+  const title = string(value.title, "view title must be text");
+  const content = record(value.content, "view content must be an object");
+  if (content.kind !== "tree") {
+    throw new TypeError("view content kind must be \"tree\"");
+  }
+  const provider = record(content.provider, "tree content requires a provider object");
+  if (typeof provider.getChildren !== "function") {
+    throw new TypeError("tree provider requires a getChildren method");
+  }
+  let location = "left";
+  let order = null;
+  let visible = true;
+  if (value.placement !== undefined) {
+    const placement = record(value.placement, "view placement must be an object");
+    if (placement.location !== undefined) {
+      location = string(placement.location, "view placement location must be text");
+      if (!["left", "right", "bottom", "document"].includes(location)) {
+        throw new TypeError("view placement location is invalid");
+      }
+    }
+    if (placement.order !== undefined) {
+      order = safeInteger(placement.order);
+    }
+    if (placement.visible !== undefined) {
+      if (typeof placement.visible !== "boolean") {
+        throw new TypeError("view visible must be a boolean");
+      }
+      visible = placement.visible;
+    }
+  }
+  const registration = await request("registerView", id, title, location, order, visible ? 1 : 0);
   treeProviders.set(registration, provider);
   const owned = ownership(() => treeProviders.delete(registration),
-    () => request("unregisterTreeDataProvider", registration));
+    () => request("unregisterView", registration));
   return Object.freeze({
-    async invalidate(parentId) {
+    id,
+    async show(window) {
+      owned.assertActive();
+      await owned.track(request("showView", registration, optionalWindowAuthority(window)));
+    },
+    async hide(window) {
+      owned.assertActive();
+      await owned.track(request("hideView", registration, optionalWindowAuthority(window)));
+    },
+    async focus(window) {
+      owned.assertActive();
+      await owned.track(request("focusView", registration, optionalWindowAuthority(window)));
+    },
+    async invalidate(parentId, window) {
       owned.assertActive();
       const parent = optionalText(parentId);
-      await owned.track(request("invalidateTreeDataProvider", registration, parent));
+      await owned.track(request(
+        "invalidateView",
+        registration,
+        parent,
+        optionalWindowAuthority(window),
+      ));
     },
     dispose: () => owned.dispose(),
   });
 }
 
-globalThis.__knotRequestTreeChildren = async (registration, parentId, generation) => {
+globalThis.__knotRequestTreeChildren = async (registration, window, instance, parentId, generation) => {
   const provider = treeProviders.get(registration);
   if (!provider) {
     return { error: "tree data provider is disposed" };
   }
   try {
-    return { items: iterableItems(await provider.getChildren(parentId), treeItem) };
+    return { items: iterableItems(await provider.getChildren(parentId, Object.freeze({
+      window: windowTarget({ window }),
+      instance: string(instance, "view instance must be text"),
+    })), treeItem) };
   } catch (error) {
     return { error: String(error?.stack ?? error) };
   }
@@ -591,6 +648,9 @@ function windowAuthority(target) {
   if (!value) hostError("InvalidTarget");
   return value.window;
 }
+function optionalWindowAuthority(target) {
+  return target == null ? null : windowAuthority(target);
+}
 function documentFromNative(value) {
   return Object.freeze({ ...value, buffer: bufferFor(value.buffer) });
 }
@@ -606,7 +666,7 @@ function windowFromNative(value) {
       target: paneTarget(pane.target), selected: presentationTarget(pane.selected),
       tabs: Object.freeze(pane.tabs.map(tab => Object.freeze({
         target: presentationTarget(tab.target), kind: tab.kind, document: tab.document,
-        buffer: tab.buffer === null ? null : bufferFor(tab.buffer),
+        buffer: tab.buffer === null ? null : bufferFor(tab.buffer), tool: tab.tool,
       }))),
     }))),
   });

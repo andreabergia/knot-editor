@@ -1047,6 +1047,22 @@ impl CommandCatalog {
         self.declared_view_kinds.insert(kind.into());
     }
 
+    /// Remove a contributed view kind while retaining view-command registrations.
+    /// A later definition with the same ID rebinds those handlers when its
+    /// instances attach.
+    pub(crate) fn remove_view_kind(&mut self, kind: &str) {
+        self.declared_view_kinds.remove(kind);
+        let views = self
+            .view_kinds
+            .iter()
+            .filter_map(|(view, registered)| (registered == kind).then_some(*view))
+            .collect::<Vec<_>>();
+        for view in views {
+            self.view_kinds.remove(&view);
+            self.by_view.retain(|(owner, _), _| *owner != view);
+        }
+    }
+
     pub(crate) fn bind_view(
         &mut self,
         kind: &str,

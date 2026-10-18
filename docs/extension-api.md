@@ -62,8 +62,43 @@ explicit buffer to use outside commands.
 
 Registering commands/providers/keymaps is valid during activation. Contextual
 lookup and command invocation require a running command. Await disposal and
-tree invalidation to observe completion, and use host error `code` values
+view invalidation to observe completion, and use host error `code` values
 when handling failures. See the API reference for precise rules.
+
+## Contribute a dockable view
+
+Register one lifecycle-owned view definition before or after product windows
+exist. The contribution ID is stable, namespaced, and doubles as the native view
+kind for commands and keybindings:
+
+```js
+const view = await workbench.registerView({
+  id: "example.outline",
+  title: "Outline",
+  content: {
+    kind: "tree",
+    provider: {
+      getChildren(parentId, context) {
+        // context.window identifies the requesting window; parentId null is the root.
+        return [];
+      },
+    },
+  },
+  placement: { location: "left", visible: true },
+});
+
+await view.invalidate(null);        // every live window
+await view.show();                  // every live window
+await view.hide();
+await view.focus();
+await view.dispose();
+```
+
+Each product window owns at most one native instance. Users can drag, dock, and
+hide frames; remembered user layout overrides registration defaults in later
+windows. Programmatic `show`/`hide`/`focus` affects live windows only and never
+changes the fresh-window default. Pass a live `WindowTarget` from
+`context.target.windowTarget` or `windows.*` to target one window.
 
 ## Compose commands
 
@@ -77,9 +112,9 @@ from activation or unrelated callbacks rejects `ContextUnavailable`.
 The checked [activation example](../scripts/extension-api/examples/activation.js)
 includes `guide.compose`, which awaits another JavaScript command, and
 `guide.select-all`, which awaits the native `editor.select-all` command. The
-outline's `copy` registration shares the native command name and handles it only
-when that outline instance claims the command. Dispose these registrations when
-removing the feature; native definitions retain their application ownership.
+contributed view's `copy` registration shares the native command name and handles
+it only when that view instance claims the command. Dispose these registrations
+when removing the feature; native definitions retain their application ownership.
 
 ## Identity and lifetime
 

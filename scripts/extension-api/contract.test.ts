@@ -38,16 +38,30 @@ const registration: Promise<Disposable> = commands.register("check", async (cont
 });
 void registration;
 
-const tree = await workbench.registerTreeDataProvider("outline", {
-  getChildren(parentId) {
-    const parent: string | null = parentId;
-    void parent;
-    return [{ id: "id", label: "item", collapsibleState: "collapsed", icon: "folder" }];
+const tree = await workbench.registerView({
+  id: "check.outline",
+  title: "Check",
+  content: {
+    kind: "tree",
+    provider: {
+      getChildren(parentId, context) {
+        const parent: string | null = parentId;
+        void parent;
+        const window = context.window;
+        const instance: import("knot").ViewId = context.instance;
+        void [window, instance];
+        return [{ id: "id", label: "item", collapsibleState: "collapsed", icon: "folder" }];
+      },
+    },
   },
+  placement: { location: "left", order: 1, visible: true },
 });
 const invalidation: Promise<void> = tree.invalidate(null);
 const disposal: Promise<void> = tree.dispose();
 void [invalidation, disposal];
+await tree.show();
+await tree.hide();
+await tree.focus();
 await editor.registerCompletionProvider("check", {
   async provideCompletions(context) {
     await context.buffer.snapshot();
@@ -62,14 +76,14 @@ void keyResult;
 await commands.invoke("check", () => {});
 // @ts-expect-error numeric command names are invalid
 await commands.invoke(42);
-// @ts-expect-error arbitrary native view handlers are unsupported
-await commands.registerForView("terminal", "copy", () => {});
-// @ts-expect-error unsupported native tree kind
-await workbench.registerTreeDataProvider("projects", { getChildren: () => [] });
 // @ts-expect-error completion item requires insertText
 await editor.registerCompletionProvider("bad", { provideCompletions: () => [{ label: "bad" }] });
+// @ts-expect-error unsupported view content kind
+await workbench.registerView({ id: "check.bad", title: "Bad", content: { kind: "text" } });
+// @ts-expect-error tree content requires a provider
+await workbench.registerView({ id: "check.bad", title: "Bad", content: { kind: "tree" } });
 // @ts-expect-error tree item requires collapsibleState
-await workbench.registerTreeDataProvider("outline", { getChildren: () => [{ id: "bad", label: "bad" }] });
+await workbench.registerView({ id: "check.bad", title: "Bad", content: { kind: "tree", provider: { getChildren: () => [{ id: "bad", label: "bad" }] } } });
 // @ts-expect-error decoration token is closed
 const token: import("knot").EditorContribution = { range: { startByteOffset: 0, endByteOffset: 1 }, decoration: "blue" };
 // @ts-expect-error clipboard requires text

@@ -113,6 +113,28 @@ impl BindingRegistry {
         Ok(())
     }
 
+    /// Remove a contributed view kind together with its scoped bindings.
+    pub(crate) fn remove_extension_kind(&mut self, kind: &str) -> bool {
+        if matches!(kind, "editor" | "terminal" | "workspace-tree") || !self.kinds.remove(kind) {
+            return false;
+        }
+        let keys = self
+            .slots
+            .keys()
+            .filter(|key| key.view.as_deref() == Some(kind))
+            .map(|key| key.key.clone())
+            .collect::<HashSet<_>>();
+        self.slots
+            .retain(|key, _| key.view.as_deref() != Some(kind));
+        let mut changed = false;
+        for key in keys {
+            let before = self.active.get(&key).cloned();
+            self.refresh_key(&key);
+            changed |= before != self.active.get(&key).cloned();
+        }
+        changed
+    }
+
     pub(crate) fn set(
         &mut self,
         owner: BindingOwner,
@@ -146,7 +168,9 @@ impl BindingRegistry {
         view: Option<&str>,
     ) -> Result<bool, BindingError> {
         let key = canonical_key(key)?;
-        let view = self.validate_view(view)?;
+        // Removal is idempotent: the scoped kind may already be gone when an
+        // unload or view disposal commits before the keybinding batch.
+        let view = view.map(ToOwned::to_owned);
         let before = self.active.get(&key).cloned();
         self.slots.remove(&SlotKey {
             owner,
@@ -372,9 +396,6 @@ impl Global for ApplicationKeymaps {}
 
 fn native_registry() -> BindingRegistry {
     let mut registry = BindingRegistry::new();
-    registry
-        .declare_extension_kind("outline")
-        .expect("product view kind is valid");
     for &(key, command, view) in COMMON_BINDINGS.iter().chain(PLATFORM_BINDINGS) {
         registry
             .set(

@@ -2,7 +2,7 @@
 
 use std::{
     cell::RefCell,
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     future::Future,
     path::Path,
     pin::Pin,
@@ -350,6 +350,7 @@ fn target_document(target: &ProductCommandTarget) -> Option<DocumentId> {
 
 pub(crate) struct ProductShell {
     workbench: Entity<Workbench>,
+    window: Option<AnyWindowHandle>,
     status: SharedString,
     tab_drag: std::rc::Rc<RefCell<tab_drag::TabDragState>>,
     dock_resize: Option<DockResizeDrag>,
@@ -361,15 +362,20 @@ pub(crate) struct ProductShell {
     application_focus: Vec<(FocusHandle, Subscription, Subscription)>,
     workspace_tree: Option<Entity<WorkspaceTree>>,
     workspace_tree_subscription: Option<Subscription>,
-    extension_tree: Option<Entity<super::tree_view::TreeView>>,
-    extension_tree_subscription: Option<Subscription>,
-    extension_tree_observer: Option<Subscription>,
-    extension_tree_release: Option<Subscription>,
-    extension_tree_window_closed: Option<Subscription>,
+    contributed_views: BTreeMap<String, ContributedView>,
+    _contributed_view_release: Option<Subscription>,
+    _contributed_view_window_closed: Option<Subscription>,
+    _extension_host_release: Option<Subscription>,
     open_generation: u64,
     tasks: Vec<Task<()>>,
     extension_report_open: bool,
     extension_report_subscription: Option<Subscription>,
+}
+
+struct ContributedView {
+    view: Entity<super::tree_view::TreeView>,
+    _event: Subscription,
+    _observer: Subscription,
 }
 
 #[derive(Clone, Copy)]
@@ -383,6 +389,7 @@ impl ProductShell {
     fn new(workbench: Entity<Workbench>) -> Self {
         Self {
             workbench,
+            window: None,
             status: "ready".into(),
             tab_drag: Default::default(),
             dock_resize: None,
@@ -394,11 +401,10 @@ impl ProductShell {
             application_focus: Vec::new(),
             workspace_tree: None,
             workspace_tree_subscription: None,
-            extension_tree: None,
-            extension_tree_subscription: None,
-            extension_tree_observer: None,
-            extension_tree_release: None,
-            extension_tree_window_closed: None,
+            contributed_views: BTreeMap::new(),
+            _contributed_view_release: None,
+            _contributed_view_window_closed: None,
+            _extension_host_release: None,
             open_generation: 0,
             tasks: Vec::new(),
             extension_report_open: false,
@@ -407,7 +413,7 @@ impl ProductShell {
     }
 
     fn observe_extension_host(&mut self, native_window: &mut Window, cx: &mut Context<Self>) {
-        let window = native_window.window_handle();
+        self.window = Some(native_window.window_handle());
         self.application_observer = Some(cx.observe(&cx.entity(), |_, _, cx| {
             super::extension_host::application_changed(cx)
         }));
@@ -417,26 +423,224 @@ impl ProductShell {
             }));
         super::extension_host::application_changed(cx);
         if let Some(host) = super::extension_host::entity(cx) {
-            self.extension_report_subscription = Some(cx.observe(&host, |_, _, cx| cx.notify()));
-            let tree = cx.new(|cx| super::tree_view::TreeView::new("outline", cx));
-            let view = tree.read(cx).instance_id();
-            self.extension_tree_subscription = Some(cx.subscribe(&tree, |_, _, event, cx| {
-                let event = event.clone();
-                cx.defer(move |cx| super::extension_host::route_tree_event(&event, cx));
+            self.extension_report_subscription = Some(cx.observe(&host, |this, _, cx| {
+                this.sync_contributed_views(cx);
                 cx.notify();
             }));
-            self.extension_tree_observer = Some(cx.observe(&tree, |_, _, cx| cx.notify()));
-            self.extension_tree_release = Some(cx.on_release(move |_, cx| {
-                super::extension_host::detach_tree_view(view, cx);
-            }));
-            self.extension_tree_window_closed = Some(cx.on_window_closed(move |cx| {
-                if !cx.windows().contains(&window) {
-                    super::extension_host::detach_tree_view(view, cx);
+            self._contributed_view_release = Some(cx.on_release(|this, cx| {
+                for (_, instance) in std::mem::take(&mut this.contributed_views) {
+                    super::extension_host::detach_view_instance(
+                        instance.view.read(cx).instance_id(),
+                        cx,
+                    );
                 }
             }));
-            super::extension_host::attach_tree_view(tree.clone(), cx);
-            self.extension_tree = Some(tree);
+            // A closed window drops its live frames; other windows keep theirs.
+            let shell = cx.weak_entity();
+            self._contributed_view_window_closed = Some(cx.on_window_closed(move |cx| {
+                let shell = shell.clone();
+                cx.defer(move |cx| {
+                    let Some(shell) = shell.upgrade() else { return };
+                    let _ = shell.update(cx, |this, cx| {
+                        let Some(window) = this.window else { return };
+                        if cx.windows().contains(&window) {
+                            return;
+                        }
+                        let ids = this.contributed_views.keys().cloned().collect::<Vec<_>>();
+                        for id in ids {
+                            this.detach_contributed_view(&id, cx);
+                        }
+                    });
+                });
+            }));
+            // Host notifications reconcile definitions while it lives; release
+            // removes every remaining frame without waiting for another event.
+            self._extension_host_release = Some(cx.observe_release(&host, |this, _, cx| {
+                // The host is leased and losing ownership, so drop the frames
+                // without calling back into it.
+                let frames = std::mem::take(&mut this.contributed_views);
+                for (id, _instance) in frames {
+                    if let Some(frame) = this.workbench.read(cx).tool_by_stable_id(&id) {
+                        this.workbench
+                            .update(cx, |workbench, _| workbench.unregister_tool(frame));
+                    }
+                }
+            }));
+            self.sync_contributed_views(cx);
         }
+    }
+
+    /// Reconcile this window's contributed frames with the application-owned
+    /// definitions. Attaching applies remembered placement or registration
+    /// defaults once; later host notifications never override a window-local
+    /// programmatic hide.
+    fn sync_contributed_views(&mut self, cx: &mut Context<Self>) {
+        let definitions = super::extension_host::view_definitions(cx);
+        let live = definitions
+            .iter()
+            .map(|definition| definition.id.as_str())
+            .collect::<HashSet<_>>();
+        let stale = self
+            .contributed_views
+            .keys()
+            .filter(|id| !live.contains(id.as_str()))
+            .cloned()
+            .collect::<Vec<_>>();
+        for id in stale {
+            self.detach_contributed_view(&id, cx);
+        }
+        for definition in definitions {
+            if !self.contributed_views.contains_key(&definition.id) {
+                self.attach_contributed_view(definition, cx);
+            }
+        }
+    }
+
+    fn attach_contributed_view(
+        &mut self,
+        definition: super::extension_semantics::ViewDefinition,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(window) = self.window else {
+            return;
+        };
+        let window_id = window.window_id().as_u64().to_string();
+        let view = cx.new(|cx| {
+            super::tree_view::TreeView::new(definition.id.clone(), window_id.clone(), cx)
+        });
+        let event = cx.subscribe(&view, |_, _, event, cx| {
+            let event = event.clone();
+            cx.defer(move |cx| super::extension_host::route_tree_event(&event, cx));
+            cx.notify();
+        });
+        let observer = cx.observe(&view, |_, _, cx| cx.notify());
+        if !super::extension_host::attach_view_instance(
+            definition.id.clone(),
+            window_id,
+            view.clone(),
+            cx,
+        ) {
+            return;
+        }
+        let stored = Self::stored_tool_layout(cx);
+        let record = stored
+            .as_ref()
+            .and_then(|snapshot| snapshot.tool(&definition.id))
+            .cloned();
+        let visible = record
+            .as_ref()
+            .map_or(definition.visible, |record| record.visible);
+        let placement = record
+            .as_ref()
+            .map_or(definition.location.placement(), |record| {
+                record.location.placement()
+            });
+        let index = record
+            .as_ref()
+            .map_or(definition.order, |record| record.index);
+        let workbench_view = view.clone();
+        self.workbench.update(cx, |workbench, _| {
+            let previous = workbench.focused_pane_id();
+            let id = workbench.register_tool(
+                definition.id.clone(),
+                definition.title.clone(),
+                ToolContent::Extension(workbench_view),
+                DockLocation::Left,
+            );
+            workbench.remember_tool_placement(id, placement, index);
+            if visible {
+                workbench.show_tool(id);
+            }
+            if let Some(pane) = previous {
+                workbench.focus_pane(pane);
+            }
+        });
+        self.contributed_views.insert(
+            definition.id,
+            ContributedView {
+                view,
+                _event: event,
+                _observer: observer,
+            },
+        );
+    }
+
+    fn detach_contributed_view(&mut self, stable_id: &str, cx: &mut Context<Self>) {
+        let Some(instance) = self.contributed_views.remove(stable_id) else {
+            return;
+        };
+        let view = instance.view;
+        let view_id = view.read(cx).instance_id();
+        self.workbench.update(cx, |workbench, _| {
+            if let Some(frame) = workbench.tool_by_stable_id(stable_id) {
+                workbench.unregister_tool(frame);
+            }
+        });
+        super::extension_host::detach_view_instance(view_id, cx);
+    }
+
+    /// Show or hide a contributed frame without publishing a fresh-window
+    /// default. Returns false when this window has no live instance.
+    pub(crate) fn set_contributed_view_visible(
+        &mut self,
+        stable_id: &str,
+        visible: bool,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(view) = self
+            .contributed_views
+            .get(stable_id)
+            .map(|instance| instance.view.clone())
+        else {
+            return false;
+        };
+        let Some(frame) = self.workbench.read(cx).tool_by_stable_id(stable_id) else {
+            return false;
+        };
+        let visible_now = self.workbench.read(cx).tool_tab(frame).is_some();
+        if visible_now == visible {
+            return true;
+        }
+        if visible {
+            self.workbench.update(cx, |workbench, _| {
+                workbench.show_tool(frame);
+            });
+            view.update(cx, |tree, cx| tree.refresh_root(cx));
+        } else {
+            self.workbench.update(cx, |workbench, _| {
+                workbench.hide_tool(frame);
+            });
+        }
+        cx.notify();
+        true
+    }
+
+    /// Show and focus a contributed frame in this window.
+    pub(crate) fn focus_contributed_view(
+        &mut self,
+        stable_id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.set_contributed_view_visible(stable_id, true, cx) {
+            return false;
+        }
+        let Some(frame) = self.workbench.read(cx).tool_by_stable_id(stable_id) else {
+            return false;
+        };
+        self.workbench.update(cx, |workbench, _| {
+            workbench.show_tool(frame);
+        });
+        let Some(view) = self
+            .contributed_views
+            .get(stable_id)
+            .map(|instance| instance.view.clone())
+        else {
+            return false;
+        };
+        view.read(cx).focus_handle(cx).focus(window);
+        cx.notify();
+        true
     }
 
     fn observe_application_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -527,6 +731,12 @@ impl ProductShell {
                                 .and_then(|id| documents.get(id))
                                 .map(|document| document.identity().to_string()),
                             buffer: document.and_then(|id| buffers.get(&id).copied()),
+                            tool: match tab.surface_id() {
+                                TabSurfaceId::Tool(id) => {
+                                    workbench.tool(id).map(|tool| tool.stable_id.clone())
+                                }
+                                TabSurfaceId::Document(_) | TabSurfaceId::Terminal(_) => None,
+                            },
                         }
                     })
                     .collect::<Vec<_>>();
@@ -550,17 +760,6 @@ impl ProductShell {
             current_target,
             workspace: operations::workspace_info(target, &workspace),
         }
-    }
-
-    pub(crate) fn extension_command_view(
-        &self,
-        id: crate::host::protocol::ViewId,
-        cx: &App,
-    ) -> Option<Entity<super::tree_view::TreeView>> {
-        self.extension_tree
-            .as_ref()
-            .filter(|view| view.read(cx).instance_id() == id)
-            .cloned()
     }
 
     fn command_dispatcher(cx: &App) -> Entity<ProductCommandDispatcher> {
@@ -632,10 +831,14 @@ impl ProductShell {
         let workbench = self.workbench.read(cx);
         let pane = workbench.focused_pane()?;
         let tab = pane.active_tab();
-        let view = self
-            .extension_tree
-            .as_ref()
-            .and_then(|tree| (tree.focus_handle(cx) == focus).then(|| tree.read(cx).instance_id()));
+        let view = match tab.command_view() {
+            Some(super::workbench::CommandView::Extension(tree))
+                if tree.read(cx).focus_handle(cx) == focus =>
+            {
+                Some(tree.read(cx).instance_id())
+            }
+            _ => None,
+        };
         Some(ProductCommandTarget {
             window: window.window_handle(),
             shell: cx.entity().downgrade(),
@@ -715,27 +918,16 @@ impl ProductShell {
             cx.propagate();
             return;
         };
-        // Extension trees live outside the workbench, so resolve their kind
-        // from the shell directly rather than re-entering the shell through
-        // `ProductCommandTarget::command_view` while it is being updated.
-        let view_kind = if target.view.is_some() {
-            self.extension_tree.as_ref().and_then(|tree| {
-                (Some(tree.read(cx).instance_id()) == target.view
-                    && Some(tree.focus_handle(cx)) == target.focus.upgrade())
-                .then(|| tree.read(cx).kind().to_owned())
+        // Resolve the view kind from the focused tab; contributed frames and
+        // native tools share this path instead of a shell-level special case.
+        let view_kind = target.command_view(cx).and_then(|view| {
+            view.matches_focus(&target.focus, cx).then(|| match view {
+                super::workbench::CommandView::Editor(_) => "editor".to_owned(),
+                super::workbench::CommandView::Terminal(_) => "terminal".to_owned(),
+                super::workbench::CommandView::Workspace(_) => "workspace-tree".to_owned(),
+                super::workbench::CommandView::Extension(view) => view.read(cx).kind().to_owned(),
             })
-        } else {
-            target.command_view(cx).and_then(|view| {
-                view.matches_focus(&target.focus, cx).then(|| match view {
-                    super::workbench::CommandView::Editor(_) => "editor".to_owned(),
-                    super::workbench::CommandView::Terminal(_) => "terminal".to_owned(),
-                    super::workbench::CommandView::Workspace(_) => "workspace-tree".to_owned(),
-                    super::workbench::CommandView::Extension(view) => {
-                        view.read(cx).kind().to_owned()
-                    }
-                })
-            })
-        };
+        });
         let resolution = cx
             .global::<ApplicationKeymaps>()
             .0
@@ -1000,14 +1192,7 @@ impl ProductShell {
         cx.windows().contains(&target.window)
             && target.workbench.upgrade() == Some(self.workbench.clone())
             && target.validate_tab(cx).is_ok()
-            && if let Some(view) = target.view {
-                self.extension_command_view(view, cx)
-                    .is_some_and(|view| target.focus.upgrade() == Some(view.focus_handle(cx)))
-            } else {
-                target
-                    .command_view(cx)
-                    .is_some_and(|view| view.matches_focus(&target.focus, cx))
-            }
+            && target.validate_view(cx).is_ok()
     }
 
     pub(crate) fn start_save_command(
@@ -2029,6 +2214,23 @@ impl ProductShell {
         }
         let defaults = super::tool_layout::ToolLayoutSnapshot::product_default();
         self.restore_tool_layout(&defaults, cx);
+        let definitions = super::extension_host::view_definitions(cx);
+        self.workbench.update(cx, |workbench, _| {
+            for definition in definitions {
+                let Some(id) = workbench.tool_by_stable_id(&definition.id) else {
+                    continue;
+                };
+                workbench.hide_tool(id);
+                workbench.remember_tool_placement(
+                    id,
+                    definition.location.placement(),
+                    definition.order,
+                );
+                if definition.visible {
+                    workbench.show_tool(id);
+                }
+            }
+        });
         self.publish_tool_layout(cx);
         self.focus_active_surface(window, cx);
         cx.notify();
@@ -2042,6 +2244,9 @@ impl ProductShell {
         let Some(snapshot) = Self::stored_tool_layout(cx) else {
             return;
         };
+        self.workbench.update(cx, |workbench, _| {
+            workbench.set_dock_sizes(snapshot.dock_sizes);
+        });
         if !snapshot.customized {
             return;
         }
@@ -3171,6 +3376,7 @@ impl ProductShell {
                 .tool_content()
                 .map(|content| match content {
                     ToolContent::Workspace(view) => view.clone().into_any_element(),
+                    ToolContent::Extension(view) => view.clone().into_any_element(),
                 })
         });
         let documents = Self::documents(cx);
@@ -3293,11 +3499,6 @@ impl Render for ProductShell {
         let layout = self.workbench.read(cx).layout().cloned();
         let entity = cx.entity();
         let command_palette = self.command_palette.clone();
-        let extension_tree = self
-            .extension_tree
-            .as_ref()
-            .filter(|tree| tree.read(cx).has_provider())
-            .cloned();
         let startup_report = super::extension_host::startup_report(cx);
         let extension_button_label = match &startup_report {
             Some(report) if report.state == super::extension_host::StartupState::Complete => {
@@ -3422,17 +3623,6 @@ impl Render for ProductShell {
                     .flex_row()
                     .min_h_0()
                     .min_w_0()
-                    .when_some(extension_tree, |element, tree| {
-                        element.child(
-                            div()
-                                .w(px(240.))
-                                .h_full()
-                                .flex_none()
-                                .border_r_1()
-                                .border_color(rgb(0x454545))
-                                .child(tree),
-                        )
-                    })
                     .when_some(layout, |element, layout| {
                         element.child(
                             div()
@@ -4673,18 +4863,22 @@ mod tests {
                 "main.js",
                 r#"
                     import * as knot from 'knot';
-                    await knot.workbench.registerTreeDataProvider('outline', {
-                        getChildren(parentId) {
-                            return parentId === null
-                                ? [{ id: 'first', label: 'Tree item', collapsibleState: 'none' }]
-                                : [];
-                        },
+                    await knot.workbench.registerView({
+                        id: 'example.outline',
+                        title: 'Outline',
+                        content: { kind: 'tree', provider: {
+                            getChildren(parentId) {
+                                return parentId === null
+                                    ? [{ id: 'first', label: 'Tree item', collapsibleState: 'none' }]
+                                    : [];
+                            },
+                        } },
                     });
-                    await knot.commands.registerForView('outline', 'copy', async () => {
+                    await knot.commands.registerForView('example.outline', 'copy', async () => {
                         const text = await knot.workbench.selectedText();
                         await knot.workbench.writeClipboardText(text);
                     });
-                    knot.keybinding('cmd-j', 'file.new', { view: 'outline' });
+                    knot.keybinding('cmd-j', 'file.new', { view: 'example.outline' });
                 "#,
             )],
         );
@@ -4706,7 +4900,7 @@ mod tests {
                 Some("copy")
             );
             assert_eq!(
-                keymap_command(cx, "cmd-j", Some("outline")).as_deref(),
+                keymap_command(cx, "cmd-j", Some("example.outline")).as_deref(),
                 Some("copy")
             );
         });
@@ -4717,7 +4911,7 @@ mod tests {
             })
             .unwrap()
             .unwrap();
-        let tree = cx.read(|cx| shell.read(cx).extension_tree.clone().unwrap());
+        let tree = wait_for_contributed_view(&shell, "example.outline", cx);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
         loop {
             cx.run_until_parked();
@@ -5341,8 +5535,26 @@ mod tests {
         let native_copy = dispatch_product_command(&shell, window, super::COPY_COMMAND, cx);
         assert_eq!(wait_for_command(native_copy, cx), CommandOutcome::Completed);
         cx.read(|cx| assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), "!text"));
-        let tree = cx.read(|cx| shell.read(cx).extension_tree.as_ref().unwrap().clone());
+        let tree = wait_for_contributed_view(&shell, "guide.outline", cx);
         wait_for_api_condition(cx, |cx| tree.read(cx).root_labels() == ["Guide"]);
+        let copy_editor = cx.read(|cx| {
+            shell
+                .read(cx)
+                .workbench
+                .read(cx)
+                .focused_pane()
+                .and_then(|pane| pane.active_tab().editor().cloned())
+                .expect("document editor is focused before the tree")
+        });
+        wait_for_api_condition(cx, |cx| {
+            cx.global::<ApplicationProductCommands>()
+                .0
+                .read(cx)
+                .catalog()
+                .borrow()
+                .resolve_view(tree.read(cx).instance_id(), "copy")
+                .is_some()
+        });
         cx.update_window(window, |_, window, cx| {
             tree.update(cx, |tree, cx| assert!(tree.select_item("root", cx)));
             tree.focus_handle(cx).focus(window);
@@ -5351,6 +5563,14 @@ mod tests {
         let copy = dispatch_tree_copy(&shell, window, cx);
         assert_eq!(wait_for_command(copy, cx), CommandOutcome::Completed);
         cx.read(|cx| assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), "Guide"));
+        wait_for_api_condition(cx, |cx| {
+            super::super::extension_host::completion_provider_count(cx) == 1
+        });
+        cx.update_window(window, |_, window, cx| {
+            copy_editor.read(cx).focus_handle(cx).focus(window);
+            shell.update(cx, |shell, cx| shell.sync_focused_pane(window, cx));
+        })
+        .unwrap();
         let completion =
             dispatch_product_command(&shell, window, super::SHOW_COMPLETIONS_COMMAND, cx);
         assert_eq!(wait_for_command(completion, cx), CommandOutcome::Completed);
@@ -5377,7 +5597,7 @@ mod tests {
         let cleanup = dispatch_product_command(&shell, window, "guide.test-deactivate", cx);
         assert_eq!(wait_for_command(cleanup, cx), CommandOutcome::Completed);
         cx.read(|cx| {
-            assert!(!tree.read(cx).has_provider());
+            assert!(!tree.read(cx).lifecycle_state().0);
             assert!(model.read(cx).resolved_contributions().is_empty());
             assert_eq!(
                 keymap_command(cx, "cmd-g", Some("editor")),
@@ -5452,11 +5672,15 @@ mod tests {
                 r#"
                 import * as knot from 'knot'; const { commands, editor, workbench } = knot;
                 await commands.register('example.shared', async () => {});
-                await commands.registerForView('outline', 'copy', async () => {});
                 await editor.registerCompletionProvider('broken-provider', {
                     provideCompletions() { return []; }
                 });
-                await workbench.registerTreeDataProvider('outline', { getChildren() { return []; } });
+                await workbench.registerView({
+                    id: 'example.broken.outline',
+                    title: 'Broken outline',
+                    content: { kind: 'tree', provider: { getChildren() { return []; } } },
+                });
+                await commands.registerForView('example.broken.outline', 'copy', async () => {});
                 throw new Error('broken entry');
             "#,
             )],
@@ -5492,17 +5716,7 @@ mod tests {
             host.start_installed_extensions(root.path().to_path_buf(), cx)
         });
         let report = wait_for_extension_report(&host, cx);
-        cx.read(|cx| {
-            assert!(
-                !shell
-                    .read(cx)
-                    .extension_tree
-                    .as_ref()
-                    .unwrap()
-                    .read(cx)
-                    .has_provider()
-            )
-        });
+        cx.read(|cx| assert!(shell.read(cx).contributed_views.is_empty()));
         let result = |name| {
             report
                 .report
@@ -5550,18 +5764,7 @@ mod tests {
                 .count(),
             1
         );
-        cx.read(|cx| {
-            let tree = shell.read(cx).extension_tree.as_ref().unwrap().clone();
-            assert!(
-                cx.global::<ApplicationProductCommands>()
-                    .0
-                    .read(cx)
-                    .catalog()
-                    .borrow()
-                    .resolve_view(tree.read(cx).instance_id(), "copy")
-                    .is_none()
-            );
-        });
+        cx.read(|cx| assert!(shell.read(cx).contributed_views.is_empty()));
         let mut execution = dispatch_product_command(&shell, window, "example.dependent", cx);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
         loop {
@@ -5972,6 +6175,31 @@ mod tests {
         }
     }
 
+    fn wait_for_contributed_view(
+        shell: &Entity<ProductShell>,
+        id: &str,
+        cx: &mut TestAppContext,
+    ) -> Entity<crate::app::tree_view::TreeView> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            cx.run_until_parked();
+            if let Some(view) = cx.read(|cx| {
+                shell
+                    .read(cx)
+                    .contributed_views
+                    .get(id)
+                    .map(|view| view.view.clone())
+            }) {
+                return view;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "contributed view did not attach"
+            );
+            std::thread::yield_now();
+        }
+    }
+
     fn dispatch_tree_command(
         shell: &Entity<ProductShell>,
         window: gpui::AnyWindowHandle,
@@ -6038,12 +6266,16 @@ await expectCode(() => commands.invoke("file.new"), "ContextUnavailable");
 await workbench.writeClipboardText("activation");
 let origin;
 let previous;
-await workbench.registerTreeDataProvider("outline", {
-  async getChildren(parentId) {
-    await expectCode(() => editor.activeBuffer(), "ContextUnavailable");
-    await expectCode(() => workbench.selectedText(), "ContextUnavailable");
-    return parentId === null ? [{ id: "provider", label: "context-free", collapsibleState: "none" }] : [];
-  },
+await workbench.registerView({
+  id: "example.outline",
+  title: "Context-free",
+  content: { kind: "tree", provider: {
+    async getChildren(parentId) {
+      await expectCode(() => editor.activeBuffer(), "ContextUnavailable");
+      await expectCode(() => workbench.selectedText(), "ContextUnavailable");
+      return parentId === null ? [{ id: "provider", label: "context-free", collapsibleState: "none" }] : [];
+    },
+  } },
 });
 await editor.registerCompletionProvider("context-free", {
   async provideCompletions(context) {
@@ -6136,12 +6368,9 @@ await commands.register("api.cross", async (context) => {
         wait_for_api_condition(cx, |cx| {
             first_shell
                 .read(cx)
-                .extension_tree
-                .as_ref()
-                .unwrap()
-                .read(cx)
-                .root_labels()
-                == ["context-free"]
+                .contributed_views
+                .get("example.outline")
+                .is_some_and(|view| view.view.read(cx).root_labels() == ["context-free"])
         });
         // Capture before the palette takes focus, then admit the saved origin.
         let origin = cx
@@ -6792,7 +7021,7 @@ await commands.register("queries.terminal", async () => {
         let (first, first_window) = product_window(document, model.clone(), cx);
         let (second, second_window) = product_window(document, model, cx);
         let (_diagnostic, _) =
-            cx.add_window_view(|_, cx| crate::app::tree_view::TreeView::new("diagnostic", cx));
+            cx.add_window_view(|_, cx| crate::app::tree_view::TreeView::new("diagnostic", "1", cx));
         for (shell, window, command) in [
             (&first, first_window, "queries.catalog"),
             (&first, first_window, CLOSE_TAB_COMMAND),
@@ -6913,7 +7142,13 @@ await commands.register("api.owned-setup", async ({ buffer }) => {
     buffer.contributions,
     await buffer.onDidChange(() => workbench.writeClipboardText("leaked listener")),
     await commands.register("api.owned", () => {}),
-    await workbench.registerTreeDataProvider("outline", { getChildren() { return [{ id: "owned", label: "owned", collapsibleState: "none" }]; } }),
+    await workbench.registerView({
+      id: "example.owned",
+      title: "Owned",
+      content: { kind: "tree", provider: {
+        getChildren() { return [{ id: "owned", label: "owned", collapsibleState: "none" }]; },
+      } },
+    }),
     await editor.registerCompletionProvider("owned", { provideCompletions() { return [{ label: "owned", insertText: "owned" }]; } }),
   ];
 });
@@ -6968,12 +7203,9 @@ await commands.register("api.owned-cleanup", async () => {
             wait_for_api_condition(cx, |cx| {
                 shell
                     .read(cx)
-                    .extension_tree
-                    .as_ref()
-                    .unwrap()
-                    .read(cx)
-                    .root_labels()
-                    == ["owned"]
+                    .contributed_views
+                    .get("example.owned")
+                    .is_some_and(|view| view.view.read(cx).root_labels() == ["owned"])
             });
             cx.read(|cx| assert_eq!(model.read(cx).resolved_contributions().len(), 1));
             let completion =
@@ -6993,15 +7225,7 @@ await commands.register("api.owned-cleanup", async () => {
             }
             cx.read(|cx| {
                 assert!(model.read(cx).resolved_contributions().is_empty());
-                assert!(
-                    !shell
-                        .read(cx)
-                        .extension_tree
-                        .as_ref()
-                        .unwrap()
-                        .read(cx)
-                        .has_provider()
-                );
+                assert!(shell.read(cx).contributed_views.is_empty());
                 assert!(
                     cx.global::<ApplicationProductCommands>()
                         .0
@@ -7057,15 +7281,7 @@ await commands.register("api.owned-cleanup", async () => {
         cx.run_until_parked();
         cx.read(|cx| {
             assert!(model.read(cx).resolved_contributions().is_empty());
-            assert!(
-                !shell
-                    .read(cx)
-                    .extension_tree
-                    .as_ref()
-                    .unwrap()
-                    .read(cx)
-                    .has_provider()
-            );
+            assert!(shell.read(cx).contributed_views.is_empty());
             assert!(
                 cx.global::<ApplicationProductCommands>()
                     .0
@@ -7080,20 +7296,62 @@ await commands.register("api.owned-cleanup", async () => {
     }
 
     #[gpui::test]
+    fn contributed_view_registered_before_the_window_attaches_on_open(cx: &mut TestAppContext) {
+        use crate::host::lifecycle::ExtensionKey;
+
+        const SOURCE: &str = r#"
+import { workbench } from "knot";
+await workbench.registerView({
+  id: "example.deferred",
+  title: "Deferred",
+  content: { kind: "tree", provider: {
+    getChildren() { return [{ id: "root", label: "Deferred", collapsibleState: "none" }]; },
+  } },
+});
+"#;
+
+        let documents = install_globals(cx);
+        let host = cx.update(super::super::extension_host::install);
+        let key = ExtensionKey::new(ExtensionId::new(90), ExtensionLifecycleId::new(1));
+        host.update(cx, |host, cx| {
+            let execution = host.load_test_source(key, SOURCE).unwrap();
+            cx.spawn(async move |_, _| {
+                execution.await.unwrap();
+            })
+            .detach();
+        });
+        wait_for_api_condition(cx, |cx| {
+            super::super::extension_host::view_definitions(cx)
+                .iter()
+                .any(|definition| definition.id == "example.deferred")
+        });
+
+        let document = cx.update(|cx| create_untitled_document(&documents, cx));
+        let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+        let (shell, _window) = product_window(document, model, cx);
+        let tree = wait_for_contributed_view(&shell, "example.deferred", cx);
+        wait_for_api_condition(cx, |cx| tree.read(cx).root_labels() == ["Deferred"]);
+    }
+
+    #[gpui::test]
     fn focused_extension_tree_claims_copy_and_unload_removes_its_handler(cx: &mut TestAppContext) {
         use crate::host::lifecycle::ExtensionKey;
 
         const SOURCE: &str = r#"
 import * as knot from "knot"; const { commands, workbench } = knot;
-await workbench.registerTreeDataProvider("outline", {
-  getChildren(parentId) {
-    return parentId === null ? [
-      { id: "first", label: "Selected tree item", collapsibleState: "none", command: "test.view-first" },
-      { id: "failure", label: "Fail", collapsibleState: "none" },
-    ] : [];
-  },
+await workbench.registerView({
+  id: "example.outline",
+  title: "Outline",
+  content: { kind: "tree", provider: {
+    getChildren(parentId) {
+      return parentId === null ? [
+        { id: "first", label: "Selected tree item", collapsibleState: "none", command: "test.view-first" },
+        { id: "failure", label: "Fail", collapsibleState: "none" },
+      ] : [];
+    },
+  } },
 });
-const viewCopy = await commands.registerForView("outline", "copy", async (context) => {
+const viewCopy = await commands.registerForView("example.outline", "copy", async (context) => {
   if (context.buffer !== null || await knot.editor.activeBuffer(context.target) !== null) throw new Error("outline has a text buffer");
   const text = await workbench.selectedText(context.target);
   if (text === "Fail") throw new Error("copy failed");
@@ -7102,11 +7360,11 @@ const viewCopy = await commands.registerForView("outline", "copy", async (contex
 await commands.register("test.view-first", async () => {
   throw new Error("global handler ran");
 });
-await commands.registerForView("outline", "test.view-first", async () => {
+await commands.registerForView("example.outline", "test.view-first", async () => {
   await workbench.writeClipboardText("tree item");
 });
 await commands.register("test.view-null", () => { throw new Error("global null handler"); });
-await commands.registerForView("outline", "test.view-null", async (context) => {
+await commands.registerForView("example.outline", "test.view-null", async (context) => {
   if (context.target.view === null || await workbench.selectedText(context.target) !== null) throw new Error("missing selection is not null");
 });
 await commands.register("test.nested-view-copy", async () => {
@@ -7135,7 +7393,7 @@ await commands.register("test.dispose-view-copy", async () => viewCopy.dispose()
             .detach();
         });
 
-        let tree = cx.read(|cx| shell.read(cx).extension_tree.clone().unwrap());
+        let tree = wait_for_contributed_view(&shell, "example.outline", cx);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
         loop {
             cx.run_until_parked();
@@ -7202,7 +7460,10 @@ await commands.register("test.dispose-view-copy", async () => viewCopy.dispose()
         cx.refresh().unwrap();
         {
             let mut window_cx = VisualTestContext::from_window(window, cx);
-            let row = point(px(50.), px(42.));
+            let row = window_cx
+                .debug_bounds("extension-tree-row-0")
+                .expect("contributed tree row is laid out")
+                .center();
             window_cx.simulate_mouse_down(row, MouseButton::Left, Modifiers::default());
             window_cx.simulate_mouse_up(row, MouseButton::Left, Modifiers::default());
         }
@@ -7231,7 +7492,7 @@ await commands.register("test.dispose-view-copy", async () => viewCopy.dispose()
                     .set(
                         BindingOwner::Extension(key.extension, key.lifecycle),
                         "cmd-j",
-                        Some("outline"),
+                        Some("example.outline"),
                         Some(Command {
                             name: super::COPY_COMMAND.into(),
                             arguments: CommandArgumentValue::Null,
@@ -7289,7 +7550,7 @@ await commands.register("test.dispose-view-copy", async () => viewCopy.dispose()
         });
 
         let (second_shell, second_window) = product_window(document, model.clone(), cx);
-        let second_tree = cx.read(|cx| second_shell.read(cx).extension_tree.clone().unwrap());
+        let second_tree = wait_for_contributed_view(&second_shell, "example.outline", cx);
         assert_ne!(
             cx.read(|cx| tree.read(cx).instance_id()),
             cx.read(|cx| second_tree.read(cx).instance_id())
@@ -7358,19 +7619,16 @@ await commands.register("test.dispose-view-copy", async () => viewCopy.dispose()
                     .0
                     .resolve(
                         &gpui::Keystroke::parse("cmd-j").unwrap().unparse(),
-                        Some("outline")
+                        Some("example.outline")
                     )
                     .is_none()
             );
         });
-        let unavailable = dispatch_tree_copy(&second_shell, second_window, cx);
-        assert_eq!(
-            wait_for_command(unavailable, cx),
-            CommandOutcome::Unavailable
-        );
         cx.read(|cx| {
-            assert!(!tree.read(cx).has_provider());
-            assert!(!second_tree.read(cx).has_provider());
+            assert!(shell.read(cx).contributed_views.is_empty());
+            assert!(second_shell.read(cx).contributed_views.is_empty());
+            assert!(!tree.read(cx).lifecycle_state().0);
+            assert!(!second_tree.read(cx).lifecycle_state().0);
         });
     }
 
@@ -7577,14 +7835,18 @@ await commands.register("test.nested-open", async () => {
 
         const SOURCE: &str = r#"
 import * as knot from "knot"; const { commands, workbench } = knot;
-await workbench.registerTreeDataProvider("outline", {
-  getChildren(parentId) {
-    return parentId === null
-      ? [{ id: "held", label: "Held selection", collapsibleState: "none" }]
-      : [];
-  },
+await workbench.registerView({
+  id: "example.outline",
+  title: "Outline",
+  content: { kind: "tree", provider: {
+    getChildren(parentId) {
+      return parentId === null
+        ? [{ id: "held", label: "Held selection", collapsibleState: "none" }]
+        : [];
+    },
+  } },
 });
-await commands.registerForView("outline", "copy", async () => {
+await commands.registerForView("example.outline", "copy", async () => {
   const text = await workbench.selectedText();
   await workbench.writeClipboardText(text);
 });
@@ -7603,7 +7865,7 @@ await commands.registerForView("outline", "copy", async () => {
             })
             .detach();
         });
-        let tree = cx.read(|cx| shell.read(cx).extension_tree.clone().unwrap());
+        let tree = wait_for_contributed_view(&shell, "example.outline", cx);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
         loop {
             cx.run_until_parked();
@@ -7675,7 +7937,7 @@ await commands.registerForView("outline", "copy", async () => {
         });
 
         let (second_shell, second_window) = product_window(document, model, cx);
-        let second_tree = cx.read(|cx| second_shell.read(cx).extension_tree.clone().unwrap());
+        let second_tree = wait_for_contributed_view(&second_shell, "example.outline", cx);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
         loop {
             cx.run_until_parked();
@@ -7715,7 +7977,7 @@ await commands.registerForView("outline", "copy", async () => {
                 cx.read_from_clipboard().unwrap().text().unwrap(),
                 "Held selection"
             );
-            assert!(!second_tree.read(cx).has_provider());
+            assert!(!second_tree.read(cx).lifecycle_state().0);
         });
     }
 

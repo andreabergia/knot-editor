@@ -66,6 +66,20 @@ impl ProductCommandTarget {
         }
     }
 
+    /// Stable contribution ID for a captured contributed tool surface.
+    pub(crate) fn extension_tool_id(&self, cx: &App) -> Option<String> {
+        self.validate_tab(cx).ok()?;
+        let workbench = self.workbench.upgrade()?;
+        let workbench = workbench.read(cx);
+        match self.surface {
+            super::workbench::TabSurfaceId::Tool(id) => {
+                workbench.tool(id).map(|tool| tool.stable_id.clone())
+            }
+            super::workbench::TabSurfaceId::Document(_)
+            | super::workbench::TabSurfaceId::Terminal(_) => None,
+        }
+    }
+
     pub(crate) fn document_id(
         &self,
         cx: &App,
@@ -80,14 +94,6 @@ impl ProductCommandTarget {
 
     pub(crate) fn command_view(&self, cx: &App) -> Option<super::workbench::CommandView> {
         self.validate_tab(cx).ok()?;
-        if let Some(view) = self.view {
-            return self
-                .shell
-                .upgrade()?
-                .read(cx)
-                .extension_command_view(view, cx)
-                .map(super::workbench::CommandView::Extension);
-        }
         self.workbench
             .upgrade()?
             .read(cx)
@@ -99,30 +105,25 @@ impl ProductCommandTarget {
     }
 
     pub(crate) fn validate_view(&self, cx: &App) -> Result<(), CommandOutcome> {
-        let Some(view) = self.view else {
-            if !cx.windows().contains(&self.window)
-                || self.shell.upgrade().is_none()
-                || self
-                    .command_view(cx)
-                    .is_none_or(|view| !view.matches_focus(&self.focus, cx))
-            {
-                return Err(CommandOutcome::InvalidTarget);
-            }
-            return Ok(());
-        };
         if !cx.windows().contains(&self.window) {
             return Err(CommandOutcome::InvalidTarget);
         }
-        let shell = self.shell.upgrade().ok_or(CommandOutcome::InvalidTarget)?;
-        let tree = shell
-            .read(cx)
-            .extension_command_view(view, cx)
-            .ok_or(CommandOutcome::InvalidTarget)?;
-        if self.focus.upgrade() == Some(tree.focus_handle(cx)) {
-            Ok(())
-        } else {
-            Err(CommandOutcome::InvalidTarget)
+        let Some(view) = self.command_view(cx) else {
+            return Err(CommandOutcome::InvalidTarget);
+        };
+        if !view.matches_focus(&self.focus, cx) {
+            return Err(CommandOutcome::InvalidTarget);
         }
+        if self.view.is_some_and(|view_id| {
+            !matches!(
+                view,
+                super::workbench::CommandView::Extension(ref tree)
+                    if tree.read(cx).instance_id() == view_id
+            )
+        }) {
+            return Err(CommandOutcome::InvalidTarget);
+        }
+        Ok(())
     }
 }
 

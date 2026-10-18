@@ -1,4 +1,8 @@
-//! Foreground ownership for extension tree and completion providers.
+//! Foreground ownership for extension view and completion providers.
+//!
+//! A contributed view definition and its native instances share one
+//! lifecycle-owned registration. Definitions exist independently of product
+//! windows; each product window owns at most one native instance per definition.
 
 use std::collections::{HashMap, HashSet};
 
@@ -14,6 +18,7 @@ use super::extension_host::handlers::{
     AccessError, CompletionArguments, CompletionRegistrationArguments, TreeArguments,
     TreeInvalidationArguments, TreeRegistrationArguments,
 };
+use super::tool_layout::StoredLocation;
 use crate::host::declarations::HostError;
 
 use super::{
@@ -25,12 +30,17 @@ use super::{
 pub(crate) enum SemanticError {
     #[error(transparent)]
     Access(AccessError),
-    #[error(code = "TreeViewNotFound", message = "TreeViewNotFound")]
-    TreeViewNotFound,
-    #[error(code = "TreeProviderInUse", message = "TreeProviderInUse")]
-    TreeProviderInUse,
-    #[error(code = "TreeProviderNotFound", message = "TreeProviderNotFound")]
-    TreeProviderNotFound,
+    #[error(code = "InvalidViewId", message = "InvalidViewId")]
+    InvalidViewId,
+    #[error(code = "ViewIdInUse", message = "ViewIdInUse")]
+    ViewIdInUse,
+    #[error(code = "ViewNotFound", message = "ViewNotFound")]
+    ViewNotFound,
+    #[error(
+        code = "ViewRegistrationNotFound",
+        message = "ViewRegistrationNotFound"
+    )]
+    ViewRegistrationNotFound,
     #[error(
         code = "CompletionProviderNotFound",
         message = "CompletionProviderNotFound"
@@ -45,29 +55,46 @@ impl From<AccessError> for SemanticError {
 
 type Lifecycle = (ExtensionId, ExtensionLifecycleId);
 
-/// Foreground registries and native tree surfaces exposed to extension requests.
-pub(crate) struct ExtensionSemanticBridge {
-    lifecycles: HashSet<Lifecycle>,
-    tree_kinds: HashSet<String>,
-    tree_views: HashMap<String, Vec<WeakEntity<TreeView>>>,
-    tree_registrations: HashMap<TreeProviderRegistrationId, TreeRegistration>,
-    next_tree_registration: u64,
-    completion_providers: CompletionProviderRegistry,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ViewPresentation {
+    Show,
+    Hide,
+    Focus,
+}
+
+/// One lifecycle-owned contributed view definition visible to the product shell.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ViewDefinition {
+    pub(crate) id: String,
+    pub(crate) title: String,
+    pub(crate) location: StoredLocation,
+    pub(crate) order: usize,
+    pub(crate) visible: bool,
 }
 
 struct TreeRegistration {
-    kind: String,
+    definition: ViewDefinition,
     identity: TreeProviderIdentity,
+}
+
+/// Foreground registries and native view surfaces exposed to extension requests.
+pub(crate) struct ExtensionSemanticBridge {
+    lifecycles: HashSet<Lifecycle>,
+    tree_views: HashMap<String, Vec<(String, WeakEntity<TreeView>)>>,
+    tree_registrations: HashMap<TreeProviderRegistrationId, TreeRegistration>,
+    next_tree_registration: u64,
+    next_default_order: usize,
+    completion_providers: CompletionProviderRegistry,
 }
 
 impl ExtensionSemanticBridge {
     pub(crate) fn new() -> Self {
         Self {
             lifecycles: HashSet::new(),
-            tree_kinds: HashSet::new(),
             tree_views: HashMap::new(),
             tree_registrations: HashMap::new(),
             next_tree_registration: 1,
+            next_default_order: 1_000,
             completion_providers: CompletionProviderRegistry::new(),
         }
     }
@@ -80,22 +107,20 @@ impl ExtensionSemanticBridge {
         self.lifecycles.insert((extension, lifecycle));
     }
 
-    pub(crate) fn declare_tree_kind(&mut self, kind: impl Into<String>) {
-        self.tree_kinds.insert(kind.into());
-    }
-
+    /// Attach a native view instance to its definition's provider. A definition
+    /// can exist before any window; a window can therefore attach immediately.
     pub(crate) fn add_tree_view(
         &mut self,
         kind: impl Into<String>,
+        window: impl Into<String>,
         view: Entity<TreeView>,
         cx: &mut App,
     ) -> Result<(), TreeViewRegistrationError> {
         let kind = kind.into();
-        self.tree_kinds.insert(kind.clone());
         if let Some(registration) = self
             .tree_registrations
             .values()
-            .find(|entry| entry.kind == kind)
+            .find(|entry| entry.definition.id == kind)
         {
             view.update(cx, |tree, cx| {
                 tree.register_provider(&kind, registration.identity, cx)
@@ -104,13 +129,13 @@ impl ExtensionSemanticBridge {
         self.tree_views
             .entry(kind)
             .or_default()
-            .push(view.downgrade());
+            .push((window.into(), view.downgrade()));
         Ok(())
     }
 
     pub(crate) fn remove_tree_view(&mut self, view: ViewId, cx: &App) {
         for views in self.tree_views.values_mut() {
-            views.retain(|candidate| {
+            views.retain(|(_, candidate)| {
                 candidate
                     .upgrade()
                     .is_some_and(|entity| entity.read(cx).instance_id() != view)
@@ -136,17 +161,23 @@ impl ExtensionSemanticBridge {
         cx: &mut App,
     ) -> Result<TreeProviderRegistrationId, SemanticError> {
         self.validate(request)?;
-        let TreeArguments { view_id } = &arguments;
+        let TreeArguments {
+            id,
+            title,
+            location,
+            order,
+            visible,
+        } = arguments;
 
-        if !self.tree_kinds.contains(view_id) {
-            return Err(SemanticError::TreeViewNotFound);
+        if id.is_empty() || id.starts_with("knot.") {
+            return Err(SemanticError::InvalidViewId);
         }
         if self
             .tree_registrations
             .values()
-            .any(|entry| entry.kind == *view_id)
+            .any(|entry| entry.definition.id == id)
         {
-            return Err(SemanticError::TreeProviderInUse);
+            return Err(SemanticError::ViewIdInUse);
         }
         let registration = TreeProviderRegistrationId::new(self.next_tree_registration);
         let identity = TreeProviderIdentity {
@@ -154,8 +185,23 @@ impl ExtensionSemanticBridge {
             lifecycle: request.lifecycle,
             registration,
         };
-        for view in self.live_tree_views(view_id) {
-            view.update(cx, |tree, cx| tree.register_provider(view_id, identity, cx))
+        let order = order.unwrap_or_else(|| {
+            let order = self.next_default_order;
+            self.next_default_order = self
+                .next_default_order
+                .checked_add(1)
+                .expect("view default order exhausted");
+            order as u64
+        });
+        let definition = ViewDefinition {
+            id: id.clone(),
+            title,
+            location,
+            order: order.try_into().expect("view order fits usize"),
+            visible,
+        };
+        for view in self.live_tree_views(&id, None) {
+            view.update(cx, |tree, cx| tree.register_provider(&id, identity, cx))
                 .map_err(map_tree_error)?;
         }
         self.next_tree_registration = self
@@ -165,12 +211,13 @@ impl ExtensionSemanticBridge {
         self.tree_registrations.insert(
             registration,
             TreeRegistration {
-                kind: view_id.clone(),
+                definition,
                 identity,
             },
         );
         Ok(registration)
     }
+
     pub(crate) fn invalidate_tree_provider(
         &mut self,
         request: &RequestContext,
@@ -181,10 +228,15 @@ impl ExtensionSemanticBridge {
         let TreeInvalidationArguments {
             registration,
             parent_id,
+            window,
         } = &arguments;
 
         let kind = self.owned_tree_kind(*registration, request)?;
-        for view in self.live_tree_views(&kind) {
+        let views = self.live_tree_views(&kind, window.as_deref());
+        if window.is_some() && views.is_empty() {
+            return Err(SemanticError::ViewNotFound);
+        }
+        for view in views {
             view.update(cx, |tree, cx| {
                 tree.invalidate(*registration, parent_id.clone(), cx)
             })
@@ -192,6 +244,7 @@ impl ExtensionSemanticBridge {
         }
         Ok(())
     }
+
     pub(crate) fn unregister_tree_provider(
         &mut self,
         request: &RequestContext,
@@ -202,13 +255,47 @@ impl ExtensionSemanticBridge {
         let TreeRegistrationArguments { registration } = &arguments;
 
         let kind = self.owned_tree_kind(*registration, request)?;
-        for view in self.live_tree_views(&kind) {
+        for view in self.live_tree_views(&kind, None) {
             view.update(cx, |tree, cx| tree.unregister_provider(*registration, cx))
                 .map_err(map_tree_error)?;
         }
         self.tree_registrations.remove(registration);
         Ok(())
     }
+
+    pub(crate) fn definitions(&self) -> Vec<ViewDefinition> {
+        let mut definitions = self
+            .tree_registrations
+            .values()
+            .map(|entry| entry.definition.clone())
+            .collect::<Vec<_>>();
+        definitions.sort_by(|left, right| (left.order, &left.id).cmp(&(right.order, &right.id)));
+        definitions
+    }
+
+    pub(crate) fn has_definition(&self, id: &str) -> bool {
+        self.tree_registrations
+            .values()
+            .any(|entry| entry.definition.id == id)
+    }
+
+    pub(crate) fn owned_kind(
+        &self,
+        registration: TreeProviderRegistrationId,
+        request: &RequestContext,
+    ) -> Result<String, SemanticError> {
+        let entry = self
+            .tree_registrations
+            .get(&registration)
+            .ok_or(SemanticError::ViewRegistrationNotFound)?;
+        if (entry.identity.extension, entry.identity.lifecycle)
+            != (request.extension, request.lifecycle)
+        {
+            return Err(SemanticError::ViewRegistrationNotFound);
+        }
+        Ok(entry.definition.id.clone())
+    }
+
     pub(crate) fn register_completion_provider(
         &mut self,
         request: &RequestContext,
@@ -246,16 +333,7 @@ impl ExtensionSemanticBridge {
         registration: TreeProviderRegistrationId,
         request: &RequestContext,
     ) -> Result<String, SemanticError> {
-        let entry = self
-            .tree_registrations
-            .get(&registration)
-            .ok_or(SemanticError::TreeProviderNotFound)?;
-        if (entry.identity.extension, entry.identity.lifecycle)
-            != (request.extension, request.lifecycle)
-        {
-            return Err(SemanticError::TreeProviderNotFound);
-        }
-        Ok(entry.kind.clone())
+        self.owned_kind(registration, request)
     }
 
     pub(crate) fn apply_tree_response(&self, response: TreeChildrenResponse, cx: &mut App) -> bool {
@@ -263,18 +341,19 @@ impl ExtensionSemanticBridge {
             return false;
         };
         let mut applied = false;
-        for view in self.live_tree_views(&entry.kind) {
+        for view in self.live_tree_views(&entry.definition.id, Some(&response.window)) {
             applied |= view.update(cx, |tree, cx| tree.apply_response(response.clone(), cx));
         }
         applied
     }
 
-    fn live_tree_views(&self, kind: &str) -> Vec<Entity<TreeView>> {
+    fn live_tree_views(&self, kind: &str, window: Option<&str>) -> Vec<Entity<TreeView>> {
         self.tree_views
             .get(kind)
             .into_iter()
             .flatten()
-            .filter_map(WeakEntity::upgrade)
+            .filter(|(candidate, _)| window.is_none_or(|window| candidate == window))
+            .filter_map(|(_, view)| view.upgrade())
             .collect()
     }
 
@@ -298,20 +377,29 @@ impl ExtensionSemanticBridge {
         extension: ExtensionId,
         lifecycle: ExtensionLifecycleId,
         cx: &mut App,
-    ) {
+    ) -> Vec<String> {
         self.lifecycles.remove(&(extension, lifecycle));
-        self.tree_registrations.retain(|_, entry| {
-            (entry.identity.extension, entry.identity.lifecycle) != (extension, lifecycle)
-        });
-        for views in self.tree_views.values() {
-            for view in views.iter().filter_map(WeakEntity::upgrade) {
+        let removed = self
+            .tree_registrations
+            .iter()
+            .filter_map(|(registration, entry)| {
+                ((entry.identity.extension, entry.identity.lifecycle) == (extension, lifecycle))
+                    .then_some((*registration, entry.definition.id.clone()))
+            })
+            .collect::<Vec<_>>();
+        let mut ids = Vec::new();
+        for (registration, kind) in removed {
+            for view in self.live_tree_views(&kind, None) {
                 view.update(cx, |tree, cx| {
                     tree.remove_lifecycle(extension, lifecycle, cx)
                 });
             }
+            self.tree_registrations.remove(&registration);
+            ids.push(kind);
         }
         self.completion_providers
             .remove_lifecycle(extension, lifecycle);
+        ids
     }
 }
 
@@ -323,22 +411,17 @@ impl Default for ExtensionSemanticBridge {
 
 fn map_tree_error(error: TreeViewRegistrationError) -> SemanticError {
     match error {
-        TreeViewRegistrationError::WrongView => SemanticError::TreeViewNotFound,
-        TreeViewRegistrationError::ProviderInUse => SemanticError::TreeProviderInUse,
-        TreeViewRegistrationError::ProviderNotFound => SemanticError::TreeProviderNotFound,
+        TreeViewRegistrationError::WrongView => SemanticError::ViewNotFound,
+        TreeViewRegistrationError::ProviderInUse => SemanticError::ViewIdInUse,
+        TreeViewRegistrationError::ProviderNotFound => SemanticError::ViewRegistrationNotFound,
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use gpui::{AppContext, TestAppContext};
-
-    use crate::host::protocol::{
-        CompletionProviderRegistrationId, RequestId, TreeCollapsibleState, TreeItem,
-        TreeProviderError,
-    };
-
     use super::*;
+    use crate::host::protocol::{RequestId, TreeCollapsibleState, TreeItem, TreeProviderError};
+    use gpui::{AppContext, TestAppContext};
 
     fn request(extension: ExtensionId, lifecycle: ExtensionLifecycleId, id: u64) -> RequestContext {
         RequestContext {
@@ -349,34 +432,48 @@ mod tests {
         }
     }
 
+    fn arguments(id: &str) -> TreeArguments {
+        TreeArguments {
+            id: id.into(),
+            title: "Outline".into(),
+            location: StoredLocation::Left,
+            order: None,
+            visible: true,
+        }
+    }
+
     #[gpui::test]
     fn registrations_route_to_native_owners_and_cleanup_with_the_lifecycle(
         cx: &mut TestAppContext,
     ) {
         let extension = ExtensionId::new(7);
         let lifecycle = ExtensionLifecycleId::new(3);
-        let tree = cx.new(|cx| TreeView::new("outline", cx));
+        let tree = cx.new(|cx| TreeView::new("example.outline", "1", cx));
         cx.update(|cx| {
             let mut bridge = ExtensionSemanticBridge::new();
-            bridge.add_tree_view("outline", tree.clone(), cx).unwrap();
+            bridge
+                .add_tree_view("example.outline", "1", tree.clone(), cx)
+                .unwrap();
             bridge.admit_lifecycle(extension, lifecycle);
 
-            let registered = bridge.register_tree_provider(
-                &request(extension, lifecycle, 1),
-                TreeArguments {
-                    view_id: "outline".into(),
-                },
-                cx,
-            );
-            let registration = registered.unwrap();
+            let registration = bridge
+                .register_tree_provider(
+                    &request(extension, lifecycle, 1),
+                    arguments("example.outline"),
+                    cx,
+                )
+                .unwrap();
             assert!(
                 tree.read(cx)
                     .owns_provider(registration, extension, lifecycle)
             );
+            assert_eq!(bridge.definitions()[0].id, "example.outline");
             let generation = tree.read(cx).root_generation();
             assert!(bridge.apply_tree_response(
                 TreeChildrenResponse {
                     registration,
+                    window: "1".into(),
+                    view: tree.read(cx).instance_id(),
                     parent_id: None,
                     generation,
                     result: Ok(vec![TreeItem {
@@ -405,9 +502,12 @@ mod tests {
             bridge.remove_lifecycle(extension, lifecycle, cx);
             assert_eq!(tree.read(cx).lifecycle_state(), (false, 0, false, 0));
             assert!(!bridge.owns_completion_provider(completion, extension, lifecycle));
+            assert!(bridge.definitions().is_empty());
             assert!(!bridge.apply_tree_response(
                 TreeChildrenResponse {
                     registration,
+                    window: "1".into(),
+                    view: tree.read(cx).instance_id(),
                     parent_id: None,
                     generation,
                     result: Err(TreeProviderError {
@@ -420,27 +520,93 @@ mod tests {
     }
 
     #[gpui::test]
-    fn wrong_lifecycle_and_registration_are_rejected(cx: &mut TestAppContext) {
-        let extension = ExtensionId::new(9);
-        let lifecycle = ExtensionLifecycleId::new(4);
-        let tree = cx.new(|cx| TreeView::new("outline", cx));
+    fn targeted_invalidation_touches_only_the_requested_window(cx: &mut TestAppContext) {
+        let extension = ExtensionId::new(11);
+        let lifecycle = ExtensionLifecycleId::new(5);
         cx.update(|cx| {
             let mut bridge = ExtensionSemanticBridge::new();
-            bridge.add_tree_view("outline", tree, cx).unwrap();
+            bridge.admit_lifecycle(extension, lifecycle);
+            let registration = bridge
+                .register_tree_provider(
+                    &request(extension, lifecycle, 1),
+                    arguments("example.outline"),
+                    cx,
+                )
+                .unwrap();
+            let first = cx.new(|cx| TreeView::new("example.outline", "1", cx));
+            let second = cx.new(|cx| TreeView::new("example.outline", "2", cx));
+            bridge
+                .add_tree_view("example.outline", "1", first.clone(), cx)
+                .unwrap();
+            bridge
+                .add_tree_view("example.outline", "2", second.clone(), cx)
+                .unwrap();
+
+            let arguments = |window: Option<&str>| TreeInvalidationArguments {
+                registration,
+                parent_id: None,
+                window: window.map(str::to_owned),
+            };
+            let first_before = first.read(cx).root_generation();
+            let second_before = second.read(cx).root_generation();
+            bridge
+                .invalidate_tree_provider(
+                    &request(extension, lifecycle, 2),
+                    arguments(Some("1")),
+                    cx,
+                )
+                .unwrap();
+            assert!(first.read(cx).root_generation() > first_before);
+            assert_eq!(second.read(cx).root_generation(), second_before);
+
+            bridge
+                .invalidate_tree_provider(&request(extension, lifecycle, 3), arguments(None), cx)
+                .unwrap();
+            assert!(second.read(cx).root_generation() > second_before);
+            assert_eq!(
+                bridge.invalidate_tree_provider(
+                    &request(extension, lifecycle, 4),
+                    arguments(Some("missing")),
+                    cx
+                ),
+                Err(SemanticError::ViewNotFound)
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn duplicate_ids_and_reserved_names_are_rejected(cx: &mut TestAppContext) {
+        let extension = ExtensionId::new(9);
+        let lifecycle = ExtensionLifecycleId::new(4);
+        cx.update(|cx| {
+            let mut bridge = ExtensionSemanticBridge::new();
+            bridge.admit_lifecycle(extension, lifecycle);
             assert_eq!(
                 bridge.register_tree_provider(
                     &request(extension, lifecycle, 1),
-                    TreeArguments {
-                        view_id: "outline".into(),
-                    },
+                    arguments("knot.explorer"),
                     cx
                 ),
-                Err(SemanticError::Access(AccessError::Cancelled))
+                Err(SemanticError::InvalidViewId)
             );
-            bridge.admit_lifecycle(extension, lifecycle);
+            bridge
+                .register_tree_provider(
+                    &request(extension, lifecycle, 2),
+                    arguments("example.outline"),
+                    cx,
+                )
+                .unwrap();
+            assert_eq!(
+                bridge.register_tree_provider(
+                    &request(extension, lifecycle, 3),
+                    arguments("example.outline"),
+                    cx
+                ),
+                Err(SemanticError::ViewIdInUse)
+            );
             assert_eq!(
                 bridge.unregister_completion_provider(
-                    &request(extension, lifecycle, 2),
+                    &request(extension, lifecycle, 4),
                     CompletionRegistrationArguments {
                         registration: CompletionProviderRegistrationId::new(99),
                     },

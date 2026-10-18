@@ -687,19 +687,34 @@ pub(crate) async fn dispose_editor_contributions(
     })?
 }
 
-use super::super::extension_semantics::SemanticError;
+use super::super::extension_semantics::{SemanticError, ViewPresentation};
 use crate::host::protocol::{
     CompletionProviderRegistrationId, ProviderIdentity, TreeProviderRegistrationId,
 };
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct TreeArguments {
-    pub view_id: String,
+    pub id: String,
+    pub title: String,
+    pub location: crate::app::tool_layout::StoredLocation,
+    pub order: Option<u64>,
+    pub visible: bool,
 }
 impl HostArguments for TreeArguments {
     fn decode(reader: &mut dyn ArgumentReader) -> Result<Self, DecodeError> {
+        let location = match reader.text(4, "view placement must be text")?.as_str() {
+            "left" => crate::app::tool_layout::StoredLocation::Left,
+            "right" => crate::app::tool_layout::StoredLocation::Right,
+            "bottom" => crate::app::tool_layout::StoredLocation::Bottom,
+            "document" => crate::app::tool_layout::StoredLocation::DocumentGroup,
+            _ => return Err(DecodeError::Type("invalid view placement")),
+        };
         Ok(Self {
-            view_id: reader.text(2, "UnsupportedOperation")?,
+            id: reader.text(2, "view id must be text")?,
+            title: reader.text(3, "view title must be text")?,
+            location,
+            order: reader.optional_integer(5)?,
+            visible: reader.integer(6)? != 0,
         })
     }
 }
@@ -732,12 +747,14 @@ impl HostArguments for TreeRegistrationArguments {
 pub(crate) struct TreeInvalidationArguments {
     pub registration: TreeProviderRegistrationId,
     pub parent_id: Option<String>,
+    pub window: Option<String>,
 }
 impl HostArguments for TreeInvalidationArguments {
     fn decode(reader: &mut dyn ArgumentReader) -> Result<Self, DecodeError> {
         Ok(Self {
             registration: TreeProviderRegistrationId::new(reader.integer(2)?),
             parent_id: reader.optional_text(3, "UnsupportedOperation")?,
+            window: reader.optional_text(4, "window target must be text")?,
         })
     }
     fn provider_mutation(&self) -> Option<ProviderIdentity> {
@@ -759,19 +776,33 @@ impl HostArguments for CompletionRegistrationArguments {
     }
 }
 
-#[host_operation("registerTreeDataProvider")]
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ViewOperationArguments {
+    pub registration: TreeProviderRegistrationId,
+    pub window: Option<String>,
+}
+impl HostArguments for ViewOperationArguments {
+    fn decode(reader: &mut dyn ArgumentReader) -> Result<Self, DecodeError> {
+        Ok(Self {
+            registration: TreeProviderRegistrationId::new(reader.integer(2)?),
+            window: reader.optional_text(3, "window target must be text")?,
+        })
+    }
+    fn provider_mutation(&self) -> Option<ProviderIdentity> {
+        Some(ProviderIdentity::Tree(self.registration))
+    }
+}
+
+#[host_operation("registerView")]
 pub(crate) async fn register_tree_provider(
     context: HostContext,
     arguments: TreeArguments,
 ) -> Result<TreeProviderRegistrationId, SemanticError> {
     let request = context.request;
-    context.foreground(|host, cx| {
-        host.semantics
-            .register_tree_provider(&request, arguments, cx)
-    })?
+    context.foreground(|host, cx| host.register_view(&request, arguments, cx))?
 }
 
-#[host_operation("invalidateTreeDataProvider")]
+#[host_operation("invalidateView")]
 pub(crate) async fn invalidate_tree_provider(
     context: HostContext,
     arguments: TreeInvalidationArguments,
@@ -783,15 +814,63 @@ pub(crate) async fn invalidate_tree_provider(
     })?
 }
 
-#[host_operation("unregisterTreeDataProvider")]
+#[host_operation("unregisterView")]
 pub(crate) async fn unregister_tree_provider(
     context: HostContext,
     arguments: TreeRegistrationArguments,
 ) -> Result<(), SemanticError> {
     let request = context.request;
+    context.foreground(|host, cx| host.unregister_view(&request, arguments, cx))?
+}
+
+#[host_operation("showView")]
+pub(crate) async fn show_view(
+    context: HostContext,
+    arguments: ViewOperationArguments,
+) -> Result<(), SemanticError> {
+    let request = context.request;
     context.foreground(|host, cx| {
-        host.semantics
-            .unregister_tree_provider(&request, arguments, cx)
+        host.present_view(
+            &request,
+            arguments.registration,
+            arguments.window.as_deref(),
+            ViewPresentation::Show,
+            cx,
+        )
+    })?
+}
+
+#[host_operation("hideView")]
+pub(crate) async fn hide_view(
+    context: HostContext,
+    arguments: ViewOperationArguments,
+) -> Result<(), SemanticError> {
+    let request = context.request;
+    context.foreground(|host, cx| {
+        host.present_view(
+            &request,
+            arguments.registration,
+            arguments.window.as_deref(),
+            ViewPresentation::Hide,
+            cx,
+        )
+    })?
+}
+
+#[host_operation("focusView")]
+pub(crate) async fn focus_view(
+    context: HostContext,
+    arguments: ViewOperationArguments,
+) -> Result<(), SemanticError> {
+    let request = context.request;
+    context.foreground(|host, cx| {
+        host.present_view(
+            &request,
+            arguments.registration,
+            arguments.window.as_deref(),
+            ViewPresentation::Focus,
+            cx,
+        )
     })?
 }
 

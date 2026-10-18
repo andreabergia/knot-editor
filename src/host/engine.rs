@@ -1126,11 +1126,15 @@ impl RuntimeCapsule {
                         || Some(v8::null(try_catch).into()),
                         |parent| v8::String::new(try_catch, parent).map(Into::into),
                     )?;
+                    let window = v8::String::new(try_catch, &request.window)?;
+                    let instance = v8::String::new(try_catch, &request.view.value().to_string())?;
                     function.call(
                         try_catch,
                         v8::undefined(try_catch).into(),
                         &[
                             v8::Number::new(try_catch, request.registration.value() as f64).into(),
+                            window.into(),
+                            instance.into(),
                             parent,
                             v8::Number::new(try_catch, request.generation as f64).into(),
                         ],
@@ -1634,7 +1638,9 @@ impl RuntimeCapsule {
                             None => tree_response_from_v8(scope, request, value),
                             Some(error) => TreeChildrenResponse {
                                 registration: request.registration,
-                                parent_id: request.parent_id,
+                                window: request.window.clone(),
+                                view: request.view,
+                                parent_id: request.parent_id.clone(),
                                 generation: request.generation,
                                 result: Err(TreeProviderError {
                                     message: error.to_string(),
@@ -1707,7 +1713,9 @@ impl RuntimeCapsule {
                         completed.store(true, Ordering::Release);
                         let _ = result.send(Ok(TreeChildrenResponse {
                             registration: request.registration,
-                            parent_id: request.parent_id,
+                            window: request.window.clone(),
+                            view: request.view,
+                            parent_id: request.parent_id.clone(),
                             generation: request.generation,
                             result: Err(TreeProviderError {
                                 message: error.to_string(),
@@ -2904,11 +2912,33 @@ impl RuntimePool {
         Ok(())
     }
 
+    /// Panics if the extension's lifecycle ends in failure while a test awaits a
+    /// request: that always means the fixture never reached the expected call,
+    /// and hiding the failure behind a generic missing-request panic makes the
+    /// cause much harder to find.
+    #[cfg(test)]
+    fn lifecycle_failure_while_waiting(reason: &LifecycleEnd) {
+        match reason {
+            LifecycleEnd::Failed(failure) => panic!(
+                "extension failed while a request was expected: {}",
+                failure.message()
+            ),
+            LifecycleEnd::StartupFailed => {
+                panic!("extension startup failed while a request was expected")
+            }
+            LifecycleEnd::Unloaded | LifecycleEnd::Shutdown => {}
+        }
+    }
+
+    #[cfg(test)]
     pub(crate) fn receive_request(&self) -> Option<HostRequest> {
         loop {
             let event = self.events.lock().unwrap().as_mut()?.blocking_recv()?;
-            if let EngineEvent::Request(request) = event {
-                return Some(request);
+            match event {
+                EngineEvent::Request(request) => return Some(request),
+                EngineEvent::LifecycleEnded { reason, .. } => {
+                    Self::lifecycle_failure_while_waiting(&reason)
+                }
             }
         }
     }
@@ -2920,7 +2950,9 @@ impl RuntimePool {
             let event = self.events.lock().unwrap().as_mut()?.try_recv();
             match event {
                 Ok(EngineEvent::Request(request)) => return Some(request),
-                Ok(EngineEvent::LifecycleEnded { .. }) => {}
+                Ok(EngineEvent::LifecycleEnded { reason, .. }) => {
+                    Self::lifecycle_failure_while_waiting(&reason)
+                }
                 Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => return None,
                 Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
                     if Instant::now() >= deadline {
@@ -4506,6 +4538,8 @@ fn tree_response_from_v8<'s>(
 ) -> TreeChildrenResponse {
     TreeChildrenResponse {
         registration: request.registration,
+        window: request.window,
+        view: request.view,
         parent_id: request.parent_id,
         generation: request.generation,
         result: provider_items_from_v8(scope, value, tree_item_from_v8)
@@ -5892,6 +5926,7 @@ mod tests {
                     authority: CommandInvocationId::new(900),
                     window: "fixture-window".into(),
                     view: None,
+                    tool: None,
                 }),
             },
             Some(BufferHandle::new(3)),
@@ -6051,7 +6086,7 @@ mod tests {
                 await commands.register("owned", () => { throw new Error("disposed command ran"); }),
                 await buffer.onDidChange(() => { throw new Error("disposed listener ran"); }),
                 buffer.contributions,
-                await workbench.registerTreeDataProvider("outline", { getChildren() { throw new Error("disposed tree ran"); } }),
+                await workbench.registerView({ id: "example.outline", title: "Outline", content: { kind: "tree", provider: { getChildren() { throw new Error("disposed tree ran"); } } } }),
                 await editor.registerCompletionProvider("owned", { provideCompletions() { throw new Error("disposed completion ran"); } }),
               ];
             "#,
@@ -6169,6 +6204,8 @@ mod tests {
                     runtime,
                     TreeChildrenRequest {
                         registration: TreeProviderRegistrationId::new(903),
+                        window: "1".into(),
+                        view: crate::host::protocol::ViewId::new(1),
                         parent_id: None,
                         generation: 1,
                     },
@@ -6205,7 +6242,7 @@ mod tests {
         let setup = pool.execute_fixture_module(runtime, "file:///fixtures/ordering.js", r#"
           import { workbench } from "knot";
           globalThis.api = workbench;
-          globalThis.tree = await workbench.registerTreeDataProvider("outline", { getChildren() { return []; } });
+          globalThis.tree = await workbench.registerView({ id: "example.outline", title: "Outline", content: { kind: "tree", provider: { getChildren() { return []; } } } });
         "#).unwrap();
         let request = pool.receive_request().unwrap();
         pool.respond(HostResponse {
@@ -6334,9 +6371,9 @@ mod tests {
           import { editor, workbench } from "knot";
           globalThis.treeCalls = 0;
           globalThis.completionCalls = 0;
-          globalThis.tree = await workbench.registerTreeDataProvider("outline", {
+          globalThis.tree = await workbench.registerView({ id: "example.outline", title: "Outline", content: { kind: "tree", provider: {
             async getChildren() { treeCalls++; await tree.dispose(); globalThis.treeReleased = true; return []; },
-          });
+          } } });
           globalThis.completion = await editor.registerCompletionProvider("self", {
             async provideCompletions() { completionCalls++; await completion.dispose(); globalThis.completionReleased = true; return []; },
           });
@@ -6362,6 +6399,8 @@ mod tests {
                 runtime,
                 TreeChildrenRequest {
                     registration: TreeProviderRegistrationId::new(906),
+                    window: "1".into(),
+                    view: crate::host::protocol::ViewId::new(1),
                     parent_id: None,
                     generation: 1,
                 },
@@ -6379,6 +6418,8 @@ mod tests {
                 runtime,
                 TreeChildrenRequest {
                     registration: TreeProviderRegistrationId::new(906),
+                    window: "1".into(),
+                    view: crate::host::protocol::ViewId::new(1),
                     parent_id: None,
                     generation: 2,
                 },
@@ -6467,7 +6508,7 @@ mod tests {
         pool.load(runtime, IsolateConfig::default()).unwrap();
         let setup = pool.execute_fixture_module(runtime, "file:///fixtures/provider-data.js", r#"
           import { editor, workbench } from "knot";
-          await workbench.registerTreeDataProvider("outline", {
+          await workbench.registerView({ id: "example.outline", title: "Outline", content: { kind: "tree", provider: {
             getChildren(parent) {
               if (parent === "prototype") { Object.prototype.error = "ambient error"; Object.prototype.toJSON = () => { throw new Error("ambient toJSON evaluated"); }; }
               if (parent === "arraylike") return { 0: {}, length: 1 };
@@ -6478,7 +6519,7 @@ mod tests {
               if (parent === "bad-token") return [{ id: "id", label: "label", collapsibleState: "none", icon: "other" }];
               return new Set([{ id: "id", label: "label", collapsibleState: "none", unknown: () => {}, toJSON() { throw new Error("unknown item field evaluated"); } }]);
             },
-          });
+          } } });
           await editor.registerCompletionProvider("data", {
             provideCompletions(context) {
               if (context.prefix === "arraylike") return { length: 1, 0: {} };
@@ -6519,6 +6560,8 @@ mod tests {
                     runtime,
                     TreeChildrenRequest {
                         registration: TreeProviderRegistrationId::new(908),
+                        window: "1".into(),
+                        view: crate::host::protocol::ViewId::new(1),
                         parent_id: Some(parent.into()),
                         generation: 1,
                     },
@@ -6568,7 +6611,7 @@ mod tests {
         for operation in [
             "commands.register('late', () => {})",
             "editor.registerCompletionProvider('late', { provideCompletions() { return []; } })",
-            "workbench.registerTreeDataProvider('outline', { getChildren() { return []; } })",
+            "workbench.registerView({ id: 'example.outline', title: 'Outline', content: { kind: 'tree', provider: { getChildren() { return []; } } } })",
         ] {
             let pool = RuntimePool::new(PoolConfig::single_worker());
             let runtime = key(196);
@@ -7186,7 +7229,7 @@ globalThis.activationFinished = true;
                     || typeof knot.commands.invalidArguments !== "function"
                     || typeof knot.commands.invoke !== "function"
                     || typeof knot.commands.register !== "function"
-                    || typeof knot.workbench.registerTreeDataProvider !== "function") {
+                    || typeof knot.workbench.registerView !== "function") {
                     throw new Error("facade shape is incomplete");
                 }
             "#,
@@ -8293,6 +8336,8 @@ globalThis.activationFinished = true;
                 runtime,
                 TreeChildrenRequest {
                     registration: TreeProviderRegistrationId::new(1),
+                    window: "1".into(),
+                    view: crate::host::protocol::ViewId::new(1),
                     parent_id: None,
                     generation: 1,
                 },
@@ -8795,9 +8840,10 @@ globalThis.activationFinished = true;
                       globalThis[name] = () => { throw new Error("untrusted provider dispatch replacement"); };
                     }
                     globalThis.providerEvents = [];
-                    globalThis.treeProvider = await workbench.registerTreeDataProvider(
-                      "outline",
-                      {
+                    globalThis.treeProvider = await workbench.registerView({
+                      id: "example.outline",
+                      title: "Outline",
+                      content: { kind: "tree", provider: {
                         async getChildren(parentId) {
                           globalThis.providerEvents.push(`tree-${parentId ?? "root"}-start`);
                           if (parentId === "await") await workbench.writeClipboardText("tree wait");
@@ -8811,8 +8857,8 @@ globalThis.activationFinished = true;
                             collapsibleState: parentId === null ? "expanded" : "none",
                           }];
                         },
-                      },
-                    );
+                      } },
+                    });
                     globalThis.completionProvider = await editor.registerCompletionProvider(
                       "fixture",
                       {
@@ -8831,11 +8877,15 @@ globalThis.activationFinished = true;
             .unwrap();
         let tree = pool
             .receive_request_timeout(Duration::from_secs(1))
-            .unwrap();
+            .unwrap_or_else(|| panic!("no registerView request: {:?}", pool.diagnostics()));
         assert_eq!(
             tree.operation,
             operation::<declared::register_tree_provider>(declared::TreeArguments {
-                view_id: "outline".into()
+                id: "example.outline".into(),
+                title: "Outline".into(),
+                location: crate::app::tool_layout::StoredLocation::Left,
+                order: None,
+                visible: true,
             })
         );
         pool.respond(HostResponse {
@@ -8882,6 +8932,8 @@ globalThis.activationFinished = true;
                 runtime,
                 TreeChildrenRequest {
                     registration: tree_registration,
+                    window: "1".into(),
+                    view: crate::host::protocol::ViewId::new(1),
                     parent_id: None,
                     generation: 8,
                 },
@@ -8904,6 +8956,8 @@ globalThis.activationFinished = true;
                 runtime,
                 TreeChildrenRequest {
                     registration: tree_registration,
+                    window: "1".into(),
+                    view: crate::host::protocol::ViewId::new(1),
                     parent_id: Some("failure".into()),
                     generation: 9,
                 },
@@ -8977,6 +9031,7 @@ globalThis.activationFinished = true;
             operation::<declared::invalidate_tree_provider>(declared::TreeInvalidationArguments {
                 registration: tree_registration,
                 parent_id: Some("root".into()),
+                window: None,
             })
         );
         pool.respond(HostResponse {
@@ -9006,6 +9061,8 @@ globalThis.activationFinished = true;
                 runtime,
                 TreeChildrenRequest {
                     registration: tree_registration,
+                    window: "1".into(),
+                    view: crate::host::protocol::ViewId::new(1),
                     parent_id: Some("await".into()),
                     generation: 1,
                 },
@@ -9076,6 +9133,8 @@ globalThis.activationFinished = true;
                 runtime,
                 TreeChildrenRequest {
                     registration: tree_registration,
+                    window: "1".into(),
+                    view: crate::host::protocol::ViewId::new(1),
                     parent_id: Some("await".into()),
                     generation: 2,
                 },
@@ -9126,6 +9185,8 @@ globalThis.activationFinished = true;
                 runtime,
                 TreeChildrenRequest {
                     registration: tree_registration,
+                    window: "1".into(),
+                    view: crate::host::protocol::ViewId::new(1),
                     parent_id: Some("await".into()),
                     generation: 4,
                 },
@@ -9198,6 +9259,8 @@ globalThis.activationFinished = true;
                 runtime,
                 TreeChildrenRequest {
                     registration: tree_registration,
+                    window: "1".into(),
+                    view: crate::host::protocol::ViewId::new(1),
                     parent_id: None,
                     generation: 5,
                 },
