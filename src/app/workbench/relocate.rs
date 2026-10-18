@@ -3,8 +3,8 @@
 use gpui::{Entity, EntityId};
 
 use super::{
-    Pane, PaneId, SplitDirection, SplitPlacement, TabId, TerminalView, Workbench, WorkbenchLayout,
-    WorkbenchTab, WorkbenchTabPayload, WorkbenchTabSnapshot,
+    DockLocation, Pane, PaneId, SplitDirection, SplitPlacement, TabId, TerminalView, Workbench,
+    WorkbenchLayout, WorkbenchTab, WorkbenchTabPayload, WorkbenchTabSnapshot,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -47,6 +47,10 @@ pub(crate) enum TabMoveDestination {
         anchor: TabMoveCapture,
         placement: TabMovePlacement,
     },
+    /// Move to a sidebar or bottom dock, creating the dock group around the
+    /// whole workbench when it is not visible. Produced by workbench-edge
+    /// drops; pane-edge splits keep using `At` with `Split`.
+    Dock(DockLocation),
     /// Install the first pane in an empty workbench.
     Empty,
 }
@@ -64,6 +68,7 @@ struct PreparedDestination {
     index: usize,
     new_pane: bool,
     new_tab: bool,
+    dock: Option<DockLocation>,
     layout: WorkbenchLayout,
 }
 
@@ -92,6 +97,7 @@ impl Workbench {
     pub(crate) fn accepts_tab_move(&self, target: TabMoveDestination) -> bool {
         match target {
             TabMoveDestination::Empty => self.layout.is_none() && self.panes.is_empty(),
+            TabMoveDestination::Dock(_) => true,
             TabMoveDestination::At { anchor, .. } => self.contains_tab_move(anchor),
         }
     }
@@ -105,10 +111,41 @@ impl Workbench {
             return None;
         }
         let tab = reused_tab.unwrap_or(TabId(self.next_tab_id));
-        let (pane, index, new_pane, layout) = match target {
+        let (pane, index, new_pane, dock, layout) = match target {
             TabMoveDestination::Empty => {
                 let pane = PaneId(self.next_pane_id);
-                (pane, 0, true, WorkbenchLayout::Pane(pane))
+                (pane, 0, true, None, WorkbenchLayout::Pane(pane))
+            }
+            TabMoveDestination::Dock(dock) => {
+                if let Some(pane) = self
+                    .docks
+                    .iter()
+                    .find(|(_, location)| *location == dock)
+                    .map(|(pane, _)| *pane)
+                {
+                    let index = self.pane(pane).map(|pane| pane.tabs.len()).unwrap_or(0);
+                    let layout = self.layout.clone().unwrap_or(WorkbenchLayout::Pane(pane));
+                    (pane, index, false, Some(dock), layout)
+                } else {
+                    let pane = PaneId(self.next_pane_id);
+                    let leaf = WorkbenchLayout::Pane(pane);
+                    let layout = match self.layout.clone() {
+                        None => leaf,
+                        Some(root) => {
+                            let (direction, first, second) = match dock {
+                                DockLocation::Left => (SplitDirection::Horizontal, leaf, root),
+                                DockLocation::Right => (SplitDirection::Horizontal, root, leaf),
+                                DockLocation::Bottom => (SplitDirection::Vertical, root, leaf),
+                            };
+                            WorkbenchLayout::Split {
+                                direction,
+                                first: Box::new(first),
+                                second: Box::new(second),
+                            }
+                        }
+                    };
+                    (pane, 0, true, Some(dock), layout)
+                }
             }
             TabMoveDestination::At { anchor, placement } => {
                 let pane = self.pane(anchor.tab.pane_id)?;
@@ -120,14 +157,15 @@ impl Workbench {
                             .iter()
                             .position(|tab| tab.id == anchor.tab.tab_id)?,
                         false,
+                        None,
                         layout,
                     ),
-                    TabMovePlacement::End => (pane.id, pane.tabs.len(), false, layout),
+                    TabMovePlacement::End => (pane.id, pane.tabs.len(), false, None, layout),
                     TabMovePlacement::Split(edge) => {
                         let new_pane = PaneId(self.next_pane_id);
                         let (direction, placement) = edge.split();
                         assert!(layout.split_pane(pane.id, new_pane, direction, placement));
-                        (new_pane, 0, true, layout)
+                        (new_pane, 0, true, None, layout)
                     }
                 }
             }
@@ -138,6 +176,7 @@ impl Workbench {
             index,
             new_pane,
             new_tab: reused_tab.is_none(),
+            dock,
             layout,
         })
     }
@@ -158,6 +197,9 @@ impl Workbench {
         }
         if prepared.new_pane {
             assert_eq!(self.allocate_pane_id(), prepared.pane);
+            if let Some(dock) = prepared.dock {
+                self.docks.push((prepared.pane, dock));
+            }
             self.panes.push(Pane {
                 id: prepared.pane,
                 tabs: vec![tab],

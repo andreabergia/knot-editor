@@ -43,6 +43,11 @@ pub(crate) enum DockLocation {
 impl DockLocation {
     pub(crate) const ALL: [Self; 3] = [Self::Left, Self::Right, Self::Bottom];
 
+    /// Usable dock extents in logical pixels. Dividers clamp to this range so
+    /// a dragged dock stays visible without squeezing the editor shut.
+    pub(crate) const MIN_SIZE: f32 = 80.;
+    pub(crate) const MAX_SIZE: f32 = 480.;
+
     pub(crate) fn index(self) -> usize {
         match self {
             Self::Left => 0,
@@ -129,6 +134,11 @@ impl Workbench {
 
     pub(crate) fn dock_size(&self, dock: DockLocation) -> f32 {
         self.dock_sizes[dock.index()]
+    }
+
+    pub(crate) fn set_dock_size(&mut self, dock: DockLocation, size: f32) {
+        self.dock_sizes[dock.index()] = size.clamp(DockLocation::MIN_SIZE, DockLocation::MAX_SIZE);
+        self.debug_assert_invariants();
     }
 
     pub(crate) fn normal_pane(&self) -> Option<PaneId> {
@@ -365,7 +375,7 @@ mod tests {
             let presentation = workbench.tool(id).unwrap().content.presentation();
             let (dock, _) = workbench.show_tool(id).unwrap();
             assert_eq!(workbench.dock_location(dock), Some(DockLocation::Left));
-            workbench.dock_sizes[0] = 315.;
+            workbench.set_dock_size(DockLocation::Left, 315.);
             assert!(workbench.hide_tool(id));
             assert!(workbench.pane(dock).is_none());
             assert!(matches!(workbench.layout(), Some(WorkbenchLayout::Pane(id)) if *id == pane));
@@ -467,6 +477,120 @@ mod tests {
                 ids.map(TabSurfaceId::Tool)
             );
             assert_eq!(pane.active_tab().surface_id(), TabSurfaceId::Tool(ids[1]));
+        });
+    }
+
+    #[gpui::test]
+    fn tool_moves_between_groups_edges_and_docks_preserve_frame(cx: &mut gpui::TestAppContext) {
+        let workbench = cx.new(|_| Workbench::empty());
+        workbench.update(cx, |workbench, cx| {
+            let model = cx.new(|_| BufferModel::from_text(""));
+            let mut documents = crate::app::documents::DocumentCollection::new();
+            let document = documents.create_untitled("doc", model.clone(), cx);
+            let (doc_pane, _) = workbench.open_document_in_normal_group(document, model, cx);
+            let id = explorer(workbench, cx);
+            let presentation = workbench.tool(id).unwrap().content.presentation();
+            let (dock, _) = workbench.show_tool(id).unwrap();
+            assert_eq!(workbench.dock_location(dock), Some(DockLocation::Left));
+
+            // Pane-edge split moves the frame next to the document group and
+            // collapses the emptied dock.
+            let source = workbench
+                .capture_tab_move(dock, workbench.tool_tab(id).unwrap().1)
+                .unwrap();
+            let anchor = workbench
+                .capture_tab_move(doc_pane, workbench.pane(doc_pane).unwrap().tabs()[0].id())
+                .unwrap();
+            let moved = workbench
+                .relocate_tab(
+                    source,
+                    super::TabMoveDestination::At {
+                        anchor,
+                        placement: super::TabMovePlacement::Split(super::SplitEdge::Right),
+                    },
+                )
+                .unwrap();
+            assert_eq!(
+                workbench.tool(id).unwrap().content.presentation(),
+                presentation
+            );
+            assert_eq!(moved.destination.tab_id, source.tab.tab_id);
+            assert!(!workbench.contains_tab_move(source));
+            assert!(workbench.pane(dock).is_none());
+            assert_eq!(workbench.focused_pane_id(), Some(moved.destination.pane_id));
+
+            // Workbench-edge drop recreates the dock around the whole layout.
+            let source = workbench
+                .capture_tab_move(moved.destination.pane_id, moved.destination.tab_id)
+                .unwrap();
+            let docked = workbench
+                .relocate_tab(
+                    source,
+                    super::TabMoveDestination::Dock(DockLocation::Bottom),
+                )
+                .unwrap();
+            assert_eq!(
+                workbench.tool(id).unwrap().content.presentation(),
+                presentation
+            );
+            assert_eq!(
+                workbench.dock_location(docked.destination.pane_id),
+                Some(DockLocation::Bottom)
+            );
+            assert_eq!(
+                workbench.focused_pane_id(),
+                Some(docked.destination.pane_id)
+            );
+
+            // Joining the document group keeps the document view count at one.
+            let anchor = workbench
+                .capture_tab_move(doc_pane, workbench.pane(doc_pane).unwrap().tabs()[0].id())
+                .unwrap();
+            let joined = workbench
+                .relocate_tab(
+                    workbench
+                        .capture_tab_move(docked.destination.pane_id, docked.destination.tab_id)
+                        .unwrap(),
+                    super::TabMoveDestination::At {
+                        anchor,
+                        placement: super::TabMovePlacement::End,
+                    },
+                )
+                .unwrap();
+            assert_eq!(joined.destination.pane_id, doc_pane);
+            assert_eq!(workbench.view_count(document), 1);
+            assert!(workbench.pane(docked.destination.pane_id).is_none());
+            assert_eq!(
+                workbench.tool(id).unwrap().content.presentation(),
+                presentation
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn dock_sizes_clamp_and_survive_hide_reopen(cx: &mut gpui::TestAppContext) {
+        let workbench = cx.new(|_| Workbench::empty());
+        workbench.update(cx, |workbench, cx| {
+            let id = explorer(workbench, cx);
+            workbench.show_tool(id).unwrap();
+            workbench.set_dock_size(DockLocation::Left, 1.);
+            assert_eq!(
+                workbench.dock_size(DockLocation::Left),
+                DockLocation::MIN_SIZE
+            );
+            workbench.set_dock_size(DockLocation::Left, 10_000.);
+            assert_eq!(
+                workbench.dock_size(DockLocation::Left),
+                DockLocation::MAX_SIZE
+            );
+            workbench.set_dock_size(DockLocation::Bottom, 133.);
+            workbench.place_tool(id, ToolPlacement::Dock(DockLocation::Bottom));
+            assert_eq!(workbench.dock_size(DockLocation::Bottom), 133.);
+            assert!(workbench.hide_tool(id));
+            workbench.set_dock_size(DockLocation::Bottom, 200.);
+            let (pane, _) = workbench.show_tool(id).unwrap();
+            assert_eq!(workbench.dock_location(pane), Some(DockLocation::Bottom));
+            assert_eq!(workbench.dock_size(DockLocation::Bottom), 200.);
         });
     }
 }
