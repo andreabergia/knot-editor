@@ -1,6 +1,6 @@
 # D049 — Docking and automatic tool-layout memory
 
-Status: 🚧 Checkpoint 2 implemented and automated checks passed; native review pending.
+Status: 🚧 Checkpoint 3 implemented and automated checks passed; native review pending.
 
 Source: checkpoint 5 of the [extension platform and projects plan](extension-platform-and-projects-plan.md).
 Design discussion: 2026-10-16. Followed by the
@@ -201,7 +201,7 @@ Implementation evidence:
 into an editor tab group, and back; resize nested splits. Inspect whether the
 shared model remains simple before adding extension ownership.
 
-### 3. Automatic tool-layout persistence ⬜
+### 3. Automatic tool-layout persistence 🚧
 
 Implement the tool-only snapshot, native application storage, automatic writes,
 fresh-window restoration, and Reset Layout. Preserve remembered hidden tools;
@@ -216,6 +216,52 @@ return to their size/location; automatic tool activation does not alter defaults
 mixed document groups produce no inherited document splits or placeholders;
 missing tools, Reset Layout, write failure, and graceful shutdown with a pending
 write. Tests must prove document/terminal state is absent from tool records.
+
+Implementation evidence:
+
+- ✅ Tool-only snapshot in `src/app/tool_layout.rs`: stable namespaced tool IDs
+  (`knot.explorer`), dock/document-group location, order, sizes, visibility,
+  per-dock selection, and hidden tools' remembered locations. Visible tools in
+  ordinary groups and vanished panes flatten to the document group. A visible
+  dock reports its active tab as its selection; hidden docks keep their
+  remembered selection. Live `ToolFrameId` handles, `PaneId`s, documents, and
+  terminals never enter the record.
+- ✅ One versioned row in application-owned SQLite
+  (`tool-layout.sqlite3` beside extension storage, `PRAGMA application_id`,
+  `STRICT` table with `json_valid` payload, single `state = 0` row). Version or
+  payload mismatch, corrupt files, and missing files all fall back to product
+  defaults without touching the filesystem on read.
+- ✅ Small native boundary: `ToolLayoutStore` caches the published snapshot
+  synchronously so fresh windows inherit immediately; writes go off the
+  foreground with 300ms trailing-edge debounce, so divider dragging coalesces
+  into one write and identical publishes skip storage entirely. `flush()` forces
+  a pending write; the quit path awaits it after extension-storage drain, so a
+  pending customization survives restart. Write failure keeps the live cache,
+  records the error, and stays pending for retry.
+- ✅ Fresh-window restore applies sizes, placements, order, visibility, and
+  selection onto registered tools at explorer registration; unknown stored
+  tools are skipped without blank frames and docks already in stored order are
+  left untouched. `workbench.reset-layout` restores product defaults and
+  publishes the reset.
+- ✅ Publish points are user-only: explorer/dock toggle and move commands,
+  the hide button, same-window tool drag relocation, and divider release
+  (Escape revert publishes nothing). Workspace-open auto-show, restore,
+  window activation, and document splits never publish.
+- ✅ `cargo test --all-targets --locked` passed (667 library tests), as did
+  `cargo clippy --all-targets --locked -- -D warnings`,
+  `scripts/check-extension-api.sh`, and `git diff --check`. Ran `cargo fmt`.
+  Tests live in `src/app/tool_layout.rs` (reopen durability, coalescing,
+  fallback, write failure), `src/app/workbench/tools.rs` (tool-only content,
+  flattening, round trip), and `src/app/product/tests/tool_layout.rs`
+  (fresh-window inheritance, existing-window independence, activation and
+  auto-show publishing nothing, hidden-tool restore, no inherited splits,
+  Reset Layout, unknown-tool restore).
+- ✅ Built `target/debug/Knot.app` for native review. No native interaction
+  has been claimed as verified; no UI automation was used.
+- ⏳ Native review pending. Customize the explorer (move to each dock and
+  editor tabs, resize dividers, hide/reopen), open another window, quit, and
+  restart the product. Inspect the restored arrangement and Reset Layout from
+  the palette.
 
 **Review gate:** customize the explorer, hide/reopen it, open another window, and
 restart the product. Inspect the restored experience and stored tool-only data.

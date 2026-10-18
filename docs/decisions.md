@@ -200,6 +200,19 @@ retaining closed documents or rebuilding obsolete document groups. Model and
 gpui integration tests cover these ownership and closure boundaries; native dock
 interaction review remains in the active D049 plan.
 
+Automatic tool-layout memory persists one versioned tool-only snapshot in
+application-owned SQLite, separate from extension storage: stable namespaced
+tool IDs, dock location, grouping and order, sizes, visibility, per-dock
+selection, and hidden tools' remembered locations. Tools in document groups
+flatten to the normal document group of a fresh window; document splits,
+terminal contents, and live handles are never serialized. Fresh windows inherit
+the last user-customized arrangement while open windows stay independent, and
+only explicit user moves, resizes, and show/hide changes publish a new default.
+Restore, activation, automatic presentation, and document structure changes never
+publish. The cache updates synchronously for immediate inheritance while writes
+go off the foreground with debounce; quit flushes a pending write before exit.
+Reset Layout returns to product defaults with no profiles or layered preferences.
+
 Reference: [workbench and lifecycle](architecture/workbench-and-lifecycle.md).
 
 ## Terminal
