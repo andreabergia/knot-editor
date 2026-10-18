@@ -8,7 +8,7 @@
 #[cfg(debug_assertions)]
 use std::collections::HashSet;
 
-use gpui::{App, AppContext, Context, Entity, Focusable, WeakFocusHandle};
+use gpui::{App, AppContext, Context, Entity, FocusHandle, Focusable, WeakFocusHandle};
 
 use super::{
     documents::{Document, DocumentId},
@@ -179,14 +179,17 @@ pub(crate) enum CommandView {
 }
 
 impl CommandView {
-    pub(crate) fn matches_focus(&self, focus: &WeakFocusHandle, cx: &App) -> bool {
-        let handle = match self {
+    pub(crate) fn focus_handle(&self, cx: &App) -> FocusHandle {
+        match self {
             Self::Editor(view) => view.focus_handle(cx),
             Self::Terminal(view) => view.focus_handle(cx),
             Self::Extension(view) => view.focus_handle(cx),
             Self::Workspace(view) => view.focus_handle(cx),
-        };
-        focus.upgrade() == Some(handle)
+        }
+    }
+
+    pub(crate) fn matches_focus(&self, focus: &WeakFocusHandle, cx: &App) -> bool {
+        focus.upgrade() == Some(self.focus_handle(cx))
     }
 }
 
@@ -763,15 +766,9 @@ pub(crate) use tools::{DockLocation, ToolContent, ToolFrame, ToolFrameId, ToolPl
 mod close;
 mod relocate;
 
-#[allow(unused_imports, reason = "typed workbench relocation contract")]
-pub(crate) use relocate::{
-    SplitEdge, TabMoveCapture, TabMoveDestination, TabMovePlacement, TabMoveTransition,
-};
+pub(crate) use relocate::{SplitEdge, TabMoveCapture, TabMoveDestination, TabMovePlacement};
 
-#[allow(unused_imports, reason = "these form the checkpoint 2 workbench API")]
-pub(crate) use close::{
-    CloseConfirmation, CloseRequestOutcome, CloseTransition, DocumentCloseDisposition, PendingClose,
-};
+pub(crate) use close::{CloseConfirmation, CloseRequestOutcome, DocumentCloseDisposition};
 
 #[cfg(test)]
 mod tests {

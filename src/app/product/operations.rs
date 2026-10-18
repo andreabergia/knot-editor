@@ -352,12 +352,7 @@ pub(crate) fn close_presentation(
         .read(cx)
         .pane(target.pane)
         .and_then(|pane| pane.tabs().iter().find(|tab| tab.id() == target.tab))
-        .and_then(|tab| {
-            tab.editor()
-                .map(|editor| editor.focus_handle(cx))
-                .or_else(|| tab.terminal_view().map(|view| view.focus_handle(cx)))
-                .or_else(|| tab.tool_content().map(|content| content.focus_handle(cx)))
-        })
+        .and_then(|tab| tab.command_view().map(|view| view.focus_handle(cx)))
         .ok_or(CloseError::Access(AccessError::InvalidTarget))?;
     let origin = ProductCommandTarget {
         window: target.window,

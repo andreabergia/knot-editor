@@ -446,12 +446,7 @@ impl ProductShell {
             .panes()
             .iter()
             .flat_map(|pane| pane.tabs())
-            .filter_map(|tab| {
-                tab.editor()
-                    .map(|view| view.focus_handle(cx))
-                    .or_else(|| tab.terminal_view().map(|view| view.focus_handle(cx)))
-                    .or_else(|| tab.tool_content().map(|content| content.focus_handle(cx)))
-            })
+            .filter_map(|tab| tab.command_view().map(|view| view.focus_handle(cx)))
             .collect::<Vec<_>>();
         self.application_focus
             .retain(|(handle, _, _)| handles.contains(handle));
@@ -616,23 +611,15 @@ impl ProductShell {
     }
 
     fn focus_active_surface(&self, window: &mut Window, cx: &App) {
-        let Some(tab) = self
+        let Some(view) = self
             .workbench
             .read(cx)
             .focused_pane()
-            .map(|pane| pane.active_tab())
+            .and_then(|pane| pane.active_tab().command_view())
         else {
             return;
         };
-        if let Some(content) = tab.tool_content() {
-            content.focus_handle(cx).focus(window);
-        }
-        if let Some(editor) = tab.editor() {
-            editor.focus_handle(cx).focus(window);
-        }
-        if let Some(view) = tab.terminal_view() {
-            view.focus_handle(cx).focus(window);
-        }
+        view.focus_handle(cx).focus(window);
     }
 
     pub(crate) fn capture_command_target(
@@ -682,16 +669,8 @@ impl ProductShell {
             surface: tab.surface_id(),
             presentation: tab.presentation(),
             focus: tab
-                .editor()
-                .map(|editor| editor.focus_handle(cx).downgrade())
-                .or_else(|| {
-                    tab.terminal_view()
-                        .map(|view| view.focus_handle(cx).downgrade())
-                })
-                .or_else(|| {
-                    tab.tool_content()
-                        .map(|content| content.focus_handle(cx).downgrade())
-                })
+                .command_view()
+                .map(|view| view.focus_handle(cx).downgrade())
                 .or_else(|| window.focused(cx).map(|focus| focus.downgrade()))?,
             view: None,
         })
@@ -736,13 +715,10 @@ impl ProductShell {
             cx.propagate();
             return;
         };
-        let view_kind = if self
-            .workspace_tree
-            .as_ref()
-            .is_some_and(|tree| Some(tree.focus_handle(cx)) == target.focus.upgrade())
-        {
-            Some("workspace-tree".to_owned())
-        } else if target.view.is_some() {
+        // Extension trees live outside the workbench, so resolve their kind
+        // from the shell directly rather than re-entering the shell through
+        // `ProductCommandTarget::command_view` while it is being updated.
+        let view_kind = if target.view.is_some() {
             self.extension_tree.as_ref().and_then(|tree| {
                 (Some(tree.read(cx).instance_id()) == target.view
                     && Some(tree.focus_handle(cx)) == target.focus.upgrade())
@@ -814,46 +790,21 @@ impl ProductShell {
     }
 
     fn sync_focused_pane(&self, window: &Window, cx: &mut Context<Self>) {
-        let focused_tool = self.workbench.read(cx).panes().iter().find_map(|pane| {
-            pane.tabs()
-                .iter()
-                .any(|tab| {
-                    tab.tool_content().is_some_and(|content| {
-                        content.focus_handle(cx).contains_focused(window, cx)
-                    })
-                })
-                .then_some(pane.id())
-        });
-        if let Some(pane) = focused_tool {
-            self.workbench.update(cx, |workbench, _| {
-                workbench.focus_pane(pane);
-            });
+        let Some(focus) = window.focused(cx) else {
             return;
-        }
-        if let Some(pane_id) = self.workbench.read(cx).panes().iter().find_map(|pane| {
-            pane.tabs().iter().find_map(|tab| {
-                tab.terminal_view()
-                    .filter(|view| view.focus_handle(cx).contains_focused(window, cx))
-                    .map(|_| pane.id())
-            })
-        }) {
-            self.workbench.update(cx, |workbench, _| {
-                workbench.focus_pane(pane_id);
-            });
-            return;
-        }
+        };
         let focused_pane = self.workbench.read(cx).panes().iter().find_map(|pane| {
             pane.tabs()
                 .iter()
                 .any(|tab| {
-                    tab.editor()
-                        .is_some_and(|editor| editor.focus_handle(cx).contains_focused(window, cx))
+                    tab.command_view()
+                        .is_some_and(|view| view.matches_focus(&focus.downgrade(), cx))
                 })
                 .then_some(pane.id())
         });
-        if let Some(focused_pane) = focused_pane {
+        if let Some(pane) = focused_pane {
             self.workbench.update(cx, |workbench, _| {
-                workbench.focus_pane(focused_pane);
+                workbench.focus_pane(pane);
             });
         }
     }
@@ -3012,6 +2963,7 @@ impl ProductShell {
         Ok(())
     }
 
+    #[cfg(test)]
     fn focus_active_editor(&self, window: &mut Window, cx: &App) {
         if let Some(editor) = self
             .workbench
@@ -3716,7 +3668,7 @@ pub(crate) fn open_product_window(request: Option<OpenRequest>, cx: &mut App) {
             shell.update(cx, |shell, cx| shell.observe_extension_host(window, cx));
             install_protected_window_close(&shell, window, cx);
             shell.update(cx, |shell, cx| shell.restore_fresh_window_layout(cx));
-            shell.read(cx).focus_active_editor(window, cx);
+            shell.read(cx).focus_active_surface(window, cx);
             if let Some(request) = request {
                 let pane = shell.read(cx).workbench.read(cx).focused_pane().unwrap();
                 let tab = pane.active_tab();

@@ -1,6 +1,6 @@
 //! Native tool definitions outlive their visible tab attachments.
 
-use gpui::{EntityId, FocusHandle};
+use gpui::EntityId;
 
 use super::*;
 use crate::app::tool_layout::{StoredLocation, StoredTool, ToolLayoutSnapshot};
@@ -24,12 +24,6 @@ impl ToolContent {
     pub(crate) fn command_view(&self) -> CommandView {
         match self {
             Self::Workspace(view) => CommandView::Workspace(view.clone()),
-        }
-    }
-
-    pub(crate) fn focus_handle(&self, cx: &App) -> FocusHandle {
-        match self {
-            Self::Workspace(view) => view.focus_handle(cx),
         }
     }
 }
