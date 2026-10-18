@@ -182,11 +182,12 @@ impl Workbench {
         self.debug_assert_invariants();
     }
 
-    /// Capture the tool-only layout record. Visible tools in ordinary groups
-    /// flatten to the document group; hidden tools resolve vanished panes to
-    /// the document group. Documents, terminals, and live handles never enter
-    /// the record: docks map to stable locations and selection maps to
-    /// stable namespaced IDs.
+    /// Capture the tool-only layout record. Docks map to stable locations;
+    /// a tool alone in an ordinary split pane is remembered as the dock on
+    /// the side its split faces, while tools sharing a group with documents
+    /// flatten to the document group and vanished panes resolve the same way.
+    /// Documents, terminals, and live handles never enter the record, and
+    /// selection maps to stable namespaced IDs.
     pub(crate) fn tool_layout_snapshot(&self) -> ToolLayoutSnapshot {
         let stable = |id: ToolFrameId| {
             self.tools
@@ -208,7 +209,7 @@ impl Workbench {
                         .unwrap();
                     let location = match self.dock_location(pane) {
                         Some(dock) => StoredLocation::from(dock),
-                        None => StoredLocation::DocumentGroup,
+                        None => self.ordinary_group_location(pane),
                     };
                     StoredTool {
                         id: tool.stable_id.to_owned(),
@@ -222,7 +223,7 @@ impl Workbench {
                         ToolPlacement::DocumentGroup => StoredLocation::DocumentGroup,
                         ToolPlacement::Group(pane) => match self.dock_location(pane) {
                             Some(dock) => StoredLocation::from(dock),
-                            None => StoredLocation::DocumentGroup,
+                            None => self.ordinary_group_location(pane),
                         },
                     };
                     StoredTool {
@@ -249,6 +250,58 @@ impl Workbench {
                 }
                 self.dock_selected[dock.index()].and_then(stable)
             }),
+            customized: false,
+        }
+    }
+
+    /// Where an ordinary (non-dock) group belongs in a tool-only record. A
+    /// group shared with documents flattens to the document group so document
+    /// structure is never reproduced; a tool-only split pane maps to the dock
+    /// on the side its split faces, or the document group for top splits and
+    /// unsplit windows. Vanished panes resolve to the document group.
+    fn ordinary_group_location(&self, pane: PaneId) -> StoredLocation {
+        let Some(group) = self.pane(pane) else {
+            return StoredLocation::DocumentGroup;
+        };
+        if group.tabs().iter().any(|tab| tab.document_id().is_some()) {
+            return StoredLocation::DocumentGroup;
+        }
+        self.split_side(pane)
+            .map(StoredLocation::from)
+            .unwrap_or(StoredLocation::DocumentGroup)
+    }
+
+    /// The dock on the side of the split directly containing the pane, if any.
+    /// Only the innermost split counts, matching the gesture that placed the
+    /// pane; top splits have no dock and report nothing.
+    fn split_side(&self, target: PaneId) -> Option<DockLocation> {
+        fn walk(
+            layout: &WorkbenchLayout,
+            target: PaneId,
+        ) -> Option<(SplitDirection, SplitPlacement)> {
+            match layout {
+                WorkbenchLayout::Pane(_) => None,
+                WorkbenchLayout::Split {
+                    direction,
+                    first,
+                    second,
+                } => {
+                    if first.contains_pane(target) {
+                        walk(first, target).or(Some((*direction, SplitPlacement::Before)))
+                    } else if second.contains_pane(target) {
+                        walk(second, target).or(Some((*direction, SplitPlacement::After)))
+                    } else {
+                        None
+                    }
+                }
+            }
+        }
+        let layout = self.layout.as_ref()?;
+        match walk(layout, target)? {
+            (SplitDirection::Horizontal, SplitPlacement::After) => Some(DockLocation::Right),
+            (SplitDirection::Horizontal, SplitPlacement::Before) => Some(DockLocation::Left),
+            (SplitDirection::Vertical, SplitPlacement::After) => Some(DockLocation::Bottom),
+            (SplitDirection::Vertical, SplitPlacement::Before) => None,
         }
     }
 
@@ -267,10 +320,10 @@ impl Workbench {
         let Some((pane, tab)) = self.tool_tab(id) else {
             return false;
         };
-        let placement = self
-            .dock_location(pane)
-            .map(ToolPlacement::Dock)
-            .unwrap_or(ToolPlacement::Group(pane));
+        let placement = match self.dock_location(pane) {
+            Some(dock) => ToolPlacement::Dock(dock),
+            None => self.remembered_group_placement(pane),
+        };
         let index = self
             .pane(pane)
             .unwrap()
@@ -283,6 +336,20 @@ impl Workbench {
         tool.index = index;
         self.remove_tab(pane, tab);
         true
+    }
+
+    /// Placement remembered when hiding a tool from an ordinary group. A group
+    /// shared with documents is remembered directly so reopening rejoins it;
+    /// a tool-only split pane collapses on hide, so it remembers its dock side
+    /// instead of a pane that is about to disappear.
+    fn remembered_group_placement(&self, pane: PaneId) -> ToolPlacement {
+        let shared = self
+            .pane(pane)
+            .is_some_and(|group| group.tabs().iter().any(|tab| tab.document_id().is_some()));
+        if !shared && let Some(side) = self.split_side(pane) {
+            return ToolPlacement::Dock(side);
+        }
+        ToolPlacement::Group(pane)
     }
 
     pub(crate) fn show_tool(&mut self, id: ToolFrameId) -> Option<(PaneId, TabId)> {
@@ -761,6 +828,62 @@ mod tests {
             );
             assert!(!hidden.tools[0].visible);
             assert_eq!(doc_pane, workbench.normal_pane().unwrap());
+        });
+    }
+
+    #[gpui::test]
+    fn tool_only_splits_remember_their_side_as_a_dock(cx: &mut gpui::TestAppContext) {
+        use crate::app::tool_layout::{StoredLocation, StoredTool};
+        let workbench = cx.new(|_| Workbench::empty());
+        workbench.update(cx, |workbench, cx| {
+            let model = cx.new(|_| BufferModel::from_text(""));
+            let mut documents = crate::app::documents::DocumentCollection::new();
+            let document = documents.create_untitled("doc", model.clone(), cx);
+            let (doc_pane, _) = workbench.open_document_in_normal_group(document, model, cx);
+            let id = explorer(workbench, cx);
+            workbench.show_tool(id).unwrap();
+            let split = |workbench: &mut Workbench, edge: super::SplitEdge| {
+                let (_, tool_tab) = workbench.tool_tab(id).unwrap();
+                let source = workbench
+                    .capture_tab_move(workbench.tool_tab(id).unwrap().0, tool_tab)
+                    .unwrap();
+                let doc_tab = workbench.pane(doc_pane).unwrap().tabs()[0].id();
+                let anchor = workbench.capture_tab_move(doc_pane, doc_tab).unwrap();
+                workbench
+                    .relocate_tab(
+                        source,
+                        super::TabMoveDestination::At {
+                            anchor,
+                            placement: super::TabMovePlacement::Split(edge),
+                        },
+                    )
+                    .unwrap();
+            };
+            let location =
+                |workbench: &Workbench| workbench.tool_layout_snapshot().tools[0].clone();
+            split(workbench, super::SplitEdge::Right);
+            assert_eq!(
+                location(workbench),
+                StoredTool {
+                    id: crate::app::tool_layout::EXPLORER_TOOL_ID.to_owned(),
+                    location: StoredLocation::Right,
+                    index: 0,
+                    visible: true,
+                }
+            );
+            // Hiding in a tool-only split remembers the dock side.
+            workbench.hide_tool(id);
+            let hidden = location(workbench);
+            assert_eq!(hidden.location, StoredLocation::Right);
+            assert!(!hidden.visible);
+            workbench.show_tool(id).unwrap();
+            split(workbench, super::SplitEdge::Bottom);
+            assert_eq!(location(workbench).location, StoredLocation::Bottom);
+            split(workbench, super::SplitEdge::Left);
+            assert_eq!(location(workbench).location, StoredLocation::Left);
+            // Top splits have no dock and flatten to the document group.
+            split(workbench, super::SplitEdge::Top);
+            assert_eq!(location(workbench).location, StoredLocation::DocumentGroup);
         });
     }
 

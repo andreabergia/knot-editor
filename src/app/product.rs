@@ -2083,6 +2083,25 @@ impl ProductShell {
         cx.notify();
     }
 
+    /// Inherit the last customized arrangement on a fresh window. Only runs
+    /// at window creation: already-open windows never re-read the default.
+    /// Uncustomized stores keep first-run behavior (no eager explorer before
+    /// any folder or toggle); hidden tools stay hidden. Never publishes.
+    fn restore_fresh_window_layout(&mut self, cx: &mut Context<Self>) {
+        let Some(snapshot) = Self::stored_tool_layout(cx) else {
+            return;
+        };
+        if !snapshot.customized {
+            return;
+        }
+        let visible = snapshot
+            .tool(super::tool_layout::EXPLORER_TOOL_ID)
+            .is_some_and(|record| record.visible);
+        if visible {
+            self.ensure_explorer(false, cx);
+        }
+    }
+
     /// Restore the full stored arrangement onto this window's registered tools.
     /// Unknown stored tools are skipped without blank frames; registered tools
     /// without a stored record keep their live placement. Never publishes.
@@ -3696,6 +3715,7 @@ pub(crate) fn open_product_window(request: Option<OpenRequest>, cx: &mut App) {
             let shell = cx.new(|_| ProductShell::new(workbench));
             shell.update(cx, |shell, cx| shell.observe_extension_host(window, cx));
             install_protected_window_close(&shell, window, cx);
+            shell.update(cx, |shell, cx| shell.restore_fresh_window_layout(cx));
             shell.read(cx).focus_active_editor(window, cx);
             if let Some(request) = request {
                 let pane = shell.read(cx).workbench.read(cx).focused_pane().unwrap();

@@ -79,6 +79,11 @@ pub(crate) struct ToolLayoutSnapshot {
     pub(crate) tools: Vec<StoredTool>,
     pub(crate) dock_sizes: [f32; 3],
     pub(crate) dock_selected: [Option<String>; 3],
+    /// Whether the user has ever customized the arrangement. Fresh windows
+    /// only auto-show stored tools once set, preserving first-run behavior
+    /// (no eager explorer before any folder or toggle) on fresh installs.
+    #[serde(default)]
+    pub(crate) customized: bool,
 }
 
 impl ToolLayoutSnapshot {
@@ -93,6 +98,7 @@ impl ToolLayoutSnapshot {
             }],
             dock_sizes: [240., 240., 220.],
             dock_selected: [Some(EXPLORER_TOOL_ID.to_owned()), None, None],
+            customized: false,
         }
     }
 
@@ -218,8 +224,11 @@ impl ToolLayoutStore {
 
     /// Record a user-customized arrangement and schedule a coalesced write.
     /// Equal snapshots are no-ops, so divider release without movement and
-    /// repeated identical publishes never touch SQLite.
+    /// repeated identical publishes never touch SQLite. Any publish marks the
+    /// arrangement customized, including a return to product defaults.
     pub(crate) fn publish(&self, snapshot: ToolLayoutSnapshot) {
+        let mut snapshot = snapshot;
+        snapshot.customized = true;
         let generation = {
             let mut state = self.inner.state.lock().unwrap();
             if state.current == snapshot {
@@ -306,6 +315,9 @@ mod tests {
         let mut snapshot = ToolLayoutSnapshot::product_default();
         snapshot.dock_sizes = [size, 200., 180.];
         snapshot.tools[0].location = StoredLocation::Bottom;
+        // Publish marks the arrangement customized; stored snapshots compare
+        // against that form.
+        snapshot.customized = true;
         snapshot
     }
 
@@ -341,13 +353,33 @@ mod tests {
     }
 
     #[gpui::test]
-    async fn equal_publishes_skip_writes(cx: &mut gpui::TestAppContext) {
+    async fn identical_republish_skips_writes(cx: &mut gpui::TestAppContext) {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("tool-layout.sqlite3");
         let store = open_store(&path, cx);
-        store.publish(ToolLayoutSnapshot::product_default());
+        assert!(!store.current().customized);
+        store.publish(customized(320.));
+        store.flush().await.unwrap();
+        std::fs::remove_file(&path).unwrap();
+        store.publish(customized(320.));
         store.flush().await.unwrap();
         assert!(!path.exists());
+    }
+
+    #[gpui::test]
+    async fn publish_marks_customized_and_survives_reopen(cx: &mut gpui::TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tool-layout.sqlite3");
+        let store = open_store(&path, cx);
+        // Even confirming product defaults counts as a customization, so fresh
+        // windows later inherit the confirmed arrangement.
+        store.publish(ToolLayoutSnapshot::product_default());
+        store.flush().await.unwrap();
+        drop(store);
+        let reopened = open_store(&path, cx);
+        let mut expected = ToolLayoutSnapshot::product_default();
+        expected.customized = true;
+        assert_eq!(reopened.current(), expected);
     }
 
     #[gpui::test]

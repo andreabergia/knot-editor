@@ -130,6 +130,15 @@ impl WorkbenchLayout {
         }
     }
 
+    fn contains_pane(&self, target: PaneId) -> bool {
+        match self {
+            Self::Pane(pane_id) => *pane_id == target,
+            Self::Split { first, second, .. } => {
+                first.contains_pane(target) || second.contains_pane(target)
+            }
+        }
+    }
+
     fn pane_ids(&self, result: &mut Vec<PaneId>) {
         match self {
             Self::Pane(pane_id) => result.push(*pane_id),
