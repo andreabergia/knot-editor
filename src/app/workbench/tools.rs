@@ -3,6 +3,7 @@
 use gpui::{EntityId, FocusHandle};
 
 use super::*;
+use crate::app::tool_layout::{StoredLocation, StoredTool, ToolLayoutSnapshot};
 use crate::app::workspace_tree::WorkspaceTree;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -66,6 +67,7 @@ pub(crate) enum ToolPlacement {
 
 pub(crate) struct ToolFrame {
     pub(crate) id: ToolFrameId,
+    pub(crate) stable_id: &'static str,
     pub(crate) title: &'static str,
     pub(crate) content: ToolContent,
     remembered: ToolPlacement,
@@ -91,6 +93,7 @@ impl WorkbenchTab {
 impl Workbench {
     pub(crate) fn register_tool(
         &mut self,
+        stable_id: &'static str,
         title: &'static str,
         content: ToolContent,
         dock: DockLocation,
@@ -99,6 +102,7 @@ impl Workbench {
         if !self.tools.iter().any(|tool| tool.id == id) {
             self.tools.push(ToolFrame {
                 id,
+                stable_id,
                 title,
                 content,
                 remembered: ToolPlacement::Dock(dock),
@@ -132,6 +136,13 @@ impl Workbench {
             .map(|(_, dock)| *dock)
     }
 
+    pub(crate) fn dock_pane(&self, dock: DockLocation) -> Option<PaneId> {
+        self.docks
+            .iter()
+            .find(|(_, location)| *location == dock)
+            .map(|(pane, _)| *pane)
+    }
+
     pub(crate) fn dock_size(&self, dock: DockLocation) -> f32 {
         self.dock_sizes[dock.index()]
     }
@@ -139,6 +150,106 @@ impl Workbench {
     pub(crate) fn set_dock_size(&mut self, dock: DockLocation, size: f32) {
         self.dock_sizes[dock.index()] = size.clamp(DockLocation::MIN_SIZE, DockLocation::MAX_SIZE);
         self.debug_assert_invariants();
+    }
+
+    pub(crate) fn set_dock_sizes(&mut self, sizes: [f32; 3]) {
+        for dock in DockLocation::ALL {
+            self.dock_sizes[dock.index()] =
+                sizes[dock.index()].clamp(DockLocation::MIN_SIZE, DockLocation::MAX_SIZE);
+        }
+        self.debug_assert_invariants();
+    }
+
+    pub(crate) fn tool_by_stable_id(&self, stable_id: &str) -> Option<ToolFrameId> {
+        self.tools
+            .iter()
+            .find(|tool| tool.stable_id == stable_id)
+            .map(|tool| tool.id)
+    }
+
+    /// Remember a placement without showing the tool. Restore uses this for
+    /// hidden tools so remembered locations survive without visible tabs.
+    pub(crate) fn remember_tool_placement(
+        &mut self,
+        id: ToolFrameId,
+        placement: ToolPlacement,
+        index: usize,
+    ) {
+        if let Some(tool) = self.tools.iter_mut().find(|tool| tool.id == id) {
+            tool.remembered = placement;
+            tool.index = index;
+        }
+        self.debug_assert_invariants();
+    }
+
+    /// Capture the tool-only layout record. Visible tools in ordinary groups
+    /// flatten to the document group; hidden tools resolve vanished panes to
+    /// the document group. Documents, terminals, and live handles never enter
+    /// the record: docks map to stable locations and selection maps to
+    /// stable namespaced IDs.
+    pub(crate) fn tool_layout_snapshot(&self) -> ToolLayoutSnapshot {
+        let stable = |id: ToolFrameId| {
+            self.tools
+                .iter()
+                .find(|tool| tool.id == id)
+                .map(|tool| tool.stable_id.to_owned())
+        };
+        let tools = self
+            .tools
+            .iter()
+            .map(|tool| {
+                if let Some((pane, tab)) = self.tool_tab(tool.id) {
+                    let index = self
+                        .pane(pane)
+                        .unwrap()
+                        .tabs
+                        .iter()
+                        .position(|item| item.id == tab)
+                        .unwrap();
+                    let location = match self.dock_location(pane) {
+                        Some(dock) => StoredLocation::from(dock),
+                        None => StoredLocation::DocumentGroup,
+                    };
+                    StoredTool {
+                        id: tool.stable_id.to_owned(),
+                        location,
+                        index,
+                        visible: true,
+                    }
+                } else {
+                    let location = match tool.remembered {
+                        ToolPlacement::Dock(dock) => StoredLocation::from(dock),
+                        ToolPlacement::DocumentGroup => StoredLocation::DocumentGroup,
+                        ToolPlacement::Group(pane) => match self.dock_location(pane) {
+                            Some(dock) => StoredLocation::from(dock),
+                            None => StoredLocation::DocumentGroup,
+                        },
+                    };
+                    StoredTool {
+                        id: tool.stable_id.to_owned(),
+                        location,
+                        index: tool.index,
+                        visible: false,
+                    }
+                }
+            })
+            .collect();
+        ToolLayoutSnapshot {
+            version: crate::app::tool_layout::TOOL_LAYOUT_VERSION,
+            tools,
+            dock_sizes: self.dock_sizes,
+            dock_selected: DockLocation::ALL.map(|dock| {
+                // A visible dock's selection is its active tab; a hidden dock
+                // keeps its remembered selection so reopening restores it.
+                if let Some((pane, _)) = self.docks.iter().find(|(_, location)| *location == dock)
+                    && let Some(TabSurfaceId::Tool(id)) =
+                        self.pane(*pane).map(|pane| pane.active_tab().surface_id())
+                {
+                    return stable(id);
+                }
+                self.dock_selected[dock.index()].and_then(stable)
+            }),
+        }
     }
 
     pub(crate) fn normal_pane(&self) -> Option<PaneId> {
@@ -360,7 +471,12 @@ mod tests {
 
     fn explorer(workbench: &mut Workbench, cx: &mut Context<Workbench>) -> ToolFrameId {
         let tree = cx.new(|cx| WorkspaceTree::new(WorkspaceState::default().snapshot(), cx));
-        workbench.register_tool("Explorer", ToolContent::Workspace(tree), DockLocation::Left)
+        workbench.register_tool(
+            crate::app::tool_layout::EXPLORER_TOOL_ID,
+            "Explorer",
+            ToolContent::Workspace(tree),
+            DockLocation::Left,
+        )
     }
 
     #[gpui::test]
@@ -449,7 +565,12 @@ mod tests {
     fn dock_toggle_restores_selector_order_and_selection(cx: &mut gpui::TestAppContext) {
         let workbench = cx.new(|_| Workbench::empty());
         workbench.update(cx, |workbench, cx| {
-            let ids = ["First", "Second", "Third"].map(|title| {
+            let ids = [
+                ("knot.first", "First"),
+                ("knot.second", "Second"),
+                ("knot.third", "Third"),
+            ]
+            .map(|(stable_id, title)| {
                 let tree = cx.new(|cx| {
                     WorkspaceTree::new(
                         crate::app::workspace::WorkspaceState::default().snapshot(),
@@ -457,6 +578,7 @@ mod tests {
                     )
                 });
                 let id = workbench.register_tool(
+                    stable_id,
                     title,
                     ToolContent::Workspace(tree),
                     DockLocation::Right,
@@ -591,6 +713,79 @@ mod tests {
             let (pane, _) = workbench.show_tool(id).unwrap();
             assert_eq!(workbench.dock_location(pane), Some(DockLocation::Bottom));
             assert_eq!(workbench.dock_size(DockLocation::Bottom), 200.);
+        });
+    }
+
+    #[gpui::test]
+    fn tool_snapshots_record_only_tools_with_stable_ids(cx: &mut gpui::TestAppContext) {
+        let workbench = cx.new(|_| Workbench::empty());
+        workbench.update(cx, |workbench, cx| {
+            let model = cx.new(|_| BufferModel::from_text(""));
+            let mut documents = crate::app::documents::DocumentCollection::new();
+            let document = documents.create_untitled("doc", model.clone(), cx);
+            let (doc_pane, _) = workbench.open_document_in_normal_group(document, model, cx);
+            workbench.open_terminal_tab_test_double(doc_pane, super::TerminalSessionId(7));
+            let id = explorer(workbench, cx);
+            workbench.show_tool(id).unwrap();
+            workbench.set_dock_size(DockLocation::Left, 311.);
+            // A visible tool in an ordinary group flattens to the document group.
+            workbench.place_tool(id, ToolPlacement::DocumentGroup);
+            let snapshot = workbench.tool_layout_snapshot();
+            assert_eq!(
+                snapshot.tools,
+                [crate::app::tool_layout::StoredTool {
+                    id: crate::app::tool_layout::EXPLORER_TOOL_ID.to_owned(),
+                    location: crate::app::tool_layout::StoredLocation::DocumentGroup,
+                    index: 2,
+                    visible: true,
+                }]
+            );
+            assert_eq!(snapshot.dock_sizes[DockLocation::Left.index()], 311.);
+            let payload = serde_json::to_string(&snapshot).unwrap();
+            for forbidden in ["Document", "Terminal", "Pane(", "Tab(", "presentation"] {
+                assert!(
+                    !payload.contains(forbidden),
+                    "tool record leaks {forbidden}"
+                );
+            }
+            let decoded: crate::app::tool_layout::ToolLayoutSnapshot =
+                serde_json::from_str(&payload).unwrap();
+            assert_eq!(decoded, snapshot);
+            // Hidden tools keep their remembered dock while staying invisible.
+            workbench.place_tool(id, ToolPlacement::Dock(DockLocation::Bottom));
+            workbench.hide_tool(id);
+            let hidden = workbench.tool_layout_snapshot();
+            assert_eq!(
+                hidden.tools[0].location,
+                crate::app::tool_layout::StoredLocation::Bottom
+            );
+            assert!(!hidden.tools[0].visible);
+            assert_eq!(doc_pane, workbench.normal_pane().unwrap());
+        });
+    }
+
+    #[gpui::test]
+    fn tool_snapshots_flatten_vanished_groups(cx: &mut gpui::TestAppContext) {
+        let workbench = cx.new(|_| Workbench::empty());
+        workbench.update(cx, |workbench, cx| {
+            let id = explorer(workbench, cx);
+            workbench.place_tool(id, ToolPlacement::DocumentGroup);
+            workbench.hide_tool(id);
+            // The remembered pane still exists as an ordinary group.
+            let remembered = workbench.tool_layout_snapshot();
+            assert_eq!(
+                remembered.tools[0].location,
+                crate::app::tool_layout::StoredLocation::DocumentGroup
+            );
+            // A vanished pane flattens the same way instead of naming a dead group.
+            workbench.remember_tool_placement(id, ToolPlacement::Group(PaneId(999)), 3);
+            let vanished = workbench.tool_layout_snapshot();
+            assert_eq!(
+                vanished.tools[0].location,
+                crate::app::tool_layout::StoredLocation::DocumentGroup
+            );
+            assert_eq!(vanished.tools[0].index, 3);
+            assert!(!vanished.tools[0].visible);
         });
     }
 }

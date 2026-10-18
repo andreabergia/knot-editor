@@ -93,6 +93,7 @@ mod terminal_session_tests;
     reason = "terminal view helpers also serve the diagnostic fixture"
 )]
 mod terminal_view;
+mod tool_layout;
 mod tree_view;
 mod typography;
 mod workbench;
