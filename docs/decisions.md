@@ -212,6 +212,11 @@ Restore, activation, automatic presentation, and document structure changes neve
 publish. The cache updates synchronously for immediate inheritance while writes
 go off the foreground with debounce; quit flushes a pending write before exit.
 Reset Layout returns to product defaults with no profiles or layered preferences.
+Fresh windows auto-show stored-visible tools even with no folder open, while a
+customized flag preserves the empty first-run window. A tool alone in an
+ordinary split pane is remembered as the dock on the side its split faces;
+groups shared with documents still flatten so document structure is never
+reproduced.
 
 Reference: [workbench and lifecycle](architecture/workbench-and-lifecycle.md).
 

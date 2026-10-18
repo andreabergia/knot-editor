@@ -263,6 +263,25 @@ Implementation evidence:
   restart the product. Inspect the restored arrangement and Reset Layout from
   the palette.
 
+Native review round 1 (2026-10-18) found no persistence fault: the stored
+snapshot exactly matched the arrangement left before quit, and folder-open
+restore placed the explorer correctly. Two behaviors needed work:
+
+- ✅ Fresh windows now inherit stored-visible tools with no folder open. The
+  snapshot carries a `customized` flag set by any publish (including Reset),
+  so first-run windows keep their empty state while customized windows
+  auto-show the explorer at its stored placement. Hidden tools stay hidden;
+  restore never publishes.
+- ✅ A tool alone in an ordinary split pane is now remembered as the dock on
+  the side its split faces (right/left/bottom; top still flattens), instead
+  of flattening every document-group placement. Groups shared with documents
+  still flatten so document structure is never reproduced. Hiding from a
+  tool-only split pane remembers the dock side rather than the collapsing
+  pane, so reopening returns there. Covered by model tests for each side,
+  hidden split panes, and mixed groups, plus product tests for fresh-window
+  restore without a folder and split-right restoring as a right dock.
+- ✅ Rebuilt `target/debug/Knot.app` for native re-review.
+
 **Review gate:** customize the explorer, hide/reopen it, open another window, and
 restart the product. Inspect the restored experience and stored tool-only data.
 Approve automatic memory before connecting extension definitions to it.
