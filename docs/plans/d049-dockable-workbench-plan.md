@@ -1,6 +1,6 @@
 # D049 — Docking and automatic tool-layout memory
 
-Status: 🚧 Checkpoint 3 implemented and automated checks passed; native review pending.
+Status: 🚧 Checkpoints 1–4 implemented and automated checks passed; native review pending.
 
 Source: checkpoint 5 of the [extension platform and projects plan](extension-platform-and-projects-plan.md).
 Design discussion: 2026-10-16. Followed by the
@@ -286,11 +286,44 @@ restore placed the explorer correctly. Two behaviors needed work:
 restart the product. Inspect the restored experience and stored tool-only data.
 Approve automatic memory before connecting extension definitions to it.
 
-### 4. Layout cleanup and handoff ⬜
+### 4. Layout cleanup and handoff 🚧
 
 Remove superseded fixed sidebar rendering and redundant shell focus/geometry
 paths. Document the shared layout ownership and runtime constraints. Record
 validated rationale in decisions and link the implementation evidence here.
+
+Implementation evidence:
+
+- ✅ Checkpoint 1 already removed the native resource explorer's fixed 240px
+  sidebar; the explorer now renders only through the tool model. The dormant
+  extension outline `TreeView` keeps its fixed rendering because the follow-up
+  native extension UI plan owns migrating it to contributed frames; removing it
+  here would split that migration and its fixture across plans (scope review,
+  2026-10-19).
+- ✅ One `CommandView` path now resolves surface focus and key-context kind:
+  `sync_focused_pane`, workbench keybinding routing, `focus_active_surface`,
+  `window_close_target`, application-focus observation, and captured close
+  targets no longer branch per surface. `focus_active_editor` is test-only.
+  Extension trees keep a direct shell read to avoid re-entering the shell during
+  keybinding dispatch.
+- ✅ Dropped the stale "checkpoint 2 workbench API" allow and narrowed the close
+  and relocation re-exports to the types actually imported; removed now-unused
+  `ToolContent::focus_handle`.
+- ✅ Documented tool-layout snapshot ownership, user-only publish rules,
+  coalesced off-foreground writes, quit flush, Reset Layout, and defaults
+  fallback in
+  [workbench and lifecycle](../architecture/workbench-and-lifecycle.md);
+  [architecture](../architecture.md) records the application-owned snapshot and
+  [decisions](../decisions.md) records the shared layout ownership, the single
+  focus resolution path, and the outline handoff.
+- ✅ `cargo test --all-targets --locked` passed (673 library tests plus the
+  binary, facade integration, and drag-delivery example targets), as did
+  `cargo clippy --all-targets --locked -- -D warnings`,
+  `scripts/check-extension-api.sh`, and `git diff --check`. Ran `cargo fmt`
+  once at the end.
+- ⏳ Native review pending. Manually inspect docking, automatic layout memory
+  across a second window and restart, and Reset Layout; no UI automation is
+  used.
 
 **Validation:** run the relevant workbench, product, command, observation, and
 relocation tests, then the library suite and repository-required checks. Run

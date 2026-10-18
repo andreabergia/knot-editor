@@ -114,6 +114,31 @@ a window near the pointer. Preview rendering, hit-test thresholds, workbench-edg
 drag handling, and coordinate fallbacks live in the [relocation
 code](../../src/app/product/tab_drag.rs).
 
+## Automatic tool-layout memory
+
+One application-owned `ToolLayoutStore` holds a single versioned tool-only
+snapshot in SQLite beside extension storage. It records stable namespaced tool
+IDs, dock location, group order, dock sizes, visibility, the selected tool per
+dock, and hidden tools' remembered locations. Documents, terminals, document
+splits, and live handles never enter the record; a tool in a document group
+flattens to the normal document group of a fresh window.
+
+A fresh window applies the stored arrangement when its explorer registers;
+already-open windows keep their live arrangements. Only explicit user moves, dock
+resizes, and show/hide changes publish a new default. Divider dragging coalesces
+through a trailing-edge debounce so one settled arrangement reaches storage, and
+identical publishes skip storage. Restore, window activation, automatic
+presentation, and document structure changes never publish. The cache updates
+synchronously so the next window inherits immediately; writes run off the
+foreground and the quit path flushes a pending write before exit. Reset Layout
+returns to product defaults. A missing, corrupt, or version-mismatched record
+falls back to defaults, and unknown stored IDs are skipped without creating
+blank frames.
+
+Tool frames stay workbench-owned behind stable namespaced IDs and explicit
+native content variants. Extension contributions attach through this contract
+instead of receiving layout storage or persisting live handles.
+
 ## Native resource tree
 
 `WorkspaceTree` owns cached native filesystem presentation state. It emits

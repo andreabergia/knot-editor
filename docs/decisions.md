@@ -218,6 +218,14 @@ ordinary split pane is remembered as the dock on the side its split faces;
 groups shared with documents still flatten so document structure is never
 reproduced.
 
+Replacing the native explorer's fixed sidebar with tool frames leaves one shell
+focus/command-view resolution path: `CommandView` supplies the focus handle and
+key-context kind for every tab surface, so capture, keybinding routing, and close
+targets no longer branch per surface. The dormant extension outline surface keeps
+its fixed rendering until the follow-up native extension UI plan migrates it to
+contributed frames, keeping that migration in one place while the docking
+foundation exposes the attachment contract it consumes.
+
 Reference: [workbench and lifecycle](architecture/workbench-and-lifecycle.md).
 
 ## Terminal
