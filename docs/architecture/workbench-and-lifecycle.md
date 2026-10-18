@@ -87,7 +87,12 @@ reveals still apply. Terminal cross-window moves hand off the sole attachment to
 a destination view of the same session; same-window moves retain their view.
 Replacement or pane/window transfer invalidates old exact command targets.
 
-Native tools stay in their owning product window.
+Native tools stay in their owning product window. Dragging a tool tab
+reorders, joins a tab group, or splits pane edges like any tab; dropping near
+a workbench left/right/bottom edge moves it to that dock around the whole
+layout instead of splitting one pane. Releasing a tool outside all Knot frames
+cancels without creating a window. Dock-adjacent dividers drag to resize the
+window-local dock size within usable limits; other splits stay equal.
 
 Transfers do not enter protected closure or remove documents/sessions. An emptied
 source receives ordinary untitled replacement. New-window transfer creates and
@@ -105,8 +110,9 @@ lifetime.
 
 Tab bars accept insertion and pane bodies accept append or edge splits. Invalid
 space inside Knot frames rejects a drop; release outside all Knot frames creates
-a window near the pointer. Preview rendering, hit-test thresholds, and coordinate
-fallbacks live in the [relocation code](../../src/app/product/tab_drag.rs).
+a window near the pointer. Preview rendering, hit-test thresholds, workbench-edge dock targets, divider
+drag handling, and coordinate fallbacks live in the [relocation
+code](../../src/app/product/tab_drag.rs).
 
 ## Native resource tree
 

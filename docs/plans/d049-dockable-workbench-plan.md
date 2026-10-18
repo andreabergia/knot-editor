@@ -1,6 +1,6 @@
 # D049 — Docking and automatic tool-layout memory
 
-Status: 🚧 Checkpoint 1 implemented and automated checks passed; native review pending.
+Status: 🚧 Checkpoint 2 implemented and automated checks passed; native review pending.
 
 Source: checkpoint 5 of the [extension platform and projects plan](extension-platform-and-projects-plan.md).
 Design discussion: 2026-10-16. Followed by the
@@ -150,7 +150,7 @@ Implementation evidence:
 Approve familiar dock interaction, native ownership, and remembered hide/reopen
 behavior before extending dragging.
 
-### 2. Frame relocation and resizing ⬜
+### 2. Frame relocation and resizing ✅
 
 Implement individual-frame dragging: reorder, join a tab group, and
 create four-edge splits. Add whole-workbench edge drop targets where needed to
@@ -166,6 +166,36 @@ frame retains its native state and updates focus and captured-target validity.
 gpui event tests for group insertion, pane/workbench edge drops, resizing,
 Escape/invalid drops, closure during dragging, and focus after moving. Retain
 existing document/terminal relocation and cross-window regression coverage.
+
+Implementation evidence:
+
+- ✅ Tool tabs drag like any tab: reorder, join groups, and pane-edge
+  four-way splits reuse the existing relocation transitions, preserving frame
+  presentation identity and focusing the moved tool. Workbench left/right/bottom
+  edge strips (20px) produce dock previews and move to `TabMoveDestination::Dock`,
+  which recreates the dock around the whole layout; the top edge keeps pane-local
+  splits. Only tool drags consult edge strips, so document/terminal split and
+  tear-off semantics are unchanged.
+- ✅ Tear-out and cross-window transfer of tools return `Unavailable` before any
+  window is created; the source model and captures stay live.
+- ✅ Dock-adjacent dividers (9px hit area, `dock-divider-{index}` selectors) drag
+  to resize window-local dock sizes clamped to 80–480px; other splits stay equal.
+  Escape reverts an in-progress resize. Resizing applies incrementally and does
+  not use GPUI active drags, so tab-drag previews are unaffected.
+- ✅ Model tests in `src/app/workbench/tools.rs` cover tool moves across groups,
+  pane-edge splits, dock drops with empty-pane collapse, capture invalidation,
+  and dock-size clamping across hide/reopen. Integration tests in
+  `src/app/product/tab_drag/tests.rs` cover group insertion, pane/workbench edge
+  drops with preview assertions, divider drag and Escape revert, mid-drag hide,
+  invalid drops, and focus after moving; `src/app/product/relocate/tests.rs`
+  proves tool tear-out creates no window. Existing document/terminal relocation
+  and cross-window suites still pass.
+- ✅ `cargo test --all-targets --locked` passed (654 library tests), as did
+  `cargo clippy --all-targets --locked -- -D warnings`,
+  `scripts/check-extension-api.sh`, and `git diff --check`. Ran `cargo fmt`.
+- ⏳ Native review pending. Drag the Explorer tab into an editor group, to pane
+  edges for splits, and to window left/right/bottom edges for docks; drag dock
+  dividers. Frame dragging across windows must cancel; divider drags clamp.
 
 **Review gate:** manually move the explorer from a sidebar to a bottom split,
 into an editor tab group, and back; resize nested splits. Inspect whether the
