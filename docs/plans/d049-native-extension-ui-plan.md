@@ -109,7 +109,7 @@ Execute one checkpoint per implementation request and stop at its review gate.
 Keep this plan updated with ✅ evidence and split coherent work into logical
 commits. Update declarations, authoring examples, and docs alongside each API.
 
-### 1. Lifecycle-owned contributed frames ⬜
+### 1. Lifecycle-owned contributed frames 🚧
 
 Connect namespaced registration and per-window instances to the dockable
 workbench and automatic layout memory. Adapt the outline fixture to that supported
@@ -118,6 +118,29 @@ shell routing. Implement
 window-targeted show/hide/focus, provider context, invalidation, disposal, and
 failed-startup cleanup. Extend application snapshots/command captures to represent
 contributed tools without pretending they are document presentations.
+
+Decisions locked before implementation:
+
+- `workbench.registerView` returns a `ViewRegistration`; the contribution ID is
+  the native view kind. Supported content is `tree` in this checkpoint.
+- `show`, `hide`, `focus`, and `invalidate` apply to every live product window by
+  default. An optional live `WindowTarget` narrows the operation to one window.
+  Programmatic presentation stays window-local for layout memory: it never
+  publishes a fresh-window default.
+- Contributions are visible on registration by default. Placement defaults to
+  the left dock; explicit order wins, otherwise registration order follows native
+  tools. A remembered record always overrides these defaults.
+- IDs are non-empty, unique among live registrations, and may not use the
+  reserved `knot.` prefix. Duplicate live IDs fail with `ViewIdInUse`.
+- Tool presentations and command captures expose the stable contribution ID in
+  addition to the live instance identity. `CommandTarget.window` is a live
+  `WindowTarget` so command handlers can target the originating window.
+- Hiding keeps the native instance and its selection, expansion, and scroll
+  state alive while removing the tab. Reopening reattaches the frame and
+  refreshes root children. Window closure, unload, disposal, and failed startup
+  drop live instances and pending results without touching remembered layout.
+- The native explorer remains a shell-owned tool until a later JavaScript
+  extension replaces it.
 
 **Validation:** host/JS boundary tests and gpui integration tests for registration
 before/after windows, duplicate IDs, multiple contributions/windows, targeted

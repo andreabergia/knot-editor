@@ -165,6 +165,14 @@ D005; tool-only layout memory belongs to D049.
   - Deferred: No concrete user workflow or provider boundary has been selected.
   - Reconsider: An AI-assisted editing slice is defined.
 
+- **D053 — Native explorer as a packaged extension**
+  - Deferred: The explorer remains a shell-owned native tool while the extension
+    view API is validated; converting it now would mix provider migration with
+    the native frame work.
+  - Reconsider: The extension view API can express workspace providers and
+    explorer actions end to end, or maintaining the native explorer duplicates
+    behavior that extensions already provide.
+
 ## Terminals and generated surfaces
 
 - **D040 — Physical application-keypad input**
