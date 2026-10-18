@@ -334,6 +334,7 @@ async fn toggle_dock(context: CommandContext, dock: DockLocation) -> Result<(), 
             shell
                 .workbench
                 .update(cx, |workbench, _| workbench.toggle_dock(dock));
+            shell.publish_tool_layout(cx);
             shell.focus_active_surface(window, cx);
             cx.notify();
             Ok(())
@@ -377,8 +378,19 @@ async fn place_explorer(
             shell.workbench.update(cx, |workbench, _| {
                 workbench.place_tool(id, placement);
             });
+            shell.publish_tool_layout(cx);
             shell.focus_active_surface(window, cx);
             cx.notify();
+            Ok(())
+        })
+        .await
+}
+
+#[command("workbench.reset-layout", title = "Reset Layout", id = RESET_LAYOUT_COMMAND, participant = Workbench)]
+pub(crate) async fn reset_layout(context: CommandContext, (): ()) -> Result<(), CommandOutcome> {
+    context
+        .shell(move |shell, _, window, cx| {
+            shell.reset_tool_layout(window, cx);
             Ok(())
         })
         .await

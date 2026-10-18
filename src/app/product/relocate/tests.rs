@@ -492,7 +492,7 @@ fn tool_tear_out_and_cross_window_transfer_cancel_without_new_window(cx: &mut Te
     let (source, source_window) = product_window(document, model.clone(), cx);
     let (destination, destination_window) = product_window(document, model, cx);
     source.update(cx, |shell, cx| {
-        shell.ensure_explorer(cx);
+        shell.ensure_explorer(false, cx);
         cx.notify();
     });
     cx.run_until_parked();

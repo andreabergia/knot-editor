@@ -125,7 +125,7 @@ fn last_document_closure_leaves_tool_only_window_and_hidden_definitions_survive_
     let documents = install_globals(cx);
     let (shell, window) = empty_product_window(&documents, cx);
     let workbench = cx.read(|cx| shell.read(cx).workbench.clone());
-    shell.update(cx, |shell, cx| shell.ensure_explorer(cx));
+    shell.update(cx, |shell, cx| shell.ensure_explorer(false, cx));
     let document = cx.read(|cx| {
         workbench
             .read(cx)
@@ -184,7 +184,7 @@ fn workspace_refresh_does_not_reopen_or_reposition_tool(cx: &mut TestAppContext)
     cx.set_global(ApplicationFileSystems(memory_filesystems()));
     let (shell, _) = empty_product_window(&documents, cx);
     shell.update(cx, |shell, cx| {
-        shell.ensure_explorer(cx);
+        shell.ensure_explorer(false, cx);
         let id = id_of(shell.workbench.read(cx));
         shell.workbench.update(cx, |workbench, _| {
             workbench.place_tool(id, ToolPlacement::Dock(DockLocation::Bottom));
@@ -206,7 +206,7 @@ async fn tools_do_not_bypass_dirty_document_or_terminal_protection(cx: &mut Test
     let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
     model.update(cx, |model, _| model.replace(0..0, "unsaved").unwrap());
     let (shell, window) = product_window(document, model, cx);
-    shell.update(cx, |shell, cx| shell.ensure_explorer(cx));
+    shell.update(cx, |shell, cx| shell.ensure_explorer(false, cx));
     let close = dispatch_product_command(&shell, window, CLOSE_TAB_COMMAND, cx);
     cx.run_until_parked();
     assert!(cx.has_pending_prompt());

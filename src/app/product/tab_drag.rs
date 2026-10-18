@@ -657,6 +657,10 @@ impl ProductShell {
                     {
                         shell.update(cx, |shell, cx| {
                             shell.dock_resize = None;
+                            // A settled resize is a user customization; equal
+                            // snapshots are no-ops, so release without movement
+                            // never reaches storage.
+                            shell.publish_tool_layout(cx);
                             cx.notify();
                         });
                     }

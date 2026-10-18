@@ -140,8 +140,16 @@ pub(crate) fn quit_after_storage(cx: &mut App) {
     let Some(drain) = host.update(cx, |host, _| host.shutdown_storage()) else {
         return;
     };
+    // A debounced tool-layout write may still be pending; force it out before
+    // exiting so the last customization survives the restart.
+    let layout_flush = cx
+        .try_global::<super::tool_layout::ApplicationToolLayout>()
+        .map(|store| store.0.flush());
     cx.spawn(async move |cx| {
         drain.await;
+        if let Some(flush) = layout_flush {
+            let _ = flush.await;
+        }
         let _ = cx.update(|cx| cx.quit());
     })
     .detach();

@@ -295,7 +295,7 @@ fn tool_fixture(cx: &mut TestAppContext) -> (Entity<ProductShell>, AnyWindowHand
     let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
     let (shell, window) = product_window(document, model, cx);
     shell.update(cx, |shell, cx| {
-        shell.ensure_explorer(cx);
+        shell.ensure_explorer(false, cx);
         cx.notify();
     });
     cx.run_until_parked();

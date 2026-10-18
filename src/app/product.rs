@@ -1954,7 +1954,7 @@ impl ProductShell {
 
     fn toggle_explorer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.workspace_tree.is_none() {
-            self.ensure_explorer(cx);
+            self.ensure_explorer(true, cx);
         } else {
             let id = self.explorer_frame(cx).unwrap();
             self.workbench.update(cx, |workbench, _| {
@@ -1965,6 +1965,7 @@ impl ProductShell {
                 }
             });
         }
+        self.publish_tool_layout(cx);
         self.focus_active_surface(window, cx);
         cx.notify();
     }
@@ -1987,7 +1988,7 @@ impl ProductShell {
         if let Some(tree) = &self.workspace_tree {
             tree.update(cx, |tree, cx| tree.set_workspace(workspace.clone(), cx));
         } else if !workspace.roots().is_empty() {
-            self.ensure_explorer(cx);
+            self.ensure_explorer(false, cx);
         }
         self.status = if workspace.roots().is_empty() {
             "workspace cleared"
@@ -1999,7 +2000,11 @@ impl ProductShell {
         Ok(workspace)
     }
 
-    fn ensure_explorer(&mut self, cx: &mut Context<Self>) {
+    /// Register the native explorer frame and apply the stored tool arrangement.
+    /// `show` forces visibility for explicit user requests; automatic presentation
+    /// (workspace open, fresh-window restore) honors stored visibility instead and
+    /// never publishes a new default.
+    fn ensure_explorer(&mut self, show: bool, cx: &mut Context<Self>) {
         if self.workspace_tree.is_some() {
             return;
         }
@@ -2012,19 +2017,177 @@ impl ProductShell {
         ));
         let load = tree.clone();
         cx.defer(move |cx| load.update(cx, |tree, cx| tree.load(cx)));
+        let stored = Self::stored_tool_layout(cx);
         self.workbench.update(cx, |workbench, _| {
             let previous = workbench.focused_pane_id();
             let id = workbench.register_tool(
+                super::tool_layout::EXPLORER_TOOL_ID,
                 "Explorer",
                 ToolContent::Workspace(tree.clone()),
                 DockLocation::Left,
             );
-            workbench.show_tool(id);
+            let visible = show
+                || stored
+                    .as_ref()
+                    .and_then(|snapshot| snapshot.tool(super::tool_layout::EXPLORER_TOOL_ID))
+                    .is_none_or(|record| record.visible);
+            if let Some(snapshot) = &stored {
+                workbench.set_dock_sizes(snapshot.dock_sizes);
+                if let Some(record) = snapshot.tool(super::tool_layout::EXPLORER_TOOL_ID) {
+                    workbench.remember_tool_placement(
+                        id,
+                        record.location.placement(),
+                        record.index,
+                    );
+                }
+            }
+            if visible {
+                workbench.show_tool(id);
+            }
             if let Some(pane) = previous {
                 workbench.focus_pane(pane);
             }
         });
         self.workspace_tree = Some(tree);
+    }
+
+    /// The last user-customized tool arrangement, or product defaults when no
+    /// store is installed. Fresh windows restore from this; live windows never
+    /// read it again after creation.
+    fn stored_tool_layout(cx: &App) -> Option<super::tool_layout::ToolLayoutSnapshot> {
+        cx.try_global::<super::tool_layout::ApplicationToolLayout>()
+            .map(|store| store.0.current())
+    }
+
+    /// Publish this window's live arrangement as the fresh-window default.
+    /// Call only for explicit user moves, resizes, and show/hide changes:
+    /// restore, activation, and automatic presentation must not publish.
+    fn publish_tool_layout(&self, cx: &App) {
+        let Some(store) = cx.try_global::<super::tool_layout::ApplicationToolLayout>() else {
+            return;
+        };
+        store
+            .0
+            .publish(self.workbench.read(cx).tool_layout_snapshot());
+    }
+
+    /// Reset this window's tools to product defaults and publish the reset.
+    fn reset_tool_layout(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.workspace_tree.is_none() {
+            self.ensure_explorer(false, cx);
+        }
+        let defaults = super::tool_layout::ToolLayoutSnapshot::product_default();
+        self.restore_tool_layout(&defaults, cx);
+        self.publish_tool_layout(cx);
+        self.focus_active_surface(window, cx);
+        cx.notify();
+    }
+
+    /// Restore the full stored arrangement onto this window's registered tools.
+    /// Unknown stored tools are skipped without blank frames; registered tools
+    /// without a stored record keep their live placement. Never publishes.
+    fn restore_tool_layout(
+        &mut self,
+        snapshot: &super::tool_layout::ToolLayoutSnapshot,
+        cx: &mut Context<Self>,
+    ) {
+        use super::tool_layout::StoredLocation;
+        self.workbench.update(cx, |workbench, _| {
+            workbench.set_dock_sizes(snapshot.dock_sizes);
+            let known: Vec<(ToolFrameId, String)> = workbench
+                .tools()
+                .iter()
+                .map(|tool| (tool.id, tool.stable_id.to_owned()))
+                .collect();
+            let live_location = |workbench: &Workbench, id: ToolFrameId| {
+                workbench
+                    .tool_tab(id)
+                    .map(|(pane, _)| match workbench.dock_location(pane) {
+                        Some(dock) => StoredLocation::from(dock),
+                        None => StoredLocation::DocumentGroup,
+                    })
+            };
+            // Visible dock tools restore in stored order so tab order matches.
+            // Docks already in stored order are left untouched so live command
+            // targets survive.
+            for dock in DockLocation::ALL {
+                let mut ordered: Vec<(usize, ToolFrameId)> = known
+                    .iter()
+                    .filter_map(|(id, stable)| {
+                        snapshot
+                            .tool(stable)
+                            .filter(|record| {
+                                record.visible && record.location == StoredLocation::from(dock)
+                            })
+                            .map(|record| (record.index, *id))
+                    })
+                    .collect();
+                ordered.sort_by_key(|(order, _)| *order);
+                let want: Vec<ToolFrameId> = ordered.iter().map(|(_, id)| *id).collect();
+                let live: Vec<ToolFrameId> = workbench
+                    .dock_pane(dock)
+                    .and_then(|pane| workbench.pane(pane))
+                    .map(|pane| {
+                        pane.tabs()
+                            .iter()
+                            .filter_map(|tab| match tab.surface_id() {
+                                TabSurfaceId::Tool(id) => Some(id),
+                                _ => None,
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                if live == want {
+                    for (index, id) in &ordered {
+                        workbench.remember_tool_placement(
+                            *id,
+                            StoredLocation::from(dock).placement(),
+                            *index,
+                        );
+                    }
+                    continue;
+                }
+                for (index, id) in &ordered {
+                    workbench.hide_tool(*id);
+                    workbench.remember_tool_placement(
+                        *id,
+                        StoredLocation::from(dock).placement(),
+                        *index,
+                    );
+                    workbench.show_tool(*id);
+                }
+            }
+            // Visible document-group tools and hidden tools restore next.
+            for (id, stable) in &known {
+                let Some(record) = snapshot.tool(stable) else {
+                    continue;
+                };
+                if record.visible && record.location != StoredLocation::DocumentGroup {
+                    continue;
+                }
+                if record.visible && live_location(workbench, *id) == Some(record.location) {
+                    workbench.remember_tool_placement(
+                        *id,
+                        record.location.placement(),
+                        record.index,
+                    );
+                    continue;
+                }
+                workbench.hide_tool(*id);
+                workbench.remember_tool_placement(*id, record.location.placement(), record.index);
+                if record.visible {
+                    workbench.show_tool(*id);
+                }
+            }
+            for dock in DockLocation::ALL {
+                if let Some(selected) = &snapshot.dock_selected[dock.index()]
+                    && let Some(id) = workbench.tool_by_stable_id(selected)
+                    && workbench.tool_tab(id).is_some()
+                {
+                    workbench.show_tool(id);
+                }
+            }
+        });
     }
 
     fn handle_workspace_tree_event(&mut self, event: WorkspaceTreeEvent, cx: &mut Context<Self>) {
@@ -3131,6 +3294,7 @@ impl ProductShell {
                                             this.workbench.update(cx, |workbench, _| {
                                                 workbench.hide_tool(id);
                                             });
+                                            this.publish_tool_layout(cx);
                                             this.focus_active_surface(window, cx);
                                             cx.notify();
                                         }
@@ -3272,6 +3436,7 @@ impl Render for ProductShell {
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.workbench
                                     .update(cx, |workbench, _| workbench.toggle_dock(dock));
+                                this.publish_tool_layout(cx);
                                 this.focus_active_surface(window, cx);
                                 cx.notify();
                             }))
@@ -3670,6 +3835,17 @@ pub(crate) fn run(initial_request: Option<OpenRequest>) {
         cx.set_global(ApplicationTerminalSessions(RefCell::new(
             TerminalSessions::default(),
         )));
+        // Load the persisted tool arrangement before any window opens so the
+        // first window restores it; a missing or unreadable record keeps
+        // product defaults without delaying startup.
+        let layout_path = super::tool_layout::ToolLayoutStore::user_path()
+            .unwrap_or_else(|_| std::env::temp_dir().join("knot-tool-layout.sqlite3"));
+        cx.set_global(super::tool_layout::ApplicationToolLayout(
+            super::tool_layout::ToolLayoutStore::open(
+                layout_path,
+                cx.background_executor().clone(),
+            ),
+        ));
         cx.set_global(ApplicationLaunchGate(RefCell::new(LaunchGate::Pending(
             Vec::new(),
         ))));
@@ -3766,6 +3942,7 @@ mod tests {
     mod closure;
     mod observation;
     mod operations;
+    mod tool_layout;
     mod tools;
     mod workspaces;
     use std::path::Path;
@@ -3863,8 +4040,23 @@ mod tests {
         cx.set_global(ApplicationFileSystems(product_filesystems()));
         let commands = cx.new(ProductCommandDispatcher::new);
         cx.set_global(ApplicationProductCommands(commands));
+        // Each test gets an isolated tool-layout database; the directory is
+        // retained as a global so the database path stays alive with the test.
+        let layout_dir = tempfile::tempdir().unwrap();
+        cx.set_global(crate::app::tool_layout::ApplicationToolLayout(
+            crate::app::tool_layout::ToolLayoutStore::open(
+                layout_dir.path().join("tool-layout.sqlite3"),
+                cx.background_executor.clone(),
+            ),
+        ));
+        cx.set_global(TestToolLayoutDir(layout_dir));
         documents
     }
+
+    #[allow(dead_code, reason = "ownership keeps the test database path alive")]
+    struct TestToolLayoutDir(tempfile::TempDir);
+
+    impl gpui::Global for TestToolLayoutDir {}
 
     fn keymap_command(cx: &gpui::App, key: &str, view: Option<&str>) -> Option<String> {
         match cx

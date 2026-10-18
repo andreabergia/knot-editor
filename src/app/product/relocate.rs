@@ -108,6 +108,9 @@ impl ProductShell {
             if moved.is_none() {
                 return CommandOutcome::InvalidTarget;
             }
+            if matches!(source.tab.tab.surface, TabSurfaceId::Tool(_)) {
+                self.publish_tool_layout(cx);
+            }
             self.focus_relocated_surface(window, cx);
             cx.notify();
             return CommandOutcome::Completed;
