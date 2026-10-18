@@ -133,8 +133,9 @@ Decisions locked before implementation:
 - IDs are non-empty, unique among live registrations, and may not use the
   reserved `knot.` prefix. Duplicate live IDs fail with `ViewIdInUse`.
 - Tool presentations and command captures expose the stable contribution ID in
-  addition to the live instance identity. `CommandTarget.window` is a live
-  `WindowTarget` so command handlers can target the originating window.
+  addition to the live instance identity. Command targets also expose a live
+  `WindowTarget` alongside the captured window identity so handlers can target
+  the originating window.
 - Hiding keeps the native instance and its selection, expansion, and scroll
   state alive while removing the tab. Reopening reattaches the frame and
   refreshes root children. Window closure, unload, disposal, and failed startup
@@ -149,6 +150,27 @@ disposal from callbacks, unload, startup rollback, and captured command routing.
 Cover preferences surviving reload/restart, late/missing registration, user
 versus automatic show/hide, and independent live layouts in two windows. Verify
 that no provider callback or cleanup overwrites the saved default arrangement.
+
+Execution evidence:
+
+- ✅ `workbench.registerView`/`ViewRegistration` (show, hide, focus, invalidate,
+  dispose), per-window instances, provider window/instance context, targeted
+  invalidation, disposal, unload, window closure, and host-release cleanup are
+  wired into the dockable workbench and automatic layout memory.
+- ✅ Hardcoded outline creation, declared tree kinds, fixed sidebar rendering,
+  and singleton shell routing are removed; the outline fixtures use the public
+  contributed-view path.
+- ✅ `knot.d.ts`, the bootstrap/facade, authoring examples, the API contract
+  test, and `docs/extension-api.md` reflect the new surface.
+- ✅ Fixture compilation failures now fail loudly (`receive_request*` panics with
+  the lifecycle failure) instead of looking like a missing request.
+- ✅ Coverage includes registration before/after windows, duplicate IDs,
+  multiple contributions and windows, targeted invalidation, moving/reopening,
+  stale results, window closure, disposal, unload, startup rollback, and
+  captured command routing (`cargo test --lib`: 674 passed).
+- 🚧 Review gate pending: inspect the outline frame in two windows and approve
+  the exact public names, IDs, context, visibility, placement, and remembered
+  hide/reopen semantics.
 
 **Review gate:** inspect outline frames in two windows, including dragging into
 a document tab group. Approve exact public names, IDs, context, visibility,
