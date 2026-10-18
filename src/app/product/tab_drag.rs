@@ -2,12 +2,23 @@
 
 use super::relocate::{TabRelocationDestination, TabRelocationSource};
 use super::*;
-use crate::app::workbench::{SplitEdge, TabMoveCapture, TabMoveDestination, TabMovePlacement};
+use crate::app::workbench::{
+    DockLocation, SplitEdge, TabMoveCapture, TabMoveDestination, TabMovePlacement,
+};
 use std::rc::Rc;
+
+/// Distance from the workbench frame edge that starts a dock drop target for
+/// tool frames. Pane-edge splits keep handling the interior; only tools use
+/// these whole-workbench strips so documents and terminals keep their
+/// pane-local split behavior.
+const WORKBENCH_EDGE_WIDTH: f32 = 20.;
+const DOCK_PREVIEW_SIDE: f32 = 240.;
+const DOCK_PREVIEW_BOTTOM: f32 = 220.;
 
 #[derive(Default)]
 pub(super) struct TabDragState {
     panes: Vec<PaneGeometry>,
+    workbench: Option<Bounds<Pixels>>,
     preview: Option<DropTarget>,
 }
 
@@ -25,7 +36,57 @@ struct DropTarget {
 }
 
 impl TabDragState {
-    fn target_at(&self, position: Point<Pixels>) -> Option<DropTarget> {
+    fn workbench_dock_target(&self, position: Point<Pixels>) -> Option<DropTarget> {
+        let bounds = self.workbench?;
+        if !bounds.contains(&position) {
+            return None;
+        }
+        let edge = WORKBENCH_EDGE_WIDTH;
+        let left = position.x - bounds.left() < px(edge);
+        let right = bounds.right() - position.x < px(edge);
+        let bottom = bounds.bottom() - position.y < px(edge);
+        let (dock, preview) = if left {
+            (
+                DockLocation::Left,
+                Bounds::new(
+                    point(bounds.left(), bounds.top()),
+                    size(
+                        px(DOCK_PREVIEW_SIDE).min(bounds.size.width),
+                        bounds.size.height,
+                    ),
+                ),
+            )
+        } else if right {
+            let width = px(DOCK_PREVIEW_SIDE).min(bounds.size.width);
+            (
+                DockLocation::Right,
+                Bounds::new(
+                    point(bounds.right() - width, bounds.top()),
+                    size(width, bounds.size.height),
+                ),
+            )
+        } else if bottom {
+            let height = px(DOCK_PREVIEW_BOTTOM).min(bounds.size.height);
+            (
+                DockLocation::Bottom,
+                Bounds::new(
+                    point(bounds.left(), bounds.bottom() - height),
+                    size(bounds.size.width, height),
+                ),
+            )
+        } else {
+            return None;
+        };
+        Some(DropTarget {
+            tab: TabMoveDestination::Dock(dock),
+            bounds: preview,
+        })
+    }
+
+    fn target_at(&self, position: Point<Pixels>, is_tool: bool) -> Option<DropTarget> {
+        if is_tool && let Some(dock) = self.workbench_dock_target(position) {
+            return Some(dock);
+        }
         let pane = self
             .panes
             .iter()
@@ -98,6 +159,7 @@ impl TabDragState {
 
     pub(super) fn begin_frame(&mut self) {
         self.panes.clear();
+        self.workbench = None;
     }
 }
 
@@ -209,7 +271,12 @@ impl TabDragCoordinator {
         false
     }
 
-    fn action_at(&self, pointer: Point<Pixels>, geometry: &[WindowGeometry]) -> DropAction {
+    fn action_at(
+        &self,
+        pointer: Point<Pixels>,
+        geometry: &[WindowGeometry],
+        source: &TabRelocationSource,
+    ) -> DropAction {
         let Some(front) = geometry
             .iter()
             .find(|window| window.frame.contains(&pointer))
@@ -229,10 +296,14 @@ impl TabDragCoordinator {
         if !entry.accepts_drop {
             return DropAction::Invalid;
         }
+        let is_tool = matches!(
+            source.tab.tab.surface,
+            crate::app::workbench::TabSurfaceId::Tool(_)
+        );
         let Some(target) = entry
             .state
             .borrow()
-            .target_at(pointer - front.content.origin)
+            .target_at(pointer - front.content.origin, is_tool)
         else {
             return DropAction::Invalid;
         };
@@ -249,6 +320,12 @@ impl TabDragCoordinator {
             .iter()
             .find(|window| window.frame.contains(&pointer))
             .map(|window| window.window);
+        let is_tool = self.active.as_ref().is_some_and(|active| {
+            matches!(
+                active.source.tab.tab.surface,
+                crate::app::workbench::TabSurfaceId::Tool(_)
+            )
+        });
         for entry in &self.windows {
             let target = geometry
                 .iter()
@@ -262,7 +339,7 @@ impl TabDragCoordinator {
                     entry
                         .state
                         .borrow()
-                        .target_at(pointer - window.content.origin)
+                        .target_at(pointer - window.content.origin, is_tool)
                 });
             entry.state.borrow_mut().preview = target;
         }
@@ -405,6 +482,20 @@ impl ProductShell {
         }
     }
 
+    pub(super) fn workbench_drag_geometry(&self) -> impl IntoElement + use<> {
+        let state = self.tab_drag.clone();
+        canvas(
+            move |bounds, _, _| {
+                state.borrow_mut().workbench = Some(bounds);
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+    }
+
     pub(super) fn pane_drag_geometry(&self, pane: PaneId) -> impl IntoElement + use<> {
         let state = self.tab_drag.clone();
         canvas(
@@ -476,6 +567,16 @@ impl ProductShell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if event.keystroke.key == "escape"
+            && let Some(resize) = self.dock_resize.take()
+        {
+            self.workbench.update(cx, |workbench, _| {
+                workbench.set_dock_size(resize.dock, resize.start_size);
+            });
+            cx.stop_propagation();
+            cx.notify();
+            return;
+        }
         let coordinator = cx.global::<ApplicationTabDrag>().0.clone();
         if event.keystroke.key == "escape" && coordinator.borrow().active.is_some() {
             coordinator.borrow_mut().clear();
@@ -509,7 +610,30 @@ impl ProductShell {
                     window.paint_quad(fill(preview.bounds, rgba(0x7fb5ff55)));
                 }
                 let moves = coordinator.clone();
+                let resize_shell = shell.clone();
                 window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+                    if phase == DispatchPhase::Capture
+                        && let Some(shell) = resize_shell.upgrade()
+                    {
+                        let resize = shell.read(cx).dock_resize;
+                        if let Some(resize) = resize
+                            && event.dragging()
+                        {
+                            let delta = event.position - resize.start_pointer;
+                            let size = match resize.dock {
+                                DockLocation::Left => resize.start_size + f32::from(delta.x),
+                                DockLocation::Right => resize.start_size - f32::from(delta.x),
+                                DockLocation::Bottom => resize.start_size - f32::from(delta.y),
+                            };
+                            shell.update(cx, |shell, cx| {
+                                shell.workbench.update(cx, |workbench, _| {
+                                    workbench.set_dock_size(resize.dock, size);
+                                });
+                                cx.notify();
+                            });
+                            return;
+                        }
+                    }
                     if phase == DispatchPhase::Capture
                         && cx.has_active_drag()
                         && moves.borrow().active.is_some()
@@ -523,16 +647,27 @@ impl ProductShell {
                     }
                 });
                 let releases = coordinator.clone();
+                let resize_release = shell.clone();
                 window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
                     if phase != DispatchPhase::Capture || event.button != MouseButton::Left {
                         return;
                     }
+                    if let Some(shell) = resize_release.upgrade()
+                        && shell.read(cx).dock_resize.is_some()
+                    {
+                        shell.update(cx, |shell, cx| {
+                            shell.dock_resize = None;
+                            cx.notify();
+                        });
+                    }
                     let active = releases.borrow_mut().active.take();
                     if let Some(active) = active {
                         let geometry = window_geometries(window, cx);
-                        let action = releases
-                            .borrow()
-                            .action_at(content_bounds(window).origin + event.position, &geometry);
+                        let action = releases.borrow().action_at(
+                            content_bounds(window).origin + event.position,
+                            &geometry,
+                            &active.source,
+                        );
                         releases.borrow_mut().clear();
                         if cx.has_active_drag() {
                             cx.stop_active_drag(window);

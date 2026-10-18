@@ -483,3 +483,52 @@ fn terminal_moves_within_window_then_hands_off_into_existing_window(cx: &mut Tes
     cx.read(|cx| assert_eq!(session.read(cx).size(), size));
     session.update(cx, |session, cx| session.close(cx));
 }
+
+#[gpui::test]
+fn tool_tear_out_and_cross_window_transfer_cancel_without_new_window(cx: &mut TestAppContext) {
+    let documents = install_globals(cx);
+    let document = cx.update(|cx| create_untitled_document(&documents, cx));
+    let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+    let (source, source_window) = product_window(document, model.clone(), cx);
+    let (destination, destination_window) = product_window(document, model, cx);
+    source.update(cx, |shell, cx| {
+        shell.ensure_explorer(cx);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let before = cx.read(|cx| source.read(cx).workbench.read(cx).tab_snapshots());
+    let tool = cx.read(|cx| {
+        let shell = source.read(cx);
+        let workbench = shell.workbench.read(cx);
+        let explorer = shell.explorer_frame(cx).unwrap();
+        let (tool_pane, tool_tab) = workbench.tool_tab(explorer).unwrap();
+        shell
+            .capture_tab_relocation(tool_pane, tool_tab, cx)
+            .unwrap()
+    });
+    assert!(matches!(tool.tab.tab.surface, TabSurfaceId::Tool(_)));
+    let outcome = cx
+        .update_window(source_window, |_, window, cx| {
+            source.update(cx, |shell, cx| {
+                shell.relocate_tab_to_new_window_with(&tool, window, cx, |_| {
+                    panic!("tool tear-out must not create a window")
+                })
+            })
+        })
+        .unwrap();
+    assert_eq!(outcome, CommandOutcome::Unavailable);
+    let target = cx.read(|cx| target(&destination, destination_window, TabMovePlacement::End, cx));
+    let outcome = cx
+        .update_window(source_window, |_, window, cx| {
+            source.update(cx, |shell, cx| {
+                shell.relocate_tab_to(&tool, &target, window, cx)
+            })
+        })
+        .unwrap();
+    assert_eq!(outcome, CommandOutcome::Unavailable);
+    cx.read(|cx| {
+        assert_eq!(cx.windows().len(), 2);
+        assert_eq!(source.read(cx).workbench.read(cx).tab_snapshots(), before);
+        assert!(source.read(cx).relocation_is_live(&tool, cx));
+    });
+}

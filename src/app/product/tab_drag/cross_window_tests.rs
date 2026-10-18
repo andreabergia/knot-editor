@@ -647,7 +647,7 @@ fn source_window_closure_cancels_shared_drag_and_releases_geometry(cx: &mut Test
 
 #[gpui::test]
 fn hit_testing_respects_title_bar_occlusion_and_global_content_offsets(cx: &mut TestAppContext) {
-    let (_, source_window, _, destination_window) = pair(cx, 1);
+    let (source, source_window, _, destination_window) = pair(cx, 1);
     let local = VisualTestContext::from_window(destination_window, cx)
         .debug_bounds("pane-1")
         .unwrap()
@@ -659,19 +659,24 @@ fn hit_testing_respects_title_bar_occlusion_and_global_content_offsets(cx: &mut 
         size(px(640.), px(552.)),
     );
     cx.read(|cx| {
+        let shell = source.read(cx);
+        let pane = shell.workbench.read(cx).focused_pane().unwrap();
+        let document_source = shell
+            .capture_tab_relocation(pane.id(), pane.active_tab_id(), cx)
+            .unwrap();
         let state = cx.global::<ApplicationTabDrag>().0.borrow();
         let pointer = content.origin + local;
         let geometry = vec![WindowGeometry { window: destination_window, frame, content }];
-        assert!(matches!(state.action_at(pointer, &geometry), DropAction::Target(destination) if destination.window == destination_window));
+        assert!(matches!(state.action_at(pointer, &geometry, &document_source), DropAction::Target(destination) if destination.window == destination_window));
         let title = frame.origin + point(px(20.), px(10.));
-        assert!(matches!(state.action_at(title, &geometry), DropAction::Invalid));
+        assert!(matches!(state.action_at(title, &geometry, &document_source), DropAction::Invalid));
         let toolbar = content.origin + point(local.x, px(5.));
-        assert!(matches!(state.action_at(toolbar, &geometry), DropAction::Invalid));
+        assert!(matches!(state.action_at(toolbar, &geometry, &document_source), DropAction::Invalid));
         // A front window's non-content frame prevents dropping into the pane behind it.
         let mut overlapping = vec![WindowGeometry { window: source_window, frame: Bounds::new(pointer - point(px(5.), px(5.)), size(px(100.), px(100.))), content: Bounds::new(pointer + point(px(0.), px(40.)), size(px(100.), px(60.))) }];
         overlapping.extend(geometry);
-        assert!(matches!(state.action_at(pointer, &overlapping), DropAction::Invalid));
-        assert!(matches!(state.action_at(point(px(-3000.), px(-3000.)), &overlapping), DropAction::TearOut(_)));
+        assert!(matches!(state.action_at(pointer, &overlapping, &document_source), DropAction::Invalid));
+        assert!(matches!(state.action_at(point(px(-3000.), px(-3000.)), &overlapping, &document_source), DropAction::TearOut(_)));
     });
 }
 

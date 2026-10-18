@@ -352,6 +352,7 @@ pub(crate) struct ProductShell {
     workbench: Entity<Workbench>,
     status: SharedString,
     tab_drag: std::rc::Rc<RefCell<tab_drag::TabDragState>>,
+    dock_resize: Option<DockResizeDrag>,
     command_palette: Option<Entity<CommandPalette<ProductCommandTarget>>>,
     command_palette_subscription: Option<Subscription>,
     workspace: WorkspaceState,
@@ -371,12 +372,20 @@ pub(crate) struct ProductShell {
     extension_report_subscription: Option<Subscription>,
 }
 
+#[derive(Clone, Copy)]
+struct DockResizeDrag {
+    dock: DockLocation,
+    start_pointer: Point<Pixels>,
+    start_size: f32,
+}
+
 impl ProductShell {
     fn new(workbench: Entity<Workbench>) -> Self {
         Self {
             workbench,
             status: "ready".into(),
             tab_drag: Default::default(),
+            dock_resize: None,
             command_palette: None,
             command_palette_subscription: None,
             workspace: WorkspaceState::default(),
@@ -2884,6 +2893,8 @@ impl ProductShell {
                 second,
             } => {
                 let direction = *direction;
+                // Only dock-adjacent dividers resize. Document/document splits
+                // stay equal; docks keep window-local sizes with usable limits.
                 let dock_extent = |layout: &WorkbenchLayout| match layout {
                     WorkbenchLayout::Pane(pane) => self
                         .workbench
@@ -2893,11 +2904,14 @@ impl ProductShell {
                             (direction == SplitDirection::Vertical)
                                 == (*dock == DockLocation::Bottom)
                         })
-                        .map(|dock| self.workbench.read(cx).dock_size(dock)),
+                        .map(|dock| (dock, self.workbench.read(cx).dock_size(dock))),
                     _ => None,
                 };
                 let first_extent = dock_extent(first);
                 let second_extent = dock_extent(second);
+                let divider_dock = first_extent
+                    .map(|(dock, _)| dock)
+                    .or_else(|| second_extent.map(|(dock, _)| dock));
                 div()
                     .flex()
                     .when(direction == SplitDirection::Horizontal, |element| {
@@ -2914,7 +2928,7 @@ impl ProductShell {
                             .when(first_extent.is_none(), |element| element.flex_1())
                             .min_w_0()
                             .min_h_0()
-                            .when_some(first_extent, |element, extent| {
+                            .when_some(first_extent, |element, (_, extent)| {
                                 element
                                     .flex_none()
                                     .when(direction == SplitDirection::Horizontal, |element| {
@@ -2926,22 +2940,13 @@ impl ProductShell {
                             })
                             .child(self.render_layout(first, cx)),
                     )
-                    .child(
-                        div()
-                            .when(direction == SplitDirection::Horizontal, |element| {
-                                element.w(px(1.)).h_full()
-                            })
-                            .when(direction == SplitDirection::Vertical, |element| {
-                                element.h(px(1.)).w_full()
-                            })
-                            .bg(rgb(0x454545)),
-                    )
+                    .child(self.render_divider(direction, divider_dock, cx))
                     .child(
                         div()
                             .when(second_extent.is_none(), |element| element.flex_1())
                             .min_w_0()
                             .min_h_0()
-                            .when_some(second_extent, |element, extent| {
+                            .when_some(second_extent, |element, (_, extent)| {
                                 element
                                     .flex_none()
                                     .when(direction == SplitDirection::Horizontal, |element| {
@@ -2956,6 +2961,60 @@ impl ProductShell {
                     .into_any_element()
             }
         }
+    }
+
+    /// Divider between two split children. Dock-adjacent dividers get a wider
+    /// hit area and drag to resize; other dividers stay a fixed 1px rule.
+    fn render_divider(
+        &self,
+        direction: SplitDirection,
+        dock: Option<DockLocation>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let Some(dock) = dock else {
+            return div()
+                .when(direction == SplitDirection::Horizontal, |element| {
+                    element.w(px(1.)).h_full()
+                })
+                .when(direction == SplitDirection::Vertical, |element| {
+                    element.h(px(1.)).w_full()
+                })
+                .bg(rgb(0x454545))
+                .into_any_element();
+        };
+        let horizontal = direction == SplitDirection::Horizontal;
+        div()
+            .id(("dock-divider", dock.index()))
+            .debug_selector(move || format!("dock-divider-{}", dock.index()))
+            .flex()
+            .flex_none()
+            .when(horizontal, |element| {
+                element.flex_row().w(px(9.)).h_full().justify_center()
+            })
+            .when(!horizontal, |element| {
+                element.flex_col().h(px(9.)).w_full().items_center()
+            })
+            .child(
+                div()
+                    .when(horizontal, |element| element.w(px(1.)).h_full())
+                    .when(!horizontal, |element| element.h(px(1.)).w_full())
+                    .bg(rgb(0x454545))
+                    .hover(|style| style.bg(rgb(0x7fb5ff))),
+            )
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                    let size = this.workbench.read(cx).dock_size(dock);
+                    this.dock_resize = Some(DockResizeDrag {
+                        dock,
+                        start_pointer: event.position,
+                        start_size: size,
+                    });
+                    cx.stop_propagation();
+                    cx.notify();
+                }),
+            )
+            .into_any_element()
     }
 
     fn render_pane(&self, pane_id: PaneId, cx: &mut Context<Self>) -> AnyElement {
@@ -3006,10 +3065,7 @@ impl ProductShell {
                     .id(("tab", tab_id.value()))
                     .debug_selector(move || format!("tab-{}", tab_id.value()))
                     .relative()
-                    .when(
-                        !matches!(tab.surface_id(), TabSurfaceId::Tool(_)),
-                        |element| element.on_drag(source, drag_label),
-                    )
+                    .on_drag(source, drag_label)
                     .child(self.tab_drag_geometry(pane_id, capture))
                     .px_3()
                     .py_1()
@@ -3247,7 +3303,9 @@ impl Render for ProductShell {
                                 .flex_1()
                                 .min_w_0()
                                 .min_h_0()
-                                .child(self.render_layout(&layout, cx)),
+                                .relative()
+                                .child(self.render_layout(&layout, cx))
+                                .child(self.workbench_drag_geometry()),
                         )
                     }),
             )

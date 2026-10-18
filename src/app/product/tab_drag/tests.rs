@@ -1,7 +1,7 @@
 use super::super::{ProductShell, create_untitled_document};
 use crate::app::{
     product::tests::{install_globals, product_window},
-    workbench::{SplitEdge, TabMoveDestination, TabMovePlacement, TabSurfaceId},
+    workbench::{DockLocation, SplitEdge, TabMoveDestination, TabMovePlacement, TabSurfaceId},
 };
 use gpui::{
     AnyWindowHandle, AppContext, Entity, Focusable, Modifiers, MouseButton, TestAppContext,
@@ -287,4 +287,292 @@ fn terminal_drag_preserves_live_view_session_and_attachment(cx: &mut TestAppCont
         assert!(view.read(cx).is_attached_to(&session));
     });
     visual.update(|window, cx| assert!(view.focus_handle(cx).is_focused(window)));
+}
+
+fn tool_fixture(cx: &mut TestAppContext) -> (Entity<ProductShell>, AnyWindowHandle) {
+    let documents = install_globals(cx);
+    let document = cx.update(|cx| create_untitled_document(&documents, cx));
+    let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+    let (shell, window) = product_window(document, model, cx);
+    shell.update(cx, |shell, cx| {
+        shell.ensure_explorer(cx);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        shell.update(cx, |shell, cx| shell.focus_active_surface(window, cx));
+    })
+    .unwrap();
+    (shell, window)
+}
+
+fn tool_tab_id(shell: &Entity<ProductShell>, cx: &TestAppContext) -> u64 {
+    cx.read(|cx| {
+        let workbench = shell.read(cx).workbench.read(cx);
+        let id = shell.read(cx).explorer_frame(cx).unwrap();
+        workbench.tool_tab(id).unwrap().1.value()
+    })
+}
+
+fn tool_presentation(shell: &Entity<ProductShell>, cx: &TestAppContext) -> gpui::EntityId {
+    cx.read(|cx| {
+        let workbench = shell.read(cx).workbench.read(cx);
+        let id = shell.read(cx).explorer_frame(cx).unwrap();
+        workbench.tool(id).unwrap().content.presentation()
+    })
+}
+
+fn assert_tool_focused(shell: &Entity<ProductShell>, visual: &mut VisualTestContext) {
+    let tree = visual.read(|cx| shell.read(cx).workspace_tree.clone().unwrap());
+    visual.update(|window, cx| assert!(tree.focus_handle(cx).is_focused(window)));
+}
+
+#[gpui::test]
+fn tool_drag_joins_group_splits_edges_and_docks_with_focus(cx: &mut TestAppContext) {
+    let (shell, window) = tool_fixture(cx);
+    let presentation = tool_presentation(&shell, cx);
+    let mut visual = VisualTestContext::from_window(window, cx);
+
+    // Escape cancels without moving.
+    let before = cx.read(|cx| shell.read(cx).workbench.read(cx).tab_snapshots());
+    start_drag(&mut visual, tool_tab_id(&shell, cx));
+    let center = visual.debug_bounds("pane-1").unwrap().center();
+    visual.simulate_mouse_move(center, MouseButton::Left, Modifiers::default());
+    visual.simulate_keystrokes("escape");
+    visual.simulate_mouse_up(center, MouseButton::Left, Modifiers::default());
+    visual.run_until_parked();
+    visual.read(|cx| {
+        assert_eq!(shell.read(cx).workbench.read(cx).tab_snapshots(), before);
+        assert!(shell.read(cx).tab_drag.borrow().preview.is_none());
+    });
+
+    // Center drop joins the document group.
+    start_drag(&mut visual, tool_tab_id(&shell, cx));
+    let pane = visual.debug_bounds("pane-1").unwrap();
+    let center = pane.center();
+    visual.simulate_mouse_move(center, MouseButton::Left, Modifiers::default());
+    visual.run_until_parked();
+    shell.read_with(&visual, |shell, _| {
+        assert!(matches!(
+            shell.tab_drag.borrow().preview.unwrap().tab,
+            TabMoveDestination::At {
+                placement: TabMovePlacement::End,
+                ..
+            }
+        ));
+    });
+    visual.simulate_mouse_up(center, MouseButton::Left, Modifiers::default());
+    visual.run_until_parked();
+    visual.read(|cx| {
+        let workbench = shell.read(cx).workbench.read(cx);
+        assert_eq!(workbench.panes().len(), 1);
+        assert_eq!(workbench.tab_snapshots().len(), 2);
+        let id = shell.read(cx).explorer_frame(cx).unwrap();
+        assert_eq!(
+            workbench.tool(id).unwrap().content.presentation(),
+            presentation
+        );
+        assert!(
+            workbench
+                .dock_location(workbench.tool_tab(id).unwrap().0)
+                .is_none()
+        );
+    });
+    assert_tool_focused(&shell, &mut visual);
+
+    // Pane left edge creates a side split.
+    start_drag(&mut visual, tool_tab_id(&shell, cx));
+    let pane = visual.debug_bounds("pane-1").unwrap();
+    let edge = point(pane.left() + px(30.), pane.center().y);
+    visual.simulate_mouse_move(edge, MouseButton::Left, Modifiers::default());
+    visual.run_until_parked();
+    shell.read_with(&visual, |shell, _| {
+        assert!(matches!(
+            shell.tab_drag.borrow().preview.unwrap().tab,
+            TabMoveDestination::At {
+                placement: TabMovePlacement::Split(SplitEdge::Left),
+                ..
+            }
+        ));
+    });
+    visual.simulate_mouse_up(edge, MouseButton::Left, Modifiers::default());
+    visual.run_until_parked();
+    visual.read(|cx| {
+        let workbench = shell.read(cx).workbench.read(cx);
+        assert_eq!(workbench.panes().len(), 2);
+        let id = shell.read(cx).explorer_frame(cx).unwrap();
+        assert_eq!(
+            workbench.tool(id).unwrap().content.presentation(),
+            presentation
+        );
+    });
+    assert_tool_focused(&shell, &mut visual);
+
+    // Workbench left edge docks around the whole layout. The dragged tool
+    // pane is leftmost after the split, so its left edge is the workbench edge.
+    start_drag(&mut visual, tool_tab_id(&shell, cx));
+    let tool_pane = cx.read(|cx| {
+        let workbench = shell.read(cx).workbench.read(cx);
+        let id = shell.read(cx).explorer_frame(cx).unwrap();
+        workbench.tool_tab(id).unwrap().0.value()
+    });
+    let selector: &'static str = Box::leak(format!("pane-{tool_pane}").into_boxed_str());
+    let pane = visual.debug_bounds(selector).unwrap();
+    let dock_point = point(pane.left() + px(2.), pane.center().y);
+    visual.simulate_mouse_move(dock_point, MouseButton::Left, Modifiers::default());
+    visual.run_until_parked();
+    shell.read_with(&visual, |shell, _| {
+        assert!(matches!(
+            shell.tab_drag.borrow().preview.unwrap().tab,
+            TabMoveDestination::Dock(DockLocation::Left)
+        ));
+    });
+    visual.simulate_mouse_up(dock_point, MouseButton::Left, Modifiers::default());
+    visual.run_until_parked();
+    visual.read(|cx| {
+        let workbench = shell.read(cx).workbench.read(cx);
+        let id = shell.read(cx).explorer_frame(cx).unwrap();
+        assert_eq!(
+            workbench.dock_location(workbench.tool_tab(id).unwrap().0),
+            Some(DockLocation::Left)
+        );
+        assert_eq!(
+            workbench.tool(id).unwrap().content.presentation(),
+            presentation
+        );
+    });
+    assert_tool_focused(&shell, &mut visual);
+
+    // Workbench bottom edge moves the same frame to the bottom dock.
+    start_drag(&mut visual, tool_tab_id(&shell, cx));
+    let pane = visual.debug_bounds("pane-1").unwrap();
+    let bottom = point(pane.center().x, pane.bottom() - px(2.));
+    visual.simulate_mouse_move(bottom, MouseButton::Left, Modifiers::default());
+    visual.run_until_parked();
+    shell.read_with(&visual, |shell, _| {
+        assert!(matches!(
+            shell.tab_drag.borrow().preview.unwrap().tab,
+            TabMoveDestination::Dock(DockLocation::Bottom)
+        ));
+    });
+    visual.simulate_mouse_up(bottom, MouseButton::Left, Modifiers::default());
+    visual.run_until_parked();
+    visual.read(|cx| {
+        let workbench = shell.read(cx).workbench.read(cx);
+        let id = shell.read(cx).explorer_frame(cx).unwrap();
+        assert_eq!(
+            workbench.dock_location(workbench.tool_tab(id).unwrap().0),
+            Some(DockLocation::Bottom)
+        );
+        assert_eq!(
+            workbench.tool(id).unwrap().content.presentation(),
+            presentation
+        );
+    });
+    assert_tool_focused(&shell, &mut visual);
+
+    // Invalid release above the pane keeps the model unchanged.
+    let before = cx.read(|cx| shell.read(cx).workbench.read(cx).tab_snapshots());
+    start_drag(&mut visual, tool_tab_id(&shell, cx));
+    let pane = visual.debug_bounds("pane-1").unwrap();
+    let invalid = point(pane.center().x, pane.top() - px(5.));
+    visual.simulate_mouse_move(invalid, MouseButton::Left, Modifiers::default());
+    visual.simulate_mouse_up(invalid, MouseButton::Left, Modifiers::default());
+    visual.run_until_parked();
+    visual.read(|cx| {
+        assert_eq!(shell.read(cx).workbench.read(cx).tab_snapshots(), before);
+    });
+}
+
+#[gpui::test]
+fn hiding_tool_mid_drag_cancels_drop(cx: &mut TestAppContext) {
+    let (shell, window) = tool_fixture(cx);
+    let before = cx.read(|cx| shell.read(cx).workbench.read(cx).tab_snapshots());
+    let mut visual = VisualTestContext::from_window(window, cx);
+    start_drag(&mut visual, tool_tab_id(&shell, cx));
+    shell.update(&mut visual, |shell, cx| {
+        let id = shell.explorer_frame(cx).unwrap();
+        shell.workbench.update(cx, |workbench, _| {
+            workbench.hide_tool(id);
+        });
+        cx.notify();
+    });
+    visual.run_until_parked();
+    let pane = visual.debug_bounds("pane-1").unwrap();
+    visual.simulate_mouse_up(pane.center(), MouseButton::Left, Modifiers::default());
+    visual.run_until_parked();
+    visual.read(|cx| {
+        let workbench = shell.read(cx).workbench.read(cx);
+        let id = shell.read(cx).explorer_frame(cx).unwrap();
+        assert!(workbench.tool_tab(id).is_none());
+        assert_eq!(workbench.tab_snapshots().len(), before.len() - 1);
+    });
+}
+
+#[gpui::test]
+fn dock_divider_drag_resizes_and_escape_reverts(cx: &mut TestAppContext) {
+    let (shell, window) = tool_fixture(cx);
+    let mut visual = VisualTestContext::from_window(window, cx);
+    let divider = visual.debug_bounds("dock-divider-0").unwrap().center();
+    visual.simulate_mouse_down(divider, MouseButton::Left, Modifiers::default());
+    visual.simulate_mouse_move(
+        divider + point(px(60.), px(0.)),
+        MouseButton::Left,
+        Modifiers::default(),
+    );
+    visual.run_until_parked();
+    visual.read(|cx| {
+        assert_eq!(
+            shell
+                .read(cx)
+                .workbench
+                .read(cx)
+                .dock_size(DockLocation::Left),
+            300.
+        );
+    });
+    visual.simulate_mouse_up(
+        divider + point(px(60.), px(0.)),
+        MouseButton::Left,
+        Modifiers::default(),
+    );
+    visual.run_until_parked();
+    visual.read(|cx| {
+        assert_eq!(
+            shell
+                .read(cx)
+                .workbench
+                .read(cx)
+                .dock_size(DockLocation::Left),
+            300.
+        );
+    });
+    let explorer = visual.debug_bounds("pane-2").unwrap();
+    assert_eq!(explorer.size.width, px(300.));
+
+    // Escape reverts an in-progress resize.
+    let divider = visual.debug_bounds("dock-divider-0").unwrap().center();
+    visual.simulate_mouse_down(divider, MouseButton::Left, Modifiers::default());
+    visual.simulate_mouse_move(
+        divider + point(px(40.), px(0.)),
+        MouseButton::Left,
+        Modifiers::default(),
+    );
+    visual.simulate_keystrokes("escape");
+    visual.simulate_mouse_up(
+        divider + point(px(40.), px(0.)),
+        MouseButton::Left,
+        Modifiers::default(),
+    );
+    visual.run_until_parked();
+    visual.read(|cx| {
+        assert_eq!(
+            shell
+                .read(cx)
+                .workbench
+                .read(cx)
+                .dock_size(DockLocation::Left),
+            300.
+        );
+    });
 }
