@@ -63,3 +63,11 @@ the fixture and refresh both frames. Move the selection and press Right to
 navigate a row's actions from the keyboard. The log frame is a read-only text
 frame replaced through `setText`. Both frames are driven only through the public
 API.
+
+A **Repositories** group demonstrates the transient interactions. **Switch
+repository** in the frame toolbar opens a searchable picker; **Add** on the group
+header opens a text input for a path; **Rename** and **Remove** on a repository
+row open an input and a native confirmation. The same picker and input are
+triggered by **example.git.select-repository** and
+**example.git.add-repository** from the command palette, and each flow awaits
+its result inside the extension command before refreshing the frame.
