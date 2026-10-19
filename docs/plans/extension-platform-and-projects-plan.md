@@ -309,10 +309,11 @@ from JS, collaboration/sync, settings/secrets systems, archive installation,
 and unrelated explorer editing features. These exclusions do not excuse missing
 failure, cancellation, and lifecycle contracts in the APIs implemented here.
 
-D049's focused plans own docking, contribution, and tool-layout contracts;
-concrete APIs, storage schema, and sizing details are finalized at their review
-gates. Recovery cadence/retention, multi-window project activation, and
-detailed startup precedence remain at their stated gates.
+The completed D049 contracts for docking, contributed frames, and tool-layout
+memory now live in the current architecture and decisions references; storage
+schema and remaining sizing details are finalized at their review gates.
+Recovery cadence/retention, multi-window project activation, and detailed
+startup precedence remain at their stated gates.
 
 **Explorer migration sequencing (D053).** The native shell-owned explorer stays
 native through checkpoint 8. Migrate it to a bundled JavaScript extension only

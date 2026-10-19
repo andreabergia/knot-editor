@@ -15,30 +15,29 @@ The [extension platform and project management plan](plans/extension-platform-an
 uses an ordinary JavaScript project manager to validate native application APIs,
 extension UI, durable storage, multi-root workspaces, and session restoration
 including unsaved documents. API foundation, application state/operations, handler
-declarations, and extension storage are complete; approval and validation notes
-live in that plan.
+declarations, extension storage, and native UI contributions are complete;
+approval and validation notes live in that plan.
 
 Remaining order:
 
 | Checkpoint | Work identifiers | Outcome |
 | --- | --- | --- |
-| 5 | D049 | Native docks, tool-layout memory, extension frames, and picker/input surfaces |
 | 6 | D051 | A usable JavaScript project registry with one root per workspace |
 | 7 | D050 | Unsaved-content recovery independent of extension health |
 | 8 | D051, D050 | Safe project switching with durable suspension/restoration |
 | 9 | D052 | Multiple roots throughout UI and resource operations |
 | 10 | D005, D051 | Layout, view-state, and startup restoration |
 
-The docking foundation is complete and approved; start checkpoint 5 with the
-[native extension UI plan](plans/d049-native-extension-ui-plan.md). Execute one
-checkpoint at a time and stop at its review gate; detailed scope and acceptance
-belong to that plan. The early project registry is an intermediate validation
-point, not initiative completion.
+Checkpoints 1–5 are complete and approved; start checkpoint 6 with the
+[extension platform plan](plans/extension-platform-and-projects-plan.md).
+Execute one checkpoint at a time and stop at its review gate; detailed scope and
+acceptance belong to that plan. The early project registry is an intermediate
+validation point, not initiative completion.
 
 This initiative takes priority over the deferred register. Persistent undo (D012),
 general UI/WebViews (D021), terminal restoration (D043), and broad scheduling
 policy (D019) remain deferred. Exact view-state restoration belongs to selected
-D005; tool-only layout memory belongs to D049.
+D005; tool-only layout memory shipped with the completed D049.
 
 ## Deferred register
 

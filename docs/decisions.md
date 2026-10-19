@@ -198,8 +198,8 @@ observation, and command targeting with document and terminal presentations.
 Keeping hidden definitions in the workbench preserves native state without
 retaining closed documents or rebuilding obsolete document groups. Model and
 gpui integration tests cover these ownership and closure boundaries, and the
-docking foundation is approved; extension-contributed frames remain in the
-active D049 native extension UI plan.
+docking foundation is approved; extension-contributed frames now render through
+the shared [semantic UI](architecture/semantic-ui.md) tree and text surfaces.
 
 Automatic tool-layout memory persists one versioned tool-only snapshot in
 application-owned SQLite, separate from extension storage: stable namespaced
