@@ -629,6 +629,9 @@ impl TreeView {
             }
             "right" => {
                 let Some(index) = current else {
+                    // With no row cursor, enter the frame's own actions.
+                    self.enter_action_focus(cx);
+                    cx.stop_propagation();
                     return;
                 };
                 let id = item_rows[index].0;
