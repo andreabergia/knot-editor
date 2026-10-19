@@ -1,7 +1,7 @@
 # Bundled JavaScript project registry
 
-Status: ⬜ In progress. 6.1 and 6.2 complete and approved; 6.3 next. Owns
-detailed execution for checkpoint 6 of the
+Status: ⬜ In progress. 6.1 and 6.2 complete and approved; 6.3 implemented and
+awaiting its review gate. Owns detailed execution for checkpoint 6 of the
 [extension platform and projects plan](extension-platform-and-projects-plan.md).
 Work identifier D051.
 
@@ -135,20 +135,30 @@ contract and normalization flow live in
 [documents and persistence](../architecture/documents-and-persistence.md#workspaces-and-resource-trees)
 and [semantic UI](../architecture/semantic-ui.md#extension-transient-interactions).
 
-### 6.3 Project registry extension and dogfood ⬜
+### 6.3 Project registry extension and dogfood ⬜ awaiting review
 
-- Implement `@knot/projects` behavior, storage schema, commands, tree
-  contribution, active derivation, and error surfacing using only public APIs.
-- Include bundled sources in the extension API check.
-- **Validation:** real bundled package through the product host covering
-  create/list/select/rename/remove, restart persistence, missing-root and
-  storage-failure handling, independent windows using captured context, and
-  cleanup of contributions when the package fails. Ensure existing native
-  product flows and multi-window behavior regress cleanly.
-- **Review gate:** dogfood the registry, approve the extension/platform
-  boundary, and record the API limitations and coupling fixes this checkpoint
-  exposed (folder selection, built-in storage identity, bundled module root) in
-  the current architecture references and decisions.
+- ✅ `@knot/projects` implements one `projects` storage record
+  (`{ schema, projects: [{ id, name, roots, createdAt, lastOpenedAt }],
+  recentProjectId }`), JS-generated stable IDs, and sanitizing reads that retain
+  the last good state on malformed records or storage failure.
+- ✅ Commands cover create (folder picker plus name input), select (palette picker
+  and row activation), rename, remove (native confirmation), list (clipboard
+  record), refresh, show, and hide. Errors surface through messages; a missing
+  root leaves the record and window intact.
+- ✅ The Projects tree lists one row per project with its root, marks the project
+  matching that window's workspace root, and exposes rename/remove row actions
+  plus create/refresh toolbar actions.
+- ✅ The view registers hidden so it never displaces the native explorer
+  selection on fresh windows; `projects.show` reveals it and tool-layout memory
+  remembers the arrangement. Bundled sources join the extension API check.
+- **Validation:** bundled package through the product host covering create/list/
+  select/rename/remove, active marking, restart persistence, missing-root
+  reporting, and per-window captured context; `check-extension-api.sh`, clippy,
+  and the full Rust suite pass. Storage-failure cleanup and contribution rollback
+  reuse the 6.1 and D049 coverage.
+- **Review gate:** dogfood the registry, approve the extension/platform boundary,
+  and confirm the API limitations this checkpoint exposed are recorded (folder
+  selection in 6.2, built-in storage identity and bundled module root in 6.1).
 
 ## Documentation updates on landing
 

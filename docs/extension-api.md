@@ -339,6 +339,10 @@ ordering, cancellation, and failure contracts live in the TypeScript reference;
 SQLite ownership and shutdown belong to
 [host architecture](architecture/extension-host.md#extension-record-storage).
 
+The bundled `@knot/projects` package is a worked example that combines one
+registry record, a contributed tree, a folder picker, text input, confirmation,
+and workspace opening through the public API only.
+
 ## Native contributors
 
 Handler annotation and conversion contracts live in the

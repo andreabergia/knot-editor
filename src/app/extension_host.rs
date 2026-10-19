@@ -522,6 +522,11 @@ impl ProductExtensionHost {
         let _ = self.start_installed_extensions_with_completion(root, false, cx);
     }
 
+    #[cfg(test)]
+    pub(crate) fn start_product_extensions(&mut self, root: PathBuf, cx: &mut Context<Self>) {
+        let _ = self.start_installed_extensions_with_completion(root, true, cx);
+    }
+
     fn start_installed_extensions_with_completion(
         &mut self,
         root: PathBuf,

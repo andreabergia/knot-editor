@@ -4470,6 +4470,7 @@ mod tests {
     mod git_status;
     mod observation;
     mod operations;
+    mod projects;
     mod tool_layout;
     mod tools;
     mod transient;
