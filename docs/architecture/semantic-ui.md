@@ -97,10 +97,10 @@ timeouts, backpressure, richer edits, and popup polish remain deferred.
 `TreeView` owns cached semantic items, expansion, selection, focus, scroll, and
 per-parent loading/error generations. It renders and handles input from cached
 foreground state only.
-Each product window owns an instance of a declared tree kind. The foreground
-semantic bridge retains weak references to live instances, accepts provider
-registration before windows open, and routes invalidations and responses to
-each instance. Its generation rejects responses from a replaced request.
+Each product window owns at most one instance of a contributed view. The
+foreground semantic bridge retains weak references to live instances, accepts
+view registration before windows open, and routes invalidations and responses
+to each instance. Its generation rejects responses from a replaced request.
 Clicking an item focuses its tree before emitting its command. The product
 shell routes that event after the tree update through the captured window
 command path.

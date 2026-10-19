@@ -222,10 +222,11 @@ reproduced.
 Replacing the native explorer's fixed sidebar with tool frames leaves one shell
 focus/command-view resolution path: `CommandView` supplies the focus handle and
 key-context kind for every tab surface, so capture, keybinding routing, and close
-targets no longer branch per surface. The dormant extension outline surface keeps
-its fixed rendering until the follow-up native extension UI plan migrates it to
-contributed frames, keeping that migration in one place while the docking
-foundation exposes the attachment contract it consumes.
+targets no longer branch per surface. Contributed tree and text frames now render
+through the shared `TreeView`/`EditorView` surfaces under that same path. The
+native explorer stays a shell-owned tool until a bundled JavaScript extension
+replaces it (D053), so its workspace providers and file actions are shaped by the
+project registry and multi-root semantics rather than by this plan's internals.
 
 Reference: [workbench and lifecycle](architecture/workbench-and-lifecycle.md).
 

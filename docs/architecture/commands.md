@@ -62,17 +62,17 @@ without dispatching twice. Same-lifecycle children run inline under the parent's
 scheduler root; cross-lifecycle children await foreground completion. Each parent
 has at most one unfinished child, and ancestry cycles are unavailable.
 
-View-scoped extension handlers bind to live instances of a declared kind. The
-focused instance claims before global extension handlers reach the application
-participant. Disposal, lifecycle teardown, and window closure remove bindings;
-late results validate instance and lifecycle.
+View-scoped extension handlers bind to live instances of a contributed view
+registration. The focused instance claims before global extension handlers reach
+the application participant. Disposal, lifecycle teardown, and window closure
+remove bindings; late results validate instance and lifecycle.
 
 Contextual buffer/selection access validates the live invocation, caller lifecycle,
 target authority, and exact presentation. Roots and children inherit the same
 capture. Activation and unrelated callbacks cannot borrow command focus. A valid
-nontext target has a null buffer; current selection support is limited to admitted
-outline handlers. Explicit buffer access remains independent of presentation
-lifetime; clipboard access is application-scoped.
+nontext target has a null buffer; current selection support is limited to
+admitted contributed-view handlers. Explicit buffer access remains independent
+of presentation lifetime; clipboard access is application-scoped.
 
 Outcomes report execution status rather than semantic values. Resource APIs return
 committed data directly; ordinary functions suit composition that needs return

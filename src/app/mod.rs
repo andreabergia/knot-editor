@@ -124,7 +124,6 @@ actions!(
 );
 
 const EDITOR_KEY_CONTEXT: &str = "editor";
-#[allow(dead_code, reason = "retained with the dormant extension tree view")]
 const TREE_KEY_CONTEXT: &str = "tree";
 const TERMINAL_KEY_CONTEXT: &str = "terminal";
 const PALETTE_KEY_CONTEXT: &str = "palette";

@@ -386,22 +386,6 @@ impl BufferModel {
         }
     }
 
-    pub(crate) fn has_contribution_action(
-        &self,
-        source: ContributionSource,
-        command: &str,
-    ) -> bool {
-        self.contributions.sets.get(&source).is_some_and(|set| {
-            set.anchored_ranges.iter().any(|id| {
-                self.contributions
-                    .metadata
-                    .get(id)
-                    .and_then(|metadata| metadata.command.as_deref())
-                    == Some(command)
-            })
-        })
-    }
-
     /// Validate a public UTF-8 byte range before it reaches `TextBuffer`.
     ///
     /// Core buffer operations deliberately assert their preconditions. The
