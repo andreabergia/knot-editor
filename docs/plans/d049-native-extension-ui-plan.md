@@ -1,7 +1,6 @@
 # D049 — Native extension UI
 
-Status: 🚧 In progress; checkpoints 1 and 2 are complete and approved.
-Checkpoint 3 is implemented and awaiting its review gate. The
+Status: 🚧 In progress; checkpoints 1, 2, and 3 are complete and approved. The
 [docking foundation](../architecture/workbench-and-lifecycle.md#automatic-tool-layout-memory)
 is complete and approved.
 
@@ -215,7 +214,7 @@ verified the fixture in sidebar, bottom, and mixed tab-group placements, hide an
 reopen plus fresh-window inheritance, and approved the Git information/action
 surface and the text frame contract.
 
-### 3. Picker, input, and confirmation/message 🚧
+### 3. Picker, input, and confirmation/message ✅
 
 Implement the transient operations with native text input and local picker
 filtering. Move the command palette onto the shared input path. Extend the fixture
@@ -254,21 +253,22 @@ Unicode/IME and paste/editing, overlap with a palette/another request, focus
 restoration, originating-window isolation, cancellation, unload, and closure.
 Include an awaited picker inside an extension command to catch scheduler deadlocks.
 
-**Progress:** implementation and automated coverage are complete; the manual
-review gate remains open. `workbench.showPicker`, `showInput`,
-`showConfirmation`, and `showMessage` resolve typed results, capture the
-originating window, and reject overlap with `OperationInProgress`. A shared
-single-line `TextInput` implements gpui's input handler and now backs the
-command palette query. Coverage: text input typing/IME/clipboard/grapheme
-editing, picker filtering/selection/no-match, overlap rejection, focus
-restoration, native confirm/message answer mapping, two-window independence,
-owner-matched cancellation, window closure, extension unload, and the
-Git-status fixture's awaited-picker/input/confirmation flows end to end
-(`cargo test --lib` passes; the checked TypeScript API includes the new
-surface).
-
-**Review gate:** inspect ordinary typing, picker selection, rename input, and
-confirmation in a product build. Approve result/error and overlap semantics.
+**Completion:** ✅ Approved. `workbench.showPicker`, `showInput`,
+`showConfirmation`, and `showMessage` resolve typed results; the window comes
+from an explicit target or the admitted command capture, one extension
+interaction owns a window at a time, and window closure, unload, and caller
+cancellation settle as cancellation with focus restored. Confirmation and
+message use the native prompt, and the shared single-line `TextInput` backs both
+transient fields and the palette query. The git-status fixture adds an in-memory
+repository list exercising picker select, input create/rename, and confirmation
+remove through public APIs. Coverage: text input typing/IME/clipboard/selection,
+picker filtering and no-match, overlap rejection, focus restoration, native
+prompt mapping, two-window independence, owner-matched cancellation, window
+closure, unload, context-free rejection, and the fixture's awaited-picker flows
+end to end. `cargo test --lib` passes, the checked TypeScript API/examples pass,
+and `cargo clippy --all-targets -- -D warnings` is clean. The review gate
+verified ordinary typing, picker selection, rename input, and confirmation and
+approved the result and overlap semantics.
 
 ### 4. Cleanup and D049 acceptance ⬜
 
