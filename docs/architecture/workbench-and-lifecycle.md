@@ -137,7 +137,10 @@ blank frames.
 
 Tool frames stay workbench-owned behind stable namespaced IDs and explicit
 native content variants. Extension contributions attach through this contract
-instead of receiving layout storage or persisting live handles.
+instead of receiving layout storage or persisting live handles. A contributed
+frame currently provides either a semantic tree or read-only text; text content
+owns a private buffer rendered by the editor and never enters the document
+collection or persistence.
 
 ## Native resource tree
 
