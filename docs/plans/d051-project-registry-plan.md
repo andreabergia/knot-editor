@@ -1,7 +1,7 @@
 # Bundled JavaScript project registry
 
-Status: ⬜ In progress. 6.1 complete and approved; 6.2 implemented and awaiting
-its review gate. Owns detailed execution for checkpoint 6 of the
+Status: ⬜ In progress. 6.1 and 6.2 complete and approved; 6.3 next. Owns
+detailed execution for checkpoint 6 of the
 [extension platform and projects plan](extension-platform-and-projects-plan.md).
 Work identifier D051.
 
@@ -124,28 +124,16 @@ and [decisions](../decisions.md#bundled-extension-packages); the registry and
 sources are [bundled.rs](../../src/app/bundled.rs) and
 [extensions/@knot/projects](../../extensions/@knot/projects).
 
-### 6.2 `workspaces.pickFolder` public capability ⬜ awaiting review
+### 6.2 `workspaces.pickFolder` public capability ✅
 
-- ✅ Native directory prompt (`ProductShell::begin_folder_picker`) occupies the
-  shared per-window transient slot, so ownership, cancellation, window closure,
-  explicit target, and stale-target resolution match the existing interactions.
-- ✅ `product::operations::resolve_directory` converts the selected path to a
-  file URI and normalizes/stats it through the registered providers.
-- ✅ Public contract: `workspaces.pickFolder(options?)` resolves
-  `{ kind: "selected", uri }` or `{ kind: "dismissed" }`; path failures reject
-  `ResourceNotFound`/`ResourceWrongKind`, dialog failure rejects
-  `ProviderFailure`, and `OperationInProgress`, `ContextUnavailable`,
-  `InvalidTarget`, and `Cancelled` come from the shared interaction path.
-- ✅ TypeScript declarations, bootstrap facade, guide section, and architecture
-  notes are updated; the checked authoring example exercises the result union.
-- **Validation:** fixed-dialog tests for selected, dismissed, and failed prompts;
-  a product command end to end asserting the normalized directory URI plus
-  `ResourceWrongKind` and `ResourceNotFound`; `check-extension-api.sh` passes.
-  Stale-target and context-free rejection reuse the shared transient resolution
-  already covered for other interactions. `cargo fmt`, clippy, and the Rust test
-  suite pass.
-- **Review gate:** approve the public name, namespace, result union, and target
-  rules before the registry consumes them.
+Approved after manual product smoke (selected, dismissed, no root side effect) plus
+fixed-dialog, normalized-URI, wrong-kind, and missing-path tests. The public
+contract and normalization flow live in
+[knot.d.ts](../../src/host/js/knot.d.ts), the
+[extension guide](../extension-api.md), and
+[decisions](../decisions.md#folder-selection); runtime ownership is in
+[documents and persistence](../architecture/documents-and-persistence.md#workspaces-and-resource-trees)
+and [semantic UI](../architecture/semantic-ui.md#extension-transient-interactions).
 
 ### 6.3 Project registry extension and dogfood ⬜
 

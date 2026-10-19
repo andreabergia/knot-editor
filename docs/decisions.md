@@ -382,6 +382,19 @@ does not roll back a save already accepted by the shared persistence path.
 References: [documents](architecture/documents-and-persistence.md) and
 [protected closure](architecture/workbench-and-lifecycle.md#workbench-and-protected-closure).
 
+## Folder selection
+
+Expose folder selection through `workspaces.pickFolder` rather than a general
+resource picker or implicit reuse of the Open dialog. A workflow that manages
+project roots needs a normalized directory before deciding whether to open or
+replace them, and the operation deliberately never commits roots itself.
+
+The native directory prompt occupies the existing per-window transient interaction
+slot, so ownership, cancellation, and target resolution match other extension
+interactions. The selected path is normalized and stat-checked through registered
+providers, so callers receive a usable URI or a typed `ResourceNotFound` /
+`ResourceWrongKind` failure instead of revalidating the path themselves.
+
 ## Extension record storage
 
 Separate SQLite databases by canonical package identity, with a distinct config
