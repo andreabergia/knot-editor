@@ -1,7 +1,6 @@
 # D049 — Native extension UI
 
-Status: 🚧 In progress; checkpoint 1 is complete and approved. Checkpoint 2 is
-implemented and awaits its manual review gate. The
+Status: 🚧 In progress; checkpoints 1 and 2 are complete and approved. The
 [docking foundation](../architecture/workbench-and-lifecycle.md#automatic-tool-layout-memory)
 is complete and approved.
 
@@ -193,7 +192,7 @@ after actions, stale item/window captures, independent two-window content, and
 text replacement/disposal. Verify shared docking and focus routing with editor
 and terminal tabs; no fixture-only production bypass.
 
-**Completion:** ✅ Implemented; manual review gate pending. Tree items now carry
+**Completion:** ✅ Approved. Tree items now carry
 group kind, status text, badges, and row/group actions; contributions carry frame
 actions. Actions dispatch existing commands with explicit JSON arguments through
 the captured-window path and stop click propagation, and a keyboard action mode
@@ -208,11 +207,11 @@ log frame. Coverage: `TreeView` group/activation, action arguments and keyboard
 focus, local loading/error states, root-refresh cache replacement; semantic
 bridge text retention, window targeting, lifecycle cleanup, and kind mismatch;
 product end-to-end Git fixture actions and activation; text replacement/no-op;
-and all existing lifecycle/layout tests. `cargo test --lib` passes (681 tests),
+and all existing lifecycle/layout tests. `cargo test --lib` passes, 
 `cargo test --test handler_linking` passes, the checked TypeScript API/examples
-pass, and `cargo clippy --all-targets -- -D warnings` is clean. Reviewers should
-inspect the fixture in sidebar, bottom, and mixed tab-group placements, hide and
-reopen plus fresh-window inheritance, and approve the Git information/action
+pass, and `cargo clippy --all-targets -- -D warnings` is clean. The review gate
+verified the fixture in sidebar, bottom, and mixed tab-group placements, hide and
+reopen plus fresh-window inheritance, and approved the Git information/action
 surface and the text frame contract.
 
 ### 3. Picker, input, and confirmation/message ⬜
