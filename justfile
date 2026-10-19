@@ -26,3 +26,9 @@ app-release:
 
 # Format, lint, and test all Rust targets
 check: fmt lint test
+
+# Copies all the example apps in the correct macOS directory
+install-example-apps-mac:
+    rm -rf ~/Library/Application\ Support/Knot/extensions/@example
+    mkdir -p "$HOME/Library/Application Support/Knot/extensions"
+    cp -av examples/extensions/@example "$HOME/Library/Application Support/Knot/extensions"
