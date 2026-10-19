@@ -814,6 +814,7 @@ impl Render for TreeView {
                             .id(("extension-tree-row", index))
                             .debug_selector(move || format!("extension-tree-row-{index}"))
                             .w_full()
+                            .overflow_hidden()
                             .pl(px(8. + *depth as f32 * 14.))
                             .pr_2()
                             .py_1()
@@ -828,14 +829,16 @@ impl Render for TreeView {
                             .when(is_selected, |row| {
                                 row.bg(rgb(0x2a4a7a)).text_color(rgb(0xffffff))
                             })
-                            .hover(|style| style.bg(rgb(0x222222)))
+                            // A selected row keeps its highlight while hovered.
+                            .when(!is_selected, |row| {
+                                row.hover(|style| style.bg(rgb(0x222222)))
+                            })
                             .child(Self::disclosure(item, expanded.contains(&item.id)))
                             .child(Self::icon(item))
-                            .child(item.label.clone())
+                            .child(div().flex_1().truncate().child(item.label.clone()))
                             .when_some(item.description.clone(), |row, description| {
                                 row.child(div().text_color(rgb(0x888888)).child(description))
-                            })
-                            .child(div().flex_1());
+                            });
                         if let Some(status) = item.status_text.clone() {
                             row = row.child(div().text_color(rgb(0xb0b0b0)).child(status));
                         }
