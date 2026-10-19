@@ -212,6 +212,10 @@ sections.
 
 ### 6. Usable JS project registry — D051 ⬜
 
+Detailed execution, step-level deliverables, and intermediate review gates live in
+[the bundled project registry plan](d051-project-registry-plan.md); this plan
+keeps the checkpoint's shared scope, ordering, and final review gate.
+
 - Bundle a project-manager extension using only public APIs. Establish bundled
   source loading, canonical identity, version/dependency handling, load diagnostics,
   and collision policy with installed packages through the existing loader.
