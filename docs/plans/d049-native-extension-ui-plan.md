@@ -195,8 +195,10 @@ and terminal tabs; no fixture-only production bypass.
 group kind, status text, badges, and row/group actions; contributions carry frame
 actions. Actions dispatch existing commands with explicit JSON arguments through
 the captured-window path and stop click propagation, and a keyboard action mode
-reaches row/group/frame actions. Root invalidation replaces nested caches so
-groups and expanded rows refetch. Read-only text frames push complete text into a
+reaches row/group/frame actions. Keyboard row navigation indexes the rendered
+rows so scrolling stays aligned with transient loading/error rows, and a root
+refresh keeps stale rows navigable while group children reload. Read-only text
+frames push complete text into a
 private buffer rendered by the editor and retain the last text across later
 windows. The installed `@example/git-status` fixture uses only public APIs for
 grouped lists, badges, row/group/frame actions, file activation, refresh, and a

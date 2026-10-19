@@ -115,8 +115,11 @@ arguments, never drawing callbacks. The native view renders them as controls
 and emits the same captured-window command event as activation, with the action
 arguments instead of null. Action clicks stop propagation so they cannot also
 activate the row. The same actions are reachable from the keyboard by entering
-an action-focus mode on the current row. A root invalidation replaces the cached
-child tree so nested groups and expanded rows refetch current data.
+an action-focus mode on the current row; keyboard navigation indexes the
+rendered rows directly so scrolling stays aligned when a transient loading or
+error row is present. A root invalidation keeps stale rows visible while the
+refetch is pending and reloads group children when the refreshed result arrives,
+so selection and navigation stay usable during a refresh.
 
 Contributed text frames are a separate content kind. Each instance owns a
 private read-only `BufferModel` rendered by the ordinary `EditorView`; it is not

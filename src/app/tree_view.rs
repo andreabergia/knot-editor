@@ -225,9 +225,9 @@ impl TreeView {
             .ok_or(TreeViewRegistrationError::ProviderNotFound)?;
         let generation = NEXT_TREE_GENERATION.fetch_add(1, Ordering::Relaxed);
         if parent_id.is_none() {
-            // A root refresh replaces the whole cache so nested groups and
-            // expanded children refetch current data.
-            self.children.clear();
+            // Keep stale rows visible while the refresh is in flight so
+            // selection and keyboard navigation stay usable. Group children
+            // still refetch when the new root response arrives.
             self.action_focus = None;
         }
         let state = self.children.entry(parent_id.clone()).or_default();
@@ -339,14 +339,15 @@ impl TreeView {
             return false;
         }
         // Resolve which nested rows need their own children before borrowing
-        // the parent state mutably.
+        // the parent state mutably. Groups always reload so a refreshed tree
+        // reflects their current children; expanded items load once.
         let children_to_load = match &response.result {
             Ok(items) => items
                 .iter()
                 .filter(|item| {
-                    (item.kind == TreeItemKind::Group
-                        || item.collapsible_state == TreeCollapsibleState::Expanded)
-                        && !self.children.contains_key(&Some(item.id.clone()))
+                    item.kind == TreeItemKind::Group
+                        || (item.collapsible_state == TreeCollapsibleState::Expanded
+                            && !self.children.contains_key(&Some(item.id.clone())))
                 })
                 .map(|item| item.id.clone())
                 .collect::<Vec<_>>(),
@@ -558,49 +559,53 @@ impl TreeView {
         let key = event.keystroke.key.to_lowercase();
         if let Some(focus) = self.action_focus.clone() {
             let actions = self.focused_actions();
-            if actions.is_empty() {
-                self.action_focus = None;
+            if !actions.is_empty() {
+                match key.as_str() {
+                    "up" => {
+                        self.action_focus = Some(ActionFocus {
+                            row: focus.row,
+                            index: focus.index.saturating_sub(1),
+                        });
+                        cx.notify();
+                        cx.stop_propagation();
+                    }
+                    "down" => {
+                        self.action_focus = Some(ActionFocus {
+                            row: focus.row,
+                            index: (focus.index + 1).min(actions.len() - 1),
+                        });
+                        cx.notify();
+                        cx.stop_propagation();
+                    }
+                    "enter" | "space" => {
+                        let action = actions[focus.index.min(actions.len() - 1)].clone();
+                        self.invoke_action(action, window.window_handle(), cx);
+                        cx.stop_propagation();
+                    }
+                    "escape" | "left" => {
+                        self.action_focus = None;
+                        cx.notify();
+                        cx.stop_propagation();
+                    }
+                    _ => {}
+                }
                 return;
             }
-            match key.as_str() {
-                "up" => {
-                    self.action_focus = Some(ActionFocus {
-                        row: focus.row,
-                        index: focus.index.saturating_sub(1),
-                    });
-                    cx.notify();
-                    cx.stop_propagation();
-                }
-                "down" => {
-                    self.action_focus = Some(ActionFocus {
-                        row: focus.row,
-                        index: (focus.index + 1).min(actions.len() - 1),
-                    });
-                    cx.notify();
-                    cx.stop_propagation();
-                }
-                "enter" | "space" => {
-                    let action = actions[focus.index.min(actions.len() - 1)].clone();
-                    self.invoke_action(action, window.window_handle(), cx);
-                    cx.stop_propagation();
-                }
-                "escape" | "left" => {
-                    self.action_focus = None;
-                    cx.notify();
-                    cx.stop_propagation();
-                }
-                _ => {}
-            }
-            return;
+            // The focused row disappeared (for example after a refresh); fall
+            // through so the arrow still moves the row cursor.
+            self.action_focus = None;
         }
 
         let rows = self.visible_rows();
+        // Keep each navigable item's flat list index so scrolling follows the
+        // rendered rows even when transient loading/error status rows appear.
         let item_rows = rows
             .iter()
-            .filter_map(|row| match row {
+            .enumerate()
+            .filter_map(|(flat, row)| match row {
                 VisibleRow::Item {
                     item, parent_id, ..
-                } => Some((item.id.as_str(), parent_id.as_deref())),
+                } => Some((flat, item.id.as_str(), parent_id.as_deref())),
                 VisibleRow::Status { .. } => None,
             })
             .collect::<Vec<_>>();
@@ -610,7 +615,7 @@ impl TreeView {
         let current = self
             .selected
             .as_deref()
-            .and_then(|selected| item_rows.iter().position(|(id, _)| *id == selected));
+            .and_then(|selected| item_rows.iter().position(|(_, id, _)| *id == selected));
         let target = match key.as_str() {
             "up" => Some(current.unwrap_or(1).saturating_sub(1)),
             "down" => Some((current.map_or(0, |index| index + 1)).min(item_rows.len() - 1)),
@@ -618,7 +623,7 @@ impl TreeView {
                 let Some(index) = current else {
                     return;
                 };
-                let (id, parent) = item_rows[index];
+                let (_, id, parent) = item_rows[index];
                 if self.expanded.remove(id) {
                     cx.notify();
                 } else if let Some(parent) = parent {
@@ -634,7 +639,7 @@ impl TreeView {
                     cx.stop_propagation();
                     return;
                 };
-                let id = item_rows[index].0;
+                let id = item_rows[index].1;
                 let collapsible = self
                     .item(id)
                     .is_some_and(|item| item.collapsible_state != TreeCollapsibleState::None);
@@ -651,16 +656,17 @@ impl TreeView {
                 let Some(index) = current.or(Some(0)) else {
                     return;
                 };
-                self.activate(item_rows[index].0, window.window_handle(), cx);
+                self.activate(item_rows[index].1, window.window_handle(), cx);
                 cx.stop_propagation();
                 return;
             }
             _ => return,
         };
         if let Some(index) = target {
-            self.selected = Some(item_rows[index].0.to_owned());
+            let (flat, id, _) = item_rows[index];
+            self.selected = Some(id.to_owned());
             self.action_focus = None;
-            self.scroll.scroll_to_item(index, ScrollStrategy::Center);
+            self.scroll.scroll_to_item(flat, ScrollStrategy::Center);
             cx.notify();
             cx.stop_propagation();
         }
@@ -924,7 +930,7 @@ mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
 
-    use gpui::{AppContext, Subscription, TestAppContext};
+    use gpui::{AppContext, Focusable, Subscription, TestAppContext};
 
     use super::{TreeProviderIdentity, TreeView, TreeViewEvent, TreeViewRegistrationError};
     use crate::host::protocol::{
@@ -1273,6 +1279,59 @@ mod tests {
     }
 
     #[gpui::test]
+    fn arrow_keys_move_selection_across_visible_rows(cx: &mut TestAppContext) {
+        let registration = TreeProviderRegistrationId::new(9);
+        let (tree, window) = windowed_tree(cx);
+        let generation = tree.update(cx, |tree, cx| {
+            tree.register_provider("example.git", owner(registration), Vec::new(), cx)
+                .unwrap();
+            tree.root_generation()
+        });
+        let view = cx.read(|cx| tree.read(cx).instance_id());
+        tree.update(cx, |tree, cx| {
+            assert!(tree.apply_response(
+                response(
+                    registration,
+                    view,
+                    None,
+                    generation,
+                    vec![
+                        item("a", "a.rs", TreeItemKind::Item, Vec::new()),
+                        item("b", "b.rs", TreeItemKind::Item, Vec::new()),
+                        item("c", "c.rs", TreeItemKind::Item, Vec::new()),
+                    ],
+                ),
+                cx,
+            ));
+        });
+        cx.update_window(window, |_, window, cx| {
+            tree.read(cx).focus_handle(cx).focus(window);
+        })
+        .unwrap();
+        cx.refresh().unwrap();
+
+        let selected = |cx: &mut TestAppContext| cx.read(|cx| tree.read(cx).selected.clone());
+        cx.simulate_keystrokes(window, "down");
+        assert_eq!(selected(cx).as_deref(), Some("a"));
+        cx.simulate_keystrokes(window, "down");
+        assert_eq!(selected(cx).as_deref(), Some("b"));
+        cx.simulate_keystrokes(window, "down");
+        assert_eq!(selected(cx).as_deref(), Some("c"));
+        cx.simulate_keystrokes(window, "down");
+        assert_eq!(selected(cx).as_deref(), Some("c"));
+        cx.simulate_keystrokes(window, "up");
+        assert_eq!(selected(cx).as_deref(), Some("b"));
+
+        // Stale rows stay navigable while a root refresh is in flight.
+        tree.update(cx, |tree, cx| {
+            tree.invalidate(registration, None, cx).unwrap();
+        });
+        cx.refresh().unwrap();
+        cx.simulate_keystrokes(window, "up");
+        assert_eq!(selected(cx).as_deref(), Some("a"));
+    }
+
+    #[gpui::test]
     fn loading_and_error_states_are_local_to_one_parent(cx: &mut TestAppContext) {
         use crate::host::protocol::TreeProviderError;
 
@@ -1320,7 +1379,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn root_refresh_clears_cached_group_children(cx: &mut TestAppContext) {
+    fn root_refresh_keeps_rows_and_reloads_group_children(cx: &mut TestAppContext) {
         let registration = TreeProviderRegistrationId::new(7);
         let tree = cx.new(|cx| TreeView::new("example.git", "1", cx));
         let generation = tree.update(cx, |tree, cx| {
@@ -1353,10 +1412,26 @@ mod tests {
             ));
             assert_eq!(tree.visible_labels(), ["Staged", "file.rs"]);
 
+            // A root refresh marks the root loading but keeps stale rows so
+            // keyboard navigation stays usable while the refetch is pending.
             tree.invalidate(registration, None, cx).unwrap();
-            assert_eq!(tree.children.len(), 1, "root refresh drops nested caches");
             assert!(tree.is_loading());
-            assert!(tree.visible_labels().is_empty());
+            assert_eq!(tree.visible_labels(), ["Staged", "file.rs"]);
+
+            // The refreshed root reloads group children even when cached.
+            let refreshed = tree.children[&None].generation;
+            tree.apply_response(
+                response(
+                    registration,
+                    view,
+                    None,
+                    refreshed,
+                    vec![item("staged", "Staged", TreeItemKind::Group, Vec::new())],
+                ),
+                cx,
+            );
+            let reloaded = tree.children[&Some("staged".to_owned())].generation;
+            assert!(reloaded > group_generation);
         });
     }
 }

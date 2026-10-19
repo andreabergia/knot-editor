@@ -100,6 +100,20 @@ fn git_status_frame_groups_actions_and_log_through_public_apis(cx: &mut TestAppC
         log_text(&shell, cx).is_some_and(|text| text.contains("U  notes.txt"))
     });
 
+    // Arrow navigation follows the rendered rows across groups and files.
+    let _ = cx.update_window(window, |_, window, cx| {
+        tree.read(cx).focus_handle(cx).focus(window);
+    });
+    cx.refresh().unwrap();
+    for expected in ["Staged", "src/main.rs", "src/app/tree_view.rs", "Changes"] {
+        cx.simulate_keystrokes(window, "down");
+        cx.run_until_parked();
+        assert_eq!(
+            cx.read(|cx| tree.read(cx).selected_text()).as_deref(),
+            Some(expected)
+        );
+    }
+
     // Route the row action through the native tree event path with the tree
     // focused, so the captured window and item arguments are exercised.
     let _ = cx.update_window(window, |_, window, cx| {
