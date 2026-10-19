@@ -40,6 +40,7 @@ use super::{
     product_commands::{
         ApplicationProductCommands, CommandClaim, ProductCommandTarget, dispatch_to_captured_target,
     },
+    transient::TransientOwner,
     tree_view::TreeViewEvent,
     workbench::ExtensionView,
 };
@@ -1054,6 +1055,7 @@ impl ProductExtensionHost {
                         lifecycle,
                         invocation,
                     } => {
+                        self.cancel_transients(extension, lifecycle, Some(invocation), cx);
                         let _ = self
                             .pool
                             .cancel_command(ExtensionKey::new(extension, lifecycle), invocation);
@@ -1723,6 +1725,72 @@ impl ProductExtensionHost {
         }
     }
 
+    fn transient_window(
+        &self,
+        request: &crate::host::protocol::RequestContext,
+        explicit: Option<&str>,
+        cx: &App,
+    ) -> Result<gpui::AnyWindowHandle, handlers::AccessError> {
+        let window = match (explicit, request.invocation) {
+            (Some(window), _) => window.to_owned(),
+            // An explicit target or an admitted command capture is required;
+            // activation and context-free callbacks cannot borrow active focus.
+            (None, Some(_)) => self.operation_window(request, cx)?.window,
+            (None, None) => return Err(handlers::AccessError::ContextUnavailable),
+        };
+        product_window_handle(&window, cx).ok_or(handlers::AccessError::InvalidTarget)
+    }
+
+    /// Run one transient interaction install against the resolved product window.
+    fn with_transient_window<R>(
+        &self,
+        request: &crate::host::protocol::RequestContext,
+        explicit: Option<&str>,
+        access: impl FnOnce(
+            &mut ProductShell,
+            &mut gpui::Window,
+            &mut gpui::Context<ProductShell>,
+        ) -> Result<R, handlers::TransientError>,
+        cx: &mut Context<Self>,
+    ) -> Result<R, handlers::TransientError> {
+        let handle = self.transient_window(request, explicit, cx)?;
+        cx.update_window(handle, |root, window, cx| {
+            let Ok(shell) = root.downcast::<ProductShell>() else {
+                return Err(handlers::TransientError::InvalidTarget);
+            };
+            shell.update(cx, |shell, cx| access(shell, window, cx))
+        })
+        .map_err(|_| handlers::TransientError::InvalidTarget)?
+    }
+
+    /// Settle any live transient interaction owned by the given extension
+    /// lifetime, optionally narrowed to one command invocation.
+    fn cancel_transients(
+        &self,
+        extension: ExtensionId,
+        lifecycle: ExtensionLifecycleId,
+        invocation: Option<CommandInvocationId>,
+        cx: &mut App,
+    ) {
+        let owner = TransientOwner {
+            extension,
+            lifecycle,
+            invocation,
+        };
+        let handles = cx
+            .windows()
+            .into_iter()
+            .filter(|handle| handle.downcast::<ProductShell>().is_some())
+            .collect::<Vec<_>>();
+        for handle in handles {
+            let _ = cx.update_window(handle, |root, _window, cx| {
+                if let Ok(shell) = root.downcast::<ProductShell>() {
+                    shell.update(cx, |shell, cx| shell.cancel_transient(owner, cx));
+                }
+            });
+        }
+    }
+
     /// Show, hide, or focus a live registration in all product windows or in
     /// one explicit window. Programmatic presentation never publishes defaults.
     pub(crate) fn present_view(
@@ -1782,6 +1850,7 @@ impl ProductExtensionHost {
         if !self.lifecycles.remove(&key) {
             return;
         }
+        self.cancel_transients(key.extension, key.lifecycle, None, cx);
         self.refresh_storage_callers();
         self.storage_owners.remove(&key);
         self.application_observation.remove_lifecycle(key);

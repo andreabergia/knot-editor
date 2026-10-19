@@ -514,6 +514,43 @@ declare module "knot" {
      */
     setText(text: string, window?: WindowTarget): Promise<void>;
   }
+  /** One selectable row offered to a picker; filtered locally by label and description. */
+  export interface PickerItem {
+    readonly id: string;
+    readonly label: string;
+    readonly description?: string | null;
+  }
+  /** Selection or explicit dismissal; dismissal is not an operational failure. */
+  export type PickerResult = Readonly<
+    { kind: "selected"; id: string } | { kind: "dismissed" }>;
+  /** Accepted text or explicit dismissal. */
+  export type InputResult = Readonly<
+    { kind: "accepted"; value: string } | { kind: "dismissed" }>;
+  /** Confirmed or dismissed native confirmation. */
+  export type ConfirmationResult = Readonly<
+    { kind: "confirmed" } | { kind: "dismissed" }>;
+  /** An explicit target or the admitted command's window is required; a
+   * context-free call without either rejects ContextUnavailable. */
+  export interface TransientTargetOptions { readonly target?: WindowTarget; }
+  export interface PickerOptions extends TransientTargetOptions {
+    readonly title: string;
+    readonly items: readonly PickerItem[];
+  }
+  export interface InputOptions extends TransientTargetOptions {
+    readonly title: string;
+    /** Initial text; defaults to empty. */
+    readonly value?: string;
+  }
+  export interface ConfirmationOptions extends TransientTargetOptions {
+    readonly title: string;
+    readonly message?: string;
+    readonly confirmLabel?: string;
+    readonly cancelLabel?: string;
+  }
+  export interface MessageOptions extends TransientTargetOptions {
+    readonly title: string;
+    readonly message?: string;
+  }
   /** Native completion request; use its explicit buffer without borrowing focus. */
   export interface CompletionContext {
     readonly buffer: Buffer;
@@ -616,6 +653,35 @@ declare module "knot" {
      * for invalid fields or a missing getChildren method.
      */
     registerView(contribution: ViewContribution): Promise<ViewRegistration>;
+    /**
+     * Present a searchable single-selection picker with a native text field and
+     * local filtering. Resolution is a typed selection or dismissal.
+     * @throws TypeError for invalid options; HostError with OperationInProgress
+     * when another extension interaction owns the window, InvalidTarget for a
+     * stale target, ContextUnavailable without a target or command capture, or
+     * Cancelled on window closure, unload or caller cancellation.
+     */
+    showPicker(options: PickerOptions): Promise<PickerResult>;
+    /**
+     * Present a single-line text field with a title and optional initial text.
+     * Accepting returns the current text; Escape returns dismissal.
+     * @throws TypeError for invalid options; HostError with the same set as
+     * showPicker.
+     */
+    showInput(options: InputOptions): Promise<InputResult>;
+    /**
+     * Present the native confirmation prompt. The cancel button and window
+     * closure map to dismissal.
+     * @throws TypeError for invalid options; HostError with the same set as
+     * showPicker.
+     */
+    showConfirmation(options: ConfirmationOptions): Promise<ConfirmationResult>;
+    /**
+     * Present the native message prompt. Resolution carries no result.
+     * @throws TypeError for invalid options; HostError with the same set as
+     * showPicker.
+     */
+    showMessage(options: MessageOptions): Promise<void>;
     /**
      * Read selection for an admitted contributed view handler; no selection is
      * null. Omission uses its current capture; explicit target must be authorized

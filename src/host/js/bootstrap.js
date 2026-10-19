@@ -362,6 +362,50 @@ export async function writeClipboardText(text) {
   await request("writeClipboardText", text);
 }
 
+function pickerItem(value) {
+  record(value, "picker item must be an object");
+  return {
+    id: string(value.id, "picker item ID must be text"),
+    label: string(value.label, "picker item label must be text"),
+    description: optionalText(value.description),
+  };
+}
+
+function transientTarget(options) {
+  record(options, "transient options are required");
+  return optionalWindowAuthority(options.target);
+}
+
+export async function showPicker(options) {
+  const target = transientTarget(options);
+  const title = string(options.title, "picker title must be text");
+  const items = arrayItems(options.items, pickerItem);
+  return request("showPicker", title, items, target);
+}
+
+export async function showInput(options) {
+  const target = transientTarget(options);
+  const title = string(options.title, "input title must be text");
+  const value = optionalText(options.value);
+  return request("showInput", title, value, target);
+}
+
+export async function showConfirmation(options) {
+  const target = transientTarget(options);
+  const title = string(options.title, "confirmation title must be text");
+  const message = optionalText(options.message);
+  const confirmLabel = optionalText(options.confirmLabel);
+  const cancelLabel = optionalText(options.cancelLabel);
+  return request("showConfirmation", title, message, confirmLabel, cancelLabel, target);
+}
+
+export async function showMessage(options) {
+  const target = transientTarget(options);
+  const title = string(options.title, "message title must be text");
+  const message = optionalText(options.message);
+  await request("showMessage", title, message, target);
+}
+
 export async function invokeCommand(name, commandArguments) {
   if (typeof name !== "string") {
     throw new TypeError("commands.invoke requires a command name");

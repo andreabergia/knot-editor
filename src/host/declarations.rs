@@ -200,6 +200,24 @@ impl HostSuccess for super::protocol::CommandInvokeDispatch {
     }
 }
 
+impl HostSuccess for super::protocol::PickerResult {
+    fn encode(self) -> Result<EncodedValue, DecodeError> {
+        encode_json(self)
+    }
+}
+
+impl HostSuccess for super::protocol::InputResult {
+    fn encode(self) -> Result<EncodedValue, DecodeError> {
+        encode_json(self)
+    }
+}
+
+impl HostSuccess for super::protocol::ConfirmationResult {
+    fn encode(self) -> Result<EncodedValue, DecodeError> {
+        encode_json(self)
+    }
+}
+
 /// Checks native numeric precision before JSON enters V8.
 pub fn encode_json(value: impl serde::Serialize) -> Result<EncodedValue, DecodeError> {
     fn exact(value: &serde_json::Value) -> bool {

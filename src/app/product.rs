@@ -22,6 +22,7 @@ use super::{
     CommandCompletion, CommandPalette, CommandPaletteEntry, CommandPaletteEvent,
     documents::{ApplicationDocuments, DocumentCollection, DocumentId, DocumentState},
     entry::OpenRequest,
+    extension_host::handlers::TransientError,
     filesystem::{
         FileSystemProviderRegistry, LocalFileSystemProvider, ResourceError, ResourceKind,
         ResourceStat, ResourceVersion,
@@ -42,6 +43,10 @@ use super::{
     },
     terminal_session::TerminalSession,
     terminal_view::TerminalView,
+    transient::{
+        InputEvent, InputView, PickerEvent, PickerView, PromptText, TransientOutcome,
+        TransientOwner, TransientSurface,
+    },
     workbench::{
         CloseRequestOutcome, DockLocation, DocumentCloseDisposition, PaneId, SplitDirection,
         SplitPlacement, TabId, TabSurfaceId, TerminalSessionId, ToolContent, ToolFrameId,
@@ -356,6 +361,7 @@ pub(crate) struct ProductShell {
     dock_resize: Option<DockResizeDrag>,
     command_palette: Option<Entity<CommandPalette<ProductCommandTarget>>>,
     command_palette_subscription: Option<Subscription>,
+    transient: Option<ActiveTransient>,
     workspace: WorkspaceState,
     application_observer: Option<Subscription>,
     application_activation: Option<Subscription>,
@@ -370,6 +376,31 @@ pub(crate) struct ProductShell {
     tasks: Vec<Task<()>>,
     extension_report_open: bool,
     extension_report_subscription: Option<Subscription>,
+}
+
+/// One live extension transient interaction owned by this window.
+struct ActiveTransient {
+    owner: TransientOwner,
+    surface: Option<TransientSurface>,
+    focus: Option<FocusHandle>,
+    completion: Option<tokio::sync::oneshot::Sender<TransientOutcome>>,
+    restore_focus: Option<WeakFocusHandle>,
+    _subscription: Option<Subscription>,
+}
+
+impl ActiveTransient {
+    fn render(&self) -> Option<AnyElement> {
+        self.surface.as_ref().map(|surface| match surface {
+            TransientSurface::Picker(view) => view.clone().into_any_element(),
+            TransientSurface::Input(view) => view.clone().into_any_element(),
+        })
+    }
+
+    fn settle(&mut self, outcome: TransientOutcome) {
+        if let Some(completion) = self.completion.take() {
+            let _ = completion.send(outcome);
+        }
+    }
 }
 
 struct ContributedView {
@@ -411,6 +442,7 @@ impl ProductShell {
             dock_resize: None,
             command_palette: None,
             command_palette_subscription: None,
+            transient: None,
             workspace: WorkspaceState::default(),
             application_observer: None,
             application_activation: None,
@@ -438,6 +470,26 @@ impl ProductShell {
                 super::extension_host::application_changed(cx)
             }));
         super::extension_host::application_changed(cx);
+        // A closed window drops its live frames and any pending transient
+        // interaction; other windows keep theirs.
+        let shell = cx.weak_entity();
+        self._contributed_view_window_closed = Some(cx.on_window_closed(move |cx| {
+            let shell = shell.clone();
+            cx.defer(move |cx| {
+                let Some(shell) = shell.upgrade() else { return };
+                shell.update(cx, |this, cx| {
+                    let Some(window) = this.window else { return };
+                    if cx.windows().contains(&window) {
+                        return;
+                    }
+                    let ids = this.contributed_views.keys().cloned().collect::<Vec<_>>();
+                    for id in ids {
+                        this.detach_contributed_view(&id, cx);
+                    }
+                    this.finish_transient(TransientOutcome::Cancelled, cx);
+                });
+            });
+        }));
         if let Some(host) = super::extension_host::entity(cx) {
             self.extension_report_subscription = Some(cx.observe(&host, |this, _, cx| {
                 this.sync_contributed_views(cx);
@@ -447,24 +499,6 @@ impl ProductShell {
                 for (_, instance) in std::mem::take(&mut this.contributed_views) {
                     super::extension_host::detach_view_instance(instance.instance_id(cx), cx);
                 }
-            }));
-            // A closed window drops its live frames; other windows keep theirs.
-            let shell = cx.weak_entity();
-            self._contributed_view_window_closed = Some(cx.on_window_closed(move |cx| {
-                let shell = shell.clone();
-                cx.defer(move |cx| {
-                    let Some(shell) = shell.upgrade() else { return };
-                    shell.update(cx, |this, cx| {
-                        let Some(window) = this.window else { return };
-                        if cx.windows().contains(&window) {
-                            return;
-                        }
-                        let ids = this.contributed_views.keys().cloned().collect::<Vec<_>>();
-                        for id in ids {
-                            this.detach_contributed_view(&id, cx);
-                        }
-                    });
-                });
             }));
             // Host notifications reconcile definitions while it lives; release
             // removes every remaining frame without waiting for another event.
@@ -1002,6 +1036,7 @@ impl ProductShell {
                 if let CommandPaletteEvent::Confirmed { command, origin } = event {
                     this.dispatch_command(command.clone(), origin.clone(), cx);
                 }
+                this.refocus_active_transient(cx);
                 cx.notify();
             },
         );
@@ -1009,6 +1044,227 @@ impl ProductShell {
         self.command_palette = Some(palette);
         self.command_palette_subscription = Some(subscription);
         cx.notify();
+    }
+
+    fn transient_slot_free(&self) -> Result<(), TransientError> {
+        if self.transient.is_some() {
+            Err(TransientError::OperationInProgress)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn transient_restore_focus(
+        &self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Option<WeakFocusHandle> {
+        window.focused(cx).map(|focus| focus.downgrade())
+    }
+
+    fn finish_transient(&mut self, outcome: TransientOutcome, cx: &mut Context<Self>) {
+        let Some(mut active) = self.transient.take() else {
+            return;
+        };
+        active.settle(outcome);
+        self.restore_focus(active.restore_focus, cx);
+        cx.notify();
+    }
+
+    fn restore_focus(&self, restore: Option<WeakFocusHandle>, cx: &mut Context<Self>) {
+        let (Some(window), Some(focus)) = (self.window, restore.and_then(|focus| focus.upgrade()))
+        else {
+            return;
+        };
+        let _ = cx.update_window(window, |_, window, _| window.focus(&focus));
+    }
+
+    fn refocus_active_transient(&self, cx: &mut Context<Self>) {
+        let Some(focus) = self
+            .transient
+            .as_ref()
+            .and_then(|active| active.focus.clone())
+        else {
+            return;
+        };
+        let Some(window) = self.window else {
+            return;
+        };
+        let _ = cx.update_window(window, |_, window, _| window.focus(&focus));
+    }
+
+    /// Cancel the live interaction when it belongs to the requested owner.
+    /// A `None` invocation cancels any interaction of that extension lifetime.
+    pub(crate) fn cancel_transient(&mut self, owner: TransientOwner, cx: &mut Context<Self>) {
+        let matches = self.transient.as_ref().is_some_and(|active| {
+            active.owner.extension == owner.extension
+                && active.owner.lifecycle == owner.lifecycle
+                && (owner.invocation.is_none() || active.owner.invocation == owner.invocation)
+        });
+        if matches {
+            self.finish_transient(TransientOutcome::Cancelled, cx);
+        }
+    }
+
+    /// Present a lifecycle-authorized picker, or reject when another extension
+    /// interaction already owns this window.
+    pub(crate) fn begin_picker(
+        &mut self,
+        owner: TransientOwner,
+        title: String,
+        items: Vec<crate::host::protocol::PickerItem>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<tokio::sync::oneshot::Receiver<TransientOutcome>, TransientError> {
+        self.transient_slot_free()?;
+        let restore_focus = self.transient_restore_focus(window, cx);
+        let view = cx.new(|cx| PickerView::new(title, items, cx));
+        let focus = view.read(cx).focus_handle(cx);
+        let subscription =
+            cx.subscribe(&view, |this: &mut Self, _view, event: &PickerEvent, cx| {
+                this.finish_transient(
+                    match event {
+                        PickerEvent::Selected(id) => TransientOutcome::Picker(id.clone()),
+                        PickerEvent::Dismissed => TransientOutcome::Dismissed,
+                    },
+                    cx,
+                );
+            });
+        let (completion, receiver) = tokio::sync::oneshot::channel();
+        self.transient = Some(ActiveTransient {
+            owner,
+            surface: Some(TransientSurface::Picker(view)),
+            focus: Some(focus.clone()),
+            completion: Some(completion),
+            restore_focus,
+            _subscription: Some(subscription),
+        });
+        window.focus(&focus);
+        cx.notify();
+        Ok(receiver)
+    }
+
+    /// Present a lifecycle-authorized single-line input, or reject when another
+    /// extension interaction already owns this window.
+    pub(crate) fn begin_input(
+        &mut self,
+        owner: TransientOwner,
+        title: String,
+        initial: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<tokio::sync::oneshot::Receiver<TransientOutcome>, TransientError> {
+        self.transient_slot_free()?;
+        let restore_focus = self.transient_restore_focus(window, cx);
+        let view = cx.new(|cx| InputView::new(title, initial, cx));
+        let focus = view.read(cx).focus_handle(cx);
+        let subscription = cx.subscribe(&view, |this: &mut Self, _view, event: &InputEvent, cx| {
+            this.finish_transient(
+                match event {
+                    InputEvent::Accepted(value) => TransientOutcome::Input(value.clone()),
+                    InputEvent::Dismissed => TransientOutcome::Dismissed,
+                },
+                cx,
+            );
+        });
+        let (completion, receiver) = tokio::sync::oneshot::channel();
+        self.transient = Some(ActiveTransient {
+            owner,
+            surface: Some(TransientSurface::Input(view)),
+            focus: Some(focus.clone()),
+            completion: Some(completion),
+            restore_focus,
+            _subscription: Some(subscription),
+        });
+        window.focus(&focus);
+        cx.notify();
+        Ok(receiver)
+    }
+
+    /// Present the native confirmation prompt, settling the shared slot when it
+    /// is answered.
+    pub(crate) fn begin_confirmation(
+        &mut self,
+        owner: TransientOwner,
+        text: PromptText,
+        confirm_label: String,
+        cancel_label: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<tokio::sync::oneshot::Receiver<TransientOutcome>, TransientError> {
+        self.transient_slot_free()?;
+        let restore_focus = self.transient_restore_focus(window, cx);
+        let prompt = window.prompt(
+            PromptLevel::Warning,
+            &text.title,
+            text.message.as_deref(),
+            &[
+                PromptButton::new(confirm_label),
+                PromptButton::cancel(cancel_label),
+            ],
+            cx,
+        );
+        let (completion, receiver) = tokio::sync::oneshot::channel();
+        self.transient = Some(ActiveTransient {
+            owner,
+            surface: None,
+            focus: None,
+            completion: Some(completion),
+            restore_focus,
+            _subscription: None,
+        });
+        cx.spawn(async move |this, cx| {
+            let outcome = match prompt.await {
+                Ok(0) => TransientOutcome::Confirmed,
+                _ => TransientOutcome::Dismissed,
+            };
+            let _ = this.update(cx, |this, cx| this.finish_transient(outcome, cx));
+        })
+        .detach();
+        cx.notify();
+        Ok(receiver)
+    }
+
+    /// Present the native message prompt. Resolution carries no result, but the
+    /// interaction still occupies the shared slot while it is open.
+    pub(crate) fn begin_message(
+        &mut self,
+        owner: TransientOwner,
+        text: PromptText,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<tokio::sync::oneshot::Receiver<TransientOutcome>, TransientError> {
+        self.transient_slot_free()?;
+        let restore_focus = self.transient_restore_focus(window, cx);
+        let prompt = window.prompt(
+            PromptLevel::Info,
+            &text.title,
+            text.message.as_deref(),
+            &[PromptButton::new("OK")],
+            cx,
+        );
+        let (completion, receiver) = tokio::sync::oneshot::channel();
+        self.transient = Some(ActiveTransient {
+            owner,
+            surface: None,
+            focus: None,
+            completion: Some(completion),
+            restore_focus,
+            _subscription: None,
+        });
+        cx.spawn(async move |this, cx| {
+            let _ = prompt.await;
+            let _ = this.update(cx, |this, cx| {
+                this.finish_transient(TransientOutcome::Dismissed, cx)
+            });
+        })
+        .detach();
+        cx.notify();
+        Ok(receiver)
+    }
+
+    fn render_transient(&self) -> Option<AnyElement> {
+        self.transient.as_ref().and_then(|active| active.render())
     }
 
     fn sync_focused_pane(&self, window: &Window, cx: &mut Context<Self>) {
@@ -3534,6 +3790,11 @@ impl Render for ProductShell {
         let layout = self.workbench.read(cx).layout().cloned();
         let entity = cx.entity();
         let command_palette = self.command_palette.clone();
+        let transient = self.render_transient();
+        let dismiss_transient =
+            cx.listener(|this: &mut Self, _: &MouseDownEvent, _: &mut Window, cx| {
+                this.finish_transient(TransientOutcome::Dismissed, cx);
+            });
         let startup_report = super::extension_host::startup_report(cx);
         let extension_button_label = match &startup_report {
             Some(report) if report.state == super::extension_host::StartupState::Complete => {
@@ -3671,6 +3932,20 @@ impl Render for ProductShell {
                     }),
             )
             .child(self.drag_listener(cx))
+            .when_some(transient, |root, transient| {
+                root.child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .flex()
+                        .items_start()
+                        .justify_center()
+                        .pt(px(80.))
+                        .bg(rgba(0x00000080))
+                        .on_mouse_down(MouseButton::Left, dismiss_transient)
+                        .child(transient),
+                )
+            })
             .when_some(command_palette, |root, palette| {
                 root.child(
                     div()
@@ -4142,6 +4417,7 @@ mod tests {
     mod operations;
     mod tool_layout;
     mod tools;
+    mod transient;
     mod workspaces;
     use std::path::Path;
     use std::sync::{Arc, Mutex};

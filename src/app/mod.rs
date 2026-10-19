@@ -93,8 +93,10 @@ mod terminal_session_tests;
     reason = "terminal view helpers also serve the diagnostic fixture"
 )]
 mod terminal_view;
+mod text_input;
 mod text_view;
 pub(crate) mod tool_layout;
+mod transient;
 mod tree_view;
 mod typography;
 mod workbench;
@@ -126,6 +128,8 @@ const EDITOR_KEY_CONTEXT: &str = "editor";
 const TREE_KEY_CONTEXT: &str = "tree";
 const TERMINAL_KEY_CONTEXT: &str = "terminal";
 const PALETTE_KEY_CONTEXT: &str = "palette";
+const TEXT_INPUT_KEY_CONTEXT: &str = "text_input";
+const TRANSIENT_KEY_CONTEXT: &str = "transient";
 
 #[cfg(test)]
 #[derive(Clone, Eq, PartialEq)]

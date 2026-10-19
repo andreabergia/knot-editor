@@ -72,6 +72,29 @@ pub(crate) enum AccessError {
     OwnershipDisposed,
 }
 
+/// Failures of an extension transient interaction.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, HostError)]
+pub(crate) enum TransientError {
+    #[error(code = "OperationInProgress", message = "OperationInProgress")]
+    OperationInProgress,
+    #[error(code = "ContextUnavailable", message = "ContextUnavailable")]
+    ContextUnavailable,
+    #[error(code = "InvalidTarget", message = "InvalidTarget")]
+    InvalidTarget,
+    #[error(code = "Cancelled", message = "Cancelled")]
+    Cancelled,
+}
+
+impl From<AccessError> for TransientError {
+    fn from(error: AccessError) -> Self {
+        match error {
+            AccessError::Cancelled | AccessError::OwnershipDisposed => Self::Cancelled,
+            AccessError::InvalidTarget => Self::InvalidTarget,
+            AccessError::ContextUnavailable => Self::ContextUnavailable,
+        }
+    }
+}
+
 #[derive(Debug, HostError)]
 pub(crate) enum OpenError {
     #[error(transparent)]
@@ -689,9 +712,11 @@ pub(crate) async fn dispose_editor_contributions(
 
 use super::super::extension_semantics::{SemanticError, ViewPresentation};
 use crate::host::protocol::{
-    CompletionProviderRegistrationId, ProviderIdentity, TreeAction, TreeProviderRegistrationId,
-    ViewContentKind,
+    CompletionProviderRegistrationId, ConfirmationResult, InputResult, PickerItem, PickerResult,
+    ProviderIdentity, TreeAction, TreeProviderRegistrationId, ViewContentKind,
 };
+
+use super::super::transient::{PromptText, TransientOutcome, TransientOwner};
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct TreeArguments {
@@ -823,6 +848,208 @@ impl HostArguments for ViewOperationArguments {
     }
     fn provider_mutation(&self) -> Option<ProviderIdentity> {
         Some(ProviderIdentity::Tree(self.registration))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct PickerArguments {
+    pub title: String,
+    pub items: Vec<PickerItem>,
+    pub target: Option<String>,
+}
+impl HostArguments for PickerArguments {
+    fn decode(reader: &mut dyn ArgumentReader) -> Result<Self, DecodeError> {
+        let items = serde_json::to_value(reader.command_arguments(3)?)
+            .ok()
+            .and_then(|value| serde_json::from_value::<Vec<PickerItem>>(value).ok())
+            .ok_or(DecodeError::Type("invalid picker items"))?;
+        Ok(Self {
+            title: reader.text(2, "picker title must be text")?,
+            items,
+            target: reader.optional_text(4, "window target must be text")?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct InputArguments {
+    pub title: String,
+    pub value: Option<String>,
+    pub target: Option<String>,
+}
+impl HostArguments for InputArguments {
+    fn decode(reader: &mut dyn ArgumentReader) -> Result<Self, DecodeError> {
+        Ok(Self {
+            title: reader.text(2, "input title must be text")?,
+            value: reader.optional_text(3, "input value must be text or null")?,
+            target: reader.optional_text(4, "window target must be text")?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ConfirmationArguments {
+    pub title: String,
+    pub message: Option<String>,
+    pub confirm_label: Option<String>,
+    pub cancel_label: Option<String>,
+    pub target: Option<String>,
+}
+impl HostArguments for ConfirmationArguments {
+    fn decode(reader: &mut dyn ArgumentReader) -> Result<Self, DecodeError> {
+        Ok(Self {
+            title: reader.text(2, "confirmation title must be text")?,
+            message: reader.optional_text(3, "confirmation message must be text or null")?,
+            confirm_label: reader.optional_text(4, "confirm label must be text or null")?,
+            cancel_label: reader.optional_text(5, "cancel label must be text or null")?,
+            target: reader.optional_text(6, "window target must be text")?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct MessageArguments {
+    pub title: String,
+    pub message: Option<String>,
+    pub target: Option<String>,
+}
+impl HostArguments for MessageArguments {
+    fn decode(reader: &mut dyn ArgumentReader) -> Result<Self, DecodeError> {
+        Ok(Self {
+            title: reader.text(2, "message title must be text")?,
+            message: reader.optional_text(3, "message body must be text or null")?,
+            target: reader.optional_text(4, "window target must be text")?,
+        })
+    }
+}
+
+fn transient_owner(request: &crate::host::protocol::RequestContext) -> TransientOwner {
+    TransientOwner {
+        extension: request.extension,
+        lifecycle: request.lifecycle,
+        invocation: request.invocation,
+    }
+}
+
+#[host_operation("showPicker")]
+pub(crate) async fn show_picker(
+    context: HostContext,
+    arguments: PickerArguments,
+) -> Result<PickerResult, TransientError> {
+    let request = context.request;
+    let owner = transient_owner(&request);
+    let PickerArguments {
+        title,
+        items,
+        target,
+    } = arguments;
+    let receiver = context.foreground(|host, cx| {
+        host.with_transient_window(
+            &request,
+            target.as_deref(),
+            move |shell, window, cx| shell.begin_picker(owner, title, items, window, cx),
+            cx,
+        )
+    })??;
+    match receiver.await {
+        Ok(TransientOutcome::Picker(id)) => Ok(PickerResult::Selected { id }),
+        Ok(TransientOutcome::Dismissed) => Ok(PickerResult::Dismissed),
+        _ => Err(TransientError::Cancelled),
+    }
+}
+
+#[host_operation("showInput")]
+pub(crate) async fn show_input(
+    context: HostContext,
+    arguments: InputArguments,
+) -> Result<InputResult, TransientError> {
+    let request = context.request;
+    let owner = transient_owner(&request);
+    let InputArguments {
+        title,
+        value,
+        target,
+    } = arguments;
+    let receiver = context.foreground(|host, cx| {
+        host.with_transient_window(
+            &request,
+            target.as_deref(),
+            move |shell, window, cx| {
+                shell.begin_input(owner, title, value.unwrap_or_default(), window, cx)
+            },
+            cx,
+        )
+    })??;
+    match receiver.await {
+        Ok(TransientOutcome::Input(value)) => Ok(InputResult::Accepted { value }),
+        Ok(TransientOutcome::Dismissed) => Ok(InputResult::Dismissed),
+        _ => Err(TransientError::Cancelled),
+    }
+}
+
+#[host_operation("showConfirmation")]
+pub(crate) async fn show_confirmation(
+    context: HostContext,
+    arguments: ConfirmationArguments,
+) -> Result<ConfirmationResult, TransientError> {
+    let request = context.request;
+    let owner = transient_owner(&request);
+    let ConfirmationArguments {
+        title,
+        message,
+        confirm_label,
+        cancel_label,
+        target,
+    } = arguments;
+    let receiver = context.foreground(|host, cx| {
+        host.with_transient_window(
+            &request,
+            target.as_deref(),
+            move |shell, window, cx| {
+                shell.begin_confirmation(
+                    owner,
+                    PromptText { title, message },
+                    confirm_label.unwrap_or_else(|| "OK".to_owned()),
+                    cancel_label.unwrap_or_else(|| "Cancel".to_owned()),
+                    window,
+                    cx,
+                )
+            },
+            cx,
+        )
+    })??;
+    match receiver.await {
+        Ok(TransientOutcome::Confirmed) => Ok(ConfirmationResult::Confirmed),
+        Ok(TransientOutcome::Dismissed) => Ok(ConfirmationResult::Dismissed),
+        _ => Err(TransientError::Cancelled),
+    }
+}
+
+#[host_operation("showMessage")]
+pub(crate) async fn show_message(
+    context: HostContext,
+    arguments: MessageArguments,
+) -> Result<(), TransientError> {
+    let request = context.request;
+    let owner = transient_owner(&request);
+    let MessageArguments {
+        title,
+        message,
+        target,
+    } = arguments;
+    let receiver = context.foreground(|host, cx| {
+        host.with_transient_window(
+            &request,
+            target.as_deref(),
+            move |shell, window, cx| {
+                shell.begin_message(owner, PromptText { title, message }, window, cx)
+            },
+            cx,
+        )
+    })??;
+    match receiver.await {
+        Ok(_) => Ok(()),
+        Err(_) => Err(TransientError::Cancelled),
     }
 }
 

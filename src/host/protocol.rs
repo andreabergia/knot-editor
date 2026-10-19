@@ -379,6 +379,40 @@ pub enum ViewContentKind {
     Text,
 }
 
+/// One selectable row offered to an extension picker.
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PickerItem {
+    pub id: String,
+    pub label: String,
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+/// Settled outcome of a picker interaction.
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum PickerResult {
+    Selected { id: String },
+    Dismissed,
+}
+
+/// Settled outcome of a text input interaction.
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum InputResult {
+    Accepted { value: String },
+    Dismissed,
+}
+
+/// Settled outcome of a confirmation interaction.
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum ConfirmationResult {
+    Confirmed,
+    Dismissed,
+}
+
 /// One asynchronous child request issued by a native view instance.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TreeChildrenRequest {
@@ -626,6 +660,15 @@ pub struct WorkbenchObservation {
     pub subscription: WorkbenchSubscriptionId,
     pub snapshot: ApplicationSnapshot,
     pub watermark: u64,
+}
+
+/// The kind of transient interaction currently owned by one product window.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TransientKind {
+    Picker,
+    Input,
+    Confirmation,
+    Message,
 }
 
 /// Owned identity of a provider whose queued mutations precede disposal acknowledgement.

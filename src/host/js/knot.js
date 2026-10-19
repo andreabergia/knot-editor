@@ -11,6 +11,10 @@ import {
   registerViewCommand,
   selectedViewText,
   writeClipboardText,
+  showPicker,
+  showInput,
+  showConfirmation,
+  showMessage,
   registerCompletionProvider,
   registerView,
 } from "knot:bootstrap";
@@ -35,6 +39,10 @@ export const workbench = Object.freeze({
   registerView,
   selectedText: selectedViewText,
   writeClipboardText,
+  showPicker,
+  showInput,
+  showConfirmation,
+  showMessage,
 });
 
 export const documents = Object.freeze({ list: listDocuments, get: getDocument, open: openDocument, createUntitled, present: presentDocument });

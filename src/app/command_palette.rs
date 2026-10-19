@@ -2,7 +2,11 @@ use gpui::{prelude::*, *};
 
 use crate::host::protocol::{Command, CommandArgumentValue};
 
-use super::{PALETTE_KEY_CONTEXT, model::CommandDefinition};
+use super::{
+    PALETTE_KEY_CONTEXT,
+    model::CommandDefinition,
+    text_input::{TextInput, TextInputEvent},
+};
 
 #[derive(Clone, PartialEq)]
 pub(crate) enum CommandPaletteEvent<Origin> {
@@ -36,7 +40,8 @@ pub(crate) struct CommandPalette<Origin> {
     entries: Vec<CommandPaletteEntry>,
     query: String,
     selected: usize,
-    focus: FocusHandle,
+    input: Entity<TextInput>,
+    _input_subscription: Subscription,
     origin: Origin,
 }
 
@@ -51,11 +56,21 @@ where
     ) -> Self {
         let mut entries = entries.into_iter().collect::<Vec<_>>();
         entries.sort_by(|left, right| left.definition.name.cmp(&right.definition.name));
+        let input = cx.new(|cx| TextInput::new("", cx));
+        let subscription = cx.subscribe(
+            &input,
+            |this: &mut Self, _input, _event: &TextInputEvent, cx| {
+                this.query = this.input.read(cx).text().to_string();
+                this.selected = 0;
+                cx.notify();
+            },
+        );
         Self {
             entries,
             query: String::new(),
             selected: 0,
-            focus: cx.focus_handle(),
+            input,
+            _input_subscription: subscription,
             origin,
         }
     }
@@ -96,8 +111,10 @@ where
             .map(|entry| &entry.definition)
     }
 
-    fn set_query(&mut self, query: String, cx: &mut Context<Self>) {
-        self.query = query;
+    #[cfg(test)]
+    pub(crate) fn set_query(&mut self, query: String, cx: &mut Context<Self>) {
+        self.input.update(cx, |input, cx| input.set_text(query, cx));
+        self.query = self.input.read(cx).text().to_string();
         self.selected = 0;
         cx.notify();
     }
@@ -134,18 +151,8 @@ where
             "enter" => self.confirm(cx),
             "up" => self.move_selection(-1, cx),
             "down" => self.move_selection(1, cx),
-            "backspace" => {
-                let mut query = self.query.clone();
-                query.pop();
-                self.set_query(query, cx);
-            }
-            _ if !event.keystroke.modifiers.platform && !event.keystroke.modifiers.control => {
-                if let Some(text) = event.keystroke.key_char.as_deref() {
-                    self.set_query(format!("{}{text}", self.query), cx);
-                } else {
-                    return;
-                }
-            }
+            "pageup" => self.move_selection(-10, cx),
+            "pagedown" => self.move_selection(10, cx),
             _ => return,
         }
         cx.stop_propagation();
@@ -161,8 +168,8 @@ impl<Origin> Focusable for CommandPalette<Origin>
 where
     Origin: Clone + PartialEq + 'static,
 {
-    fn focus_handle(&self, _: &App) -> FocusHandle {
-        self.focus.clone()
+    fn focus_handle(&self, cx: &App) -> FocusHandle {
+        self.input.read(cx).focus_handle()
     }
 }
 
@@ -225,7 +232,6 @@ where
             .border_color(rgb(0x555555))
             .bg(rgb(0x252526))
             .shadow_lg()
-            .track_focus(&self.focus)
             .key_context(PALETTE_KEY_CONTEXT)
             .on_key_down(cx.listener(Self::on_key_down))
             .child(
@@ -234,16 +240,7 @@ where
                     .py_2()
                     .border_b_1()
                     .border_color(rgb(0x444444))
-                    .text_color(if self.query.is_empty() {
-                        rgb(0x888888)
-                    } else {
-                        rgb(0xffffff)
-                    })
-                    .child(if self.query.is_empty() {
-                        "Type to filter commands".to_owned()
-                    } else {
-                        self.query.clone()
-                    }),
+                    .child(self.input.clone()),
             )
             .child(
                 div()

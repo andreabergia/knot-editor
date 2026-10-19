@@ -255,7 +255,7 @@ impl BindingRegistry {
             .flat_map(|key| {
                 let effective = &self.active[&key];
                 if matches!(effective.global, Some(BindingResolution::Command(_))) {
-                    let mut context = "product && !palette".to_owned();
+                    let mut context = "product && !palette && !transient".to_owned();
                     let mut unbound_views = effective
                         .views
                         .iter()
@@ -867,7 +867,7 @@ mod tests {
             registry.gpui_bindings()[1],
             (
                 canonical_key("cmd-k right").unwrap(),
-                "product && !palette".into()
+                "product && !palette && !transient".into()
             )
         );
     }
@@ -889,7 +889,7 @@ mod tests {
             registry.gpui_bindings(),
             vec![(
                 canonical_key("cmd-n").unwrap(),
-                "product && !palette && !editor".into()
+                "product && !palette && !transient && !editor".into()
             )]
         );
     }
