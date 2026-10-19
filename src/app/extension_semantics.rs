@@ -313,6 +313,13 @@ impl ExtensionSemanticBridge {
         } = &arguments;
 
         let kind = self.owned_tree_kind(*registration, request)?;
+        if self
+            .tree_registrations
+            .get(registration)
+            .is_some_and(|entry| entry.definition.content != ViewContentKind::Tree)
+        {
+            return Err(SemanticError::ContentKindMismatch);
+        }
         let views = self.live_tree_views(&kind, window.as_deref());
         if window.is_some() && views.is_empty() {
             return Err(SemanticError::ViewNotFound);
@@ -514,6 +521,7 @@ fn map_tree_error(error: TreeViewRegistrationError) -> SemanticError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::text_view::TextView;
     use crate::host::protocol::{RequestId, TreeCollapsibleState, TreeItem, TreeProviderError};
     use gpui::{AppContext, TestAppContext};
 
@@ -535,6 +543,30 @@ mod tests {
             location: StoredLocation::Left,
             order: None,
             visible: true,
+        }
+    }
+
+    fn text_arguments(id: &str) -> TreeArguments {
+        TreeArguments {
+            id: id.into(),
+            title: "Log".into(),
+            content: ViewContentKind::Text,
+            actions: Vec::new(),
+            location: StoredLocation::Bottom,
+            order: None,
+            visible: true,
+        }
+    }
+
+    fn replace(
+        registration: TreeProviderRegistrationId,
+        text: &str,
+        window: Option<&str>,
+    ) -> ReplaceViewTextArguments {
+        ReplaceViewTextArguments {
+            registration,
+            text: text.into(),
+            window: window.map(str::to_owned),
         }
     }
 
@@ -671,6 +703,88 @@ mod tests {
                 ),
                 Err(SemanticError::ViewNotFound)
             );
+        });
+    }
+
+    #[gpui::test]
+    fn text_frames_retain_last_text_and_target_windows(cx: &mut TestAppContext) {
+        let extension = ExtensionId::new(12);
+        let lifecycle = ExtensionLifecycleId::new(6);
+        cx.update(|cx| {
+            let mut bridge = ExtensionSemanticBridge::new();
+            bridge.admit_lifecycle(extension, lifecycle);
+            let registration = bridge
+                .register_tree_provider(
+                    &request(extension, lifecycle, 1),
+                    text_arguments("example.log"),
+                    cx,
+                )
+                .unwrap();
+            let first = cx.new(|cx| TextView::new("example.log", "1", cx));
+            bridge.add_text_view("example.log", "1", first.clone(), cx);
+            bridge
+                .replace_view_text(
+                    &request(extension, lifecycle, 2),
+                    replace(registration, "hello", None),
+                    cx,
+                )
+                .unwrap();
+            assert_eq!(first.read(cx).text(cx), "hello");
+
+            // A window created after the push receives the retained text.
+            let second = cx.new(|cx| TextView::new("example.log", "2", cx));
+            bridge.add_text_view("example.log", "2", second.clone(), cx);
+            assert_eq!(second.read(cx).text(cx), "hello");
+
+            bridge
+                .replace_view_text(
+                    &request(extension, lifecycle, 3),
+                    replace(registration, "only first", Some("1")),
+                    cx,
+                )
+                .unwrap();
+            assert_eq!(first.read(cx).text(cx), "only first");
+            assert_eq!(second.read(cx).text(cx), "hello");
+            assert_eq!(
+                bridge.replace_view_text(
+                    &request(extension, lifecycle, 4),
+                    replace(registration, "missing", Some("missing")),
+                    cx,
+                ),
+                Err(SemanticError::ViewNotFound)
+            );
+
+            let tree = bridge
+                .register_tree_provider(
+                    &request(extension, lifecycle, 5),
+                    arguments("example.outline"),
+                    cx,
+                )
+                .unwrap();
+            assert_eq!(
+                bridge.replace_view_text(
+                    &request(extension, lifecycle, 6),
+                    replace(tree, "wrong kind", None),
+                    cx,
+                ),
+                Err(SemanticError::ContentKindMismatch)
+            );
+            assert_eq!(
+                bridge.invalidate_tree_provider(
+                    &request(extension, lifecycle, 7),
+                    TreeInvalidationArguments {
+                        registration,
+                        parent_id: None,
+                        window: None,
+                    },
+                    cx,
+                ),
+                Err(SemanticError::ContentKindMismatch)
+            );
+
+            bridge.remove_lifecycle(extension, lifecycle, cx);
+            assert_eq!(first.read(cx).text(cx), "");
+            assert_eq!(second.read(cx).text(cx), "");
         });
     }
 

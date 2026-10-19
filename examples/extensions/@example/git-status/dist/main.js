@@ -189,7 +189,10 @@ await commands.register("example.git.refresh", async () => {
   await publish();
 });
 
-await commands.register("example.git.activate", async () => {
+// The global definition owns the command name. Selected-item access belongs to
+// a view-claimed handler, which is the one that runs for frame activation.
+await commands.register("example.git.activate", async () => {});
+await commands.registerForView("example.git-status", "example.git.activate", async () => {
   const selected = await workbench.selectedText();
   if (selected !== null) {
     await workbench.writeClipboardText(selected);

@@ -171,6 +171,16 @@ impl TreeView {
     }
 
     #[cfg(test)]
+    pub(crate) fn activate_row_for_test(
+        &mut self,
+        id: &str,
+        window: AnyWindowHandle,
+        cx: &mut Context<Self>,
+    ) {
+        self.activate(id, window, cx);
+    }
+
+    #[cfg(test)]
     pub(crate) fn owns_provider(
         &self,
         registration: TreeProviderRegistrationId,
@@ -459,6 +469,35 @@ impl TreeView {
         cx.notify();
     }
 
+    #[cfg(test)]
+    pub(crate) fn visible_labels(&self) -> Vec<String> {
+        self.visible_rows()
+            .iter()
+            .filter_map(|row| match row {
+                VisibleRow::Item { item, .. } => Some(item.label.clone()),
+                VisibleRow::Status { .. } => None,
+            })
+            .collect()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn actions_for_row_for_test(&self, id: &str) -> Vec<TreeAction> {
+        self.actions_for_row(id)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn status_for_test(&self, id: &str) -> Option<(Option<String>, Option<TreeBadge>)> {
+        self.item(id)
+            .map(|item| (item.status_text.clone(), item.badge))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn action_focus_for_test(&self) -> Option<(Option<String>, usize)> {
+        self.action_focus
+            .as_ref()
+            .map(|focus| (focus.row.clone(), focus.index))
+    }
+
     fn actions_for_row(&self, id: &str) -> Vec<TreeAction> {
         self.item(id)
             .map(|item| item.actions.clone())
@@ -497,7 +536,7 @@ impl TreeView {
         }
     }
 
-    fn invoke_action(
+    pub(crate) fn invoke_action(
         &mut self,
         action: TreeAction,
         window: AnyWindowHandle,
@@ -879,13 +918,66 @@ impl Render for TreeView {
 
 #[cfg(test)]
 mod tests {
-    use gpui::{AppContext, TestAppContext};
+    use std::cell::RefCell;
+    use std::rc::Rc;
 
-    use super::{TreeProviderIdentity, TreeView, TreeViewRegistrationError};
+    use gpui::{AppContext, Subscription, TestAppContext};
+
+    use super::{TreeProviderIdentity, TreeView, TreeViewEvent, TreeViewRegistrationError};
     use crate::host::protocol::{
-        ExtensionId, ExtensionLifecycleId, TreeChildrenResponse, TreeCollapsibleState, TreeItem,
+        CommandArgumentValue, ExtensionId, ExtensionLifecycleId, TreeAction, TreeActionIcon,
+        TreeBadge, TreeChildrenResponse, TreeCollapsibleState, TreeItem, TreeItemKind,
         TreeProviderRegistrationId,
     };
+
+    type CommandLog = Rc<RefCell<Vec<(String, CommandArgumentValue)>>>;
+
+    struct EventSubscriber {
+        _events: CommandLog,
+        _subscription: Subscription,
+    }
+
+    fn subscribe_commands(
+        cx: &mut TestAppContext,
+        tree: &gpui::Entity<TreeView>,
+    ) -> (CommandLog, gpui::Entity<EventSubscriber>) {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let log = events.clone();
+        let sink = events.clone();
+        let tree = tree.clone();
+        let subscriber = cx.update(move |cx| {
+            cx.new(move |cx| {
+                let subscription = cx.subscribe(&tree, move |_, _, event: &TreeViewEvent, _| {
+                    if let TreeViewEvent::InvokeCommand {
+                        command, arguments, ..
+                    } = event
+                    {
+                        sink.borrow_mut().push((command.clone(), arguments.clone()));
+                    }
+                });
+                EventSubscriber {
+                    _events: log,
+                    _subscription: subscription,
+                }
+            })
+        });
+        (events, subscriber)
+    }
+
+    fn item(id: &str, label: &str, kind: TreeItemKind, actions: Vec<TreeAction>) -> TreeItem {
+        TreeItem {
+            id: id.into(),
+            label: label.into(),
+            description: None,
+            icon: None,
+            collapsible_state: TreeCollapsibleState::None,
+            command: Some("example.activate".into()),
+            kind,
+            status_text: Some("M".into()),
+            badge: Some(TreeBadge::Modified),
+            actions,
+        }
+    }
 
     #[gpui::test]
     fn provider_registration_enforces_view_and_ownership(cx: &mut TestAppContext) {
@@ -1025,6 +1117,243 @@ mod tests {
                 },
                 cx,
             ));
+        });
+    }
+
+    fn owner(registration: TreeProviderRegistrationId) -> TreeProviderIdentity {
+        TreeProviderIdentity {
+            extension: ExtensionId::new(7),
+            lifecycle: ExtensionLifecycleId::new(2),
+            registration,
+        }
+    }
+
+    fn response(
+        registration: TreeProviderRegistrationId,
+        view: crate::host::protocol::ViewId,
+        parent_id: Option<String>,
+        generation: u64,
+        items: Vec<TreeItem>,
+    ) -> TreeChildrenResponse {
+        TreeChildrenResponse {
+            registration,
+            window: "1".into(),
+            view,
+            parent_id,
+            generation,
+            result: Ok(items),
+        }
+    }
+
+    fn windowed_tree(cx: &mut TestAppContext) -> (gpui::Entity<TreeView>, gpui::AnyWindowHandle) {
+        let (tree, window) = cx.add_window_view(|_, cx| TreeView::new("example.git", "1", cx));
+        let handle = window.update(|window, _| window.window_handle());
+        (tree, handle)
+    }
+
+    #[gpui::test]
+    fn groups_fetch_children_and_are_not_activated(cx: &mut TestAppContext) {
+        let registration = TreeProviderRegistrationId::new(5);
+        let (tree, handle) = windowed_tree(cx);
+        let (events, _subscriber) = subscribe_commands(cx, &tree);
+        let generation = tree.update(cx, |tree, cx| {
+            tree.register_provider("example.git", owner(registration), Vec::new(), cx)
+                .unwrap();
+            tree.root_generation()
+        });
+        let view = cx.read(|cx| tree.read(cx).instance_id());
+        tree.update(cx, |tree, cx| {
+            assert!(tree.apply_response(
+                response(
+                    registration,
+                    view,
+                    None,
+                    generation,
+                    vec![
+                        item("staged", "Staged", TreeItemKind::Group, Vec::new()),
+                        item("notes", "notes.txt", TreeItemKind::Item, Vec::new()),
+                    ],
+                ),
+                cx,
+            ));
+        });
+
+        let group_generation =
+            cx.read(|cx| tree.read(cx).children[&Some("staged".to_owned())].generation);
+        tree.update(cx, |tree, cx| {
+            assert!(tree.apply_response(
+                response(
+                    registration,
+                    view,
+                    Some("staged".into()),
+                    group_generation,
+                    vec![item("file", "file.rs", TreeItemKind::Item, Vec::new())],
+                ),
+                cx,
+            ));
+        });
+        assert_eq!(
+            cx.read(|cx| tree.read(cx).visible_labels()),
+            ["Staged", "file.rs", "notes.txt"]
+        );
+
+        tree.update(cx, |tree, cx| tree.activate("staged", handle, cx));
+        assert!(
+            events.borrow().is_empty(),
+            "a group header is not activatable"
+        );
+
+        tree.update(cx, |tree, cx| tree.activate("notes", handle, cx));
+        let events = events.borrow();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].0, "example.activate");
+        assert_eq!(events[0].1, CommandArgumentValue::Null);
+    }
+
+    #[gpui::test]
+    fn actions_carry_arguments_and_enter_keyboard_focus(cx: &mut TestAppContext) {
+        let registration = TreeProviderRegistrationId::new(6);
+        let (tree, handle) = windowed_tree(cx);
+        let (events, _subscriber) = subscribe_commands(cx, &tree);
+        let frame_action = TreeAction {
+            label: "Refresh".into(),
+            command: "example.refresh".into(),
+            arguments: CommandArgumentValue::Null,
+            icon: None,
+        };
+        let generation = tree.update(cx, |tree, cx| {
+            tree.register_provider("example.git", owner(registration), vec![frame_action], cx)
+                .unwrap();
+            tree.root_generation()
+        });
+        let view = cx.read(|cx| tree.read(cx).instance_id());
+        let stage = TreeAction {
+            label: "Stage".into(),
+            command: "example.stage".into(),
+            arguments: CommandArgumentValue::Object(
+                [(
+                    "path".into(),
+                    CommandArgumentValue::String("notes.txt".into()),
+                )]
+                .into(),
+            ),
+            icon: Some(TreeActionIcon::Stage),
+        };
+        tree.update(cx, |tree, cx| {
+            assert!(tree.apply_response(
+                response(
+                    registration,
+                    view,
+                    None,
+                    generation,
+                    vec![item(
+                        "notes",
+                        "notes.txt",
+                        TreeItemKind::Item,
+                        vec![stage.clone()],
+                    )],
+                ),
+                cx,
+            ));
+            assert!(tree.select_item("notes", cx));
+            tree.enter_action_focus(cx);
+            assert_eq!(
+                tree.action_focus_for_test(),
+                Some((Some("notes".into()), 0))
+            );
+            tree.invoke_action(stage.clone(), handle, cx);
+        });
+        let events = events.borrow();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].0, "example.stage");
+        assert_eq!(events[0].1, stage.arguments);
+    }
+
+    #[gpui::test]
+    fn loading_and_error_states_are_local_to_one_parent(cx: &mut TestAppContext) {
+        use crate::host::protocol::TreeProviderError;
+
+        let registration = TreeProviderRegistrationId::new(8);
+        let tree = cx.new(|cx| TreeView::new("example.git", "1", cx));
+        let generation = tree.update(cx, |tree, cx| {
+            tree.register_provider("example.git", owner(registration), Vec::new(), cx)
+                .unwrap();
+            tree.root_generation()
+        });
+        let view = cx.read(|cx| tree.read(cx).instance_id());
+        tree.update(cx, |tree, cx| {
+            assert!(tree.apply_response(
+                response(
+                    registration,
+                    view,
+                    None,
+                    generation,
+                    vec![
+                        item("staged", "Staged", TreeItemKind::Group, Vec::new()),
+                        item("notes", "notes.txt", TreeItemKind::Item, Vec::new()),
+                    ],
+                ),
+                cx,
+            ));
+            assert!(tree.is_loading(), "the group child request is pending");
+
+            let group_generation = tree.children[&Some("staged".to_owned())].generation;
+            assert!(tree.apply_response(
+                TreeChildrenResponse {
+                    registration,
+                    window: "1".into(),
+                    view,
+                    parent_id: Some("staged".into()),
+                    generation: group_generation,
+                    result: Err(TreeProviderError {
+                        message: "boom".into(),
+                    }),
+                },
+                cx,
+            ));
+            assert_eq!(tree.lifecycle_state(), (true, 2, false, 1));
+            assert_eq!(tree.visible_labels(), ["Staged", "notes.txt"]);
+        });
+    }
+
+    #[gpui::test]
+    fn root_refresh_clears_cached_group_children(cx: &mut TestAppContext) {
+        let registration = TreeProviderRegistrationId::new(7);
+        let tree = cx.new(|cx| TreeView::new("example.git", "1", cx));
+        let generation = tree.update(cx, |tree, cx| {
+            tree.register_provider("example.git", owner(registration), Vec::new(), cx)
+                .unwrap();
+            tree.root_generation()
+        });
+        let view = cx.read(|cx| tree.read(cx).instance_id());
+        tree.update(cx, |tree, cx| {
+            assert!(tree.apply_response(
+                response(
+                    registration,
+                    view,
+                    None,
+                    generation,
+                    vec![item("staged", "Staged", TreeItemKind::Group, Vec::new())],
+                ),
+                cx,
+            ));
+            let group_generation = tree.children[&Some("staged".to_owned())].generation;
+            assert!(tree.apply_response(
+                response(
+                    registration,
+                    view,
+                    Some("staged".into()),
+                    group_generation,
+                    vec![item("file", "file.rs", TreeItemKind::Item, Vec::new())],
+                ),
+                cx,
+            ));
+            assert_eq!(tree.visible_labels(), ["Staged", "file.rs"]);
+
+            tree.invalidate(registration, None, cx).unwrap();
+            assert_eq!(tree.children.len(), 1, "root refresh drops nested caches");
+            assert!(tree.is_loading());
+            assert!(tree.visible_labels().is_empty());
         });
     }
 }

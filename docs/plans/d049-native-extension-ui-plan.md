@@ -1,6 +1,7 @@
 # D049 — Native extension UI
 
-Status: 🚧 In progress; checkpoint 1 is complete and approved. The
+Status: 🚧 In progress; checkpoint 1 is complete and approved. Checkpoint 2 is
+implemented and awaits its manual review gate. The
 [docking foundation](../architecture/workbench-and-lifecycle.md#automatic-tool-layout-memory)
 is complete and approved.
 
@@ -161,12 +162,28 @@ ownership and layout follow the
 [workbench and lifecycle](../architecture/workbench-and-lifecycle.md) and
 [semantic UI](../architecture/semantic-ui.md) references.
 
-### 2. Useful content and actions ⬜
+### 2. Useful content and actions ✅
 
 Implement the semantic tree/list additions, frame/group/row actions, and the
 minimal read-only text frame. Ship a normal installed-package fixture with a
 Git-status-style frame and log-like output through public APIs only. Update all
 affected repository fixtures and remove superseded item-command special cases.
+
+Decisions locked before implementation:
+
+- Items may declare `kind: "item" | "group"`; a group is a non-activatable,
+  non-disclosure header whose children are fetched immediately. Groups remain
+  keyboard-navigable for their actions.
+- Rows carry optional `statusText` plus a theme `badge` token (`added`,
+  `modified`, `deleted`, `renamed`, `untracked`, `conflicted`).
+- Actions are static `TreeAction` arrays on items, groups, and the contribution
+  (`label`, `command`, JSON `arguments`, optional `stage`/`unstage`/`discard`
+  icon). `item.command` remains the row activation trigger.
+- Text frames use a push contract: `registration.setText(text, window?)` replaces
+  a private read-only buffer. The bridge retains the last text for windows
+  created later, and `invalidate` remains tree-only (`ContentKindMismatch`
+  otherwise). The buffer renders through the ordinary `EditorView`; a dedicated
+  read-only surface is deferred as D054.
 
 **Validation:** grouped/empty/loading/error data, keyboard and pointer selection,
 activation versus action clicks, item arguments, status presentation, refresh
@@ -174,10 +191,25 @@ after actions, stale item/window captures, independent two-window content, and
 text replacement/disposal. Verify shared docking and focus routing with editor
 and terminal tabs; no fixture-only production bypass.
 
-**Review gate:** manually inspect the Git-status-style frame in sidebar, bottom,
-and mixed tab-group placements, including hide/reopen and fresh-window layout
-inheritance. Approve that its information and actions are
-sufficient for a real Git extension, and inspect the text frame's ownership/API.
+**Completion:** ✅ Implemented; manual review gate pending. Tree items now carry
+group kind, status text, badges, and row/group actions; contributions carry frame
+actions. Actions dispatch existing commands with explicit JSON arguments through
+the captured-window path and stop click propagation, and a keyboard action mode
+reaches row/group/frame actions. Root invalidation replaces nested caches so
+groups and expanded rows refetch. Read-only text frames push complete text into a
+private buffer rendered by the editor and retain the last text across later
+windows. The installed `@example/git-status` fixture uses only public APIs for
+grouped lists, badges, row/group/frame actions, file activation, refresh, and a
+log frame. Coverage: `TreeView` group/activation, action arguments and keyboard
+focus, local loading/error states, root-refresh cache replacement; semantic
+bridge text retention, window targeting, lifecycle cleanup, and kind mismatch;
+product end-to-end Git fixture actions and activation; text replacement/no-op;
+and all existing lifecycle/layout tests. `cargo test --lib` passes (681 tests),
+`cargo test --test handler_linking` passes, the checked TypeScript API/examples
+pass, and `cargo clippy --all-targets -- -D warnings` is clean. Reviewers should
+inspect the fixture in sidebar, bottom, and mixed tab-group placements, hide and
+reopen plus fresh-window inheritance, and approve the Git information/action
+surface and the text frame contract.
 
 ### 3. Picker, input, and confirmation/message ⬜
 

@@ -454,7 +454,7 @@ impl ProductShell {
                 let shell = shell.clone();
                 cx.defer(move |cx| {
                     let Some(shell) = shell.upgrade() else { return };
-                    let _ = shell.update(cx, |this, cx| {
+                    shell.update(cx, |this, cx| {
                         let Some(window) = this.window else { return };
                         if cx.windows().contains(&window) {
                             return;
@@ -4137,6 +4137,7 @@ pub(super) fn bind_product_keys(cx: &mut App) {
 #[cfg(test)]
 mod tests {
     mod closure;
+    mod git_status;
     mod observation;
     mod operations;
     mod tool_layout;
