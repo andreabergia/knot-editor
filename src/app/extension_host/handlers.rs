@@ -689,13 +689,16 @@ pub(crate) async fn dispose_editor_contributions(
 
 use super::super::extension_semantics::{SemanticError, ViewPresentation};
 use crate::host::protocol::{
-    CompletionProviderRegistrationId, ProviderIdentity, TreeProviderRegistrationId,
+    CompletionProviderRegistrationId, ProviderIdentity, TreeAction, TreeProviderRegistrationId,
+    ViewContentKind,
 };
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct TreeArguments {
     pub id: String,
     pub title: String,
+    pub content: ViewContentKind,
+    pub actions: Vec<TreeAction>,
     pub location: crate::app::tool_layout::StoredLocation,
     pub order: Option<u64>,
     pub visible: bool,
@@ -709,9 +712,20 @@ impl HostArguments for TreeArguments {
             "document" => crate::app::tool_layout::StoredLocation::DocumentGroup,
             _ => return Err(DecodeError::Type("invalid view placement")),
         };
+        let content = match reader.text(7, "view content kind must be text")?.as_str() {
+            "tree" => ViewContentKind::Tree,
+            "text" => ViewContentKind::Text,
+            _ => return Err(DecodeError::Type("invalid view content kind")),
+        };
+        let actions = serde_json::to_value(reader.command_arguments(8)?)
+            .ok()
+            .and_then(|value| serde_json::from_value::<Vec<TreeAction>>(value).ok())
+            .ok_or(DecodeError::Type("invalid view actions"))?;
         Ok(Self {
             id: reader.text(2, "view id must be text")?,
             title: reader.text(3, "view title must be text")?,
+            content,
+            actions,
             location,
             order: reader.optional_integer(5)?,
             visible: reader.integer(6)? != 0,
@@ -777,6 +791,25 @@ impl HostArguments for CompletionRegistrationArguments {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ReplaceViewTextArguments {
+    pub registration: TreeProviderRegistrationId,
+    pub text: String,
+    pub window: Option<String>,
+}
+impl HostArguments for ReplaceViewTextArguments {
+    fn decode(reader: &mut dyn ArgumentReader) -> Result<Self, DecodeError> {
+        Ok(Self {
+            registration: TreeProviderRegistrationId::new(reader.integer(2)?),
+            text: reader.text(3, "view text must be text")?,
+            window: reader.optional_text(4, "window target must be text")?,
+        })
+    }
+    fn provider_mutation(&self) -> Option<ProviderIdentity> {
+        Some(ProviderIdentity::Tree(self.registration))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ViewOperationArguments {
     pub registration: TreeProviderRegistrationId,
     pub window: Option<String>,
@@ -800,6 +833,15 @@ pub(crate) async fn register_tree_provider(
 ) -> Result<TreeProviderRegistrationId, SemanticError> {
     let request = context.request;
     context.foreground(|host, cx| host.register_view(&request, arguments, cx))?
+}
+
+#[host_operation("replaceViewText")]
+pub(crate) async fn replace_view_text(
+    context: HostContext,
+    arguments: ReplaceViewTextArguments,
+) -> Result<(), SemanticError> {
+    let request = context.request;
+    context.foreground(|host, cx| host.semantics.replace_view_text(&request, arguments, cx))?
 }
 
 #[host_operation("invalidateView")]

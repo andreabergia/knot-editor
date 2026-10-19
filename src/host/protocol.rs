@@ -310,24 +310,84 @@ pub enum TreeIcon {
 }
 
 /// Whether a tree item can be expanded.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum TreeCollapsibleState {
+    #[default]
     None,
     Collapsed,
     Expanded,
 }
 
+/// Theme-aware change-state tokens rendered as a tree row badge.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TreeBadge {
+    Added,
+    Modified,
+    Deleted,
+    Renamed,
+    Untracked,
+    Conflicted,
+}
+
+/// Theme-aware glyphs for command-backed tree actions.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TreeActionIcon {
+    Stage,
+    Unstage,
+    Discard,
+}
+
+/// One semantic command-backed action attached to a row, group, or frame.
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TreeAction {
+    pub label: String,
+    pub command: String,
+    pub arguments: CommandArgumentValue,
+    pub icon: Option<TreeActionIcon>,
+}
+
+/// Whether a tree row is ordinary selectable content or a group header.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TreeItemKind {
+    #[default]
+    Item,
+    Group,
+}
+
 /// Renderer-neutral semantics for one extension-provided tree item.
-#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TreeItem {
     pub id: String,
     pub label: String,
+    #[serde(default)]
     pub description: Option<String>,
+    #[serde(default)]
     pub icon: Option<TreeIcon>,
+    #[serde(default)]
     pub collapsible_state: TreeCollapsibleState,
+    #[serde(default)]
     pub command: Option<String>,
+    #[serde(default)]
+    pub kind: TreeItemKind,
+    #[serde(default)]
+    pub status_text: Option<String>,
+    #[serde(default)]
+    pub badge: Option<TreeBadge>,
+    #[serde(default)]
+    pub actions: Vec<TreeAction>,
+}
+
+/// Native content a contributed view definition provides in each window.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ViewContentKind {
+    Tree,
+    Text,
 }
 
 /// One asynchronous child request issued by a native view instance.
@@ -347,7 +407,7 @@ pub struct TreeProviderError {
 }
 
 /// One extension callback result returned to a native view instance.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct TreeChildrenResponse {
     pub registration: TreeProviderRegistrationId,
     pub window: String,

@@ -40,7 +40,8 @@ use super::{
     product_commands::{
         ApplicationProductCommands, CommandClaim, ProductCommandTarget, dispatch_to_captured_target,
     },
-    tree_view::{TreeView, TreeViewEvent},
+    tree_view::TreeViewEvent,
+    workbench::ExtensionView,
 };
 
 #[cfg(test)]
@@ -189,7 +190,7 @@ pub(crate) fn view_definitions(cx: &App) -> Vec<super::extension_semantics::View
 pub(crate) fn attach_view_instance(
     stable_id: String,
     window_id: String,
-    view: Entity<TreeView>,
+    view: ExtensionView,
     cx: &mut App,
 ) -> bool {
     let Some(host) = entity(cx) else { return false };
@@ -197,7 +198,7 @@ pub(crate) fn attach_view_instance(
         if !host.semantics.has_definition(&stable_id) {
             return false;
         }
-        let view_id = view.read(cx).instance_id();
+        let view_id = view.instance_id(cx);
         if host
             .commands
             .catalog()
@@ -207,11 +208,18 @@ pub(crate) fn attach_view_instance(
         {
             return false;
         }
-        if host
-            .semantics
-            .add_tree_view(stable_id, window_id, view, cx)
-            .is_err()
-        {
+        let attached = match &view {
+            ExtensionView::Tree(tree) => host
+                .semantics
+                .add_tree_view(stable_id, window_id, tree.clone(), cx)
+                .is_ok(),
+            ExtensionView::Text(text) => {
+                host.semantics
+                    .add_text_view(stable_id, window_id, text.clone(), cx);
+                true
+            }
+        };
+        if !attached {
             host.commands.catalog().borrow_mut().remove_view(view_id);
             return false;
         }
@@ -1023,13 +1031,14 @@ impl ProductExtensionHost {
         {
             return Err(AccessError::InvalidTarget.into());
         }
-        let Some(super::workbench::CommandView::Extension(tree)) = target.command_view(cx) else {
+        let Some(super::workbench::CommandView::Extension(extension)) = target.command_view(cx)
+        else {
             return Err(AccessError::InvalidTarget.into());
         };
-        if tree.read(cx).instance_id() != view {
+        if extension.instance_id(cx) != view {
             return Err(AccessError::InvalidTarget.into());
         }
-        Ok(tree.read(cx).selected_text())
+        Ok(extension.selected_text(cx))
     }
 
     fn drain_command_events(&mut self, cx: &mut Context<Self>) {
@@ -1182,6 +1191,7 @@ impl ProductExtensionHost {
             TreeViewEvent::InvokeCommand {
                 provider,
                 command,
+                arguments,
                 window,
                 focus,
             } => {
@@ -1203,7 +1213,7 @@ impl ProductExtensionHost {
                     dispatcher.dispatch(
                         Command {
                             name: command.clone().into(),
-                            arguments: crate::host::protocol::CommandArgumentValue::Null,
+                            arguments: arguments.clone(),
                         },
                         target,
                         cx,

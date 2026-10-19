@@ -10,19 +10,20 @@ use gpui::{App, Entity, WeakEntity};
 
 use crate::host::protocol::CompletionProviderRegistrationId;
 use crate::host::protocol::{
-    ExtensionId, ExtensionLifecycleId, RequestContext, TreeChildrenResponse,
-    TreeProviderRegistrationId, ViewId,
+    ExtensionId, ExtensionLifecycleId, RequestContext, TreeAction, TreeChildrenResponse,
+    TreeProviderRegistrationId, ViewContentKind, ViewId,
 };
 
 use super::extension_host::handlers::{
-    AccessError, CompletionArguments, CompletionRegistrationArguments, TreeArguments,
-    TreeInvalidationArguments, TreeRegistrationArguments,
+    AccessError, CompletionArguments, CompletionRegistrationArguments, ReplaceViewTextArguments,
+    TreeArguments, TreeInvalidationArguments, TreeRegistrationArguments,
 };
 use super::tool_layout::StoredLocation;
 use crate::host::declarations::HostError;
 
 use super::{
     completion::{CompletionProviderRegistration, CompletionProviderRegistry},
+    text_view::TextView,
     tree_view::{TreeProviderIdentity, TreeView, TreeViewRegistrationError},
 };
 
@@ -46,6 +47,8 @@ pub(crate) enum SemanticError {
         message = "CompletionProviderNotFound"
     )]
     CompletionProviderNotFound,
+    #[error(code = "ContentKindMismatch", message = "ContentKindMismatch")]
+    ContentKindMismatch,
 }
 impl From<AccessError> for SemanticError {
     fn from(error: AccessError) -> Self {
@@ -63,10 +66,12 @@ pub(crate) enum ViewPresentation {
 }
 
 /// One lifecycle-owned contributed view definition visible to the product shell.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ViewDefinition {
     pub(crate) id: String,
     pub(crate) title: String,
+    pub(crate) content: ViewContentKind,
+    pub(crate) actions: Vec<TreeAction>,
     pub(crate) location: StoredLocation,
     pub(crate) order: usize,
     pub(crate) visible: bool,
@@ -75,12 +80,16 @@ pub(crate) struct ViewDefinition {
 struct TreeRegistration {
     definition: ViewDefinition,
     identity: TreeProviderIdentity,
+    /// Last text pushed for a text frame, retained so windows created later
+    /// still present current content without another JavaScript turn.
+    text: Option<String>,
 }
 
 /// Foreground registries and native view surfaces exposed to extension requests.
 pub(crate) struct ExtensionSemanticBridge {
     lifecycles: HashSet<Lifecycle>,
     tree_views: HashMap<String, Vec<(String, WeakEntity<TreeView>)>>,
+    text_views: HashMap<String, Vec<(String, WeakEntity<TextView>)>>,
     tree_registrations: HashMap<TreeProviderRegistrationId, TreeRegistration>,
     next_tree_registration: u64,
     next_default_order: usize,
@@ -92,6 +101,7 @@ impl ExtensionSemanticBridge {
         Self {
             lifecycles: HashSet::new(),
             tree_views: HashMap::new(),
+            text_views: HashMap::new(),
             tree_registrations: HashMap::new(),
             next_tree_registration: 1,
             next_default_order: 1_000,
@@ -122,8 +132,9 @@ impl ExtensionSemanticBridge {
             .values()
             .find(|entry| entry.definition.id == kind)
         {
+            let actions = registration.definition.actions.clone();
             view.update(cx, |tree, cx| {
-                tree.register_provider(&kind, registration.identity, cx)
+                tree.register_provider(&kind, registration.identity, actions, cx)
             })?;
         }
         self.tree_views
@@ -133,8 +144,38 @@ impl ExtensionSemanticBridge {
         Ok(())
     }
 
+    /// Attach a native text instance, seeding it with the last pushed content.
+    pub(crate) fn add_text_view(
+        &mut self,
+        kind: impl Into<String>,
+        window: impl Into<String>,
+        view: Entity<TextView>,
+        cx: &mut App,
+    ) {
+        let kind = kind.into();
+        if let Some(text) = self
+            .tree_registrations
+            .values()
+            .find(|entry| entry.definition.id == kind)
+            .and_then(|entry| entry.text.clone())
+        {
+            view.update(cx, |view, cx| view.replace_text(&text, cx));
+        }
+        self.text_views
+            .entry(kind)
+            .or_default()
+            .push((window.into(), view.downgrade()));
+    }
+
     pub(crate) fn remove_tree_view(&mut self, view: ViewId, cx: &App) {
         for views in self.tree_views.values_mut() {
+            views.retain(|(_, candidate)| {
+                candidate
+                    .upgrade()
+                    .is_some_and(|entity| entity.read(cx).instance_id() != view)
+            });
+        }
+        for views in self.text_views.values_mut() {
             views.retain(|(_, candidate)| {
                 candidate
                     .upgrade()
@@ -164,6 +205,8 @@ impl ExtensionSemanticBridge {
         let TreeArguments {
             id,
             title,
+            content,
+            actions,
             location,
             order,
             visible,
@@ -196,13 +239,19 @@ impl ExtensionSemanticBridge {
         let definition = ViewDefinition {
             id: id.clone(),
             title,
+            content,
+            actions: actions.clone(),
             location,
             order: order.try_into().expect("view order fits usize"),
             visible,
         };
-        for view in self.live_tree_views(&id, None) {
-            view.update(cx, |tree, cx| tree.register_provider(&id, identity, cx))
+        if content == ViewContentKind::Tree {
+            for view in self.live_tree_views(&id, None) {
+                view.update(cx, |tree, cx| {
+                    tree.register_provider(&id, identity, actions.clone(), cx)
+                })
                 .map_err(map_tree_error)?;
+            }
         }
         self.next_tree_registration = self
             .next_tree_registration
@@ -213,9 +262,41 @@ impl ExtensionSemanticBridge {
             TreeRegistration {
                 definition,
                 identity,
+                text: None,
             },
         );
         Ok(registration)
+    }
+
+    pub(crate) fn replace_view_text(
+        &mut self,
+        request: &RequestContext,
+        arguments: ReplaceViewTextArguments,
+        cx: &mut App,
+    ) -> Result<(), SemanticError> {
+        self.validate(request)?;
+        let ReplaceViewTextArguments {
+            registration,
+            text,
+            window,
+        } = arguments;
+        let kind = self.owned_tree_kind(registration, request)?;
+        let entry = self
+            .tree_registrations
+            .get_mut(&registration)
+            .expect("owned registration exists");
+        if entry.definition.content != ViewContentKind::Text {
+            return Err(SemanticError::ContentKindMismatch);
+        }
+        entry.text = Some(text.clone());
+        let views = self.live_text_views(&kind, window.as_deref());
+        if window.is_some() && views.is_empty() {
+            return Err(SemanticError::ViewNotFound);
+        }
+        for view in views {
+            view.update(cx, |view, cx| view.replace_text(&text, cx));
+        }
+        Ok(())
     }
 
     pub(crate) fn invalidate_tree_provider(
@@ -357,6 +438,16 @@ impl ExtensionSemanticBridge {
             .collect()
     }
 
+    fn live_text_views(&self, kind: &str, window: Option<&str>) -> Vec<Entity<TextView>> {
+        self.text_views
+            .get(kind)
+            .into_iter()
+            .flatten()
+            .filter(|(candidate, _)| window.is_none_or(|window| candidate == window))
+            .filter_map(|(_, view)| view.upgrade())
+            .collect()
+    }
+
     pub(crate) fn completion_snapshot(&self) -> Vec<CompletionProviderRegistration> {
         self.completion_providers.snapshot()
     }
@@ -393,6 +484,9 @@ impl ExtensionSemanticBridge {
                 view.update(cx, |tree, cx| {
                     tree.remove_lifecycle(extension, lifecycle, cx)
                 });
+            }
+            for view in self.live_text_views(&kind, None) {
+                view.update(cx, |view, cx| view.replace_text("", cx));
             }
             self.tree_registrations.remove(&registration);
             ids.push(kind);
@@ -436,6 +530,8 @@ mod tests {
         TreeArguments {
             id: id.into(),
             title: "Outline".into(),
+            content: ViewContentKind::Tree,
+            actions: Vec::new(),
             location: StoredLocation::Left,
             order: None,
             visible: true,
@@ -483,6 +579,10 @@ mod tests {
                         icon: None,
                         collapsible_state: TreeCollapsibleState::None,
                         command: None,
+                        kind: crate::host::protocol::TreeItemKind::Item,
+                        status_text: None,
+                        badge: None,
+                        actions: Vec::new(),
                     }]),
                 },
                 cx,

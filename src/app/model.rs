@@ -556,8 +556,33 @@ impl BufferModel {
         if self.access_policy == BufferAccessPolicy::ReadOnly {
             return Err(BufferAccessError::ReadOnly);
         }
+        Ok(self.commit_replacement(range, text, grouping, view))
+    }
+
+    /// Replace the complete text of a read-only generated buffer. Generated
+    /// content is not an editable document, so this bypasses the access policy
+    /// while still committing one public revision.
+    pub(crate) fn replace_generated_text(&mut self, text: &str) -> bool {
+        assert!(self.open, "cannot edit a closed buffer");
+        assert!(
+            self.access_policy == BufferAccessPolicy::ReadOnly,
+            "generated replacement requires a read-only buffer"
+        );
+        if self.text() == text {
+            return false;
+        }
+        self.commit_replacement(0..self.buffer.len(), text, None, None)
+    }
+
+    fn commit_replacement(
+        &mut self,
+        range: Range<usize>,
+        text: &str,
+        grouping: Option<EditGrouping>,
+        view: Option<HistoryViewChange>,
+    ) -> bool {
         if range.is_empty() && text.is_empty() {
-            return Ok(false);
+            return false;
         }
         let edit = crate::host::protocol::TextEdit {
             range: ByteRange {
@@ -585,7 +610,7 @@ impl BufferModel {
             revision: self.revision,
             edits: vec![edit],
         });
-        Ok(true)
+        true
     }
 
     #[cfg(test)]

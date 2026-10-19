@@ -103,10 +103,23 @@ function iterableItems(value, convert) {
   }
   return Array.from(value, convert);
 }
+function treeAction(value) {
+  record(value, "tree action must be an object");
+  return {
+    label: string(value.label, "tree action label must be text"),
+    command: string(value.command, "tree action command must be text"),
+    arguments: value.arguments === undefined ? null : validateJsonValue(value.arguments),
+    icon: token(value.icon, ["stage", "unstage", "discard"]),
+  };
+}
+function treeActions(value) {
+  return value == null ? [] : arrayItems(value, treeAction);
+}
 function treeItem(value) {
   record(value, "tree item must be an object");
   const collapsibleState = token(value.collapsibleState, ["none", "collapsed", "expanded"]);
   if (collapsibleState === null) throw new TypeError("collapsibleState is required");
+  const kind = token(value.kind, ["item", "group"]);
   return {
     id: string(value.id, "tree item ID must be text"),
     label: string(value.label, "tree item label must be text"),
@@ -114,6 +127,10 @@ function treeItem(value) {
     icon: token(value.icon, ["file", "folder", "symbol"]),
     collapsibleState,
     command: optionalText(value.command),
+    kind: kind === null ? "item" : kind,
+    statusText: optionalText(value.statusText),
+    badge: token(value.badge, ["added", "modified", "deleted", "renamed", "untracked", "conflicted"]),
+    actions: treeActions(value.actions),
   };
 }
 
@@ -491,13 +508,16 @@ export async function registerView(contribution) {
   }
   const title = string(value.title, "view title must be text");
   const content = record(value.content, "view content must be an object");
-  if (content.kind !== "tree") {
-    throw new TypeError("view content kind must be \"tree\"");
+  let provider = null;
+  if (content.kind === "tree") {
+    provider = record(content.provider, "tree content requires a provider object");
+    if (typeof provider.getChildren !== "function") {
+      throw new TypeError("tree provider requires a getChildren method");
+    }
+  } else if (content.kind !== "text") {
+    throw new TypeError("view content kind must be \"tree\" or \"text\"");
   }
-  const provider = record(content.provider, "tree content requires a provider object");
-  if (typeof provider.getChildren !== "function") {
-    throw new TypeError("tree provider requires a getChildren method");
-  }
+  const actions = treeActions(value.actions);
   let location = "left";
   let order = null;
   let visible = true;
@@ -519,8 +539,17 @@ export async function registerView(contribution) {
       visible = placement.visible;
     }
   }
-  const registration = await request("registerView", id, title, location, order, visible ? 1 : 0);
-  treeProviders.set(registration, provider);
+  const registration = await request(
+    "registerView",
+    id,
+    title,
+    location,
+    order,
+    visible ? 1 : 0,
+    content.kind,
+    actions,
+  );
+  if (provider !== null) treeProviders.set(registration, provider);
   const owned = ownership(() => treeProviders.delete(registration),
     () => request("unregisterView", registration));
   return Object.freeze({
@@ -544,6 +573,15 @@ export async function registerView(contribution) {
         "invalidateView",
         registration,
         parent,
+        optionalWindowAuthority(window),
+      ));
+    },
+    async setText(text, window) {
+      owned.assertActive();
+      await owned.track(request(
+        "replaceViewText",
+        registration,
+        string(text, "view text must be text"),
         optionalWindowAuthority(window),
       ));
     },

@@ -195,7 +195,6 @@ impl EditorView {
         ))
     }
 
-    #[cfg(test)]
     pub(crate) fn selected_byte_range(&self) -> Option<Range<usize>> {
         self.selection_range().map(|(start, end)| {
             self.to_flat_byte(start.0, start.1)..self.to_flat_byte(end.0, end.1)

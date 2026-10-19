@@ -34,8 +34,9 @@ use super::{
         CommandOutcome, CompletionProviderError, CompletionRequest, CompletionResponse,
         CompletionResultItem, DecorationToken, EditorContribution, ExtensionId, GutterToken,
         HostRequest, HostResponse, KeybindingMutation, ProviderIdentity, RequestId, SnapshotText,
-        TextEdit, TextSnapshot, TreeChildrenRequest, TreeChildrenResponse, TreeCollapsibleState,
-        TreeIcon, TreeItem, TreeProviderError, WorkbenchSubscriptionId,
+        TextEdit, TextSnapshot, TreeAction, TreeActionIcon, TreeBadge, TreeChildrenRequest,
+        TreeChildrenResponse, TreeCollapsibleState, TreeIcon, TreeItem, TreeItemKind,
+        TreeProviderError, WorkbenchSubscriptionId,
     },
     scheduler::{
         CompletionOutcome, CompletionReceiver, PoolConfig, RootId, SchedulerError, SchedulerHandle,
@@ -4513,12 +4514,31 @@ fn tree_item_from_v8<'s>(
         "expanded" => TreeCollapsibleState::Expanded,
         _ => return Err(BoundaryError::Type("invalid tree collapsible state")),
     };
+    let kind = match optional_text_property(scope, object, "kind")? {
+        None => TreeItemKind::Item,
+        Some(kind) => match kind.as_str() {
+            "item" => TreeItemKind::Item,
+            "group" => TreeItemKind::Group,
+            _ => return Err(BoundaryError::Type("invalid tree item kind")),
+        },
+    };
     let icon = optional_text_property(scope, object, "icon")?
         .map(|icon| match icon.as_str() {
             "file" => Ok(TreeIcon::File),
             "folder" => Ok(TreeIcon::Folder),
             "symbol" => Ok(TreeIcon::Symbol),
             _ => Err(BoundaryError::Type("invalid tree icon")),
+        })
+        .transpose()?;
+    let badge = optional_text_property(scope, object, "badge")?
+        .map(|badge| match badge.as_str() {
+            "added" => Ok(TreeBadge::Added),
+            "modified" => Ok(TreeBadge::Modified),
+            "deleted" => Ok(TreeBadge::Deleted),
+            "renamed" => Ok(TreeBadge::Renamed),
+            "untracked" => Ok(TreeBadge::Untracked),
+            "conflicted" => Ok(TreeBadge::Conflicted),
+            _ => Err(BoundaryError::Type("invalid tree badge")),
         })
         .transpose()?;
     Ok(TreeItem {
@@ -4528,6 +4548,57 @@ fn tree_item_from_v8<'s>(
         collapsible_state,
         icon,
         command: optional_text_property(scope, object, "command")?,
+        kind,
+        status_text: optional_text_property(scope, object, "statusText")?,
+        badge,
+        actions: tree_actions_from_v8(scope, object, "actions")?,
+    })
+}
+
+fn tree_actions_from_v8<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    name: &str,
+) -> Result<Vec<TreeAction>, BoundaryError> {
+    let value = property(scope, object, name, "invalid tree actions")?;
+    if value.is_null_or_undefined() {
+        return Ok(Vec::new());
+    }
+    let array = v8::Local::<v8::Array>::try_from(value)
+        .map_err(|_| BoundaryError::Type("tree actions must be an array"))?;
+    let mut actions = Vec::with_capacity(array.length() as usize);
+    for index in 0..array.length() {
+        let value = array.get_index(scope, index).ok_or("invalid tree action")?;
+        actions.push(tree_action_from_v8(scope, value)?);
+    }
+    Ok(actions)
+}
+
+fn tree_action_from_v8<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Value>,
+) -> Result<TreeAction, BoundaryError> {
+    let object =
+        v8::Local::<v8::Object>::try_from(value).map_err(|_| "tree action must be an object")?;
+    let icon = optional_text_property(scope, object, "icon")?
+        .map(|icon| match icon.as_str() {
+            "stage" => Ok(TreeActionIcon::Stage),
+            "unstage" => Ok(TreeActionIcon::Unstage),
+            "discard" => Ok(TreeActionIcon::Discard),
+            _ => Err(BoundaryError::Type("invalid tree action icon")),
+        })
+        .transpose()?;
+    let arguments = property(scope, object, "arguments", "invalid tree action arguments")?;
+    let arguments = if arguments.is_null_or_undefined() {
+        CommandArgumentValue::Null
+    } else {
+        command_argument_from_v8(scope, arguments)?
+    };
+    Ok(TreeAction {
+        label: string_property(scope, object, "label")?,
+        command: string_property(scope, object, "command")?,
+        arguments,
+        icon,
     })
 }
 
@@ -8883,6 +8954,8 @@ globalThis.activationFinished = true;
             operation::<declared::register_tree_provider>(declared::TreeArguments {
                 id: "example.outline".into(),
                 title: "Outline".into(),
+                content: crate::host::protocol::ViewContentKind::Tree,
+                actions: Vec::new(),
                 location: crate::app::tool_layout::StoredLocation::Left,
                 order: None,
                 visible: true,

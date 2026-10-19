@@ -12,14 +12,17 @@ pub(crate) struct ToolFrameId(EntityId);
 #[derive(Clone)]
 pub(crate) enum ToolContent {
     Workspace(Entity<WorkspaceTree>),
-    Extension(Entity<crate::app::tree_view::TreeView>),
+    Extension(super::ExtensionView),
 }
 
 impl ToolContent {
     pub(crate) fn presentation(&self) -> EntityId {
         match self {
             Self::Workspace(view) => view.entity_id(),
-            Self::Extension(view) => view.entity_id(),
+            Self::Extension(view) => match view {
+                super::ExtensionView::Tree(view) => view.entity_id(),
+                super::ExtensionView::Text(view) => view.entity_id(),
+            },
         }
     }
 

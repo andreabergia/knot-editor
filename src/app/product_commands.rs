@@ -117,8 +117,8 @@ impl ProductCommandTarget {
         if self.view.is_some_and(|view_id| {
             !matches!(
                 view,
-                super::workbench::CommandView::Extension(ref tree)
-                    if tree.read(cx).instance_id() == view_id
+                super::workbench::CommandView::Extension(ref extension)
+                    if extension.instance_id(cx) == view_id
             )
         }) {
             return Err(CommandOutcome::InvalidTarget);
@@ -404,9 +404,7 @@ pub(crate) fn dispatch_to_captured_target(
                     completion.clone(),
                     cx,
                 ),
-                CommandView::Extension(view) => {
-                    view.update(cx, |view, cx| view.handle_command(command, cx))
-                }
+                CommandView::Extension(view) => view.handle_command(command, cx),
                 CommandView::Editor(_) => super::command_declarations::registry().dispatch(
                     super::command_declarations::Participant::Editor,
                     command,

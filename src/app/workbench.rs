@@ -14,6 +14,7 @@ use super::{
     documents::{Document, DocumentId},
     editor::EditorView,
     terminal_view::TerminalView,
+    text_view::TextView,
     tree_view::TreeView,
 };
 
@@ -170,11 +171,59 @@ pub(crate) enum WorkbenchTabPayload {
     },
 }
 
+/// Native content owned by one contributed view instance.
+#[derive(Clone)]
+pub(crate) enum ExtensionView {
+    Tree(Entity<TreeView>),
+    Text(Entity<TextView>),
+}
+
+impl ExtensionView {
+    pub(crate) fn focus_handle(&self, cx: &App) -> FocusHandle {
+        match self {
+            Self::Tree(view) => view.read(cx).focus_handle(cx),
+            Self::Text(view) => view.read(cx).focus_handle(cx),
+        }
+    }
+
+    pub(crate) fn kind(&self, cx: &App) -> String {
+        match self {
+            Self::Tree(view) => view.read(cx).kind().to_owned(),
+            Self::Text(view) => view.read(cx).kind().to_owned(),
+        }
+    }
+
+    pub(crate) fn instance_id(&self, cx: &App) -> crate::host::protocol::ViewId {
+        match self {
+            Self::Tree(view) => view.read(cx).instance_id(),
+            Self::Text(view) => view.read(cx).instance_id(),
+        }
+    }
+
+    pub(crate) fn handle_command(
+        &self,
+        command: &crate::host::protocol::Command,
+        cx: &mut App,
+    ) -> super::product_commands::CommandClaim {
+        match self {
+            Self::Tree(view) => view.update(cx, |view, cx| view.handle_command(command, cx)),
+            Self::Text(view) => view.update(cx, |view, cx| view.handle_command(command, cx)),
+        }
+    }
+
+    pub(crate) fn selected_text(&self, cx: &App) -> Option<String> {
+        match self {
+            Self::Tree(view) => view.read(cx).selected_text(),
+            Self::Text(view) => view.read(cx).selected_text(cx),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub(crate) enum CommandView {
     Editor(Entity<EditorView>),
     Terminal(Entity<TerminalView>),
-    Extension(Entity<TreeView>),
+    Extension(ExtensionView),
     Workspace(Entity<super::workspace_tree::WorkspaceTree>),
 }
 
