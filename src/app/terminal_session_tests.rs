@@ -83,7 +83,10 @@ fn wait_for_pid(path: &Path) -> u32 {
 fn view_rebuild_preserves_process_and_grid(cx: &mut TestAppContext) {
     let session = cx.new(|cx| {
         TerminalSession::new_with_options(
-            shell("printf 'before-rebuild\\n'; IFS= read -r line; printf 'after:%s\\n' \"$line\""),
+            // The loop keeps the child alive so its output is never racing a process exit.
+            shell(
+                "printf 'before-rebuild\\n'; while IFS= read -r line; do printf 'after:%s\\n' \"$line\"; done",
+            ),
             cx,
         )
     });
@@ -97,12 +100,19 @@ fn view_rebuild_preserves_process_and_grid(cx: &mut TestAppContext) {
     drop(view);
     let _rebuilt = cx.new(|cx| TerminalView::new(session.clone(), cx));
     assert!(session.read_with(cx, |session, _| {
-        std::sync::Arc::ptr_eq(&terminal_before, session.terminal().unwrap())
+        matches!(session.status(), TerminalStatus::Running)
+            && output(session).contains("before-rebuild")
+            && std::sync::Arc::ptr_eq(&terminal_before, session.terminal().unwrap())
     }));
     session.update(cx, |session, _| session.send(b"hello\r".to_vec()));
     wait_for(cx, &session, |session| {
         output(session).contains("after:hello")
     });
+    assert!(session.read_with(cx, |session, _| {
+        matches!(session.status(), TerminalStatus::Running)
+            && std::sync::Arc::ptr_eq(&terminal_before, session.terminal().unwrap())
+    }));
+    session.update(cx, |session, cx| session.close(cx));
 }
 
 #[gpui::test]
