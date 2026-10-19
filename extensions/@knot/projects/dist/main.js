@@ -14,11 +14,11 @@ const VIEW_ID = "builtin.projects";
 /** @typedef {import("knot").ViewContext} ViewContext */
 /** @typedef {import("knot").ViewRegistration} ViewRegistration */
 /** @typedef {{ id: string, name: string, roots: string[], createdAt: number | null, lastOpenedAt: number | null }} Project */
-/** @typedef {{ schema: number, projects: Project[], recentProjectId: string | null }} Registry */
+/** @typedef {{ schema: number, projects: Project[], recentProjectId: string | null, toolVisible: boolean }} Registry */
 
 /** @returns {Registry} */
 function emptyRegistry() {
-  return { schema: SCHEMA, projects: [], recentProjectId: null };
+  return { schema: SCHEMA, projects: [], recentProjectId: null, toolVisible: false };
 }
 
 /** @param {unknown} error @returns {string} */
@@ -73,6 +73,7 @@ async function readRegistry() {
     projects,
     recentProjectId:
       typeof record.recentProjectId === "string" ? record.recentProjectId : null,
+    toolVisible: record.toolVisible === true,
   };
 }
 
@@ -173,7 +174,7 @@ async function openProject(project) {
     return;
   }
   const next = {
-    schema: SCHEMA,
+    ...registry,
     recentProjectId: project.id,
     projects: registry.projects.map((entry) =>
       entry.id === project.id ? { ...entry, lastOpenedAt: Date.now() } : entry,
@@ -245,13 +246,26 @@ view = await workbench.registerView({
 });
 
 // The tool starts hidden so it never displaces the native explorer selection on
-// fresh windows; the layout remembers it once the user shows it.
+// fresh windows. The registry remembers a user's choice and reapplies it to each
+// window, because programmatic show/hide never changes the fresh-window default.
+/** @param {boolean} visible */
+async function setToolVisible(visible) {
+  const next = { ...registry, toolVisible: visible };
+  try {
+    await storage.write(RECORD_KEY, next);
+    registry = next;
+  } catch (error) {
+    await report(`cannot save the tool preference: ${describe(error)}`);
+  }
+  if (view !== null) await (visible ? view.show() : view.hide());
+}
+
 await commands.register("projects.show", async () => {
-  if (view !== null) await view.show();
+  await setToolVisible(true);
 });
 
 await commands.register("projects.hide", async () => {
-  if (view !== null) await view.hide();
+  await setToolVisible(false);
 });
 
 await commands.register("projects.create", async () => {
@@ -281,7 +295,7 @@ await commands.register("projects.create", async () => {
     lastOpenedAt: now,
   };
   const next = {
-    schema: SCHEMA,
+    ...registry,
     projects: [...registry.projects, project],
     recentProjectId: project.id,
   };
@@ -342,8 +356,7 @@ await commands.register("projects.rename", async ({ arguments: args }) => {
     return;
   }
   const next = {
-    schema: SCHEMA,
-    recentProjectId: registry.recentProjectId,
+    ...registry,
     projects: registry.projects.map((entry) =>
       entry.id === project.id ? { ...entry, name } : entry,
     ),
@@ -371,7 +384,7 @@ await commands.register("projects.remove", async ({ arguments: args }) => {
   });
   if (confirmed.kind !== "confirmed") return;
   const next = {
-    schema: SCHEMA,
+    ...registry,
     projects: registry.projects.filter((entry) => entry.id !== project.id),
     recentProjectId: registry.recentProjectId === project.id ? null : registry.recentProjectId,
   };
@@ -386,7 +399,7 @@ await commands.register("projects.list", async () => {
   await reload();
   await refreshTree();
   // The tree is the list; showing it is the visible result.
-  if (view !== null) await view.show();
+  await setToolVisible(true);
   await workbench.writeClipboardText(
     JSON.stringify({
       schema: registry.schema,
@@ -404,7 +417,17 @@ await commands.register("projects.refresh", async () => {
 });
 
 await reload();
-await workbench.observe((event) => {
-  if (event.type === "workspaceChanged") return refreshTree();
-  return undefined;
+const observation = await workbench.observe(async (event) => {
+  if (event.type === "workspaceChanged") {
+    await refreshTree();
+    return;
+  }
+  if (event.type === "windowOpened" && registry.toolVisible && view !== null) {
+    await view.show(event.window.target);
+  }
 });
+if (registry.toolVisible && view !== null) {
+  for (const window of observation.snapshot.windows) {
+    await view.show(window.target);
+  }
+}

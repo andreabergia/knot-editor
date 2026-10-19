@@ -15,6 +15,48 @@ fn wait_for_prompt(cx: &mut TestAppContext) {
     }
 }
 
+/// Focuses the normal pane's active document so tool commands target it.
+fn focus_document_tab(
+    shell: &Entity<ProductShell>,
+    window: gpui::AnyWindowHandle,
+    cx: &mut TestAppContext,
+) {
+    let located = cx.read(|cx| {
+        let workbench = shell.read(cx).workbench.read(cx);
+        let pane = workbench.normal_pane()?;
+        let tab = workbench.pane(pane)?.active_tab_id();
+        Some((pane, tab))
+    });
+    let Some((pane, tab)) = located else {
+        return;
+    };
+    cx.update_window(window, |_, window, cx| {
+        shell.update(cx, |shell, cx| shell.activate_tab(pane, tab, window, cx));
+    })
+    .unwrap();
+    cx.run_until_parked();
+}
+
+fn tree_tab_attached(
+    shell: &Entity<ProductShell>,
+    tree: &Entity<crate::app::tree_view::TreeView>,
+    cx: &gpui::App,
+) -> bool {
+    let focus = tree.read(cx).focus_handle(cx).downgrade();
+    shell
+        .read(cx)
+        .workbench
+        .read(cx)
+        .panes()
+        .iter()
+        .any(|pane| {
+            pane.tabs().iter().any(|tab| {
+                tab.command_view()
+                    .is_some_and(|view| view.matches_focus(&focus, cx))
+            })
+        })
+}
+
 /// Makes the contributed tree the active tool tab so row events resolve against it.
 fn activate_tree_tab(
     shell: &Entity<ProductShell>,
@@ -129,7 +171,8 @@ fn start_registry(cx: &mut TestAppContext) -> Fixture {
     host.update(cx, |host, cx| {
         host.set_test_storage_root(storage.path().to_owned(), cx)
     });
-    restart_registry(&host, &extensions, &shell, window, cx);
+    restart_registry(&host, &extensions, cx);
+    show_registry(&shell, window, cx);
     Fixture {
         documents,
         host,
@@ -158,8 +201,6 @@ fn show_registry(
 fn restart_registry(
     host: &Entity<crate::app::extension_host::ProductExtensionHost>,
     extensions: &tempfile::TempDir,
-    shell: &Entity<ProductShell>,
-    window: gpui::AnyWindowHandle,
     cx: &mut TestAppContext,
 ) {
     host.update(cx, |host, cx| {
@@ -170,7 +211,6 @@ fn restart_registry(
         entry.name.as_deref() == Some("@knot/projects")
             && entry.result == crate::app::extension_load::LoadResult::Loaded
     }));
-    show_registry(shell, window, cx);
 }
 
 fn create_project(
@@ -258,19 +298,15 @@ fn bundled_projects_registry_manages_roots_and_persists(cx: &mut TestAppContext)
     });
 
     // A reload keeps the record and re-registers the contributed commands.
-    restart_registry(
-        &fixture.host,
-        &fixture.extensions,
-        &fixture.shell,
-        fixture.window,
-        cx,
-    );
+    restart_registry(&fixture.host, &fixture.extensions, cx);
     let tree = wait_for_contributed_view(&fixture.shell, "builtin.projects", cx);
     wait_for_api_condition(cx, |cx| {
-        tree.read(cx)
-            .visible_labels()
-            .iter()
-            .any(|label| label == "Renamed")
+        tree_tab_attached(&fixture.shell, &tree, cx)
+            && tree
+                .read(cx)
+                .visible_labels()
+                .iter()
+                .any(|label| label == "Renamed")
     });
     let listed = listed_projects(&fixture.shell, fixture.window, cx);
     assert_eq!(listed["projects"][0]["id"], id);
@@ -414,4 +450,35 @@ fn project_selection_stays_in_the_capturing_window(cx: &mut TestAppContext) {
             .iter()
             .any(|label| label == "Second")
     });
+}
+
+#[gpui::test]
+fn projects_tool_visibility_survives_reload(cx: &mut TestAppContext) {
+    let fixture = start_registry(cx);
+    let tree = wait_for_contributed_view(&fixture.shell, "builtin.projects", cx);
+    assert!(cx.read(|cx| tree_tab_attached(&fixture.shell, &tree, cx)));
+    activate_tree_tab(&fixture.shell, &tree, fixture.window, cx);
+
+    focus_document_tab(&fixture.shell, fixture.window, cx);
+    let hide = dispatch_product_command(&fixture.shell, fixture.window, "projects.hide", cx);
+    assert_eq!(wait_for_command(hide, cx), CommandOutcome::Completed);
+    cx.run_until_parked();
+    assert!(!cx.read(|cx| tree_tab_attached(&fixture.shell, &tree, cx)));
+
+    // A hidden choice stays hidden across a reload.
+    restart_registry(&fixture.host, &fixture.extensions, cx);
+    let tree = wait_for_contributed_view(&fixture.shell, "builtin.projects", cx);
+    cx.run_until_parked();
+    assert!(!cx.read(|cx| tree_tab_attached(&fixture.shell, &tree, cx)));
+
+    focus_document_tab(&fixture.shell, fixture.window, cx);
+    let show = dispatch_product_command(&fixture.shell, fixture.window, "projects.show", cx);
+    assert_eq!(wait_for_command(show, cx), CommandOutcome::Completed);
+    cx.run_until_parked();
+    assert!(cx.read(|cx| tree_tab_attached(&fixture.shell, &tree, cx)));
+
+    // A shown choice is reapplied to the window after another reload.
+    restart_registry(&fixture.host, &fixture.extensions, cx);
+    let tree = wait_for_contributed_view(&fixture.shell, "builtin.projects", cx);
+    wait_for_api_condition(cx, |cx| tree_tab_attached(&fixture.shell, &tree, cx));
 }
