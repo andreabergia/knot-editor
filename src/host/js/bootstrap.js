@@ -812,6 +812,12 @@ export async function replaceWorkspaceRoots(roots, options) {
   const uris = arrayItems(roots, uri => string(uri, "workspace root URI must be text"));
   return workspaceFromNative(await request("replaceWorkspaceRoots", uris, workspaceDestination(options)));
 }
+export async function pickFolder(options) {
+  const value = await request("pickFolder", workspaceDestination(options));
+  return Object.freeze(value.kind === "selected"
+    ? { kind: "selected", uri: value.uri }
+    : { kind: "dismissed" });
+}
 export async function getWorkspace(target) {
   const value = await request("getWorkspace", windowAuthority(target));
   return value === null ? null : workspaceFromNative(value);

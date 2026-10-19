@@ -256,7 +256,18 @@ for another presentation of a live document. These return committed document and
 presentation data. Use `workspaces.openFolder` or `replaceRoots` for directory
 roots; currently zero or one root is supported. Documents remain independent of
 workspace containment. A missing file opens as a dirty destination-associated
-document rather than failing.
+document rather than failing. Use `workspaces.pickFolder` when a workflow asks
+the user for a folder:
+
+```js
+const folder = await workspaces.pickFolder();
+if (folder.kind === "selected") await workspaces.openFolder(folder.uri);
+```
+
+The picker reuses the native directory prompt, owns the window's transient
+interaction while open, and returns a provider-normalized directory URI. Dismissal
+is a normal result; a missing directory rejects `ResourceNotFound` and a file
+rejects `ResourceWrongKind`.
 
 Pass an explicit live target when acting on a previously selected window, pane,
 or presentation. Omitting it captures the command's originating window, or the

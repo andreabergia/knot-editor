@@ -747,3 +747,86 @@ await commands.register("operations.target-loss", async () => {
             .unwrap();
     }
 }
+
+const FOLDER_PICKER_MAIN: &str = r#"
+import { commands, workbench, workspaces } from "knot";
+await commands.register("picker.pick", async () => {
+  try {
+    const result = await workspaces.pickFolder();
+    await workbench.writeClipboardText(JSON.stringify(result));
+  } catch (error) {
+    await workbench.writeClipboardText(JSON.stringify({ error: error.code }));
+  }
+});
+"#;
+
+fn clipboard_json(cx: &TestAppContext) -> serde_json::Value {
+    cx.read(|cx| serde_json::from_str(&cx.read_from_clipboard().unwrap().text().unwrap()).unwrap())
+}
+
+#[gpui::test]
+fn pick_folder_returns_a_normalized_directory_and_reports_path_failures(cx: &mut TestAppContext) {
+    let documents = install_globals(cx);
+    let root = tempfile::tempdir().unwrap();
+    install_extension(
+        root.path(),
+        "@example/picker",
+        &[],
+        &[("main.js", FOLDER_PICKER_MAIN)],
+    );
+    let host = cx.update(extension_host::install);
+    host.update(cx, |host, cx| {
+        host.start_installed_extensions(root.path().to_path_buf(), cx)
+    });
+    assert_eq!(
+        wait_for_extension_report(&host, cx).report.entries[0].result,
+        crate::app::extension_load::LoadResult::Loaded
+    );
+    let (shell, window) = empty_product_window(&documents, cx);
+
+    let directory = tempfile::tempdir().unwrap();
+    cx.set_global(ApplicationOpenDialog(Arc::new(FixedOpenDialog(
+        OpenDialogOutcome::Selected(directory.path().to_path_buf()),
+    ))));
+    assert_eq!(
+        wait_for_command(
+            dispatch_product_command(&shell, window, "picker.pick", cx),
+            cx
+        ),
+        CommandOutcome::Completed
+    );
+    let result = clipboard_json(cx);
+    assert_eq!(result["kind"], "selected");
+    assert_eq!(
+        result["uri"],
+        url::Url::from_file_path(directory.path())
+            .unwrap()
+            .to_string()
+    );
+
+    let file = directory.path().join("notes.txt");
+    std::fs::write(&file, "text").unwrap();
+    cx.set_global(ApplicationOpenDialog(Arc::new(FixedOpenDialog(
+        OpenDialogOutcome::Selected(file),
+    ))));
+    assert_eq!(
+        wait_for_command(
+            dispatch_product_command(&shell, window, "picker.pick", cx),
+            cx
+        ),
+        CommandOutcome::Completed
+    );
+    assert_eq!(clipboard_json(cx)["error"], "ResourceWrongKind");
+
+    cx.set_global(ApplicationOpenDialog(Arc::new(FixedOpenDialog(
+        OpenDialogOutcome::Selected(directory.path().join("missing")),
+    ))));
+    assert_eq!(
+        wait_for_command(
+            dispatch_product_command(&shell, window, "picker.pick", cx),
+            cx
+        ),
+        CommandOutcome::Completed
+    );
+    assert_eq!(clipboard_json(cx)["error"], "ResourceNotFound");
+}

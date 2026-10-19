@@ -2,7 +2,7 @@ import {
   activeBuffer,
   storageRead, storageWrite, storageDelete, storageList,
   observeWorkbench, closePresentation,
-  openDocument, createUntitled, presentDocument, listDocuments, getDocument, listWindows, getWindow, getWorkspace, openFolder, replaceWorkspaceRoots,
+  openDocument, createUntitled, presentDocument, listDocuments, getDocument, listWindows, getWindow, getWorkspace, openFolder, replaceWorkspaceRoots, pickFolder,
   invalidCommandArguments,
   keybinding,
   removeKeybinding,
@@ -47,6 +47,6 @@ export const workbench = Object.freeze({
 
 export const documents = Object.freeze({ list: listDocuments, get: getDocument, open: openDocument, createUntitled, present: presentDocument });
 export const windows = Object.freeze({ list: listWindows, get: getWindow });
-export const workspaces = Object.freeze({ get: getWorkspace, openFolder, replaceRoots: replaceWorkspaceRoots });
+export const workspaces = Object.freeze({ get: getWorkspace, openFolder, replaceRoots: replaceWorkspaceRoots, pickFolder });
 
 export const storage = Object.freeze({ read: storageRead, write: storageWrite, delete: storageDelete, list: storageList });

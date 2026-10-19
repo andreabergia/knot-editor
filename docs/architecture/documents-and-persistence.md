@@ -77,6 +77,12 @@ selected document. They normalize/stat every proposed directory before one share
 root/tree commit, revalidating caller lifetime, window, Open generation, and root
 set generation. Unrelated documents stay open. Results use the committed snapshot.
 
+The public folder picker presents the same native directory prompt one interaction
+per window, then normalizes and stats the selected path through providers before
+returning a URI. It never commits roots; callers choose whether to open or replace
+them. A missing selection rejects `ResourceNotFound` and a file rejects
+`ResourceWrongKind`.
+
 `WorkspaceTree` owns cached entries, expansion, selection, loading, and errors.
 Enumeration checks captured roots, root generation, and per-directory request
 generation before applying results; clearing roots clears the cache. Painting

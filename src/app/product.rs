@@ -1263,6 +1263,61 @@ impl ProductShell {
         Ok(receiver)
     }
 
+    /// Present the native directory prompt, settling the shared slot when it is
+    /// answered. Path validation and normalization belong to the caller.
+    pub(crate) fn begin_folder_picker(
+        &mut self,
+        owner: TransientOwner,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<tokio::sync::oneshot::Receiver<TransientOutcome>, TransientError> {
+        self.transient_slot_free()?;
+        let restore_focus = self.transient_restore_focus(window, cx);
+        let selection: OpenDialogFuture =
+            if let Some(dialog) = cx.try_global::<ApplicationOpenDialog>() {
+                dialog.0.select()
+            } else {
+                let selection = cx.prompt_for_paths(PathPromptOptions {
+                    files: false,
+                    directories: true,
+                    multiple: false,
+                    prompt: Some("Choose Folder".into()),
+                });
+                Box::pin(async move {
+                    match selection.await {
+                        Ok(Ok(Some(paths))) => paths
+                            .into_iter()
+                            .next()
+                            .map(OpenDialogOutcome::Selected)
+                            .unwrap_or(OpenDialogOutcome::Cancelled),
+                        Ok(Ok(None)) => OpenDialogOutcome::Cancelled,
+                        Ok(Err(error)) => OpenDialogOutcome::Failed(error.to_string()),
+                        Err(error) => OpenDialogOutcome::Failed(error.to_string()),
+                    }
+                })
+            };
+        let (completion, receiver) = tokio::sync::oneshot::channel();
+        self.transient = Some(ActiveTransient {
+            owner,
+            surface: None,
+            focus: None,
+            completion: Some(completion),
+            restore_focus,
+            _subscription: None,
+        });
+        cx.spawn(async move |this, cx| {
+            let outcome = match selection.await {
+                OpenDialogOutcome::Selected(path) => TransientOutcome::Folder(path),
+                OpenDialogOutcome::Cancelled => TransientOutcome::Dismissed,
+                OpenDialogOutcome::Failed(message) => TransientOutcome::Failed(message),
+            };
+            let _ = this.update(cx, |this, cx| this.finish_transient(outcome, cx));
+        })
+        .detach();
+        cx.notify();
+        Ok(receiver)
+    }
+
     fn render_transient(&self) -> Option<AnyElement> {
         self.transient.as_ref().and_then(|active| active.render())
     }

@@ -200,6 +200,15 @@ const confirmed: import("knot").ConfirmationResult = await workbench.showConfirm
 if (confirmed.kind === "confirmed") {
   // Confirmation carries no payload.
 }
+const pickedFolder: import("knot").FolderPickerResult = await workspaces.pickFolder();
+if (pickedFolder.kind === "selected") {
+  const uri: string = pickedFolder.uri;
+  void uri;
+}
+// @ts-expect-error folder picker results are selected or dismissed only
+void pickedFolder.value;
+// @ts-expect-error target options accept a live window target, not a string
+await workspaces.pickFolder({ target: "window" });
 await workbench.showMessage({ title: "Notice", message: "body" });
 // @ts-expect-error picker items require an id
 await workbench.showPicker({ title: "Bad", items: [{ label: "missing" }] });

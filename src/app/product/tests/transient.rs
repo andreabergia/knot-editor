@@ -188,6 +188,56 @@ fn input_and_native_prompts_settle_once(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn folder_picker_settles_selected_dismissed_and_failed(cx: &mut TestAppContext) {
+    let documents = install_globals(cx);
+    let (shell, window) = empty_product_window(&documents, cx);
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().to_path_buf();
+
+    cx.set_global(ApplicationOpenDialog(Arc::new(FixedOpenDialog(
+        OpenDialogOutcome::Selected(path.clone()),
+    ))));
+    let mut selected = cx
+        .update_window(window, |_, window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.begin_folder_picker(owner(None), window, cx)
+            })
+        })
+        .unwrap()
+        .unwrap();
+    assert_eq!(settle(&mut selected, cx), TransientOutcome::Folder(path));
+
+    cx.set_global(ApplicationOpenDialog(Arc::new(FixedOpenDialog(
+        OpenDialogOutcome::Cancelled,
+    ))));
+    let mut dismissed = cx
+        .update_window(window, |_, window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.begin_folder_picker(owner(None), window, cx)
+            })
+        })
+        .unwrap()
+        .unwrap();
+    assert_eq!(settle(&mut dismissed, cx), TransientOutcome::Dismissed);
+
+    cx.set_global(ApplicationOpenDialog(Arc::new(FixedOpenDialog(
+        OpenDialogOutcome::Failed("dialog exploded".into()),
+    ))));
+    let mut failed = cx
+        .update_window(window, |_, window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.begin_folder_picker(owner(None), window, cx)
+            })
+        })
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        settle(&mut failed, cx),
+        TransientOutcome::Failed("dialog exploded".into())
+    );
+}
+
+#[gpui::test]
 fn cancellation_matches_the_owner_and_two_windows_stay_independent(cx: &mut TestAppContext) {
     let documents = install_globals(cx);
     let (first_shell, first_window) = empty_product_window(&documents, cx);

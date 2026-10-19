@@ -125,6 +125,15 @@ declare module "knot" {
      * More than one root rejects TooManyWorkspaceRoots. Documents remain open.
      * A newer Open/root request or root generation invalidates pending work. */
     replaceRoots(roots: readonly string[], options?: WorkspaceDestinationOptions): Promise<WorkspaceInfo>;
+    /** Presents the native directory prompt and resolves a normalized, existing
+     * directory URI, or dismissal. The selected path is normalized through the
+     * registered providers, so a missing directory rejects ResourceNotFound and
+     * a file rejects ResourceWrongKind. Omission captures the command's window or
+     * active product window at admission.
+     * @throws HostError with OperationInProgress when another extension
+     * interaction owns the window, InvalidTarget, ContextUnavailable, Cancelled,
+     * InvalidUri, ResourceNotFound, ResourceWrongKind, or ProviderFailure. */
+    pickFolder(options?: WorkspaceDestinationOptions): Promise<FolderPickerResult>;
   }>;
 
   export interface ApplicationSnapshot {
@@ -529,6 +538,9 @@ declare module "knot" {
   /** Confirmed or dismissed native confirmation. */
   export type ConfirmationResult = Readonly<
     { kind: "confirmed" } | { kind: "dismissed" }>;
+  /** Selected directory URI or explicit dismissal; dismissal is not a failure. */
+  export type FolderPickerResult = Readonly<
+    { kind: "selected"; uri: string } | { kind: "dismissed" }>;
   /** An explicit target or the admitted command's window is required; a
    * context-free call without either rejects ContextUnavailable. */
   export interface TransientTargetOptions { readonly target?: WindowTarget; }

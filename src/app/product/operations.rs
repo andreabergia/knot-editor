@@ -165,6 +165,37 @@ impl OpenFailure {
     }
 }
 
+/// Resolve a user-selected path to a normalized, existing directory URI.
+pub(crate) fn resolve_directory(
+    path: std::path::PathBuf,
+    completion: impl FnOnce(Result<super::super::resource::ResourceUri, WorkspaceError>) + 'static,
+    cx: &mut App,
+) {
+    let providers = ProductShell::filesystems(cx);
+    cx.spawn(async move |_| {
+        let result = async {
+            let request = OpenRequest::from_path(&path, Path::new("/"))
+                .map_err(|_| WorkspaceError::Resource(OpenError::InvalidUri))?;
+            match super::super::open::load_resource_kind(
+                providers,
+                request.uri().clone(),
+                Some(ResourceKind::Directory),
+            )
+            .await
+            {
+                Ok(OpenResource::Directory(uri)) => Ok(uri),
+                Ok(_) => Err(WorkspaceError::Resource(OpenError::ResourceWrongKind)),
+                Err(error) => Err(WorkspaceError::Resource(
+                    OpenFailure::Resource(error).host_error(),
+                )),
+            }
+        }
+        .await;
+        completion(result);
+    })
+    .detach();
+}
+
 pub(crate) fn validate_presentation(
     target: &PresentationTarget,
     cx: &mut App,

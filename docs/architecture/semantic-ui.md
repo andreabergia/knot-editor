@@ -150,7 +150,9 @@ not by the extension runtime. The host operation resolves the originating
 window from an explicit target or the admitted command capture, installs the
 overlay on the foreground, and awaits its settled outcome. A window owns at most
 one extension interaction; the palette is a separate native surface and may be
-open at the same time.
+open at the same time. Native confirmation, message, and directory prompts occupy
+the same slot without a rendered overlay; the folder picker normalizes and stats
+its selected path through providers before delivering a URI.
 
 ```text
 extension host request (showPicker/showInput/...)

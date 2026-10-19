@@ -95,6 +95,44 @@ impl From<AccessError> for TransientError {
     }
 }
 
+/// Failures of the `workspaces.pickFolder` interaction and its path validation.
+#[derive(Debug, HostError)]
+pub(crate) enum FolderPickerError {
+    #[error(transparent)]
+    Transient(TransientError),
+    #[error(transparent)]
+    Workspace(WorkspaceError),
+    #[error(
+        code = "ProviderFailure",
+        message = "the folder dialog failed: {message}"
+    )]
+    Dialog { message: String },
+}
+
+impl From<TransientError> for FolderPickerError {
+    fn from(error: TransientError) -> Self {
+        Self::Transient(error)
+    }
+}
+
+impl From<AccessError> for FolderPickerError {
+    fn from(error: AccessError) -> Self {
+        Self::Transient(error.into())
+    }
+}
+
+impl From<WorkspaceError> for FolderPickerError {
+    fn from(error: WorkspaceError) -> Self {
+        Self::Workspace(error)
+    }
+}
+
+impl From<OpenError> for FolderPickerError {
+    fn from(error: OpenError) -> Self {
+        Self::Workspace(error.into())
+    }
+}
+
 #[derive(Debug, HostError)]
 pub(crate) enum OpenError {
     #[error(transparent)]
@@ -712,8 +750,9 @@ pub(crate) async fn dispose_editor_contributions(
 
 use super::super::extension_semantics::{SemanticError, ViewPresentation};
 use crate::host::protocol::{
-    CompletionProviderRegistrationId, ConfirmationResult, InputResult, PickerItem, PickerResult,
-    ProviderIdentity, TreeAction, TreeProviderRegistrationId, ViewContentKind,
+    CompletionProviderRegistrationId, ConfirmationResult, FolderPickerResult, InputResult,
+    PickerItem, PickerResult, ProviderIdentity, TreeAction, TreeProviderRegistrationId,
+    ViewContentKind,
 };
 
 use super::super::transient::{PromptText, TransientOutcome, TransientOwner};
@@ -1051,6 +1090,57 @@ pub(crate) async fn show_message(
         Ok(_) => Ok(()),
         Err(_) => Err(TransientError::Cancelled),
     }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct FolderPickerArguments {
+    pub target: Option<String>,
+}
+
+impl HostArguments for FolderPickerArguments {
+    fn decode(reader: &mut dyn ArgumentReader) -> Result<Self, DecodeError> {
+        Ok(Self {
+            target: reader.optional_text(2, "window target must be text")?,
+        })
+    }
+}
+
+#[host_operation("pickFolder")]
+pub(crate) async fn pick_folder(
+    context: HostContext,
+    arguments: FolderPickerArguments,
+) -> Result<FolderPickerResult, FolderPickerError> {
+    let request = context.request;
+    let owner = transient_owner(&request);
+    let receiver = context.foreground(|host, cx| {
+        host.with_transient_window(
+            &request,
+            arguments.target.as_deref(),
+            move |shell, window, cx| shell.begin_folder_picker(owner, window, cx),
+            cx,
+        )
+    })??;
+    let path = match receiver.await {
+        Ok(TransientOutcome::Folder(path)) => path,
+        Ok(TransientOutcome::Dismissed) => return Ok(FolderPickerResult::Dismissed),
+        Ok(TransientOutcome::Failed(message)) => return Err(FolderPickerError::Dialog { message }),
+        _ => return Err(TransientError::Cancelled.into()),
+    };
+    let (sender, response) = tokio::sync::oneshot::channel();
+    context.foreground(|_, cx| {
+        product::operations::resolve_directory(
+            path,
+            move |result| {
+                let _ = sender.send(result);
+            },
+            cx,
+        )
+    })?;
+    let result = response.await.map_err(|_| TransientError::Cancelled)?;
+    let uri = context.foreground(|_, _| result)??;
+    Ok(FolderPickerResult::Selected {
+        uri: uri.to_string(),
+    })
 }
 
 #[host_operation("registerView")]

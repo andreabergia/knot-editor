@@ -413,6 +413,14 @@ pub enum ConfirmationResult {
     Dismissed,
 }
 
+/// Settled outcome of a native folder picker.
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum FolderPickerResult {
+    Selected { uri: String },
+    Dismissed,
+}
+
 /// One asynchronous child request issued by a native view instance.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TreeChildrenRequest {

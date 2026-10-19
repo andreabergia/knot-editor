@@ -5,6 +5,8 @@
 //! one live extension interaction per window; confirmations and messages use
 //! the native platform prompt instead of an overlay.
 
+use std::path::PathBuf;
+
 use gpui::{prelude::*, *};
 
 use crate::host::protocol::{CommandInvocationId, ExtensionId, ExtensionLifecycleId, PickerItem};
@@ -41,6 +43,8 @@ pub(crate) enum TransientOutcome {
     Picker(String),
     Input(String),
     Confirmed,
+    Folder(PathBuf),
+    Failed(String),
     Dismissed,
     Cancelled,
 }
