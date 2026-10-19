@@ -9,6 +9,7 @@ use crate::host::protocol::CommandOutcome;
 use gpui::*;
 
 mod application_observation;
+mod bundled;
 mod command_declarations;
 #[allow(
     dead_code,

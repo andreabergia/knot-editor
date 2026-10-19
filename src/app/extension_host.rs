@@ -86,10 +86,8 @@ await editor.registerCompletionProvider("fixture-secondary", {
 
 fn graph_for_package(package: &InstalledPackage) -> Result<ModuleGraph, String> {
     extension_package::validate_package_api(&package.manifest)?;
-    let root = url::Url::from_directory_path(&package.directory)
-        .map_err(|_| format!("invalid package directory: {}", package.directory.display()))?;
     ModuleGraph::new(
-        root.as_str(),
+        &package.module_root()?,
         &package.manifest.main,
         package.sources.clone(),
     )
@@ -521,12 +519,13 @@ impl ProductExtensionHost {
 
     #[cfg(test)]
     pub(crate) fn start_installed_extensions(&mut self, root: PathBuf, cx: &mut Context<Self>) {
-        let _ = self.start_installed_extensions_with_completion(root, cx);
+        let _ = self.start_installed_extensions_with_completion(root, false, cx);
     }
 
     fn start_installed_extensions_with_completion(
         &mut self,
         root: PathBuf,
+        include_bundled: bool,
         cx: &mut Context<Self>,
     ) -> Option<tokio::sync::oneshot::Receiver<()>> {
         if self
@@ -554,9 +553,13 @@ impl ProductExtensionHost {
             report: LoadReport::default(),
         });
         cx.notify();
-        let discovery = cx
-            .background_executor()
-            .spawn(async move { extension_package::discover(&root) });
+        let discovery = cx.background_executor().spawn(async move {
+            if include_bundled {
+                extension_package::discover_all(&root)
+            } else {
+                extension_package::discover(&root)
+            }
+        });
         let pool = self.pool.clone();
         let next_extension_id = self.next_extension_id.clone();
         self._startup_task = Some(cx.spawn(async move |this, cx| {
@@ -579,9 +582,18 @@ impl ProductExtensionHost {
                         let graph = graph_for_package(package);
                         let execution = graph.and_then(|graph| {
                             this.update(cx, |host, _| {
-                                let owner = super::extension_storage::StorageOwner::package(
-                                    &package.manifest.name,
-                                )?;
+                                let owner = match package.origin {
+                                    extension_package::PackageOrigin::Installed => {
+                                        super::extension_storage::StorageOwner::package(
+                                            &package.manifest.name,
+                                        )
+                                    }
+                                    extension_package::PackageOrigin::Bundled => {
+                                        super::extension_storage::StorageOwner::bundled(
+                                            &package.manifest.name,
+                                        )
+                                    }
+                                }?;
                                 host.load_package(key, graph, Some(owner))
                             })
                             .map_err(|error| error.to_string())?
@@ -717,7 +729,7 @@ impl ProductExtensionHost {
                     Ok(root) => {
                         let done = this
                             .update(cx, |host, cx| {
-                                host.start_installed_extensions_with_completion(root, cx)
+                                host.start_installed_extensions_with_completion(root, true, cx)
                             })
                             .map_err(|error| {
                                 ConfigDiagnostic::new(None, &config_root, error.to_string())
@@ -1984,6 +1996,7 @@ mod tests {
             manifest.api_version = version;
             let package = InstalledPackage {
                 directory: PathBuf::from("/fixtures/tools"),
+                origin: extension_package::PackageOrigin::Installed,
                 manifest: manifest.clone(),
                 sources: BTreeMap::new(),
             };
@@ -2151,6 +2164,51 @@ mod tests {
         });
         drop(host);
         cx.run_until_parked();
+    }
+
+    #[gpui::test]
+    fn bundled_packages_load_with_product_discovery(cx: &mut TestAppContext) {
+        use std::time::{Duration, Instant};
+
+        let root = tempfile::tempdir().unwrap();
+        let host = cx.update(|cx| {
+            let commands = cx.new(super::super::product_commands::ProductCommandDispatcher::new);
+            cx.set_global(ApplicationProductCommands(commands));
+            let host = install(cx);
+            host.update(cx, |host, cx| {
+                host.set_test_storage_root(root.path().join("storage"), cx)
+            });
+            host
+        });
+        let completed = host.update(cx, |host, cx| {
+            host.start_installed_extensions_with_completion(
+                root.path().join("extensions"),
+                true,
+                cx,
+            )
+            .unwrap()
+        });
+        let (sender, receiver) = std::sync::mpsc::channel();
+        cx.spawn(async move |_| {
+            let _ = sender.send(completed.await);
+        })
+        .detach();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            cx.run_until_parked();
+            if receiver.try_recv().is_ok() {
+                break;
+            }
+            assert!(Instant::now() < deadline, "bundled startup did not finish");
+            std::thread::yield_now();
+        }
+        cx.read(|cx| {
+            let report = host.read(cx).startup_report.as_ref().unwrap();
+            assert!(report.report.entries.iter().any(|entry| {
+                entry.name.as_deref() == Some("@knot/projects")
+                    && entry.result == LoadResult::Loaded
+            }));
+        });
     }
 }
 

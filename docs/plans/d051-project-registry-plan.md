@@ -1,6 +1,7 @@
 # Bundled JavaScript project registry
 
-Status: ⬜ Not started. Owns detailed execution for checkpoint 6 of the
+Status: ⬜ In progress. 6.1 implemented and awaiting its review gate; 6.2 and
+6.3 remain unstarted. Owns detailed execution for checkpoint 6 of the
 [extension platform and projects plan](extension-platform-and-projects-plan.md).
 Work identifier D051.
 
@@ -113,20 +114,25 @@ dirty-content suspension belong to checkpoint 8.
 
 ## Checkpoints and review gates
 
-### 6.1 Bundled package loading and storage identity ⬜
+### 6.1 Bundled package loading and storage identity ⬜ awaiting review
 
-- Add the bundled registry, merge it into discovery, carry package origin and
-  module root, and accept built-in identities in storage ownership while keeping
-  installed `@knot/*` rejected.
-- Ship `@knot/projects` as a manifest plus an activation stub so bundled loading
-  is exercised end to end before registry behavior lands.
-- **Validation:** deterministic merge of bundled and installed packages; an
-  installed directory cannot claim a bundled ID; installed packages can require
-  a bundled ID and still order correctly; a failing bundled package is non-fatal
-  and diagnosable; storage accepts `@knot/...` owners while discovery still
-  rejects installed `@knot/*`; the synthetic module root is stable and resolves
-  captured sources; a product test confirms the bundled package appears in the
-  startup report. `cargo fmt`, clippy, and focused tests pass.
+- ✅ Compile-in registry (`src/app/bundled.rs`) merged into product discovery via
+  `extension_package::discover_all`; `InstalledPackage` carries
+  `PackageOrigin` and exposes a module root (installed directory or synthetic
+  `file:///knot/bundled/%40knot/<name>/`).
+- ✅ Bundled admission reuses installed manifest, `apiVersion`, version, and
+  source validation while allowing only the reserved `@knot` scope; installed
+  packages still reject `@knot/*` but may now `requires` a bundled identity.
+- ✅ `DependencyPlan` no longer lets a rejected installed identity block a
+  package that owns the same name, so bundled packages always load.
+- ✅ `StorageOwner::bundled` accepts application-supplied built-in identities
+  while `StorageOwner::package` keeps rejecting the reserved scope.
+- ✅ `@knot/projects` ships as `extensions/@knot/projects/knot.jsonc` plus an
+  activation stub; product startup discovers it together with installed packages.
+- **Validation:** discovery merge/ordering, installed-identity rejection,
+  reserved-scope ownership, bundled admission errors, dependency-plan override,
+  storage owner path, and a product startup test confirming the bundled package
+  loads. `cargo fmt`, clippy, and focused tests pass.
 - **Review gate:** approve the bundled origin, canonical identity, collision
   policy, and storage-owner boundary before building on them.
 

@@ -1,0 +1,11 @@
+{
+  // Bundled project manager. Registry behavior lands with the D051 plan.
+  "name": "@knot/projects",
+  "apiVersion": 1,
+  "version": "0.1.0",
+  "main": "dist/main.js",
+  "displayName": "Projects",
+  "description": "Named projects, their roots, and session restoration.",
+  "author": "Knot",
+  "license": "MIT",
+}

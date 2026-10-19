@@ -14,7 +14,7 @@ use gpui::{BackgroundExecutor, Task};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use serde_json::Value;
 
-use super::extension_package::validate_name;
+use super::extension_package::{validate_bundled_name, validate_name};
 
 const APPLICATION_ID: i64 = 0x4b4e4f54;
 const SCHEMA: &str = "CREATE TABLE records (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL CHECK(json_valid(value))) STRICT";
@@ -32,6 +32,12 @@ impl StorageOwner {
     /// Accept only canonical installed-package identities supplied by the application.
     pub(crate) fn package(name: &str) -> Result<Self, String> {
         validate_name(name)?;
+        Ok(Self(Owner::Package(name.to_owned())))
+    }
+
+    /// Accept a canonical built-in identity supplied by the application.
+    pub(crate) fn bundled(name: &str) -> Result<Self, String> {
+        validate_bundled_name(name)?;
         Ok(Self(Owner::Package(name.to_owned())))
     }
 
@@ -418,6 +424,18 @@ mod tests {
         ] {
             assert!(StorageOwner::package(invalid).is_err(), "{invalid}");
         }
+    }
+
+    #[test]
+    fn bundled_identities_use_the_reserved_scope() {
+        assert!(StorageOwner::package("@knot/projects").is_err());
+        assert_eq!(
+            StorageOwner::bundled("@knot/projects")
+                .unwrap()
+                .relative_path(),
+            PathBuf::from("packages/@knot/projects.sqlite3")
+        );
+        assert!(StorageOwner::bundled("@example/projects").is_err());
     }
 
     #[gpui::test]

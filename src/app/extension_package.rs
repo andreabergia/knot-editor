@@ -27,12 +27,40 @@ pub struct Manifest {
     pub license: Option<String>,
 }
 
+/// Where a package's immutable sources came from.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PackageOrigin {
+    /// Discovered under the user extensions root.
+    Installed,
+    /// Compiled into the binary.
+    Bundled,
+}
+
 #[derive(Clone, Debug)]
 pub struct InstalledPackage {
+    /// Installed directory, or a display-only placeholder for bundled packages.
     pub directory: PathBuf,
+    pub origin: PackageOrigin,
     pub manifest: Manifest,
-    /// Slash-separated paths relative to `directory`, captured during discovery.
+    /// Slash-separated paths relative to the module root, captured during discovery.
     pub sources: BTreeMap<String, Arc<str>>,
+}
+
+impl InstalledPackage {
+    /// Directory file URL used as the immutable module graph root.
+    pub(crate) fn module_root(&self) -> Result<String, String> {
+        match self.origin {
+            PackageOrigin::Installed => url::Url::from_directory_path(&self.directory)
+                .map(String::from)
+                .map_err(|_| format!("invalid package directory: {}", self.directory.display())),
+            // Bundled identities are validated to `@knot/name`, so only `@` needs
+            // escaping to stay inside the synthetic root's path.
+            PackageOrigin::Bundled => Ok(format!(
+                "file:///knot/bundled/{}/",
+                self.manifest.name.replace('@', "%40")
+            )),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -147,6 +175,17 @@ pub fn discover(root: &Path) -> DiscoveryReport {
     report
 }
 
+/// Product discovery: installed packages plus compiled-in packages. Installed
+/// packages cannot claim a bundled identity because the reserved scope is
+/// rejected during discovery, so no precedence rule is needed.
+pub fn discover_all(root: &Path) -> DiscoveryReport {
+    let mut report = super::bundled::report();
+    let installed = discover(root);
+    report.packages.extend(installed.packages);
+    report.diagnostics.extend(installed.diagnostics);
+    report
+}
+
 fn diagnostic(directory: &Path, name: Option<String>, cause: String) -> PackageDiagnostic {
     PackageDiagnostic {
         directory: directory.to_path_buf(),
@@ -190,7 +229,7 @@ fn read_package(directory: &Path) -> Result<InstalledPackage, (Option<String>, S
     validate_api_version(value.get("apiVersion")).map_err(|cause| (name.clone(), cause))?;
     let manifest: Manifest = serde_json::from_value(value)
         .map_err(|error| (name.clone(), format!("invalid knot.jsonc: {error}")))?;
-    validate_manifest(&manifest).map_err(|cause| (name.clone(), cause))?;
+    validate_manifest(&manifest, false).map_err(|cause| (name.clone(), cause))?;
     let main_path = directory.join(&manifest.main);
     read_contained_file(&canonical, &main_path)
         .map_err(|cause| (name.clone(), format!("main {}: {cause}", manifest.main)))?;
@@ -199,6 +238,7 @@ fn read_package(directory: &Path) -> Result<InstalledPackage, (Option<String>, S
         .map_err(|cause| (name, cause))?;
     Ok(InstalledPackage {
         directory: directory.to_path_buf(),
+        origin: PackageOrigin::Installed,
         manifest,
         sources,
     })
@@ -237,15 +277,43 @@ pub(crate) fn validate_package_api(manifest: &Manifest) -> Result<(), String> {
     validate_api_version(Some(&serde_json::Value::from(manifest.api_version))).map(|_| ())
 }
 
-fn validate_manifest(manifest: &Manifest) -> Result<(), String> {
+/// Admits a compiled-in package with the same manifest and source rules used for
+/// installed packages. `sources` are relative to the package root.
+pub(crate) fn bundled_package(
+    manifest_text: &str,
+    sources: BTreeMap<String, Arc<str>>,
+) -> Result<InstalledPackage, String> {
+    let value: serde_json::Value =
+        jsonc_parser::parse_to_serde_value(manifest_text, &Default::default())
+            .map_err(|error| format!("invalid knot.jsonc: {error}"))?;
+    validate_api_version(value.get("apiVersion"))?;
+    let manifest: Manifest =
+        serde_json::from_value(value).map_err(|error| format!("invalid knot.jsonc: {error}"))?;
+    validate_manifest(&manifest, true)?;
+    validate_bundled_name(&manifest.name)?;
+    if !sources.contains_key(&manifest.main) {
+        return Err(format!("main {}: not captured", manifest.main));
+    }
+    Ok(InstalledPackage {
+        directory: PathBuf::from(format!("<bundled>/{}", manifest.name)),
+        origin: PackageOrigin::Bundled,
+        manifest,
+        sources,
+    })
+}
+
+fn validate_manifest(manifest: &Manifest, bundled: bool) -> Result<(), String> {
     validate_package_api(manifest)?;
-    validate_name(&manifest.name)?;
+    validate_name_inner(&manifest.name, bundled)?;
     semver::Version::parse(&manifest.version)
         .map_err(|error| format!("invalid version: {error}"))?;
     validate_relative_module_path(&manifest.main)?;
     let mut requires = BTreeSet::new();
     for dependency in &manifest.requires {
-        validate_name(dependency).map_err(|error| format!("invalid requires entry: {error}"))?;
+        // Any package may depend on a built-in package, which is the only owner
+        // of the reserved scope.
+        validate_name_inner(dependency, true)
+            .map_err(|error| format!("invalid requires entry: {error}"))?;
         if !requires.insert(dependency) {
             return Err(format!("duplicate requires entry {dependency}"));
         }
@@ -270,13 +338,28 @@ fn validate_manifest(manifest: &Manifest) -> Result<(), String> {
 }
 
 pub fn validate_name(name: &str) -> Result<(), String> {
+    validate_name_inner(name, false)
+}
+
+/// Built-in identities supplied by the application must use the reserved scope.
+pub(crate) fn validate_bundled_name(name: &str) -> Result<(), String> {
+    validate_name_inner(name, true)?;
+    if !name.starts_with("@knot/") {
+        return Err(format!(
+            "built-in package ID {name} must use the @knot scope"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_name_inner(name: &str, allow_reserved_scope: bool) -> Result<(), String> {
     let Some((scope, package)) = name.strip_prefix('@').and_then(|name| name.split_once('/'))
     else {
         return Err(format!(
             "invalid package ID {name}: expected @scope/package"
         ));
     };
-    if scope == "knot" {
+    if scope == "knot" && !allow_reserved_scope {
         return Err("@knot is reserved for built-in packages".into());
     }
     for part in [scope, package] {
@@ -710,6 +793,95 @@ mod tests {
             report.diagnostics[0]
                 .cause
                 .contains("scope directory cannot be a symlink")
+        );
+    }
+
+    #[test]
+    fn bundled_packages_merge_with_installed_discovery() {
+        let temp = tempfile::tempdir().unwrap();
+        package(temp.path(), "@example/tools", VALID);
+        let report = discover_all(temp.path());
+        assert!(report.diagnostics.is_empty(), "{:?}", report.diagnostics);
+        let bundled = report
+            .packages
+            .iter()
+            .find(|package| package.origin == PackageOrigin::Bundled)
+            .expect("bundled package is discovered");
+        assert_eq!(bundled.manifest.name, "@knot/projects");
+        assert_eq!(bundled.sources.len(), 1);
+        assert_eq!(
+            bundled.module_root().unwrap(),
+            "file:///knot/bundled/%40knot/projects/"
+        );
+        assert!(report.packages.iter().any(|package| {
+            package.origin == PackageOrigin::Installed && package.manifest.name == "@example/tools"
+        }));
+    }
+
+    #[test]
+    fn installed_packages_cannot_claim_the_bundled_identity() {
+        let temp = tempfile::tempdir().unwrap();
+        package(
+            temp.path(),
+            "@knot/projects",
+            r#"{"name":"@knot/projects","apiVersion":1,"version":"1.0.0","main":"dist/main.js"}"#,
+        );
+        let report = discover_all(temp.path());
+        let claimed = report
+            .packages
+            .iter()
+            .filter(|package| package.manifest.name == "@knot/projects")
+            .collect::<Vec<_>>();
+        assert_eq!(claimed.len(), 1);
+        assert_eq!(claimed[0].origin, PackageOrigin::Bundled);
+        assert!(report.diagnostics.iter().any(|diagnostic| {
+            diagnostic.name.as_deref() == Some("@knot/projects")
+                && diagnostic.cause.contains("reserved")
+        }));
+    }
+
+    #[test]
+    fn reserved_scope_is_owned_by_bundled_packages_only() {
+        assert!(validate_name("@knot/projects").is_err());
+        assert!(validate_bundled_name("@knot/projects").is_ok());
+        let dependent: Manifest = serde_json::from_str(
+            r#"{"name":"@example/tools","apiVersion":1,"version":"1.0.0","main":"main.js","requires":["@knot/projects"]}"#,
+        )
+        .unwrap();
+        assert!(validate_manifest(&dependent, false).is_ok());
+        let owned: Manifest = serde_json::from_str(
+            r#"{"name":"@knot/tools","apiVersion":1,"version":"1.0.0","main":"main.js"}"#,
+        )
+        .unwrap();
+        assert!(validate_manifest(&owned, false).is_err());
+        assert!(validate_manifest(&owned, true).is_ok());
+    }
+
+    #[test]
+    fn bundled_admission_rejects_missing_sources_and_installed_scope() {
+        let sources = BTreeMap::from([("dist/main.js".to_owned(), Arc::from("export {};"))]);
+        assert!(
+            bundled_package(
+                r#"{"name":"@knot/projects","apiVersion":1,"version":"1.0.0","main":"dist/main.js"}"#,
+                sources.clone(),
+            )
+            .is_ok()
+        );
+        assert!(
+            bundled_package(
+                r#"{"name":"@knot/projects","apiVersion":1,"version":"1.0.0","main":"missing.js"}"#,
+                sources.clone(),
+            )
+            .unwrap_err()
+            .contains("not captured")
+        );
+        assert!(
+            bundled_package(
+                r#"{"name":"@example/projects","apiVersion":1,"version":"1.0.0","main":"dist/main.js"}"#,
+                sources,
+            )
+            .unwrap_err()
+            .contains("@knot scope")
         );
     }
 }

@@ -38,6 +38,16 @@ duplicates and rejected dependencies remain diagnosable. Discovery runs on gpui'
 background executor; the foreground admits valid packages in dependency order
 and awaits entry completion before loading dependents.
 
+Bundled packages are compiled into the binary and merged into the same discovery
+result, without reading sources from disk. They use canonical `@knot/...`
+identities, the same manifest, API-version, dependency, and rollback rules, and a
+synthetic module root instead of a captured directory. The reserved scope cannot
+be claimed by an installed package, making bundled identity structural rather
+than a precedence rule; a rejected installed directory that shares a bundled
+identity is diagnosed without blocking the bundled package. Installed packages
+may require bundled ones. A bundled package failure is reported and fails its
+dependents like any other package, without stopping product startup.
+
 The application retains an ordered startup report, publishing outcomes as they
 become known so one pending entry does not hide earlier failures. Failed or
 cancelled entry rolls back its runtime and foreground registrations before the
@@ -192,9 +202,11 @@ recovery, or backpressure mechanism is introduced.
 
 `app::extension_storage` owns separate SQLite databases selected by canonical
 package identity or personal config, independently of lifecycle IDs and installation
-paths. Admission binds the owner before startup requests can run; source-only
-diagnostic lifecycles have no implicit durable owner. Teardown removes lifecycle
-bindings while retaining application-owned connections and records.
+paths. Built-in `@knot/...` identities are accepted only for bundled packages;
+installed packages cannot use the reserved scope. Admission binds the owner
+before startup requests can run; source-only diagnostic lifecycles have no
+implicit durable owner. Teardown removes lifecycle bindings while retaining
+application-owned connections and records.
 
 Binding performs no I/O. Async handlers await background operations serialized
 through a reused connection per database. Native transactions never span a JS
