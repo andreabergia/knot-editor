@@ -178,6 +178,36 @@ await workbench.close(workspace.window);
 await workbench.close({} as CommandTarget);
 void closedKind;
 
+// Transient interactions resolve typed selection, acceptance and dismissal.
+const picked: import("knot").PickerResult = await workbench.showPicker({
+  title: "Pick",
+  items: [{ id: "a", label: "A", description: null }],
+});
+if (picked.kind === "selected") {
+  const id: string = picked.id;
+  void id;
+}
+const typed: import("knot").InputResult = await workbench.showInput({
+  title: "Name", value: "seed", target: opened.presentation.target.window,
+});
+if (typed.kind === "accepted") {
+  const value: string = typed.value;
+  void value;
+}
+const confirmed: import("knot").ConfirmationResult = await workbench.showConfirmation({
+  title: "Sure?", message: "detail", confirmLabel: "Yes", cancelLabel: "No",
+});
+if (confirmed.kind === "confirmed") {
+  // Confirmation carries no payload.
+}
+await workbench.showMessage({ title: "Notice", message: "body" });
+// @ts-expect-error picker items require an id
+await workbench.showPicker({ title: "Bad", items: [{ label: "missing" }] });
+// @ts-expect-error input title is required
+await workbench.showInput({ value: "no title" });
+// @ts-expect-error command targets are not live window targets
+await workbench.showMessage({ title: "Notice", target: {} as CommandTarget });
+
 // @ts-expect-error plain URIs are not document identities
 await documents.present("file:///tmp/document.txt");
 

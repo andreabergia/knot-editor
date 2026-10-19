@@ -487,6 +487,11 @@ impl TreeView {
     }
 
     #[cfg(test)]
+    pub(crate) fn frame_actions_for_test(&self) -> Vec<TreeAction> {
+        self.frame_actions.clone()
+    }
+
+    #[cfg(test)]
     pub(crate) fn status_for_test(&self, id: &str) -> Option<(Option<String>, Option<TreeBadge>)> {
         self.item(id)
             .map(|item| (item.status_text.clone(), item.badge))

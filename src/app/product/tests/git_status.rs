@@ -68,6 +68,9 @@ fn git_status_frame_groups_actions_and_log_through_public_apis(cx: &mut TestAppC
             "Changes",
             "docs/architecture/semantic-ui.md",
             "notes.txt",
+            "Repositories",
+            "knot",
+            "website",
         ]
     );
     assert_eq!(
@@ -160,4 +163,144 @@ fn git_status_frame_groups_actions_and_log_through_public_apis(cx: &mut TestAppC
         );
         std::thread::yield_now();
     }
+}
+
+fn wait_for_prompt(cx: &mut TestAppContext) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while !cx.has_pending_prompt() {
+        cx.run_until_parked();
+        assert!(
+            std::time::Instant::now() < deadline,
+            "native confirmation prompt never appeared"
+        );
+        std::thread::yield_now();
+    }
+}
+
+fn invoke_tree_action(
+    tree: &Entity<crate::app::tree_view::TreeView>,
+    action: crate::host::protocol::TreeAction,
+    window: gpui::AnyWindowHandle,
+    cx: &mut TestAppContext,
+) {
+    let _ = cx.update_window(window, |_, window, cx| {
+        tree.read(cx).focus_handle(cx).focus(window);
+    });
+    cx.run_until_parked();
+    let _ = cx.update_window(window, |_, window, cx| {
+        tree.update(cx, |tree, cx| {
+            tree.invoke_action(action, window.window_handle(), cx)
+        });
+    });
+}
+
+#[gpui::test]
+fn git_status_transient_flows_round_trip_through_commands(cx: &mut TestAppContext) {
+    let extensions = tempfile::tempdir().unwrap();
+    install_git_status(extensions.path());
+    let storage = tempfile::tempdir().unwrap();
+    let documents = install_globals(cx);
+    let host = cx.update(crate::app::extension_host::install);
+    let document = cx.update(|cx| create_untitled_document(&documents, cx));
+    let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+    let (shell, window) = product_window(document, model, cx);
+    host.update(cx, |host, cx| {
+        host.set_test_storage_root(storage.path().to_owned(), cx)
+    });
+    host.update(cx, |host, cx| {
+        host.start_installed_extensions(extensions.path().to_path_buf(), cx)
+    });
+    let report = wait_for_extension_report(&host, cx);
+    assert!(
+        report
+            .report
+            .entries
+            .iter()
+            .all(|entry| entry.result == crate::app::extension_load::LoadResult::Loaded),
+    );
+
+    let tree = wait_for_contributed_view(&shell, "example.git-status", cx);
+    wait_for_api_condition(cx, |cx| {
+        tree.read(cx)
+            .visible_labels()
+            .iter()
+            .any(|label| label == "Repositories")
+    });
+
+    // An awaited picker inside the extension command yields the extension turn
+    // and resumes with the selected repository after the overlay settles.
+    let switch = cx.read(|cx| {
+        tree.read(cx)
+            .frame_actions_for_test()
+            .into_iter()
+            .find(|action| action.command == "example.git.select-repository")
+            .expect("frame exposes switch-repository")
+    });
+    invoke_tree_action(&tree, switch, window, cx);
+    wait_for_api_condition(cx, |cx| shell.read(cx).transient.is_some());
+    cx.simulate_input(window, "web");
+    cx.simulate_keystrokes(window, "enter");
+    wait_for_api_condition(cx, |cx| {
+        tree.read(cx)
+            .status_for_test("repository:site")
+            .is_some_and(|(status, _)| status.as_deref() == Some("current"))
+    });
+
+    // Creating a repository through a text input.
+    let add = cx.read(|cx| {
+        tree.read(cx)
+            .actions_for_row_for_test("repositories")
+            .into_iter()
+            .find(|action| action.command == "example.git.add-repository")
+            .expect("repositories group exposes add-repository")
+    });
+    invoke_tree_action(&tree, add, window, cx);
+    wait_for_api_condition(cx, |cx| shell.read(cx).transient.is_some());
+    cx.simulate_input(window, "/src/extra");
+    cx.simulate_keystrokes(window, "enter");
+    wait_for_api_condition(cx, |cx| {
+        tree.read(cx)
+            .visible_labels()
+            .iter()
+            .any(|label| label == "extra")
+    });
+
+    // Renaming the created repository selects the initial text first.
+    let rename = cx.read(|cx| {
+        tree.read(cx)
+            .actions_for_row_for_test("repository:repo-3")
+            .into_iter()
+            .find(|action| action.command == "example.git.rename-repository")
+            .expect("repository rows expose rename")
+    });
+    invoke_tree_action(&tree, rename, window, cx);
+    wait_for_api_condition(cx, |cx| shell.read(cx).transient.is_some());
+    cx.simulate_keystrokes(window, "cmd-a");
+    cx.simulate_input(window, "renamed");
+    cx.simulate_keystrokes(window, "enter");
+    wait_for_api_condition(cx, |cx| {
+        tree.read(cx)
+            .visible_labels()
+            .iter()
+            .any(|label| label == "renamed")
+    });
+
+    // Removing a repository asks for native confirmation before applying.
+    let remove = cx.read(|cx| {
+        tree.read(cx)
+            .actions_for_row_for_test("repository:repo-3")
+            .into_iter()
+            .find(|action| action.command == "example.git.remove-repository")
+            .expect("repository rows expose remove")
+    });
+    invoke_tree_action(&tree, remove, window, cx);
+    wait_for_prompt(cx);
+    cx.simulate_prompt_answer("Remove");
+    wait_for_api_condition(cx, |cx| {
+        !tree
+            .read(cx)
+            .visible_labels()
+            .iter()
+            .any(|label| label == "renamed")
+    });
 }

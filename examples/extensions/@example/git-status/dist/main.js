@@ -1,11 +1,13 @@
 // A Git-status-style contributed frame backed by fixture data. This package
 // demonstrates grouped lists, status badges, row/group/frame actions, file
-// activation, and a read-only log frame through the public API only. It does
-// not read or write a Git repository.
+// activation, a read-only log frame, and picker/input/confirmation flows
+// through the public API only. It does not read or write a Git repository and
+// keeps tracked repositories in memory.
 import { commands, workbench } from "knot";
 
 /** @typedef {"modified" | "added" | "deleted" | "renamed" | "untracked" | "conflicted"} Status */
 /** @typedef {{ path: string, status: Status }} Entry */
+/** @typedef {{ id: string, name: string, path: string }} Repository */
 /** @typedef {import("knot").TreeItem} TreeItem */
 /** @typedef {import("knot").TreeAction} TreeAction */
 /** @typedef {import("knot").JsonValue} JsonValue */
@@ -40,6 +42,13 @@ let changed = [
   { path: "docs/architecture/semantic-ui.md", status: "modified" },
   { path: "notes.txt", status: "untracked" },
 ];
+/** @type {Repository[]} */
+let repositories = [
+  { id: "knot", name: "knot", path: "/src/knot-editor" },
+  { id: "site", name: "website", path: "/src/site" },
+];
+/** @type {string | null} */
+let activeRepository = "knot";
 /** @type {string[]} */
 let logLines = ["$ git status --short"];
 
@@ -101,7 +110,45 @@ const tree = await workbench.registerView({
               label: "Stage all",
               command: "example.git.stage-all",
             }),
+            {
+              id: "repositories",
+              label: "Repositories",
+              description: `${repositories.length} tracked`,
+              icon: null,
+              collapsibleState: "none",
+              kind: "group",
+              statusText: null,
+              badge: null,
+              actions: [{ label: "Add", command: "example.git.add-repository" }],
+            },
           ];
+        }
+        if (parentId === "repositories") {
+          return repositories.map((repository) => ({
+            id: `repository:${repository.id}`,
+            label: repository.name,
+            description: repository.id === activeRepository
+              ? `${repository.path} (current)`
+              : repository.path,
+            icon: "folder",
+            collapsibleState: "none",
+            kind: "item",
+            statusText: repository.id === activeRepository ? "current" : null,
+            badge: repository.id === activeRepository ? "info" : null,
+            command: null,
+            actions: [
+              {
+                label: "Rename",
+                command: "example.git.rename-repository",
+                arguments: { id: repository.id },
+              },
+              {
+                label: "Remove",
+                command: "example.git.remove-repository",
+                arguments: { id: repository.id },
+              },
+            ],
+          }));
         }
         if (parentId === "staged") {
           return staged.map((entry) => entryRow(entry, [{
@@ -131,6 +178,7 @@ const tree = await workbench.registerView({
   actions: [
     { label: "Refresh", command: "example.git.refresh", arguments: { source: "frame" } },
     { label: "Stage all", command: "example.git.stage-all", arguments: { source: "frame" } },
+    { label: "Switch repository", command: "example.git.select-repository" },
   ],
 });
 
@@ -190,7 +238,91 @@ function pathArgument(value) {
   return typeof path === "string" ? path : null;
 }
 
+/**
+ * @param {JsonValue} value
+ * @returns {string | null}
+ */
+function idArgument(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const record = /** @type {{ readonly [key: string]: JsonValue }} */ (value);
+  const id = record["id"];
+  return typeof id === "string" ? id : null;
+}
+
+/**
+ * @param {string} id
+ * @returns {Repository | null}
+ */
+function repositoryById(id) {
+  return repositories.find((repository) => repository.id === id) ?? null;
+}
+
 await commands.register("example.git.refresh", async () => {
+  await publish();
+});
+
+// An awaited picker inside a command: the extension turn yields while the
+// native overlay owns the window, and resumes with a typed result.
+await commands.register("example.git.select-repository", async () => {
+  const result = await workbench.showPicker({
+    title: "Switch repository",
+    items: repositories.map((repository) => ({
+      id: repository.id,
+      label: repository.name,
+      description: repository.path,
+    })),
+  });
+  if (result.kind !== "selected") return;
+  activeRepository = result.id;
+  logLines.push(`repository ${result.id}`);
+  await publish();
+});
+
+await commands.register("example.git.add-repository", async () => {
+  const result = await workbench.showInput({ title: "Add repository path", value: "" });
+  if (result.kind !== "accepted") return;
+  const path = result.value.trim();
+  if (path.length === 0) return;
+  const segments = path.split("/").filter((segment) => segment.length > 0);
+  const id = `repo-${repositories.length + 1}`;
+  repositories.push({ id, name: segments.at(-1) ?? path, path });
+  activeRepository = id;
+  logLines.push(`add ${path}`);
+  await publish();
+});
+
+await commands.register("example.git.rename-repository", async ({ arguments: args }) => {
+  const id = idArgument(args);
+  if (id === null) return;
+  const repository = repositoryById(id);
+  if (repository === null) return;
+  const result = await workbench.showInput({
+    title: "Rename repository",
+    value: repository.name,
+  });
+  if (result.kind !== "accepted") return;
+  const name = result.value.trim();
+  if (name.length === 0) return;
+  repository.name = name;
+  logLines.push(`rename ${id} ${name}`);
+  await publish();
+});
+
+await commands.register("example.git.remove-repository", async ({ arguments: args }) => {
+  const id = idArgument(args);
+  if (id === null) return;
+  const repository = repositoryById(id);
+  if (repository === null) return;
+  const result = await workbench.showConfirmation({
+    title: `Remove ${repository.name}?`,
+    message: repository.path,
+    confirmLabel: "Remove",
+    cancelLabel: "Cancel",
+  });
+  if (result.kind !== "confirmed") return;
+  repositories = repositories.filter((candidate) => candidate.id !== id);
+  if (activeRepository === id) activeRepository = repositories[0]?.id ?? null;
+  logLines.push(`remove ${id}`);
   await publish();
 });
 
