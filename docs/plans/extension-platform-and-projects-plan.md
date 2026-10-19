@@ -316,8 +316,18 @@ failure, cancellation, and lifecycle contracts in the APIs implemented here.
 D049's focused plans own docking, contribution, and tool-layout contracts;
 concrete APIs, storage schema, and sizing details are finalized at their review
 gates. Recovery cadence/retention, multi-window project activation, and
-detailed startup precedence remain at their stated gates. No unresolved choice may be
-silently baked into earlier public or persisted schemas. Add a focused subsidiary
+detailed startup precedence remain at their stated gates.
+
+**Explorer migration sequencing (D053).** The native shell-owned explorer stays
+native through checkpoint 8. Migrate it to a bundled JavaScript extension only
+after checkpoint 6 establishes bundled loading and checkpoint 9 settles
+multi-root workspace and root-replacement semantics; the migration is then a
+focused D053 slice that reuses D049's tree and action APIs. Do not pull it ahead
+of checkpoint 6, and do not re-scope checkpoint 9's native multi-root resource
+tree to the packaged extension, without recording that decision here first.
+
+No unresolved choice may be silently baked into earlier public or persisted
+schemas. Add a focused subsidiary
 design if a checkpoint exposes a materially larger problem; retain this initiative's
 ordering and links instead of implementing several unreviewed checkpoints at once.
 

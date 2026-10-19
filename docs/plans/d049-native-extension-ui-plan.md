@@ -224,6 +224,13 @@ is part of D049; project registry and exact mixed session restoration remain
 D051/D005. No empty document placeholders are saved in tool-layout records.
 Existing document/terminal behavior remains covered.
 
+The native shell-owned explorer remains in place through this plan; migrating it
+to a bundled JavaScript extension is sequenced after the project registry
+(platform checkpoint 6) and multi-root workspace semantics (platform checkpoint
+9). Keep new tree and action behavior on the shared contributed path without
+adding explorer-only special cases, so that later migration does not depend on
+this plan's internals.
+
 Choose concrete API names and content/action schemas at their stated review
 gates; do not publish speculative types ahead of working behavior. No cross-restart
 instance identity or general layout API is introduced here.

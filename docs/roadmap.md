@@ -168,10 +168,16 @@ D005; tool-only layout memory belongs to D049.
 - **D053 — Native explorer as a packaged extension**
   - Deferred: The explorer remains a shell-owned native tool while the extension
     view API is validated; converting it now would mix provider migration with
-    the native frame work.
+    the native frame work. Migration is sequenced after the project registry
+    establishes bundled extension loading and after multi-root workspace
+    semantics settle, so the workspace provider and file-action APIs are shaped
+    by real project and root behavior rather than designed speculatively.
   - Reconsider: The extension view API can express workspace providers and
     explorer actions end to end, or maintaining the native explorer duplicates
-    behavior that extensions already provide.
+    behavior that extensions already provide. Revisit as a focused slice once the
+    earlier sequencing completes; pulling the migration forward requires
+    explicitly re-scoping the native multi-root resource tree to the packaged
+    extension.
 
 ## Terminals and generated surfaces
 
