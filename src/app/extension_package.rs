@@ -175,12 +175,31 @@ pub fn discover(root: &Path) -> DiscoveryReport {
     report
 }
 
-/// Product discovery: installed packages plus compiled-in packages. Installed
-/// packages cannot claim a bundled identity because the reserved scope is
-/// rejected during discovery, so no precedence rule is needed.
+/// Product discovery: installed packages plus compiled-in packages. An installed
+/// directory that claims a bundled identity becomes a directory conflict rather
+/// than rejecting that identity, so a named diagnostic always means its identity
+/// is genuinely unavailable.
 pub fn discover_all(root: &Path) -> DiscoveryReport {
     let mut report = super::bundled::report();
-    let installed = discover(root);
+    let bundled = report
+        .packages
+        .iter()
+        .map(|package| package.manifest.name.clone())
+        .collect::<BTreeSet<_>>();
+    let mut installed = discover(root);
+    for diagnostic in &mut installed.diagnostics {
+        if diagnostic
+            .name
+            .as_ref()
+            .is_some_and(|name| bundled.contains(name))
+        {
+            let name = diagnostic.name.take().expect("checked above");
+            diagnostic.cause = format!(
+                "{name}: {}; the bundled package supplies this identity",
+                diagnostic.cause
+            );
+        }
+    }
     report.packages.extend(installed.packages);
     report.diagnostics.extend(installed.diagnostics);
     report
@@ -834,10 +853,14 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(claimed.len(), 1);
         assert_eq!(claimed[0].origin, PackageOrigin::Bundled);
-        assert!(report.diagnostics.iter().any(|diagnostic| {
-            diagnostic.name.as_deref() == Some("@knot/projects")
-                && diagnostic.cause.contains("reserved")
-        }));
+        let conflict = report
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.cause.contains("@knot/projects"))
+            .expect("the rejected directory is reported");
+        assert_eq!(conflict.name, None);
+        assert!(conflict.cause.contains("reserved"));
+        assert!(conflict.cause.contains("bundled package supplies"));
     }
 
     #[test]

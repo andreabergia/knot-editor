@@ -123,16 +123,18 @@ dirty-content suspension belong to checkpoint 8.
 - ✅ Bundled admission reuses installed manifest, `apiVersion`, version, and
   source validation while allowing only the reserved `@knot` scope; installed
   packages still reject `@knot/*` but may now `requires` a bundled identity.
-- ✅ `DependencyPlan` no longer lets a rejected installed identity block a
-  package that owns the same name, so bundled packages always load.
+- ✅ Product discovery resolves an installed directory that claims a bundled
+  identity into a directory-level conflict diagnostic, so the identity stays
+  available and `DependencyPlan` keeps its unconditional named-diagnostic rule.
 - ✅ `StorageOwner::bundled` accepts application-supplied built-in identities
   while `StorageOwner::package` keeps rejecting the reserved scope.
 - ✅ `@knot/projects` ships as `extensions/@knot/projects/knot.jsonc` plus an
   activation stub; product startup discovers it together with installed packages.
-- **Validation:** discovery merge/ordering, installed-identity rejection,
-  reserved-scope ownership, bundled admission errors, dependency-plan override,
-  storage owner path, and a product startup test confirming the bundled package
-  loads. `cargo fmt`, clippy, and focused tests pass.
+- **Validation:** discovery merge and conflict reporting, installed-identity
+  rejection, reserved-scope ownership, bundled admission errors, installed
+  packages ordering after a required bundled package, storage owner path, and a
+  product startup test confirming the bundled package loads. `cargo fmt`, clippy,
+  and focused tests pass.
 - **Review gate:** approve the bundled origin, canonical identity, collision
   policy, and storage-owner boundary before building on them.
 

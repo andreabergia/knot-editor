@@ -143,9 +143,6 @@ impl DependencyPlan {
         let mut outcomes = BTreeMap::<String, Result<(), String>>::new();
         for diagnostic in self.diagnostics {
             if let (Some(name), LoadResult::Failed(cause)) = (&diagnostic.name, &diagnostic.result)
-                // A rejected installed directory may share a bundled identity. The
-                // bundled package owns that identity and must still load.
-                && !self.packages.contains_key(name)
             {
                 outcomes
                     .entry(name.clone())
@@ -278,7 +275,7 @@ mod tests {
     use std::task::{Context, Poll, Waker};
 
     use super::*;
-    use crate::app::extension_package::{Manifest, PackageDiagnostic, PackageOrigin, discover};
+    use crate::app::extension_package::{Manifest, PackageOrigin, discover};
     use crate::host::{
         lifecycle::{ExtensionKey, ExtensionState},
         module_graph::ModuleGraph,
@@ -340,25 +337,23 @@ mod tests {
     }
 
     #[test]
-    fn rejected_installed_identity_does_not_block_the_bundled_package() {
-        let plan = DependencyPlan::new(DiscoveryReport {
-            packages: vec![package("@knot/projects", &[])],
-            diagnostics: vec![PackageDiagnostic {
-                directory: PathBuf::from("@knot/projects"),
-                name: Some("@knot/projects".into()),
-                cause: "@knot is reserved for built-in packages".into(),
-            }],
-        });
+    fn installed_packages_order_after_a_required_bundled_package() {
+        let plan = plan(vec![
+            package("@example/tools", &["@knot/projects"]),
+            package("@knot/projects", &[]),
+        ]);
         let mut started = Vec::new();
         let report = pollster::block_on(plan.execute(|package| {
             started.push(package.manifest.name.clone());
             StartupAttempt::new(ready(Ok(())), || {})
         }));
-        assert_eq!(started, ["@knot/projects"]);
-        assert!(matches!(&report.entries[0].result, LoadResult::Failed(_)));
-        assert!(report.entries.iter().any(|entry| {
-            entry.name.as_deref() == Some("@knot/projects") && entry.result == LoadResult::Loaded
-        }));
+        assert_eq!(started, ["@knot/projects", "@example/tools"]);
+        assert!(
+            report
+                .entries
+                .iter()
+                .all(|entry| entry.result == LoadResult::Loaded)
+        );
     }
 
     #[test]
