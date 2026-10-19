@@ -1,9 +1,7 @@
 # Production extension APIs and JavaScript project management
 
-Status: ⬜ In progress. Checkpoints 1–4 and D053 are complete and approved;
-checkpoints 5–10 remain unstarted. The docking foundation is complete and
-approved; next: D049, executing
-[native extension UI](d049-native-extension-ui-plan.md).
+Status: ⬜ In progress. Checkpoints 1–5 and D053 are complete and approved;
+checkpoints 6–10 remain unstarted. Next: D051.
 
 Work identifiers: D046–D052, promoted D005, and completed maintenance interlude
 D053. [Roadmap](../roadmap.md) owns initiative priority; this plan owns execution
@@ -38,7 +36,7 @@ change contracts and repository consumers together.
 ✅ Implemented. Contextual APIs use admitted command authority; discoverable
 live targets support application operations independently of commands. The
 [command reference](../architecture/commands.md) owns routing and authority rules.
-Future D049 providers/actions must receive explicit window/instance context;
+Contributed providers and actions receive explicit window/instance context;
 activation may register features before product windows exist.
 
 ### Observation — D047
@@ -63,14 +61,12 @@ owns workspaces, not project policy.
 
 ### Extension UI — D049
 
-The [workbench architecture](../architecture/workbench-and-lifecycle.md) owns
-the completed docking foundation: native frames, resizing, relocation, and
-automatic tool-only layout memory. The
-[native extension UI plan](d049-native-extension-ui-plan.md) owns contributed
-instances/content, explicit window context, picker/input/confirmation APIs, and
-Git-status-style acceptance. Complete it before marking checkpoint 5 complete.
-Its review gates own concrete schemas, placement, and interaction choices.
-Exact mixed document/session restoration remains checkpoint 10.
+✅ Implemented. The [workbench architecture](../architecture/workbench-and-lifecycle.md)
+owns docking, resizing, relocation, and automatic tool-only layout memory.
+[Semantic UI](../architecture/semantic-ui.md) and [decisions](../decisions.md)
+own contributed instances/content, explicit window context,
+picker/input/confirmation semantics, and the shared native text input. Exact
+mixed document/session restoration remains checkpoint 10.
 
 ### Durable extension storage — D048
 
@@ -205,14 +201,14 @@ failure-preservation validation. Current storage ownership and durability ration
 live in [architecture](../architecture/extension-host.md#extension-record-storage)
 and [decisions](../decisions.md#extension-record-storage).
 
-### 5. Production native UI contributions — D049 ⬜
+### 5. Production native UI contributions — D049 ✅
 
-The docking foundation is complete and approved. Execute
-[native extension UI](d049-native-extension-ui-plan.md) one focused checkpoint
-and review gate at a time. That plan owns deliverables, validation, and gates.
-D049 completes only after acceptance of the full public-API fixture, independent
-windows, lifecycle cleanup, and tool-layout memory across restart. Docking alone
-does not complete this checkpoint.
+Approved after acceptance of the full public-API fixture, independent windows,
+lifecycle cleanup, and tool-layout memory across restart. Current ownership,
+runtime flows, and rationale live in [workbench
+lifecycle](../architecture/workbench-and-lifecycle.md), [semantic
+UI](../architecture/semantic-ui.md), and the relevant [decisions](../decisions.md)
+sections.
 
 ### 6. Usable JS project registry — D051 ⬜
 
