@@ -151,9 +151,9 @@ and [semantic UI](../architecture/semantic-ui.md#extension-transient-interaction
   plus create/refresh toolbar actions.
 - ✅ The view registers hidden so it never displaces the native explorer
   selection on fresh windows; `projects.show`/`list` persist the choice in the
-  registry record and the extension reapplies it to every window, because
-  programmatic show never changes the native fresh-window default. Bundled
-  sources join the extension API check.
+  registry record and the extension reapplies and selects it in every window,
+  because programmatic show never changes the native fresh-window default.
+  Bundled sources join the extension API check.
 - **Validation:** bundled package through the product host covering create/list/
   select/rename/remove, active marking, restart persistence, missing-root
   reporting, and per-window captured context; `check-extension-api.sh`, clippy,

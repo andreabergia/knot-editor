@@ -57,6 +57,20 @@ fn tree_tab_attached(
         })
 }
 
+fn tree_tab_focused(
+    shell: &Entity<ProductShell>,
+    tree: &Entity<crate::app::tree_view::TreeView>,
+    cx: &gpui::App,
+) -> bool {
+    let focus = tree.read(cx).focus_handle(cx).downgrade();
+    let workbench = shell.read(cx).workbench.read(cx);
+    workbench.focused_pane().is_some_and(|pane| {
+        pane.active_tab()
+            .command_view()
+            .is_some_and(|view| view.matches_focus(&focus, cx))
+    })
+}
+
 /// Makes the contributed tree the active tool tab so row events resolve against it.
 fn activate_tree_tab(
     shell: &Entity<ProductShell>,
@@ -474,11 +488,10 @@ fn projects_tool_visibility_survives_reload(cx: &mut TestAppContext) {
     focus_document_tab(&fixture.shell, fixture.window, cx);
     let show = dispatch_product_command(&fixture.shell, fixture.window, "projects.show", cx);
     assert_eq!(wait_for_command(show, cx), CommandOutcome::Completed);
-    cx.run_until_parked();
-    assert!(cx.read(|cx| tree_tab_attached(&fixture.shell, &tree, cx)));
+    wait_for_api_condition(cx, |cx| tree_tab_focused(&fixture.shell, &tree, cx));
 
-    // A shown choice is reapplied to the window after another reload.
+    // A shown choice is reapplied and selected in the window after another reload.
     restart_registry(&fixture.host, &fixture.extensions, cx);
     let tree = wait_for_contributed_view(&fixture.shell, "builtin.projects", cx);
-    wait_for_api_condition(cx, |cx| tree_tab_attached(&fixture.shell, &tree, cx));
+    wait_for_api_condition(cx, |cx| tree_tab_focused(&fixture.shell, &tree, cx));
 }

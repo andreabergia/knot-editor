@@ -257,7 +257,8 @@ async function setToolVisible(visible) {
   } catch (error) {
     await report(`cannot save the tool preference: ${describe(error)}`);
   }
-  if (view !== null) await (visible ? view.show() : view.hide());
+  // Focus shows the tool if hidden and selects it in every live window.
+  if (view !== null) await (visible ? view.focus() : view.hide());
 }
 
 await commands.register("projects.show", async () => {
@@ -423,11 +424,11 @@ const observation = await workbench.observe(async (event) => {
     return;
   }
   if (event.type === "windowOpened" && registry.toolVisible && view !== null) {
-    await view.show(event.window.target);
+    await view.focus(event.window.target);
   }
 });
 if (registry.toolVisible && view !== null) {
   for (const window of observation.snapshot.windows) {
-    await view.show(window.target);
+    await view.focus(window.target);
   }
 }

@@ -365,6 +365,37 @@ fn route_nested_command(
     }
 }
 
+/// Test hosts isolate extension storage so bundled packages never read the
+/// developer's real records. Production uses the platform application-data root.
+#[cfg(test)]
+fn test_storage(
+    cx: &mut Context<ProductExtensionHost>,
+) -> Result<super::extension_storage::ExtensionStorage, String> {
+    #[allow(
+        dead_code,
+        reason = "keeps the test storage directory alive with the app"
+    )]
+    struct TestStorageDir(tempfile::TempDir);
+    impl Global for TestStorageDir {}
+
+    let directory = tempfile::tempdir().expect("test extension storage root");
+    let root = directory.path().to_owned();
+    cx.set_global(TestStorageDir(directory));
+    Ok(super::extension_storage::ExtensionStorage::new(
+        root,
+        cx.background_executor().clone(),
+    ))
+}
+
+#[cfg(not(test))]
+fn test_storage(
+    cx: &mut Context<ProductExtensionHost>,
+) -> Result<super::extension_storage::ExtensionStorage, String> {
+    super::extension_storage::ExtensionStorage::user_root().map(|root| {
+        super::extension_storage::ExtensionStorage::new(root, cx.background_executor().clone())
+    })
+}
+
 /// Owns the one process-wide extension pool and all foreground protocol state.
 pub(crate) struct ProductExtensionHost {
     pool: Arc<ExtensionPool>,
@@ -436,12 +467,7 @@ impl ProductExtensionHost {
         Self {
             pool,
             lifecycles: HashSet::new(),
-            storage: super::extension_storage::ExtensionStorage::user_root().map(|root| {
-                super::extension_storage::ExtensionStorage::new(
-                    root,
-                    cx.background_executor().clone(),
-                )
-            }),
+            storage: test_storage(cx),
             storage_owners: HashMap::new(),
             storage_stopping: false,
             storage_callers: Vec::new(),
