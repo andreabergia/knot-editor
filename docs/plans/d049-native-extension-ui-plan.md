@@ -1,6 +1,7 @@
 # D049 — Native extension UI
 
-Status: 🚧 In progress; checkpoints 1, 2, and 3 are complete and approved. The
+Status: 🚧 In progress; checkpoints 1, 2, and 3 are complete and approved.
+Checkpoint 4 cleanup is complete and awaiting its manual acceptance gate. The
 [docking foundation](../architecture/workbench-and-lifecycle.md#automatic-tool-layout-memory)
 is complete and approved.
 
@@ -270,13 +271,24 @@ and `cargo clippy --all-targets -- -D warnings` is clean. The review gate
 verified ordinary typing, picker selection, rename input, and confirmation and
 approved the result and overlap semantics.
 
-### 4. Cleanup and D049 acceptance ⬜
+### 4. Cleanup and D049 acceptance 🚧
 
 Finish the touched proof-of-concept cleanup: obsolete outline/provider APIs,
 singleton surface assumptions, redundant selection/focus paths, examples, and
 historical comments. Keep cleanup tied to the new production path; no unrelated
 host restructuring. Update architecture references for actual ownership/runtime
 changes and decisions for validated choices.
+
+**Progress:** the touched proof-of-concept cleanup is done. The hardcoded
+outline creation, declared-kind tables, and singleton shell routing were already
+removed in checkpoints 1-3; the survey found no remaining obsolete provider
+API. Cleanup removed a dead `BufferModel` contribution-action query and a stale
+dormant-tree `dead_code` allowance, and corrected architecture/decisions text
+that still described a declared tree kind or a dormant outline surface.
+Automated validation passes: `cargo test --lib` (695), `cargo test --test
+handler_linking`, the checked TypeScript API/examples, and
+`cargo clippy --all-targets -- -D warnings`. `cargo fmt` ran once before commit.
+The manual acceptance gate below remains open.
 
 **Validation:** focused model/lifecycle/command/UI tests, full library tests,
 extension authoring/API checks, and Clippy with warnings denied. Run `cargo fmt`
