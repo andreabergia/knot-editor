@@ -226,9 +226,11 @@ selection, and hidden tools' remembered locations. Tools in document groups
 flatten to the normal document group of a fresh window; document splits,
 terminal contents, and live handles are never serialized. Fresh windows inherit
 the last user-customized arrangement while open windows stay independent, and
-only explicit user moves, resizes, and show/hide changes publish a new default.
-Restore, activation, automatic presentation, and document structure changes never
-publish. The cache updates synchronously for immediate inheritance while writes
+only explicit user arrangements publish a new default: moves, resizes, and
+show/hide changes, including a command-invoked extension show, hide, or focus.
+Restore, activation, listener callbacks, automatic presentation, and document
+structure changes never publish. The cache updates synchronously for immediate
+inheritance while writes
 go off the foreground with debounce; quit flushes a pending write before exit.
 Reset Layout returns to product defaults with no profiles or layered preferences.
 Fresh windows auto-show stored-visible tools even with no folder open, while a

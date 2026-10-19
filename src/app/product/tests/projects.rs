@@ -467,31 +467,43 @@ fn project_selection_stays_in_the_capturing_window(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn projects_tool_visibility_survives_reload(cx: &mut TestAppContext) {
+fn command_invoked_project_tool_changes_publish_the_window_default(cx: &mut TestAppContext) {
+    // start_registry shows the tool through a command, which is an explicit user
+    // arrangement and therefore becomes the fresh-window default.
     let fixture = start_registry(cx);
     let tree = wait_for_contributed_view(&fixture.shell, "builtin.projects", cx);
-    assert!(cx.read(|cx| tree_tab_attached(&fixture.shell, &tree, cx)));
-    activate_tree_tab(&fixture.shell, &tree, fixture.window, cx);
+    wait_for_api_condition(cx, |cx| tree_tab_focused(&fixture.shell, &tree, cx));
+    cx.read(|cx| {
+        let snapshot = cx
+            .global::<crate::app::tool_layout::ApplicationToolLayout>()
+            .0
+            .current();
+        assert!(
+            snapshot
+                .tool("builtin.projects")
+                .is_some_and(|tool| tool.visible)
+        );
+        // Left dock is index 0 and now selects the shown tool.
+        assert_eq!(
+            snapshot.dock_selected[0].as_deref(),
+            Some("builtin.projects")
+        );
+    });
 
     focus_document_tab(&fixture.shell, fixture.window, cx);
     let hide = dispatch_product_command(&fixture.shell, fixture.window, "projects.hide", cx);
     assert_eq!(wait_for_command(hide, cx), CommandOutcome::Completed);
     cx.run_until_parked();
     assert!(!cx.read(|cx| tree_tab_attached(&fixture.shell, &tree, cx)));
-
-    // A hidden choice stays hidden across a reload.
-    restart_registry(&fixture.host, &fixture.extensions, cx);
-    let tree = wait_for_contributed_view(&fixture.shell, "builtin.projects", cx);
-    cx.run_until_parked();
-    assert!(!cx.read(|cx| tree_tab_attached(&fixture.shell, &tree, cx)));
-
-    focus_document_tab(&fixture.shell, fixture.window, cx);
-    let show = dispatch_product_command(&fixture.shell, fixture.window, "projects.show", cx);
-    assert_eq!(wait_for_command(show, cx), CommandOutcome::Completed);
-    wait_for_api_condition(cx, |cx| tree_tab_focused(&fixture.shell, &tree, cx));
-
-    // A shown choice is reapplied and selected in the window after another reload.
-    restart_registry(&fixture.host, &fixture.extensions, cx);
-    let tree = wait_for_contributed_view(&fixture.shell, "builtin.projects", cx);
-    wait_for_api_condition(cx, |cx| tree_tab_focused(&fixture.shell, &tree, cx));
+    cx.read(|cx| {
+        let snapshot = cx
+            .global::<crate::app::tool_layout::ApplicationToolLayout>()
+            .0
+            .current();
+        assert!(
+            !snapshot
+                .tool("builtin.projects")
+                .is_some_and(|tool| tool.visible)
+        );
+    });
 }

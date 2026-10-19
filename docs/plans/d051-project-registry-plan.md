@@ -150,10 +150,9 @@ and [semantic UI](../architecture/semantic-ui.md#extension-transient-interaction
   matching that window's workspace root, and exposes rename/remove row actions
   plus create/refresh toolbar actions.
 - ✅ The view registers hidden so it never displaces the native explorer
-  selection on fresh windows; `projects.show`/`list` persist the choice in the
-  registry record and the extension reapplies and selects it in every window,
-  because programmatic show never changes the native fresh-window default.
-  Bundled sources join the extension API check.
+  selection on fresh windows; a command-invoked `projects.show`/`hide` publishes
+  the native tool-layout default, so windows restore it shown and selected with
+  no extension-side layout state. Bundled sources join the extension API check.
 - **Validation:** bundled package through the product host covering create/list/
   select/rename/remove, active marking, restart persistence, missing-root
   reporting, and per-window captured context; `check-extension-api.sh`, clippy,
@@ -181,5 +180,3 @@ and [semantic UI](../architecture/semantic-ui.md#extension-transient-interaction
 
 - No API reports or sets the active project in the window title.
 - Concurrent registry edits from several windows are last-writer-wins.
-- Hiding the tool natively is not mirrored into the registry record; use
-  `projects.hide` so the choice survives the next window.

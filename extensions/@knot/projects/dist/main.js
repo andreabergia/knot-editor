@@ -14,11 +14,11 @@ const VIEW_ID = "builtin.projects";
 /** @typedef {import("knot").ViewContext} ViewContext */
 /** @typedef {import("knot").ViewRegistration} ViewRegistration */
 /** @typedef {{ id: string, name: string, roots: string[], createdAt: number | null, lastOpenedAt: number | null }} Project */
-/** @typedef {{ schema: number, projects: Project[], recentProjectId: string | null, toolVisible: boolean }} Registry */
+/** @typedef {{ schema: number, projects: Project[], recentProjectId: string | null }} Registry */
 
 /** @returns {Registry} */
 function emptyRegistry() {
-  return { schema: SCHEMA, projects: [], recentProjectId: null, toolVisible: false };
+  return { schema: SCHEMA, projects: [], recentProjectId: null };
 }
 
 /** @param {unknown} error @returns {string} */
@@ -73,7 +73,6 @@ async function readRegistry() {
     projects,
     recentProjectId:
       typeof record.recentProjectId === "string" ? record.recentProjectId : null,
-    toolVisible: record.toolVisible === true,
   };
 }
 
@@ -246,27 +245,14 @@ view = await workbench.registerView({
 });
 
 // The tool starts hidden so it never displaces the native explorer selection on
-// fresh windows. The registry remembers a user's choice and reapplies it to each
-// window, because programmatic show/hide never changes the fresh-window default.
-/** @param {boolean} visible */
-async function setToolVisible(visible) {
-  const next = { ...registry, toolVisible: visible };
-  try {
-    await storage.write(RECORD_KEY, next);
-    registry = next;
-  } catch (error) {
-    await report(`cannot save the tool preference: ${describe(error)}`);
-  }
-  // Focus shows the tool if hidden and selects it in every live window.
-  if (view !== null) await (visible ? view.focus() : view.hide());
-}
-
+// fresh windows. A command-invoked show or hide is an explicit user arrangement,
+// so the native tool-layout snapshot remembers it as the fresh-window default.
 await commands.register("projects.show", async () => {
-  await setToolVisible(true);
+  if (view !== null) await view.show();
 });
 
 await commands.register("projects.hide", async () => {
-  await setToolVisible(false);
+  if (view !== null) await view.hide();
 });
 
 await commands.register("projects.create", async () => {
@@ -400,7 +386,7 @@ await commands.register("projects.list", async () => {
   await reload();
   await refreshTree();
   // The tree is the list; showing it is the visible result.
-  await setToolVisible(true);
+  if (view !== null) await view.show();
   await workbench.writeClipboardText(
     JSON.stringify({
       schema: registry.schema,
@@ -418,17 +404,7 @@ await commands.register("projects.refresh", async () => {
 });
 
 await reload();
-const observation = await workbench.observe(async (event) => {
-  if (event.type === "workspaceChanged") {
-    await refreshTree();
-    return;
-  }
-  if (event.type === "windowOpened" && registry.toolVisible && view !== null) {
-    await view.focus(event.window.target);
-  }
+await workbench.observe((event) => {
+  if (event.type === "workspaceChanged") return refreshTree();
+  return undefined;
 });
-if (registry.toolVisible && view !== null) {
-  for (const window of observation.snapshot.windows) {
-    await view.focus(window.target);
-  }
-}

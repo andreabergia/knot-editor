@@ -2539,7 +2539,7 @@ impl ProductShell {
     /// Publish this window's live arrangement as the fresh-window default.
     /// Call only for explicit user moves, resizes, and show/hide changes:
     /// restore, activation, and automatic presentation must not publish.
-    fn publish_tool_layout(&self, cx: &App) {
+    pub(crate) fn publish_tool_layout(&self, cx: &App) {
         let Some(store) = cx.try_global::<super::tool_layout::ApplicationToolLayout>() else {
             return;
         };

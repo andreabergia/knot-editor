@@ -1880,7 +1880,33 @@ impl ProductExtensionHost {
                 });
             });
         }
+        // A command-invoked presentation change is an explicit user arrangement,
+        // so it becomes the fresh-window default. Activation and callbacks never
+        // publish.
+        if request.invocation.is_some() {
+            self.publish_command_layout(request, cx);
+        }
         Ok(())
+    }
+
+    /// Publish the invoking window's arrangement after a command-invoked show,
+    /// hide, or focus.
+    fn publish_command_layout(
+        &self,
+        request: &crate::host::protocol::RequestContext,
+        cx: &mut Context<Self>,
+    ) {
+        let Ok(target) = self.operation_window(request, cx) else {
+            return;
+        };
+        let Some(handle) = product_window_handle(&target.window, cx) else {
+            return;
+        };
+        let _ = cx.update_window(handle, |root, _, cx| {
+            if let Ok(shell) = root.downcast::<ProductShell>() {
+                shell.update(cx, |shell, cx| shell.publish_tool_layout(cx));
+            }
+        });
     }
 
     fn remove_lifecycle(&mut self, key: ExtensionKey, cx: &mut Context<Self>) {
