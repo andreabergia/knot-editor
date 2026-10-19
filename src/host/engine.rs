@@ -34,9 +34,9 @@ use super::{
         CommandOutcome, CompletionProviderError, CompletionRequest, CompletionResponse,
         CompletionResultItem, DecorationToken, EditorContribution, ExtensionId, GutterToken,
         HostRequest, HostResponse, KeybindingMutation, ProviderIdentity, RequestId, SnapshotText,
-        TextEdit, TextSnapshot, TreeAction, TreeActionIcon, TreeBadge, TreeChildrenRequest,
-        TreeChildrenResponse, TreeCollapsibleState, TreeIcon, TreeItem, TreeItemKind,
-        TreeProviderError, WorkbenchSubscriptionId,
+        TextEdit, TextSnapshot, TreeAction, TreeBadge, TreeChildrenRequest, TreeChildrenResponse,
+        TreeCollapsibleState, TreeIcon, TreeItem, TreeItemKind, TreeProviderError,
+        WorkbenchSubscriptionId,
     },
     scheduler::{
         CompletionOutcome, CompletionReceiver, PoolConfig, RootId, SchedulerError, SchedulerHandle,
@@ -4532,12 +4532,11 @@ fn tree_item_from_v8<'s>(
         .transpose()?;
     let badge = optional_text_property(scope, object, "badge")?
         .map(|badge| match badge.as_str() {
-            "added" => Ok(TreeBadge::Added),
-            "modified" => Ok(TreeBadge::Modified),
-            "deleted" => Ok(TreeBadge::Deleted),
-            "renamed" => Ok(TreeBadge::Renamed),
-            "untracked" => Ok(TreeBadge::Untracked),
-            "conflicted" => Ok(TreeBadge::Conflicted),
+            "neutral" => Ok(TreeBadge::Neutral),
+            "info" => Ok(TreeBadge::Info),
+            "success" => Ok(TreeBadge::Success),
+            "warning" => Ok(TreeBadge::Warning),
+            "error" => Ok(TreeBadge::Error),
             _ => Err(BoundaryError::Type("invalid tree badge")),
         })
         .transpose()?;
@@ -4580,14 +4579,6 @@ fn tree_action_from_v8<'s>(
 ) -> Result<TreeAction, BoundaryError> {
     let object =
         v8::Local::<v8::Object>::try_from(value).map_err(|_| "tree action must be an object")?;
-    let icon = optional_text_property(scope, object, "icon")?
-        .map(|icon| match icon.as_str() {
-            "stage" => Ok(TreeActionIcon::Stage),
-            "unstage" => Ok(TreeActionIcon::Unstage),
-            "discard" => Ok(TreeActionIcon::Discard),
-            _ => Err(BoundaryError::Type("invalid tree action icon")),
-        })
-        .transpose()?;
     let arguments = property(scope, object, "arguments", "invalid tree action arguments")?;
     let arguments = if arguments.is_null_or_undefined() {
         CommandArgumentValue::Null
@@ -4598,7 +4589,6 @@ fn tree_action_from_v8<'s>(
         label: string_property(scope, object, "label")?,
         command: string_property(scope, object, "command")?,
         arguments,
-        icon,
     })
 }
 

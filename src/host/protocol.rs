@@ -319,25 +319,15 @@ pub enum TreeCollapsibleState {
     Expanded,
 }
 
-/// Theme-aware change-state tokens rendered as a tree row badge.
+/// Theme-aware severity tokens rendered as a tree row badge.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum TreeBadge {
-    Added,
-    Modified,
-    Deleted,
-    Renamed,
-    Untracked,
-    Conflicted,
-}
-
-/// Theme-aware glyphs for command-backed tree actions.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub enum TreeActionIcon {
-    Stage,
-    Unstage,
-    Discard,
+    Neutral,
+    Info,
+    Success,
+    Warning,
+    Error,
 }
 
 /// One semantic command-backed action attached to a row, group, or frame.
@@ -347,7 +337,6 @@ pub struct TreeAction {
     pub label: String,
     pub command: String,
     pub arguments: CommandArgumentValue,
-    pub icon: Option<TreeActionIcon>,
 }
 
 /// Whether a tree row is ordinary selectable content or a group header.

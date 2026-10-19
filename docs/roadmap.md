@@ -156,6 +156,18 @@ D005; tool-only layout memory belongs to D049.
   - Deferred: Surface-specific semantic UI remains sufficient.
   - Reconsider: A selected extension requires genuinely arbitrary UI.
 
+- **D055 — Extensible icon and status-glyph system (icon packs)**
+  - Deferred: Contributed tree items use a small fixed `TreeIcon` set, status
+    uses generic severity badges, and actions are label-only. There is no way
+    for a theme or an extension to replace or extend item, action, or status
+    glyphs, and no icon-pack mechanism. Shipping a demo's verbs as tokens in the
+    shared API would bake one feature's vocabulary into the boundary.
+  - Reconsider: A theme or extension needs to supply or override glyphs (for
+    example a file-type or source-control icon pack). Then define an
+    application-owned icon registry with named tokens, theme and
+    extension-provided packs, and a deterministic fallback, and migrate the
+    fixed `TreeIcon` set and label-only actions onto it.
+
 - **D022 — Rich completion policy and presentation**
   - Deferred: The prototype validated provider aggregation and replaceable
     native presentation.

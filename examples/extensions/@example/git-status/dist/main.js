@@ -20,6 +20,16 @@ const STATUS_LETTERS = {
   conflicted: "!",
 };
 
+/** @type {Record<Status, import("knot").TreeBadge>} */
+const STATUS_BADGES = {
+  modified: "warning",
+  added: "success",
+  deleted: "error",
+  renamed: "info",
+  untracked: "neutral",
+  conflicted: "error",
+};
+
 /** @type {Entry[]} */
 let staged = [
   { path: "src/main.rs", status: "modified" },
@@ -47,7 +57,7 @@ function entryRow(entry, actions) {
     collapsibleState: "none",
     kind: "item",
     statusText: STATUS_LETTERS[entry.status],
-    badge: entry.status,
+    badge: STATUS_BADGES[entry.status],
     command: "example.git.activate",
     actions,
   };
@@ -86,12 +96,10 @@ const tree = await workbench.registerView({
             group("staged", "Staged", staged, {
               label: "Unstage all",
               command: "example.git.unstage-all",
-              icon: "unstage",
             }),
             group("changes", "Changes", changed, {
               label: "Stage all",
               command: "example.git.stage-all",
-              icon: "stage",
             }),
           ];
         }
@@ -100,7 +108,6 @@ const tree = await workbench.registerView({
             label: "Unstage",
             command: "example.git.unstage",
             arguments: { path: entry.path },
-            icon: "unstage",
           }]));
         }
         if (parentId === "changes") {
@@ -109,13 +116,11 @@ const tree = await workbench.registerView({
               label: "Stage",
               command: "example.git.stage",
               arguments: { path: entry.path },
-              icon: "stage",
             },
             {
               label: "Discard",
               command: "example.git.discard",
               arguments: { path: entry.path },
-              icon: "discard",
             },
           ]));
         }

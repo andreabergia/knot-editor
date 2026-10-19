@@ -174,11 +174,13 @@ Decisions locked before implementation:
 - Items may declare `kind: "item" | "group"`; a group is a non-activatable,
   non-disclosure header whose children are fetched immediately. Groups remain
   keyboard-navigable for their actions.
-- Rows carry optional `statusText` plus a theme `badge` token (`added`,
-  `modified`, `deleted`, `renamed`, `untracked`, `conflicted`).
+- Rows carry optional `statusText` plus a generic theme severity `badge`
+  (`neutral`, `info`, `success`, `warning`, `error`); feature taxonomies map
+  onto these severities.
 - Actions are static `TreeAction` arrays on items, groups, and the contribution
-  (`label`, `command`, JSON `arguments`, optional `stage`/`unstage`/`discard`
-  icon). `item.command` remains the row activation trigger.
+  (`label`, `command`, JSON `arguments`). Action and item glyphs are not in the
+  boundary; an extensible icon system (icon packs) is deferred as D055.
+  `item.command` remains the row activation trigger.
 - Text frames use a push contract: `registration.setText(text, window?)` replaces
   a private read-only buffer. The bridge retains the last text for windows
   created later, and `invalidate` remains tree-only (`ContentKindMismatch`

@@ -393,11 +393,12 @@ declare module "knot" {
     { kind: "completed" | "unavailable" | "invalidTarget" | "cancelled" }
     | { kind: "invalidArgument" | "handlerFailure"; message: string }
   >;
-  /** Theme-aware change-state token rendered as a row badge. */
-  export type TreeBadge =
-    | "added" | "modified" | "deleted" | "renamed" | "untracked" | "conflicted";
-  /** Theme-aware glyph for a command-backed action. */
-  export type TreeActionIcon = "stage" | "unstage" | "discard";
+  /**
+   * Theme-aware severity token rendered as a row badge. The native theme owns
+   * the color; authors choose the severity and put any short label in
+   * statusText. Extensible/replaceable icon and badge packs remain deferred.
+   */
+  export type TreeBadge = "neutral" | "info" | "success" | "warning" | "error";
   /**
    * One semantic command-backed action on a row, group header, or frame.
    * Arguments are JSON and are passed to the command as its argument value;
@@ -407,7 +408,6 @@ declare module "knot" {
     readonly label: string;
     readonly command: string;
     readonly arguments?: JsonValue;
-    readonly icon?: TreeActionIcon | null;
   }
   /**
    * Native tree semantics. Optional description, icon and command are nullable.

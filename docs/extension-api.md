@@ -104,9 +104,11 @@ changes the fresh-window default. Pass a live `WindowTarget` from
 
 An item is `item` by default. A `group` is a non-activatable header that
 organizes child rows: the native view fetches its children immediately, shows no
-disclosure, and keeps them visible. Items carry optional `statusText` and a
-theme `badge`, and either kind may declare command-backed `actions`. A
-contribution's own `actions` populate the frame toolbar.
+disclosure, and keeps them visible. Items carry optional `statusText` plus a
+severity `badge` (`neutral`, `info`, `success`, `warning`, `error`) that the
+theme colors, and either kind may declare command-backed `actions`. A
+contribution's own `actions` populate the frame toolbar. Action labels are
+text; a general extensible icon system is deferred (roadmap D055).
 
 ```js
 const view = await workbench.registerView({
@@ -118,13 +120,13 @@ const view = await workbench.registerView({
       getChildren(parentId) {
         if (parentId === null) return [{
           id: "changed", label: "Changes", collapsibleState: "none", kind: "group",
-          actions: [{ label: "Stage all", command: "example.stage-all", icon: "stage" }],
+          actions: [{ label: "Stage all", command: "example.stage-all" }],
         }];
         if (parentId === "changed") return [{
           id: "src/main.rs", label: "src/main.rs", collapsibleState: "none",
-          statusText: "M", badge: "modified",
+          statusText: "M", badge: "warning",
           actions: [{ label: "Stage", command: "example.stage",
-                      arguments: { path: "src/main.rs" }, icon: "stage" }],
+                      arguments: { path: "src/main.rs" } }],
         }];
         return [];
       },

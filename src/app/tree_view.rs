@@ -6,8 +6,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use gpui::{prelude::FluentBuilder, *};
 
 use crate::host::protocol::{
-    Command, CommandArgumentValue, ExtensionId, ExtensionLifecycleId, TreeAction, TreeActionIcon,
-    TreeBadge, TreeChildrenRequest, TreeChildrenResponse, TreeCollapsibleState, TreeIcon, TreeItem,
+    Command, CommandArgumentValue, ExtensionId, ExtensionLifecycleId, TreeAction, TreeBadge,
+    TreeChildrenRequest, TreeChildrenResponse, TreeCollapsibleState, TreeIcon, TreeItem,
     TreeItemKind, TreeProviderRegistrationId, ViewId,
 };
 
@@ -692,34 +692,13 @@ impl TreeView {
         }
     }
 
-    fn action_glyph(icon: Option<TreeActionIcon>) -> &'static str {
-        match icon {
-            Some(TreeActionIcon::Stage) => "+",
-            Some(TreeActionIcon::Unstage) => "−",
-            Some(TreeActionIcon::Discard) => "×",
-            None => "",
-        }
-    }
-
-    fn badge_letter(badge: TreeBadge) -> &'static str {
-        match badge {
-            TreeBadge::Added => "A",
-            TreeBadge::Modified => "M",
-            TreeBadge::Deleted => "D",
-            TreeBadge::Renamed => "R",
-            TreeBadge::Untracked => "U",
-            TreeBadge::Conflicted => "!",
-        }
-    }
-
     fn badge_color(badge: TreeBadge) -> u32 {
         match badge {
-            TreeBadge::Added => 0x5fb85f,
-            TreeBadge::Modified => 0xe2c08d,
-            TreeBadge::Deleted => 0xf48771,
-            TreeBadge::Renamed => 0x6cb6ff,
-            TreeBadge::Untracked => 0x9a9a9a,
-            TreeBadge::Conflicted => 0xe08a3c,
+            TreeBadge::Neutral => 0x9a9a9a,
+            TreeBadge::Info => 0x6cb6ff,
+            TreeBadge::Success => 0x5fb85f,
+            TreeBadge::Warning => 0xe2c08d,
+            TreeBadge::Error => 0xf48771,
         }
     }
 }
@@ -765,7 +744,6 @@ impl Render for TreeView {
                     && action_focus
                         .as_ref()
                         .is_some_and(|focus| focus.index == action_index);
-                let glyph = Self::action_glyph(action.icon);
                 let target = action.clone();
                 let entity = entity.clone();
                 bar = bar.child(
@@ -782,10 +760,6 @@ impl Render for TreeView {
                             rgb(0x2d2d2d)
                         })
                         .hover(|style| style.bg(rgb(0x3a3a3a)))
-                        .flex()
-                        .flex_row()
-                        .gap_1()
-                        .when(!glyph.is_empty(), |button| button.child(glyph))
                         .child(action.label)
                         .on_click(move |_, window, cx| {
                             let handle = window.window_handle();
@@ -845,16 +819,14 @@ impl Render for TreeView {
                         if let Some(badge) = item.badge {
                             row = row.child(
                                 div()
-                                    .px_1()
-                                    .rounded_sm()
-                                    .text_xs()
-                                    .text_color(rgb(Self::badge_color(badge)))
-                                    .child(Self::badge_letter(badge)),
+                                    .size(px(6.0))
+                                    .flex_shrink_0()
+                                    .rounded_full()
+                                    .bg(rgb(Self::badge_color(badge))),
                             );
                         }
                         for (action_index, action) in item.actions.iter().enumerate() {
                             let focused = row_action_focus == Some(action_index);
-                            let glyph = Self::action_glyph(action.icon);
                             let target = action.clone();
                             let entity = entity.clone();
                             row = row.child(
@@ -870,10 +842,6 @@ impl Render for TreeView {
                                         rgb(0x2d2d2d)
                                     })
                                     .hover(|style| style.bg(rgb(0x3a3a3a)))
-                                    .flex()
-                                    .flex_row()
-                                    .gap_1()
-                                    .when(!glyph.is_empty(), |button| button.child(glyph))
                                     .child(action.label.clone())
                                     .on_click(move |_, window, cx| {
                                         let handle = window.window_handle();
@@ -937,8 +905,8 @@ mod tests {
 
     use super::{TreeProviderIdentity, TreeView, TreeViewEvent, TreeViewRegistrationError};
     use crate::host::protocol::{
-        CommandArgumentValue, ExtensionId, ExtensionLifecycleId, TreeAction, TreeActionIcon,
-        TreeBadge, TreeChildrenResponse, TreeCollapsibleState, TreeItem, TreeItemKind,
+        CommandArgumentValue, ExtensionId, ExtensionLifecycleId, TreeAction, TreeBadge,
+        TreeChildrenResponse, TreeCollapsibleState, TreeItem, TreeItemKind,
         TreeProviderRegistrationId,
     };
 
@@ -986,7 +954,7 @@ mod tests {
             command: Some("example.activate".into()),
             kind,
             status_text: Some("M".into()),
-            badge: Some(TreeBadge::Modified),
+            badge: Some(TreeBadge::Warning),
             actions,
         }
     }
@@ -1231,7 +1199,6 @@ mod tests {
             label: "Refresh".into(),
             command: "example.refresh".into(),
             arguments: CommandArgumentValue::Null,
-            icon: None,
         };
         let generation = tree.update(cx, |tree, cx| {
             tree.register_provider("example.git", owner(registration), vec![frame_action], cx)
@@ -1249,7 +1216,6 @@ mod tests {
                 )]
                 .into(),
             ),
-            icon: Some(TreeActionIcon::Stage),
         };
         tree.update(cx, |tree, cx| {
             assert!(tree.apply_response(

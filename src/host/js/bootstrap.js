@@ -109,7 +109,6 @@ function treeAction(value) {
     label: string(value.label, "tree action label must be text"),
     command: string(value.command, "tree action command must be text"),
     arguments: value.arguments === undefined ? null : validateJsonValue(value.arguments),
-    icon: token(value.icon, ["stage", "unstage", "discard"]),
   };
 }
 function treeActions(value) {
@@ -129,7 +128,7 @@ function treeItem(value) {
     command: optionalText(value.command),
     kind: kind === null ? "item" : kind,
     statusText: optionalText(value.statusText),
-    badge: token(value.badge, ["added", "modified", "deleted", "renamed", "untracked", "conflicted"]),
+    badge: token(value.badge, ["neutral", "info", "success", "warning", "error"]),
     actions: treeActions(value.actions),
   };
 }

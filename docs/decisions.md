@@ -257,7 +257,10 @@ pushed text, and frame actions. Groups are explicit tree headers rather than a
 second list model, so grouping, expansion, and invalidation share one provider
 tree. Row and group actions carry a command name plus JSON arguments and reuse
 the captured-window command route, keeping native controls and activation
-mutually exclusive without a parallel dispatch path.
+mutually exclusive without a parallel dispatch path. Row status uses a generic
+theme severity rather than a feature's change-state taxonomy, and action and
+status glyphs stay out of the boundary until an extension-replaceable icon
+system exists (D055).
 
 Contributed text frames push a complete read-only value into a private buffer
 rendered by the ordinary editor surface. This avoids a second text renderer and

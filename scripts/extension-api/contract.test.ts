@@ -53,13 +53,13 @@ const tree = await workbench.registerView({
         return [
           {
             id: "group", label: "Group", collapsibleState: "none", kind: "group",
-            actions: [{ label: "Stage all", command: "check.stage", arguments: { id: 1 }, icon: "stage" }],
+            actions: [{ label: "Stage all", command: "check.stage", arguments: { id: 1 } }],
           },
           {
             id: "id", label: "item", collapsibleState: "collapsed", icon: "folder",
-            statusText: "M", badge: "modified",
+            statusText: "M", badge: "warning",
             command: "check.open",
-            actions: [{ label: "Discard", command: "check.discard", arguments: { path: "a" }, icon: "discard" }],
+            actions: [{ label: "Discard", command: "check.discard", arguments: { path: "a" } }],
           },
         ];
       },

@@ -56,8 +56,8 @@ const tree = await workbench.registerView({
         return parentId === null ? [{
           id: "root", label: "Guide", collapsibleState: "none", kind: "item",
           description: null, icon: "symbol", command: "guide.annotate",
-          statusText: "new", badge: "added",
-          actions: [{ label: "Annotate", command: "guide.annotate", "arguments": { source: "row" }, icon: "stage" }],
+          statusText: "new", badge: "success",
+          actions: [{ label: "Annotate", command: "guide.annotate", "arguments": { source: "row" } }],
         }] : [];
       },
     },

@@ -108,7 +108,11 @@ command path.
 Items are ordinary content or `group` headers. A group is neither activatable
 nor disclosable: its children are fetched when it first appears and remain
 visible, so a grouped list is one provider tree rather than a second model.
-Items expose optional right-aligned status text and a theme badge token.
+Items expose optional right-aligned status text and a theme severity badge
+(`neutral`, `info`, `success`, `warning`, `error`). Actions are labeled text
+commands; icon glyphs are not part of the boundary yet. A general,
+extension-replaceable icon/status source (icon packs) is deferred (roadmap
+D055).
 
 Frame, group, and row actions are semantic command references with JSON
 arguments, never drawing callbacks. The native view renders them as controls

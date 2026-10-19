@@ -74,7 +74,7 @@ fn git_status_frame_groups_actions_and_log_through_public_apis(cx: &mut TestAppC
         cx.read(|cx| tree.read(cx).status_for_test("notes.txt")),
         Some((
             Some("U".to_owned()),
-            Some(crate::host::protocol::TreeBadge::Untracked)
+            Some(crate::host::protocol::TreeBadge::Neutral)
         ))
     );
     let stage = cx.read(|cx| {
