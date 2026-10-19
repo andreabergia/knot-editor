@@ -1,6 +1,6 @@
 # D049 — Native extension UI
 
-Status: ⬜ Planned; implementation has not started. The
+Status: 🚧 In progress; checkpoint 1 is complete and approved. The
 [docking foundation](../architecture/workbench-and-lifecycle.md#automatic-tool-layout-memory)
 is complete and approved.
 
@@ -109,7 +109,7 @@ Execute one checkpoint per implementation request and stop at its review gate.
 Keep this plan updated with ✅ evidence and split coherent work into logical
 commits. Update declarations, authoring examples, and docs alongside each API.
 
-### 1. Lifecycle-owned contributed frames 🚧
+### 1. Lifecycle-owned contributed frames ✅
 
 Connect namespaced registration and per-window instances to the dockable
 workbench and automatic layout memory. Adapt the outline fixture to that supported
@@ -151,31 +151,15 @@ Cover preferences surviving reload/restart, late/missing registration, user
 versus automatic show/hide, and independent live layouts in two windows. Verify
 that no provider callback or cleanup overwrites the saved default arrangement.
 
-Execution evidence:
-
-- ✅ `workbench.registerView`/`ViewRegistration` (show, hide, focus, invalidate,
-  dispose), per-window instances, provider window/instance context, targeted
-  invalidation, disposal, unload, window closure, and host-release cleanup are
-  wired into the dockable workbench and automatic layout memory.
-- ✅ Hardcoded outline creation, declared tree kinds, fixed sidebar rendering,
-  and singleton shell routing are removed; the outline fixtures use the public
-  contributed-view path.
-- ✅ `knot.d.ts`, the bootstrap/facade, authoring examples, the API contract
-  test, and `docs/extension-api.md` reflect the new surface.
-- ✅ Fixture compilation failures now fail loudly (`receive_request*` panics with
-  the lifecycle failure) instead of looking like a missing request.
-- ✅ Coverage includes registration before/after windows, duplicate IDs,
-  multiple contributions and windows, targeted invalidation, moving/reopening,
-  stale results, window closure, disposal, unload, startup rollback, and
-  captured command routing (`cargo test --lib`: 674 passed).
-- 🚧 Review gate pending: inspect the outline frame in two windows and approve
-  the exact public names, IDs, context, visibility, placement, and remembered
-  hide/reopen semantics.
-
-**Review gate:** inspect outline frames in two windows, including dragging into
-a document tab group. Approve exact public names, IDs, context, visibility,
-placement, remembered hide/reopen, restore, and invalidation semantics before
-expanding content.
+**Completion:** ✅ Approved. `workbench.registerView` owns a namespaced
+contribution, and each product window attaches at most one dockable native
+instance. Window-targeted show/hide/focus/invalidate, provider window and
+instance context, disposal, unload, window closure, startup rollback, and
+remembered placement are implemented and covered by host/JS and gpui tests. The
+public surface is documented in the [extension API](../extension-api.md);
+ownership and layout follow the
+[workbench and lifecycle](../architecture/workbench-and-lifecycle.md) and
+[semantic UI](../architecture/semantic-ui.md) references.
 
 ### 2. Useful content and actions ⬜
 
