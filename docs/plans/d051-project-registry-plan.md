@@ -142,8 +142,9 @@ and [semantic UI](../architecture/semantic-ui.md#extension-transient-interaction
   recentProjectId }`), JS-generated stable IDs, and sanitizing reads that retain
   the last good state on malformed records or storage failure.
 - ✅ Commands cover create (folder picker plus name input), select (palette picker
-  and row activation), rename, remove (native confirmation), list (clipboard
-  record), refresh, show, and hide. Errors surface through messages; a missing
+  and row activation), rename, remove (native confirmation), list (shows the
+  tree and copies the record), refresh, show, and hide. Errors surface through
+  messages; a missing
   root leaves the record and window intact.
 - ✅ The Projects tree lists one row per project with its root, marks the project
   matching that window's workspace root, and exposes rename/remove row actions

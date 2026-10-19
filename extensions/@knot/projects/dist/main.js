@@ -384,6 +384,9 @@ await commands.register("projects.remove", async ({ arguments: args }) => {
 
 await commands.register("projects.list", async () => {
   await reload();
+  await refreshTree();
+  // The tree is the list; showing it is the visible result.
+  if (view !== null) await view.show();
   await workbench.writeClipboardText(
     JSON.stringify({
       schema: registry.schema,
