@@ -131,6 +131,24 @@ startup outcomes expose failures while independent packages remain usable.
 
 Reference: [extension host](architecture/extension-host.md).
 
+## Bundled extension packages
+
+Compile bundled workflow packages into the binary instead of installing them
+beside it or copying them into user data. Sources stay in the repository, work
+identically in development and release without packaging steps, and cannot
+drift from the shipped binary.
+
+Bundled packages use the reserved `@knot` scope and the same manifest, API-version,
+dependency, and rollback rules as installed packages. The reserved scope makes
+bundled identity structural: an installed directory can never claim it. A
+rejected installed directory that names a bundled identity is reported as a
+directory conflict without rejecting the identity, so a named diagnostic always
+means that identity is unavailable. Installed packages may require bundled ones.
+A bundled package failure is reported and fails its dependents without stopping
+product startup.
+
+Reference: [extension host](architecture/extension-host.md#package-admission-and-startup).
+
 ## Personal configuration
 
 Use one manifest-free config directory with optional pre-init and post-init

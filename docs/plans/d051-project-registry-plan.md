@@ -1,7 +1,7 @@
 # Bundled JavaScript project registry
 
-Status: ⬜ In progress. 6.1 implemented and awaiting its review gate; 6.2 and
-6.3 remain unstarted. Owns detailed execution for checkpoint 6 of the
+Status: ⬜ In progress. 6.1 complete and approved; 6.2 next. Owns detailed
+execution for checkpoint 6 of the
 [extension platform and projects plan](extension-platform-and-projects-plan.md).
 Work identifier D051.
 
@@ -114,29 +114,15 @@ dirty-content suspension belong to checkpoint 8.
 
 ## Checkpoints and review gates
 
-### 6.1 Bundled package loading and storage identity ⬜ awaiting review
+### 6.1 Bundled package loading and storage identity ✅
 
-- ✅ Compile-in registry (`src/app/bundled.rs`) merged into product discovery via
-  `extension_package::discover_all`; `InstalledPackage` carries
-  `PackageOrigin` and exposes a module root (installed directory or synthetic
-  `file:///knot/bundled/%40knot/<name>/`).
-- ✅ Bundled admission reuses installed manifest, `apiVersion`, version, and
-  source validation while allowing only the reserved `@knot` scope; installed
-  packages still reject `@knot/*` but may now `requires` a bundled identity.
-- ✅ Product discovery resolves an installed directory that claims a bundled
-  identity into a directory-level conflict diagnostic, so the identity stays
-  available and `DependencyPlan` keeps its unconditional named-diagnostic rule.
-- ✅ `StorageOwner::bundled` accepts application-supplied built-in identities
-  while `StorageOwner::package` keeps rejecting the reserved scope.
-- ✅ `@knot/projects` ships as `extensions/@knot/projects/knot.jsonc` plus an
-  activation stub; product startup discovers it together with installed packages.
-- **Validation:** discovery merge and conflict reporting, installed-identity
-  rejection, reserved-scope ownership, bundled admission errors, installed
-  packages ordering after a required bundled package, storage owner path, and a
-  product startup test confirming the bundled package loads. `cargo fmt`, clippy,
-  and focused tests pass.
-- **Review gate:** approve the bundled origin, canonical identity, collision
-  policy, and storage-owner boundary before building on them.
+Approved after discovery-merge, conflict, dependency-ordering, storage-owner, and
+product-startup validation. Current bundled admission, origin and module root,
+collision policy, and built-in storage identity live in
+[host architecture](../architecture/extension-host.md#package-admission-and-startup)
+and [decisions](../decisions.md#bundled-extension-packages); the registry and
+sources are [bundled.rs](../../src/app/bundled.rs) and
+[extensions/@knot/projects](../../extensions/@knot/projects).
 
 ### 6.2 `workspaces.pickFolder` public capability ⬜
 
