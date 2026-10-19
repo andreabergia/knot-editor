@@ -100,6 +100,69 @@ windows. Programmatic `show`/`hide`/`focus` affects live windows only and never
 changes the fresh-window default. Pass a live `WindowTarget` from
 `context.target.windowTarget` or `windows.*` to target one window.
 
+### Groups, status, and actions
+
+An item is `item` by default. A `group` is a non-activatable header that
+organizes child rows: the native view fetches its children immediately, shows no
+disclosure, and keeps them visible. Items carry optional `statusText` and a
+theme `badge`, and either kind may declare command-backed `actions`. A
+contribution's own `actions` populate the frame toolbar.
+
+```js
+const view = await workbench.registerView({
+  id: "example.changes",
+  title: "Changes",
+  content: {
+    kind: "tree",
+    provider: {
+      getChildren(parentId) {
+        if (parentId === null) return [{
+          id: "changed", label: "Changes", collapsibleState: "none", kind: "group",
+          actions: [{ label: "Stage all", command: "example.stage-all", icon: "stage" }],
+        }];
+        if (parentId === "changed") return [{
+          id: "src/main.rs", label: "src/main.rs", collapsibleState: "none",
+          statusText: "M", badge: "modified",
+          actions: [{ label: "Stage", command: "example.stage",
+                      arguments: { path: "src/main.rs" }, icon: "stage" }],
+        }];
+        return [];
+      },
+    },
+  },
+  actions: [{ label: "Refresh", command: "example.refresh" }],
+});
+```
+
+Actions invoke existing registered commands. Their JSON `arguments` become the
+handler's `context.arguments`, so an action retains the row identity it was
+created for even after focus changes. Clicking an action never activates the
+row, and the captured window is the one where the click happened. Rows remain
+usable without a pointer: move the selection, press Right to enter its actions,
+cycle with Up/Down, press Enter to invoke, and Escape to return.
+
+### Read-only text frames
+
+A text frame owns a private read-only buffer rendered by the native editor; it is
+not a document and has no resource, persistence, or document tab. Replace the
+whole text with `setText`. The last text is retained for windows created later.
+
+```js
+const log = await workbench.registerView({
+  id: "example.log",
+  title: "Log",
+  content: { kind: "text" },
+  placement: { location: "bottom" },
+});
+
+await log.setText("first line\n");
+await log.setText("replacement text\n");
+```
+
+`invalidate` applies to tree frames and `setText` to text frames; the wrong kind
+rejects with `ContentKindMismatch`. Selection and copy work through the normal
+editor surface, but edits are rejected.
+
 ## Compose commands
 
 `await commands.invoke(name, arguments)` routes a child through the originating
@@ -115,6 +178,10 @@ includes `guide.compose`, which awaits another JavaScript command, and
 contributed view's `copy` registration shares the native command name and handles
 it only when that view instance claims the command. Dispose these registrations
 when removing the feature; native definitions retain their application ownership.
+
+The [Git-status fixture](../examples/extensions/@example/git-status/dist/main.js)
+uses only the public API for grouped frames, row/group/frame actions, file
+activation, a read-only log frame, and refresh after actions.
 
 ## Identity and lifetime
 

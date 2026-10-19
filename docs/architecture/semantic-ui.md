@@ -105,6 +105,27 @@ Clicking an item focuses its tree before emitting its command. The product
 shell routes that event after the tree update through the captured window
 command path.
 
+Items are ordinary content or `group` headers. A group is neither activatable
+nor disclosable: its children are fetched when it first appears and remain
+visible, so a grouped list is one provider tree rather than a second model.
+Items expose optional right-aligned status text and a theme badge token.
+
+Frame, group, and row actions are semantic command references with JSON
+arguments, never drawing callbacks. The native view renders them as controls
+and emits the same captured-window command event as activation, with the action
+arguments instead of null. Action clicks stop propagation so they cannot also
+activate the row. The same actions are reachable from the keyboard by entering
+an action-focus mode on the current row. A root invalidation replaces the cached
+child tree so nested groups and expanded rows refetch current data.
+
+Contributed text frames are a separate content kind. Each instance owns a
+private read-only `BufferModel` rendered by the ordinary `EditorView`; it is not
+registered with the document collection and has no resource or persistence.
+The extension replaces the whole text through a foreground request, and the
+bridge keeps the last text so a window created later presents current content.
+Wrapping the editor surface is provisional; the [roadmap](../roadmap.md) tracks a
+dedicated read-only presentation (D054).
+
 Semantic tree state retains accessibility information, but gpui 0.2.2 lacks
 the required public platform bridge.
 

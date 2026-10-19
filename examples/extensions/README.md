@@ -53,3 +53,13 @@ exists. Run **example.storage-report** and paste the clipboard JSON into an unti
 document. Restart Knot and repeat: `activations` increases, JSON null stays distinct
 from the missing record, and sorted keys remain. Its source uses only public APIs;
 records belong to `@example/storage-demo` independently of its installation path.
+
+The `git-status` package contributes a **Source Control** frame and a **Source
+Control Log** text frame using fixture data; it never touches a real repository.
+The frame groups staged files and changed files, shows Git-style status badges,
+and exposes row, group, and frame actions. Click a file to copy its path and add
+it to the log; use Stage, Unstage, Discard, Stage all, and Unstage all to mutate
+the fixture and refresh both frames. Move the selection and press Right to
+navigate a row's actions from the keyboard. The log frame is a read-only text
+frame replaced through `setText`. Both frames are driven only through the public
+API.

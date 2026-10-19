@@ -53,15 +53,33 @@ const tree = await workbench.registerView({
     kind: "tree",
     provider: {
       getChildren(parentId) {
-        return parentId === null ? [{
-          id: "root", label: "Guide", collapsibleState: "none",
-          description: null, icon: "symbol", command: "guide.annotate",
-        }] : [];
+        return parentId === null ? [
+          {
+            id: "group", label: "Entries", collapsibleState: "none", kind: "group",
+            actions: [{ label: "Annotate all", command: "guide.annotate", icon: "stage" }],
+          },
+          {
+            id: "root", label: "Guide", collapsibleState: "none", kind: "item",
+            description: null, icon: "symbol", command: "guide.annotate",
+            statusText: "new", badge: "added",
+            actions: [{ label: "Annotate", command: "guide.annotate", icon: "stage" }],
+          },
+        ] : [];
       },
     },
   },
+  actions: [{ label: "Refresh", command: "guide.annotate", arguments: { source: "frame" } }],
 });
 await tree.invalidate();
+
+const log = await workbench.registerView({
+  id: "guide.log",
+  title: "Guide log",
+  content: { kind: "text" },
+  placement: { location: "bottom", visible: false },
+});
+await log.setText("guide: activated\n");
+await log.setText("guide: ready\n");
 
 const viewCommand = await commands.registerForView("guide.outline", "copy", async ({ target }) => {
   const selected = await workbench.selectedText(target);
@@ -90,6 +108,6 @@ export async function deactivateFeature() {
   await Promise.all([
     ...Array.from(bufferOwnership, (owner) => owner.dispose()),
     command.dispose(), child.dispose(), nativeChild.dispose(), viewCommand.dispose(),
-    completion.dispose(), tree.dispose(),
+    completion.dispose(), tree.dispose(), log.dispose(),
   ]);
 }

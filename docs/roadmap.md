@@ -232,6 +232,15 @@ D005; tool-only layout memory belongs to D049.
   - Reconsider: A concrete generated output remains useful as text but stresses
     the current model.
 
+- **D054 — Dedicated read-only generated text surface**
+  - Deferred: Contributed text frames embed the ordinary editor view over a
+    private read-only buffer. This reuses selection, copy, scrolling, and
+    rendering without a second renderer, but couples tool frames to the editor
+    key context and command surface.
+  - Reconsider: A text frame needs behavior the editor surface cannot express,
+    or tool-focused keymaps and editor commands conflict, at which point extract
+    a dedicated read-only presentation over the same buffer layer.
+
 ## Platforms and accessibility
 
 - **D035 — macOS distribution**

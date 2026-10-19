@@ -5992,7 +5992,7 @@ mod tests {
             host.start_installed_extensions(root.clone(), cx)
         });
         let report = wait_for_extension_report(&host, cx);
-        assert_eq!(report.report.entries.len(), 4);
+        assert_eq!(report.report.entries.len(), 5);
         assert!(
             report
                 .report

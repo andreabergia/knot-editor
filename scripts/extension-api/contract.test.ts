@@ -50,10 +50,22 @@ const tree = await workbench.registerView({
         const window = context.window;
         const instance: import("knot").ViewId = context.instance;
         void [window, instance];
-        return [{ id: "id", label: "item", collapsibleState: "collapsed", icon: "folder" }];
+        return [
+          {
+            id: "group", label: "Group", collapsibleState: "none", kind: "group",
+            actions: [{ label: "Stage all", command: "check.stage", arguments: { id: 1 }, icon: "stage" }],
+          },
+          {
+            id: "id", label: "item", collapsibleState: "collapsed", icon: "folder",
+            statusText: "M", badge: "modified",
+            command: "check.open",
+            actions: [{ label: "Discard", command: "check.discard", arguments: { path: "a" }, icon: "discard" }],
+          },
+        ];
       },
     },
   },
+  actions: [{ label: "Refresh", command: "check.refresh", arguments: {} }],
   placement: { location: "left", order: 1, visible: true },
 });
 const invalidation: Promise<void> = tree.invalidate(null);
@@ -62,6 +74,23 @@ void [invalidation, disposal];
 await tree.show();
 await tree.hide();
 await tree.focus();
+
+const text = await workbench.registerView({
+  id: "check.log",
+  title: "Check log",
+  content: { kind: "text" },
+});
+const replacement: Promise<void> = text.setText("first line\n");
+void replacement;
+await text.setText("second line\n");
+await text.setText("third line\n", undefined);
+await text.dispose();
+
+// @ts-expect-error text frames have no tree provider
+const badContent: import("knot").ViewContent = { kind: "text", provider: {} };
+// @ts-expect-error tree action command is required
+const badAction: import("knot").TreeAction = { label: "Missing" };
+void [badContent, badAction];
 await editor.registerCompletionProvider("check", {
   async provideCompletions(context) {
     await context.buffer.snapshot();
@@ -78,8 +107,6 @@ await commands.invoke("check", () => {});
 await commands.invoke(42);
 // @ts-expect-error completion item requires insertText
 await editor.registerCompletionProvider("bad", { provideCompletions: () => [{ label: "bad" }] });
-// @ts-expect-error unsupported view content kind
-await workbench.registerView({ id: "check.bad", title: "Bad", content: { kind: "text" } });
 // @ts-expect-error tree content requires a provider
 await workbench.registerView({ id: "check.bad", title: "Bad", content: { kind: "tree" } });
 // @ts-expect-error tree item requires collapsibleState

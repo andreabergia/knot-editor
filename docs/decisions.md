@@ -250,6 +250,24 @@ rather than vendoring gpui solely to recover its missing native key identity.
 
 Reference: [workbench and lifecycle](architecture/workbench-and-lifecycle.md).
 
+## Extension tree content and actions
+
+One contributed registration declares its native content kind, provider or
+pushed text, and frame actions. Groups are explicit tree headers rather than a
+second list model, so grouping, expansion, and invalidation share one provider
+tree. Row and group actions carry a command name plus JSON arguments and reuse
+the captured-window command route, keeping native controls and activation
+mutually exclusive without a parallel dispatch path.
+
+Contributed text frames push a complete read-only value into a private buffer
+rendered by the ordinary editor surface. This avoids a second text renderer and
+reuses selection, copy, and scrolling, while the buffer stays outside document
+identity and persistence. The bridge retains the last pushed text so later
+windows present current content. The editor embedding is provisional; a
+dedicated read-only presentation is tracked as D054.
+
+Reference: [semantic UI](architecture/semantic-ui.md).
+
 ## Generated text surfaces
 
 Use ordinary buffers and views when generated output benefits from text

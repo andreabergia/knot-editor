@@ -197,7 +197,7 @@ declare module "knot" {
     | "Cancelled" | "UnsupportedOperation" | "BufferClosed" | "BufferReadOnly"
     | "InvalidRange" | "InvalidEditBatch" | "RevisionConflict" | "ContributionSetNotFound"
     | "ViewNotFound" | "ViewIdInUse" | "InvalidViewId"
-    | "ViewRegistrationNotFound"
+    | "ViewRegistrationNotFound" | "ContentKindMismatch"
     | "CompletionProviderNotFound" | "CommandNameInUse" | "CommandNotFound"
     | "InvalidUri" | "DocumentNotFound" | "TooManyWorkspaceRoots" | "OperationInProgress" | "PersistenceFailed" | "ResourceNotFound" | "ResourceWrongKind" | "InvalidUtf8" | "ProviderFailure" | "StorageUnavailable";
   /**
@@ -393,7 +393,27 @@ declare module "knot" {
     { kind: "completed" | "unavailable" | "invalidTarget" | "cancelled" }
     | { kind: "invalidArgument" | "handlerFailure"; message: string }
   >;
-  /** Native tree semantics; optional description, icon and command are nullable. */
+  /** Theme-aware change-state token rendered as a row badge. */
+  export type TreeBadge =
+    | "added" | "modified" | "deleted" | "renamed" | "untracked" | "conflicted";
+  /** Theme-aware glyph for a command-backed action. */
+  export type TreeActionIcon = "stage" | "unstage" | "discard";
+  /**
+   * One semantic command-backed action on a row, group header, or frame.
+   * Arguments are JSON and are passed to the command as its argument value;
+   * an absent value is null. Clicking an action never activates the row.
+   */
+  export interface TreeAction {
+    readonly label: string;
+    readonly command: string;
+    readonly arguments?: JsonValue;
+    readonly icon?: TreeActionIcon | null;
+  }
+  /**
+   * Native tree semantics. Optional description, icon and command are nullable.
+   * A group is a non-activatable, non-disclosure header that organizes child
+   * rows; its children are fetched immediately and remain visible.
+   */
   export interface TreeItem {
     /** Author-supplied identity, stable and unique within the provider tree. */
     readonly id: string;
@@ -402,7 +422,15 @@ declare module "knot" {
     readonly icon?: "file" | "folder" | "symbol" | null;
     /** Required expansion state; never inferred from child results. */
     readonly collapsibleState: "none" | "collapsed" | "expanded";
+    /** Activation command for ordinary item rows; ignored for groups. */
     readonly command?: string | null;
+    /** Row kind; defaults to "item". */
+    readonly kind?: "item" | "group";
+    /** Right-aligned short status text, e.g. a Git change letter. */
+    readonly statusText?: string | null;
+    readonly badge?: TreeBadge | null;
+    /** Row or group actions; frame actions belong to the contribution. */
+    readonly actions?: readonly TreeAction[];
   }
   /** Explicit live context supplied to a contributed view's provider. */
   export interface ViewContext {
@@ -433,13 +461,21 @@ declare module "knot" {
     /** Initial visibility. Defaults to true. */
     readonly visible?: boolean;
   }
+  /**
+   * Native content for one contributed view. A tree is populated through its
+   * provider; a text frame starts empty and is replaced with setText.
+   */
+  export type ViewContent =
+    | Readonly<{ kind: "tree"; provider: TreeDataProvider }>
+    | Readonly<{ kind: "text" }>;
   /** One lifecycle-owned native view definition. */
   export interface ViewContribution {
     /** Stable, unique, namespaced identity; `knot.` is reserved. */
     readonly id: string;
     readonly title: string;
-    /** Native content and the provider populated in every product window. */
-    readonly content: Readonly<{ kind: "tree"; provider: TreeDataProvider }>;
+    readonly content: ViewContent;
+    /** Actions shown in the frame toolbar; only meaningful for tree frames. */
+    readonly actions?: readonly TreeAction[];
     readonly placement?: ViewPlacement;
   }
   /** Registration owns one contributed view across every live product window. */
@@ -468,6 +504,15 @@ declare module "knot" {
      * window without a live instance, or Cancelled on teardown.
      */
     invalidate(parentId?: string | null, window?: WindowTarget): Promise<void>;
+    /**
+     * Replace the complete text of a text frame in every live window, or in
+     * one explicit window. Tree frames reject with ContentKindMismatch.
+     * The last text is retained for windows created later; this is not an
+     * editable document and has no persistence or backing resource.
+     * @throws HostError with ContentKindMismatch, ViewNotFound (explicit window
+     * without a live instance), OwnershipDisposed, or Cancelled on teardown.
+     */
+    setText(text: string, window?: WindowTarget): Promise<void>;
   }
   /** Native completion request; use its explicit buffer without borrowing focus. */
   export interface CompletionContext {
