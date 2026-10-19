@@ -143,6 +143,41 @@ also removes that provider's already-completed aggregate results; other provider
 retain their state. Tree invalidation acknowledges native acceptance separately
 from later fetch/paint. Invalid provider results fail only their request.
 
+## Extension transient interactions
+
+Pickers and text prompts are window-local overlays owned by the product shell,
+not by the extension runtime. The host operation resolves the originating
+window from an explicit target or the admitted command capture, installs the
+overlay on the foreground, and awaits its settled outcome. A window owns at most
+one extension interaction; the palette is a separate native surface and may be
+open at the same time.
+
+```text
+extension host request (showPicker/showInput/...)
+        |
+        v
+window resolution (explicit target or command capture)
+        |
+        v
+shell-owned overlay + shared TextInput
+        |
+        v
+one settled outcome (selection, acceptance, dismissal, cancellation)
+```
+
+`TextInput` is one shared single-line gpui `EntityInputHandler`: typing, IME
+preedit, and clipboard flow through gpui, while the field owns caret, selection,
+keyboard movement, and pointer selection. It backs both transient fields and
+the command palette query, so text entry has one native path. Picker filtering
+is local to the supplied item list; no provider, scheduler, or event bus is
+added.
+
+Settlement happens once on acceptance, dismissal, native-prompt answer, window
+closure, extension unload, or caller cancellation. Window closure and unload
+release the overlay and settle it as cancellation; no remembered layout or
+extension state is touched. Focus returns to the previously focused surface
+when the overlay closes and that surface is still live.
+
 ## Generated text
 
 Generated search documents retain their application-owned

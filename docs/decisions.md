@@ -271,6 +271,32 @@ dedicated read-only presentation is tracked as D054.
 
 Reference: [semantic UI](architecture/semantic-ui.md).
 
+## Extension transient interactions
+
+Picker, text input, and confirmation/message interactions resolve with typed
+values under `workbench`, so dismissal is an ordinary result and operational
+failure stays a host error. The window is resolved before any focus change from
+an explicit `WindowTarget` or the admitted command capture, which keeps an
+awaited picker inside a command bound to its originating window.
+
+Pickers receive a complete item list and filter locally, deliberately avoiding
+streaming providers and a second scheduler. One extension interaction owns a
+window at a time and a second request rejects `OperationInProgress`; the
+command palette stays an independent native surface rather than sharing that
+slot. Window closure, extension unload, and caller cancellation settle the
+interaction as cancellation, and the previous live focus is restored on close.
+
+Confirmations and messages reuse the native gpui prompt. The platform already
+tests these answers, restores focus, and covers the contract, so a parallel
+rendered dialog would add surface without behavior.
+
+One shared single-line `TextInput` implements gpui's input-handler contract and
+backs both transient fields and the palette query, replacing the palette's
+key-event string assembly. Typing, IME preedit, and clipboard use gpui's native
+path; the field owns only ordinary movement, selection, and pointer handling.
+
+Reference: [semantic UI](architecture/semantic-ui.md).
+
 ## Generated text surfaces
 
 Use ordinary buffers and views when generated output benefits from text

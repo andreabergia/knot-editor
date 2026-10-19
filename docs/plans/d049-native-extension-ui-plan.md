@@ -1,6 +1,7 @@
 # D049 — Native extension UI
 
-Status: 🚧 In progress; checkpoints 1 and 2 are complete and approved. The
+Status: 🚧 In progress; checkpoints 1 and 2 are complete and approved.
+Checkpoint 3 is implemented and awaiting its review gate. The
 [docking foundation](../architecture/workbench-and-lifecycle.md#automatic-tool-layout-memory)
 is complete and approved.
 
@@ -214,17 +215,57 @@ verified the fixture in sidebar, bottom, and mixed tab-group placements, hide an
 reopen plus fresh-window inheritance, and approved the Git information/action
 surface and the text frame contract.
 
-### 3. Picker, input, and confirmation/message ⬜
+### 3. Picker, input, and confirmation/message 🚧
 
 Implement the transient operations with native text input and local picker
 filtering. Move the command palette onto the shared input path. Extend the fixture
 with create/select/rename/remove-style flows without implementing project storage
 or project switching policy.
 
+Decisions locked before implementation:
+
+- Transient operations live under `workbench` as `showPicker`, `showInput`,
+  `showConfirmation`, and `showMessage`. Results are discriminated typed values:
+  `{ kind: "selected", id }`, `{ kind: "accepted", value }`,
+  `{ kind: "confirmed" }`, or `{ kind: "dismissed" }`. Dismissal is a normal
+  result; operational failure is a host error.
+- A picker receives its complete `{ id, label, description? }` item list and
+  filters locally by label and description. Inputs carry a title and optional
+  initial `value`; there is no form schema or asynchronous validation.
+- Confirmations and messages use the native gpui prompt, mapping the confirm and
+  cancel button indices to `confirmed`/`dismissed`.
+- One live extension transient interaction per window. A second extension
+  request rejects with `OperationInProgress`. The command palette stays
+  independent and may open above an active interaction; existing keybinding
+  suppression while a palette is open is unchanged.
+- The window is resolved from an explicit `WindowTarget` or the admitted command
+  capture. Neither available rejects `ContextUnavailable`/`InvalidTarget`.
+- A shared single-line `TextInput` implements gpui `EntityInputHandler` for
+  typing, IME, and clipboard, plus arrows/home/end, shift selection, and pointer
+  click/drag selection. It backs both transient input fields and the palette
+  query, replacing the palette's key-event string assembly.
+- Window closure, unload, and caller cancellation settle pending interactions as
+  cancellation; focus returns to the previously focused surface on close. The
+  git-status fixture gains an in-memory tracked-repository list using picker
+  select, input create/rename, and confirmation remove.
+
 **Validation:** native input behavior and JS results; accept/dismiss, no matches,
 Unicode/IME and paste/editing, overlap with a palette/another request, focus
 restoration, originating-window isolation, cancellation, unload, and closure.
 Include an awaited picker inside an extension command to catch scheduler deadlocks.
+
+**Progress:** implementation and automated coverage are complete; the manual
+review gate remains open. `workbench.showPicker`, `showInput`,
+`showConfirmation`, and `showMessage` resolve typed results, capture the
+originating window, and reject overlap with `OperationInProgress`. A shared
+single-line `TextInput` implements gpui's input handler and now backs the
+command palette query. Coverage: text input typing/IME/clipboard/grapheme
+editing, picker filtering/selection/no-match, overlap rejection, focus
+restoration, native confirm/message answer mapping, two-window independence,
+owner-matched cancellation, window closure, extension unload, and the
+Git-status fixture's awaited-picker/input/confirmation flows end to end
+(`cargo test --lib` passes; the checked TypeScript API includes the new
+surface).
 
 **Review gate:** inspect ordinary typing, picker selection, rename input, and
 confirmation in a product build. Approve result/error and overlap semantics.

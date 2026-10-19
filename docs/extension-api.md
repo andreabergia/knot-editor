@@ -165,6 +165,41 @@ await log.setText("replacement text\n");
 rejects with `ContentKindMismatch`. Selection and copy work through the normal
 editor surface, but edits are rejected.
 
+## Ask the user transiently
+
+`workbench` exposes window-local pickers, text input, and native confirmation or
+message prompts. Each operation captures an explicit `WindowTarget` or the
+admitting command's window, so focus changes during an `await` cannot retarget
+it. Results are typed: acceptance carries a value, dismissal is a normal value,
+and operational failure is a host error.
+
+```js
+const picked = await workbench.showPicker({
+  title: "Switch repository",
+  items: [{ id: "knot", label: "knot", description: "/src/knot-editor" }],
+});
+if (picked.kind === "selected") await select(picked.id);
+
+const named = await workbench.showInput({ title: "Rename", value: "knot" });
+if (named.kind === "accepted") await rename(named.value);
+
+const sure = await workbench.showConfirmation({ title: "Remove knot?" });
+if (sure.kind === "confirmed") await remove();
+
+await workbench.showMessage({ title: "Saved" });
+```
+
+Picker items are filtered locally by label and description, so the complete list
+is supplied up front; there is no streaming provider. Inputs are single-line and
+support the usual editing, clipboard, IME, and selection behavior. Confirmation
+and message use the native platform prompt.
+
+One extension transient interaction may own a window at a time. A second
+request rejects `OperationInProgress`. The command palette is independent and
+may be open at the same time. Window closure, extension unload, and caller
+cancellation settle a pending interaction as cancellation; focus returns to the
+surface that was focused before it opened.
+
 ## Compose commands
 
 `await commands.invoke(name, arguments)` routes a child through the originating
