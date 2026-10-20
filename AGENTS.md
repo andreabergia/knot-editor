@@ -24,6 +24,42 @@ lower boundary.
 No one is using the product at the moment; we are free to break any backward
 compatibility concerns at any time.
 
+## Repository map
+
+```text
+src/core    UI-, platform-, and scripting-independent text and edit primitives
+src/app     gpui shell, foreground editor state, native views, resource providers,
+            commands, startup, and application persistence
+src/host    V8, bounded scheduling, module-graph validation, and typed transport
+crates/knot-handler-macros   adapters for annotated native host handlers and commands
+```
+
+Use the table below to route a change to its authoritative documentation and
+canonical source before reading broadly.
+
+| Change area | Documentation | Canonical source |
+| --- | --- | --- |
+| Text storage, history, anchored ranges | [core and buffers](docs/architecture/core-and-buffers.md) | `src/core/` |
+| Document identity, dirty state, providers, Open/Save | [documents and persistence](docs/architecture/documents-and-persistence.md) | `src/app/documents.rs`, `src/app/open.rs`, `src/app/model.rs`, `src/app/resource.rs` |
+| Windows, panes, tabs, closure, terminal, tool layout | [workbench and lifecycle](docs/architecture/workbench-and-lifecycle.md) | `src/app/workbench/`, `src/app/product/`, `src/app/terminal_*.rs` |
+| Commands, keymaps, captured targets, focus routing | [commands](docs/architecture/commands.md) | `src/app/keymaps.rs`, `src/app/product/commands.rs` |
+| Extension runtime, scheduling, lifecycle, records | [extension host](docs/architecture/extension-host.md) | `src/host/`, `src/app/extension_host.rs`, `src/app/extension_storage.rs` |
+| Contributed UI, trees, completion, generated text | [semantic UI](docs/architecture/semantic-ui.md) | `src/app/extension_semantics.rs`, `src/app/tree_view.rs`, `src/app/completion.rs` |
+| Extension public contract | `src/host/js/knot.d.ts`, [extension guide](docs/extension-api.md) | `docs/schemas/knot.schema.json`, `examples/extensions/` |
+| Application-owned SQLite stores | [automatic tool-layout memory](docs/architecture/workbench-and-lifecycle.md#automatic-tool-layout-memory) | `src/app/tool_layout.rs` |
+
+### Registering an application subsystem
+
+- Declare the module in `src/app/mod.rs`; keep the deliberately-unused
+  `dead_code` allowances only for boundaries the product surface does not exercise.
+- Expose application-wide state as a gpui `Global` (for example
+  `ApplicationToolLayout`, `ApplicationDocuments`, `ApplicationExtensionHost`).
+- A subsystem that writes durably off the foreground flushes or drains pending
+  work from `extension_host::quit_after_storage` before `cx.quit()`.
+- Extension-facing operations are annotated in
+  `src/app/extension_host/handlers.rs`; `host::declarations` validates the context
+  types at startup.
+
 ## Rules
 
 - Whenever implementing a plan or design document, always keep the plan

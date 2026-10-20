@@ -178,6 +178,19 @@ recovery UI beyond the listing command.
   persistence transitions; dedup one row per document UUID across multiple views.
   Save and Save As update or retire the automatic row; final-view discard removes
   it. Capture copies text on the foreground and writes off it.
+- **Implementation context:** Add `src/app/recovery.rs`, declare it in
+  `src/app/mod.rs`, install its `Global` beside `ApplicationToolLayout` and
+  `ApplicationDocuments`, and flush a pending capture from
+  `extension_host::quit_after_storage`. Mirror `src/app/tool_layout.rs` for the
+  store shape (path under `data_local_dir`, `application_id`, versioned `STRICT`
+  schema, debounced background writes, `flush()` at quit, non-fatal diagnostics)
+  and `src/app/extension_storage.rs` for the serialized background connection and
+  shutdown drain. Capture hooks already exist: model commits are drained in
+  `src/app/application_observation.rs` and persistence transitions signal
+  `extension_host::application_changed`. Read document identity, state, resource
+  URI, and the saved baseline through `src/app/documents.rs`
+  (`Document::identity/state/resource_uri`,
+  `DocumentState::Persisted { persisted_revision, persisted_version }`).
 - **Validation:** store reopen and schema-version mismatch; write coalescing and
   identical-capture skip; every fired capture is committed durably before the
   next cadence tick, with no accepted-but-uncommitted window; interruption at the
@@ -200,6 +213,12 @@ recovery UI beyond the listing command.
   disk.
 - Implement explicit discard, silent startup restoration of unclaimed automatic
   snapshots, and the native File listing command with Restore and Discard.
+- **Implementation context:** Restore primitives live in `src/app/recovery.rs`;
+  wire silent restoration into startup in `src/app/product/`, the listing command
+  and its picker surface into `src/app/product/commands.rs`, and URI deduplication
+  through the ordinary open path in `src/app/open.rs`. Registered providers are
+  read through `src/app/resource.rs`; the missing-file and external-change paths
+  reuse the baseline handling in `src/app/open.rs`.
 - **Validation:** reopen after a simulated crash; dirty and untitled documents;
   missing and edited files; Save As; an externally changed or deleted resource
   restores over the current content and writes nothing, and a later save hits the
@@ -225,6 +244,11 @@ recovery UI beyond the listing command.
   [extension guide](../extension-api.md) for list, retain, release, restore, and
   discard; validate owner isolation and non-forgeable ownership with an installed
   fixture package and the authoring check.
+- **Implementation context:** Add annotated operations in
+  `src/app/extension_host/handlers.rs`, matching declarations in
+  `src/host/declarations.rs`, and public types in `src/host/js/knot.d.ts`. Stamp
+  owners the way `src/app/extension_storage.rs` binds a database owner at
+  admission, so an extension supplies only an opaque key.
 - **Validation:** owner isolation and forged-owner rejection; retain before a
   hypothetical session commit; release only after a durable update; orphan
   survival across an extension failure and restart; no durable dangling
