@@ -3301,6 +3301,22 @@ impl ProductShell {
                 return Err(ProtectedCloseFailure::InvalidTarget);
             }
         }
+        // A discarded document retires its automatic protection even when the
+        // quit transition keeps the document entity alive until process exit.
+        let discarded: Vec<uuid::Uuid> = documents
+            .read(cx)
+            .documents()
+            .filter(|document| {
+                approvals.iter().any(|approval| {
+                    approval.document == document.id()
+                        && approval.kind == CloseApprovalKind::Discarded
+                })
+            })
+            .map(|document| document.identity())
+            .collect();
+        for identity in discarded {
+            super::recovery::discard(identity, cx);
+        }
         let total_counts = views.iter().fold(HashMap::new(), |mut counts, view| {
             if let TabSurfaceId::Document(document) = view.key.surface {
                 *counts.entry(document).or_insert(0usize) += 1;
@@ -4379,6 +4395,16 @@ pub(crate) fn run(initial_request: Option<OpenRequest>) {
     application.run(move |cx| {
         let documents = cx.new(|_| DocumentCollection::new());
         cx.set_global(ApplicationDocuments(documents));
+        // Install durable recovery before any document exists so every created
+        // document is observed and protected from its first edit.
+        let recovery_path = super::recovery::RecoveryStore::user_path()
+            .unwrap_or_else(|_| std::env::temp_dir().join("knot-recovery.sqlite3"));
+        cx.set_global(super::recovery::ApplicationRecovery(
+            super::recovery::RecoveryService::new(super::recovery::RecoveryStore::open(
+                recovery_path,
+                cx.background_executor().clone(),
+            )),
+        ));
         cx.set_global(ApplicationWorkbenches(RefCell::new(Vec::new())));
         cx.set_global(ApplicationProtectedClosure(RefCell::new(false)));
         cx.set_global(ApplicationTerminalSessions(RefCell::new(
@@ -4493,6 +4519,7 @@ mod tests {
     mod observation;
     mod operations;
     mod projects;
+    mod recovery;
     mod tool_layout;
     mod tools;
     mod transient;
@@ -4584,6 +4611,16 @@ mod tests {
     pub(super) fn install_globals(cx: &mut TestAppContext) -> Entity<DocumentCollection> {
         let documents = cx.new(|_| DocumentCollection::new());
         cx.set_global(ApplicationDocuments(documents.clone()));
+        // Each test gets an isolated recovery database; the directory is kept
+        // as a global so the database path stays alive with the test.
+        let recovery_dir = tempfile::tempdir().unwrap();
+        cx.set_global(crate::app::recovery::ApplicationRecovery(
+            crate::app::recovery::RecoveryService::new(crate::app::recovery::RecoveryStore::open(
+                recovery_dir.path().join("recovery.sqlite3"),
+                cx.background_executor.clone(),
+            )),
+        ));
+        cx.set_global(TestRecoveryDir(recovery_dir));
         cx.set_global(ApplicationWorkbenches(RefCell::new(Vec::new())));
         cx.set_global(ApplicationProtectedClosure(RefCell::new(false)));
         cx.set_global(ApplicationTerminalSessions(RefCell::new(
@@ -4609,6 +4646,11 @@ mod tests {
     struct TestToolLayoutDir(tempfile::TempDir);
 
     impl gpui::Global for TestToolLayoutDir {}
+
+    #[allow(dead_code, reason = "ownership keeps the test database path alive")]
+    struct TestRecoveryDir(tempfile::TempDir);
+
+    impl gpui::Global for TestRecoveryDir {}
 
     fn keymap_command(cx: &gpui::App, key: &str, view: Option<&str>) -> Option<String> {
         match cx

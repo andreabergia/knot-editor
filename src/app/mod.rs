@@ -66,6 +66,7 @@ mod personal_config;
 mod personal_config_error;
 mod product;
 mod product_commands;
+mod recovery;
 #[allow(
     dead_code,
     reason = "retained application boundary during the pooled extension-host rebuild"

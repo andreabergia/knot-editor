@@ -246,6 +246,12 @@ impl DocumentCollection {
         self.documents.iter().find(|document| document.id == id)
     }
 
+    pub(crate) fn document_by_identity(&self, identity: uuid::Uuid) -> Option<&Document> {
+        self.documents
+            .iter()
+            .find(|document| document.identity == identity)
+    }
+
     pub(crate) fn document_for_resource(&self, uri: &ResourceUri) -> Option<DocumentId> {
         self.resources.get(uri).copied()
     }
@@ -262,6 +268,7 @@ impl DocumentCollection {
         if let Some(uri) = document.resource_uri() {
             self.resources.remove(uri);
         }
+        super::recovery::forget_document(document.identity, cx);
         super::application_observation::changed(cx);
         true
     }
@@ -332,6 +339,10 @@ impl DocumentCollection {
             version,
         };
         self.resources.insert(uri, id);
+        // A successful persistence changes the saved baseline while edits racing
+        // the I/O remain dirty; re-publish so the automatic record matches the
+        // committed state or is retired once the document is clean.
+        super::recovery::publish(document, cx);
         super::application_observation::changed(cx);
         true
     }
@@ -368,15 +379,18 @@ impl DocumentCollection {
             .next_id
             .checked_add(1)
             .expect("document identity space exhausted");
+        let identity = uuid::Uuid::new_v4();
+        let observed_model = model.clone();
         self.documents.push(Document {
             id,
-            identity: uuid::Uuid::new_v4(),
+            identity,
             title: title.into(),
             model,
             state,
             search_results,
             persistence_generation: 0,
         });
+        super::recovery::observe_document(&observed_model, identity, cx);
         super::application_observation::changed(cx);
         id
     }

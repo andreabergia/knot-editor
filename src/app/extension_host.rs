@@ -147,8 +147,16 @@ pub(crate) fn quit_after_storage(cx: &mut App) {
     let layout_flush = cx
         .try_global::<super::tool_layout::ApplicationToolLayout>()
         .map(|store| store.0.flush());
+    // A recovery capture inside its debounce window is drained so the last
+    // edits reach the durable store before exit.
+    let recovery_flush = cx
+        .try_global::<super::recovery::ApplicationRecovery>()
+        .map(|recovery| recovery.0.store().flush());
     cx.spawn(async move |cx| {
         drain.await;
+        if let Some(flush) = recovery_flush {
+            let _ = flush.await;
+        }
         if let Some(flush) = layout_flush {
             let _ = flush.await;
         }

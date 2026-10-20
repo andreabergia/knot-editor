@@ -40,6 +40,10 @@ impl ResourceVersion {
     pub(crate) fn new(value: impl Into<Vec<u8>>) -> Self {
         Self(value.into())
     }
+
+    pub(crate) fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
