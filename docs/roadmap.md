@@ -189,6 +189,28 @@ D005; tool-only layout memory shipped with the completed D049.
     explicitly re-scoping the native multi-root resource tree to the packaged
     extension.
 
+- **D056 — TypeScript authoring for bundled extensions**
+  - Deferred: Bundled packages ship checked plain JavaScript compiled into the
+    binary. The extension API check runs `tsc` with `--checkJs` against the
+    declarations, and installed packages take built JavaScript directly; nothing
+    compiles TypeScript into the shipped sources yet.
+  - Reconsider: A bundled workflow's size or shared types make hand-written
+    JavaScript and JSDoc the dominant authoring cost. Then define a build step
+    that type-checks and emits captured sources for bundled packages, with no
+    runtime transpiler, and decide whether installed packages may also ship
+    TypeScript.
+
+- **D057 — Extension and product localization (i18n)**
+  - Deferred: Contributed view titles, tree labels, status text, native prompt
+    text, and the bundled registry's own strings are literal English. Extensions
+    and personal config can pass arbitrary strings, but there is no locale
+    source, message catalog, or lookup for native-owned product text.
+  - Reconsider: Shipping a second language becomes a product requirement. Then
+    define locale discovery, a catalog format with fallback, which strings are
+    extension-owned versus application-owned, contribution-time versus call-time
+    resolution, and how native product text such as "Projects" reaches the same
+    mechanism.
+
 ## Terminals and generated surfaces
 
 - **D040 — Physical application-keypad input**
