@@ -490,6 +490,12 @@ fn command_invoked_project_tool_changes_publish_the_window_default(cx: &mut Test
         );
     });
 
+    // A late native explorer registration must not steal the stored selection.
+    fixture
+        .shell
+        .update(cx, |shell, cx| shell.restore_fresh_window_layout(cx));
+    wait_for_api_condition(cx, |cx| tree_tab_focused(&fixture.shell, &tree, cx));
+
     focus_document_tab(&fixture.shell, fixture.window, cx);
     let hide = dispatch_product_command(&fixture.shell, fixture.window, "projects.hide", cx);
     assert_eq!(wait_for_command(hide, cx), CommandOutcome::Completed);

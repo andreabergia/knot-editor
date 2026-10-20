@@ -2597,6 +2597,28 @@ impl ProductShell {
         if visible {
             self.ensure_explorer(false, cx);
         }
+        // Explorer registration selects itself; restore the stored dock selection
+        // so a contributed tool that was selected stays selected.
+        self.apply_stored_selection(&snapshot, cx);
+    }
+
+    /// Select each dock's stored tool when it is already registered. Unknown or
+    /// hidden tools are skipped without changing the live selection.
+    fn apply_stored_selection(
+        &mut self,
+        snapshot: &super::tool_layout::ToolLayoutSnapshot,
+        cx: &mut Context<Self>,
+    ) {
+        self.workbench.update(cx, |workbench, _| {
+            for dock in DockLocation::ALL {
+                if let Some(selected) = &snapshot.dock_selected[dock.index()]
+                    && let Some(id) = workbench.tool_by_stable_id(selected)
+                    && workbench.tool_tab(id).is_some()
+                {
+                    workbench.show_tool(id);
+                }
+            }
+        });
     }
 
     /// Restore the full stored arrangement onto this window's registered tools.

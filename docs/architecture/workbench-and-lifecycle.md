@@ -124,18 +124,19 @@ splits, and live handles never enter the record; a tool in a document group
 flattens to the normal document group of a fresh window.
 
 A fresh window applies the stored arrangement when its explorer registers;
-already-open windows keep their live arrangements. Only explicit user
-arrangements publish a new default: moves, dock resizes, and show/hide changes,
-including a command-invoked extension show, hide, or focus. Divider dragging
-coalesces through a trailing-edge debounce so one settled arrangement reaches
-storage, and identical publishes skip storage. Restore, window activation,
-listener callbacks, automatic presentation, and document structure changes never
-publish. The cache updates
-synchronously so the next window inherits immediately; writes run off the
-foreground and the quit path flushes a pending write before exit. Reset Layout
-returns to product defaults. A missing, corrupt, or version-mismatched record
-falls back to defaults, and unknown stored IDs are skipped without creating
-blank frames.
+after that registration the stored per-dock selection is reapplied, so a
+contributed tool keeps the selection the user gave it instead of losing the dock
+to the explorer. Already-open windows keep their live arrangements. Only explicit
+user arrangements publish a new default: moves, dock resizes, and show/hide
+changes, including a command-invoked extension show, hide, or focus. Divider
+dragging coalesces through a trailing-edge debounce so one settled arrangement
+reaches storage, and identical publishes skip storage. Restore, window
+activation, listener callbacks, automatic presentation, and document structure
+changes never publish. The cache updates synchronously so the next window
+inherits immediately; writes run off the foreground and the quit path flushes a
+pending write before exit. Reset Layout returns to product defaults. A missing,
+corrupt, or version-mismatched record falls back to defaults, and unknown stored
+IDs are skipped without creating blank frames.
 
 Tool frames stay workbench-owned behind stable namespaced IDs and explicit
 native content variants. Extension contributions attach through this contract
