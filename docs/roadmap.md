@@ -77,6 +77,30 @@ D005; tool-only layout memory shipped with the completed D049.
   - Reconsider: Daily editing needs navigation beyond the current tree, such as
     revealing the active file, refreshing directories, or filtering entries.
 
+- **D058 — Complete Vim mode in JavaScript**
+  - Deferred: No modal editing contract has been selected. The native core owns
+    raw key input, IME, and text mechanics, while extensions reach commands,
+    keybindings, and buffer/selection access through the public API. A full
+    emulation depends on those primitives covering multi-key operator state,
+    motions, text objects, registers, and repeat/macro playback without a
+    private host bypass.
+  - Reconsider: A daily Vim workflow is selected. Then define how pending
+    operator sequences are held in personal keymaps, how edits group into undo
+    steps, and which primitives (mode-aware input, reveal/scroll, macro
+    recording) must become native or public. Package the result as ordinary
+    personal or installed configuration rather than a privileged mode.
+
+- **D059 — Professional typography: ligatures and configurable font features**
+  - Deferred: Surfaces use shared fixed typography defaults. Ligatures and
+    font features need shaping options per surface, and the terminal assumes
+    fallback glyphs stay within emulator cell allocations, so enablement rules
+    differ between the editor and the PTY grid.
+  - Reconsider: Daily readability or a font choice requires ligatures,
+    stylistic sets, variable-font settings, or configurable terminal
+    typography. Then define font selection and fallback per surface, feature
+    toggles and their persistence scope (with D045), and terminal cell metrics
+    for fonts whose shaped advance differs from the default.
+
 - **D037 — Whole-pane dragging and arbitrary split-tree reshaping**
   - Deferred: D004 moves individual tabs into existing panes or new edge splits;
     moving groups of tabs and restructuring whole split branches is a separate
@@ -276,6 +300,16 @@ D005; tool-only layout memory shipped with the completed D049.
     a dedicated read-only presentation over the same buffer layer.
 
 ## Platforms and accessibility
+
+- **D060 — Audited default shortcuts for macOS, Windows, and Linux**
+  - Deferred: Native defaults already follow platform modifiers and macOS is
+    the only dogfooded platform. Windows and Linux have no audited, discoverable
+    set across the whole command catalog.
+  - Reconsider: Knot targets daily use on Windows or Linux. Then audit every
+    command for a platform-conventional binding, resolve conflicts with system
+    and TUI/terminal keys, keep palette discovery consistent, and treat the
+    resulting defaults as the native slot that extensions and personal
+    keymaps override.
 
 - **D035 — macOS distribution**
   - Deferred: Local `Knot.app` builds cover dogfooding without release
