@@ -1,7 +1,7 @@
 # Production extension APIs and JavaScript project management
 
-Status: ⬜ In progress. Checkpoints 1–5 and D053 are complete and approved;
-checkpoints 6–10 remain unstarted. Next: D051.
+Status: ⬜ In progress. Checkpoints 1–6 and D053 are complete and approved;
+checkpoints 7–10 remain unstarted. Next: D050 (checkpoint 7).
 
 Work identifiers: D046–D052, promoted D005, and completed maintenance interlude
 D053. [Roadmap](../roadmap.md) owns initiative priority; this plan owns execution
@@ -210,26 +210,18 @@ lifecycle](../architecture/workbench-and-lifecycle.md), [semantic
 UI](../architecture/semantic-ui.md), and the relevant [decisions](../decisions.md)
 sections.
 
-### 6. Usable JS project registry — D051 ⬜
+### 6. Usable JS project registry — D051 ✅
 
-Detailed execution, step-level deliverables, and intermediate review gates live in
-[the bundled project registry plan](d051-project-registry-plan.md); this plan
-keeps the checkpoint's shared scope, ordering, and final review gate.
-
-- Bundle a project-manager extension using only public APIs. Establish bundled
-  source loading, canonical identity, version/dependency handling, load diagnostics,
-  and collision policy with installed packages through the existing loader.
-- Create/list/select/rename/remove projects; persist stable project IDs and
-  roots arrays; open the selected root in the originating window. Display useful
-  errors through the contributed native UI. Root selection does not yet claim
-  full session switching or dirty-content suspension.
-- Capture the product/API limitations exposed by using the extension and fix
-  relevant prototype coupling before proceeding.
-- **Validation:** real packaged JS through product host, storage and native UI;
-  registry survives restart; package failures clean up contributions; independent
-  windows use captured context; missing roots and storage errors remain actionable.
-- **Review gate:** dogfood the simple registry and approve the extension/platform
-  boundary. This is intermediate validation, not initiative completion.
+Approved after dogfooding the bundled `@knot/projects` registry. Bundled package
+loading, canonical identity, collision policy, and built-in storage ownership live
+in [host architecture](../architecture/extension-host.md#package-admission-and-startup)
+and [decisions](../decisions.md#bundled-extension-packages); folder selection lives
+in [decisions](../decisions.md#folder-selection) and
+[documents and persistence](../architecture/documents-and-persistence.md#workspaces-and-resource-trees);
+project ownership and active-project derivation are recorded in
+[decisions](../decisions.md#bundled-project-registry). The registry itself is
+[extensions/@knot/projects](../../extensions/@knot/projects), documented by the
+[extension guide](../extension-api.md).
 
 ### 7. Durable unsaved-document recovery — D050 ⬜
 

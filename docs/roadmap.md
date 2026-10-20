@@ -15,20 +15,19 @@ The [extension platform and project management plan](plans/extension-platform-an
 uses an ordinary JavaScript project manager to validate native application APIs,
 extension UI, durable storage, multi-root workspaces, and session restoration
 including unsaved documents. API foundation, application state/operations, handler
-declarations, extension storage, and native UI contributions are complete;
-approval and validation notes live in that plan.
+declarations, extension storage, native UI contributions, and the bundled project
+registry are complete; approval and validation notes live in that plan.
 
 Remaining order:
 
 | Checkpoint | Work identifiers | Outcome |
 | --- | --- | --- |
-| 6 | D051 | A usable JavaScript project registry with one root per workspace |
 | 7 | D050 | Unsaved-content recovery independent of extension health |
 | 8 | D051, D050 | Safe project switching with durable suspension/restoration |
 | 9 | D052 | Multiple roots throughout UI and resource operations |
 | 10 | D005, D051 | Layout, view-state, and startup restoration |
 
-Checkpoints 1–5 are complete and approved; start checkpoint 6 with the
+Checkpoints 1–6 are complete and approved; start checkpoint 7 with the
 [extension platform plan](plans/extension-platform-and-projects-plan.md).
 Execute one checkpoint at a time and stop at its review gate; detailed scope and
 acceptance belong to that plan. The early project registry is an intermediate

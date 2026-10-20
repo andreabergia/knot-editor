@@ -149,6 +149,26 @@ product startup.
 
 Reference: [extension host](architecture/extension-host.md#package-admission-and-startup).
 
+## Bundled project registry
+
+The bundled `@knot/projects` package owns project records: one application-global
+storage record holding JS-generated stable IDs, names, roots, and the recent
+selection. Native code owns workspaces and roots; the registry asks the
+application to open or replace them, so project identity and policy stay in
+JavaScript while the application keeps every private bypass closed.
+
+A project is active in a window when its recorded root matches that window's
+workspace root, and the registry persists no per-window binding yet.
+Multi-window activation is finalized with durable project sessions, and
+overlapping or multi-root matching with multi-root workspaces.
+
+The Projects tool starts hidden. Its visibility and dock selection are native
+tool-layout state: a command-invoked extension show or hide publishes the
+fresh-window default like any other explicit user arrangement.
+
+References: [extension guide](../extension-api.md) and
+[workbench lifecycle](architecture/workbench-and-lifecycle.md#automatic-tool-layout-memory).
+
 ## Personal configuration
 
 Use one manifest-free config directory with optional pre-init and post-init
