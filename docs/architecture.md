@@ -44,7 +44,8 @@ The workbench retains native tool definitions independently of visible tab
 attachments, including dock placement and hide/reopen state. The application
 owns one versioned tool-only layout snapshot in SQLite; fresh windows inherit
 the last user-customized arrangement while already-open windows stay
-independent. Views own presentation and interaction; terminal sessions own
+independent. It also owns one recovery database that protects dirty document
+text independently of extension health. Views own presentation and interaction; terminal sessions own
 PTYs, processes, and emulator state independently of their sole attached view.
 The workbench owns layout transitions; the product shell coordinates windows,
 tab transfers, and application-wide protected closure.

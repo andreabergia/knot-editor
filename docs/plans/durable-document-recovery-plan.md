@@ -1,6 +1,7 @@
 # Durable unsaved-document recovery
 
-Status: ⬜ Proposed. Execution plan for checkpoint 7 of the
+Status: 🟡 In progress. Checkpoint 7a is implemented and awaits its review gate;
+7b–7c are unstarted. Execution plan for checkpoint 7 of the
 [extension platform and projects plan](extension-platform-and-projects-plan.md).
 Checkpoints 7a–7c are executed one per implementation request and each stops at
 its review gate.
@@ -168,7 +169,7 @@ recovery UI beyond the listing command.
 
 ## Checkpoints
 
-### 7a. Recovery store and automatic protection ⬜
+### 7a. Recovery store and automatic protection 🟡 implemented, awaiting review
 
 - Implement `app::recovery`: versioned SQLite store, snapshot record types,
   automatic and retained kinds, background writes with debounce and a durable
@@ -191,6 +192,17 @@ recovery UI beyond the listing command.
   URI, and the saved baseline through `src/app/documents.rs`
   (`Document::identity/state/resource_uri`,
   `DocumentState::Persisted { persisted_revision, persisted_version }`).
+- **Implemented:** `app::recovery` owns the versioned `snapshots` store with
+  automatic and retained roles, foreground text copy with debounced background
+  `FULL`-synchronous commits, a quit flush, and non-fatal preservation of a
+  damaged or incompatible database. Documents are observed from creation on
+  model commits; persistence transitions re-publish or retire the automatic row,
+  and final-view discard and quit-discard remove it. Twelve focused tests cover
+  reopen, schema mismatch, coalescing, identical-capture skip, retained
+  immutability, commit-boundary interruption, clean and generated exclusion,
+  persistence retirement, one row per document, and disk failure. Current
+  behavior is documented in
+  [documents and persistence](../architecture/documents-and-persistence.md#durable-unsaved-document-recovery).
 - **Validation:** store reopen and schema-version mismatch; write coalescing and
   identical-capture skip; every fired capture is committed durably before the
   next cadence tick, with no accepted-but-uncommitted window; interruption at the

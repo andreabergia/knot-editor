@@ -102,6 +102,32 @@ resource association only after successful I/O. Overwrite consent does not bypas
 provider-version checks. Conflicts offer Reload, Save As, and Cancel; Reload also
 rejects edits racing its read. Watching and automatic reload remain deferred.
 
+## Durable unsaved-document recovery
+
+`app::recovery` owns one application `recovery.sqlite3` beside the tool-layout
+store. The database opens lazily off the foreground. One versioned `snapshots`
+table holds two retention roles keyed by `(kind, capture_key)`: `automatic` is
+the replaceable protection for a live dirty document (one row per document
+UUID), and `retained` is an immutable opaque-key checkpoint owned by a suspended
+session or another extension owner. Retained rows are never overwritten by
+later automatic captures.
+
+Every document is observed through its model from creation, so a commit copies
+dirty, non-generated text on the foreground and serializes it off it. Captures
+coalesce through a trailing-edge debounce and fire at least every five seconds
+while typing continues. A fired capture is written and committed with `FULL`
+synchronization before it is accepted, so the crash-loss window is the cadence
+itself. A successful persistence transition re-publishes against the new
+baseline or retires the automatic row once the document is clean; final-view
+discard removes it, and the quit path drains a capture still inside its debounce
+window. A missing, corrupt, or incompatible database is preserved and reported,
+never replaced, and failures keep pending work and live document state.
+
+Snapshot restore, external-change conflicts, the native listing command, and
+the extension-facing retention API remain in the [recovery
+plan](../plans/durable-document-recovery-plan.md). Implementation and physical
+schema live in [recovery.rs](../../src/app/recovery.rs).
+
 ## Observation
 
 Creation, final removal, persistence, and root/tree commits signal
