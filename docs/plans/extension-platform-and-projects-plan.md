@@ -1,7 +1,8 @@
 # Production extension APIs and JavaScript project management
 
 Status: ⬜ In progress. Checkpoints 1–6 and D053 are complete and approved;
-checkpoints 7–10 remain unstarted. Next: D050 (checkpoint 7).
+checkpoints 7–10 remain unstarted. Next: D050 (checkpoint 7), whose detailed
+execution lives in the [focused recovery plan](durable-document-recovery-plan.md).
 
 Work identifiers: D046–D052, promoted D005, and completed maintenance interlude
 D053. [Roadmap](../roadmap.md) owns initiative priority; this plan owns execution
@@ -225,18 +226,18 @@ project ownership and active-project derivation are recorded in
 
 ### 7. Durable unsaved-document recovery — D050 ⬜
 
-- Implement persistent document metadata, automatic recovery, retained consistent
-  captures, resolve/restore operations, dirty-baseline reconstruction, and a native
-  recovery listing/command independent of the project manager.
-- Implement the durable capture barrier and safe linkage of session records to
-  retained content; specify retention/release, orphan handling, discard, crash-loss
-  window, and graceful flush. Include untitled, missing-destination, and edited files.
-- **Validation:** reopen/crash interruption at persistence boundaries; captured
-  revision versus racing edits; no durable dangling references; multiple views;
-  Save As; external change/deletion; URI collisions; disk failure; saved versus
-  suspended generations; extension failure and missing session metadata.
-- **Review gate:** approve exact durability, recovery conflict, retention, and
-  discard semantics. Demonstrate native recovery with the project extension absent.
+Detailed execution lives in the [focused recovery plan](durable-document-recovery-plan.md):
+7a recovery store and automatic protection, 7b restore, conflicts, discard, and
+native recovery UI, and 7c capture barrier, retention API, and cleanup. This plan
+owns the shared outcome and ordering; the focused plan owns deliverables,
+validation, and one review gate per sub-checkpoint. Execute one sub-checkpoint
+per implementation request.
+
+The shared outcome: unsaved content survives restart and crash as dirty documents
+with empty undo history, restore never silently overwrites disk, the durable
+capture barrier links session records to retained content, and native recovery
+works with the project extension absent. Persistent undo (D012) and exact
+session/layout restoration (checkpoints 8 and 10) stay out of scope.
 
 ### 8. Safe JS project switching and document sessions — D051, D050 ⬜
 

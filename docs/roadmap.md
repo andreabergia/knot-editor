@@ -28,9 +28,11 @@ Remaining order:
 | 10 | D005, D051 | Layout, view-state, and startup restoration |
 
 Checkpoints 1–6 are complete and approved; start checkpoint 7 with the
-[extension platform plan](plans/extension-platform-and-projects-plan.md).
+[extension platform plan](plans/extension-platform-and-projects-plan.md), whose
+D050 sub-checkpoints are detailed in the
+[focused recovery plan](plans/durable-document-recovery-plan.md).
 Execute one checkpoint at a time and stop at its review gate; detailed scope and
-acceptance belong to that plan. The early project registry is an intermediate
+acceptance belong to those plans. The early project registry is an intermediate
 validation point, not initiative completion.
 
 This initiative takes priority over the deferred register. Persistent undo (D012),
