@@ -1,5 +1,9 @@
 //! Knot editor library.
 
-pub mod app;
+mod app;
 pub mod core;
-pub mod host;
+mod host;
+
+pub use app::run;
+/// Host operation declarations linked into the product library.
+pub use host::declarations::registry as host_operation_registry;

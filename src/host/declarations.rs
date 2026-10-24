@@ -362,6 +362,7 @@ impl DeclaredRequest {
         self.arguments.provider_mutation()
     }
 
+    #[cfg(test)]
     pub fn new<H: Handler>(arguments: H::Arguments) -> Self {
         let descriptor = registry().get(H::NAME).expect("registered handler");
         assert_eq!((descriptor.handler_type)(), std::any::TypeId::of::<H>());
@@ -371,6 +372,7 @@ impl DeclaredRequest {
         }
     }
 
+    #[cfg(test)]
     pub fn arguments<H: Handler>(&self) -> Option<&H::Arguments> {
         (self.descriptor.name == H::NAME)
             .then(|| self.arguments.as_any().downcast_ref::<H::Arguments>())
@@ -391,6 +393,7 @@ pub struct OperationDescriptor {
     invoke: InvokeAdapter,
     pub error_codes: fn() -> Vec<&'static str>,
     context_type: fn() -> std::any::TypeId,
+    #[cfg(test)]
     handler_type: fn() -> std::any::TypeId,
     argument_type: fn() -> std::any::TypeId,
 }
@@ -432,6 +435,7 @@ impl OperationDescriptor {
             },
             error_codes: H::Error::codes,
             context_type: std::any::TypeId::of::<H::Context>,
+            #[cfg(test)]
             handler_type: std::any::TypeId::of::<H>,
             argument_type: std::any::TypeId::of::<H::Arguments>,
         }

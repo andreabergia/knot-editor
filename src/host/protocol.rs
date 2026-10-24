@@ -15,6 +15,7 @@ impl ExtensionId {
         Self(value)
     }
 
+    #[cfg(test)]
     pub(crate) const fn value(self) -> u64 {
         self.0
     }

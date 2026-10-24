@@ -4,11 +4,14 @@ use std::{
     collections::{HashMap, VecDeque},
     num::NonZeroUsize,
     pin::Pin,
-    sync::{Arc, Condvar, Mutex, mpsc},
+    sync::{Arc, Condvar, Mutex},
     task::{Context, Poll},
     thread::JoinHandle,
     time::{Duration, Instant},
 };
+
+#[cfg(test)]
+use std::sync::mpsc;
 
 use super::{
     lifecycle::{ExtensionKey, ExtensionState, Failure},
@@ -26,6 +29,7 @@ impl PoolConfig {
         Self { workers }
     }
 
+    #[cfg(test)]
     pub const fn single_worker() -> Self {
         Self::new(NonZeroUsize::MIN)
     }
@@ -59,20 +63,12 @@ impl RootId {
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct TurnId(u64);
 
-/// Whether a dispatched payload starts a root or resumes its command tree.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum TurnKind {
-    Root,
-    Continuation,
-}
-
 /// One unit of opaque work selected for a worker.
 #[derive(Debug)]
 pub struct Turn<W> {
     pub key: ExtensionKey,
     pub root: RootId,
     pub id: TurnId,
-    pub kind: TurnKind,
     pub work: W,
 }
 
@@ -81,6 +77,7 @@ pub struct Turn<W> {
 pub enum TurnOutcome {
     Completed,
     AwaitingHostWork,
+    #[cfg(test)]
     ReadyForContinuation,
     Fatal(Failure),
 }
@@ -93,6 +90,7 @@ pub enum CompletionOutcome {
     Failed(Failure),
 }
 
+#[cfg(test)]
 /// Point-in-time scheduler diagnostics for one extension lifetime.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExtensionDiagnostics {
@@ -105,6 +103,7 @@ pub struct ExtensionDiagnostics {
     pub max_enqueue_to_start_lag: Duration,
 }
 
+#[cfg(test)]
 /// Point-in-time diagnostics for one bounded scheduler pool.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SchedulerDiagnostics {
@@ -137,6 +136,7 @@ pub enum SchedulerError {
         received: RootId,
     },
     DuplicateOrStaleTurn(TurnId),
+    #[cfg(test)]
     NoContinuation,
     Stopping,
     Failed(Failure),
@@ -150,20 +150,21 @@ impl std::fmt::Display for SchedulerError {
 
 impl std::error::Error for SchedulerError {}
 
-struct CompletionSlot(
-    Option<(
-        mpsc::Sender<CompletionOutcome>,
-        tokio::sync::oneshot::Sender<CompletionOutcome>,
-    )>,
-);
+struct CompletionSlot {
+    #[cfg(test)]
+    blocking: Option<mpsc::Sender<CompletionOutcome>>,
+    asynchronous: Option<tokio::sync::oneshot::Sender<CompletionOutcome>>,
+}
 
-/// Blocking and awaitable views of one root's terminal disposition.
+/// Awaitable view of one root's terminal disposition. Tests may also block on it.
 pub struct CompletionReceiver {
+    #[cfg(test)]
     blocking: mpsc::Receiver<CompletionOutcome>,
     asynchronous: tokio::sync::oneshot::Receiver<CompletionOutcome>,
 }
 
 impl CompletionReceiver {
+    #[cfg(test)]
     pub fn recv(&self) -> Result<CompletionOutcome, mpsc::RecvError> {
         self.blocking.recv()
     }
@@ -184,8 +185,11 @@ impl Future for CompletionReceiver {
 
 impl CompletionSlot {
     fn settle(&mut self, outcome: CompletionOutcome) {
-        if let Some((blocking, asynchronous)) = self.0.take() {
+        #[cfg(test)]
+        if let Some(blocking) = self.blocking.take() {
             let _ = blocking.send(outcome.clone());
+        }
+        if let Some(asynchronous) = self.asynchronous.take() {
             let _ = asynchronous.send(outcome);
         }
     }
@@ -315,6 +319,7 @@ impl<W> StateMachine<W> {
         }
         let id = RootId::new(self.next_root);
         self.next_root += 1;
+        #[cfg(test)]
         let (sender, receiver) = mpsc::channel();
         let (async_sender, async_receiver) = tokio::sync::oneshot::channel();
         let was_idle = {
@@ -332,7 +337,11 @@ impl<W> StateMachine<W> {
                     work,
                     enqueued_at: Instant::now(),
                 },
-                completion: CompletionSlot(Some((sender, async_sender))),
+                completion: CompletionSlot {
+                    #[cfg(test)]
+                    blocking: Some(sender),
+                    asynchronous: Some(async_sender),
+                },
             });
             extension.state == ExtensionState::Idle
         };
@@ -343,6 +352,7 @@ impl<W> StateMachine<W> {
         Ok((
             id,
             CompletionReceiver {
+                #[cfg(test)]
                 blocking: receiver,
                 asynchronous: async_receiver,
             },
@@ -390,6 +400,7 @@ impl<W> StateMachine<W> {
         Ok(())
     }
 
+    #[cfg(test)]
     pub fn next_turn(&mut self) -> Option<Turn<W>> {
         self.next_turn_on_worker(0)
     }
@@ -400,9 +411,9 @@ impl<W> StateMachine<W> {
             if extension.key != key || extension.state != ExtensionState::Queued {
                 continue;
             }
-            let (root, kind, queued) = if let Some(active) = extension.active.as_mut() {
+            let (root, queued) = if let Some(active) = extension.active.as_mut() {
                 let work = active.continuations.pop_front()?;
-                (active.id, TurnKind::Continuation, work)
+                (active.id, work)
             } else {
                 let pending = extension.roots.pop_front()?;
                 let root = pending.id;
@@ -412,7 +423,7 @@ impl<W> StateMachine<W> {
                     completion: pending.completion,
                     continuations: VecDeque::new(),
                 });
-                (root, TurnKind::Root, work)
+                (root, work)
             };
             let lag = queued.enqueued_at.elapsed();
             extension.max_enqueue_to_start_lag = extension.max_enqueue_to_start_lag.max(lag);
@@ -435,7 +446,6 @@ impl<W> StateMachine<W> {
                 key,
                 root,
                 id,
-                kind,
                 work: queued.work,
             });
         }
@@ -485,6 +495,7 @@ impl<W> StateMachine<W> {
                     self.extension_mut(key)?.state = ExtensionState::AwaitingHostWork;
                 }
             }
+            #[cfg(test)]
             TurnOutcome::ReadyForContinuation => {
                 if self
                     .extension(key)?
@@ -537,6 +548,7 @@ impl<W> StateMachine<W> {
         }
     }
 
+    #[cfg(test)]
     pub fn state(&self, key: ExtensionKey) -> Result<&ExtensionState, SchedulerError> {
         Ok(&self.extension(key)?.state)
     }
@@ -545,6 +557,7 @@ impl<W> StateMachine<W> {
         self.shutting_down
     }
 
+    #[cfg(test)]
     fn diagnostics(&self, worker_count: usize) -> SchedulerDiagnostics {
         let mut extensions = self
             .extensions
@@ -682,6 +695,7 @@ fn settle_roots<W>(roots: &mut VecDeque<Root<W>>, outcome: CompletionOutcome) {
 struct Shared<W> {
     state: Mutex<StateMachine<W>>,
     ready: Condvar,
+    #[cfg(test)]
     worker_count: usize,
 }
 
@@ -748,10 +762,12 @@ impl<W> SchedulerHandle<W> {
         self.shared.state.lock().unwrap().stop(key)
     }
 
+    #[cfg(test)]
     pub fn state(&self, key: ExtensionKey) -> Result<ExtensionState, SchedulerError> {
         self.shared.state.lock().unwrap().state(key).cloned()
     }
 
+    #[cfg(test)]
     pub fn diagnostics(&self) -> SchedulerDiagnostics {
         self.shared
             .state
@@ -778,6 +794,7 @@ impl<W: Send + 'static> SchedulerPool<W> {
         let shared = Arc::new(Shared {
             state: Mutex::new(StateMachine::default()),
             ready: Condvar::new(),
+            #[cfg(test)]
             worker_count: config.workers().get(),
         });
         let executor = Arc::new(executor);
@@ -802,10 +819,12 @@ impl<W: Send + 'static> SchedulerPool<W> {
         self.handle.clone()
     }
 
+    #[cfg(test)]
     pub fn worker_count(&self) -> usize {
         self.handle.shared.worker_count
     }
 
+    #[cfg(test)]
     pub fn diagnostics(&self) -> SchedulerDiagnostics {
         self.handle.diagnostics()
     }
@@ -898,7 +917,7 @@ mod tests {
         assert_eq!(scheduler.state(key), Ok(&ExtensionState::Queued));
 
         let turn = scheduler.next_turn().unwrap();
-        assert_eq!((turn.kind, turn.work), (TurnKind::Root, "root"));
+        assert_eq!(turn.work, "root");
         scheduler
             .finish_turn(key, turn.id, TurnOutcome::AwaitingHostWork)
             .unwrap();
@@ -908,7 +927,7 @@ mod tests {
             .enqueue_continuation(key, root, "response")
             .unwrap();
         let turn = scheduler.next_turn().unwrap();
-        assert_eq!((turn.kind, turn.work), (TurnKind::Continuation, "response"));
+        assert_eq!(turn.work, "response");
         scheduler
             .finish_turn(key, turn.id, TurnOutcome::Completed)
             .unwrap();
@@ -1366,7 +1385,7 @@ mod tests {
             for key in &keys {
                 let turn = scheduler.next_turn_on_worker(0).unwrap();
                 assert_eq!(turn.key, *key);
-                assert_eq!((turn.kind, turn.work), (TurnKind::Root, "await host"));
+                assert_eq!(turn.work, "await host");
                 scheduler
                     .finish_turn(*key, turn.id, TurnOutcome::AwaitingHostWork)
                     .unwrap();
@@ -1383,10 +1402,7 @@ mod tests {
             for key in keys.iter().rev() {
                 let turn = scheduler.next_turn_on_worker(1).unwrap();
                 assert_eq!(turn.key, *key);
-                assert_eq!(
-                    (turn.kind, turn.work),
-                    (TurnKind::Continuation, "host reply")
-                );
+                assert_eq!(turn.work, "host reply");
                 scheduler
                     .finish_turn(*key, turn.id, TurnOutcome::Completed)
                     .unwrap();
@@ -1394,7 +1410,7 @@ mod tests {
             for key in keys.iter().rev() {
                 let turn = scheduler.next_turn_on_worker(0).unwrap();
                 assert_eq!(turn.key, *key);
-                assert_eq!((turn.kind, turn.work), (TurnKind::Root, "next root"));
+                assert_eq!(turn.work, "next root");
                 scheduler
                     .finish_turn(*key, turn.id, TurnOutcome::Completed)
                     .unwrap();
