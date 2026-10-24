@@ -436,3 +436,31 @@ of its awaiting caller, preserving accepted native work without a final JS
 callback.
 
 Reference: [extension host](architecture/extension-host.md#extension-record-storage).
+
+## Unsaved-document recovery store
+
+Protect unsaved text in an application-owned recovery database, independently of
+extension health and separate from the extension record stores. An `automatic`
+row per document UUID is replaceable protection for a live dirty document; a
+`retained` row is an immutable opaque-key checkpoint owned by a suspended session
+or another extension owner. Later automatic captures never overwrite retained
+rows, and saving retires the automatic row without invalidating a retained one.
+
+Capture copies text on the foreground and commits off it. A trailing-edge
+debounce settles about a second after edits stop and fires at least every five
+seconds while typing continues. Each fired capture commits with FULL
+synchronization before it is accepted, so the advertised crash-loss window is the
+cadence itself. Deferring durability to save is rejected: a FULL commit off the
+foreground is far cheaper than losing text to avoid it. The quit, close, and
+command paths only drain a capture still inside its debounce window.
+
+The database opens lazily off the foreground, and a missing, corrupt, or
+incompatible database is preserved and reported rather than replaced. Dirty
+documents are observed through their shared model, so multiple views produce one
+row and no extension or session metadata is required.
+
+Restore, conflict, and discard semantics remain proposed in the [recovery
+plan](plans/durable-document-recovery-plan.md) until the 7b gate.
+
+Reference: [documents and
+persistence](architecture/documents-and-persistence.md#durable-unsaved-document-recovery).

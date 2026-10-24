@@ -1,8 +1,9 @@
 # Production extension APIs and JavaScript project management
 
 Status: ⬜ In progress. Checkpoints 1–6 and D053 are complete and approved;
-checkpoints 7–10 remain unstarted. Next: D050 (checkpoint 7), whose detailed
-execution lives in the [focused recovery plan](durable-document-recovery-plan.md).
+checkpoint 7 is in progress (7a approved) and checkpoints 8–10 remain unstarted.
+Next: D050 checkpoint 7b, whose detailed execution lives in the
+[focused recovery plan](durable-document-recovery-plan.md).
 
 Work identifiers: D046–D052, promoted D005, and completed maintenance interlude
 D053. [Roadmap](../roadmap.md) owns initiative priority; this plan owns execution
@@ -224,14 +225,14 @@ project ownership and active-project derivation are recorded in
 [extensions/@knot/projects](../../extensions/@knot/projects), documented by the
 [extension guide](../extension-api.md).
 
-### 7. Durable unsaved-document recovery — D050 ⬜
+### 7. Durable unsaved-document recovery — D050 🟡
 
-Detailed execution lives in the [focused recovery plan](durable-document-recovery-plan.md):
-7a recovery store and automatic protection, 7b restore, conflicts, discard, and
-native recovery UI, and 7c capture barrier, retention API, and cleanup. This plan
-owns the shared outcome and ordering; the focused plan owns deliverables,
-validation, and one review gate per sub-checkpoint. Execute one sub-checkpoint
-per implementation request.
+7a recovery store and automatic protection is approved; 7b restore, conflicts,
+discard, and native recovery UI is next, then 7c capture barrier, retention API,
+and cleanup. Detailed execution lives in the [focused recovery
+plan](durable-document-recovery-plan.md), which owns deliverables, validation,
+and one review gate per sub-checkpoint. This plan owns the shared outcome and
+ordering. Execute one sub-checkpoint per implementation request.
 
 The shared outcome: unsaved content survives restart and crash as dirty documents
 with empty undo history, restore never silently overwrites disk, the durable

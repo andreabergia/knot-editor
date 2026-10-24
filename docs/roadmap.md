@@ -27,7 +27,8 @@ Remaining order:
 | 9 | D052 | Multiple roots throughout UI and resource operations |
 | 10 | D005, D051 | Layout, view-state, and startup restoration |
 
-Checkpoints 1–6 are complete and approved; start checkpoint 7 with the
+Checkpoints 1–6 are complete and approved and checkpoint 7 is in progress (7a
+approved). Continue with the
 [extension platform plan](plans/extension-platform-and-projects-plan.md), whose
 D050 sub-checkpoints are detailed in the
 [focused recovery plan](plans/durable-document-recovery-plan.md).

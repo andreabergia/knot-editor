@@ -1,7 +1,7 @@
 # Durable unsaved-document recovery
 
-Status: 🟡 In progress. Checkpoint 7a is implemented and awaits its review gate;
-7b–7c are unstarted. Execution plan for checkpoint 7 of the
+Status: 🟡 In progress. Checkpoint 7a is approved; 7b is next and 7c is
+unstarted. Execution plan for checkpoint 7 of the
 [extension platform and projects plan](extension-platform-and-projects-plan.md).
 Checkpoints 7a–7c are executed one per implementation request and each stops at
 its review gate.
@@ -169,49 +169,16 @@ recovery UI beyond the listing command.
 
 ## Checkpoints
 
-### 7a. Recovery store and automatic protection 🟡 implemented, awaiting review
+### 7a. Recovery store and automatic protection ✅
 
-- Implement `app::recovery`: versioned SQLite store, snapshot record types,
-  automatic and retained kinds, background writes with debounce and a durable
-  commit per capture, quit flush, and non-fatal diagnostics that preserve a
-  damaged or incompatible database.
-- Publish dirty, non-generated document snapshots on model commits and on
-  persistence transitions; dedup one row per document UUID across multiple views.
-  Save and Save As update or retire the automatic row; final-view discard removes
-  it. Capture copies text on the foreground and writes off it.
-- **Implementation context:** Add `src/app/recovery.rs`, declare it in
-  `src/app/mod.rs`, install its `Global` beside `ApplicationToolLayout` and
-  `ApplicationDocuments`, and flush a pending capture from
-  `extension_host::quit_after_storage`. Mirror `src/app/tool_layout.rs` for the
-  store shape (path under `data_local_dir`, `application_id`, versioned `STRICT`
-  schema, debounced background writes, `flush()` at quit, non-fatal diagnostics)
-  and `src/app/extension_storage.rs` for the serialized background connection and
-  shutdown drain. Capture hooks already exist: model commits are drained in
-  `src/app/application_observation.rs` and persistence transitions signal
-  `extension_host::application_changed`. Read document identity, state, resource
-  URI, and the saved baseline through `src/app/documents.rs`
-  (`Document::identity/state/resource_uri`,
-  `DocumentState::Persisted { persisted_revision, persisted_version }`).
-- **Implemented:** `app::recovery` owns the versioned `snapshots` store with
-  automatic and retained roles, foreground text copy with debounced background
-  `FULL`-synchronous commits, a quit flush, and non-fatal preservation of a
-  damaged or incompatible database. Documents are observed from creation on
-  model commits; persistence transitions re-publish or retire the automatic row,
-  and final-view discard and quit-discard remove it. Twelve focused tests cover
-  reopen, schema mismatch, coalescing, identical-capture skip, retained
-  immutability, commit-boundary interruption, clean and generated exclusion,
-  persistence retirement, one row per document, and disk failure. Current
-  behavior is documented in
-  [documents and persistence](../architecture/documents-and-persistence.md#durable-unsaved-document-recovery).
-- **Validation:** store reopen and schema-version mismatch; write coalescing and
-  identical-capture skip; every fired capture is committed durably before the
-  next cadence tick, with no accepted-but-uncommitted window; interruption at the
-  commit boundary leaves either the old or the new durable row; clean and
-  generated documents excluded; multiple views produce one row; Save, Save As, and
-  Don't Save lifecycle; disk and file failures keep live state and report without
-  blocking editing.
-- **Review gate:** approve the record schema, the two retention roles, the capture
-  cadence, the acknowledged durability point, and the crash-loss guarantee.
+Approved 2026-10-20 after store, retention, cadence, commit-boundary
+interruption, and failure-preservation validation. `app::recovery` owns the
+versioned snapshots store, automatic and retained roles, debounced background
+commits with a quit flush, and non-fatal preservation of damaged databases.
+Dirty documents are observed through their shared model, so multiple views
+produce one row. Current behavior lives in [documents and
+persistence](../architecture/documents-and-persistence.md#durable-unsaved-document-recovery)
+and validated rationale in [decisions](../decisions.md#unsaved-document-recovery-store).
 
 ### 7b. Restore, conflicts, discard, and native recovery UI ⬜
 
