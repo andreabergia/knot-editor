@@ -60,38 +60,20 @@ impl OpenRequest {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum LaunchConfiguration {
-    Product(Option<OpenRequest>),
-    TerminalFixture,
-}
-
-impl LaunchConfiguration {
-    pub(crate) fn parse(
-        arguments: impl IntoIterator<Item = String>,
-        current_dir: &Path,
-    ) -> Result<Self, String> {
-        let mut arguments = arguments.into_iter();
-        let _executable = arguments.next();
-        let Some(first) = arguments.next() else {
-            return Ok(Self::Product(None));
-        };
-
-        if first == "--terminal-fixture" {
-            if arguments.next().is_some() {
-                return Err("usage: knot [path] | knot --terminal-fixture".into());
-            }
-            return Ok(Self::TerminalFixture);
-        }
-
-        if arguments.next().is_some() {
-            return Err("usage: knot [path] | knot --terminal-fixture".into());
-        }
-        Ok(Self::Product(Some(OpenRequest::from_path(
-            &PathBuf::from(first),
-            current_dir,
-        )?)))
+/// Parse the process arguments into the optional resource the product opens.
+pub(crate) fn parse_launch_arguments(
+    arguments: impl IntoIterator<Item = String>,
+    current_dir: &Path,
+) -> Result<Option<OpenRequest>, String> {
+    let mut arguments = arguments.into_iter();
+    let _executable = arguments.next();
+    let Some(first) = arguments.next() else {
+        return Ok(None);
+    };
+    if arguments.next().is_some() {
+        return Err("usage: knot [path]".into());
     }
+    OpenRequest::from_path(&PathBuf::from(first), current_dir).map(Some)
 }
 
 #[cfg(test)]
@@ -101,22 +83,20 @@ mod tests {
     #[test]
     fn launch_defaults_to_the_product_without_a_target() {
         assert_eq!(
-            LaunchConfiguration::parse(["knot".into()], Path::new("/tmp")).unwrap(),
-            LaunchConfiguration::Product(None)
+            parse_launch_arguments(["knot".into()], Path::new("/tmp")).unwrap(),
+            None
         );
     }
 
     #[test]
     fn launch_accepts_exactly_one_path_and_normalizes_it_at_the_boundary() {
         let directory = tempfile::tempdir().unwrap();
-        let configuration = LaunchConfiguration::parse(
+        let request = parse_launch_arguments(
             ["knot".into(), "project/../notes ü.md".into()],
             directory.path(),
         )
-        .unwrap();
-        let LaunchConfiguration::Product(Some(request)) = configuration else {
-            panic!("expected a product open request");
-        };
+        .unwrap()
+        .expect("expected a product open request");
 
         assert_eq!(
             request.uri().to_string(),
@@ -126,23 +106,11 @@ mod tests {
         );
         assert_eq!(request.title(), "notes ü.md");
         assert!(
-            LaunchConfiguration::parse(
+            parse_launch_arguments(
                 ["knot".into(), "one".into(), "two".into()],
                 directory.path()
             )
             .is_err()
-        );
-    }
-
-    #[test]
-    fn terminal_fixture_requires_an_explicit_flag() {
-        assert_eq!(
-            LaunchConfiguration::parse(
-                ["knot".into(), "--terminal-fixture".into()],
-                Path::new("/tmp")
-            )
-            .unwrap(),
-            LaunchConfiguration::TerminalFixture
         );
     }
 

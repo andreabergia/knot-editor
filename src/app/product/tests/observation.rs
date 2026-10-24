@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::app::{
-    entry::LaunchConfiguration,
+    entry::parse_launch_arguments,
     extension_host::{self, ProductExtensionHost},
 };
 use crate::host::protocol::{ApplicationChange, ApplicationEvent, DocumentInfo, DocumentKind};
@@ -70,13 +70,12 @@ fn open_entry_points_share_document_identity_and_publish_only_committed_resource
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("notes.txt");
     std::fs::write(&path, "native file").unwrap();
-    let LaunchConfiguration::Product(Some(cli)) = LaunchConfiguration::parse(
+    let cli = parse_launch_arguments(
         ["knot".to_owned(), "notes.txt".to_owned()],
         directory.path(),
     )
-    .unwrap() else {
-        panic!("CLI target missing");
-    };
+    .unwrap()
+    .expect("CLI target missing");
     let placeholder = cx.update(|cx| create_untitled_document(&documents, cx));
     let placeholder_model =
         cx.read(|cx| documents.read(cx).get(placeholder).unwrap().model().clone());

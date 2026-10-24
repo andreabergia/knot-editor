@@ -73,22 +73,13 @@ mod recovery;
 )]
 mod resource;
 mod terminal_colors;
-mod terminal_fixture;
 mod terminal_input;
 mod terminal_layout;
 mod terminal_links;
 mod terminal_mouse;
-#[allow(
-    dead_code,
-    reason = "session helpers also serve the diagnostic terminal fixture"
-)]
 mod terminal_session;
 #[cfg(all(test, unix))]
 mod terminal_session_tests;
-#[allow(
-    dead_code,
-    reason = "terminal view helpers also serve the diagnostic fixture"
-)]
 mod terminal_view;
 mod text_input;
 mod text_view;
@@ -186,7 +177,7 @@ struct CommandExecution {
 }
 
 pub fn run() {
-    let launch = entry::LaunchConfiguration::parse(
+    let request = entry::parse_launch_arguments(
         std::env::args(),
         &std::env::current_dir().expect("Knot requires a current working directory"),
     )
@@ -194,8 +185,5 @@ pub fn run() {
         eprintln!("[knot] {error}");
         std::process::exit(2);
     });
-    match launch {
-        entry::LaunchConfiguration::Product(request) => product::run(request),
-        entry::LaunchConfiguration::TerminalFixture => terminal_fixture::run(),
-    }
+    product::run(request);
 }
