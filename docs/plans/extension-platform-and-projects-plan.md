@@ -2,9 +2,9 @@
 
 Status: ⬜ In progress. Checkpoints 1–6 and D053 are complete and approved;
 checkpoint 7 is in progress (7a and 7b approved) and checkpoints 8–10 remain
-unstarted. Next: the [codebase health maintenance
-interlude](#maintenance-interlude--codebase-health-cleanup-), then D050
-checkpoint 7c; detailed execution lives in the [focused recovery
+unstarted. The [codebase health maintenance
+interlude](#maintenance-interlude--codebase-health-cleanup-) is implemented and
+awaiting its review gate; D050 checkpoint 7c follows; detailed execution lives in the [focused recovery
 plan](durable-document-recovery-plan.md).
 
 Work identifiers: D046–D052, promoted D005, and completed maintenance interlude
@@ -226,7 +226,9 @@ project ownership and active-project derivation are recorded in
 [extensions/@knot/projects](../../extensions/@knot/projects), documented by the
 [extension guide](../extension-api.md).
 
-### Maintenance interlude — Codebase health cleanup ⬜
+### Maintenance interlude — Codebase health cleanup 🔍
+
+Implemented; awaiting the review gate.
 
 Runs between 7b and 7c. The [codebase health review](codebase-health-review.md)
 found prototype leftovers and structural debt in the code that 7c, 8, and 10
@@ -234,13 +236,13 @@ modify. This interlude removes what the remaining checkpoints would otherwise
 design around. Behavior changes are limited to the symlink save fix and hiding
 the Find stub. Section references (§) point into the review.
 
-- ⬜ **Prototype removal (§2.1).** Delete the native search-results controller,
+- ✅ **Prototype removal (§2.1).** Delete the native search-results controller,
   `CompactCompletionSurface` and completion-surface swapping, the
   `--terminal-fixture` launch mode, `examples/tab_drag_delivery.rs`, the D028/D029
   platform smoke scripts, `TransientKind`, `ContributionSource::BuiltIn`, and the
   remaining unused one-off items. Keep `RecoveryStore::{retain, release}` (7c) and
   `ResourceUri::is_descendant_of` / `WorkspaceState::replace_root` (checkpoint 9).
-- ⬜ **Remove `DocumentState::Generated`.** No product path or public API creates
+- ✅ **Remove `DocumentState::Generated`.** No product path or public API creates
   a generated document; only the search probe and tests did. Remove the state,
   `DocumentKind::Generated`, the `"generated"` document kind in `knot.d.ts`, and
   the recovery, closure, and Save special cases. Rewrite the D050 sentence above
@@ -249,24 +251,24 @@ the Find stub. Section references (§) point into the review.
   [documents and persistence](../architecture/documents-and-persistence.md), the
   recovery plan, and decisions. Record interactive generated views (magit-like)
   as an extension-facing use case under roadmap D027.
-- ⬜ **Fence test-only code.** Put the V8 probe APIs (`Script`/`FixtureModule`
+- ✅ **Fence test-only code.** Put the V8 probe APIs (`Script`/`FixtureModule`
   work, fixture execution, external UTF-16 holding), `MemoryFileSystemProvider`,
   scheduler diagnostics, declaration introspection, and the workbench
   convenience APIs behind `#[cfg(test)]`. Remove every module-level
   `allow(dead_code)` from `src/app/mod.rs` and `src/host/mod.rs`. Any remaining
   item-level allowance names the scheduled work that needs it.
-- ⬜ **Save through symlinks (P0-2).** Resolve the final target before choosing
+- ✅ **Save through symlinks (P0-2).** Resolve the final target before choosing
   the temporary directory and rename destination, and fsync the parent directory
   after replacement. Add a Unix test that saves through a symlink and asserts the
   link survives.
-- ⬜ **Hide the Find stub (P1-4).** Remove the Find menu items, default
+- ✅ **Hide the Find stub (P1-4).** Remove the Find menu items, default
   bindings, and placeholder commands until D031 is selected.
-- ⬜ **Split `ProductShell` (P1-5).** Move save, open, protected closure,
+- ✅ **Split `ProductShell` (P1-5).** Move save, open, protected closure,
   tools/contributed views, rendering, and launch into `src/app/product/`
   submodules, and move the inline tests into `product/tests/`. This is a pure
   move, done before checkpoint 8 adds capture/prepare/replace operations to the
   closure path. Update the `AGENTS.md` routing table and architecture links.
-- ⬜ **Hygiene.** Rewrite the `core` module docs in present tense, without the
+- ✅ **Hygiene.** Rewrite the `core` module docs in present tense, without the
   exploration's `D#` / "step N" labels, which collide with roadmap IDs. Move
   `pollster` to dev-dependencies. Fix the `docs/development.md` CI drift
   (macOS/Windows handler jobs) and document the manual terminal fixtures.
@@ -274,6 +276,47 @@ the Find stub. Section references (§) point into the review.
   suite; `cargo check --lib` reports no dead code with the module-level
   allowances gone; the extension authoring check passes with the narrowed
   document kind; manual Save through a symlinked file.
+
+Notes for the review:
+
+- **Library surface.** `src/lib.rs` now exports only `run()`, the public `core`,
+  and a hidden re-export of `host::declarations` for the linked-inventory test
+  and the declaration doc tests. With `app` and `host` private, `cargo check
+  --lib` checks their items for dead code too; it reports none. `core` stays
+  public, so its unused line index and interval index (kept for the editor view
+  rework, P0-1) are not checked.
+- **Beyond the listed removals.** The stricter check surfaced items that even
+  tests never used. Those were deleted, as was `TurnKind`: tests identify roots
+  and continuations by their work. The scheduler's blocking completion channel,
+  `ReadyForContinuation`, and diagnostics are test-only. Contribution sources are
+  now a plain extension-lifecycle struct. The launch arguments parse straight
+  into the optional open request.
+- **Remaining item-level allowances.** `ExtensionPool::watchdog` and
+  `ExtensionWatchdog` cite the checkpoint 8 escape hatch.
+  `RecoveryStore::{retain, release}` cite the D050 retention API.
+  `is_descendant_of` and `replace_root` cite D052. `CommandExecution` is only
+  allowed outside tests, because product callers discard it and tests await it.
+  `ExtensionStorage::user_root` is only allowed under test, where hosts use
+  temporary roots.
+- **`ProductShell` layout.** `product.rs` keeps shell state, focus, command
+  routing, terminals, and transient interactions (1,400 lines, down from 4,600).
+  `save.rs`, `open.rs`, `closure.rs`, `tools.rs`, `render.rs`, and `launch.rs`
+  each hold one `impl ProductShell` block, plus their free functions. Moved
+  methods widened from private to `pub(super)`; the shared state types stay in
+  `product.rs`. The 8,000 lines of inline tests
+  moved unchanged into `product/tests.rs`, the module root for the existing
+  themed files in `product/tests/`. Splitting them further by theme was left
+  for the post-initiative test extraction (P2-3).
+- **Rooted local provider.** `LocalFileSystemProvider::new` is test-only; the
+  product only uses the unrestricted provider. The rooted mode stays because
+  the provider tests exercise containment through it.
+- **Validation.** Clippy with `-D warnings`, the full workspace test suite, doc
+  tests, and the extension authoring check pass; `cargo check --lib` reports no
+  dead code. The new Unix test fails without the symlink fix. One host test,
+  `dropped_removed_and_unloaded_provider_requests_release_runtime_state`, fails
+  about once in 15 full-suite runs both here and at the pre-interlude commit, so
+  the flake predates this work. Manual Save through a symlinked file has not
+  been run yet.
 - **Review gate:** approve the removals and the `ProductShell` module layout
   before 7c starts.
 
