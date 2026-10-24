@@ -70,14 +70,15 @@ EditorView -> CompletionController -> independent extension runtimes
    |                    ^                         |
    |                    +--- validated results ---+
    |                              |
-   +---- list or compact surface <-+
+   +----- native list surface <----+
 ```
 
 Responses reach a controller only while the registration and lifecycle remain
 live and weak editor identity, active generation, buffer handle, and public
 revision still match. The controller merges partial results deterministically
-and assigns stable semantic item identities. Surface replacement reattaches to
-the current immutable snapshot without restarting provider work. Acceptance
+and assigns stable semantic item identities. The native list surface presents
+the current immutable snapshot and tracks selection by item identity, so
+presentation updates never restart provider work. Acceptance
 resolves the selected identity through the controller and performs one
 revision-checked prefix replacement.
 
@@ -88,9 +89,8 @@ revision-checked prefix replacement.
   remain visible, and the provider participates again on the next invocation
   without re-registration.
 
-Surface replacement deliberately resets presentation selection. Applicability,
-automatic triggers, streaming, active cancellation of superseded requests,
-timeouts, backpressure, richer edits, and popup polish remain deferred.
+Applicability, automatic triggers, streaming, active cancellation of superseded
+requests, timeouts, backpressure, richer edits, and popup polish remain deferred.
 
 ## Extension trees
 

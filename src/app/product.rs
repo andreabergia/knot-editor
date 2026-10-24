@@ -6128,7 +6128,7 @@ mod tests {
             editor
                 .read(cx)
                 .completion_state()
-                .is_some_and(|(items, pending, failures, _, _)| {
+                .is_some_and(|(items, pending, failures, _)| {
                     items == 1 && pending == 0 && failures == 0
                 })
         });
@@ -6673,7 +6673,7 @@ mod tests {
             cx.run_until_parked();
             if cx.read(|cx| {
                 editor.read(cx).completion_state().is_some_and(
-                    |(items, pending, failures, _, _)| items == 2 && pending == 0 && failures == 0,
+                    |(items, pending, failures, _)| items == 2 && pending == 0 && failures == 0,
                 )
             }) {
                 break;
@@ -6965,7 +6965,7 @@ await commands.register("api.cross", async (context) => {
             editor
                 .read(cx)
                 .completion_state()
-                .is_some_and(|(items, pending, failures, _, _)| {
+                .is_some_and(|(items, pending, failures, _)| {
                     items == 1 && pending == 0 && failures == 0
                 })
         });
@@ -7753,7 +7753,7 @@ await commands.register("api.owned-cleanup", async () => {
                 editor
                     .read(cx)
                     .completion_state()
-                    .is_some_and(|(items, pending, _, _, _)| items == 1 && pending == 0)
+                    .is_some_and(|(items, pending, _, _)| items == 1 && pending == 0)
             });
             if explicit_cleanup {
                 let cleanup = dispatch_product_command(&shell, window, "api.owned-cleanup", cx);
@@ -7773,7 +7773,7 @@ await commands.register("api.owned-cleanup", async () => {
                         .resolve("api.owned")
                         .is_err()
                 );
-                let (items, pending, _, _, _) = editor.read(cx).completion_state().unwrap();
+                let (items, pending, _, _) = editor.read(cx).completion_state().unwrap();
                 assert_eq!((items, pending), (0, 0));
             });
             if explicit_cleanup {

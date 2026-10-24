@@ -25,8 +25,7 @@ use super::typography::{TEXT_SIZE as FONT_SIZE, text_font as make_font};
 use super::{
     CompletionAccept, CompletionDismiss, CompletionNext, CompletionPrevious, EDITOR_KEY_CONTEXT,
     completion::{
-        CompactCompletionSurface, CompletionController, CompletionProviderRegistration,
-        CompletionSurface, CompletionSurfaceKind, ListCompletionSurface,
+        CompletionController, CompletionProviderRegistration, CompletionSurface,
     },
     history::{EditGroupKind, EditGrouping, HistoryViewChange, HistoryViewState},
     model::{BufferModel, ContributionSource, ResolvedEditorContribution},
@@ -156,7 +155,7 @@ pub struct EditorView {
     history_was_focused: bool,
     last_history_restore_generation: u64,
     completion: Option<CompletionController>,
-    completion_surface: Option<Box<dyn CompletionSurface>>,
+    completion_surface: Option<CompletionSurface>,
     completion_tasks: Vec<(CompletionProviderRegistrationId, Task<()>)>,
     next_completion_generation: u64,
     #[cfg(test)]
@@ -183,14 +182,13 @@ impl EditorView {
     #[cfg(test)]
     pub(crate) fn completion_state(
         &self,
-    ) -> Option<(usize, usize, usize, CompletionSurfaceKind, u64)> {
+    ) -> Option<(usize, usize, usize, u64)> {
         let controller = self.completion.as_ref()?;
         let snapshot = controller.snapshot();
         Some((
             snapshot.items.len(),
             snapshot.pending_provider_count,
             snapshot.failures.len(),
-            self.completion_surface.as_ref()?.kind(),
             controller.generation(),
         ))
     }
@@ -1631,9 +1629,7 @@ impl EditorView {
             providers,
         );
         let requests = controller.requests();
-        self.completion_surface = Some(Box::new(ListCompletionSurface::attach(
-            controller.snapshot().clone(),
-        )));
+        self.completion_surface = Some(CompletionSurface::attach(controller.snapshot().clone()));
         self.completion = Some(controller);
         cx.notify();
         requests
@@ -1696,9 +1692,6 @@ impl EditorView {
     }
 
     fn dismiss_completion(&mut self) {
-        if let Some(surface) = self.completion_surface.as_mut() {
-            surface.detach();
-        }
         self.completion_surface = None;
         self.completion = None;
         self.completion_tasks.clear();
@@ -1790,27 +1783,6 @@ impl EditorView {
         cx: &mut Context<Self>,
     ) {
         self.dismiss_completion();
-        cx.notify();
-    }
-
-    fn swap_completion_surface(&mut self, cx: &mut Context<Self>) {
-        let Some(controller) = self.completion.as_ref() else {
-            return;
-        };
-        let next: Box<dyn CompletionSurface> = match self
-            .completion_surface
-            .as_ref()
-            .map(|surface| surface.kind())
-        {
-            Some(CompletionSurfaceKind::List) => Box::new(CompactCompletionSurface::attach(
-                controller.snapshot().clone(),
-            )),
-            _ => Box::new(ListCompletionSurface::attach(controller.snapshot().clone())),
-        };
-        if let Some(surface) = self.completion_surface.as_mut() {
-            surface.detach();
-        }
-        self.completion_surface = Some(next);
         cx.notify();
     }
 }

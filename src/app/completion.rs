@@ -35,21 +35,6 @@ pub(crate) struct CompletionSnapshot {
     pub(crate) failures: Arc<[CompletionFailure]>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CompletionSurfaceKind {
-    List,
-    Compact,
-}
-
-pub(crate) trait CompletionSurface {
-    fn kind(&self) -> CompletionSurfaceKind;
-    fn update(&mut self, snapshot: CompletionSnapshot);
-    fn move_selection(&mut self, delta: isize);
-    fn selected_item(&self) -> Option<CompletionItemId>;
-    fn render(&self, anchor: Point<Pixels>) -> AnyElement;
-    fn detach(&mut self);
-}
-
 fn initial_selection(snapshot: &CompletionSnapshot) -> Option<CompletionItemId> {
     snapshot.items.first().map(|item| item.id)
 }
@@ -77,37 +62,32 @@ fn preserve_selection(snapshot: &CompletionSnapshot, selected: &mut Option<Compl
     }
 }
 
-pub(crate) struct ListCompletionSurface {
+/// The native completion list presenting one aggregated snapshot.
+pub(crate) struct CompletionSurface {
     snapshot: CompletionSnapshot,
     selected: Option<CompletionItemId>,
 }
 
-impl ListCompletionSurface {
+impl CompletionSurface {
     pub(crate) fn attach(snapshot: CompletionSnapshot) -> Self {
         let selected = initial_selection(&snapshot);
         Self { snapshot, selected }
     }
-}
 
-impl CompletionSurface for ListCompletionSurface {
-    fn kind(&self) -> CompletionSurfaceKind {
-        CompletionSurfaceKind::List
-    }
-
-    fn update(&mut self, snapshot: CompletionSnapshot) {
+    pub(crate) fn update(&mut self, snapshot: CompletionSnapshot) {
         self.snapshot = snapshot;
         preserve_selection(&self.snapshot, &mut self.selected);
     }
 
-    fn move_selection(&mut self, delta: isize) {
+    pub(crate) fn move_selection(&mut self, delta: isize) {
         move_selection(&self.snapshot, &mut self.selected, delta);
     }
 
-    fn selected_item(&self) -> Option<CompletionItemId> {
+    pub(crate) fn selected_item(&self) -> Option<CompletionItemId> {
         self.selected
     }
 
-    fn render(&self, anchor: Point<Pixels>) -> AnyElement {
+    pub(crate) fn render(&self, anchor: Point<Pixels>) -> AnyElement {
         let selected = self.selected;
         let status = format!(
             "{} pending · {} failed",
@@ -157,75 +137,6 @@ impl CompletionSurface for ListCompletionSurface {
                     .child(status),
             )
             .into_any_element()
-    }
-
-    fn detach(&mut self) {
-        self.selected = None;
-    }
-}
-
-pub(crate) struct CompactCompletionSurface {
-    snapshot: CompletionSnapshot,
-    selected: Option<CompletionItemId>,
-}
-
-impl CompactCompletionSurface {
-    pub(crate) fn attach(snapshot: CompletionSnapshot) -> Self {
-        let selected = initial_selection(&snapshot);
-        Self { snapshot, selected }
-    }
-}
-
-impl CompletionSurface for CompactCompletionSurface {
-    fn kind(&self) -> CompletionSurfaceKind {
-        CompletionSurfaceKind::Compact
-    }
-
-    fn update(&mut self, snapshot: CompletionSnapshot) {
-        self.snapshot = snapshot;
-        preserve_selection(&self.snapshot, &mut self.selected);
-    }
-
-    fn move_selection(&mut self, delta: isize) {
-        move_selection(&self.snapshot, &mut self.selected, delta);
-    }
-
-    fn selected_item(&self) -> Option<CompletionItemId> {
-        self.selected
-    }
-
-    fn render(&self, anchor: Point<Pixels>) -> AnyElement {
-        let candidate = self
-            .selected
-            .and_then(|selected| self.snapshot.items.iter().find(|item| item.id == selected))
-            .map_or_else(|| "waiting…".into(), |item| item.label.clone());
-        let status = format!(
-            "{} items / {} pending / {} failed",
-            self.snapshot.items.len(),
-            self.snapshot.pending_provider_count,
-            self.snapshot.failures.len()
-        );
-        div()
-            .absolute()
-            .left(anchor.x)
-            .top(anchor.y)
-            .flex()
-            .items_center()
-            .gap_2()
-            .rounded_full()
-            .border_1()
-            .border_color(rgb(0xd08770))
-            .bg(rgb(0x3b2f2f))
-            .px_3()
-            .py_1()
-            .text_sm()
-            .child(candidate)
-            .child(div().text_xs().text_color(rgb(0xd8a48f)).child(status))
-            .into_any_element()
-    }
-
-    fn detach(&mut self) {
-        self.selected = None;
     }
 }
 
@@ -564,8 +475,8 @@ mod tests {
     use std::sync::Arc;
 
     use super::{
-        CompactCompletionSurface, CompletionController, CompletionItem, CompletionItemId,
-        CompletionProviderRegistry, CompletionSnapshot, CompletionSurface, ListCompletionSurface,
+        CompletionController, CompletionItem, CompletionItemId, CompletionProviderRegistry,
+        CompletionSnapshot, CompletionSurface,
     };
     use crate::host::protocol::{
         BufferHandle, CompletionProviderError, CompletionResponse, CompletionResultItem,
@@ -761,14 +672,11 @@ mod tests {
             }
         }
 
-        let mut list = ListCompletionSurface::attach(snapshot(&[(1, "one"), (2, "two")]));
+        let mut list = CompletionSurface::attach(snapshot(&[(1, "one"), (2, "two")]));
         list.move_selection(1);
         assert_eq!(list.selected_item(), Some(CompletionItemId(2)));
         let reordered = snapshot(&[(3, "three"), (2, "two"), (1, "one")]);
-        list.update(reordered.clone());
+        list.update(reordered);
         assert_eq!(list.selected_item(), Some(CompletionItemId(2)));
-
-        let compact = CompactCompletionSurface::attach(reordered);
-        assert_eq!(compact.selected_item(), Some(CompletionItemId(3)));
     }
 }
