@@ -123,8 +123,27 @@ discard removes it, and the quit path drains a capture still inside its debounce
 window. A missing, corrupt, or incompatible database is preserved and reported,
 never replaced, and failures keep pending work and live document state.
 
-Snapshot restore, external-change conflicts, the native listing command, and
-the extension-facing retention API remain in the [recovery
+Restore reads the snapshot's resource through its registered provider as the
+baseline (empty for untitled documents), then applies the recovered text as one
+edit with an empty undo history, so dirty state comes from the ordinary content
+comparison. Restore never writes a resource. A deleted persisted file becomes a
+dirty destination; a changed file keeps the capture-time provider version, so a
+later save reaches the existing conflict prompt. A live document is never
+replaced: when another document owns the URI, or a retained capture's document is
+open, the text opens as a separate untitled copy, and an automatic snapshot's
+protection moves to that copy in one transaction. Automatic restores keep the
+document UUID; retained restores allocate a fresh one and leave the capture in
+place.
+
+Startup restores every automatic snapshot without a live document, newest per
+URI, after config and extension startup and before the launch gate opens
+windows. Queued launch requests therefore deduplicate against restored
+documents. Older duplicates, retained captures, and unreadable baselines remain
+in the store, and the first window's status points at File › Recover Unsaved
+Documents…. That native command lists them in the window's transient slot and
+restores or discards the selection. None of this depends on the extension host.
+
+The extension-facing retention API remains in the [recovery
 plan](../plans/durable-document-recovery-plan.md). Implementation and physical
 schema live in [recovery.rs](../../src/app/recovery.rs).
 

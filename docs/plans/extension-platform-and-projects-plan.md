@@ -1,9 +1,9 @@
 # Production extension APIs and JavaScript project management
 
 Status: ⬜ In progress. Checkpoints 1–6 and D053 are complete and approved;
-checkpoint 7 is in progress (7a approved) and checkpoints 8–10 remain unstarted.
-Next: D050 checkpoint 7b, whose detailed execution lives in the
-[focused recovery plan](durable-document-recovery-plan.md).
+checkpoint 7 is in progress (7a approved, 7b awaiting review) and checkpoints
+8–10 remain unstarted. Next: the D050 checkpoint 7b review gate, then 7c; detailed
+execution lives in the [focused recovery plan](durable-document-recovery-plan.md).
 
 Work identifiers: D046–D052, promoted D005, and completed maintenance interlude
 D053. [Roadmap](../roadmap.md) owns initiative priority; this plan owns execution
@@ -228,8 +228,8 @@ project ownership and active-project derivation are recorded in
 ### 7. Durable unsaved-document recovery — D050 🟡
 
 7a recovery store and automatic protection is approved; 7b restore, conflicts,
-discard, and native recovery UI is next, then 7c capture barrier, retention API,
-and cleanup. Detailed execution lives in the [focused recovery
+discard, and native recovery UI is implemented and awaiting review, then 7c
+capture barrier, retention API, and cleanup. Detailed execution lives in the [focused recovery
 plan](durable-document-recovery-plan.md), which owns deliverables, validation,
 and one review gate per sub-checkpoint. This plan owns the shared outcome and
 ordering. Execute one sub-checkpoint per implementation request.

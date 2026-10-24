@@ -8,8 +8,10 @@ records rationale; deferred work lives in the [roadmap](../roadmap.md).
 The macOS product is packaged as `Knot.app` for native activation, file-open,
 and reopen callbacks. CLI and platform requests join a launch queue while
 [personal config and extensions](extension-host.md#package-admission-and-startup)
-start. Successful startup opens queued product windows, or one empty window,
-then activates the app. Fatal config failure discards the queue and opens a
+start. Successful startup first restores
+[unsaved documents](documents-and-persistence.md#durable-unsaved-document-recovery),
+then opens queued product windows, or one empty window, presenting restored
+documents in the first, and activates the app. Fatal config failure discards the queue and opens a
 focused diagnostic window with Copy and Quit; product windows remain unavailable
 for that launch.
 

@@ -1,7 +1,7 @@
 # Durable unsaved-document recovery
 
-Status: 🟡 In progress. Checkpoint 7a is approved; 7b is next and 7c is
-unstarted. Execution plan for checkpoint 7 of the
+Status: 🟡 In progress. Checkpoint 7a is approved; 7b is implemented and
+awaiting its review gate; 7c is unstarted. Execution plan for checkpoint 7 of the
 [extension platform and projects plan](extension-platform-and-projects-plan.md).
 Checkpoints 7a–7c are executed one per implementation request and each stops at
 its review gate.
@@ -180,17 +180,19 @@ produce one row. Current behavior lives in [documents and
 persistence](../architecture/documents-and-persistence.md#durable-unsaved-document-recovery)
 and validated rationale in [decisions](../decisions.md#unsaved-document-recovery-store).
 
-### 7b. Restore, conflicts, discard, and native recovery UI ⬜
+### 7b. Restore, conflicts, discard, and native recovery UI 🔍
 
-- Implement restore: read the baseline through the registered provider (or empty
+Implemented; awaiting the review gate.
+
+- ✅ Implement restore: read the baseline through the registered provider (or empty
   for untitled/destination records), create the document, and apply recovered text
   as one edit so dirty state and an empty undo history fall out of existing
   behavior. Preserve URI deduplication with ordinary opening.
-- Produce typed outcomes for missing destination, externally changed resource,
+- ✅ Produce typed outcomes for missing destination, externally changed resource,
   URI already owned by a live document, skipped generated document, and
   unavailable retained capture; preserve both content versions and never write to
   disk.
-- Implement explicit discard, silent startup restoration of unclaimed automatic
+- ✅ Implement explicit discard, silent startup restoration of unclaimed automatic
   snapshots, and the native File listing command with Restore and Discard.
 - **Implementation context:** Restore primitives live in `src/app/recovery.rs`;
   wire silent restoration into startup in `src/app/product/`, the listing command
@@ -209,6 +211,54 @@ and validated rationale in [decisions](../decisions.md#unsaved-document-recovery
 - **Review gate:** approve exact restore, conflict, retention, and discard
   semantics, and demonstrate native recovery with the bundled project extension
   absent.
+
+Semantics proposed for review:
+
+- **Baselines.** Untitled snapshots restore over an empty baseline and persisted
+  or destination snapshots over the current resource read through its provider,
+  using `BufferModel::from_recovered_text`. Text equal to its baseline restores
+  clean, so an untouched or externally matching document needs no protection.
+- **Typed outcomes.** `RestoreOutcome` is `Restored` with `RestoredResource`
+  (`Untitled`, `Unchanged`, `Missing`, `Changed`), `AlreadyOpen`, or `Preserved`;
+  `RestoreError` is `Unavailable`, `Resource`, or `Store`. A deleted persisted
+  file restores as a dirty destination; a changed file, or a destination that now
+  exists, restores over the current content with the capture-time version (or
+  destination state), so Save reaches the existing Reload / Save As / Cancel
+  conflict prompt. An unreadable baseline keeps the snapshot. Generated
+  documents have no outcome because they are never captured and the schema has
+  no generated state.
+- **Ownership.** A live document is never replaced. An automatic snapshot of an
+  open document is `AlreadyOpen`. When another live document owns the URI, or a
+  retained capture's document is open, the text opens as an untitled
+  “Title (Recovered)” copy. For an automatic snapshot, one transaction moves the
+  protection to the copy so the text is never unprotected and the listing does
+  not keep showing it.
+- **Identity.** Automatic restores keep the document UUID, so later captures
+  replace the same row. Retained restores take a fresh UUID because the
+  automatic role may still protect newer text for the original document, and the
+  retained capture stays until released or discarded.
+- **Startup.** Restoration of unclaimed automatic snapshots runs after config
+  and extension startup and before the launch gate opens windows, so queued
+  CLI/platform requests deduplicate against restored documents. The newest
+  snapshot per URI is restored; older duplicates, retained captures, and
+  unreadable baselines remain. Restored documents open in the first window,
+  replacing its placeholder when no request targets it, and that window's status
+  points at the listing when snapshots remain. Recovery does not depend on the
+  extension host: an unavailable store reports in the status line and never
+  blocks startup.
+- **Listing.** File › Recover Unsaved Documents… (`file.recover`) shows every
+  retained capture and every automatic snapshot without a live document, newest
+  first, as a native picker in the window's transient slot (title, state, URI,
+  capture age, and role). A native prompt then offers Restore, Discard, or
+  Cancel; Discard deletes that one snapshot of either role.
+
+Evidence: `src/app/product/tests/recovery.rs` covers each validation item
+through the product lifecycle, including startup with no extension host, startup
+with a failing installed extension and launch requests, and the listing command
+end to end; store, model, and collection primitives have unit tests beside them.
+To demonstrate manually, edit an untitled and a saved file, wait a few seconds,
+kill the process, and relaunch; then edit the saved file externally, kill and
+relaunch again, and Save to see the conflict prompt.
 
 ### 7c. Capture barrier, retention API, and cleanup ⬜
 
@@ -240,6 +290,7 @@ and validated rationale in [decisions](../decisions.md#unsaved-document-recovery
 - Exact retained-capture key shape and whether an owner may retain several
   captures of one document simultaneously; finalized at 7c.
 - Whether the native listing uses the existing transient picker surface or a
-  dedicated list surface; product review decides at 7b.
+  dedicated list surface; 7b proposes the transient picker followed by a native
+  Restore / Discard prompt, for product review at its gate.
 - Final advertised crash-loss wording for the UI and documentation; approved at
   the 7a review gate.
