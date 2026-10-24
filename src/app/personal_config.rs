@@ -117,7 +117,6 @@ fn config_message(message: &str) -> String {
 
 #[derive(Clone, Debug)]
 pub(crate) struct ConfigSources {
-    pub(crate) directory: PathBuf,
     canonical_directory: PathBuf,
     pub(crate) pre_init: bool,
     pub(crate) post_init: bool,
@@ -170,7 +169,6 @@ fn select_config_root(native: &Path, home: Option<&Path>, xdg_home: Option<&OsSt
 /// paths can select the same source contract without changing process state.
 pub(crate) fn capture(directory: &Path) -> Result<ConfigSources, ConfigDiagnostic> {
     let mut captured = ConfigSources {
-        directory: directory.to_path_buf(),
         canonical_directory: directory.to_path_buf(),
         pre_init: false,
         post_init: false,

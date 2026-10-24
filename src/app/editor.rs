@@ -2902,7 +2902,7 @@ mod tests {
             let mut model = BufferModel::from_read_only_text("result");
             model
                 .replace_contributions(
-                    ContributionSource::BuiltIn,
+                    ContributionSource::fixture(),
                     &[EditorContribution {
                         range: ByteRange {
                             start_byte_offset: 0,
@@ -3005,7 +3005,7 @@ mod tests {
                     start_byte_offset: 1,
                     end_byte_offset: 9,
                 },
-                source: ContributionSource::BuiltIn,
+                source: ContributionSource::fixture(),
                 decoration: Some(DecorationToken::Warning),
                 gutter: Some(GutterToken::Warning),
                 command: Some("fixture.action".into()),
@@ -3108,7 +3108,7 @@ mod tests {
             assert!(model.replace(0..0, "shared\n").unwrap());
             model
                 .replace_contributions(
-                    ContributionSource::BuiltIn,
+                    ContributionSource::fixture(),
                     &[EditorContribution {
                         range: ByteRange {
                             start_byte_offset: 0,

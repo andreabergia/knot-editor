@@ -14,10 +14,6 @@ impl DocumentId {
     pub(crate) const fn from_value(value: u64) -> Self {
         Self(value)
     }
-
-    pub(crate) fn value(self) -> u64 {
-        self.0
-    }
 }
 
 /// A document's persistence relationship.

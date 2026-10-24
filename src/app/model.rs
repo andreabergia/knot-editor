@@ -25,14 +25,21 @@ use crate::{
 
 use super::history::{EditGrouping, EditHistory, HistoryViewChange, HistoryViewState};
 
-/// The producer whose complete contribution set is stored in this buffer.
+/// The extension lifecycle whose complete contribution set is stored in this buffer.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(crate) enum ContributionSource {
-    BuiltIn,
-    Extension {
-        extension: ExtensionId,
-        lifecycle: ExtensionLifecycleId,
-    },
+pub(crate) struct ContributionSource {
+    pub(crate) extension: ExtensionId,
+    pub(crate) lifecycle: ExtensionLifecycleId,
+}
+
+#[cfg(test)]
+impl ContributionSource {
+    pub(crate) fn fixture() -> Self {
+        Self {
+            extension: ExtensionId::new(1),
+            lifecycle: ExtensionLifecycleId::new(1),
+        }
+    }
 }
 
 impl DecorationToken {
@@ -291,7 +298,7 @@ impl BufferModel {
             .copied()
             .filter(|source| {
                 *source
-                    == ContributionSource::Extension {
+                    == ContributionSource {
                         extension,
                         lifecycle,
                     }
@@ -1512,7 +1519,7 @@ mod tests {
 
         model
             .replace_contributions(
-                ContributionSource::BuiltIn,
+                ContributionSource::fixture(),
                 &[EditorContribution {
                     range: ByteRange {
                         start_byte_offset: 0,
@@ -1539,7 +1546,7 @@ mod tests {
     #[test]
     fn contribution_sets_stabilize_and_replace_atomically() {
         let mut model = BufferModel::from_text("abc def");
-        let source = ContributionSource::Extension {
+        let source = ContributionSource {
             extension: ExtensionId::new(7),
             lifecycle: ExtensionLifecycleId::new(3),
         };
@@ -1606,12 +1613,12 @@ mod tests {
     #[test]
     fn replacing_one_contribution_source_preserves_other_sources() {
         let mut model = BufferModel::from_text("abcdef");
-        let extension_source = ContributionSource::Extension {
+        let extension_source = ContributionSource {
             extension: ExtensionId::new(7),
             lifecycle: ExtensionLifecycleId::new(3),
         };
         for (source, range, decoration) in [
-            (ContributionSource::BuiltIn, 0..2, DecorationToken::Info),
+            (ContributionSource::fixture(), 0..2, DecorationToken::Info),
             (extension_source, 2..4, DecorationToken::Warning),
         ] {
             model
@@ -1658,7 +1665,7 @@ mod tests {
                         start_byte_offset: 0,
                         end_byte_offset: 2,
                     },
-                    source: ContributionSource::BuiltIn,
+                    source: ContributionSource::fixture(),
                     decoration: Some(DecorationToken::Info),
                     gutter: None,
                     command: None,
@@ -1680,7 +1687,7 @@ mod tests {
     #[test]
     fn empty_buffer_contributions_are_rejected_recoverably() {
         let mut model = BufferModel::from_text("");
-        let source = ContributionSource::BuiltIn;
+        let source = ContributionSource::fixture();
 
         assert_eq!(
             model.replace_contributions(
@@ -1707,11 +1714,11 @@ mod tests {
     fn contribution_ownership_rejects_stale_lifecycles_and_cleans_up() {
         let mut model = BufferModel::from_text("abc");
         let extension = ExtensionId::new(7);
-        let source = ContributionSource::Extension {
+        let source = ContributionSource {
             extension,
             lifecycle: ExtensionLifecycleId::new(3),
         };
-        let stale_source = ContributionSource::Extension {
+        let stale_source = ContributionSource {
             extension,
             lifecycle: ExtensionLifecycleId::new(2),
         };
@@ -1744,7 +1751,7 @@ mod tests {
     #[test]
     fn stabilization_prunes_consumed_contribution_metadata() {
         let mut model = BufferModel::from_text("abc def");
-        let source = ContributionSource::BuiltIn;
+        let source = ContributionSource::fixture();
         model
             .replace_contributions(
                 source,
@@ -1773,9 +1780,9 @@ mod tests {
     fn decoration_precedence_is_application_owned_and_deterministic() {
         let mut model = BufferModel::from_text("abc");
         for (source, decoration) in [
-            (ContributionSource::BuiltIn, DecorationToken::Warning),
+            (ContributionSource::fixture(), DecorationToken::Warning),
             (
-                ContributionSource::Extension {
+                ContributionSource {
                     extension: ExtensionId::new(7),
                     lifecycle: ExtensionLifecycleId::new(3),
                 },

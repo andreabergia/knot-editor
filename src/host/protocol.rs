@@ -669,15 +669,6 @@ pub struct WorkbenchObservation {
     pub watermark: u64,
 }
 
-/// The kind of transient interaction currently owned by one product window.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum TransientKind {
-    Picker,
-    Input,
-    Confirmation,
-    Message,
-}
-
 /// Owned identity of a provider whose queued mutations precede disposal acknowledgement.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProviderIdentity {

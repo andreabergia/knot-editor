@@ -219,7 +219,7 @@ impl ExtensionBufferBridge {
             }
             model
                 .replace_contributions(
-                    ContributionSource::Extension {
+                    ContributionSource {
                         extension: request.extension,
                         lifecycle: request.lifecycle,
                     },
@@ -248,7 +248,7 @@ impl ExtensionBufferBridge {
             if cancelled() {
                 return Err(AccessError::Cancelled.into());
             }
-            match model.dispose_contributions(ContributionSource::Extension {
+            match model.dispose_contributions(ContributionSource {
                 extension: request.extension,
                 lifecycle: request.lifecycle,
             }) {
