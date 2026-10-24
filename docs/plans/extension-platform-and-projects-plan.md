@@ -1,8 +1,9 @@
 # Production extension APIs and JavaScript project management
 
 Status: ⬜ In progress. Checkpoints 1–6 and D053 are complete and approved;
-checkpoint 7 is in progress (7a approved, 7b awaiting review) and checkpoints
-8–10 remain unstarted. Next: the D050 checkpoint 7b review gate, then 7c; detailed
+checkpoint 7 is in progress (7a approved, 7b adding hot-exit quit before its
+review) and checkpoints 8–10 remain unstarted. Next: finish D050 checkpoint 7b
+and its review gate, then 7c; detailed
 execution lives in the [focused recovery plan](durable-document-recovery-plan.md).
 
 Work identifiers: D046–D052, promoted D005, and completed maintenance interlude
@@ -228,7 +229,7 @@ project ownership and active-project derivation are recorded in
 ### 7. Durable unsaved-document recovery — D050 🟡
 
 7a recovery store and automatic protection is approved; 7b restore, conflicts,
-discard, and native recovery UI is implemented and awaiting review, then 7c
+discard, native recovery UI, and hot-exit quit are in progress, then 7c
 capture barrier, retention API, and cleanup. Detailed execution lives in the [focused recovery
 plan](durable-document-recovery-plan.md), which owns deliverables, validation,
 and one review gate per sub-checkpoint. This plan owns the shared outcome and
@@ -246,8 +247,8 @@ session/layout restoration (checkpoints 8 and 10) stay out of scope.
   capture/prepare/replace operations and JS orchestration of durable suspension.
 - Restore documents into a simple tab arrangement; preserve shared application
   models and source state on failure. Define multi-window project activation.
-- Define removing a project with retained unsaved content and ordinary close/quit
-  behavior now that automatic recovery exists. Terminal tabs are never persisted;
+- Define removing a project with retained unsaved content and how project
+  sessions interact with the hot-exit quit established in checkpoint 7b. Terminal tabs are never persisted;
   any terminal affected by replacement follows existing close behavior and does
   not terminate during preparation or a failed switch. Review its visible treatment.
 - **Validation:** A→B→A with unsaved/untitled documents, concurrent views/windows,

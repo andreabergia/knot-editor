@@ -1,7 +1,7 @@
 # Durable unsaved-document recovery
 
-Status: 🟡 In progress. Checkpoint 7a is approved; 7b is implemented and
-awaiting its review gate; 7c is unstarted. Execution plan for checkpoint 7 of the
+Status: 🟡 In progress. Checkpoint 7a is approved; 7b is in progress (hot-exit
+quit remains before its review gate); 7c is unstarted. Execution plan for checkpoint 7 of the
 [extension platform and projects plan](extension-platform-and-projects-plan.md).
 Checkpoints 7a–7c are executed one per implementation request and each stops at
 its review gate.
@@ -125,9 +125,14 @@ foreground disk wait and no final JavaScript callback is required.
   making: a `FULL` commit on an SSD costs a fraction of a millisecond to a few
   milliseconds, off the foreground, and losing user text to avoid that is worse.
 - Save retires the automatic row; a final-view Don't Save discards it as an
-  explicit user decision. Quit and ordinary close prompts keep their existing
-  Save / Don't Save / Cancel semantics; broader quit behavior is finalized in
-  checkpoint 8 now that recovery exists.
+  explicit user decision. Closing a tab or window keeps its Save / Don't Save /
+  Cancel prompt.
+- Quit is a hot exit, matching Sublime Text, VS Code, and Zed: it does not prompt
+  for dirty documents, drains captures still inside their debounce window, and
+  exits with every automatic row intact for the next launch to restore. When the
+  store cannot protect the text (the database failed to open or write, or the
+  final drain fails), quit falls back to the existing prompts, so a broken store
+  never turns quit into silent loss. Terminal shutdown on quit is unchanged.
 - A crash loses at most the edits since the last durable capture; validation
   demonstrates recovery across an interruption at the commit boundary.
 
@@ -182,7 +187,8 @@ and validated rationale in [decisions](../decisions.md#unsaved-document-recovery
 
 ### 7b. Restore, conflicts, discard, and native recovery UI 🔍
 
-Implemented; awaiting the review gate.
+Restore, discard, and the listing are implemented; hot-exit quit is in progress.
+The review gate follows it.
 
 - ✅ Implement restore: read the baseline through the registered provider (or empty
   for untitled/destination records), create the document, and apply recovered text
@@ -194,6 +200,10 @@ Implemented; awaiting the review gate.
   disk.
 - ✅ Implement explicit discard, silent startup restoration of unclaimed automatic
   snapshots, and the native File listing command with Restore and Discard.
+- ⬜ Make quit a hot exit: skip dirty-document prompts while the store is healthy,
+  drain pending captures before exiting, and fall back to the existing prompts
+  when the store has failed or the drain fails. Tab and window close keep their
+  prompts.
 - **Implementation context:** Restore primitives live in `src/app/recovery.rs`;
   wire silent restoration into startup in `src/app/product/`, the listing command
   and its picker surface into `src/app/product/commands.rs`, and URI deduplication
@@ -207,9 +217,11 @@ Implemented; awaiting the review gate.
   live document; duplicate records for one URI at startup; multiple views sharing
   one restored document; a CLI/platform launch still restores and lists pending
   records; disk failure; extension failure with no session metadata; native
-  recovery with the project extension absent.
-- **Review gate:** approve exact restore, conflict, retention, and discard
-  semantics, and demonstrate native recovery with the bundled project extension
+  recovery with the project extension absent; quit with dirty documents exits
+  without prompting and restores them on relaunch; quit with a failed store or
+  drain prompts as before; tab and window close still prompt.
+- **Review gate:** approve exact restore, conflict, retention, discard, and
+  hot-exit quit semantics, and demonstrate native recovery with the bundled project extension
   absent.
 
 Semantics proposed for review:
@@ -256,9 +268,9 @@ Evidence: `src/app/product/tests/recovery.rs` covers each validation item
 through the product lifecycle, including startup with no extension host, startup
 with a failing installed extension and launch requests, and the listing command
 end to end; store, model, and collection primitives have unit tests beside them.
-To demonstrate manually, edit an untitled and a saved file, wait a few seconds,
-kill the process, and relaunch; then edit the saved file externally, kill and
-relaunch again, and Save to see the conflict prompt.
+To demonstrate manually, edit an untitled and a saved file, quit (or kill the
+process after a few seconds), and relaunch; then edit the saved file externally,
+quit and relaunch again, and Save to see the conflict prompt.
 
 ### 7c. Capture barrier, retention API, and cleanup ⬜
 
