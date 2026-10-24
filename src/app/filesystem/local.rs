@@ -23,7 +23,7 @@ pub(crate) struct LocalFileSystemProvider {
 }
 
 impl LocalFileSystemProvider {
-#[cfg(test)]
+    #[cfg(test)]
     pub(crate) fn new(
         root_path: impl AsRef<Path>,
         runtime: Arc<tokio::runtime::Runtime>,
@@ -589,16 +589,23 @@ mod tests {
 
         let version = run(provider.replace(uri.clone(), before.version, b"new".to_vec())).unwrap();
 
-        assert!(fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        assert!(
+            fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
         assert_eq!(fs::read_link(&link).unwrap(), target);
         assert_eq!(fs::read(&target).unwrap(), b"new");
         assert_eq!(run(provider.read(uri)).unwrap().version, version);
         for directory in [links.path(), targets.path()] {
-            assert!(
-                fs::read_dir(directory)
+            assert!(fs::read_dir(directory).unwrap().all(|entry| {
+                !entry
                     .unwrap()
-                    .all(|entry| !entry.unwrap().file_name().to_string_lossy().starts_with(".knot-save-"))
-            );
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".knot-save-")
+            }));
         }
     }
 }

@@ -624,7 +624,9 @@ async fn reordering_retains_exact_targets_while_replacement_and_transfer_change_
 }
 
 #[gpui::test]
-fn empty_workbench_and_clean_untitled_documents_keep_their_actual_metadata(cx: &mut TestAppContext) {
+fn empty_workbench_and_clean_untitled_documents_keep_their_actual_metadata(
+    cx: &mut TestAppContext,
+) {
     let documents = install_globals(cx);
     let host = cx.update(extension_host::install);
     let handle = cx.update(open_tab_transfer_window).unwrap();

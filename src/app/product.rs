@@ -33,13 +33,12 @@ use super::{
     open::{OpenResource, enumerate_directory, load_resource},
     product_commands::{
         ApplicationProductCommands, CLOSE_TAB_COMMAND, CLOSE_WINDOW_COMMAND, COPY_COMMAND,
-        CUT_COMMAND,
-        MOVE_TERMINAL_TO_NEW_WINDOW_COMMAND, NEW_COMMAND, NEW_TERMINAL_COMMAND, NEW_WINDOW_COMMAND,
-        OPEN_COMMAND, PASTE_COMMAND, ProductCommandDispatcher, ProductCommandSource,
-        ProductCommandTarget, QUIT_COMMAND, REDO_COMMAND, SAVE_AS_COMMAND, SAVE_COMMAND,
-        SELECT_ALL_COMMAND, SHOW_COMMAND_PALETTE_COMMAND, SHOW_EXTENSION_REPORT_COMMAND,
-        SPLIT_HORIZONTAL_COMMAND, SPLIT_VERTICAL_COMMAND, UNDO_COMMAND,
-        dispatch_close_to_captured_target, dispatch_open_to_captured_target,
+        CUT_COMMAND, MOVE_TERMINAL_TO_NEW_WINDOW_COMMAND, NEW_COMMAND, NEW_TERMINAL_COMMAND,
+        NEW_WINDOW_COMMAND, OPEN_COMMAND, PASTE_COMMAND, ProductCommandDispatcher,
+        ProductCommandSource, ProductCommandTarget, QUIT_COMMAND, REDO_COMMAND, SAVE_AS_COMMAND,
+        SAVE_COMMAND, SELECT_ALL_COMMAND, SHOW_COMMAND_PALETTE_COMMAND,
+        SHOW_EXTENSION_REPORT_COMMAND, SPLIT_HORIZONTAL_COMMAND, SPLIT_VERTICAL_COMMAND,
+        UNDO_COMMAND, dispatch_close_to_captured_target, dispatch_open_to_captured_target,
         dispatch_save_to_captured_target,
     },
     terminal_session::TerminalSession,
@@ -6666,9 +6665,12 @@ mod tests {
         loop {
             cx.run_until_parked();
             if cx.read(|cx| {
-                editor.read(cx).completion_state().is_some_and(
-                    |(items, pending, failures, _)| items == 2 && pending == 0 && failures == 0,
-                )
+                editor
+                    .read(cx)
+                    .completion_state()
+                    .is_some_and(|(items, pending, failures, _)| {
+                        items == 2 && pending == 0 && failures == 0
+                    })
             }) {
                 break;
             }

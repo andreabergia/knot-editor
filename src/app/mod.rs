@@ -125,7 +125,10 @@ impl CommandCompletion {
 
 #[cfg_attr(
     not(test),
-    allow(dead_code, reason = "product callers discard it; tests await the outcome")
+    allow(
+        dead_code,
+        reason = "product callers discard it; tests await the outcome"
+    )
 )]
 struct CommandExecution {
     id: crate::host::protocol::CommandInvocationId,

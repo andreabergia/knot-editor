@@ -24,9 +24,7 @@ use super::typography::{TEXT_SIZE as FONT_SIZE, text_font as make_font};
 
 use super::{
     CompletionAccept, CompletionDismiss, CompletionNext, CompletionPrevious, EDITOR_KEY_CONTEXT,
-    completion::{
-        CompletionController, CompletionProviderRegistration, CompletionSurface,
-    },
+    completion::{CompletionController, CompletionProviderRegistration, CompletionSurface},
     history::{EditGroupKind, EditGrouping, HistoryViewChange, HistoryViewState},
     model::{BufferModel, ContributionSource, ResolvedEditorContribution},
 };
@@ -175,9 +173,7 @@ impl EditorView {
     }
 
     #[cfg(test)]
-    pub(crate) fn completion_state(
-        &self,
-    ) -> Option<(usize, usize, usize, u64)> {
+    pub(crate) fn completion_state(&self) -> Option<(usize, usize, usize, u64)> {
         let controller = self.completion.as_ref()?;
         let snapshot = controller.snapshot();
         Some((

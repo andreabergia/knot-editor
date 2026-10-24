@@ -141,12 +141,7 @@ impl DocumentCollection {
         cx: &mut App,
     ) -> DocumentId {
         let clean_revision = model.read(cx).revision();
-        self.insert(
-            title,
-            model,
-            DocumentState::Untitled { clean_revision },
-            cx,
-        )
+        self.insert(title, model, DocumentState::Untitled { clean_revision }, cx)
     }
 
     pub(crate) fn create_destination(

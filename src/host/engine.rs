@@ -378,8 +378,12 @@ struct BufferChangeQueueState {
 
 enum RootEvaluation {
     #[cfg(test)]
-    Script { source: Arc<str> },
-    Module { source: Option<Arc<str>> },
+    Script {
+        source: Arc<str>,
+    },
+    Module {
+        source: Option<Arc<str>>,
+    },
 }
 
 enum ProviderCall {

@@ -358,10 +358,7 @@ impl RecoveryStore {
     /// Retain an immutable checkpoint under an opaque owner key.
     #[cfg_attr(
         not(test),
-        allow(
-            dead_code,
-            reason = "the D050 capture-retention API exposes it"
-        )
+        allow(dead_code, reason = "the D050 capture-retention API exposes it")
     )]
     pub(crate) fn retain(
         &self,
@@ -384,10 +381,7 @@ impl RecoveryStore {
     /// Release a retained checkpoint. Automatic rows are never affected.
     #[cfg_attr(
         not(test),
-        allow(
-            dead_code,
-            reason = "the D050 capture-retention API exposes it"
-        )
+        allow(dead_code, reason = "the D050 capture-retention API exposes it")
     )]
     pub(crate) fn release(&self, owner: String, capture_key: String) -> Task<Result<bool, String>> {
         let this = self.clone();
