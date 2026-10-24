@@ -98,30 +98,6 @@ async fn dirty_documents_are_captured_and_persistence_retires_the_record(cx: &mu
 }
 
 #[gpui::test]
-async fn generated_documents_are_never_captured(cx: &mut TestAppContext) {
-    let documents = install_globals(cx);
-    let model = cx.new(|_| BufferModel::from_text("generated"));
-    let document = documents.update(cx, |documents, cx| {
-        documents.create_generated("Search Results", model.clone(), cx)
-    });
-    let identity = cx.read(|cx| documents.read(cx).get(document).unwrap().identity());
-    // Generated documents stay clean even after their text is replaced.
-    model.update(cx, |model, cx| {
-        model.replace(0..0, "prefix ").unwrap();
-        cx.notify();
-    });
-    cx.run_until_parked();
-    flush(cx).await;
-    assert!(
-        recovery_store(cx)
-            .automatic(identity)
-            .await
-            .unwrap()
-            .is_none()
-    );
-}
-
-#[gpui::test]
 async fn repeated_edits_keep_one_record_per_document(cx: &mut TestAppContext) {
     let documents = install_globals(cx);
     let model = cx.new(|_| BufferModel::from_text("initial"));

@@ -182,41 +182,11 @@ when the overlay closes and that surface is still live.
 
 ## Generated text
 
-Generated search documents retain their application-owned
-`SearchResultsController` alongside the model. The controller keeps semantic
-source targets and emitted output ranges separate from the generated text; the
-generic document collection and model have no search-result semantics.
-
-Native fixture search captures an immutable source snapshot and revision. Its
-controller derives semantic matches, formats them into a read-only
-`BufferModel`, and attaches built-in actions to the emitted result ranges. The
-normal open-buffer and editor paths render the generated model; search identity
-does not enter `TextBuffer` or `BufferModel`. Activating a result carries its
-emitted byte range back to the selected controller, which resolves the recorded
-source target only while the source revision still matches. The primary source
-editor then selects, reveals, and focuses that range.
-
-```text
-source snapshot + revision
-            |
-            v
- semantic search matches
-            |
-            v
- SearchResultsController ----> source targets
-            |
-            +----> generated read-only BufferModel
-                              |
-                              v
-                    DocumentCollection
-                              |
-                              v
-                         EditorView
-```
-
-- The validated search surface duplicates only result ordering and emitted
-  range geometry. It does not duplicate previews, grouping, or source identity
-  in a second presentation model.
-- Generated search buffers are immutable snapshots. Navigation is rejected
-  after the source revision changes; refresh, incremental updates, and restored
-  view state remain deferred liabilities.
+Generated output that benefits from ordinary selection, scrolling, and copying
+uses a `BufferModel` rendered by `EditorView` rather than a second presentation
+model. Contributed [text frames](#extension-trees) are the current generated
+surface; their private buffers stay outside document identity and persistence.
+Feature controllers keep semantic identities beside the buffer instead of
+recovering them from displayed text, so `core` and `BufferModel` carry no
+feature semantics. Every application document is a user document with
+persistence state; interactive generated views remain D027.

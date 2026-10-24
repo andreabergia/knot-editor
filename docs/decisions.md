@@ -342,8 +342,15 @@ Reference: [semantic UI](architecture/semantic-ui.md).
 
 Use ordinary buffers and views when generated output benefits from text
 interaction. Controllers retain semantic identities instead of parsing displayed
-text. Search validated this boundary without adding feature semantics to generic
-buffer ownership or a second presentation model.
+text. A native search probe validated this boundary without adding feature
+semantics to generic buffer ownership or a second presentation model.
+
+Documents have no generated state. Cross-file search ships as a bundled
+extension and contributed text frames use private buffers, so no product path
+created a generated document; removing the state also removed its recovery,
+closure, Save, and public `DocumentInfo.kind` special cases. Interactive
+generated views return as an extension-facing contract (D027) rather than a
+native document kind.
 
 Reference: [semantic UI](architecture/semantic-ui.md).
 
@@ -495,9 +502,6 @@ explicit discard and recovery would only help after crashes. A store that fails
 to open, write, or drain falls back to the prompts so quit never loses text
 silently. Closing a tab or window still prompts because it is a deliberate
 removal rather than leaving the application.
-
-Generated documents need no restore outcome: they are never captured and the
-schema has no generated state.
 
 Reference: [documents and
 persistence](architecture/documents-and-persistence.md#durable-unsaved-document-recovery).

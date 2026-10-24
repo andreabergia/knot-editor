@@ -18,12 +18,11 @@ entity. The product host removes subscriptions and model observation. Nonfinal
 presentation closure and tab transfer keep the shared model open; final-view
 coordination belongs to [protected closure](workbench-and-lifecycle.md#workbench-and-protected-closure).
 
-Documents distinguish untitled, destination-associated-but-uncreated, persisted,
-and generated state. Untitled cleanliness compares against initial content;
+Documents distinguish untitled, destination-associated-but-uncreated, and
+persisted state. Untitled cleanliness compares against initial content;
 associated-but-uncreated documents remain dirty until saved; persisted documents
 compare against their saved content identity. Undo can return to clean content
-without making public revisions non-monotonic. Generated documents cannot be
-persisted. Resource identity and provider state never enter `BufferModel` or `core`.
+without making public revisions non-monotonic. Resource identity and provider state never enter `BufferModel` or `core`.
 
 ## Opening resources
 
@@ -113,7 +112,7 @@ session or another extension owner. Retained rows are never overwritten by
 later automatic captures.
 
 Every document is observed through its model from creation, so a commit copies
-dirty, non-generated text on the foreground and serializes it off it. Captures
+dirty text on the foreground and serializes it off it. Captures
 coalesce through a trailing-edge debounce and fire at least every five seconds
 while typing continues. A fired capture is written and committed with `FULL`
 synchronization before it is accepted, so the crash-loss window is the cadence

@@ -93,11 +93,7 @@ untitled document) and the restore reports a typed outcome.
 
 Restore returns committed semantic data (the restored document and presentation,
 or a typed reason such as missing destination, changed resource, URI already
-owned, or skipped generated document) rather than a status string.
-
-**Generated documents.** Generated documents are always clean, cannot be
-persisted, and are never backed up as ordinary editable documents. They are
-recreated by their owning feature or skipped with a diagnostic.
+owned) rather than a status string.
 
 **Ownership.** Rust owns snapshot bytes, retention bookkeeping, generation and
 revision validation, and orphan policy. JavaScript owns which capture its session
@@ -200,7 +196,7 @@ and validated rationale in [decisions](../decisions.md#unsaved-document-restore-
 
 Starts after the [maintenance
 interlude](extension-platform-and-projects-plan.md#maintenance-interlude--codebase-health-cleanup-),
-which removes generated documents and their recovery special cases.
+which removed generated documents and their recovery special cases.
 
 - Expose opaque retained capture IDs and the retain/release primitives with
   lifecycle-stamped ownership and an acknowledged durable barrier; specify that a

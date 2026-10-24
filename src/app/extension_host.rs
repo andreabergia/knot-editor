@@ -1984,7 +1984,6 @@ fn application_document_info(
             DocumentState::Untitled { .. } => DocumentKind::Untitled,
             DocumentState::Destination { .. } => DocumentKind::Destination,
             DocumentState::Persisted { .. } => DocumentKind::Persisted,
-            DocumentState::Generated => DocumentKind::Generated,
         },
         resource_uri: document.resource_uri().map(ToString::to_string),
         dirty: document.is_dirty(cx),

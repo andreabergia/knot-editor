@@ -1189,7 +1189,7 @@ fn commit_restore(
 }
 
 fn gather(document: &Document, cx: &App) -> Option<SnapshotDraft> {
-    if matches!(document.state(), DocumentState::Generated) || !document.is_dirty(cx) {
+    if !document.is_dirty(cx) {
         return None;
     }
     let (state, provider_version) = match document.state() {
@@ -1198,7 +1198,6 @@ fn gather(document: &Document, cx: &App) -> Option<SnapshotDraft> {
         DocumentState::Persisted { version, .. } => {
             (SnapshotState::Persisted, Some(version.as_bytes().to_vec()))
         }
-        DocumentState::Generated => return None,
     };
     Some(SnapshotDraft {
         document_id: document.identity(),

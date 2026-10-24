@@ -95,9 +95,8 @@ revisions or infer cleanliness by comparing reset revision counters.
 Restore one shared document model for all its presentations. Preserve URI
 deduplication when recovery and ordinary opening meet. Missing files, changed
 files, and URI ownership collisions produce explicit recovery outcomes; recovered
-text is preserved and never silently written over disk. Generated documents are
-recreated by their owning feature or skipped with a diagnostic, not backed up as
-ordinary editable documents. Persistent undo is excluded (D012).
+text is preserved and never silently written over disk. Persistent undo is
+excluded (D012).
 
 Resolving an older retained capture must not overwrite newer edits in an already
 live shared document. Report the conflict and preserve both content versions;
@@ -339,7 +338,7 @@ session/layout restoration (checkpoints 8 and 10) stay out of scope.
   describe structure; do not persist process-local pane/tab/view handles.
 - Preserve one shared document with independent restored views. Clamp positions
   safely when disk content changes. Define window geometry on changed displays,
-  unavailable contributed/generated surfaces, and layouts containing excluded
+  unavailable contributed surfaces, and layouts containing excluded
   terminals; pruning cannot leave an invalid split tree.
 - Integrate JS restoration after product windows exist, with user/CLI/platform
   open requests taking precedence, migration of old session records, interrupted

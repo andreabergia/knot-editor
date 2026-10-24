@@ -72,11 +72,6 @@ mod recovery;
     reason = "retained application boundary during the pooled extension-host rebuild"
 )]
 mod resource;
-#[allow(
-    dead_code,
-    reason = "retained native generated-text surface outside the current product shell"
-)]
-mod search_results;
 mod terminal_colors;
 mod terminal_fixture;
 mod terminal_input;

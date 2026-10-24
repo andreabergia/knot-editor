@@ -511,7 +511,6 @@ pub enum DocumentKind {
     Untitled,
     Destination,
     Persisted,
-    Generated,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]

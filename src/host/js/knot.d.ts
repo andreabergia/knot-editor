@@ -47,7 +47,7 @@ declare module "knot" {
   export interface DocumentInfo {
     readonly id: DocumentId;
     readonly title: string;
-    readonly kind: "untitled" | "destination" | "persisted" | "generated";
+    readonly kind: "untitled" | "destination" | "persisted";
     readonly resourceUri: string | null;
     readonly dirty: boolean;
     readonly revision: number;

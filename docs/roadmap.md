@@ -70,7 +70,8 @@ D005; tool-only layout memory shipped with the completed D049.
   - Reconsider: Platform interaction becomes a selected product slice.
 
 - **D007 — Generated-search refresh and stale-target recovery**
-  - Deferred: Immutable search results validated the text-surface boundary.
+  - Deferred: Cross-file search is a bundled extension that has not been
+    built; refresh and stale-target policy belong to its result surface.
   - Reconsider: Bundled cross-file search demonstrates that refresh or recovery
     is required.
 
@@ -288,10 +289,16 @@ D005; tool-only layout memory shipped with the completed D049.
   - Reconsider: Daily use requires working-directory tracking, command
     boundaries, or exit status; select supported shells and integration setup.
 
-- **D027 — Additional generated text surfaces**
-  - Deferred: Search did not expose another architectural boundary.
-  - Reconsider: A concrete generated output remains useful as text but stresses
-    the current model.
+- **D027 — Interactive generated text views**
+  - Deferred: Contributed text frames cover read-only generated output, and no
+    product path creates a generated document. The extension-facing use case is
+    an interactive generated view in the style of magit: a text surface whose
+    ranges carry semantic actions (stage, open, expand), that refreshes in place
+    with stable positions, and that has no persistence identity.
+  - Reconsider: A concrete extension workflow such as Git status or search
+    results needs interactive generated text beyond a read-only frame. Then
+    define how an extension creates and refreshes the view, attaches per-range
+    actions, and how such views behave in closure, recovery, and restoration.
 
 - **D054 — Dedicated read-only generated text surface**
   - Deferred: Contributed text frames embed the ordinary editor view over a

@@ -1588,17 +1588,7 @@ impl ProductShell {
             );
             return;
         };
-        if matches!(document.state(), DocumentState::Generated) {
-            let message = "generated documents cannot be saved".to_owned();
-            self.status = message.clone().into();
-            self.finish_save_command(
-                completion,
-                crate::host::protocol::CommandOutcome::HandlerFailure { message },
-                cx,
-            );
-            cx.notify();
-            return;
-        }
+
         if save_as || matches!(document.state(), DocumentState::Untitled { .. }) {
             self.start_save_dialog(target, completion, cx);
         } else {
@@ -1774,7 +1764,7 @@ impl ProductShell {
                                     .replace(uri.clone(), version, text.into_bytes())
                                     .await?
                             }
-                            DocumentState::Untitled { .. } | DocumentState::Generated => {
+                            DocumentState::Untitled { .. } => {
                                 return Err(ResourceError::InvalidUri {
                                     uri: uri.to_string(),
                                     reason: "document has no direct save destination".into(),

@@ -5,7 +5,6 @@ use gpui::{App, Entity, Global, SharedString};
 use super::filesystem::ResourceVersion;
 use super::model::BufferModel;
 use super::resource::ResourceUri;
-use super::search_results::SearchResultsController;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct DocumentId(u64);
@@ -47,20 +46,13 @@ pub(crate) enum DocumentState {
         persisted_revision: u64,
         version: ResourceVersion,
     },
-    /// Application-produced text with no persistence identity.
-    ///
-    /// Generated documents use the normal buffer and editor paths so their
-    /// text remains selectable and navigable. They cannot be saved through
-    /// document persistence and are always considered clean. Search results
-    /// are currently the only generated document type.
-    Generated,
 }
 
 impl DocumentState {
     pub(crate) fn resource_uri(&self) -> Option<&ResourceUri> {
         match self {
             Self::Destination { uri } | Self::Persisted { uri, .. } => Some(uri),
-            Self::Untitled { .. } | Self::Generated => None,
+            Self::Untitled { .. } => None,
         }
     }
 
@@ -95,11 +87,6 @@ pub(crate) struct Document {
     title: SharedString,
     model: Entity<BufferModel>,
     state: DocumentState,
-    #[allow(
-        dead_code,
-        reason = "retained with the generated document as its semantic companion"
-    )]
-    search_results: Option<SearchResultsController>,
     persistence_generation: u64,
 }
 
@@ -141,12 +128,7 @@ impl Document {
                 .model
                 .read(cx)
                 .content_matches_revision(persisted_revision),
-            DocumentState::Generated => false,
         }
-    }
-
-    pub(crate) fn search_results(&self) -> Option<&SearchResultsController> {
-        self.search_results.as_ref()
     }
 }
 
@@ -178,7 +160,6 @@ impl DocumentCollection {
             title,
             model,
             DocumentState::Untitled { clean_revision },
-            None,
             cx,
         )
     }
@@ -215,29 +196,6 @@ impl DocumentCollection {
         )
     }
 
-    pub(crate) fn create_generated(
-        &mut self,
-        title: impl Into<SharedString>,
-        model: Entity<BufferModel>,
-        cx: &mut App,
-    ) -> DocumentId {
-        self.insert(title, model, DocumentState::Generated, None, cx)
-    }
-
-    pub(crate) fn create_search_results(
-        &mut self,
-        controller: SearchResultsController,
-        cx: &mut App,
-    ) -> DocumentId {
-        self.insert(
-            controller.title(),
-            controller.model().clone(),
-            DocumentState::Generated,
-            Some(controller),
-            cx,
-        )
-    }
-
     /// Insert a recovered user document, keeping its recorded identity when one
     /// is given. Returns `None` when the identity or resource is already live,
     /// so recovered content never replaces an open document.
@@ -249,7 +207,6 @@ impl DocumentCollection {
         identity: Option<uuid::Uuid>,
         cx: &mut App,
     ) -> Option<DocumentId> {
-        debug_assert!(!matches!(state, DocumentState::Generated));
         if identity.is_some_and(|identity| self.document_by_identity(identity).is_some())
             || state
                 .resource_uri()
@@ -262,7 +219,6 @@ impl DocumentCollection {
             title,
             model,
             state,
-            None,
             identity.unwrap_or_else(uuid::Uuid::new_v4),
             cx,
         );
@@ -316,7 +272,7 @@ impl DocumentCollection {
             .documents
             .iter_mut()
             .find(|document| document.id == id)?;
-        if &document.model != model || matches!(document.state, DocumentState::Generated) {
+        if &document.model != model {
             return None;
         }
         document.persistence_generation = document
@@ -359,7 +315,6 @@ impl DocumentCollection {
             || &document.model != model
             || document.persistence_generation != capture.generation
             || document.state != capture.state
-            || matches!(document.state, DocumentState::Generated)
         {
             return false;
         }
@@ -395,7 +350,7 @@ impl DocumentCollection {
         if let Some(existing) = self.document_for_resource(&uri) {
             return existing;
         }
-        let id = self.insert(title, model, state, None, cx);
+        let id = self.insert(title, model, state, cx);
         self.resources.insert(uri, id);
         id
     }
@@ -405,17 +360,9 @@ impl DocumentCollection {
         title: impl Into<SharedString>,
         model: Entity<BufferModel>,
         state: DocumentState,
-        search_results: Option<SearchResultsController>,
         cx: &mut App,
     ) -> DocumentId {
-        self.insert_with_identity(
-            title,
-            model,
-            state,
-            search_results,
-            uuid::Uuid::new_v4(),
-            cx,
-        )
+        self.insert_with_identity(title, model, state, uuid::Uuid::new_v4(), cx)
     }
 
     fn insert_with_identity(
@@ -423,7 +370,6 @@ impl DocumentCollection {
         title: impl Into<SharedString>,
         model: Entity<BufferModel>,
         state: DocumentState,
-        search_results: Option<SearchResultsController>,
         identity: uuid::Uuid,
         cx: &mut App,
     ) -> DocumentId {
@@ -439,7 +385,6 @@ impl DocumentCollection {
             title: title.into(),
             model,
             state,
-            search_results,
             persistence_generation: 0,
         });
         super::recovery::observe_document(&observed_model, identity, cx);
@@ -499,7 +444,6 @@ mod tests {
         let untitled = cx.new(|_| BufferModel::from_text(""));
         let destination = cx.new(|_| BufferModel::from_text(""));
         let persisted = cx.new(|_| BufferModel::from_text("saved"));
-        let generated = cx.new(|_| BufferModel::from_read_only_text("generated"));
         let mut documents = DocumentCollection::new();
 
         let untitled_id =
@@ -522,7 +466,6 @@ mod tests {
                 cx,
             )
         });
-        let generated_id = cx.update(|cx| documents.create_generated("Generated", generated, cx));
 
         assert!(matches!(
             documents.get(untitled_id).unwrap().state(),
@@ -530,7 +473,6 @@ mod tests {
         ));
         assert!(cx.read(|cx| documents.get(destination_id).unwrap().is_dirty(cx)));
         assert!(!cx.read(|cx| documents.get(persisted_id).unwrap().is_dirty(cx)));
-        assert!(!cx.read(|cx| documents.get(generated_id).unwrap().is_dirty(cx)));
 
         untitled.update(cx, |model, _| model.replace(0..0, "edit").unwrap());
         persisted.update(cx, |model, _| model.replace(0..0, "edit ").unwrap());

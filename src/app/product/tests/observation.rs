@@ -625,7 +625,7 @@ async fn reordering_retains_exact_targets_while_replacement_and_transfer_change_
 }
 
 #[gpui::test]
-fn empty_workbench_and_generated_surfaces_keep_their_actual_metadata(cx: &mut TestAppContext) {
+fn empty_workbench_and_clean_untitled_documents_keep_their_actual_metadata(cx: &mut TestAppContext) {
     let documents = install_globals(cx);
     let host = cx.update(extension_host::install);
     let handle = cx.update(open_tab_transfer_window).unwrap();
@@ -638,9 +638,9 @@ fn empty_workbench_and_generated_surfaces_keep_their_actual_metadata(cx: &mut Te
             window.root::<ProductShell>().flatten().unwrap()
         })
         .unwrap();
-    let model = cx.new(|_| BufferModel::from_read_only_text("generated"));
+    let model = cx.new(|_| BufferModel::from_text("clean"));
     let document = documents.update(cx, |documents, cx| {
-        documents.create_generated("Generated", model.clone(), cx)
+        documents.create_untitled("Untitled", model.clone(), cx)
     });
     shell.update(cx, |shell, cx| {
         let workbench = cx.new(|cx| Workbench::new_for_document(document, model.clone(), cx));
@@ -652,7 +652,7 @@ fn empty_workbench_and_generated_surfaces_keep_their_actual_metadata(cx: &mut Te
     let filled = take_events(&host, cx);
     let info = changed_documents(&filled)
         .into_iter()
-        .find(|document| document.kind == DocumentKind::Generated)
+        .find(|document| document.kind == DocumentKind::Untitled)
         .unwrap();
     assert!(!info.dirty);
     assert!(info.resource_uri.is_none());
