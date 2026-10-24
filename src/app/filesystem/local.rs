@@ -354,6 +354,19 @@ fn atomic_create(path: &Path, uri: &ResourceUri, bytes: Vec<u8>) -> Result<(), R
             map_io("install new file", uri, error.error)
         }
     })?;
+    sync_parent(path, uri)
+}
+
+/// Make a rename durable by syncing the directory entry that now names it.
+fn sync_parent(path: &Path, uri: &ResourceUri) -> Result<(), ResourceError> {
+    #[cfg(unix)]
+    if let Some(parent) = path.parent() {
+        std::fs::File::open(parent)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|error| map_io("sync parent directory", uri, error))?;
+    }
+    #[cfg(not(unix))]
+    let _ = (path, uri);
     Ok(())
 }
 
@@ -364,6 +377,8 @@ fn atomic_replace(
     current: &std::fs::Metadata,
     bytes: Vec<u8>,
 ) -> Result<(), ResourceError> {
+    // Replace the file a symlink points to, so the link itself survives.
+    let path = &std::fs::canonicalize(path).map_err(|error| map_io("resolve file", uri, error))?;
     let mut temporary = temporary_file(path, uri)?;
     temporary
         .as_file()
@@ -377,7 +392,7 @@ fn atomic_replace(
     temporary
         .persist(path)
         .map_err(|error| map_io("replace file", uri, error.error))?;
-    Ok(())
+    sync_parent(path, uri)
 }
 
 pub(crate) fn normalize_file_uri(uri: ResourceUri) -> Result<ResourceUri, ResourceError> {
@@ -555,5 +570,35 @@ mod tests {
         let provider = LocalFileSystemProvider::new(root.path(), io_runtime()).unwrap();
         let link = provider.path_to_uri(&root.path().join("link")).unwrap();
         assert_eq!(run(provider.read(link)).unwrap().bytes, b"outside");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn replace_through_a_symlink_keeps_the_link_and_updates_its_target() {
+        use std::os::unix::fs::symlink;
+
+        let links = tempfile::tempdir().unwrap();
+        let targets = tempfile::tempdir().unwrap();
+        let target = targets.path().join("dotfile");
+        let link = links.path().join(".dotfile");
+        fs::write(&target, b"old").unwrap();
+        symlink(&target, &link).unwrap();
+        let provider = LocalFileSystemProvider::unrestricted(io_runtime());
+        let uri = path_to_unrestricted_uri(&link).unwrap();
+        let before = run(provider.read(uri.clone())).unwrap();
+
+        let version = run(provider.replace(uri.clone(), before.version, b"new".to_vec())).unwrap();
+
+        assert!(fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        assert_eq!(fs::read_link(&link).unwrap(), target);
+        assert_eq!(fs::read(&target).unwrap(), b"new");
+        assert_eq!(run(provider.read(uri)).unwrap().version, version);
+        for directory in [links.path(), targets.path()] {
+            assert!(
+                fs::read_dir(directory)
+                    .unwrap()
+                    .all(|entry| !entry.unwrap().file_name().to_string_lossy().starts_with(".knot-save-"))
+            );
+        }
     }
 }

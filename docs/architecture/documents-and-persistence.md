@@ -57,8 +57,10 @@ remains path-independent.
 The application registry routes normalization, enumeration, versioned read,
 no-clobber create, conditional replace, and stat by scheme. Memory and local
 providers implement the same typed results/errors. Local writes flush a temporary
-sibling and install atomically; replacement preserves permissions and rejects
-version mismatch. Native filesystem I/O uses a background Tokio runtime.
+sibling, install atomically, and sync the parent directory before reporting
+success. Replacement resolves symlinks first, so it rewrites the link's target
+and the link survives; it preserves permissions and rejects version mismatch.
+Native filesystem I/O uses a background Tokio runtime.
 
 Product documents use unscoped providers so user-selected resources need not lie
 inside workspace roots. Scoped local providers remain trusted application
