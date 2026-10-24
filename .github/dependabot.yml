@@ -1,6 +1,25 @@
 version: 2
 updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    # Indirect dependencies matter here: advisories reach the product through
+    # gpui's tree (for example rustls-webpki), not only through Cargo.toml.
+    allow:
+      - dependency-type: all
+    groups:
+      cargo:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    groups:
+      github-actions:
+        patterns:
+          - "*"
