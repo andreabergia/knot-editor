@@ -13,6 +13,7 @@ use gpui::{prelude::FluentBuilder, *};
 
 pub(super) mod commands;
 pub(super) mod operations;
+mod recovery_listing;
 mod relocate;
 mod tab_drag;
 #[cfg(test)]
@@ -378,9 +379,10 @@ pub(crate) struct ProductShell {
     extension_report_subscription: Option<Subscription>,
 }
 
-/// One live extension transient interaction owned by this window.
+/// One live transient interaction owned by this window. Native interactions
+/// have no extension owner and are never cancelled by extension lifecycles.
 struct ActiveTransient {
-    owner: TransientOwner,
+    owner: Option<TransientOwner>,
     surface: Option<TransientSurface>,
     focus: Option<FocusHandle>,
     completion: Option<tokio::sync::oneshot::Sender<TransientOutcome>>,
@@ -1096,11 +1098,15 @@ impl ProductShell {
     /// Cancel the live interaction when it belongs to the requested owner.
     /// A `None` invocation cancels any interaction of that extension lifetime.
     pub(crate) fn cancel_transient(&mut self, owner: TransientOwner, cx: &mut Context<Self>) {
-        let matches = self.transient.as_ref().is_some_and(|active| {
-            active.owner.extension == owner.extension
-                && active.owner.lifecycle == owner.lifecycle
-                && (owner.invocation.is_none() || active.owner.invocation == owner.invocation)
-        });
+        let matches = self
+            .transient
+            .as_ref()
+            .and_then(|active| active.owner)
+            .is_some_and(|active| {
+                active.extension == owner.extension
+                    && active.lifecycle == owner.lifecycle
+                    && (owner.invocation.is_none() || active.invocation == owner.invocation)
+            });
         if matches {
             self.finish_transient(TransientOutcome::Cancelled, cx);
         }
@@ -1111,6 +1117,17 @@ impl ProductShell {
     pub(crate) fn begin_picker(
         &mut self,
         owner: TransientOwner,
+        title: String,
+        items: Vec<crate::host::protocol::PickerItem>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<tokio::sync::oneshot::Receiver<TransientOutcome>, TransientError> {
+        self.begin_owned_picker(Some(owner), title, items, window, cx)
+    }
+
+    fn begin_owned_picker(
+        &mut self,
+        owner: Option<TransientOwner>,
         title: String,
         items: Vec<crate::host::protocol::PickerItem>,
         window: &mut Window,
@@ -1169,7 +1186,7 @@ impl ProductShell {
         });
         let (completion, receiver) = tokio::sync::oneshot::channel();
         self.transient = Some(ActiveTransient {
-            owner,
+            owner: Some(owner),
             surface: Some(TransientSurface::Input(view)),
             focus: Some(focus.clone()),
             completion: Some(completion),
@@ -1206,7 +1223,7 @@ impl ProductShell {
         );
         let (completion, receiver) = tokio::sync::oneshot::channel();
         self.transient = Some(ActiveTransient {
-            owner,
+            owner: Some(owner),
             surface: None,
             focus: None,
             completion: Some(completion),
@@ -1245,7 +1262,7 @@ impl ProductShell {
         );
         let (completion, receiver) = tokio::sync::oneshot::channel();
         self.transient = Some(ActiveTransient {
-            owner,
+            owner: Some(owner),
             surface: None,
             focus: None,
             completion: Some(completion),
@@ -1298,7 +1315,7 @@ impl ProductShell {
             };
         let (completion, receiver) = tokio::sync::oneshot::channel();
         self.transient = Some(ActiveTransient {
-            owner,
+            owner: Some(owner),
             surface: None,
             focus: None,
             completion: Some(completion),
@@ -4243,9 +4260,37 @@ fn install_protected_window_close(shell: &Entity<ProductShell>, window: &Window,
 }
 
 pub(crate) fn open_product_window(request: Option<OpenRequest>, cx: &mut App) {
+    open_product_window_with(request, None, cx);
+}
+
+/// Open a product window, presenting documents restored at startup. Without an
+/// open request the first restored document replaces the untitled placeholder.
+fn open_product_window_with(
+    request: Option<OpenRequest>,
+    recovery: Option<super::recovery::StartupRecovery>,
+    cx: &mut App,
+) {
     let documents = cx.global::<ApplicationDocuments>().0.clone();
-    let document = create_untitled_document(&documents, cx);
+    let mut restored = recovery
+        .as_ref()
+        .map(|recovery| recovery.restored.clone())
+        .unwrap_or_default()
+        .into_iter();
+    let document = match request {
+        None => restored.next(),
+        Some(_) => None,
+    }
+    .unwrap_or_else(|| create_untitled_document(&documents, cx));
     let model = documents.read(cx).get(document).unwrap().model().clone();
+    let restored = restored
+        .filter_map(|document| {
+            documents
+                .read(cx)
+                .get(document)
+                .map(|entry| (document, entry.model().clone()))
+        })
+        .collect::<Vec<_>>();
+    let status = recovery.as_ref().and_then(recovery_listing::startup_status);
     let bounds = Bounds::centered(None, size(px(1000.), px(720.)), cx);
     cx.open_window(
         WindowOptions {
@@ -4261,22 +4306,43 @@ pub(crate) fn open_product_window(request: Option<OpenRequest>, cx: &mut App) {
             shell.update(cx, |shell, cx| shell.observe_extension_host(window, cx));
             install_protected_window_close(&shell, window, cx);
             shell.update(cx, |shell, cx| shell.restore_fresh_window_layout(cx));
-            shell.read(cx).focus_active_surface(window, cx);
-            if let Some(request) = request {
-                let pane = shell.read(cx).workbench.read(cx).focused_pane().unwrap();
-                let tab = pane.active_tab();
-                let target = OpenTarget {
-                    window: window.window_handle(),
-                    workbench: shell.read(cx).workbench.downgrade(),
-                    pane: pane.id(),
-                    tab: tab.id(),
-                    surface: tab.surface_id(),
-                    presentation: tab.presentation(),
-                };
-                shell.update(cx, |shell, cx| {
-                    shell.start_open_request(request, target, true, None, cx);
+            let pane = shell.read(cx).workbench.read(cx).focused_pane().unwrap();
+            let tab = pane.active_tab();
+            let target = OpenTarget {
+                window: window.window_handle(),
+                workbench: shell.read(cx).workbench.downgrade(),
+                pane: pane.id(),
+                tab: tab.id(),
+                surface: tab.surface_id(),
+                presentation: tab.presentation(),
+            };
+            shell.update(cx, |shell, cx| {
+                shell.workbench.update(cx, |workbench, cx| {
+                    for (document, model) in restored {
+                        workbench.open_tab_for_document(target.pane, document, model, cx);
+                    }
+                    workbench.activate_tab(target.pane, target.tab);
                 });
-            }
+            });
+            shell.read(cx).focus_active_surface(window, cx);
+            shell.update(cx, |shell, cx| {
+                // The recovery status outlives the launch open's own status.
+                let opened =
+                    request.map(|request| shell.start_open_operation(request, target, true, cx));
+                let Some(status) = status else {
+                    return;
+                };
+                let task = cx.spawn(async move |this, cx| {
+                    if let Some(opened) = opened {
+                        let _ = opened.await;
+                    }
+                    let _ = this.update(cx, |shell, cx| {
+                        shell.status = status.into();
+                        cx.notify();
+                    });
+                });
+                shell.tasks.push(task);
+            });
             shell
         },
     )
@@ -4358,15 +4424,25 @@ pub(super) fn finish_product_startup(
 ) {
     match result {
         Ok(()) => {
-            let requests = cx
-                .global::<ApplicationLaunchGate>()
-                .0
-                .borrow_mut()
-                .complete();
-            for request in requests {
-                open_product_window(request, cx);
-            }
-            cx.activate(true);
+            // Restore unsaved work before the launch gate opens, so queued open
+            // requests deduplicate against restored documents.
+            let recovery = super::recovery::restore_at_startup(ProductShell::filesystems(cx), cx);
+            cx.spawn(async move |cx| {
+                let recovery = recovery.await;
+                let _ = cx.update(|cx| {
+                    let requests = cx
+                        .global::<ApplicationLaunchGate>()
+                        .0
+                        .borrow_mut()
+                        .complete();
+                    let mut recovery = Some(recovery);
+                    for request in requests {
+                        open_product_window_with(request, recovery.take(), cx);
+                    }
+                    cx.activate(true);
+                });
+            })
+            .detach();
         }
         Err(diagnostic) => {
             cx.global::<ApplicationLaunchGate>().0.borrow_mut().fail();
@@ -4453,6 +4529,10 @@ pub(crate) fn run(initial_request: Option<OpenRequest>) {
                     MenuItem::action("Open…", ProductCommandSource::new(OPEN_COMMAND)),
                     MenuItem::action("Save", ProductCommandSource::new(SAVE_COMMAND)),
                     MenuItem::action("Save As…", ProductCommandSource::new(SAVE_AS_COMMAND)),
+                    MenuItem::action(
+                        "Recover Unsaved Documents…",
+                        ProductCommandSource::new(commands::RECOVER_COMMAND),
+                    ),
                     MenuItem::action("Close Tab", ProductCommandSource::new(CLOSE_TAB_COMMAND)),
                     MenuItem::action(
                         "Close Window",

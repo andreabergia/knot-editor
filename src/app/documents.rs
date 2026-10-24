@@ -238,6 +238,40 @@ impl DocumentCollection {
         )
     }
 
+    /// Insert a recovered user document, keeping its recorded identity when one
+    /// is given. Returns `None` when the identity or resource is already live,
+    /// so recovered content never replaces an open document.
+    pub(crate) fn create_recovered(
+        &mut self,
+        title: impl Into<SharedString>,
+        model: Entity<BufferModel>,
+        state: DocumentState,
+        identity: Option<uuid::Uuid>,
+        cx: &mut App,
+    ) -> Option<DocumentId> {
+        debug_assert!(!matches!(state, DocumentState::Generated));
+        if identity.is_some_and(|identity| self.document_by_identity(identity).is_some())
+            || state
+                .resource_uri()
+                .is_some_and(|uri| self.resources.contains_key(uri))
+        {
+            return None;
+        }
+        let uri = state.resource_uri().cloned();
+        let id = self.insert_with_identity(
+            title,
+            model,
+            state,
+            None,
+            identity.unwrap_or_else(uuid::Uuid::new_v4),
+            cx,
+        );
+        if let Some(uri) = uri {
+            self.resources.insert(uri, id);
+        }
+        Some(id)
+    }
+
     pub(crate) fn documents(&self) -> impl Iterator<Item = &Document> {
         self.documents.iter()
     }
@@ -374,12 +408,30 @@ impl DocumentCollection {
         search_results: Option<SearchResultsController>,
         cx: &mut App,
     ) -> DocumentId {
+        self.insert_with_identity(
+            title,
+            model,
+            state,
+            search_results,
+            uuid::Uuid::new_v4(),
+            cx,
+        )
+    }
+
+    fn insert_with_identity(
+        &mut self,
+        title: impl Into<SharedString>,
+        model: Entity<BufferModel>,
+        state: DocumentState,
+        search_results: Option<SearchResultsController>,
+        identity: uuid::Uuid,
+        cx: &mut App,
+    ) -> DocumentId {
         let id = DocumentId(self.next_id);
         self.next_id = self
             .next_id
             .checked_add(1)
             .expect("document identity space exhausted");
-        let identity = uuid::Uuid::new_v4();
         let observed_model = model.clone();
         self.documents.push(Document {
             id,
@@ -583,6 +635,48 @@ mod tests {
         });
         assert_ne!(reopened, first);
         assert_ne!(documents.get(reopened).unwrap().identity(), first_identity);
+    }
+
+    #[gpui::test]
+    fn recovered_documents_keep_identity_and_never_displace_live_ones(cx: &mut TestAppContext) {
+        let uri = ResourceUri::parse("mem://workspace/notes.txt").unwrap();
+        let identity = uuid::Uuid::new_v4();
+        let mut documents = DocumentCollection::new();
+        let recovered = cx.new(|_| BufferModel::from_recovered_text("disk", "recovered"));
+        let id = cx
+            .update(|cx| {
+                documents.create_recovered(
+                    "notes.txt",
+                    recovered,
+                    DocumentState::Persisted {
+                        uri: uri.clone(),
+                        persisted_revision: 0,
+                        version: version(1),
+                    },
+                    Some(identity),
+                    cx,
+                )
+            })
+            .unwrap();
+        let document = documents.get(id).unwrap();
+        assert_eq!(document.identity(), identity);
+        assert!(cx.read(|cx| document.is_dirty(cx)));
+        assert_eq!(documents.document_for_resource(&uri), Some(id));
+
+        for (state, identity) in [
+            (
+                DocumentState::Untitled { clean_revision: 0 },
+                Some(identity),
+            ),
+            (DocumentState::Destination { uri: uri.clone() }, None),
+        ] {
+            let model = cx.new(|_| BufferModel::from_text("other"));
+            assert!(
+                cx.update(|cx| documents.create_recovered("other", model, state, identity, cx))
+                    .is_none()
+            );
+        }
+        assert_eq!(documents.documents().count(), 1);
     }
 
     #[gpui::test]

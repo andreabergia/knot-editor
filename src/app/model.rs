@@ -143,6 +143,21 @@ impl BufferModel {
         Self::with_access_policy(text, BufferAccessPolicy::ReadOnly)
     }
 
+    /// A model whose revision 0 holds `baseline` and whose current content is
+    /// `text`, committed as one edit with an empty undo history. Dirty state
+    /// then derives from comparing against the baseline revision, so text equal
+    /// to its baseline is clean.
+    pub(crate) fn from_recovered_text(baseline: impl Into<Box<str>>, text: &str) -> Self {
+        let mut model = Self::from_text(baseline);
+        if model.text() != text {
+            let len = model.buffer.len();
+            model.commit_replacement(0..len, text, None, None);
+        }
+        model.history = EditHistory::default();
+        model.pending_changes.clear();
+        model
+    }
+
     fn with_access_policy(text: impl Into<Box<str>>, access_policy: BufferAccessPolicy) -> Self {
         Self {
             buffer: TextBuffer::from_text(text),
@@ -1325,6 +1340,18 @@ mod tests {
         assert_eq!(registry.handle_for(&model), Some(first));
         assert_ne!(registry.open(&other), first);
         assert_eq!(registry.buffers.len(), 2);
+    }
+
+    #[test]
+    fn recovered_text_is_dirty_against_its_baseline_without_undo_history() {
+        let mut model = BufferModel::from_recovered_text("on disk", "recovered");
+        assert_eq!(model.text(), "recovered");
+        assert!(!model.content_matches_revision(0));
+        assert!(model.take_pending_change().is_none());
+        assert!(!model.undo().unwrap());
+
+        let unchanged = BufferModel::from_recovered_text("same", "same");
+        assert!(unchanged.content_matches_revision(0));
     }
 
     #[test]

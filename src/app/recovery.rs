@@ -13,12 +13,21 @@
 //! considered accepted, so the advertised crash-loss window is the cadence
 //! itself. The quit path drains a capture still inside its debounce window.
 //!
+//! Restore rebuilds a document from a snapshot by loading the current resource
+//! through its provider as revision 0 and applying the recovered text as one
+//! edit with an empty undo history, so dirty state derives from the ordinary
+//! content comparison. Restore never writes a resource and never replaces a
+//! live document: when the identity or URI is already owned, the recovered text
+//! opens as a separate untitled document. Startup silently restores every
+//! automatic snapshot that no live document claims; everything else stays in
+//! the store for the native listing to restore or discard explicitly.
+//!
 //! A missing, corrupt, or incompatible database is preserved and reported; it
 //! never blocks editing and is never replaced.
 
 use std::{
     cell::RefCell,
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     hash::{Hash, Hasher},
     path::PathBuf,
     rc::Rc,
@@ -30,12 +39,17 @@ use std::{
 };
 
 use anyhow::{Context as _, ensure};
-use gpui::{App, BackgroundExecutor, Entity, Global, Subscription, Task};
+use gpui::{
+    App, AppContext as _, AsyncApp, BackgroundExecutor, Entity, Global, Subscription, Task,
+};
 use rusqlite::{Connection, OpenFlags, params, types::ToSql};
 
 use super::{
-    documents::{ApplicationDocuments, Document, DocumentState},
+    documents::{ApplicationDocuments, Document, DocumentId, DocumentState},
+    filesystem::{FileSystemProviderRegistry, ResourceKind, ResourceVersion},
     model::BufferModel,
+    open::{OpenResource, OpenResourceError, load_resource_kind},
+    resource::ResourceUri,
 };
 
 pub(crate) const RECOVERY_VERSION: u32 = 1;
@@ -67,6 +81,13 @@ pub(crate) enum SnapshotKind {
 }
 
 impl SnapshotKind {
+    fn as_column(self) -> &'static str {
+        match self {
+            Self::Automatic => "automatic",
+            Self::Retained => "retained",
+        }
+    }
+
     fn from_column(value: &str) -> Option<Self> {
         match value {
             "automatic" => Some(Self::Automatic),
@@ -435,29 +456,31 @@ impl RecoveryStore {
         })
     }
 
-    #[cfg_attr(
-        not(test),
-        allow(
-            dead_code,
-            reason = "the recovery listing and restore arrive in checkpoint 7b"
-        )
-    )]
+    #[cfg(test)]
     pub(crate) fn automatic(
         &self,
         document_id: uuid::Uuid,
+    ) -> Task<Result<Option<StoredSnapshot>, String>> {
+        self.snapshot(SnapshotKind::Automatic, document_id.to_string())
+    }
+
+    /// Read one snapshot by its retention role and capture key.
+    pub(crate) fn snapshot(
+        &self,
+        kind: SnapshotKind,
+        capture_key: String,
     ) -> Task<Result<Option<StoredSnapshot>, String>> {
         let this = self.clone();
         self.inner.executor.spawn(async move {
             this.inner
                 .database
                 .run(|connection| {
-                    let key = document_id.to_string();
                     read_rows(
                         connection,
                         "SELECT kind, capture_key, owner, document_id, title, resource_uri, state, \
                          provider_version, generation, captured_at, text FROM snapshots \
-                         WHERE kind = 'automatic' AND capture_key = ?1",
-                        &[&key],
+                         WHERE kind = ?1 AND capture_key = ?2",
+                        &[&kind.as_column(), &capture_key],
                     )
                     .map(|mut rows| rows.pop())
                 })
@@ -465,13 +488,7 @@ impl RecoveryStore {
         })
     }
 
-    #[cfg_attr(
-        not(test),
-        allow(
-            dead_code,
-            reason = "the recovery listing and restore arrive in checkpoint 7b"
-        )
-    )]
+    /// Every stored snapshot, newest capture first.
     pub(crate) fn snapshots(&self) -> Task<Result<Vec<StoredSnapshot>, String>> {
         let this = self.clone();
         self.inner.executor.spawn(async move {
@@ -487,6 +504,78 @@ impl RecoveryStore {
                     )
                 })
                 .map_err(display_error)
+        })
+    }
+
+    /// Explicitly discard one snapshot of either role. Resolves `false` when the
+    /// snapshot no longer exists.
+    pub(crate) fn discard(
+        &self,
+        kind: SnapshotKind,
+        capture_key: String,
+    ) -> Task<Result<bool, String>> {
+        let this = self.clone();
+        self.inner.executor.spawn(async move {
+            let removed = this
+                .inner
+                .database
+                .run(|connection| {
+                    Ok(connection.execute(
+                        "DELETE FROM snapshots WHERE kind = ?1 AND capture_key = ?2",
+                        params![kind.as_column(), capture_key],
+                    )? > 0)
+                })
+                .map_err(display_error)?;
+            if kind == SnapshotKind::Automatic
+                && let Ok(document_id) = uuid::Uuid::parse_str(&capture_key)
+            {
+                this.inner
+                    .state
+                    .lock()
+                    .unwrap()
+                    .applied
+                    .remove(&document_id);
+            }
+            Ok(removed)
+        })
+    }
+
+    /// Move automatic protection to another document identity in one durable
+    /// transaction, so the text is never unprotected between the two rows. A
+    /// failure keeps the original row.
+    fn transfer_automatic(
+        &self,
+        from: uuid::Uuid,
+        draft: SnapshotDraft,
+    ) -> Task<Result<(), String>> {
+        let this = self.clone();
+        self.inner.executor.spawn(async move {
+            let result = this
+                .inner
+                .database
+                .run(|connection| {
+                    let generation = this.inner.database.allocate_generation();
+                    let transaction = connection.transaction()?;
+                    write_automatic(&transaction, &draft, generation)?;
+                    transaction.execute(
+                        "DELETE FROM snapshots WHERE kind = 'automatic' AND capture_key = ?1",
+                        params![from.to_string()],
+                    )?;
+                    transaction.commit()?;
+                    Ok(())
+                })
+                .map_err(display_error);
+            let mut state = this.inner.state.lock().unwrap();
+            match &result {
+                Ok(()) => {
+                    state.applied.remove(&from);
+                    state
+                        .applied
+                        .insert(draft.document_id, Applied::Written(draft.digest()));
+                }
+                Err(message) => state.last_error = Some(message.clone()),
+            }
+            result
         })
     }
 
@@ -771,6 +860,313 @@ pub(crate) fn forget_document(identity: uuid::Uuid, cx: &mut App) {
     service.store.retire_automatic(identity);
 }
 
+/// How a restored document relates to its resource at restore time.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RestoredResource {
+    /// No resource: an untitled document.
+    Untitled,
+    /// The resource is as it was captured, or the destination is still absent.
+    Unchanged,
+    /// The persisted resource no longer exists; the document targets it as a
+    /// destination that a save creates.
+    Missing,
+    /// The resource changed or appeared after capture. The recovered text sits
+    /// dirty on top of the current content and the capture-time version is kept,
+    /// so a later save reaches the ordinary conflict handling.
+    Changed,
+}
+
+/// Committed result of one restore.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RestoreOutcome {
+    Restored {
+        document: DocumentId,
+        resource: RestoredResource,
+    },
+    /// The snapshot is the automatic protection of a document that is open.
+    AlreadyOpen { document: DocumentId },
+    /// A live document already owns the identity or URI. It is left untouched and
+    /// the recovered text opens as a separate untitled document.
+    Preserved {
+        owner: DocumentId,
+        document: DocumentId,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum RestoreError {
+    /// The snapshot was discarded, released, or restored elsewhere.
+    Unavailable,
+    /// The resource baseline could not be read; the snapshot is kept.
+    Resource(OpenResourceError),
+    Store(String),
+}
+
+impl std::fmt::Display for RestoreError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unavailable => {
+                formatter.write_str("the recovered document is no longer available")
+            }
+            Self::Resource(error) => error.fmt(formatter),
+            Self::Store(message) => formatter.write_str(message),
+        }
+    }
+}
+
+fn service(cx: &App) -> Option<RecoveryService> {
+    cx.try_global::<ApplicationRecovery>()
+        .map(|global| global.0.clone())
+}
+
+/// Snapshots the user can restore or discard: every retained capture and every
+/// automatic snapshot whose document is not open, newest first.
+pub(crate) fn recoverable(cx: &mut App) -> Task<Result<Vec<StoredSnapshot>, String>> {
+    let Some(service) = service(cx) else {
+        return Task::ready(Ok(Vec::new()));
+    };
+    let listing = service.store.snapshots();
+    cx.spawn(async move |cx| {
+        let snapshots = listing.await?;
+        cx.update(|cx| {
+            let documents = cx.global::<ApplicationDocuments>().0.read(cx);
+            snapshots
+                .into_iter()
+                .filter(|snapshot| {
+                    snapshot.kind == SnapshotKind::Retained
+                        || documents
+                            .document_by_identity(snapshot.document_id)
+                            .is_none()
+                })
+                .collect()
+        })
+        .map_err(display_error)
+    })
+}
+
+/// Restore one stored snapshot as an ordinary dirty document. Nothing is written
+/// to its resource.
+pub(crate) fn restore(
+    kind: SnapshotKind,
+    capture_key: String,
+    providers: Arc<FileSystemProviderRegistry>,
+    cx: &mut App,
+) -> Task<Result<RestoreOutcome, RestoreError>> {
+    let Some(service) = service(cx) else {
+        return Task::ready(Err(RestoreError::Store("recovery is unavailable".into())));
+    };
+    let read = service.store.snapshot(kind, capture_key);
+    cx.spawn(async move |cx| {
+        let snapshot = read
+            .await
+            .map_err(RestoreError::Store)?
+            .ok_or(RestoreError::Unavailable)?;
+        restore_snapshot(&service, snapshot, providers, cx).await
+    })
+}
+
+/// Explicitly discard one stored snapshot. Resolves `false` when it no longer exists.
+pub(crate) fn discard_snapshot(
+    kind: SnapshotKind,
+    capture_key: String,
+    cx: &App,
+) -> Task<Result<bool, String>> {
+    match service(cx) {
+        Some(service) => service.store.discard(kind, capture_key),
+        None => Task::ready(Err("recovery is unavailable".into())),
+    }
+}
+
+/// Documents restored silently at startup and the snapshots left for the listing.
+#[derive(Debug, Default)]
+pub(crate) struct StartupRecovery {
+    pub(crate) restored: Vec<DocumentId>,
+    pub(crate) remaining: usize,
+    pub(crate) error: Option<String>,
+}
+
+/// Restore every automatic snapshot no live document claims, newest first.
+///
+/// When several snapshots target one URI only the newest is restored; older
+/// ones, retained captures, and snapshots whose resource cannot be read stay in
+/// the store and are counted as remaining.
+pub(crate) fn restore_at_startup(
+    providers: Arc<FileSystemProviderRegistry>,
+    cx: &mut App,
+) -> Task<StartupRecovery> {
+    let Some(service) = service(cx) else {
+        return Task::ready(StartupRecovery::default());
+    };
+    let listing = service.store.snapshots();
+    cx.spawn(async move |cx| {
+        let mut recovery = StartupRecovery::default();
+        let snapshots = match listing.await {
+            Ok(snapshots) => snapshots,
+            Err(error) => {
+                recovery.error = Some(error);
+                return recovery;
+            }
+        };
+        let mut claimed = HashSet::new();
+        for snapshot in snapshots {
+            if snapshot.kind == SnapshotKind::Retained
+                || snapshot
+                    .resource_uri
+                    .as_ref()
+                    .is_some_and(|uri| !claimed.insert(uri.clone()))
+            {
+                recovery.remaining += 1;
+                continue;
+            }
+            match restore_snapshot(&service, snapshot, providers.clone(), cx).await {
+                Ok(RestoreOutcome::Restored { document, .. }) => recovery.restored.push(document),
+                Ok(RestoreOutcome::AlreadyOpen { .. }) => {}
+                Ok(RestoreOutcome::Preserved { document, .. }) => {
+                    recovery.restored.push(document);
+                }
+                Err(error) => {
+                    eprintln!("[knot] recovery: {error}");
+                    recovery.remaining += 1;
+                }
+            }
+        }
+        recovery
+    })
+}
+
+async fn restore_snapshot(
+    service: &RecoveryService,
+    snapshot: StoredSnapshot,
+    providers: Arc<FileSystemProviderRegistry>,
+    cx: &mut AsyncApp,
+) -> Result<RestoreOutcome, RestoreError> {
+    let loaded = match (&snapshot.resource_uri, snapshot.state) {
+        (_, SnapshotState::Untitled) => None,
+        (Some(uri), _) => {
+            let uri = ResourceUri::parse(uri)
+                .map_err(|error| RestoreError::Store(format!("invalid recovered URI: {error}")))?;
+            Some(
+                load_resource_kind(providers, uri, Some(ResourceKind::File))
+                    .await
+                    .map_err(RestoreError::Resource)?,
+            )
+        }
+        (None, _) => {
+            return Err(RestoreError::Store(
+                "recovered document has no resource".into(),
+            ));
+        }
+    };
+    let service = service.clone();
+    cx.update(|cx| commit_restore(&service, snapshot, loaded, cx))
+        .map_err(|error| RestoreError::Store(display_error(error)))?
+}
+
+fn commit_restore(
+    service: &RecoveryService,
+    snapshot: StoredSnapshot,
+    loaded: Option<OpenResource>,
+    cx: &mut App,
+) -> Result<RestoreOutcome, RestoreError> {
+    let documents = cx.global::<ApplicationDocuments>().0.clone();
+    let (baseline, state, resource) = match (snapshot.state, loaded) {
+        (SnapshotState::Untitled, _) => (
+            String::new(),
+            DocumentState::Untitled { clean_revision: 0 },
+            RestoredResource::Untitled,
+        ),
+        (state, Some(OpenResource::Missing(uri))) => (
+            String::new(),
+            DocumentState::Destination { uri },
+            if state == SnapshotState::Persisted {
+                RestoredResource::Missing
+            } else {
+                RestoredResource::Unchanged
+            },
+        ),
+        (SnapshotState::Destination, Some(OpenResource::File { uri, text, .. })) => (
+            text,
+            DocumentState::Destination { uri },
+            RestoredResource::Changed,
+        ),
+        (SnapshotState::Persisted, Some(OpenResource::File { uri, text, version })) => {
+            let captured =
+                ResourceVersion::new(snapshot.provider_version.clone().unwrap_or_default());
+            let resource = if version == captured {
+                RestoredResource::Unchanged
+            } else {
+                RestoredResource::Changed
+            };
+            (
+                text,
+                DocumentState::Persisted {
+                    uri,
+                    persisted_revision: 0,
+                    version: captured,
+                },
+                resource,
+            )
+        }
+        (_, Some(OpenResource::Directory(_))) | (_, None) => {
+            unreachable!("file loads reject directories and only untitled snapshots skip loading")
+        }
+    };
+    let (by_identity, by_resource) = {
+        let documents = documents.read(cx);
+        (
+            documents
+                .document_by_identity(snapshot.document_id)
+                .map(Document::id),
+            state
+                .resource_uri()
+                .and_then(|uri| documents.document_for_resource(uri)),
+        )
+    };
+    if snapshot.kind == SnapshotKind::Automatic
+        && let Some(document) = by_identity
+    {
+        return Ok(RestoreOutcome::AlreadyOpen { document });
+    }
+    if let Some(owner) = by_resource.or(by_identity) {
+        let model = cx.new(|_| BufferModel::from_recovered_text("", &snapshot.text));
+        let document = documents.update(cx, |documents, cx| {
+            documents
+                .create_recovered(
+                    format!("{} (Recovered)", snapshot.title),
+                    model,
+                    DocumentState::Untitled { clean_revision: 0 },
+                    None,
+                    cx,
+                )
+                .expect("a fresh untitled identity is never live")
+        });
+        let draft = gather(documents.read(cx).get(document).unwrap(), cx);
+        match (snapshot.kind, draft) {
+            // The separate copy now carries the automatic protection.
+            (SnapshotKind::Automatic, Some(draft)) => service
+                .store
+                .transfer_automatic(snapshot.document_id, draft)
+                .detach(),
+            _ => documents.update(cx, |documents, cx| {
+                publish(documents.get(document).unwrap(), cx);
+            }),
+        }
+        return Ok(RestoreOutcome::Preserved { owner, document });
+    }
+    // Retained captures restore under a fresh identity: the automatic role may
+    // still protect newer text for the original one.
+    let identity = (snapshot.kind == SnapshotKind::Automatic).then_some(snapshot.document_id);
+    let model = cx.new(|_| BufferModel::from_recovered_text(baseline, &snapshot.text));
+    let document = documents.update(cx, |documents, cx| {
+        let document = documents
+            .create_recovered(snapshot.title.clone(), model, state, identity, cx)
+            .expect("ownership was checked in this turn");
+        publish(documents.get(document).unwrap(), cx);
+        document
+    });
+    Ok(RestoreOutcome::Restored { document, resource })
+}
+
 fn gather(document: &Document, cx: &App) -> Option<SnapshotDraft> {
     if matches!(document.state(), DocumentState::Generated) || !document.is_dirty(cx) {
         return None;
@@ -796,7 +1192,7 @@ fn gather(document: &Document, cx: &App) -> Option<SnapshotDraft> {
     })
 }
 
-fn now_ms() -> i64 {
+pub(crate) fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|elapsed| elapsed.as_millis() as i64)
@@ -1005,6 +1401,69 @@ mod tests {
                 .text,
             "automatic"
         );
+    }
+
+    #[gpui::test]
+    async fn discard_removes_either_role_and_transfer_moves_protection_atomically(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("recovery.sqlite3");
+        let orphan = uuid::Uuid::new_v4();
+        let store = open_store(&path, cx);
+        store.submit_automatic(draft(orphan, "orphan"));
+        store.flush().await.unwrap();
+        assert!(
+            store
+                .retain("owner".into(), "kept".into(), draft(orphan, "kept"))
+                .await
+                .unwrap()
+        );
+
+        let copy = draft(uuid::Uuid::new_v4(), "orphan");
+        store
+            .transfer_automatic(orphan, copy.clone())
+            .await
+            .unwrap();
+        let reopened = open_store(&path, cx);
+        assert!(reopened.automatic(orphan).await.unwrap().is_none());
+        assert_eq!(
+            reopened
+                .automatic(copy.document_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .text,
+            "orphan"
+        );
+        // The retained capture of the same document is a separate role.
+        assert!(
+            reopened
+                .snapshot(SnapshotKind::Retained, "kept".into())
+                .await
+                .unwrap()
+                .is_some()
+        );
+
+        assert!(
+            store
+                .discard(SnapshotKind::Retained, "kept".into())
+                .await
+                .unwrap()
+        );
+        assert!(
+            store
+                .discard(SnapshotKind::Automatic, copy.document_id.to_string())
+                .await
+                .unwrap()
+        );
+        assert!(
+            !store
+                .discard(SnapshotKind::Automatic, copy.document_id.to_string())
+                .await
+                .unwrap()
+        );
+        assert!(open_store(&path, cx).snapshots().await.unwrap().is_empty());
     }
 
     #[gpui::test]

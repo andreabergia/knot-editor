@@ -146,6 +146,22 @@ pub(crate) async fn save_as(
     save_to_target(&context, true).await
 }
 
+#[command("file.recover", title = "Recover Unsaved Documents…", id = RECOVER_COMMAND, participant = Workbench)]
+pub(crate) async fn recover(context: CommandContext, (): ()) -> Result<(), CommandOutcome> {
+    context
+        .foreground(move |target, _, cx| {
+            super::super::product_commands::break_captured_history_group(target, cx);
+            Ok(())
+        })
+        .await?;
+    context
+        .shell(|shell, target, _, cx| {
+            shell.start_recovery_listing(target, cx);
+            Ok(())
+        })
+        .await
+}
+
 #[command("editor.show-completions", title = "Show Completions", id = SHOW_COMPLETIONS_COMMAND, participant = Workbench)]
 pub(crate) async fn show_completions(
     context: CommandContext,
