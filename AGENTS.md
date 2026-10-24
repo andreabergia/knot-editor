@@ -40,8 +40,8 @@ canonical source before reading broadly.
 | Change area | Documentation | Canonical source |
 | --- | --- | --- |
 | Text storage, history, anchored ranges | [core and buffers](docs/architecture/core-and-buffers.md) | `src/core/` |
-| Document identity, dirty state, providers, Open/Save | [documents and persistence](docs/architecture/documents-and-persistence.md) | `src/app/documents.rs`, `src/app/open.rs`, `src/app/model.rs`, `src/app/resource.rs` |
-| Windows, panes, tabs, closure, terminal, tool layout | [workbench and lifecycle](docs/architecture/workbench-and-lifecycle.md) | `src/app/workbench/`, `src/app/product/`, `src/app/terminal_*.rs` |
+| Document identity, dirty state, providers, Open/Save | [documents and persistence](docs/architecture/documents-and-persistence.md) | `src/app/documents.rs`, `src/app/open.rs`, `src/app/product/{open,save}.rs`, `src/app/model.rs`, `src/app/resource.rs` |
+| Windows, panes, tabs, closure, terminal, tool layout | [workbench and lifecycle](docs/architecture/workbench-and-lifecycle.md) | `src/app/workbench/`, `src/app/product/` (`closure.rs`, `tools.rs`, `launch.rs`, `render.rs`), `src/app/terminal_*.rs` |
 | Commands, keymaps, captured targets, focus routing | [commands](docs/architecture/commands.md) | `src/app/keymaps.rs`, `src/app/product/commands.rs` |
 | Extension runtime, scheduling, lifecycle, records | [extension host](docs/architecture/extension-host.md) | `src/host/`, `src/app/extension_host.rs`, `src/app/extension_storage.rs` |
 | Contributed UI, trees, completion, generated text | [semantic UI](docs/architecture/semantic-ui.md) | `src/app/extension_semantics.rs`, `src/app/tree_view.rs`, `src/app/completion.rs` |
