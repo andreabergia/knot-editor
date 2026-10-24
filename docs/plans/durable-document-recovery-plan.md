@@ -198,6 +198,10 @@ and validated rationale in [decisions](../decisions.md#unsaved-document-restore-
 
 ### 7c. Capture barrier, retention API, and cleanup ⬜
 
+Starts after the [maintenance
+interlude](extension-platform-and-projects-plan.md#maintenance-interlude--codebase-health-cleanup-),
+which removes generated documents and their recovery special cases.
+
 - Expose opaque retained capture IDs and the retain/release primitives with
   lifecycle-stamped ownership and an acknowledged durable barrier; specify that a
   session record is committed only after its capture is durable and that old

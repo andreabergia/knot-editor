@@ -2,8 +2,10 @@
 
 Status: ⬜ In progress. Checkpoints 1–6 and D053 are complete and approved;
 checkpoint 7 is in progress (7a and 7b approved) and checkpoints 8–10 remain
-unstarted. Next: D050 checkpoint 7c; detailed
-execution lives in the [focused recovery plan](durable-document-recovery-plan.md).
+unstarted. Next: the [codebase health maintenance
+interlude](#maintenance-interlude--codebase-health-cleanup-), then D050
+checkpoint 7c; detailed execution lives in the [focused recovery
+plan](durable-document-recovery-plan.md).
 
 Work identifiers: D046–D052, promoted D005, and completed maintenance interlude
 D053. [Roadmap](../roadmap.md) owns initiative priority; this plan owns execution
@@ -225,11 +227,62 @@ project ownership and active-project derivation are recorded in
 [extensions/@knot/projects](../../extensions/@knot/projects), documented by the
 [extension guide](../extension-api.md).
 
+### Maintenance interlude — Codebase health cleanup ⬜
+
+Runs between 7b and 7c. The [codebase health review](codebase-health-review.md)
+found prototype leftovers and structural debt in the code that 7c, 8, and 10
+modify. This interlude removes what the remaining checkpoints would otherwise
+design around. Behavior changes are limited to the symlink save fix and hiding
+the Find stub. Section references (§) point into the review.
+
+- ⬜ **Prototype removal (§2.1).** Delete the native search-results controller,
+  `CompactCompletionSurface` and completion-surface swapping, the
+  `--terminal-fixture` launch mode, `examples/tab_drag_delivery.rs`, the D028/D029
+  platform smoke scripts, `TransientKind`, `ContributionSource::BuiltIn`, and the
+  remaining unused one-off items. Keep `RecoveryStore::{retain, release}` (7c) and
+  `ResourceUri::is_descendant_of` / `WorkspaceState::replace_root` (checkpoint 9).
+- ⬜ **Remove `DocumentState::Generated`.** No product path or public API creates
+  a generated document; only the search probe and tests did. Remove the state,
+  `DocumentKind::Generated`, the `"generated"` document kind in `knot.d.ts`, and
+  the recovery, closure, and Save special cases. Rewrite the D050 sentence above
+  about generated documents and checkpoint 10's "generated surfaces". Update
+  [semantic UI](../architecture/semantic-ui.md#generated-text),
+  [documents and persistence](../architecture/documents-and-persistence.md), the
+  recovery plan, and decisions. Record interactive generated views (magit-like)
+  as an extension-facing use case under roadmap D027.
+- ⬜ **Fence test-only code.** Put the V8 probe APIs (`Script`/`FixtureModule`
+  work, fixture execution, external UTF-16 holding), `MemoryFileSystemProvider`,
+  scheduler diagnostics, declaration introspection, and the workbench
+  convenience APIs behind `#[cfg(test)]`. Remove every module-level
+  `allow(dead_code)` from `src/app/mod.rs` and `src/host/mod.rs`. Any remaining
+  item-level allowance names the scheduled work that needs it.
+- ⬜ **Save through symlinks (P0-2).** Resolve the final target before choosing
+  the temporary directory and rename destination, and fsync the parent directory
+  after replacement. Add a Unix test that saves through a symlink and asserts the
+  link survives.
+- ⬜ **Hide the Find stub (P1-4).** Remove the Find menu items, default
+  bindings, and placeholder commands until D031 is selected.
+- ⬜ **Split `ProductShell` (P1-5).** Move save, open, protected closure,
+  tools/contributed views, rendering, and launch into `src/app/product/`
+  submodules, and move the inline tests into `product/tests/`. This is a pure
+  move, done before checkpoint 8 adds capture/prepare/replace operations to the
+  closure path. Update the `AGENTS.md` routing table and architecture links.
+- ⬜ **Hygiene.** Rewrite the `core` module docs in present tense, without the
+  exploration's `D#` / "step N" labels, which collide with roadmap IDs. Move
+  `pollster` to dev-dependencies. Fix the `docs/development.md` CI drift
+  (macOS/Windows handler jobs) and document the manual terminal fixtures.
+- **Validation:** `cargo clippy --all-targets -D warnings` and the full test
+  suite; `cargo check --lib` reports no dead code with the module-level
+  allowances gone; the extension authoring check passes with the narrowed
+  document kind; manual Save through a symlinked file.
+- **Review gate:** approve the removals and the `ProductShell` module layout
+  before 7c starts.
+
 ### 7. Durable unsaved-document recovery — D050 🟡
 
 7a recovery store and automatic protection and 7b restore, conflicts, discard,
 native recovery UI, and hot-exit quit are approved; 7c capture barrier, retention
-API, and cleanup is next. Detailed execution lives in the [focused recovery
+API, and cleanup follows the maintenance interlude. Detailed execution lives in the [focused recovery
 plan](durable-document-recovery-plan.md), which owns deliverables, validation,
 and one review gate per sub-checkpoint. This plan owns the shared outcome and
 ordering. Execute one sub-checkpoint per implementation request.
@@ -250,6 +303,11 @@ session/layout restoration (checkpoints 8 and 10) stay out of scope.
   sessions interact with the hot-exit quit established in checkpoint 7b. Terminal tabs are never persisted;
   any terminal affected by replacement follows existing close behavior and does
   not terminate during preparation or a failed switch. Review its visible treatment.
+- Add an extension escape hatch: a command that restarts or disables an
+  extension lifecycle through the existing terminating `unload`, or a coarse
+  per-turn watchdog built on `ExtensionWatchdog`. Switching depends on
+  JavaScript orchestration, and today a stuck turn can only be cleared by
+  quitting (review P1-3). Broader quotas and timeouts stay D019.
 - **Validation:** A→B→A with unsaved/untitled documents, concurrent views/windows,
   racing edits, cancellation, missing destination resources, storage failure,
   interruption between durable source capture and native commit, project deletion,
@@ -259,7 +317,8 @@ session/layout restoration (checkpoints 8 and 10) stay out of scope.
 
 ### 9. Multi-root workspace product behavior — D052 ⬜
 
-- Remove single-root enforcement; implement add/remove/reorder/replace roots and
+- Remove single-root enforcement, including the `TooManyWorkspaceRoots` error
+  type rather than a raised limit; implement add/remove/reorder/replace roots and
   a native multi-root resource tree. Upgrade project records without changing IDs.
 - Define overlapping roots, duplicate normalized URIs, root labels, tree selection,
   root removal with documents still open, folder-open replacement policy, and
@@ -292,6 +351,24 @@ session/layout restoration (checkpoints 8 and 10) stay out of scope.
 - **Review gate:** review the complete product workflow and API documentation,
   then mark the initiative complete. Preserve durable details in current docs
   and remove this plan in a separate commit; Git retains its execution history.
+
+## Follow-up from the codebase health review
+
+The [codebase health review](codebase-health-review.md) findings are scheduled
+as follows. Remove the review once every item below has landed or moved into the
+roadmap register.
+
+| Finding | Where |
+| --- | --- |
+| Prototype removal, `Generated` removal, test-only fencing, symlink Save, Find stub, `ProductShell` split, hygiene | [Maintenance interlude](#maintenance-interlude--codebase-health-cleanup-) before 7c |
+| Extension restart/disable escape hatch (P1-3) | Checkpoint 8 |
+| Single-root error removal (P2-6) | Checkpoint 9 |
+| Editor view incremental line model, piece-table length cache, insert coalescing and edit-log bounding, CRLF policy (P0-1, P1-1, P2-7) | After checkpoint 10, as a focused plan before D002 and D031 |
+| `engine.rs` split and marshaling unification, command module regrouping, `app/terminal` and `app/extensions` directories, inline test extraction, tokio runtime removal (P1-6, P2-1–P2-4) | After checkpoint 10, as pure-move maintenance between slices |
+
+Pull the editor view work forward only if dogfooding on large files becomes
+disruptive. Checkpoint 10 restores byte-offset view state that does not depend
+on the view's line representation.
 
 ## Completion and scope limits
 
