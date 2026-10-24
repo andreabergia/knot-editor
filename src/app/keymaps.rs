@@ -10,7 +10,7 @@ use crate::host::protocol::{
 
 use super::product_commands::{
     CLOSE_TAB_COMMAND, CLOSE_WINDOW_COMMAND, COPY_COMMAND, CUT_COMMAND, DELETE_BACKWARD_COMMAND,
-    DELETE_FORWARD_COMMAND, FIND_COMMAND, FIND_NEXT_COMMAND, FIND_PREVIOUS_COMMAND,
+    DELETE_FORWARD_COMMAND,
     INSERT_NEWLINE_COMMAND, INSERT_TAB_COMMAND, MOVE_DOCUMENT_END_COMMAND,
     MOVE_DOCUMENT_START_COMMAND, MOVE_DOWN_COMMAND, MOVE_LEFT_COMMAND, MOVE_LINE_END_COMMAND,
     MOVE_LINE_START_COMMAND, MOVE_PAGE_DOWN_COMMAND, MOVE_PAGE_UP_COMMAND, MOVE_RIGHT_COMMAND,
@@ -506,9 +506,6 @@ const PLATFORM_BINDINGS: &[(&str, &str, Option<&str>)] = &[
     ("cmd-c", COPY_COMMAND, None),
     ("cmd-v", PASTE_COMMAND, None),
     ("cmd-a", SELECT_ALL_COMMAND, None),
-    ("cmd-f", FIND_COMMAND, None),
-    ("cmd-g", FIND_NEXT_COMMAND, None),
-    ("cmd-shift-g", FIND_PREVIOUS_COMMAND, None),
     ("cmd-q", QUIT_COMMAND, None),
 ];
 
@@ -558,9 +555,6 @@ const PLATFORM_BINDINGS: &[(&str, &str, Option<&str>)] = &[
     ("ctrl-c", COPY_COMMAND, None),
     ("ctrl-v", PASTE_COMMAND, None),
     ("ctrl-a", SELECT_ALL_COMMAND, None),
-    ("ctrl-f", FIND_COMMAND, None),
-    ("ctrl-g", FIND_NEXT_COMMAND, None),
-    ("ctrl-shift-g", FIND_PREVIOUS_COMMAND, None),
     ("ctrl-q", QUIT_COMMAND, None),
 ];
 

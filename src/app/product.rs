@@ -33,7 +33,7 @@ use super::{
     open::{OpenResource, enumerate_directory, load_resource},
     product_commands::{
         ApplicationProductCommands, CLOSE_TAB_COMMAND, CLOSE_WINDOW_COMMAND, COPY_COMMAND,
-        CUT_COMMAND, FIND_COMMAND, FIND_NEXT_COMMAND, FIND_PREVIOUS_COMMAND,
+        CUT_COMMAND,
         MOVE_TERMINAL_TO_NEW_WINDOW_COMMAND, NEW_COMMAND, NEW_TERMINAL_COMMAND, NEW_WINDOW_COMMAND,
         OPEN_COMMAND, PASTE_COMMAND, ProductCommandDispatcher, ProductCommandSource,
         ProductCommandTarget, QUIT_COMMAND, REDO_COMMAND, SAVE_AS_COMMAND, SAVE_COMMAND,
@@ -4560,12 +4560,6 @@ pub(crate) fn run(initial_request: Option<OpenRequest>) {
                     MenuItem::action("Copy", ProductCommandSource::new(COPY_COMMAND)),
                     MenuItem::action("Paste", ProductCommandSource::new(PASTE_COMMAND)),
                     MenuItem::action("Select All", ProductCommandSource::new(SELECT_ALL_COMMAND)),
-                    MenuItem::action("Find", ProductCommandSource::new(FIND_COMMAND)),
-                    MenuItem::action("Find Next", ProductCommandSource::new(FIND_NEXT_COMMAND)),
-                    MenuItem::action(
-                        "Find Previous",
-                        ProductCommandSource::new(FIND_PREVIOUS_COMMAND),
-                    ),
                 ],
             },
             Menu {

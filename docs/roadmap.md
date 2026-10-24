@@ -49,7 +49,8 @@ D005; tool-only layout memory shipped with the completed D049.
 
 - **D031 — Current-file Find**
   - Deferred: Safe ordinary editing and workbench behavior can be dogfooded
-    without a search UI.
+    without a search UI. No Find command, menu item, or default binding ships
+    until the slice is selected, so ⌘F/Ctrl-F stay free.
   - Reconsider: Daily editing identifies literal in-file search as a recurring
     need; define focused query, live matching, edit-following navigation, and
     macOS bindings together in a selected slice.

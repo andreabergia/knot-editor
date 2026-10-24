@@ -265,19 +265,6 @@ pub(crate) async fn quit(
     close_target(&context, ProtectedCloseKind::Quit).await
 }
 
-#[command("editor.find", title = "Find", id = FIND_COMMAND, participant = Application, claim = decline_find)]
-#[command("editor.find-next", title = "Find Next", id = FIND_NEXT_COMMAND, participant = Application, claim = decline_find)]
-#[command("editor.find-previous", title = "Find Previous", id = FIND_PREVIOUS_COMMAND, participant = Application, claim = decline_find)]
-pub(crate) async fn find_unavailable(
-    _context: CommandContext,
-    (): (),
-) -> Result<(), CommandOutcome> {
-    Err(CommandOutcome::Unavailable)
-}
-fn decline_find(_: &crate::host::protocol::Command, _: &ProductCommandTarget, _: &App) -> bool {
-    false
-}
-
 async fn split(context: &CommandContext, direction: SplitDirection) -> Result<(), CommandOutcome> {
     context
         .shell(move |shell, target, window, cx| {
