@@ -3,7 +3,7 @@
 #[test]
 fn product_library_links_every_facade_capability() {
     use std::collections::BTreeSet;
-    let registry = knot::host_operation_registry();
+    let registry = knot::declarations::registry();
     let bootstrap = include_str!("../src/host/js/bootstrap.js");
     let mut expected = BTreeSet::new();
     for tail in bootstrap.split("request(").skip(1) {

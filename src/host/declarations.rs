@@ -6,7 +6,7 @@
 //!
 //! A declaration supplies its typed adapter and linked descriptor:
 //! ```no_run
-//! pub use knot::host;
+//! mod host { pub use knot::declarations; }
 //! use host::declarations::*;
 //! #[derive(Clone, Debug, PartialEq)]
 //! struct Arguments;
@@ -22,7 +22,7 @@
 //!
 //! Declarations require owned contexts and asynchronous handlers:
 //! ```compile_fail
-//! pub use knot::host;
+//! mod host { pub use knot::declarations; }
 //! use host::declarations::host_operation;
 //! #[host_operation("invalid")]
 //! async fn invalid(context: &str, arguments: ()) -> Result<(), ()> { Ok(()) }
@@ -30,7 +30,7 @@
 //! ```
 //!
 //! ```compile_fail
-//! pub use knot::host;
+//! mod host { pub use knot::declarations; }
 //! use host::declarations::host_operation;
 //! #[host_operation("invalid")]
 //! fn invalid(context: (), arguments: ()) -> Result<(), ()> { Ok(()) }
@@ -39,7 +39,7 @@
 //!
 //! Error codes must be declared explicitly:
 //! ```compile_fail
-//! pub use knot::host;
+//! mod host { pub use knot::declarations; }
 //! use host::declarations::HostError;
 //! #[derive(HostError)]
 //! enum Error { RenamableRustVariant }
@@ -48,7 +48,7 @@
 //!
 //! Typed responders cannot accept another success type:
 //! ```compile_fail
-//! pub use knot::host;
+//! mod host { pub use knot::declarations; }
 //! use host::declarations::*;
 //! #[derive(Clone, Debug, PartialEq)]
 //! struct Arguments;

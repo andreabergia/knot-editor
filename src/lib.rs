@@ -5,5 +5,6 @@ pub mod core;
 mod host;
 
 pub use app::run;
-/// Host operation declarations linked into the product library.
-pub use host::declarations::registry as host_operation_registry;
+/// Handler declarations, for the linked-inventory test and declaration doc tests.
+#[doc(hidden)]
+pub use host::declarations;
