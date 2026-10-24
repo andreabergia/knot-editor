@@ -14,7 +14,7 @@ use super::{
 };
 
 pub(crate) use super::engine::{
-    BufferChangeQueueMetrics, RuntimeCommandExecution as ExtensionCommandExecution,
+    RuntimeCommandExecution as ExtensionCommandExecution,
     RuntimeExecution as ExtensionExecution, RuntimePoolError as ExtensionPoolError,
     RuntimeProviderExecution as ExtensionProviderExecution,
     RuntimeResponseError as ExtensionResponseError,
@@ -91,10 +91,6 @@ pub(crate) struct ExtensionPool {
     engine: RuntimePool,
 }
 
-#[allow(
-    dead_code,
-    reason = "fixture diagnostics and native semantic surfaces use subsets of the pooled control API"
-)]
 impl ExtensionPool {
     pub(crate) fn new(config: PoolConfig) -> (Arc<Self>, ExtensionEventInbox) {
         let engine = RuntimePool::new(config);
@@ -104,6 +100,7 @@ impl ExtensionPool {
         (Arc::new(Self { engine }), ExtensionEventInbox(inbox))
     }
 
+    #[cfg(test)]
     pub(crate) fn load(
         &self,
         key: ExtensionKey,
@@ -112,6 +109,7 @@ impl ExtensionPool {
         self.engine.load(key, config.0)
     }
 
+    #[cfg(test)]
     pub(crate) fn execute_fixture_module(
         &self,
         key: ExtensionKey,
@@ -214,17 +212,15 @@ impl ExtensionPool {
             .dispatch_buffer_change(key, subscription, change)
     }
 
-    pub(crate) fn buffer_change_queue_metrics(
-        &self,
-        key: ExtensionKey,
-    ) -> Result<BufferChangeQueueMetrics, ExtensionPoolError> {
-        self.engine.buffer_change_queue_metrics(key)
-    }
-
+    #[cfg(test)]
     pub(crate) fn diagnostics(&self) -> super::scheduler::SchedulerDiagnostics {
         self.engine.diagnostics()
     }
 
+    #[allow(
+        dead_code,
+        reason = "the stuck-extension escape hatch (checkpoint 8) issues it"
+    )]
     pub(crate) fn watchdog(
         &self,
         key: ExtensionKey,
@@ -238,6 +234,7 @@ impl ExtensionPool {
         self.engine.unload(key)
     }
 
+    #[cfg(test)]
     pub(crate) fn shutdown(self) {
         self.engine.shutdown();
     }
@@ -246,7 +243,7 @@ impl ExtensionPool {
 /// Cloneable, non-V8 watchdog for forcefully interrupting one isolate.
 #[allow(
     dead_code,
-    reason = "watchdogs are issued to fixture and product lifecycle owners"
+    reason = "the stuck-extension escape hatch (checkpoint 8) issues it"
 )]
 pub(crate) struct ExtensionWatchdog {
     handle: engine::TerminationHandle,
@@ -254,7 +251,7 @@ pub(crate) struct ExtensionWatchdog {
 
 #[allow(
     dead_code,
-    reason = "watchdogs are issued to fixture and product lifecycle owners"
+    reason = "the stuck-extension escape hatch (checkpoint 8) issues it"
 )]
 impl ExtensionWatchdog {
     pub(crate) fn terminate(&self) -> bool {

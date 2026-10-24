@@ -114,6 +114,7 @@ pub(crate) struct RuntimeError {
 }
 
 impl RuntimeError {
+    #[cfg(test)]
     pub(crate) fn kind(&self) -> RuntimeErrorKind {
         self.kind
     }
@@ -324,6 +325,7 @@ impl RuntimeLocalState {
             .max(enqueued_at.elapsed());
     }
 
+    #[cfg(test)]
     fn buffer_change_queue_metrics(&self) -> BufferChangeQueueMetrics {
         self.buffer_changes.lock().unwrap().metrics
     }
@@ -375,6 +377,7 @@ struct BufferChangeQueueState {
 }
 
 enum RootEvaluation {
+    #[cfg(test)]
     Script { source: Arc<str> },
     Module { source: Option<Arc<str>> },
 }
@@ -609,6 +612,7 @@ pub(crate) struct RuntimeCapsule {
 }
 
 impl RuntimeCapsule {
+    #[cfg(test)]
     pub(crate) fn new(key: ExtensionKey, config: IsolateConfig) -> Result<Self, RuntimeError> {
         Self::new_with_graph(key, config, None)
     }
@@ -691,6 +695,7 @@ impl RuntimeCapsule {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn execute(
         &self,
         source_name: &str,
@@ -785,6 +790,7 @@ impl RuntimeCapsule {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn execute_fixture_module(
         &self,
         specifier: &str,
@@ -818,6 +824,7 @@ impl RuntimeCapsule {
         })
     }
 
+    #[cfg(test)]
     fn start_script_turn(
         &self,
         root: RootId,
@@ -828,6 +835,7 @@ impl RuntimeCapsule {
         self.run_root_turn(root, source_name, result, RootEvaluation::Script { source })
     }
 
+    #[cfg(test)]
     fn start_module_turn(
         &self,
         root: RootId,
@@ -1312,6 +1320,7 @@ impl RuntimeCapsule {
         let scope = &mut v8::ContextScope::new(&mut scope, context);
         v8::tc_scope!(let try_catch, scope);
         let evaluated = match evaluation {
+            #[cfg(test)]
             RootEvaluation::Script {
                 source: script_source,
             } => {
@@ -1936,6 +1945,7 @@ impl RuntimeCapsule {
         *self.local_state.current_root.lock().unwrap() = None;
     }
 
+    #[cfg(test)]
     pub(crate) fn hold_external_utf16(
         &self,
         global_name: &str,
@@ -2162,11 +2172,13 @@ enum EngineWork {
         subscription: WorkbenchSubscriptionId,
         event: ApplicationEvent,
     },
+    #[cfg(test)]
     Script {
         source_name: Arc<str>,
         source: Arc<str>,
         result: ResultSender<ExecutionReport>,
     },
+    #[cfg(test)]
     FixtureModule {
         specifier: Arc<str>,
         source: Arc<str>,
@@ -2204,6 +2216,7 @@ pub(crate) struct RuntimeExecution {
 }
 
 impl RuntimeExecution {
+    #[cfg(test)]
     pub(crate) fn wait(self) -> Result<ExecutionReport, RuntimeError> {
         match self.result.blocking_recv() {
             Ok(result) => {
@@ -2265,6 +2278,7 @@ pub(crate) struct RuntimeCommandExecution {
 }
 
 impl RuntimeCommandExecution {
+    #[cfg(test)]
     pub(crate) fn wait(self) -> Result<CommandOutcome, RuntimeError> {
         match self.result.blocking_recv() {
             Ok(result) => {
@@ -2333,6 +2347,7 @@ struct ProviderCancellation {
 }
 
 impl<T> RuntimeProviderExecution<T> {
+    #[cfg(test)]
     pub(crate) fn wait(mut self) -> Result<T, RuntimeError> {
         let result = match self
             .result
@@ -2575,6 +2590,7 @@ impl RuntimePool {
             .map(|receiver| EngineEventInbox { receiver })
     }
 
+    #[cfg(test)]
     pub(crate) fn load(
         &self,
         key: ExtensionKey,
@@ -2699,6 +2715,7 @@ impl RuntimePool {
         Ok(RuntimeExecution { result, completion })
     }
 
+    #[cfg(test)]
     pub(crate) fn execute(
         &self,
         key: ExtensionKey,
@@ -2726,6 +2743,7 @@ impl RuntimePool {
         Ok(RuntimeExecution { result, completion })
     }
 
+    #[cfg(test)]
     pub(crate) fn execute_fixture_module(
         &self,
         key: ExtensionKey,
@@ -3056,6 +3074,7 @@ impl RuntimePool {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn buffer_change_queue_metrics(
         &self,
         key: ExtensionKey,
@@ -3063,6 +3082,7 @@ impl RuntimePool {
         Ok(self.capsule(key)?.local_state.buffer_change_queue_metrics())
     }
 
+    #[cfg(test)]
     pub(crate) fn diagnostics(&self) -> super::scheduler::SchedulerDiagnostics {
         self.scheduler_handle.diagnostics()
     }
@@ -3107,6 +3127,7 @@ impl RuntimePool {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn shutdown(mut self) {
         self.shutdown_inner();
     }
@@ -3221,6 +3242,7 @@ fn initialize_extension_context(
     Ok(())
 }
 
+#[cfg(test)]
 fn validate_root_module_specifier(specifier: &str) -> Result<String, RuntimeError> {
     let parsed = Url::parse(specifier).map_err(|_| RuntimeError {
         kind: RuntimeErrorKind::InvalidModuleSpecifier,
@@ -4864,11 +4886,13 @@ fn execute_engine_turn(turn: Turn<EngineTurn>, finalizer: &LifecycleFinalizer) -
     let work = turn.work;
     let capsule = Arc::clone(&work.capsule);
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match work.work {
+        #[cfg(test)]
         EngineWork::Script {
             source_name,
             source,
             result,
         } => capsule.start_script_turn(root, source_name, source, result),
+        #[cfg(test)]
         EngineWork::FixtureModule {
             specifier,
             source,
