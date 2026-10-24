@@ -459,8 +459,45 @@ incompatible database is preserved and reported rather than replaced. Dirty
 documents are observed through their shared model, so multiple views produce one
 row and no extension or session metadata is required.
 
-Restore, conflict, and discard semantics remain proposed in the [recovery
-plan](plans/durable-document-recovery-plan.md) until the 7b gate.
+Reference: [documents and
+persistence](architecture/documents-and-persistence.md#durable-unsaved-document-recovery).
+
+## Unsaved-document restore and hot exit
+
+Rebuild a recovered document by loading its current resource as revision 0 and
+applying the recovered text as one edit with an empty undo history. Dirty state
+then comes from the ordinary content comparison, so no revisions, counters, or
+history are persisted, and text equal to its baseline restores clean. Restore
+never writes a resource. A changed file keeps the capture-time provider version,
+so Save reaches the existing Reload / Save As / Cancel conflict prompt instead of
+silently clobbering, as VS Code and Zed do; a deleted file becomes a dirty
+destination.
+
+A live document is never replaced. When another document owns the URI, or a
+retained capture's document is open, the text opens as a separate untitled copy;
+for an automatic snapshot one transaction moves the protection to that copy, so
+the text is never unprotected and is not listed twice. Automatic restores keep
+the document UUID so later captures replace the same row; retained restores take
+a fresh one because the automatic role may still protect newer text.
+
+Startup restores unclaimed automatic snapshots before the launch gate opens
+windows, so launch requests deduplicate against them deterministically instead
+of racing them. Only the newest snapshot per URI is restored; older duplicates,
+retained captures, and unreadable baselines remain for File › Recover Unsaved
+Documents…, a native picker in the window's transient slot followed by a Restore
+/ Discard prompt. That interim listing reuses existing surfaces rather than
+adding a recovery UI that project sessions will supersede.
+
+Quit is a hot exit, matching Sublime Text, VS Code, and Zed: once every dirty
+document is durably committed, quit skips the Save / Don't Save / Cancel prompts
+and the next launch restores them. Without this, the prompt's Don't Save is an
+explicit discard and recovery would only help after crashes. A store that fails
+to open, write, or drain falls back to the prompts so quit never loses text
+silently. Closing a tab or window still prompts because it is a deliberate
+removal rather than leaving the application.
+
+Generated documents need no restore outcome: they are never captured and the
+schema has no generated state.
 
 Reference: [documents and
 persistence](architecture/documents-and-persistence.md#durable-unsaved-document-recovery).
