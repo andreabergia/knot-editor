@@ -105,13 +105,6 @@ where
     }
 
     #[cfg(test)]
-    pub(crate) fn selected_definition(&self) -> Option<&CommandDefinition> {
-        self.visible_entries()
-            .get(self.selected)
-            .map(|entry| &entry.definition)
-    }
-
-    #[cfg(test)]
     pub(crate) fn set_query(&mut self, query: String, cx: &mut Context<Self>) {
         self.input.update(cx, |input, cx| input.set_text(query, cx));
         self.query = self.input.read(cx).text().to_string();

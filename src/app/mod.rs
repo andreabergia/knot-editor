@@ -11,21 +11,9 @@ use gpui::*;
 mod application_observation;
 mod bundled;
 mod command_declarations;
-#[allow(
-    dead_code,
-    reason = "retained application boundary outside the current product surface"
-)]
 mod command_palette;
 mod completion;
-#[allow(
-    dead_code,
-    reason = "retained application boundary outside the current product surface"
-)]
 mod documents;
-#[allow(
-    dead_code,
-    reason = "retained application boundary outside the current product surface"
-)]
 mod editor;
 mod entry;
 mod extension_buffers;
@@ -33,44 +21,20 @@ mod extension_commands;
 mod extension_host;
 #[cfg(test)]
 pub(crate) use extension_host::handlers as declared_host;
-#[allow(
-    dead_code,
-    reason = "dependency planning is exercised by its contract tests"
-)]
 mod extension_load;
-#[allow(
-    dead_code,
-    reason = "package discovery is exercised by its contract tests"
-)]
 pub(crate) mod extension_package;
 mod extension_semantics;
 mod extension_storage;
-#[allow(
-    dead_code,
-    reason = "retained application boundary outside the current product surface"
-)]
 mod filesystem;
 mod history;
 mod keymaps;
-#[allow(
-    dead_code,
-    reason = "retained application boundary outside the current product surface"
-)]
 pub mod model;
 mod open;
-#[allow(
-    dead_code,
-    reason = "source snapshots remain inspectable at the application boundary"
-)]
 mod personal_config;
 mod personal_config_error;
 mod product;
 mod product_commands;
 mod recovery;
-#[allow(
-    dead_code,
-    reason = "retained application boundary during the pooled extension-host rebuild"
-)]
 mod resource;
 mod terminal_colors;
 mod terminal_input;
@@ -88,15 +52,7 @@ mod transient;
 mod tree_view;
 mod typography;
 mod workbench;
-#[allow(
-    dead_code,
-    reason = "retained application boundary outside the current product surface"
-)]
 mod workspace;
-#[allow(
-    dead_code,
-    reason = "retained application boundary outside the current product surface"
-)]
 mod workspace_tree;
 
 use command_palette::{CommandPalette, CommandPaletteEntry, CommandPaletteEvent};
@@ -167,9 +123,9 @@ impl CommandCompletion {
     }
 }
 
-#[allow(
-    dead_code,
-    reason = "command sources may observe the identity and await the structured result"
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "product callers discard it; tests await the outcome")
 )]
 struct CommandExecution {
     id: crate::host::protocol::CommandInvocationId,

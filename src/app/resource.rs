@@ -55,6 +55,7 @@ impl ResourceUri {
         self.same_authority(root) && path_segments(root).is_prefix_of(&path_segments(self))
     }
 
+    #[allow(dead_code, reason = "multi-root overlap rules (D052) need it")]
     pub(crate) fn is_descendant_of(&self, root: &Self) -> bool {
         self.is_within(root) && path_segments(self).len() > path_segments(root).len()
     }

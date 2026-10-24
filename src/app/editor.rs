@@ -170,11 +170,6 @@ impl EditorView {
     }
 
     #[cfg(test)]
-    pub(crate) fn responsiveness_state(&self) -> (usize, f32, u64) {
-        (self.cursor_line, self.scroll, self.paint_count)
-    }
-
-    #[cfg(test)]
     pub(crate) fn interaction_bounds(&self) -> Bounds<Pixels> {
         self.bounds
     }
@@ -234,6 +229,7 @@ impl EditorView {
         )
     }
 
+    #[cfg(test)]
     /// Select a source byte range, reveal its caret, and transfer focus here.
     pub(crate) fn select_reveal_and_focus(
         &mut self,
@@ -261,6 +257,7 @@ impl EditorView {
         Self::from_projection(model, lines, segs, 0, EditorRenderingOptions::default(), cx)
     }
 
+    #[cfg(test)]
     pub(crate) fn new_with_options(
         model: Entity<BufferModel>,
         element_id: usize,

@@ -9,18 +9,7 @@ use super::resource::ResourceUri;
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct DocumentId(u64);
 
-impl DocumentId {
-    #[cfg(test)]
-    pub(crate) const fn from_value(value: u64) -> Self {
-        Self(value)
-    }
-}
-
 /// A document's persistence relationship.
-#[allow(
-    dead_code,
-    reason = "all document states are modeled before every product entry path creates them"
-)]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum DocumentState {
     /// A user document with no destination yet.
@@ -62,6 +51,7 @@ impl DocumentState {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn persisted_version(&self) -> Option<&ResourceVersion> {
         match self {
             Self::Persisted { version, .. } => Some(version),
@@ -144,7 +134,6 @@ impl DocumentCollection {
         }
     }
 
-    #[allow(dead_code, reason = "used by the product document creation path")]
     pub(crate) fn create_untitled(
         &mut self,
         title: impl Into<SharedString>,
@@ -160,7 +149,6 @@ impl DocumentCollection {
         )
     }
 
-    #[allow(dead_code, reason = "used when opening a missing destination")]
     pub(crate) fn create_destination(
         &mut self,
         title: impl Into<SharedString>,

@@ -10,8 +10,10 @@ use std::collections::HashSet;
 
 use gpui::{App, AppContext, Context, Entity, FocusHandle, Focusable, WeakFocusHandle};
 
+#[cfg(test)]
+use super::documents::Document;
 use super::{
-    documents::{Document, DocumentId},
+    documents::DocumentId,
     editor::EditorView,
     terminal_view::TerminalView,
     text_view::TextView,
@@ -61,7 +63,6 @@ pub(crate) enum SplitDirection {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SplitPlacement {
-    #[cfg_attr(not(test), allow(dead_code, reason = "supported layout placement"))]
     Before,
     After,
 }
@@ -345,7 +346,7 @@ impl Workbench {
         }
     }
 
-    #[cfg_attr(not(test), allow(dead_code, reason = "document convenience API"))]
+    #[cfg(test)]
     pub(crate) fn new(document: &Document, cx: &mut Context<Self>) -> Self {
         Self::new_for_document(document.id(), document.model().clone(), cx)
     }
@@ -386,7 +387,6 @@ impl Workbench {
         self.layout.as_ref()
     }
 
-    #[cfg_attr(not(test), allow(dead_code, reason = "layout inspection API"))]
     pub(crate) fn panes(&self) -> &[Pane] {
         &self.panes
     }
@@ -395,7 +395,6 @@ impl Workbench {
         self.panes.iter().find(|pane| pane.id == id)
     }
 
-    #[cfg_attr(not(test), allow(dead_code, reason = "focused-pane convenience API"))]
     pub(crate) fn focused_pane_id(&self) -> Option<PaneId> {
         self.focused_pane
     }
@@ -448,7 +447,7 @@ impl Workbench {
         true
     }
 
-    #[cfg_attr(not(test), allow(dead_code, reason = "document convenience API"))]
+    #[cfg(test)]
     pub(crate) fn open_tab(
         &mut self,
         pane_id: PaneId,
@@ -549,8 +548,8 @@ impl Workbench {
         true
     }
 
+    #[cfg(test)]
     /// Split the focused pane and show its active document in a fresh view.
-    #[cfg_attr(not(test), allow(dead_code, reason = "focused-pane convenience API"))]
     pub(crate) fn split_focused(
         &mut self,
         direction: SplitDirection,

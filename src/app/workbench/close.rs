@@ -1,6 +1,8 @@
+#[cfg(test)]
 use gpui::Context;
 
 use super::{PaneId, TabId, TabSurfaceId, TerminalSessionId, Workbench};
+#[cfg(test)]
 use crate::app::documents::Document;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -31,7 +33,7 @@ pub(crate) struct PendingClose {
 }
 
 impl PendingClose {
-    #[cfg_attr(not(test), allow(dead_code, reason = "used by protected closure"))]
+    #[cfg(test)]
     pub(crate) fn document_id(&self) -> super::DocumentId {
         self.document_id
     }
@@ -44,19 +46,18 @@ pub(crate) enum CloseRequestOutcome {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[cfg_attr(not(test), allow(dead_code, reason = "used by protected closure"))]
 pub(crate) enum CloseConfirmation {
     Close,
     Cancel,
 }
 
 impl Workbench {
+    #[cfg(test)]
     /// Request closure without presenting UI or performing persistence.
     ///
     /// `open_view_count` is application-wide because another native window may
     /// show the same document. A dirty document needs confirmation only when
     /// this tab is its final view.
-    #[cfg_attr(not(test), allow(dead_code, reason = "document convenience API"))]
     pub(crate) fn request_close_tab(
         &mut self,
         pane_id: PaneId,
@@ -119,7 +120,6 @@ impl Workbench {
     /// The caller resolves Save/Don't Save into `Close` only after persistence
     /// or discard has succeeded. Stale requests are rejected rather than
     /// closing a replacement tab.
-    #[cfg_attr(not(test), allow(dead_code, reason = "used by protected closure"))]
     pub(crate) fn resolve_pending_close(
         &mut self,
         pending: PendingClose,

@@ -981,10 +981,6 @@ impl BufferSubscriptionRegistry {
         });
     }
 
-    #[allow(
-        dead_code,
-        reason = "document closure does not yet publish a buffer-registry removal event"
-    )]
     pub(crate) fn remove_buffer(&mut self, buffer: BufferHandle) {
         self.subscriptions
             .retain(|_, subscription| subscription.buffer != buffer);
@@ -1207,6 +1203,7 @@ impl CommandCatalog {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn resolve_extension(
         &self,
         name: &str,

@@ -115,6 +115,7 @@ impl DependencyPlan {
         }
     }
 
+    #[cfg(test)]
     pub async fn execute<Start, F, C>(self, start: Start) -> LoadReport
     where
         Start: FnMut(&InstalledPackage) -> StartupAttempt<F, C>,

@@ -44,10 +44,6 @@ impl MemoryFileSystemProvider {
         })
     }
 
-    pub(crate) fn root(&self) -> &ResourceUri {
-        &self.root
-    }
-
     pub(crate) fn seed_directory(&self, uri: ResourceUri) -> Result<(), ResourceError> {
         let uri = self.normalize_scoped(uri)?;
         let path = relative_segments(&self.root, &uri);

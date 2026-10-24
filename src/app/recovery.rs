@@ -339,10 +339,7 @@ impl RecoveryStore {
         }
     }
 
-    #[cfg_attr(
-        not(test),
-        allow(dead_code, reason = "write failures stay observable in diagnostics")
-    )]
+    #[cfg(test)]
     pub(crate) fn last_error(&self) -> Option<String> {
         self.inner.state.lock().unwrap().last_error.clone()
     }
@@ -363,7 +360,7 @@ impl RecoveryStore {
         not(test),
         allow(
             dead_code,
-            reason = "retention is exposed through the checkpoint 7c API"
+            reason = "the D050 capture-retention API exposes it"
         )
     )]
     pub(crate) fn retain(
@@ -389,7 +386,7 @@ impl RecoveryStore {
         not(test),
         allow(
             dead_code,
-            reason = "retention is exposed through the checkpoint 7c API"
+            reason = "the D050 capture-retention API exposes it"
         )
     )]
     pub(crate) fn release(&self, owner: String, capture_key: String) -> Task<Result<bool, String>> {

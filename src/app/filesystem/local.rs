@@ -23,6 +23,7 @@ pub(crate) struct LocalFileSystemProvider {
 }
 
 impl LocalFileSystemProvider {
+#[cfg(test)]
     pub(crate) fn new(
         root_path: impl AsRef<Path>,
         runtime: Arc<tokio::runtime::Runtime>,
@@ -56,6 +57,7 @@ impl LocalFileSystemProvider {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn root(&self) -> &ResourceUri {
         self.root
             .as_ref()

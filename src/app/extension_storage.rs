@@ -87,9 +87,9 @@ pub(crate) struct ExtensionStorage {
 }
 
 impl ExtensionStorage {
-    #[allow(
-        dead_code,
-        reason = "the product host resolves it only in non-test builds"
+    #[cfg_attr(
+        test,
+        allow(dead_code, reason = "test hosts use isolated storage roots")
     )]
     pub(crate) fn user_root() -> Result<PathBuf, String> {
         directories::ProjectDirs::from("", "", "Knot")

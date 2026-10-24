@@ -58,6 +58,7 @@ impl WorkspaceState {
     }
 
     /// Installs an already normalized root and invalidates all captured work.
+    #[allow(dead_code, reason = "multi-root replacement (D052) needs it")]
     pub(crate) fn replace_root(&mut self, root: ResourceUri) -> WorkspaceSnapshot {
         self.replace_roots(vec![root])
             .expect("one root is supported")

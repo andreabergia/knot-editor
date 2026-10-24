@@ -3,9 +3,11 @@ use std::{collections::HashMap, fmt, future::Future, pin::Pin, sync::Arc};
 use super::resource::ResourceUri;
 
 mod local;
+#[cfg(test)]
 mod memory;
 
 pub(crate) use local::{LocalFileSystemProvider, normalize_file_uri};
+#[cfg(test)]
 #[cfg(test)]
 pub(crate) use memory::MemoryFileSystemProvider;
 
@@ -278,6 +280,7 @@ fn validate_and_normalize_uri(
     Ok(ResourceUri::from_url(normalized))
 }
 
+#[cfg(test)]
 fn child_uri(parent: &ResourceUri, name: &str) -> Result<ResourceUri, ResourceError> {
     let mut url = parent.as_url().clone();
     {

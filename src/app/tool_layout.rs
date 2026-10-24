@@ -214,10 +214,7 @@ impl ToolLayoutStore {
         self.inner.state.lock().unwrap().current.clone()
     }
 
-    #[cfg_attr(
-        not(test),
-        allow(dead_code, reason = "write failures stay observable in tests")
-    )]
+    #[cfg(test)]
     pub(crate) fn last_error(&self) -> Option<String> {
         self.inner.state.lock().unwrap().last_error.clone()
     }
