@@ -181,6 +181,8 @@ struct ProtectedClosePlan {
     request: ProtectedCloseRequest,
     scope: Vec<ProtectedViewKey>,
     prompts: Vec<(DocumentId, ProductCommandTarget)>,
+    /// Quit keeps dirty documents in durable recovery instead of asking about them.
+    hot_exit: bool,
 }
 
 #[derive(Debug)]
@@ -1511,6 +1513,7 @@ impl ProductShell {
             request,
             scope,
             prompts,
+            hot_exit: false,
         })
     }
 
@@ -3023,7 +3026,7 @@ impl ProductShell {
             completion(Err(ProtectedCloseFailure::InProgress), cx);
             return;
         }
-        let plan = match Self::build_protected_close_plan(
+        let mut plan = match Self::build_protected_close_plan(
             ProtectedCloseRequest {
                 kind,
                 origin,
@@ -3042,9 +3045,27 @@ impl ProductShell {
             return;
         };
         Self::set_protected_closure_active(true, cx);
-        shell.update(cx, |shell, cx| {
-            shell.start_protected_close_plan(plan, completion, cx)
-        });
+        if kind != ProtectedCloseKind::Quit || plan.prompts.is_empty() {
+            shell.update(cx, |shell, cx| {
+                shell.start_protected_close_plan(plan, completion, cx)
+            });
+            return;
+        }
+        // Quit is a hot exit when recovery commits every dirty document; a
+        // failing store falls back to the ordinary prompts.
+        let protected = super::recovery::protect_for_exit(cx);
+        cx.spawn(async move |cx| {
+            if protected.await {
+                plan.prompts.clear();
+                plan.hot_exit = true;
+            }
+            let _ = cx.update(|cx| {
+                shell.update(cx, |shell, cx| {
+                    shell.start_protected_close_plan(plan, completion, cx)
+                })
+            });
+        })
+        .detach();
     }
 
     fn start_protected_close_plan(
@@ -3351,7 +3372,7 @@ impl ProductShell {
         for document in documents.read(cx).documents() {
             let loses_final_view = plan.request.kind == ProtectedCloseKind::Quit
                 || scoped_counts.get(&document.id()) == total_counts.get(&document.id());
-            if loses_final_view && document.is_dirty(cx) {
+            if loses_final_view && document.is_dirty(cx) && !plan.hot_exit {
                 let approved = approvals.iter().any(|approval| {
                     approval.document == document.id()
                         && approval.kind == CloseApprovalKind::Discarded
@@ -4720,6 +4741,21 @@ mod tests {
         ));
         cx.set_global(TestToolLayoutDir(layout_dir));
         documents
+    }
+
+    /// Replace recovery with a store that cannot write, so quit falls back to
+    /// asking about each dirty document.
+    pub(super) fn install_failing_recovery(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let blocker = dir.path().join("blocker");
+        std::fs::write(&blocker, "not a directory").unwrap();
+        cx.set_global(crate::app::recovery::ApplicationRecovery(
+            crate::app::recovery::RecoveryService::new(crate::app::recovery::RecoveryStore::open(
+                blocker.join("recovery.sqlite3"),
+                cx.background_executor.clone(),
+            )),
+        ));
+        cx.set_global(TestRecoveryDir(dir));
     }
 
     #[allow(dead_code, reason = "ownership keeps the test database path alive")]
@@ -10431,6 +10467,7 @@ await commands.registerForView("example.outline", "copy", async () => {
     #[gpui::test]
     async fn quit_prompts_once_for_a_document_shared_across_windows(cx: &mut TestAppContext) {
         let documents = install_globals(cx);
+        install_failing_recovery(cx);
         let document = cx.update(|cx| create_untitled_document(&documents, cx));
         let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
         model.update(cx, |model, _| model.replace(0..0, "unsaved").unwrap());
@@ -10454,6 +10491,7 @@ await commands.registerForView("example.outline", "copy", async () => {
         cx: &mut TestAppContext,
     ) {
         let documents = install_globals(cx);
+        install_failing_recovery(cx);
         let (filesystems, provider) = memory_filesystems_with_provider();
         cx.set_global(ApplicationFileSystems(filesystems));
         let uri = ResourceUri::parse("mem://product/notes.txt").unwrap();
@@ -10507,6 +10545,7 @@ await commands.registerForView("example.outline", "copy", async () => {
     #[gpui::test]
     async fn later_quit_cancellation_preserves_every_document_and_view(cx: &mut TestAppContext) {
         let documents = install_globals(cx);
+        install_failing_recovery(cx);
         let (first, second, shell, window) =
             two_dirty_untitled_documents_in_one_window(&documents, cx);
 
@@ -10532,6 +10571,7 @@ await commands.registerForView("example.outline", "copy", async () => {
     #[gpui::test]
     async fn later_quit_save_failure_preserves_every_document_and_view(cx: &mut TestAppContext) {
         let documents = install_globals(cx);
+        install_failing_recovery(cx);
         cx.set_global(ApplicationFileSystems(memory_filesystems()));
         cx.set_global(ApplicationSaveDialog(Arc::new(FixedSaveDialog(
             SaveDialogOutcome::Selected(ResourceUri::parse("mem://product/src").unwrap()),
@@ -11740,6 +11780,7 @@ await commands.registerForView("example.outline", "copy", async () => {
     #[gpui::test]
     async fn mixed_window_and_quit_cancellation_preserve_every_surface(cx: &mut TestAppContext) {
         let documents = install_globals(cx);
+        install_failing_recovery(cx);
         let document = cx.update(|cx| create_untitled_document(&documents, cx));
         let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
         model.update(cx, |model, _| model.replace(0..0, "unsaved").unwrap());

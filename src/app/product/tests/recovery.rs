@@ -899,3 +899,68 @@ async fn launch_requests_open_alongside_recovery_when_an_extension_fails(cx: &mu
         std::thread::yield_now();
     }
 }
+
+#[gpui::test]
+async fn quit_is_a_hot_exit_that_restores_dirty_documents_on_relaunch(cx: &mut TestAppContext) {
+    let documents = install_globals(cx);
+    let (filesystems, provider) = memory_filesystems_with_provider();
+    cx.set_global(ApplicationFileSystems(filesystems.clone()));
+    let uri = ResourceUri::parse("mem://product/notes.txt").unwrap();
+    let opened = provider.read(uri.clone()).await.unwrap();
+    let saved_model = cx.new(|_| BufferModel::from_text("loaded text"));
+    let saved = documents.update(cx, |documents, cx| {
+        documents.create_persisted(
+            "notes.txt",
+            saved_model.clone(),
+            uri.clone(),
+            0,
+            opened.version,
+            cx,
+        )
+    });
+    let untitled = cx.update(|cx| create_untitled_document(&documents, cx));
+    let untitled_model = cx.read(|cx| documents.read(cx).get(untitled).unwrap().model().clone());
+    let (shell, window) = product_window(saved, saved_model.clone(), cx);
+    shell.update(cx, |shell, cx| {
+        let pane = shell.workbench.read(cx).focused_pane_id().unwrap();
+        shell.workbench.update(cx, |workbench, cx| {
+            workbench
+                .open_tab_for_document(pane, untitled, untitled_model.clone(), cx)
+                .unwrap();
+        });
+    });
+    // Both edits are still inside their debounce window when quit begins.
+    for (model, text) in [(&saved_model, "edited "), (&untitled_model, "draft")] {
+        model.update(cx, |model, cx| {
+            model.replace(0..0, text).unwrap();
+            cx.notify();
+        });
+    }
+    let identities = cx.read(|cx| {
+        let documents = documents.read(cx);
+        [saved, untitled].map(|document| documents.get(document).unwrap().identity())
+    });
+
+    let execution = dispatch_product_command(&shell, window, QUIT_COMMAND, cx);
+    assert_eq!(wait_for_command(execution, cx), CommandOutcome::Completed);
+    assert!(!cx.has_pending_prompt());
+    assert_eq!(
+        provider.read(uri.clone()).await.unwrap().bytes,
+        b"loaded text"
+    );
+
+    // Relaunch with an empty document collection over the same store.
+    let relaunched = cx.new(|_| DocumentCollection::new());
+    cx.set_global(ApplicationDocuments(relaunched.clone()));
+    let recovery = startup_recovery(filesystems, cx).await;
+    assert_eq!(recovery.restored.len(), 2);
+    assert_eq!(recovery.remaining, 0);
+    for (identity, text) in identities.into_iter().zip(["edited loaded text", "draft"]) {
+        let document = document_by_identity(&relaunched, identity, cx);
+        cx.read(|cx| {
+            let document = relaunched.read(cx).get(document).unwrap();
+            assert!(document.is_dirty(cx));
+            assert_eq!(document.model().read(cx).text(), text);
+        });
+    }
+}

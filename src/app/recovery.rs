@@ -20,7 +20,9 @@
 //! live document: when the identity or URI is already owned, the recovered text
 //! opens as a separate untitled document. Startup silently restores every
 //! automatic snapshot that no live document claims; everything else stays in
-//! the store for the native listing to restore or discard explicitly.
+//! the store for the native listing to restore or discard explicitly. Quit is a
+//! hot exit: it commits every dirty document's text instead of asking about it,
+//! and asks only when the store cannot protect that text.
 //!
 //! A missing, corrupt, or incompatible database is preserved and reported; it
 //! never blocks editing and is never replaced.
@@ -975,6 +977,25 @@ pub(crate) fn discard_snapshot(
         Some(service) => service.store.discard(kind, capture_key),
         None => Task::ready(Err("recovery is unavailable".into())),
     }
+}
+
+/// Make every dirty document's current text durable before a hot exit.
+/// Resolves `true` only when the store committed all of it; otherwise quit
+/// must fall back to asking about each document.
+pub(crate) fn protect_for_exit(cx: &mut App) -> Task<bool> {
+    let Some(service) = service(cx) else {
+        return Task::ready(false);
+    };
+    let documents = cx.global::<ApplicationDocuments>().0.clone();
+    documents.update(cx, |documents, cx| {
+        for document in documents.documents() {
+            if document.is_dirty(cx) {
+                publish(document, cx);
+            }
+        }
+    });
+    let flush = service.store.flush();
+    cx.background_spawn(async move { flush.await.is_ok() })
 }
 
 /// Documents restored silently at startup and the snapshots left for the listing.

@@ -202,6 +202,7 @@ fn workspace_refresh_does_not_reopen_or_reposition_tool(cx: &mut TestAppContext)
 #[gpui::test]
 async fn tools_do_not_bypass_dirty_document_or_terminal_protection(cx: &mut TestAppContext) {
     let documents = install_globals(cx);
+    install_failing_recovery(cx);
     let document = cx.update(|cx| create_untitled_document(&documents, cx));
     let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
     model.update(cx, |model, _| model.replace(0..0, "unsaved").unwrap());
