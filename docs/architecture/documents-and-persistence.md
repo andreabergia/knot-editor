@@ -143,6 +143,11 @@ in the store, and the first window's status points at File › Recover Unsaved
 Documents…. That native command lists them in the window's transient slot and
 restores or discards the selection. None of this depends on the extension host.
 
+Quit does not ask about dirty documents. It captures each one's current text and
+drains the store; when every capture commits, the documents stay protected for
+the next launch. A failed open, write, or drain makes quit fall back to the
+Save / Don't Save / Cancel prompts. Closing a tab or window still prompts.
+
 The extension-facing retention API remains in the [recovery
 plan](../plans/durable-document-recovery-plan.md). Implementation and physical
 schema live in [recovery.rs](../../src/app/recovery.rs).

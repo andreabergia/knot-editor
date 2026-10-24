@@ -1,7 +1,7 @@
 # Durable unsaved-document recovery
 
-Status: 🟡 In progress. Checkpoint 7a is approved; 7b is in progress (hot-exit
-quit remains before its review gate); 7c is unstarted. Execution plan for checkpoint 7 of the
+Status: 🟡 In progress. Checkpoint 7a is approved; 7b is implemented and
+awaiting its review gate; 7c is unstarted. Execution plan for checkpoint 7 of the
 [extension platform and projects plan](extension-platform-and-projects-plan.md).
 Checkpoints 7a–7c are executed one per implementation request and each stops at
 its review gate.
@@ -187,8 +187,7 @@ and validated rationale in [decisions](../decisions.md#unsaved-document-recovery
 
 ### 7b. Restore, conflicts, discard, and native recovery UI 🔍
 
-Restore, discard, and the listing are implemented; hot-exit quit is in progress.
-The review gate follows it.
+Implemented; awaiting the review gate.
 
 - ✅ Implement restore: read the baseline through the registered provider (or empty
   for untitled/destination records), create the document, and apply recovered text
@@ -200,7 +199,7 @@ The review gate follows it.
   disk.
 - ✅ Implement explicit discard, silent startup restoration of unclaimed automatic
   snapshots, and the native File listing command with Restore and Discard.
-- ⬜ Make quit a hot exit: skip dirty-document prompts while the store is healthy,
+- ✅ Make quit a hot exit: skip dirty-document prompts while the store is healthy,
   drain pending captures before exiting, and fall back to the existing prompts
   when the store has failed or the drain fails. Tab and window close keep their
   prompts.
@@ -264,10 +263,19 @@ Semantics proposed for review:
   capture age, and role). A native prompt then offers Restore, Discard, or
   Cancel; Discard deletes that one snapshot of either role.
 
+- **Hot-exit quit.** Quit publishes every dirty document and drains the store
+  (`recovery::protect_for_exit`). When the drain succeeds the protected closure
+  plan drops its prompts and commits without discard approvals, leaving the
+  automatic rows for the next launch; otherwise the existing prompts run.
+
 Evidence: `src/app/product/tests/recovery.rs` covers each validation item
 through the product lifecycle, including startup with no extension host, startup
 with a failing installed extension and launch requests, and the listing command
-end to end; store, model, and collection primitives have unit tests beside them.
+end to end, and a quit with edits inside their debounce window that restores
+after relaunch. The existing quit prompt tests now run against a store that
+cannot write, so they cover the fallback, and the tab and window close prompt
+tests are unchanged. Store, model, and collection primitives have unit tests
+beside them.
 To demonstrate manually, edit an untitled and a saved file, quit (or kill the
 process after a few seconds), and relaunch; then edit the saved file externally,
 quit and relaunch again, and Save to see the conflict prompt.

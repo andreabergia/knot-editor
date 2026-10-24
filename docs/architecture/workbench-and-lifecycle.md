@@ -48,7 +48,10 @@ One application-level coordinator protects tab, window, and quit closure. It
 captures exact window, workbench, tab, surface, and presentation identities,
 counts live document views across windows, and deduplicates dirty documents
 losing their final view. Native Save / Don't Save / Cancel prompts run serially;
-Save reuses the ordinary persistence path.
+Save reuses the ordinary persistence path. Quit is a hot exit: it first commits
+every dirty document to [durable
+recovery](documents-and-persistence.md#durable-unsaved-document-recovery) and
+skips the prompts, keeping them only when that commit fails.
 
 Presentation mutation waits until all decisions succeed, then revalidates the
 capture, view counts, and approved content revisions. Cancellation, persistence
