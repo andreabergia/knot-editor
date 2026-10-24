@@ -4,14 +4,14 @@
 //! read-range operations, a lazy incrementally maintained line index, and a
 //! `Position` / `BufferEdit` surface for stable external ranges.
 //!
-//! ## Position tokens (D2 / D7)
+//! ## Position tokens
 //!
 //! A `Position` is an opaque `(PieceId, u32 offset_within_piece)` pair.
 //! It is stable across *unrelated* edits: an edit elsewhere in the
 //! buffer does not invalidate it. The only failure modes are:
 //!
 //! - The piece was deleted wholesale → `resolve` returns `None`.
-//! - The position sat in the right half of an interior split (D7) and
+//! - The position sat in the right half of an interior split and
 //!   the underlying piece has since been shortened → `resolve` returns
 //!   `None`, but the content the position pointed to is recoverable
 //!   from the matching `Split` record in the edit log: the new location
@@ -21,9 +21,10 @@
 //! boundary returns the piece ending at that offset (with `offset ==
 //! piece.len`), so a subsequent insert at the boundary leaves the
 //! position pointing at the same byte it pointed at before. Sticky-right
-//! is step 5's job — it reads the edit log and relocates.
+//! anchors belong to the anchored-range store, which reads the edit log and
+//! relocates them.
 //!
-//! ## Edit log (D7)
+//! ## Edit log
 //!
 //! Every `insert` / `delete` (and `replace`, which decomposes into a
 //! delete-then-insert pair) pushes one `BufferEdit` event onto an
@@ -33,7 +34,7 @@
 //! position was issued*. Compaction is deferred — the log only grows,
 //! bounded only by a future `take_edits` drain.
 //!
-//! ## Backing store (D1 / D2 / D7)
+//! ## Backing store
 //!
 //! Two immutable backing buffers back the piece chain:
 //!
@@ -48,7 +49,7 @@
 //! are never mutated in place except for the split rule's "left retains id"
 //! case, which only shortens `len` — never moves `start` or changes `backing`.
 //!
-//! ## Split rule (D7)
+//! ## Split rule
 //!
 //! Interior edits split a piece; the left half keeps the original id (and
 //! original `start`, with `len` shortened to the split offset), the right
@@ -77,7 +78,7 @@ static NEXT_BUFFER_ID: AtomicU64 = AtomicU64::new(1);
 /// piece's lifetime, and is never reused (the counter only goes up).
 pub type PieceId = u64;
 
-/// Opaque, stable token for a location in the logical text (D2 / D7).
+/// Opaque, stable token for a location in the logical text.
 ///
 /// `(piece, offset_within_piece)`. Issued by `TextBuffer::position_at`,
 /// resolved back to a byte offset by `TextBuffer::resolve`. The token
@@ -85,7 +86,7 @@ pub type PieceId = u64;
 /// the module and on `resolve`.
 ///
 /// Field accessors are exposed (rather than the struct being fully
-/// opaque) because step 5 needs to *store* tokens keyed by piece id and
+/// opaque) because the anchored-range store needs to *store* tokens keyed by piece id and
 /// to apply the deterministic remap described in `Split`; the fields
 /// are immutable and the type is `Copy`, so leaking them is safe.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -109,20 +110,20 @@ impl Position {
 
     /// Construct a token from raw `(piece, offset)` fields. Exposed so
     /// callers can build the *remapped* token produced by applying
-    /// the D7 rule to a `Split` record — `(Split::new_piece,
-    /// old_offset - Split::split_offset)`. Step 4 itself never uses
+    /// the split rule to a `Split` record — `(Split::new_piece,
+    /// old_offset - Split::split_offset)`. The buffer itself never uses
     /// this; the only in-crate producer of tokens is `position_at`.
     pub fn new(piece: PieceId, offset: u32) -> Self {
         Self { piece, offset }
     }
 }
 
-/// One half of an interior split (D7).
+/// One half of an interior split.
 ///
 /// A `Position` whose `piece` is `old_piece` and whose offset is
 /// `> split_offset` is *stale but detectable*: its content has moved to
-/// `new_piece` at offset `old_offset - split_offset`. Step 5 reads the
-/// edit log and applies this transformation; step 4 itself never
+/// `new_piece` at offset `old_offset - split_offset`. The anchored-range store reads the
+/// edit log and applies this transformation; the buffer itself never
 /// touches its callers' tokens.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Split {
@@ -134,7 +135,7 @@ pub struct Split {
     pub new_piece: PieceId,
 }
 
-/// Per-edit event in the `TextBuffer`'s edit log (D7).
+/// Per-edit event in the `TextBuffer`'s edit log.
 ///
 /// `at` and `range` are byte offsets into the buffer's *pre-edit*
 /// logical text, so an observer replaying stale `Position`s can reason
@@ -144,8 +145,8 @@ pub struct Split {
 /// spanning two interiors may carry up to 2.
 ///
 /// In addition to the splits, each variant carries enough
-/// affected-piece metadata for step 5's anchored-range store to repair
-/// stale tokens in `O(affected)` time per edit (D7),
+/// affected-piece metadata for the anchored-range store to repair
+/// stale tokens in `O(affected)` time per edit,
 /// without walking the whole piece chain: the anchored-range store keys
 /// anchors by `piece_id`, looks up only the pieces this edit touches,
 /// and re-binds them via these fields.
@@ -169,7 +170,7 @@ pub enum BufferEdit {
         /// `(left_piece.id, left_piece_offset)` (i.e. sitting exactly
         /// at the boundary) relocates to `(inserted_piece, inserted_len)`;
         /// a sticky-`Before` anchor keeps its token and resolves to
-        /// `at` post-edit, matching D2 "Before → unchanged".
+        /// `at` post-edit, matching sticky-`Before` semantics.
         ///
         /// For an interior-split insert, `left_piece` is
         /// `(splits[0].old_piece, splits[0].split_offset)` (the
@@ -181,7 +182,7 @@ pub enum BufferEdit {
         /// The `pieces[0]` id *pre-insert*. Used only when `at == 0`
         /// to relocate sticky-`Before` anchors anchored to the buffer's
         /// first piece at offset 0 — those would otherwise resolve to
-        /// `n` post-edit (chain shift), but D2 strict requires them to
+        /// `n` post-edit (chain shift), but sticky-`Before` requires them to
         /// stay at `0`. Relocate to `(inserted_piece, 0)`.
         pre_first_piece: Option<PieceId>,
         splits: Vec<Split>,
@@ -198,7 +199,7 @@ pub enum BufferEdit {
         /// edge piece below.
         deleted_pieces: Vec<PieceId>,
         /// `(piece_id, post-split_len)` for the drained pieces, in chain
-        /// order. Step 5 uses this to tell true interior endpoints from
+        /// order. The anchored-range store uses this to tell true interior endpoints from
         /// sticky-left tokens exactly at the delete's start/end boundary
         /// when a boundary split was elided.
         deleted_piece_lens: Vec<(PieceId, usize)>,
@@ -230,7 +231,7 @@ enum Backing {
 /// A reference to a contiguous span of one backing buffer.
 ///
 /// `(backing, start, len)` is fixed at creation. The only field ever
-/// mutated after creation is `len`, and only under the D7 split rule
+/// mutated after creation is `len`, and only under the split rule
 /// (left half retains id, shortened to the split offset).
 #[derive(Clone, Copy, Debug)]
 struct Piece {
@@ -258,12 +259,11 @@ pub struct TextBuffer {
     /// Append-only sink for inserted spans. Appended spans are never
     /// overwritten or moved; only new bytes go at the end.
     add: String,
-    /// The piece chain. Ownership is exclusive (no sharing across threads,
-    /// per D5). Operations splice and shorten in place.
+    /// The piece chain. Ownership is exclusive (no sharing across threads). Operations splice and shorten in place.
     pieces: Vec<Piece>,
     /// Global monotonic piece-id counter. Never reused.
     next_id: PieceId,
-    /// Lazy line index per D4:
+    /// Lazy line index:
     /// - `None` — not yet built. Built on first query that needs it.
     /// - `Some(vec)` — kept valid under edits via incremental update
     ///   (`update_line_starts`), never rebuilt wholesale.
@@ -272,7 +272,7 @@ pub struct TextBuffer {
     /// byte offset 0); even an empty buffer stores `[0]`. A trailing `'\n'`
     /// creates one extra empty line, so `"abc\n"` has `vec == [0, 4]`.
     line_starts: Option<Vec<usize>>,
-    /// Append-only edit log (D7). Each `insert` / `delete` pushes one
+    /// Append-only edit log. Each `insert` / `delete` pushes one
     /// `BufferEdit`. `replace` decomposes into a delete-then-insert pair
     /// and pushes two. The log is unbounded until `take_edits` drains it.
     edits: Vec<BufferEdit>,
@@ -283,7 +283,7 @@ impl TextBuffer {
     ///
     /// The text becomes the `Original` backing; an initial single piece
     /// references the whole span. The `Add` sink starts empty. No `\r`
-    /// normalization is performed (D4) — the bytes are stored verbatim.
+    /// normalization is performed — the bytes are stored verbatim.
     pub fn from_text(text: impl Into<Box<str>>) -> Self {
         let original = text.into();
         let len = original.len();
@@ -423,7 +423,7 @@ impl TextBuffer {
         // Keep the line index valid for the edited span.
         self.update_line_starts(at..at, text);
 
-        // Record the edit event (D7). `at` and `inserted_len` are byte
+        // Record the edit event. `at` and `inserted_len` are byte
         // offsets into the pre-edit logical text.
         self.edits.push(BufferEdit::Insert {
             at,
@@ -464,7 +464,7 @@ impl TextBuffer {
         // have shortened a piece to the post-end remainder; that remainder
         // sits at `right.insert_at` and survives the drain.
         //
-        // Collect the affected-piece metadata D7 stabilize needs to
+        // Collect the affected-piece metadata stabilization needs to
         // repair stale tokens in O(affected) without walking the chain.
         // `left_survivor` is the piece ending at `range.start` (= `s`)
         // post-edit — `pieces[left.insert_at - 1]`, which (if a split
@@ -497,7 +497,7 @@ impl TextBuffer {
         // Keep the line index valid for the edited span.
         self.update_line_starts(range.clone(), "");
 
-        // Record the edit event (D7). `range` is the pre-edit byte span.
+        // Record the edit event. `range` is the pre-edit byte span.
         self.edits.push(BufferEdit::Delete {
             range,
             deleted_pieces,
@@ -527,7 +527,7 @@ impl TextBuffer {
         self.insert(range.start, text);
     }
 
-    // ---- Line index (D4) ------------------------------------------------
+    // ---- Line index ------------------------------------------------
 
     /// Number of lines. The buffer always has at least one line (line 0,
     /// possibly empty), so this returns `>= 1`. Builds the line index
@@ -563,7 +563,7 @@ impl TextBuffer {
         starts.partition_point(|&s| s <= offset).saturating_sub(1)
     }
 
-    // ---- Position tokens (D2 / D7) -------------------------------------
+    // ---- Position tokens -------------------------------------
 
     /// Issue a `Position` token for byte offset `at` in the current
     /// logical text.
@@ -571,12 +571,12 @@ impl TextBuffer {
     /// `at` must satisfy `0 <= at <= len()`. Returns `None` iff the
     /// buffer is empty (no piece exists to anchor the token).
     ///
-    /// Sticky-left policy (D7): if `at` lies on a piece boundary, the
+    /// Sticky-left policy: if `at` lies on a piece boundary, the
     /// token is anchored to the piece *ending* at `at`, with
     /// `offset == piece.len`. A subsequent insert at `at` is therefore
     /// boundary-elided (no split), and the position keeps pointing at
     /// the same byte it pointed at before. To point *past* an inserted
-    /// span (sticky-right), step 5 issues its own token *after* the
+    /// span (sticky-right), the anchored-range store issues its own token *after* the
     /// edit, or remaps via the edit log.
     pub fn position_at(&self, at: usize) -> Option<Position> {
         assert!(at <= self.len());
@@ -620,8 +620,8 @@ impl TextBuffer {
     ///
     /// - The anchor piece has been deleted (no piece with `id` remains).
     /// - The anchor piece exists but `offset > piece.len` — the
-    ///   position sat in the right half of an interior split (D7) and
-    ///   is now *stale but detectable*. Step 5 reads the matching
+    ///   position sat in the right half of an interior split and
+    ///   is now *stale but detectable*. The anchored-range store reads the matching
     ///   `Split` from the edit log and remaps to
     ///   `(Split::new_piece, offset - Split::split_offset)`.
     pub fn resolve(&self, p: Position) -> Option<usize> {
@@ -639,7 +639,7 @@ impl TextBuffer {
         None
     }
 
-    // ---- Edit log (D7) -------------------------------------------------
+    // ---- Edit log -------------------------------------------------
 
     /// High-water mark of the edit log: the sequence number that will be
     /// assigned to the *next* edit (zero on a fresh buffer, incremented
@@ -793,7 +793,7 @@ impl TextBuffer {
     /// `at` must satisfy `0 <= at <= len()`.
     ///
     /// Degenerate splits — `at` at the start or end of an existing piece —
-    /// are elided per D7: the new piece is spliced in directly, no
+    /// are elided by the split rule: the new piece is spliced in directly, no
     /// zero-length halves created. Otherwise the containing piece is split,
     /// the left half retains its id (with `len` shortened to the split
     /// offset) and the right half is inserted as a fresh piece behind it.
@@ -825,7 +825,7 @@ impl TextBuffer {
                 return SplitLoc { insert_at: i + 1 };
             }
             if at > acc && at < p_end {
-                // Strict interior split — D7's only non-degenerate case.
+                // Strict interior split — the split rule's only non-degenerate case.
                 let left_len = at - acc;
                 let right_len = p.len - left_len;
                 let right_start = p.start + left_len;
@@ -1134,7 +1134,7 @@ mod tests {
         assert_eq!(s(&b), "abhij");
     }
 
-    // ---- Line index (D4) ----------------------------------------------
+    // ---- Line index ----------------------------------------------
 
     /// Peek the line-index state directly (assumes built).
     fn ls(b: &TextBuffer) -> &[usize] {
@@ -1363,7 +1363,7 @@ mod tests {
         assert_eq!(ls(&b), &expected[..], "line starts mismatch");
     }
 
-    // ---- Position tokens (D2 / D7) -------------------------------------
+    // ---- Position tokens -------------------------------------
 
     #[test]
     fn position_at_empty_buffer_returns_none() {
@@ -1676,9 +1676,9 @@ mod tests {
         assert_eq!(s(&b), "goodbye world");
     }
 
-    // ---- End-to-end remap-by-log (the design payoff of D7) -----------
+    // ---- End-to-end remap-by-log (the design payoff of the edit log) -----------
 
-    /// Simulate step 5's job: hold a position token across an interior
+    /// Simulate the anchored-range store: hold a position token across an interior
     /// split, find it stale, walk the edit log, remap it to the new
     /// piece, and confirm the remapped token resolves to the same content
     /// the original token pointed at.
@@ -1729,7 +1729,7 @@ mod tests {
     }
 
     /// Step-5-style helper: given a stale `Position`, walk the buffer's
-    /// edit log forward and apply the D7 remap rule for any matching
+    /// edit log forward and apply the split remap rule for any matching
     /// `Split`. Returns the remapped token, or `None` if no remap applies
     /// (the position was deleted wholesale, or no longer stale).
     fn remap_via_log(b: &TextBuffer, mut p: Position) -> Option<Position> {

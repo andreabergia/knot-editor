@@ -640,7 +640,7 @@ impl ProductShell {
         };
         let transition = match outcome {
             CloseRequestOutcome::Pending(_) => {
-                self.status = "save confirmation will be added in checkpoint 7".into();
+                self.status = "this tab needs a save decision before it can close".into();
                 cx.notify();
                 return CommandOutcome::Unavailable;
             }

@@ -1,4 +1,4 @@
-//! `EditTransaction`: one reversible primitive-edit transaction (step 6b).
+//! `EditTransaction`: one reversible primitive-edit transaction.
 //!
 //! This is a small, public, single-use stateful transaction recorder. It
 //! applies primitive edits (`insert` / `delete` / `replace`) to a `TextBuffer`
@@ -520,7 +520,7 @@ mod tests {
         assert_eq!(other.read_range(0..other.len()), "xyz");
     }
 
-    // ---- Step 6b acceptance: transaction flow with anchored ranges ---------
+    // ---- Transaction flow with anchored ranges ---------
 
     #[test]
     fn anchored_ranges_survive_or_get_consumed_through_forward_undo_redo() {

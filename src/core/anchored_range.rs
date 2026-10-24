@@ -26,7 +26,7 @@ pub struct StabilizationResult {
     pub consumed: Vec<AnchoredRangeId>,
 }
 
-/// Which side of an inserted span an endpoint sticks to (D2).
+/// Which side of an inserted span an endpoint sticks to.
 ///
 /// - `Before` (sticky-left, default for a selection *start*): text inserted
 ///   at the endpoint's offset lands *before* it; the endpoint keeps its byte.
@@ -101,7 +101,7 @@ impl EndpointKey {
     }
 }
 
-/// Authoritative anchored range store over a `TextBuffer` (D1, D4).
+/// Authoritative anchored range store over a `TextBuffer`.
 ///
 /// Buffer-agnostic by design (see module docs): pass `&TextBuffer` to the
 /// methods that need it.
@@ -122,11 +122,11 @@ pub struct AnchoredRangeStore {
     /// possible when the buffer is empty and a zero-width anchored range survives
     /// at offset 0).
     unanchored_endpoints: BTreeSet<EndpointKey>,
-    /// Derived interval index for `query_range` (D3): sorted by `start`,
+    /// Derived interval index for `query_range`: sorted by `start`,
     /// rebuilt lazily on the next query after edits or mutations.
     interval_index: Vec<IntervalEntry>,
     index_dirty: bool,
-    /// High-water mark into `buffer`'s edit log (D4).
+    /// High-water mark into `buffer`'s edit log.
     cursor: usize,
     next_id: AnchoredRangeId,
 }
@@ -274,7 +274,7 @@ impl AnchoredRangeStore {
     /// Add an anchored range spanning `[start, end)` (byte offsets into the
     /// current logical text). The start endpoint defaults to `Before`
     /// (sticky-left) and the end to `After` (sticky-right) — standard
-    /// selection semantics (D2).
+    /// selection semantics.
     pub fn add(&mut self, buffer: &TextBuffer, start: usize, end: usize) -> AnchoredRangeId {
         self.add_inner(buffer, start, end, false)
     }
@@ -346,7 +346,7 @@ impl AnchoredRangeStore {
         if s <= e { Some(s..e) } else { Some(e..s) }
     }
 
-    /// All anchored range ids overlapping `[a, b)` (D3, for step 6). Uses a
+    /// All anchored range ids overlapping `[a, b)`. Uses a
     /// lazily-rebuilt interval index sorted by start byte for O(log n + k)
     /// binary-search lookup; the index is rebuilt once on the first query
     /// after edits.
@@ -379,7 +379,7 @@ impl AnchoredRangeStore {
     /// valid and resolve through the buffer's piece table.
     pub fn stabilize(&mut self, buffer: &TextBuffer) -> StabilizationResult {
         let edits = buffer.edits_since(self.cursor);
-        // D4 invariant: the log must never have been shortened underneath us.
+        // Invariant: the log must never have been shortened underneath us.
         assert!(
             buffer.edit_seq() >= self.cursor,
             "edit log was shortened underneath the store (cursor {} > seq {})",
@@ -592,7 +592,7 @@ impl AnchoredRangeStore {
     /// the anchored range, its endpoint-index entries, and any cached offsets.
     /// `resolve` will return `None` for `id` thereafter; there is no
     /// tombstone. Undoing the text edit does not revive the anchored range —
-    /// a provider must re-publish it under a fresh id (step 6b).
+    /// a provider must re-publish it under a fresh id.
     fn consume(&mut self, id: AnchoredRangeId) -> bool {
         if let Some(ann) = self.anchored_ranges.remove(&id) {
             self.remove_anchored_range_endpoints(&ann);
@@ -902,7 +902,7 @@ mod tests {
         assert_eq!(store.resolve(&b, id), Some(2..2));
     }
 
-    // ---- Step 6b: removal-on-consumption semantics ---------------------
+    // ---- Removal-on-consumption semantics ---------------------
 
     #[test]
     fn fully_consumed_anchored_range_removed_not_tombstoned() {
