@@ -6,8 +6,8 @@ technical debt is.
 
 Status: active input. The [extension platform
 plan](extension-platform-and-projects-plan.md#follow-up-from-the-codebase-health-review)
-schedules each finding: the maintenance interlude before checkpoint 7c,
-additions to checkpoints 8 and 9, and post-initiative work. Remove this document
+schedules each finding. The maintenance interlude has landed; the additions to
+checkpoints 8 and 9 and the post-initiative work remain. Remove this document
 once every scheduled cleanup has landed or moved to the roadmap register;
 Git retains it.
 
