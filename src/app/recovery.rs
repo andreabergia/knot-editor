@@ -1012,14 +1012,23 @@ pub(crate) fn retain(
     document_id: uuid::Uuid,
     cx: &App,
 ) -> Option<Task<Result<StoredSnapshot, String>>> {
-    let draft = {
+    let (draft, revision) = {
         let documents = cx.global::<ApplicationDocuments>().0.read(cx);
-        capture(documents.document_by_identity(document_id)?, cx)
+        let document = documents.document_by_identity(document_id)?;
+        (capture(document, cx), document.model().read(cx).revision())
     };
     let Some(service) = service(cx) else {
         return Some(Task::ready(Err("recovery is unavailable".into())));
     };
     let capture_key = uuid::Uuid::new_v4().to_string();
+    service.revisions.borrow_mut().insert(
+        capture_key.clone(),
+        CapturedRevision {
+            owner: owner.clone(),
+            document: document_id,
+            revision,
+        },
+    );
     let retain = service
         .store
         .retain(owner.clone(), capture_key.clone(), draft.clone());
@@ -1043,6 +1052,29 @@ pub(crate) fn retain(
     }))
 }
 
+/// Whether `capture_key` is one of `owner`'s captures of `document_id` taken
+/// in this session at the document's current `revision`. Captures from earlier
+/// sessions, other owners, or older revisions never match.
+pub(crate) fn captures_revision(
+    owner: &str,
+    capture_key: &str,
+    document_id: uuid::Uuid,
+    revision: u64,
+    cx: &App,
+) -> bool {
+    service(cx).is_some_and(|service| {
+        service
+            .revisions
+            .borrow()
+            .get(capture_key)
+            .is_some_and(|captured| {
+                captured.owner == owner
+                    && captured.document == document_id
+                    && captured.revision == revision
+            })
+    })
+}
+
 /// One owner's retained captures, newest first.
 pub(crate) fn retained(owner: String, cx: &App) -> Task<Result<Vec<StoredSnapshot>, String>> {
     match service(cx) {
@@ -1055,7 +1087,10 @@ pub(crate) fn retained(owner: String, cx: &App) -> Task<Result<Vec<StoredSnapsho
 /// holds no capture with that key.
 pub(crate) fn release(owner: String, capture_key: String, cx: &App) -> Task<Result<bool, String>> {
     match service(cx) {
-        Some(service) => service.store.release(owner, capture_key),
+        Some(service) => {
+            service.revisions.borrow_mut().remove(&capture_key);
+            service.store.release(owner, capture_key)
+        }
         None => Task::ready(Err("recovery is unavailable".into())),
     }
 }
@@ -1152,12 +1187,61 @@ pub(crate) fn restore_at_startup(
     })
 }
 
-async fn restore_snapshot(
-    service: &RecoveryService,
+/// A retained capture whose text and resource baseline were read off the
+/// foreground. Committing it creates the live document in one foreground turn.
+pub(crate) struct StagedRestore {
+    snapshot: StoredSnapshot,
+    loaded: Option<OpenResource>,
+}
+
+/// Read one of `owner`'s retained captures and load its resource baseline
+/// without creating a document.
+pub(crate) fn stage_retained(
+    owner: String,
+    capture_key: String,
+    providers: Arc<FileSystemProviderRegistry>,
+    cx: &App,
+) -> Task<Result<StagedRestore, RestoreError>> {
+    let Some(service) = service(cx) else {
+        return Task::ready(Err(RestoreError::Store("recovery is unavailable".into())));
+    };
+    let read = service.store.snapshot(SnapshotKind::Retained, capture_key);
+    cx.background_spawn(async move {
+        let snapshot = read
+            .await
+            .map_err(RestoreError::Store)?
+            .filter(|snapshot| snapshot.owner.as_deref() == Some(owner.as_str()))
+            .ok_or(RestoreError::Unavailable)?;
+        stage_snapshot(snapshot, providers).await
+    })
+}
+
+/// Commit a staged capture as a live document. The caller has checked that no
+/// live document owns its identity or resource, so the text never opens as a
+/// separate copy.
+pub(crate) fn commit_staged(
+    staged: StagedRestore,
+    cx: &mut App,
+) -> Result<RestoreOutcome, RestoreError> {
+    let Some(service) = service(cx) else {
+        return Err(RestoreError::Store("recovery is unavailable".into()));
+    };
+    commit_restore(&service, staged.snapshot, staged.loaded, cx)
+}
+
+/// Drain pending automatic captures so every dirty document is durably
+/// protected when the returned task succeeds.
+pub(crate) fn drain(cx: &App) -> Task<Result<(), String>> {
+    match service(cx) {
+        Some(service) => service.store.flush(),
+        None => Task::ready(Err("recovery is unavailable".into())),
+    }
+}
+
+async fn stage_snapshot(
     snapshot: StoredSnapshot,
     providers: Arc<FileSystemProviderRegistry>,
-    cx: &mut AsyncApp,
-) -> Result<RestoreOutcome, RestoreError> {
+) -> Result<StagedRestore, RestoreError> {
     let loaded = match (&snapshot.resource_uri, snapshot.state) {
         (_, SnapshotState::Untitled) => None,
         (Some(uri), _) => {
@@ -1175,6 +1259,16 @@ async fn restore_snapshot(
             ));
         }
     };
+    Ok(StagedRestore { snapshot, loaded })
+}
+
+async fn restore_snapshot(
+    service: &RecoveryService,
+    snapshot: StoredSnapshot,
+    providers: Arc<FileSystemProviderRegistry>,
+    cx: &mut AsyncApp,
+) -> Result<RestoreOutcome, RestoreError> {
+    let StagedRestore { snapshot, loaded } = stage_snapshot(snapshot, providers).await?;
     let service = service.clone();
     cx.update(|cx| commit_restore(&service, snapshot, loaded, cx))
         .map_err(|error| RestoreError::Store(display_error(error)))?
@@ -1317,11 +1411,20 @@ pub(crate) fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
+/// The document revision a retained capture recorded, kept for this session so
+/// session replacement can validate captures without reading the store.
+struct CapturedRevision {
+    owner: String,
+    document: uuid::Uuid,
+    revision: u64,
+}
+
 /// Foreground recovery service: the store plus lifecycle-scoped model observers.
 #[derive(Clone)]
 pub(crate) struct RecoveryService {
     store: RecoveryStore,
     subscriptions: Rc<RefCell<HashMap<uuid::Uuid, Subscription>>>,
+    revisions: Rc<RefCell<HashMap<String, CapturedRevision>>>,
 }
 
 impl RecoveryService {
@@ -1329,6 +1432,7 @@ impl RecoveryService {
         Self {
             store,
             subscriptions: Rc::new(RefCell::new(HashMap::new())),
+            revisions: Rc::new(RefCell::new(HashMap::new())),
         }
     }
 
