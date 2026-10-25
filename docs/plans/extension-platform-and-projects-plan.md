@@ -3,7 +3,7 @@
 Status: ⬜ In progress. Checkpoints 1–8 and D053 are complete and approved, and
 the [codebase health maintenance
 interlude](#maintenance-interlude--codebase-health-cleanup-) is approved.
-Checkpoints 9 and 10 remain unstarted; checkpoint 9 is next.
+Checkpoint 9 is planned and next; checkpoint 10 remains unstarted.
 
 Work identifiers: D046–D052, promoted D005, and completed maintenance interlude
 D053. [Roadmap](../roadmap.md) owns initiative priority; this plan owns execution
@@ -56,7 +56,8 @@ root replacement, and protected closure; see
 [workbench lifecycle](../architecture/workbench-and-lifecycle.md).
 
 D052 extends the existing ordered root collection beyond its current one-root
-limit. Finalize duplicate/overlap, ordering, and replacement rules at checkpoint 9.
+limit; the duplicate, overlap, ordering, and replacement rules are settled in
+[checkpoint 9](#9-multi-root-workspace-product-behavior--d052-).
 Files remain independent of workspace containment. JS project identity is
 independent of roots and stable across rename/root changes; the native application
 owns workspaces, not project policy.
@@ -283,16 +284,126 @@ contract, and extension restart). Validation is in
 
 ### 9. Multi-root workspace product behavior — D052 ⬜
 
-- Remove single-root enforcement, including the `TooManyWorkspaceRoots` error
-  type rather than a raised limit; implement add/remove/reorder/replace roots and
-  a native multi-root resource tree. Upgrade project records without changing IDs.
-- Define overlapping roots, duplicate normalized URIs, root labels, tree selection,
-  root removal with documents still open, folder-open replacement policy, and
-  invalidation across root-set changes. Preserve workspace-independent files.
-- **Validation:** roots with overlapping paths, normalization and duplicate rules,
-  deterministic enumeration, stale requests during root mutations, root removal,
-  record migration, and multi-root sessions across restart/switching.
-- **Review gate:** approve root semantics and native navigation in the product.
+Remove single-root enforcement, including the `TooManyWorkspaceRoots` error
+type rather than a raised limit, then carry multiple roots through the native
+model, explorer, public API, and `@knot/projects`. Execute in two
+sub-checkpoints, 9a native and 9b projects, with one review gate at the end.
+
+#### Root semantics (approved for planning 2026-10-25)
+
+- **Ordering and identity.** A window's roots are an ordered list. Order is
+  user-visible (explorer order) and deterministic; retained normalized URIs keep
+  their `RootId` across any replacement, so add, remove, and reorder are all
+  replacements of the whole set.
+- **Duplicates.** Normalization can make different inputs equal, so a proposed
+  set is deduplicated after normalization, keeping the first occurrence, rather
+  than rejected. Adding a root that is already present is a no-op. No new error
+  code.
+- **Overlap.** Nested and overlapping roots are allowed. Each root is browsed on
+  its own, so a file under both appears under both. Expansion and selection are
+  keyed by `(RootId, URI)` so the two copies stay independent, while cached
+  directory listings can be shared by URI.
+- **Labels.** A root row shows the last path segment. Roots with the same
+  segment add their parent segment (`src — knot`, `src — other`). There are no
+  user-assigned root names; projects own naming.
+- **Explorer layout.** Every root is a top-level expandable row, even when there
+  is only one, expanded on first install. One layout and keyboard model gives
+  root-level actions an obvious target.
+- **Folder Open.** Native Open of a folder keeps replacing the window's roots.
+  A new **Add Folder to Workspace…** command appends one. **Remove Folder from
+  Workspace** and **Move Folder Up/Down** act on the explorer's selected root:
+  the root row itself, or the root that contains the selected row. Launch
+  requests for a directory keep opening a window with that single root.
+- **Root removal.** Removing a root never closes documents: files stay
+  independent of workspace containment, and there is no prompt.
+- **Invalidation.** Every root-set change bumps the generation, so in-flight
+  enumeration and Open/root requests captured earlier are rejected as today.
+  Retained roots keep their expansion, selection, and cached children, and
+  directories that were loading are re-requested under the new snapshot. A
+  removed root drops its state, and a new root requests its children.
+- **Projects follow root edits.** A window belongs to an active project when its
+  root set equals the project's root set, ignoring order. No two projects may
+  share a root set, but one folder may belong to several projects. When a
+  bound window's roots change to a non-empty set that no other project uses,
+  live tracking updates the project's roots and applies the same set to the
+  project's other windows. Clearing a window's roots, or changing them to
+  another project's set, unbinds that window. The binding used to detect the
+  edit is in memory only; the registry still persists no per-window binding.
+
+#### 9a. Native multi-root model, explorer, and API ⬜
+
+- ⬜ `WorkspaceState::replace_roots` becomes infallible and deduplicates;
+  delete `TooManyWorkspaceRoots`, `WorkspaceSnapshot::root()`, and the
+  single-root helpers (`replace_root`, `install_workspace`'s `expect`). Remove
+  the error from `WorkspaceError`, `ReplaceError`, the handler error enums,
+  and `knot.d.ts`. Drop the D052
+  `dead_code` allowances, deleting `is_descendant_of` if nothing uses it.
+- ⬜ `product::operations::replace_roots` and `workbench.replaceWindows` accept
+  any number of roots per window and deduplicate after normalization. They
+  still validate every root before one commit.
+- ⬜ `WorkspaceTree`: top-level root rows with disambiguated labels;
+  expansion and selection keyed by `(RootId, URI)`; a per-root visited set so
+  overlapping roots both render; Left from a top-level entry selects its root
+  row; `set_workspace` preserves retained-root state as described above.
+- ⬜ Native commands Add Folder to Workspace…, Remove Folder from Workspace,
+  and Move Folder Up/Down. They go through the shared root-replacement path,
+  appear in the palette, and put Add Folder in the File menu. The explorer
+  frame auto-shows on a non-empty root set as today; tool-layout memory is
+  unchanged.
+- ⬜ `knot.d.ts` and the [extension guide](../extension-api.md):
+  `replaceRoots` takes an ordered set with the deduplication rule, and there
+  are no separate add/remove methods because retained IDs make read-modify-
+  replace sufficient. Update the `workspaces` and `replaceWindows` cases in
+  `scripts/extension-api/contract.test.ts`.
+- **Validation:** `workspace.rs` unit tests for deduplication after
+  normalization, retained IDs across reorder/add/remove, and generation bumps.
+  `workspace_tree.rs` tests for root rows and labels, overlapping roots with
+  independent expansion and selection, deterministic order, and stale responses
+  across add/remove while enumeration is in flight. Product tests in
+  `product/tests/workspaces.rs` for the native commands, Open replacing every
+  root, Add Folder of an existing root as a no-op, root removal leaving
+  documents open, and an extension `replaceRoots` racing a native Add Folder
+  (rejects `InvalidTarget`). A `replaceWindows` case with multi-root
+  destinations in `product/tests/sessions.rs`.
+
+#### 9b. Multi-root projects ⬜
+
+- ⬜ Membership compares order-insensitive root sets instead of first roots.
+  `projects.create` rejects a root set another project already uses. The
+  Projects tree and picker describe a project by its first root's label plus
+  `+N`.
+- ⬜ Live tracking keeps an in-memory window→project binding, adopts root edits
+  from bound windows into the project record, and propagates them to the
+  project's other windows with `workspaces.replaceRoots`. Switching passes the
+  project's full root list to `replaceWindows`.
+- ⬜ Records: schema 1 already stores `roots` as an array, so existing
+  single-root records load unchanged and keep their IDs. The registry schema
+  stays 1 unless 9b needs a field, in which case it gains a read-time upgrade.
+  Update the header comment and the
+  [bundled project registry decision](../decisions.md#bundled-project-registry) wording
+  about first-root matching.
+- **Validation:** `tests/projects.rs` and `tests/project_sessions.rs` for
+  set-equality membership regardless of order; adding and removing a root in
+  a bound window updating the record and the project's second window; clearing
+  roots unbinding (and suspending on the last window); a set colliding with
+  another project unbinding instead of merging; a stored single-root schema-1
+  record loading with its ID; and a multi-root project switched away, restored,
+  and restored again after restart (startup suspension and capture
+  reconciliation included).
+
+#### Documentation and review gate
+
+- ⬜ Update the workspaces section of
+  [documents and persistence](../architecture/documents-and-persistence.md#workspaces-and-resource-trees),
+  the explorer notes in [workbench lifecycle](../architecture/workbench-and-lifecycle.md),
+  and `architecture.md` only if ownership changes (it should not). Add a
+  *Multi-root workspaces* decision recording deduplication over rejection,
+  allowed overlap with `(RootId, URI)` view state, replace-on-Open, and
+  projects following root edits. Remove P2-6 from the health-review table.
+- **Review gate:** approve root semantics and native navigation in the product:
+  add, remove, and reorder roots; overlapping roots; Open replacing roots;
+  projects following edits across two windows; and a multi-root project
+  surviving switch and restart.
 
 ### 10. Layout, view state, and startup restoration — D005, D051 ⬜
 
