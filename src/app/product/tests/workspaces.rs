@@ -34,7 +34,6 @@ await commands.register("workspaces.validate", async ({ target: command }) => {
   await rejects(() => workspaces.openFolder("mem://product/invalid.txt", { target }), "ResourceWrongKind");
   await rejects(() => workspaces.openFolder("mem://product/missing", { target }), "ResourceNotFound");
   await rejects(() => workspaces.replaceRoots(["mem://product/missing"], { target }), "ResourceNotFound");
-  await rejects(() => workspaces.replaceRoots(["mem://product/src", "mem://product/src"], { target }), "TooManyWorkspaceRoots");
   await rejects(() => workspaces.replaceRoots(["not a URI"], { target }), "InvalidUri");
   await rejects(() => workspaces.openFolder("other://product/src", { target }), "ProviderFailure");
   for (const invalid of [{}, command, wins[0].panes[0].target, wins[0].panes[0].selected]) await rejects(() => workspaces.replaceRoots([], { target: invalid }), "InvalidTarget");
@@ -43,6 +42,8 @@ await commands.register("workspaces.validate", async ({ target: command }) => {
   if (cleared.generation !== 3 || cleared.roots.length !== 0) throw new Error("clear");
   const restored = await workspaces.openFolder("mem://product/src", { target });
   if (restored.generation !== 4 || restored.roots[0].id === first.roots[0].id) throw new Error("reinstall");
+  const both = await workspaces.replaceRoots(["mem://product/", "mem://product/src", "mem://product/./src"], { target });
+  if (both.generation !== 5 || both.roots.length !== 2 || both.roots[1].id !== restored.roots[0].id) throw new Error("ordered, deduplicated roots");
   if ((await workspaces.get(wins[0].target)).roots.length !== 0) throw new Error("wrong window mutated");
   const implicit = await workspaces.openFolder("mem://product/src");
   if (implicit.window !== wins[0].target) throw new Error("originating command window lost");
@@ -63,7 +64,7 @@ await commands.register("workspaces.validate", async ({ target: command }) => {
     );
     cx.read(|cx| {
         assert_eq!(first.read(cx).workspace.snapshot().generation(), 1);
-        assert_eq!(second.read(cx).workspace.snapshot().generation(), 4);
+        assert_eq!(second.read(cx).workspace.snapshot().generation(), 5);
         assert!(second.read(cx).workspace_tree.is_some());
         assert_eq!(documents.read(cx).documents().count(), 2);
     });
@@ -183,11 +184,14 @@ await commands.register("workspaces.pending", async () => {
         let snapshot = cx.read(|cx| first.read(cx).workspace.snapshot());
         match scenario {
             "focus" => {
-                assert_eq!(snapshot.root().unwrap().to_string(), "mem://product/src");
+                assert_eq!(
+                    snapshot.first_root().unwrap().to_string(),
+                    "mem://product/src"
+                );
                 assert!(cx.read(|cx| second.read(cx).workspace.snapshot().roots().is_empty()));
             }
             "roots" => {
-                assert_eq!(snapshot.root().unwrap().to_string(), "mem://product/");
+                assert_eq!(snapshot.first_root().unwrap().to_string(), "mem://product/");
             }
             "close" | "unload" => assert!(snapshot.roots().is_empty()),
             _ => unreachable!(),

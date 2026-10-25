@@ -150,9 +150,6 @@ pub(crate) fn replace_windows(
     }
     let mut roots = Vec::new();
     for window in &request.windows {
-        if window.roots.len() > 1 {
-            return Err(ReplaceError::TooManyWorkspaceRoots);
-        }
         roots.push(
             window
                 .roots
@@ -517,7 +514,7 @@ fn commit(
         if terminals {
             // A window with a terminal stays open, so a switch never stops it.
             window.shell.update(cx, |shell, cx| {
-                let _ = shell.replace_workspace_roots(Vec::new(), cx);
+                shell.replace_workspace_roots(Vec::new(), cx);
                 shell.status = "session moved to another window".into();
                 cx.notify();
             });
@@ -545,7 +542,7 @@ fn commit(
         }
         let handle = window.handle;
         window.shell.update(cx, |shell, cx| {
-            let _ = shell.replace_workspace_roots(roots, cx);
+            shell.replace_workspace_roots(roots, cx);
             let mut tabs = Vec::new();
             for document in presented {
                 tabs.push(document.map(|document| shell.present_session_document(document, cx)));

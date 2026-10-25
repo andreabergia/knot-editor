@@ -192,7 +192,12 @@ collection or persistence.
 normalized resource requests and workspace generations to the shell, independently
 of the extension `TreeView` provider protocol. The explorer is native tool
 content in the workbench; the shell owns its resource event subscription.
-Changing workspace roots refreshes content without changing placement or
+Every root is a top-level row in root order, labelled by its last path segment
+plus the parent segment when names collide. Directory listings are cached by URI
+and shared between overlapping roots, while expansion and selection are keyed by
+root and URI so a nested root browses independently. Changing workspace roots
+keeps retained roots' expansion, selection, and listings, re-requests directories
+that were loading under the stale snapshot, and never changes placement or
 visibility. Hiding preserves selection, expansion, and the live native view.
 Reopening returns to the former live group and tab order, or the remembered
 dock/normal group if that group disappeared; historical document groups are

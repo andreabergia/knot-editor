@@ -86,7 +86,10 @@ fn semantic_open_returns_committed_roots_and_preserves_resource_errors(cx: &mut 
         panic!("folder Open returned a document");
     };
     assert_eq!(workspace.generation(), 1);
-    assert_eq!(workspace.root().unwrap().to_string(), "mem://product/src");
+    assert_eq!(
+        workspace.first_root().unwrap().to_string(),
+        "mem://product/src"
+    );
     assert!(cx.read(|cx| shell.read(cx).workspace.is_current(&workspace)));
     let mut invalid = begin_open(&shell, "mem://product/invalid.txt", cx);
     cx.run_until_parked();

@@ -305,9 +305,6 @@ pub(crate) fn replace_roots(
     completion: impl FnOnce(Result<crate::host::protocol::WorkspaceInfo, WorkspaceError>) + 'static,
     cx: &mut App,
 ) -> Result<(), WorkspaceError> {
-    if roots.len() > 1 {
-        return Err(WorkspaceError::TooManyWorkspaceRoots);
-    }
     let roots = roots
         .into_iter()
         .map(|uri| {
@@ -363,11 +360,9 @@ pub(crate) fn replace_roots(
                             AccessError::InvalidTarget,
                         )))
                     } else {
-                        validated.and_then(|roots| {
-                            shell
-                                .replace_workspace_roots(roots, cx)
-                                .map(|snapshot| workspace_info(window_target, &snapshot))
-                                .map_err(|_| WorkspaceError::TooManyWorkspaceRoots)
+                        validated.map(|roots| {
+                            let snapshot = shell.replace_workspace_roots(roots, cx);
+                            workspace_info(window_target, &snapshot)
                         })
                     };
                     completion.take().unwrap()(result);

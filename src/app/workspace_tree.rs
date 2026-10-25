@@ -5,7 +5,7 @@ use gpui::{prelude::FluentBuilder, *};
 use super::{
     filesystem::{ResourceEntry, ResourceKind},
     resource::ResourceUri,
-    workspace::WorkspaceSnapshot,
+    workspace::{WorkspaceRoot, WorkspaceSnapshot},
 };
 
 const WORKSPACE_TREE_KEY_CONTEXT: &str = "workspace_tree";
@@ -42,9 +42,18 @@ struct ChildrenState {
     error: Option<SharedString>,
 }
 
+/// A row's identity: the root it is shown under and its URI. Overlapping roots
+/// can show one URI under several roots, each with independent state.
+type RowKey = (uuid::Uuid, ResourceUri);
+
 #[derive(Clone)]
 enum VisibleRow {
+    Root {
+        root: WorkspaceRoot,
+        label: SharedString,
+    },
     Entry {
+        root: uuid::Uuid,
         entry: ResourceEntry,
         parent: ResourceUri,
         depth: usize,
@@ -56,12 +65,24 @@ enum VisibleRow {
     },
 }
 
-/// Native cached presentation for the current URI-rooted workspace.
+impl VisibleRow {
+    fn key(&self) -> Option<RowKey> {
+        match self {
+            Self::Root { root, .. } => Some((root.id, root.uri.clone())),
+            Self::Entry { root, entry, .. } => Some((*root, entry.uri.clone())),
+            Self::Status { .. } => None,
+        }
+    }
+}
+
+/// Native cached presentation for the window's ordered, URI-rooted workspace.
+/// Directory listings are cached by URI and shared between overlapping roots;
+/// expansion and selection belong to rows.
 pub(crate) struct WorkspaceTree {
     workspace: WorkspaceSnapshot,
     children: HashMap<ResourceUri, ChildrenState>,
-    expanded: HashSet<ResourceUri>,
-    selected: Option<ResourceUri>,
+    expanded: HashSet<RowKey>,
+    selected: Option<RowKey>,
     focus: FocusHandle,
     scroll: UniformListScrollHandle,
     next_generation: u64,
@@ -69,10 +90,15 @@ pub(crate) struct WorkspaceTree {
 
 impl WorkspaceTree {
     pub(crate) fn new(workspace: WorkspaceSnapshot, cx: &mut Context<Self>) -> Self {
+        let expanded = workspace
+            .roots()
+            .iter()
+            .map(|root| (root.id, root.uri.clone()))
+            .collect();
         Self {
             workspace,
             children: HashMap::new(),
-            expanded: HashSet::new(),
+            expanded,
             selected: None,
             focus: cx.focus_handle(),
             scroll: UniformListScrollHandle::new(),
@@ -86,7 +112,14 @@ impl WorkspaceTree {
     }
 
     pub(crate) fn selected(&self) -> Option<&ResourceUri> {
-        self.selected.as_ref()
+        self.selected.as_ref().map(|(_, uri)| uri)
+    }
+
+    /// The root shown at or above the selected row.
+    #[cfg(test)]
+    pub(crate) fn selected_root(&self) -> Option<&WorkspaceRoot> {
+        let (id, _) = self.selected.as_ref()?;
+        self.workspace.roots().iter().find(|root| root.id == *id)
     }
 
     #[cfg(test)]
@@ -96,23 +129,54 @@ impl WorkspaceTree {
 
     /// Starts initial enumeration after the shell has subscribed to events.
     pub(crate) fn load(&mut self, cx: &mut Context<Self>) {
-        self.request_root(cx);
+        for root in self.workspace.roots().to_vec() {
+            self.request_children(root.uri, cx);
+        }
+        cx.notify();
     }
 
+    /// Installs a new root set. Retained roots keep their expansion, selection,
+    /// and cached listings; requests issued under the previous snapshot are
+    /// stale, so directories still loading are requested again.
     pub(crate) fn set_workspace(&mut self, workspace: WorkspaceSnapshot, cx: &mut Context<Self>) {
-        self.workspace = workspace;
-        self.children.clear();
-        self.expanded.clear();
-        self.selected = None;
-        self.request_root(cx);
+        let previous = std::mem::replace(&mut self.workspace, workspace);
+        let roots = self.workspace.roots().to_vec();
+        let retained = |id: &uuid::Uuid| roots.iter().any(|root| root.id == *id);
+        self.expanded.retain(|(id, _)| retained(id));
+        if self.selected.as_ref().is_some_and(|(id, _)| !retained(id)) {
+            self.selected = None;
+        }
+        for root in &roots {
+            if !previous.roots().iter().any(|old| old.id == root.id) {
+                self.expanded.insert((root.id, root.uri.clone()));
+            }
+        }
+        self.children
+            .retain(|uri, _| roots.iter().any(|root| uri.is_within(&root.uri)));
+        let mut pending = self
+            .children
+            .iter()
+            .filter(|(_, state)| state.loading)
+            .map(|(uri, _)| uri.clone())
+            .collect::<Vec<_>>();
+        for root in &roots {
+            if !self.children.contains_key(&root.uri) && !pending.contains(&root.uri) {
+                pending.push(root.uri.clone());
+            }
+        }
+        for uri in pending {
+            self.request_children(uri, cx);
+        }
+        cx.notify();
     }
 
     #[cfg(test)]
     pub(crate) fn reload(&mut self, uri: ResourceUri, cx: &mut Context<Self>) -> bool {
         if !self
             .workspace
-            .root()
-            .is_some_and(|root| uri == *root || uri.is_descendant_of(root))
+            .roots()
+            .iter()
+            .any(|root| uri.is_within(&root.uri))
         {
             return false;
         }
@@ -148,14 +212,6 @@ impl WorkspaceTree {
         true
     }
 
-    fn request_root(&mut self, cx: &mut Context<Self>) {
-        if let Some(root) = self.workspace.root().cloned() {
-            self.request_children(root, cx);
-        } else {
-            cx.notify();
-        }
-    }
-
     fn request_children(&mut self, parent: ResourceUri, cx: &mut Context<Self>) {
         let generation = self.next_generation;
         self.next_generation = self
@@ -176,15 +232,23 @@ impl WorkspaceTree {
 
     fn visible_rows(&self) -> Vec<VisibleRow> {
         let mut rows = Vec::new();
-        let mut visited = HashSet::new();
-        if let Some(root) = self.workspace.root() {
-            self.append_children(root, 0, &mut visited, &mut rows);
+        let roots = self.workspace.roots();
+        for (root, label) in roots.iter().zip(root_labels(roots)) {
+            rows.push(VisibleRow::Root {
+                root: root.clone(),
+                label: label.into(),
+            });
+            if self.expanded.contains(&(root.id, root.uri.clone())) {
+                let mut visited = HashSet::new();
+                self.append_children(root.id, &root.uri, 1, &mut visited, &mut rows);
+            }
         }
         rows
     }
 
     fn append_children(
         &self,
+        root: uuid::Uuid,
         parent: &ResourceUri,
         depth: usize,
         visited: &mut HashSet<ResourceUri>,
@@ -198,12 +262,15 @@ impl WorkspaceTree {
                 continue;
             }
             rows.push(VisibleRow::Entry {
+                root,
                 entry: entry.clone(),
                 parent: parent.clone(),
                 depth,
             });
-            if entry.kind == ResourceKind::Directory && self.expanded.contains(&entry.uri) {
-                self.append_children(&entry.uri, depth + 1, visited, rows);
+            if entry.kind == ResourceKind::Directory
+                && self.expanded.contains(&(root, entry.uri.clone()))
+            {
+                self.append_children(root, &entry.uri, depth + 1, visited, rows);
             }
         }
         if state.loading {
@@ -221,43 +288,78 @@ impl WorkspaceTree {
         }
     }
 
-    fn activate(&mut self, uri: &ResourceUri, cx: &mut Context<Self>) {
-        let entry = self
-            .children
-            .values()
-            .flat_map(|state| &state.entries)
-            .find(|entry| &entry.uri == uri)
-            .cloned();
-        let Some(entry) = entry else {
-            return;
+    fn activate(&mut self, key: &RowKey, cx: &mut Context<Self>) {
+        let (root, uri) = key;
+        let kind = if self
+            .workspace
+            .roots()
+            .iter()
+            .any(|entry| entry.id == *root && entry.uri == *uri)
+        {
+            ResourceKind::Directory
+        } else {
+            let Some(entry) = self
+                .children
+                .values()
+                .flat_map(|state| &state.entries)
+                .find(|entry| &entry.uri == uri)
+            else {
+                return;
+            };
+            entry.kind
         };
-        self.selected = Some(entry.uri.clone());
-        match entry.kind {
+        self.selected = Some(key.clone());
+        match kind {
             ResourceKind::File => cx.emit(WorkspaceTreeEvent::OpenFile {
                 workspace: self.workspace.clone(),
-                uri: entry.uri,
+                uri: uri.clone(),
             }),
-            ResourceKind::Directory if self.expanded.remove(&entry.uri) => {}
+            ResourceKind::Directory if self.expanded.remove(key) => {}
             ResourceKind::Directory => {
-                self.expanded.insert(entry.uri.clone());
-                if !self.children.contains_key(&entry.uri) {
-                    self.request_children(entry.uri, cx);
+                self.expanded.insert(key.clone());
+                if !self.children.contains_key(uri) {
+                    self.request_children(uri.clone(), cx);
                 }
             }
         }
         cx.notify();
     }
 
+    /// Activates the first visible row showing `uri`.
     #[cfg(test)]
     pub(crate) fn activate_for_test(&mut self, uri: &ResourceUri, cx: &mut Context<Self>) -> bool {
-        let exists = self
-            .children
-            .values()
-            .any(|state| state.entries.iter().any(|entry| &entry.uri == uri));
-        if exists {
-            self.activate(uri, cx);
+        let key = self
+            .visible_rows()
+            .iter()
+            .filter_map(VisibleRow::key)
+            .find(|(_, row)| row == uri);
+        if let Some(key) = &key {
+            self.activate(key, cx);
         }
-        exists
+        key.is_some()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn select_for_test(&mut self, index: usize) -> bool {
+        let key = self.visible_rows().get(index).and_then(VisibleRow::key);
+        self.selected = key;
+        self.selected.is_some()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn row_labels(&self) -> Vec<String> {
+        self.visible_rows()
+            .iter()
+            .map(|row| match row {
+                VisibleRow::Root { label, .. } => label.to_string(),
+                VisibleRow::Entry { entry, depth, .. } => {
+                    format!("{}{}", "  ".repeat(*depth), entry.name)
+                }
+                VisibleRow::Status { depth, label, .. } => {
+                    format!("{}{label}", "  ".repeat(*depth))
+                }
+            })
+            .collect()
     }
 
     fn on_key_down(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
@@ -265,7 +367,13 @@ impl WorkspaceTree {
         let entries = rows
             .iter()
             .filter_map(|row| match row {
-                VisibleRow::Entry { entry, parent, .. } => Some((&entry.uri, parent)),
+                VisibleRow::Root { root, .. } => Some(((root.id, root.uri.clone()), None)),
+                VisibleRow::Entry {
+                    root,
+                    entry,
+                    parent,
+                    ..
+                } => Some(((*root, entry.uri.clone()), Some((*root, parent.clone())))),
                 VisibleRow::Status { .. } => None,
             })
             .collect::<Vec<_>>();
@@ -275,7 +383,7 @@ impl WorkspaceTree {
         let current = self
             .selected
             .as_ref()
-            .and_then(|selected| entries.iter().position(|(uri, _)| *uri == selected));
+            .and_then(|selected| entries.iter().position(|(key, _)| key == selected));
         let target = match event.keystroke.key.to_lowercase().as_str() {
             "up" => Some(current.unwrap_or(1).saturating_sub(1)),
             "down" => Some((current.map_or(0, |index| index + 1)).min(entries.len() - 1)),
@@ -283,10 +391,10 @@ impl WorkspaceTree {
                 let Some(index) = current else {
                     return;
                 };
-                let (uri, parent) = entries[index];
-                if self.expanded.remove(uri) {
+                let (key, parent) = &entries[index];
+                if self.expanded.remove(key) {
                     cx.notify();
-                } else if Some(parent) != self.workspace.root() {
+                } else if let Some(parent) = parent {
                     self.selected = Some(parent.clone());
                     cx.notify();
                 }
@@ -295,8 +403,8 @@ impl WorkspaceTree {
             }
             "right" | "enter" => {
                 let index = current.unwrap_or(0);
-                let uri = entries[index].0.clone();
-                self.activate(&uri, cx);
+                let key = entries[index].0.clone();
+                self.activate(&key, cx);
                 cx.stop_propagation();
                 return;
             }
@@ -324,6 +432,52 @@ impl WorkspaceTree {
             ResourceKind::Directory => "□",
         }
     }
+}
+
+/// Decoded non-empty path segments of a URI.
+fn decoded_segments(uri: &ResourceUri) -> Vec<String> {
+    uri.as_url()
+        .path_segments()
+        .into_iter()
+        .flatten()
+        .filter(|segment| !segment.is_empty())
+        .map(|segment| {
+            percent_encoding::percent_decode_str(segment)
+                .decode_utf8_lossy()
+                .into_owned()
+        })
+        .collect()
+}
+
+/// Root row labels: the last path segment (or the host for a bare authority),
+/// plus the parent segment when several roots share a last segment.
+fn root_labels(roots: &[WorkspaceRoot]) -> Vec<String> {
+    let segments = roots
+        .iter()
+        .map(|root| decoded_segments(&root.uri))
+        .collect::<Vec<_>>();
+    let names = segments
+        .iter()
+        .zip(roots)
+        .map(|(segments, root)| {
+            segments
+                .last()
+                .cloned()
+                .or_else(|| root.uri.as_url().host_str().map(str::to_owned))
+                .unwrap_or_else(|| root.uri.to_string())
+        })
+        .collect::<Vec<_>>();
+    names
+        .iter()
+        .zip(&segments)
+        .map(|(name, segments)| {
+            let shared = names.iter().filter(|other| *other == name).count() > 1;
+            match segments.len().checked_sub(2).map(|index| &segments[index]) {
+                Some(parent) if shared => format!("{name} — {parent}"),
+                _ => name.clone(),
+            }
+        })
+        .collect()
 }
 
 fn resource_kind_order(kind: &ResourceKind) -> u8 {
@@ -358,50 +512,61 @@ impl Render for WorkspaceTree {
         let entity = cx.entity();
         uniform_list("workspace-tree", rows.len(), move |range, _, _| {
             range
-                .map(|index| match &rows[index] {
-                    VisibleRow::Entry { entry, depth, .. } => {
-                        let uri = entry.uri.clone();
-                        let is_selected = selected.as_ref() == Some(&entry.uri);
-                        div()
-                            .id(("workspace-tree-row", index))
-                            .debug_selector(move || format!("workspace-tree-row-{index}"))
-                            .w_full()
-                            .pl(px(8. + *depth as f32 * 14.))
-                            .pr_2()
-                            .py_1()
-                            .flex()
-                            .flex_row()
-                            .gap_1()
-                            .text_sm()
-                            .when(is_selected, |row| {
-                                row.bg(rgb(0x2a4a7a)).text_color(rgb(0xffffff))
-                            })
-                            .hover(|style| style.bg(rgb(0x222222)))
-                            .child(Self::disclosure(&entry.kind, expanded.contains(&entry.uri)))
-                            .child(Self::icon(&entry.kind))
-                            .child(entry.name.clone())
-                            .on_click({
-                                let entity = entity.clone();
-                                move |_, window, cx| {
-                                    window.focus(&entity.read(cx).focus);
-                                    entity.update(cx, |tree, cx| tree.activate(&uri, cx));
-                                }
-                            })
-                            .into_any_element()
-                    }
-                    VisibleRow::Status {
-                        depth,
-                        label,
-                        error,
-                    } => div()
-                        .id(("workspace-tree-status", index))
+                .map(|index| {
+                    let row = &rows[index];
+                    let (depth, kind, label, is_root) = match row {
+                        VisibleRow::Root { label, .. } => {
+                            (0, ResourceKind::Directory, label.clone(), true)
+                        }
+                        VisibleRow::Entry { entry, depth, .. } => {
+                            (*depth, entry.kind, entry.name.clone().into(), false)
+                        }
+                        VisibleRow::Status {
+                            depth,
+                            label,
+                            error,
+                        } => {
+                            return div()
+                                .id(("workspace-tree-status", index))
+                                .w_full()
+                                .pl(px(22. + *depth as f32 * 14.))
+                                .py_1()
+                                .text_sm()
+                                .text_color(if *error { rgb(0xf48771) } else { rgb(0x888888) })
+                                .child(label.clone())
+                                .into_any_element();
+                        }
+                    };
+                    let key = row.key().unwrap();
+                    let is_selected = selected.as_ref() == Some(&key);
+                    let is_expanded = expanded.contains(&key);
+                    div()
+                        .id(("workspace-tree-row", index))
+                        .debug_selector(move || format!("workspace-tree-row-{index}"))
                         .w_full()
-                        .pl(px(22. + *depth as f32 * 14.))
+                        .pl(px(8. + depth as f32 * 14.))
+                        .pr_2()
                         .py_1()
+                        .flex()
+                        .flex_row()
+                        .gap_1()
                         .text_sm()
-                        .text_color(if *error { rgb(0xf48771) } else { rgb(0x888888) })
-                        .child(label.clone())
-                        .into_any_element(),
+                        .when(is_root, |row| row.font_weight(FontWeight::SEMIBOLD))
+                        .when(is_selected, |row| {
+                            row.bg(rgb(0x2a4a7a)).text_color(rgb(0xffffff))
+                        })
+                        .hover(|style| style.bg(rgb(0x222222)))
+                        .child(Self::disclosure(&kind, is_expanded))
+                        .when(!is_root, |row| row.child(Self::icon(&kind)))
+                        .child(label)
+                        .on_click({
+                            let entity = entity.clone();
+                            move |_, window, cx| {
+                                window.focus(&entity.read(cx).focus);
+                                entity.update(cx, |tree, cx| tree.activate(&key, cx));
+                            }
+                        })
+                        .into_any_element()
                 })
                 .collect()
         })
@@ -419,7 +584,7 @@ impl Render for WorkspaceTree {
 mod tests {
     use gpui::{AppContext, TestAppContext};
 
-    use super::{WorkspaceTree, WorkspaceTreeResponse, sort_entries};
+    use super::{WorkspaceTree, WorkspaceTreeEvent, WorkspaceTreeResponse, sort_entries};
     use crate::app::{
         filesystem::{ResourceEntry, ResourceKind},
         resource::ResourceUri,
@@ -436,6 +601,137 @@ mod tests {
             name: name.into(),
             kind,
         }
+    }
+
+    fn response(
+        workspace: &crate::app::workspace::WorkspaceSnapshot,
+        parent: &str,
+        generation: u64,
+        entries: Vec<ResourceEntry>,
+    ) -> WorkspaceTreeResponse {
+        WorkspaceTreeResponse {
+            workspace: workspace.clone(),
+            parent: uri(parent),
+            generation,
+            result: Ok(entries),
+        }
+    }
+
+    #[test]
+    fn root_labels_add_the_parent_segment_only_when_names_collide() {
+        let mut state = WorkspaceState::default();
+        let workspace = state.replace_roots(vec![
+            uri("mem://host/knot/src/"),
+            uri("mem://host/other/src/"),
+            uri("mem://host/My%20Notes/"),
+            uri("file:///"),
+        ]);
+        assert_eq!(
+            super::root_labels(workspace.roots()),
+            ["src — knot", "src — other", "My Notes", "file:///"]
+        );
+    }
+
+    #[gpui::test]
+    fn overlapping_roots_render_independently_in_root_order(cx: &mut TestAppContext) {
+        let mut state = WorkspaceState::default();
+        let workspace = state.replace_roots(vec![uri("mem://host/a/"), uri("mem://host/a/b/")]);
+        let tree = cx.new(|cx| WorkspaceTree::new(workspace.clone(), cx));
+        tree.update(cx, |tree, cx| {
+            tree.load(cx);
+            assert_eq!(tree.row_labels(), ["a", "  Loading…", "b", "  Loading…"]);
+            assert!(tree.apply_response(
+                response(
+                    &workspace,
+                    "mem://host/a/",
+                    1,
+                    vec![entry("mem://host/a/b/", "b", ResourceKind::Directory)],
+                ),
+                cx,
+            ));
+            assert!(tree.apply_response(
+                response(
+                    &workspace,
+                    "mem://host/a/b/",
+                    2,
+                    vec![entry("mem://host/a/b/x.txt", "x.txt", ResourceKind::File)],
+                ),
+                cx,
+            ));
+            assert_eq!(tree.row_labels(), ["a", "  b", "b", "  x.txt"]);
+
+            // Expanding b under a reuses the cached listing and leaves the
+            // second root's row state alone.
+            assert!(tree.activate_for_test(&uri("mem://host/a/b/"), cx));
+            assert_eq!(tree.row_labels(), ["a", "  b", "    x.txt", "b", "  x.txt"]);
+            assert!(!tree.is_loading());
+            assert_eq!(tree.selected_root(), Some(&workspace.roots()[0]));
+            assert!(tree.select_for_test(4));
+            assert_eq!(tree.selected(), Some(&uri("mem://host/a/b/x.txt")));
+            assert_eq!(tree.selected_root(), Some(&workspace.roots()[1]));
+        });
+    }
+
+    #[gpui::test]
+    fn root_changes_keep_retained_state_and_rerequest_loading_directories(cx: &mut TestAppContext) {
+        let mut state = WorkspaceState::new(uri("mem://host/one/"));
+        let first = state.snapshot();
+        let tree = cx.new(|cx| WorkspaceTree::new(first.clone(), cx));
+        let requests = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        cx.update(|cx| {
+            let requests = requests.clone();
+            cx.subscribe(&tree, move |_, event: &WorkspaceTreeEvent, _| {
+                if let WorkspaceTreeEvent::RequestChildren(request) = event {
+                    requests
+                        .borrow_mut()
+                        .push((request.parent.to_string(), request.generation));
+                }
+            })
+            .detach();
+        });
+        tree.update(cx, |tree, cx| {
+            tree.load(cx);
+            assert!(tree.apply_response(
+                response(
+                    &first,
+                    "mem://host/one/",
+                    1,
+                    vec![entry("mem://host/one/dir/", "dir", ResourceKind::Directory)],
+                ),
+                cx,
+            ));
+            // dir is still loading when a second root arrives.
+            assert!(tree.activate_for_test(&uri("mem://host/one/dir/"), cx));
+        });
+        let added = state.replace_roots(vec![uri("mem://host/one/"), uri("mem://host/two/")]);
+        tree.update(cx, |tree, cx| {
+            tree.set_workspace(added.clone(), cx);
+            // The response issued under the old snapshot is stale.
+            assert!(!tree.apply_response(response(&first, "mem://host/one/dir/", 2, vec![]), cx));
+            assert_eq!(tree.selected(), Some(&uri("mem://host/one/dir/")));
+            assert_eq!(
+                tree.row_labels(),
+                ["one", "  dir", "    Loading…", "two", "  Loading…"]
+            );
+        });
+        let mut issued = requests.borrow().clone();
+        issued.sort();
+        assert_eq!(
+            issued,
+            [
+                ("mem://host/one/".to_owned(), 1),
+                ("mem://host/one/dir/".to_owned(), 2),
+                ("mem://host/one/dir/".to_owned(), 3),
+                ("mem://host/two/".to_owned(), 4),
+            ]
+        );
+        let removed = state.replace_roots(vec![uri("mem://host/two/")]);
+        tree.update(cx, |tree, cx| {
+            tree.set_workspace(removed, cx);
+            assert_eq!(tree.selected(), None);
+            assert_eq!(tree.row_labels(), ["two", "  Loading…"]);
+            assert!(!tree.children.contains_key(&uri("mem://host/one/dir/")));
+        });
     }
 
     #[test]
@@ -460,16 +756,16 @@ mod tests {
     fn stale_responses_are_rejected_after_reload_and_workspace_change(cx: &mut TestAppContext) {
         let mut state = WorkspaceState::new(uri("mem://workspace/"));
         let first = state.snapshot();
-        let replacement = state.replace_root(uri("file:///tmp/knot-workspace/"));
+        let replacement = state.replace_roots(vec![uri("file:///tmp/knot-workspace/")]);
         let tree = cx.new(|cx| WorkspaceTree::new(first.clone(), cx));
 
         tree.update(cx, |tree, cx| {
             tree.load(cx);
-            assert!(tree.reload(first.root().unwrap().clone(), cx));
+            assert!(tree.reload(first.first_root().unwrap().clone(), cx));
             assert!(!tree.apply_response(
                 WorkspaceTreeResponse {
                     workspace: first.clone(),
-                    parent: first.root().unwrap().clone(),
+                    parent: first.first_root().unwrap().clone(),
                     generation: 1,
                     result: Ok(Vec::new()),
                 },
@@ -497,8 +793,8 @@ mod tests {
         let mut state = WorkspaceState::new(root.clone());
         let first = state.snapshot();
         let tree = cx.new(|cx| WorkspaceTree::new(first.clone(), cx));
-        let cleared = state.replace_roots(Vec::new()).unwrap();
-        let reinstalled = state.replace_root(root.clone());
+        let cleared = state.replace_roots(Vec::new());
+        let reinstalled = state.replace_roots(vec![root.clone()]);
         tree.update(cx, |tree, cx| {
             tree.load(cx);
             assert!(tree.apply_response(
@@ -514,7 +810,7 @@ mod tests {
                 },
                 cx
             ));
-            assert!(!tree.visible_rows().is_empty());
+            assert_eq!(tree.row_labels(), ["workspace", "  old.txt"]);
             tree.set_workspace(cleared, cx);
             assert!(tree.visible_rows().is_empty());
             assert!(!tree.is_loading());
@@ -543,7 +839,7 @@ mod tests {
                 },
                 cx
             ));
-            assert_eq!(tree.visible_rows().len(), 1);
+            assert_eq!(tree.row_labels(), ["workspace", "  new.txt"]);
             assert!(!tree.is_loading());
         });
     }
@@ -555,7 +851,7 @@ mod tests {
 
         tree.update(cx, |tree, cx| {
             tree.load(cx);
-            let root = workspace.root().unwrap().clone();
+            let root = workspace.first_root().unwrap().clone();
             assert!(tree.apply_response(
                 WorkspaceTreeResponse {
                     workspace: workspace.clone(),

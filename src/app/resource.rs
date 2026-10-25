@@ -55,11 +55,6 @@ impl ResourceUri {
         self.same_authority(root) && path_segments(root).is_prefix_of(&path_segments(self))
     }
 
-    #[allow(dead_code, reason = "multi-root overlap rules (D052) need it")]
-    pub(crate) fn is_descendant_of(&self, root: &Self) -> bool {
-        self.is_within(root) && path_segments(self).len() > path_segments(root).len()
-    }
-
     pub(super) fn from_url(url: Url) -> Self {
         Self(url)
     }
@@ -103,10 +98,6 @@ struct UriPathSegments<'a> {
 }
 
 impl UriPathSegments<'_> {
-    fn len(&self) -> usize {
-        self.segments.len()
-    }
-
     fn is_prefix_of(&self, target: &Self) -> bool {
         target.segments.starts_with(&self.segments)
     }
@@ -139,7 +130,7 @@ mod tests {
         assert!(
             ResourceUri::parse("mem://workspace/project/src/lib.rs")
                 .unwrap()
-                .is_descendant_of(&root)
+                .is_within(&root)
         );
         assert!(
             !ResourceUri::parse("mem://workspace/projectile/file")

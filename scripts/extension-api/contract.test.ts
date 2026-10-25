@@ -163,6 +163,7 @@ await documents.createUntitled({ target: {} as CommandTarget });
 const workspace: import("knot").WorkspaceInfo = await workspaces.openFolder("file:///tmp", { target: opened.presentation.target.window });
 await workspaces.replaceRoots([], { target: workspace.window });
 await workspaces.replaceRoots(["file:///tmp"]);
+await workspaces.replaceRoots([...workspace.roots.map((root) => root.uri), "file:///var"], { target: workspace.window });
 // @ts-expect-error folder destinations require a window, not a pane
 await workspaces.openFolder("file:///tmp", { target: opened.presentation.target.pane });
 // @ts-expect-error root replacement accepts URI strings, not root metadata
@@ -308,7 +309,7 @@ if (sourceWindow && openDocument) {
     windows: [
       { target: sourceWindow.target, roots: ["file:///project/"], selected: 0,
         entries: [{ uri: "file:///project/a.txt" }, { document: openDocument.id, capture: kept.id }] },
-      { roots: [], entries: [] },
+      { roots: ["file:///project/", "file:///notes/"], entries: [] },
     ],
     release: [],
     focus: 0,

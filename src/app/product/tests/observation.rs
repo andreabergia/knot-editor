@@ -1011,7 +1011,7 @@ fn installed_application_observer_tracks_zero_window_activation_and_native_commi
             .any(|window| window["generation"] == 2 && window["roots"][0]["id"] == installed_root)
     );
     first.update(cx, |shell, cx| {
-        shell.replace_workspace_roots(Vec::new(), cx).unwrap()
+        shell.replace_workspace_roots(Vec::new(), cx)
     });
     let cleared = report(&first, first_window, cx);
     assert!(
@@ -1021,26 +1021,30 @@ fn installed_application_observer_tracks_zero_window_activation_and_native_commi
             .iter()
             .all(|window| window["roots"].as_array().unwrap().is_empty())
     );
-    let before_rejection = cleared["events"].as_array().unwrap().len();
     first.update(cx, |shell, cx| {
-        assert!(
-            shell
-                .replace_workspace_roots(
-                    vec![
-                        ResourceUri::parse("mem://one/").unwrap(),
-                        ResourceUri::parse("mem://two/").unwrap()
-                    ],
-                    cx
-                )
-                .is_err()
+        shell.replace_workspace_roots(
+            vec![
+                ResourceUri::parse("mem://one/").unwrap(),
+                ResourceUri::parse("mem://two/").unwrap(),
+            ],
+            cx,
         )
     });
-    assert_eq!(
-        report(&first, first_window, cx)["events"]
+    let multiple = report(&first, first_window, cx);
+    assert!(
+        multiple["windows"]
             .as_array()
             .unwrap()
-            .len(),
-        before_rejection
+            .iter()
+            .any(|window| {
+                window["generation"] == 4
+                    && window["roots"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|root| root["uri"].as_str().unwrap())
+                        .eq(["mem://one/", "mem://two/"])
+            })
     );
     first.update(cx, |shell, cx| {
         shell.install_workspace(ResourceUri::parse("mem://observer/").unwrap(), cx)
@@ -1051,7 +1055,7 @@ fn installed_application_observer_tracks_zero_window_activation_and_native_commi
             .as_array()
             .unwrap()
             .iter()
-            .any(|window| window["generation"] == 4
+            .any(|window| window["generation"] == 5
                 && window["roots"][0]["id"] != installed_root
                 && !window["roots"].as_array().unwrap().is_empty())
     );

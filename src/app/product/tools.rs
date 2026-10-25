@@ -239,18 +239,14 @@ impl ProductShell {
         cx: &mut Context<Self>,
     ) -> crate::app::workspace::WorkspaceSnapshot {
         self.replace_workspace_roots(vec![root], cx)
-            .expect("one workspace root is supported")
     }
 
     pub(super) fn replace_workspace_roots(
         &mut self,
         roots: Vec<crate::app::resource::ResourceUri>,
         cx: &mut Context<Self>,
-    ) -> Result<
-        crate::app::workspace::WorkspaceSnapshot,
-        crate::app::workspace::TooManyWorkspaceRoots,
-    > {
-        let workspace = self.workspace.replace_roots(roots)?;
+    ) -> crate::app::workspace::WorkspaceSnapshot {
+        let workspace = self.workspace.replace_roots(roots);
         if let Some(tree) = &self.workspace_tree {
             tree.update(cx, |tree, cx| tree.set_workspace(workspace.clone(), cx));
         } else if !workspace.roots().is_empty() {
@@ -263,7 +259,7 @@ impl ProductShell {
         }
         .into();
         cx.notify();
-        Ok(workspace)
+        workspace
     }
 
     /// Register the native explorer frame and apply the stored tool arrangement.

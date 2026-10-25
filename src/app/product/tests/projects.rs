@@ -281,7 +281,7 @@ fn bundled_projects_registry_manages_roots_and_persists(cx: &mut TestAppContext)
                 .read(cx)
                 .workspace
                 .snapshot()
-                .root()
+                .first_root()
                 .map(ToString::to_string),
             Some(uri.clone())
         );
@@ -433,7 +433,7 @@ fn switching_to_a_project_with_a_missing_root_is_actionable_and_keeps_the_source
                 .read(cx)
                 .workspace
                 .snapshot()
-                .root()
+                .first_root()
                 .map(ToString::to_string),
             Some(other_uri.clone())
         );
@@ -496,7 +496,7 @@ fn project_selection_stays_in_the_capturing_window(cx: &mut TestAppContext) {
                 .read(cx)
                 .workspace
                 .snapshot()
-                .root()
+                .first_root()
                 .map(ToString::to_string),
             Some(second_uri.clone())
         );
@@ -506,7 +506,7 @@ fn project_selection_stays_in_the_capturing_window(cx: &mut TestAppContext) {
                 .read(cx)
                 .workspace
                 .snapshot()
-                .root()
+                .first_root()
                 .map(ToString::to_string),
             Some(first_uri.clone())
         );

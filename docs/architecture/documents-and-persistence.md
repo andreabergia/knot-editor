@@ -71,9 +71,12 @@ boundaries, not sandboxes; symlinks may lead outside the lexical root.
 ## Workspaces and resource trees
 
 Each window retains one `WorkspaceState`, including while empty. It owns ordered
-root records and a monotonic generation; currently zero or one root is supported.
-Retaining a normalized root preserves its ID. Clear/reinstall allocates another
+root records and a monotonic generation. Every change replaces the whole ordered
+set: duplicates after normalization keep their first position, nested and
+overlapping roots are allowed, and retaining a normalized root preserves its ID,
+so add, remove, and reorder keep identities. Clear/reinstall allocates another
 ID without resetting generation. Invalid replacement preserves existing state.
+Removing a root never closes documents.
 
 Folder Open and root replacement address the native window independently of any
 selected document. They normalize/stat every proposed directory before one shared

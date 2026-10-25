@@ -15,7 +15,8 @@ pub(crate) struct WorkspaceSnapshot {
 }
 
 impl WorkspaceSnapshot {
-    pub(crate) fn root(&self) -> Option<&ResourceUri> {
+    #[cfg(test)]
+    pub(crate) fn first_root(&self) -> Option<&ResourceUri> {
         self.roots().first().map(|root| &root.uri)
     }
 
@@ -28,9 +29,6 @@ impl WorkspaceSnapshot {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct TooManyWorkspaceRoots;
-
 /// Foreground-owned roots and generation for the entire lifetime of a window.
 #[derive(Default)]
 pub(crate) struct WorkspaceState {
@@ -42,7 +40,7 @@ impl WorkspaceState {
     #[cfg(test)]
     pub(crate) fn new(root: ResourceUri) -> Self {
         let mut state = Self::default();
-        state.replace_root(root);
+        state.replace_roots(vec![root]);
         state
     }
 
@@ -57,22 +55,18 @@ impl WorkspaceState {
         self.roots == snapshot.roots && self.generation == snapshot.generation()
     }
 
-    /// Installs an already normalized root and invalidates all captured work.
-    #[allow(dead_code, reason = "multi-root replacement (D052) needs it")]
-    pub(crate) fn replace_root(&mut self, root: ResourceUri) -> WorkspaceSnapshot {
-        self.replace_roots(vec![root])
-            .expect("one root is supported")
-    }
-
-    /// Replaces the entire root set atomically. Clearing preserves the generation.
-    pub(crate) fn replace_roots(
-        &mut self,
-        roots: Vec<ResourceUri>,
-    ) -> Result<WorkspaceSnapshot, TooManyWorkspaceRoots> {
-        if roots.len() > 1 {
-            return Err(TooManyWorkspaceRoots);
+    /// Replaces the entire ordered root set atomically with already normalized
+    /// roots, keeping the first of any duplicates. Retained roots keep their
+    /// identity; every replacement invalidates captured work, and clearing
+    /// preserves the generation.
+    pub(crate) fn replace_roots(&mut self, roots: Vec<ResourceUri>) -> WorkspaceSnapshot {
+        let mut unique = Vec::with_capacity(roots.len());
+        for uri in roots {
+            if !unique.contains(&uri) {
+                unique.push(uri);
+            }
         }
-        self.roots = roots
+        self.roots = unique
             .into_iter()
             .map(|uri| {
                 self.roots
@@ -89,7 +83,7 @@ impl WorkspaceState {
             .generation
             .checked_add(1)
             .expect("workspace generation overflowed");
-        Ok(self.snapshot())
+        self.snapshot()
     }
 }
 
@@ -105,11 +99,11 @@ mod tests {
     fn replacing_a_root_invalidates_captured_workspace_identity() {
         let mut workspace = WorkspaceState::new(uri("mem://workspace/"));
         let captured = workspace.snapshot();
-        let replacement = workspace.replace_root(uri("file:///tmp/knot-workspace/"));
+        let replacement = workspace.replace_roots(vec![uri("file:///tmp/knot-workspace/")]);
         assert!(!workspace.is_current(&captured));
         assert!(workspace.is_current(&replacement));
         assert_eq!(
-            replacement.root(),
+            replacement.first_root(),
             Some(&uri("file:///tmp/knot-workspace/"))
         );
         assert_ne!(replacement.roots()[0].id, captured.roots()[0].id);
@@ -120,7 +114,7 @@ mod tests {
     fn retained_normalized_roots_keep_identity_but_invalidate_in_flight_work() {
         let mut workspace = WorkspaceState::new(uri("MEM://workspace/a/../"));
         let captured = workspace.snapshot();
-        let replacement = workspace.replace_root(uri("mem://workspace/"));
+        let replacement = workspace.replace_roots(vec![uri("mem://workspace/")]);
         assert_eq!(replacement.roots(), captured.roots());
         assert!(!workspace.is_current(&captured));
     }
@@ -131,11 +125,11 @@ mod tests {
         let empty = workspace.snapshot();
         assert!(empty.roots().is_empty());
         assert_eq!(empty.generation(), 0);
-        let first = workspace.replace_root(uri("mem://workspace/"));
-        let cleared = workspace.replace_roots(Vec::new()).unwrap();
+        let first = workspace.replace_roots(vec![uri("mem://workspace/")]);
+        let cleared = workspace.replace_roots(Vec::new());
         assert!(cleared.roots().is_empty());
-        assert!(cleared.root().is_none());
-        let installed = workspace.replace_root(uri("mem://workspace/"));
+        assert!(cleared.first_root().is_none());
+        let installed = workspace.replace_roots(vec![uri("mem://workspace/")]);
         assert_eq!(installed.generation(), first.generation() + 2);
         assert_ne!(installed.roots()[0].id, first.roots()[0].id);
         assert!(!workspace.is_current(&empty));
@@ -144,13 +138,24 @@ mod tests {
     }
 
     #[test]
-    fn extra_roots_fail_without_mutating_the_current_workspace() {
-        let mut workspace = WorkspaceState::new(uri("mem://workspace/"));
-        let captured = workspace.snapshot();
-        assert_eq!(
-            workspace.replace_roots(vec![uri("mem://one/"), uri("mem://two/")]),
-            Err(TooManyWorkspaceRoots)
-        );
-        assert_eq!(workspace.snapshot(), captured);
+    fn reordering_and_adding_keep_retained_identities_and_drop_duplicates() {
+        let mut workspace = WorkspaceState::new(uri("mem://one/"));
+        let first = workspace.snapshot();
+        let replacement = workspace.replace_roots(vec![
+            uri("mem://two/"),
+            uri("mem://one/"),
+            uri("MEM://two/x/../"),
+        ]);
+        let uris = replacement
+            .roots()
+            .iter()
+            .map(|root| root.uri.to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(uris, ["mem://two/", "mem://one/"]);
+        assert_eq!(replacement.roots()[1].id, first.roots()[0].id);
+        assert!(!workspace.is_current(&first));
+        let removed = workspace.replace_roots(vec![uri("mem://one/")]);
+        assert_eq!(removed.roots()[0].id, first.roots()[0].id);
+        assert_eq!(removed.generation(), first.generation() + 2);
     }
 }

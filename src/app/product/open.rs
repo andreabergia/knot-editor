@@ -386,7 +386,7 @@ impl ProductShell {
                 });
             }
             OpenCommit::Workspace(workspace) => {
-                self.status = format!("workspace opened {}", workspace.root().unwrap()).into();
+                self.status = format!("workspace opened {}", workspace.roots()[0].uri).into();
             }
         }
         cx.notify();

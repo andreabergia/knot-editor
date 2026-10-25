@@ -293,7 +293,7 @@ fn root(shell: &Entity<ProductShell>, cx: &TestAppContext) -> Option<String> {
             .read(cx)
             .workspace
             .snapshot()
-            .root()
+            .first_root()
             .map(ToString::to_string)
     })
 }
@@ -526,7 +526,8 @@ fn multi_window_sessions_reuse_create_and_release_windows(cx: &mut TestAppContex
                 "windows": [
                     { "target": window_id(first), "roots": ["mem://product/a/"],
                       "entries": [{ "uri": "mem://product/a/one.txt" }] },
-                    { "roots": ["mem://product/a/"], "entries": [{ "document": uuid::Uuid::new_v4().to_string() }] },
+                    { "roots": ["mem://product/a/", "mem://product/b/", "mem://product/./a/"],
+                      "entries": [{ "document": uuid::Uuid::new_v4().to_string() }] },
                 ],
                 "focus": 1,
             }),
@@ -547,7 +548,18 @@ fn multi_window_sessions_reuse_create_and_release_windows(cx: &mut TestAppContex
             root.downcast::<ProductShell>().unwrap()
         })
         .unwrap();
-    assert_eq!(root(&created_shell, cx).as_deref(), Some("mem://product/a"));
+    // Multiple roots install in order, deduplicated after normalization.
+    let created_roots = cx.read(|cx| {
+        created_shell
+            .read(cx)
+            .workspace
+            .snapshot()
+            .roots()
+            .iter()
+            .map(|root| root.uri.to_string())
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(created_roots, ["mem://product/a", "mem://product/b"]);
     // A destination without documents gets an untitled document, so its
     // root's explorer dock never fills the window.
     assert_eq!(h.texts(&created_shell, cx), [""]);

@@ -318,7 +318,7 @@ fn explorer_docks_have_visible_geometry_and_open_files_by_click(cx: &mut TestApp
             cx.notify();
         });
         visual.run_until_parked();
-        assert!(visual.debug_bounds("workspace-tree-row-2").is_none());
+        assert!(visual.debug_bounds("workspace-tree-row-3").is_none());
         shell.update(&mut visual, |shell, cx| {
             let id = shell.explorer_frame(cx).unwrap();
             shell.workbench.update(cx, |workbench, _| {
@@ -329,7 +329,7 @@ fn explorer_docks_have_visible_geometry_and_open_files_by_click(cx: &mut TestApp
         visual.run_until_parked();
         let reopened = visual.debug_bounds("pane-4").unwrap();
         assert_eq!(reopened.size, explorer.size);
-        let file = visual.debug_bounds("workspace-tree-row-2").unwrap();
+        let file = visual.debug_bounds("workspace-tree-row-3").unwrap();
         assert!(file.size.width > px(100.));
         assert!(file.size.height > px(0.));
         assert!(explorer.contains(&file.center()));

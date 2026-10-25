@@ -833,7 +833,7 @@ async fn folder_open_installs_a_workspace_and_failures_preserve_the_document(
     cx.read(|cx| {
         let shell = shell.read(cx);
         assert_eq!(
-            shell.workspace.snapshot().root().unwrap().to_string(),
+            shell.workspace.snapshot().first_root().unwrap().to_string(),
             "mem://product/src"
         );
         assert!(shell.workspace_tree.is_some());

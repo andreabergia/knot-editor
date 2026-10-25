@@ -61,7 +61,7 @@ fn set_root(shell: &Entity<ProductShell>, uri: Option<&str>, cx: &mut TestAppCon
         let roots = uri
             .map(|uri| vec![ResourceUri::parse(uri).unwrap()])
             .unwrap_or_default();
-        shell.replace_workspace_roots(roots, cx).unwrap();
+        shell.replace_workspace_roots(roots, cx);
         cx.notify();
     });
     cx.run_until_parked();
@@ -74,7 +74,7 @@ fn wait_for_root(shell: &Entity<ProductShell>, uri: &str, cx: &mut TestAppContex
             .read(cx)
             .workspace
             .snapshot()
-            .root()
+            .first_root()
             .is_some_and(|root| root.to_string() == uri)
     });
     cx.run_until_parked();
@@ -86,7 +86,7 @@ fn root(shell: &Entity<ProductShell>, cx: &TestAppContext) -> Option<String> {
             .read(cx)
             .workspace
             .snapshot()
-            .root()
+            .first_root()
             .map(ToString::to_string)
     })
 }
@@ -438,7 +438,7 @@ fn startup_suspends_active_sessions_without_a_window(cx: &mut TestAppContext) {
     // The root changes while the package is not running, as across a restart.
     cx.update(|cx| {
         fixture.shell.update(cx, |shell, cx| {
-            shell.replace_workspace_roots(Vec::new(), cx).unwrap();
+            shell.replace_workspace_roots(Vec::new(), cx);
         });
         fixture.host.update(cx, |host, cx| {
             host.start_product_extensions(fixture.extensions.path().to_path_buf(), cx)

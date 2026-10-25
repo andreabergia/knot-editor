@@ -254,9 +254,11 @@ reconstructing them. `windows.focus(target)` activates a window.
 
 Use `documents.open` for files, `createUntitled` for new documents, and `present`
 for another presentation of a live document. These return committed document and
-presentation data. Use `workspaces.openFolder` or `replaceRoots` for directory
-roots; currently zero or one root is supported. Documents remain independent of
-workspace containment. A missing file opens as a dirty destination-associated
+presentation data. Use `workspaces.openFolder` to replace a window's roots with
+one folder, or `replaceRoots` with an ordered list. Retained roots keep their IDs,
+so add, remove, and reorder by replacing the list read from `workspaces.get`;
+duplicates collapse after normalization and nested roots are allowed. Documents
+remain independent of workspace containment. A missing file opens as a dirty destination-associated
 document rather than failing. Use `workspaces.pickFolder` when a workflow asks
 the user for a folder:
 

@@ -419,8 +419,6 @@ pub(crate) async fn present_document(
 pub(crate) enum WorkspaceError {
     #[error(transparent)]
     Resource(OpenError),
-    #[error(code = "TooManyWorkspaceRoots", message = "TooManyWorkspaceRoots")]
-    TooManyWorkspaceRoots,
 }
 
 impl From<AccessError> for WorkspaceError {
@@ -1824,8 +1822,6 @@ async fn recovery_restore(
 pub(crate) enum ReplaceError {
     #[error(transparent)]
     Resource(OpenError),
-    #[error(code = "TooManyWorkspaceRoots", message = "TooManyWorkspaceRoots")]
-    TooManyWorkspaceRoots,
     #[error(code = "OperationInProgress", message = "OperationInProgress")]
     OperationInProgress,
     #[error(code = "SessionConflict", message = "SessionConflict: {reason}")]

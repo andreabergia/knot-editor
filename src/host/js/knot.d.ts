@@ -125,10 +125,12 @@ declare module "knot" {
     /** Validates an existing directory and replaces this window's roots. Missing
      * roots reject ResourceNotFound, files reject ResourceWrongKind. */
     openFolder(uri: string, options?: WorkspaceDestinationOptions): Promise<WorkspaceInfo>;
-    /** Validates zero or one directory URI before committing roots and tree
-     * together. Empty roots clear; retained normalized roots keep their IDs.
-     * More than one root rejects TooManyWorkspaceRoots. Documents remain open.
-     * A newer Open/root request or root generation invalidates pending work. */
+    /** Validates an ordered list of directory URIs before committing roots and
+     * tree together. Duplicates after normalization keep their first position;
+     * nested and overlapping roots are allowed. Empty roots clear; retained
+     * normalized roots keep their IDs, so adding, removing, and reordering are
+     * replacements of the whole list. Documents remain open. A newer Open/root
+     * request or root generation invalidates pending work. */
     replaceRoots(roots: readonly string[], options?: WorkspaceDestinationOptions): Promise<WorkspaceInfo>;
     /** Presents the native directory prompt and resolves a normalized, existing
      * directory URI, or dismissal. The selected path is normalized through the
@@ -268,7 +270,7 @@ declare module "knot" {
     | "ViewNotFound" | "ViewIdInUse" | "InvalidViewId"
     | "ViewRegistrationNotFound" | "ContentKindMismatch"
     | "CompletionProviderNotFound" | "CommandNameInUse" | "CommandNotFound"
-    | "InvalidUri" | "DocumentNotFound" | "TooManyWorkspaceRoots" | "OperationInProgress" | "PersistenceFailed" | "ResourceNotFound" | "ResourceWrongKind" | "InvalidUtf8" | "ProviderFailure" | "StorageUnavailable"
+    | "InvalidUri" | "DocumentNotFound" | "OperationInProgress" | "PersistenceFailed" | "ResourceNotFound" | "ResourceWrongKind" | "InvalidUtf8" | "ProviderFailure" | "StorageUnavailable"
     | "CaptureNotFound" | "RecoveryUnavailable" | "SessionConflict";
   /**
    * Native operation failure. Narrow a caught Error by name === "KnotHostError"
@@ -717,7 +719,8 @@ declare module "knot" {
   export interface SessionWindow {
     /** An existing window to reuse; omission creates a window. */
     readonly target?: WindowTarget;
-    /** Zero or one validated directory root. */
+    /** Ordered directory roots, validated and deduplicated as in
+     * workspaces.replaceRoots. */
     readonly roots: readonly string[];
     readonly entries: readonly SessionEntry[];
     /** Index of the entry whose tab is selected. */
@@ -778,7 +781,7 @@ declare module "knot" {
      * @throws HostError with OperationInProgress during closure or another
      * replacement, SessionConflict when an edit, tab, or document changed after
      * the caller's capture, InvalidTarget, Cancelled (caller cancellation or
-     * unload before the commit), InvalidUri, TooManyWorkspaceRoots, or the
+     * unload before the commit), InvalidUri, or the
      * workspaces.openFolder resource codes for a destination root. */
     replaceWindows(options: ReplaceWindowsOptions): Promise<ReplaceWindowsResult>;
     /**
