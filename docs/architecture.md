@@ -48,7 +48,7 @@ independent. It also owns one recovery database that protects dirty document
 text independently of extension health. Views own presentation and interaction; terminal sessions own
 PTYs, processes, and emulator state independently of their sole attached view.
 The workbench owns layout transitions; the product shell coordinates windows,
-tab transfers, and application-wide protected closure.
+tab transfers, application-wide protected closure, and session replacement.
 
 Extension runtimes retain JavaScript state in persistent isolates. Host workers
 enter one turn at a time and yield while awaiting native work. The application

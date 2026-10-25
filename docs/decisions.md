@@ -157,10 +157,10 @@ selection. Native code owns workspaces and roots; the registry asks the
 application to open or replace them, so project identity and policy stay in
 JavaScript while the application keeps every private bypass closed.
 
-A project is active in a window when its recorded root matches that window's
-workspace root, and the registry persists no per-window binding yet.
-Multi-window activation is finalized with durable project sessions, and
-overlapping or multi-root matching with multi-root workspaces.
+A window belongs to a project when its root matches the project's root and the
+project's session is active; the registry persists no per-window binding, and
+roots are unique per project. Overlapping or multi-root matching arrives with
+multi-root workspaces.
 
 The Projects tool starts hidden. Its visibility and dock selection are native
 tool-layout state: a command-invoked extension show or hide publishes the
@@ -168,6 +168,75 @@ fresh-window default like any other explicit user arrangement.
 
 References: [extension guide](../extension-api.md) and
 [workbench lifecycle](architecture/workbench-and-lifecycle.md#automatic-tool-layout-memory).
+
+## Project sessions
+
+A project's session is active or suspended, recorded per project in a
+`session:<id>` record separate from the registry so live tracking writes stay
+small. Requiring an active session for membership keeps the approved
+root-derived activation while protecting suspended text: opening a suspended
+project's folder by hand never binds the window, so tracking can never overwrite
+the record holding its captures. Only a switch carries captures; losing the last
+window by closure suspends without them because closure already decided about
+dirty documents. Startup only marks unbound active records suspended and never
+releases anything.
+
+A project may span several windows and restoring it restores all of them. Source
+windows pair with destination windows in order, extras are created, and surplus
+windows are released, which keeps the record's per-window shape ready for
+layout restoration without a migration. Active records describe membership only:
+dirty active text is protected by automatic recovery and hot exit, and automatic
+restores keep their document UUID, so an active record's document references
+survive restart. Captures are released only after the record that drops them is
+durable; orphans are reconciled at activation rather than released implicitly.
+
+Switching retains text and durably suspends the source before the native commit,
+so a failed, cancelled, or interrupted switch never loses text: the source stays
+intact and its suspended record is a valid suspension of a still-active project
+that the next tracking write reactivates. An edit racing the commit retries with
+fresh captures, up to three attempts. A partial restore commits and reports the
+skipped entries together, because the source is already durably suspended.
+Package commands and listeners are serial roots, so live tracking never records
+the intermediate state of a switch.
+
+References: [extension guide](extension-api.md#project-sessions) and
+[workbench lifecycle](architecture/workbench-and-lifecycle.md#session-replacement).
+
+## Session replacement contract
+
+`workbench.replaceWindows` is a generic typed operation over windows, documents,
+and retained captures, and knows nothing about projects, so an installed package
+can build the same workflow. It runs as a protected operation so it cannot
+interleave with closure prompts or another replacement. Staging every read
+before one foreground commit means observers see only the committed result and
+need no operation tag, and staged documents never enter the document collection
+early. The commit revalidates the exact suspended set and each final view's
+retained revision in Rust, from revisions recorded at retain, so a racing edit or
+tab rejects as `SessionConflict` with nothing changed rather than losing text.
+
+A live document always wins over staged content, which keeps one source of truth
+per file: documents open elsewhere and documents restored by hot exit are
+presented rather than duplicated, and checkpoint 7's preserved untitled copy
+never arises from a session. Restored dirty documents are durably protected
+before resolution so callers can release captures immediately. A released window
+holding a terminal is cleared instead of closed, so a switch never stops a
+terminal, and only document tabs of reused windows are replaced.
+
+References: [workbench lifecycle](architecture/workbench-and-lifecycle.md#session-replacement)
+and [documents](architecture/documents-and-persistence.md#retained-captures).
+
+## Extension restart
+
+A native Restart Extension command is the minimal escape hatch for a stuck turn
+without adopting timeout or quota policy (D019). A terminating unload already
+ends a running turn and the shared foreground cleanup already removes every
+registration, so restart reuses them, rediscovers the one package, and loads a
+fresh lifecycle under the same storage and recovery owner. Dependents keep
+running because packages share only the global command namespace. Personal
+config stays excluded; restarting Knot is its recovery path. A switch hung before
+its native commit leaves the source intact, and restarting the package recovers.
+
+Reference: [extension host](architecture/extension-host.md#restarting-a-package).
 
 ## Personal configuration
 

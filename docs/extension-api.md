@@ -228,7 +228,7 @@ activation, a read-only log frame, and refresh after actions.
 | Runtime/config lifecycle | Hidden; config phases share their own lifecycle | No |
 | Window/view IDs | Opaque live identities in a command capture | No |
 | Command target/invocation | Invocation-scoped authority; invocation ID is hidden | No |
-| Document ID | Application-allocated; stable across Save As and presentations | No restart reuse guarantee yet |
+| Document ID | Application-allocated; stable across Save As and presentations | Only to refer to a document restored from automatic recovery, which keeps its ID across restart |
 | Live window/pane/view target | Exact discoverable product presentation, independent of commands | No |
 | Root ID | Window-owned; retained while its normalized URI remains installed | No |
 | Buffer proxy | Live shared model, independent of any one presentation | No |
@@ -248,8 +248,9 @@ requiring the extension to await cleanup or receive a final callback.
 Use `documents` for metadata and shared buffers, `windows` for live product
 presentations, and `workspaces` for window-owned roots. Queries work during
 activation and callbacks, including before product windows exist. Document IDs
-survive Save As but have no restart reuse guarantee. Retain returned live target
-objects rather than serializing or reconstructing them.
+survive Save As; across restart only a document restored from automatic recovery
+keeps its ID. Retain returned live target objects rather than serializing or
+reconstructing them. `windows.focus(target)` activates a window.
 
 Use `documents.open` for files, `createUntitled` for new documents, and `present`
 for another presentation of a live document. These return committed document and
@@ -366,6 +367,49 @@ captures a cancelled call left unreferenced. Restore opens an ordinary document
 with an empty undo history and never writes the file; its `outcome` reports
 whether the text replaced nothing (`restored`) or opened beside a live document
 (`preserved`). Exact outcomes and errors live in the TypeScript reference.
+
+## Project sessions
+
+`workbench.replaceWindows` swaps the documents of a set of windows in one native
+commit, without prompts. It is how `@knot/projects` switches projects, and any
+package can build the same workflow. The caller first retains the text of every
+document whose last view it removes, records those captures durably, and then
+asks for the replacement:
+
+```js
+const capture = await recovery.retain(document.id);
+await storage.write("session", { windows: [{ entries: [{ uri, document: document.id, capture: capture.id }] }] });
+const result = await workbench.replaceWindows({
+  suspend: [{ document: document.id, capture: capture.id }], // every document in the reused windows
+  windows: [{ target: window.target, roots: [root], entries: destinationEntries, selected: 0 }],
+  release: surplusWindows,
+});
+```
+
+Files load and captures restore before the commit, which then rechecks that
+nothing changed since your captures: an edit after retain, an unexpected tab, or
+a closed window rejects with `SessionConflict` and leaves every window intact, so
+retain again and retry. Each entry reports its outcome. A live document matching
+the entry's identity or file always wins over its capture, so a session never
+opens a second copy of an open document. Missing clean files and entries that
+fail to load are skipped and reported while the rest commits. When `protected`
+is true, restored dirty text is already covered by automatic recovery and the
+captures you restored from can be released once your new record is durable.
+
+`@knot/projects` keeps one `session:<projectId>` record per project, separate
+from its registry record. A session is `active` while the project has windows;
+a window belongs to it when its root matches and the session is active, so
+opening a suspended project's folder by hand never binds it. Selecting a project
+suspends the current one, retaining its unsaved and untitled text in the
+suspended record, and restores the destination's windows; a project may span
+several windows. While active, the record follows tabs live, so a hot-exit quit
+leaves an accurate record and the next launch presents the documents hot exit
+restored. Closing a project's last window suspends it without captures, because
+closure already asked about dirty documents. Removing a suspended project says
+how many unsaved documents its record discards.
+
+If a package stops responding, File › Restart Extension… stops and reloads it,
+re-reading an installed package from disk.
 
 ## Native contributors
 

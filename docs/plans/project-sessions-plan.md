@@ -1,6 +1,7 @@
 # Project sessions and safe switching
 
-Status: ⬜ Not started. Execution plan for checkpoint 8 of the
+Status: 🔍 Implemented and awaiting the review gate. Execution plan for
+checkpoint 8 of the
 [extension platform and projects plan](extension-platform-and-projects-plan.md).
 One checkpoint with one review gate.
 
@@ -160,7 +161,8 @@ first window instead of switching.
 
 ### JavaScript orchestration in `@knot/projects`
 
-Switches are serialized through one promise chain. To switch to B from the
+Switches are serialized because package commands and listeners are serial roots
+of one lifecycle (see the implementation notes). To switch to B from the
 command's window W:
 
 1. If B is active, focus its first window and stop.
@@ -243,32 +245,87 @@ source stays intact, and restarting `@knot/projects` recovers.
 - Moving hot-exit-restored tabs out of the first window waits for checkpoint 10's
   startup restoration.
 
-## Checkpoint 8 — Safe JS project switching and document sessions ⬜
+## Checkpoint 8 — Safe JS project switching and document sessions 🔍
 
 Deliverables:
 
-- ⬜ Record capture revisions at `recovery.retain` and expose a revalidation
+- ✅ Record capture revisions at `recovery.retain` and expose a revalidation
   query to the replacement path. Document identity stability for automatic
   restores in `knot.d.ts` and the documents reference.
-- ⬜ `workbench.replaceWindows` with admission, off-foreground staging, a single
+- ✅ `workbench.replaceWindows` with admission, off-foreground staging, a single
   revalidated foreground commit, window creation, released-window close or clear,
   entry outcomes, and protection of restored documents before resolution. Add
   `windows.focus`.
-- ⬜ `@knot/projects`: session records, active/suspended state, the switch
+- ✅ `@knot/projects`: session records, active/suspended state, the switch
   flow with racing-edit retry, live tracking, startup suspension, root-uniqueness
   check, removal with retained-content confirmation, and partial-restore
   reporting.
-- ⬜ `extensions.restart` native command with single-package rediscovery and
-  report update.
-- ⬜ Docs: [workbench lifecycle](../architecture/workbench-and-lifecycle.md)
+- ✅ `extensions.restart` native command with single-package rediscovery and
+  report update, also in File › Restart Extension….
+- ✅ Docs: [workbench lifecycle](../architecture/workbench-and-lifecycle.md#session-replacement)
   (session replacement and release policy),
-  [documents and persistence](../architecture/documents-and-persistence.md)
+  [documents and persistence](../architecture/documents-and-persistence.md#retained-captures)
   (identity guarantee, capture revisions),
-  [extension host](../architecture/extension-host.md) (restart),
-  [extension guide](../extension-api.md) (sessions workflow). Add
-  [decisions](../decisions.md) entries for multi-window projects, the
-  replacement contract, and restart once approved. Update the parent plan and the
-  health-review table (P1-3).
+  [extension host](../architecture/extension-host.md#restarting-a-package) (restart),
+  [extension guide](../extension-api.md#project-sessions) (sessions workflow).
+  [Decisions](../decisions.md) entries for project sessions, the replacement
+  contract, and restart are recorded for the review gate to confirm. The parent
+  plan and the health-review table (P1-3) are updated.
+
+Implementation notes:
+
+- `replaceWindows` returns `protected: true` when restored dirty documents
+  reached automatic recovery before resolution. The registry releases the
+  restored captures only then; otherwise it keeps them for reconciliation and
+  reports that the recovered text is not yet protected. Failed entries carry a
+  `HostErrorCode`, and a missing root rejects the whole operation before any
+  change. A destination with no entries presents no documents; the root's
+  explorer keeps the workbench from being empty, and a workbench left with no
+  panes receives the ordinary untitled replacement.
+- No promise chain was needed: a lifecycle's command and listener roots are
+  already serial, and a root's detached requests settle before the next root
+  starts, so tracking can neither interleave with a switch nor record its
+  intermediate state.
+- The switch fixes its source project before the first attempt; a retry reuses
+  it even though the first attempt already suspended the source record.
+- `CommandTarget.windowTarget` was built from the debug form of the window ID and
+  never matched live targets; it now uses the live window identity.
+- A command whose own captured document tab is replaced by a switch completes
+  with the dispatcher's existing `invalidTarget` outcome for a stale capture.
+  The outcome is not shown to users; the test fixtures accept it.
+- Restart rediscovers through the same product discovery used at startup and
+  selects the one package, so bundled packages restart from the binary and
+  installed ones from disk.
+
+Validation evidence (`cargo test`, 757 tests, and `scripts/check-extension-api.sh`):
+
+- Native replacement in
+  [tests/sessions.rs](../../src/app/product/tests/sessions.rs): round trip with
+  dirty persisted, dirty destination, and untitled documents and durable
+  protection on resolution; shared live documents and a file reopened under a
+  new identity; multi-window reuse, creation, and release; a released terminal
+  window cleared with its session kept; racing edits, missing captures,
+  unexpected tabs, and closed targets rejecting with nothing changed; concurrent
+  replacement and closure and caller unload during staging; missing, changed, and
+  failed entries with a partial commit; unavailable recovery; one committed set
+  of events and none during staging; and the interruption case, where hot exit
+  plus the suspended record restore every text exactly once.
+- `@knot/projects` in
+  [tests/project_sessions.rs](../../src/app/product/tests/project_sessions.rs)
+  and [tests/projects.rs](../../src/app/product/tests/projects.rs): A→B→A across
+  two windows, racing-edit retry with fresh captures, a manually opened suspended
+  root, last-window suspension without captures, startup suspension, removal with
+  and without captures, capture reconciliation, a failed switch keeping its
+  source active, partial-restore reporting, quit producing no tracking write,
+  and restarting the registry keeping bound sessions active.
+- Restart in
+  [tests/extension_restart.rs](../../src/app/product/tests/extension_restart.rs):
+  a looping command terminated, registrations and views replaced, an installed
+  package re-read from disk, a failed restart reported while a dependent keeps
+  running, and a switch hung before its commit leaving the source intact and
+  recovering after a restart.
+- `replaceWindows` and `windows.focus` in
+  `scripts/extension-api/contract.test.ts`.
 
 **Validation:**
 

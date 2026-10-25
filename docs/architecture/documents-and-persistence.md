@@ -8,8 +8,10 @@ records rationale; deferred work lives in the [roadmap](../roadmap.md).
 The application-global `DocumentCollection` strongly owns every open document
 and model, deduplicating normalized resource URIs. Each document has a UUID
 independent of collection IDs and transport handles. Save As and additional
-presentations preserve it; closure/reopening allocates another, with no restart
-reuse guarantee. `BufferRegistry` only maps monotonic transport handles to weak
+presentations preserve it; closure/reopening allocates another. A document
+restored from automatic recovery keeps its UUID across restart, which is the one
+restart guarantee: session records may reference it, and other identities are
+restart-local. `BufferRegistry` only maps monotonic transport handles to weak
 model references; shell selection remains presentation state.
 
 Final document removal explicitly closes the model, invalidates transport access,
@@ -164,6 +166,15 @@ commits against: write the record referencing a capture only after retain
 resolves, and release the capture it replaced only after the new record is
 durable. Each retain allocates a new ID, so an owner may hold several captures of
 one document.
+
+Retain also records, for the rest of the session, the capture's owner, document,
+and document revision. [Session
+replacement](workbench-and-lifecycle.md#session-replacement) validates a final
+view's capture against the document's current revision from that record, in
+Rust, without reading the store; a capture from an earlier session or an older
+revision never satisfies it. Replacement stages a capture and its resource
+baseline off the foreground and commits the restored document in its own
+foreground turn, then drains automatic recovery for it before resolving.
 
 Retained captures are never removed implicitly: unload, activation failure,
 uninstall, and restart keep them, and a cancelled retain may still commit. A

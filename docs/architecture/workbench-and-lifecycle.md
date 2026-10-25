@@ -76,6 +76,40 @@ Extension closure additionally revalidates caller lifecycle/cancellation before
 save and close admission. Completion follows the foreground transition without
 awaiting observation listeners.
 
+## Session replacement
+
+`workbench.replaceWindows` swaps the document presentations of a set of windows
+in one foreground commit. It knows windows, documents, roots, and retained
+captures, never projects; the [project registry](../extension-api.md#project-sessions)
+builds its switch on it. Admission claims the protected-closure slot, so it never
+interleaves with closure prompts, quit, or another replacement, and captures
+every reused and released window. Staging validates destination roots, reads
+files, and loads retained captures off the foreground without creating
+documents, so observers see nothing until the commit.
+
+The commit first revalidates: the caller is live, every captured window is live,
+the documents presented in reused and released windows equal the caller's
+suspended set exactly, and each document whose final view is removed, when dirty
+or a non-empty untitled document, names a capture retained at its current
+revision. A mismatch rejects with `SessionConflict` and nothing changes. The
+commit then creates any new windows first, removes document tabs from the reused
+and released windows without prompts, installs roots, and presents each window's
+entries in its normal document group. Documents left with no view are removed
+through the ordinary path, which retires their automatic recovery. Document
+splits collapse; terminal and tool tabs of reused windows stay where they are.
+
+Each entry presents a live document matching its identity or resource before
+considering staged content, so a session never duplicates an open document;
+otherwise its capture is restored or its file opened. A missing clean file is
+reported and skipped, and a failed entry is skipped with its error code while the
+rest commits. Restored dirty documents are drained to durable automatic recovery
+before the operation resolves, so the caller can release the captures they came
+from.
+
+A released window closes unless it holds a terminal. A window with a terminal
+is cleared instead: its document tabs and roots are removed and it stays open
+with its terminals and tools, so a switch never stops a terminal session.
+
 ## Tab relocation
 
 `Workbench` owns typed reorder, insertion, and edge-split transitions. The product

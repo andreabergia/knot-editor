@@ -165,8 +165,12 @@ Reconsider a tree (or rope) only after D013/D014 trigger.
 
 ### P1-3: The product cannot stop a runaway extension turn
 
+🔍 Addressed by checkpoint 8's native Restart Extension command, which unloads a
+package through the terminating `unload` and loads it again; it awaits that
+checkpoint's review. `ExtensionWatchdog` and per-turn timeouts remain D019.
+
 `ExtensionWatchdog` exists and is tested (`host/pool.rs`), but the product
-never issues one; its allowance names checkpoint 8. Termination happens only on
+never issues one. Before checkpoint 8, termination happened only on
 heap-limit exhaustion and on `unload`. The product never unloads except on
 startup rollback and shutdown, and no command reloads or disables an
 extension. A `while (true) {}` in a command or provider permanently occupies a

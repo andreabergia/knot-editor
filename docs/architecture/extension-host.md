@@ -73,6 +73,21 @@ unloads every startup lifecycle; installed-package failures do not stop post-ini
 Window admission and fatal diagnostics belong to
 [product launch](workbench-and-lifecycle.md#product-application-launch).
 
+### Restarting a package
+
+The native Restart Extension command lists every bundled and installed package in
+the startup report, including failed ones, in the window's transient picker. A
+restart performs a terminating unload of the package's current lifecycle, so a
+stuck turn stops and its queued commands cancel, and runs the shared foreground
+cleanup. It then rediscovers the package (bundled sources, or its installed
+directory re-read from disk), revalidates its manifest, API version, and that its
+dependencies are loaded, and activates a fresh lifecycle under the same storage
+and recovery owner. The outcome replaces that package's report entry and is shown
+in a message. Dependents keep running: packages share only the global command
+namespace, so a dependent's own registrations never depended on the restarted
+lifecycle. Personal config is not restartable; restarting Knot is its recovery
+path. Per-turn timeouts remain [D019](../roadmap.md).
+
 ## Runtime and scheduler flow
 
 One application-owned `ProductExtensionHost` owns the pool, foreground bridges,

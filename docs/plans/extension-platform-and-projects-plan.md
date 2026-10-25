@@ -3,8 +3,9 @@
 Status: ⬜ In progress. Checkpoints 1–7 and D053 are complete and approved, and
 the [codebase health maintenance
 interlude](#maintenance-interlude--codebase-health-cleanup-) is approved.
-Checkpoints 8–10 remain unstarted; checkpoint 8 is next and planned in
-[project sessions and safe switching](project-sessions-plan.md).
+Checkpoint 8 is implemented and awaiting its review gate 🔍 in
+[project sessions and safe switching](project-sessions-plan.md); checkpoints 9
+and 10 remain unstarted.
 
 Work identifiers: D046–D052, promoted D005, and completed maintenance interlude
 D053. [Roadmap](../roadmap.md) owns initiative priority; this plan owns execution
@@ -254,10 +255,11 @@ and rationale in [decisions](../decisions.md#unsaved-document-recovery-store)
 `src/app/recovery.rs`, `src/app/product/tests/recovery.rs`, the recovery handler
 tests, and the `recovery` contract in `scripts/extension-api/contract.test.ts`.
 
-### 8. Safe JS project switching and document sessions — D051, D050 ⬜
+### 8. Safe JS project switching and document sessions — D051, D050 🔍
 
-Planned in [project sessions and safe switching](project-sessions-plan.md),
-which owns execution detail and the review gate. Agreed scope: a project may
+Implemented and awaiting review. [Project sessions and safe
+switching](project-sessions-plan.md) owns execution detail, validation
+evidence, and the review gate. Agreed scope: a project may
 span several windows and restoring it restores all of them; membership stays
 root-derived with an active/suspended session state; one generic native
 `replaceWindows` commit swaps document tabs; active sessions are tracked live for
@@ -332,7 +334,7 @@ roadmap register.
 | Finding | Where |
 | --- | --- |
 | Prototype removal, `Generated` removal, test-only fencing, symlink Save, Find stub, `ProductShell` split, hygiene | ✅ [Maintenance interlude](#maintenance-interlude--codebase-health-cleanup-) |
-| Extension restart/disable escape hatch (P1-3) | Checkpoint 8 |
+| Extension restart/disable escape hatch (P1-3) | 🔍 Checkpoint 8: native Restart Extension, awaiting review |
 | Single-root error removal (P2-6) | Checkpoint 9 |
 | Editor view incremental line model, piece-table length cache, insert coalescing and edit-log bounding, CRLF policy (P0-1, P1-1, P2-7) | After checkpoint 10, as a focused plan before D002 and D031 |
 | `engine.rs` split and marshaling unification, command module regrouping, `app/terminal` and `app/extensions` directories, inline test extraction, tokio runtime removal (P1-6, P2-1–P2-4) | After checkpoint 10, as pure-move maintenance between slices |
