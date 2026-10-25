@@ -3,7 +3,8 @@
 Status: ⬜ In progress. Checkpoints 1–8 and D053 are complete and approved, and
 the [codebase health maintenance
 interlude](#maintenance-interlude--codebase-health-cleanup-) is approved.
-Checkpoint 9 is planned and next; checkpoint 10 remains unstarted.
+Checkpoint 9 is in progress (9a native multi-root support done, 9b next);
+checkpoint 10 remains unstarted.
 
 Work identifiers: D046–D052, promoted D005, and completed maintenance interlude
 D053. [Roadmap](../roadmap.md) owns initiative priority; this plan owns execution
@@ -330,32 +331,32 @@ sub-checkpoints, 9a native and 9b projects, with one review gate at the end.
   another project's set, unbinds that window. The binding used to detect the
   edit is in memory only; the registry still persists no per-window binding.
 
-#### 9a. Native multi-root model, explorer, and API ⬜
+#### 9a. Native multi-root model, explorer, and API ✅
 
-- ⬜ `WorkspaceState::replace_roots` becomes infallible and deduplicates;
+- ✅ `WorkspaceState::replace_roots` becomes infallible and deduplicates;
   delete `TooManyWorkspaceRoots`, `WorkspaceSnapshot::root()`, and the
   single-root helpers (`replace_root`, `install_workspace`'s `expect`). Remove
   the error from `WorkspaceError`, `ReplaceError`, the handler error enums,
   and `knot.d.ts`. Drop the D052
   `dead_code` allowances, deleting `is_descendant_of` if nothing uses it.
-- ⬜ `product::operations::replace_roots` and `workbench.replaceWindows` accept
+- ✅ `product::operations::replace_roots` and `workbench.replaceWindows` accept
   any number of roots per window and deduplicate after normalization. They
   still validate every root before one commit.
-- ⬜ `WorkspaceTree`: top-level root rows with disambiguated labels;
+- ✅ `WorkspaceTree`: top-level root rows with disambiguated labels;
   expansion and selection keyed by `(RootId, URI)`; a per-root visited set so
   overlapping roots both render; Left from a top-level entry selects its root
   row; `set_workspace` preserves retained-root state as described above.
-- ⬜ Native commands Add Folder to Workspace…, Remove Folder from Workspace,
+- ✅ Native commands Add Folder to Workspace…, Remove Folder from Workspace,
   and Move Folder Up/Down. They go through the shared root-replacement path,
   appear in the palette, and put Add Folder in the File menu. The explorer
   frame auto-shows on a non-empty root set as today; tool-layout memory is
   unchanged.
-- ⬜ `knot.d.ts` and the [extension guide](../extension-api.md):
+- ✅ `knot.d.ts` and the [extension guide](../extension-api.md):
   `replaceRoots` takes an ordered set with the deduplication rule, and there
   are no separate add/remove methods because retained IDs make read-modify-
   replace sufficient. Update the `workspaces` and `replaceWindows` cases in
   `scripts/extension-api/contract.test.ts`.
-- **Validation:** `workspace.rs` unit tests for deduplication after
+- ✅ **Validation:** `workspace.rs` unit tests for deduplication after
   normalization, retained IDs across reorder/add/remove, and generation bumps.
   `workspace_tree.rs` tests for root rows and labels, overlapping roots with
   independent expansion and selection, deterministic order, and stale responses
@@ -364,7 +365,10 @@ sub-checkpoints, 9a native and 9b projects, with one review gate at the end.
   root, Add Folder of an existing root as a no-op, root removal leaving
   documents open, and an extension `replaceRoots` racing a native Add Folder
   (rejects `InvalidTarget`). A `replaceWindows` case with multi-root
-  destinations in `product/tests/sessions.rs`.
+  destinations in `product/tests/sessions.rs`. The race is covered by the
+  existing `roots` scenario of the pending-operation test. The workspace and
+  explorer [architecture references](../architecture/documents-and-persistence.md#workspaces-and-resource-trees)
+  describe the new behavior; the decision record waits for the review gate.
 
 #### 9b. Multi-root projects ⬜
 
