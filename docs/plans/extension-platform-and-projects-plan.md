@@ -3,9 +3,9 @@
 Status: ⬜ In progress. Checkpoints 1–6 and D053 are complete and approved;
 checkpoint 7 is in progress (7a and 7b approved) and checkpoints 8–10 remain
 unstarted. The [codebase health maintenance
-interlude](#maintenance-interlude--codebase-health-cleanup-) is approved. Next:
-D050 checkpoint 7c; detailed execution lives in the [focused recovery
-plan](durable-document-recovery-plan.md).
+interlude](#maintenance-interlude--codebase-health-cleanup-) is approved. D050
+checkpoint 7c is implemented and awaiting review; detailed execution lives in the
+[focused recovery plan](durable-document-recovery-plan.md).
 
 Work identifiers: D046–D052, promoted D005, and completed maintenance interlude
 D053. [Roadmap](../roadmap.md) owns initiative priority; this plan owns execution
@@ -246,7 +246,7 @@ already flaky before the interlude (about one failure in 15 full-suite runs).
 
 7a recovery store and automatic protection and 7b restore, conflicts, discard,
 native recovery UI, and hot-exit quit are approved; 7c capture barrier, retention
-API, and cleanup is next. Detailed execution lives in the [focused recovery
+API, and cleanup is implemented and awaiting review 🔍. Detailed execution lives in the [focused recovery
 plan](durable-document-recovery-plan.md), which owns deliverables, validation,
 and one review gate per sub-checkpoint. This plan owns the shared outcome and
 ordering. Execute one sub-checkpoint per implementation request.

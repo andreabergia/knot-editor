@@ -1,6 +1,7 @@
 # Durable unsaved-document recovery
 
-Status: 🟡 In progress. Checkpoints 7a and 7b are approved; 7c is next. Execution plan for checkpoint 7 of the
+Status: 🟡 In progress. Checkpoints 7a and 7b are approved; 7c is implemented and
+awaiting review. Execution plan for checkpoint 7 of the
 [extension platform and projects plan](extension-platform-and-projects-plan.md).
 Checkpoints 7a–7c are executed one per implementation request and each stops at
 its review gate.
@@ -192,20 +193,16 @@ to prompts when the store fails. Current behavior lives in [documents and
 persistence](../architecture/documents-and-persistence.md#durable-unsaved-document-recovery)
 and validated rationale in [decisions](../decisions.md#unsaved-document-restore-and-hot-exit).
 
-### 7c. Capture barrier, retention API, and cleanup ⬜
+### 7c. Capture barrier, retention API, and cleanup 🔍
 
-Starts after the [maintenance
-interlude](extension-platform-and-projects-plan.md#maintenance-interlude--codebase-health-cleanup-),
-which removed generated documents and their recovery special cases.
-
-- Expose opaque retained capture IDs and the retain/release primitives with
+- ✅ Expose opaque retained capture IDs and the retain/release primitives with
   lifecycle-stamped ownership and an acknowledged durable barrier; specify that a
   session record is committed only after its capture is durable and that old
   captures are released only after the new record is durable.
-- Define orphan retention and inspectable cleanup: retained and orphaned captures
+- ✅ Define orphan retention and inspectable cleanup: retained and orphaned captures
   survive restart and are removed only by explicit release, explicit discard, or a
   future inspectable cleanup, with counts surfaced in diagnostics or the listing.
-- Add the `recovery` namespace to [knot.d.ts](../../src/host/js/knot.d.ts) and the
+- ✅ Add the `recovery` namespace to [knot.d.ts](../../src/host/js/knot.d.ts) and the
   [extension guide](../extension-api.md) for list, retain, release, restore, and
   discard; validate owner isolation and non-forgeable ownership with an installed
   fixture package and the authoring check.
@@ -221,9 +218,46 @@ which removed generated documents and their recovery special cases.
 - **Review gate:** approve the retention/release API, owner-stamping rules, and
   orphan policy, and confirm readiness for checkpoint 8's session orchestration.
 
+**Review notes.**
+
+- **API.** `recovery.list()`, `retain(documentId)`, `release(captureId)`, and
+  `restore(captureId, options?)` in [knot.d.ts](../../src/host/js/knot.d.ts),
+  backed by `recoveryList`/`recoveryRetain`/`recoveryRelease`/`recoveryRestore`
+  in [handlers.rs](../../src/app/extension_host/handlers.rs). New codes:
+  `CaptureNotFound`, `RecoveryUnavailable`. There is no separate `discard`: for a
+  capture its owner holds, release and discard are the same deletion, and user
+  discard stays in the native listing.
+- **Key shape (resolved).** Capture IDs are application-generated UUIDs; an
+  owner may hold several captures of one document, one per `retain`. The
+  owner is the canonical identity bound at admission (`StorageOwner::identity`:
+  the package name, or `personal-config`), never an argument.
+- **Barrier.** `retain` copies text on the foreground and resolves only after
+  its `FULL` commit. It captures clean documents too, so a session can pin exact
+  text. Write the session record after `retain` resolves; release old captures
+  after the new record is durable.
+- **Orphans.** Retained captures survive unload, failure, uninstall, and
+  restart; a cancelled `retain` may still commit. Startup neither restores nor
+  counts them (previously they inflated the "can be recovered" status). The
+  native listing labels each with its owner (`retained by @scope/name`).
+  Owners clean up by reconciling `list()` with their records.
+- **Restore.** Returns the presented document plus `outcome: "restored"`
+  (with `resource`) or `"preserved"` (with the live `owner`, null once closed).
+  A capture whose document is still open opens as a separate untitled copy.
+  If the destination closes during the load, the document is restored but the
+  request rejects; that is the documented "rejection after commit" case.
+- **Validation.** `extension_captures_are_owner_isolated_durable_and_survive_failure_and_restart`
+  (two installed packages: owner isolation and forged IDs, two generations of
+  one document, preserved and restored outcomes, release, activation failure,
+  native listing, restart under the same owner);
+  `retained_captures_survive_unload_and_the_unloaded_lifecycle_loses_access`
+  (durability on a reopened store, unload, cancellation); the store's existing
+  immutability and reopen tests; and the `recovery` contract in
+  `scripts/extension-api/contract.test.ts`.
+- **Checkpoint 8 readiness.** Sessions can retain, commit a record, and release
+  in that order. Claiming captures as session-referenced (as opposed to orphan)
+  stays checkpoint 8's job, through each owner's own records.
+
 ## Open questions for review
 
-- Exact retained-capture key shape and whether an owner may retain several
-  captures of one document simultaneously; finalized at 7c.
 - Final advertised crash-loss wording for the UI and documentation; approved at
   the 7a review gate.

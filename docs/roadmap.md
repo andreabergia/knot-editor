@@ -28,8 +28,8 @@ Remaining order:
 | 10 | D005, D051 | Layout, view-state, and startup restoration |
 
 Checkpoints 1–6 are complete and approved and checkpoint 7 is in progress (7a
-and 7b approved), and the codebase health maintenance interlude is approved;
-7c is next. The initiative plan schedules the remaining
+and 7b approved, 7c awaiting review), and the codebase health maintenance
+interlude is approved. The initiative plan schedules the remaining
 [health review](plans/codebase-health-review.md) findings. Continue with the
 [extension platform plan](plans/extension-platform-and-projects-plan.md), whose
 D050 sub-checkpoints are detailed in the
