@@ -200,7 +200,7 @@ fn folder_picker_settles_selected_dismissed_and_failed(cx: &mut TestAppContext) 
     let mut selected = cx
         .update_window(window, |_, window, cx| {
             shell.update(cx, |shell, cx| {
-                shell.begin_folder_picker(owner(None), window, cx)
+                shell.begin_folder_picker(Some(owner(None)), window, cx)
             })
         })
         .unwrap()
@@ -213,7 +213,7 @@ fn folder_picker_settles_selected_dismissed_and_failed(cx: &mut TestAppContext) 
     let mut dismissed = cx
         .update_window(window, |_, window, cx| {
             shell.update(cx, |shell, cx| {
-                shell.begin_folder_picker(owner(None), window, cx)
+                shell.begin_folder_picker(Some(owner(None)), window, cx)
             })
         })
         .unwrap()
@@ -226,7 +226,7 @@ fn folder_picker_settles_selected_dismissed_and_failed(cx: &mut TestAppContext) 
     let mut failed = cx
         .update_window(window, |_, window, cx| {
             shell.update(cx, |shell, cx| {
-                shell.begin_folder_picker(owner(None), window, cx)
+                shell.begin_folder_picker(Some(owner(None)), window, cx)
             })
         })
         .unwrap()

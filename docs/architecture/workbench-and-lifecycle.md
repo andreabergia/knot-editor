@@ -207,7 +207,11 @@ validation belongs to [documents and workspaces](documents-and-persistence.md).
 
 Native Open retains its captured target through the picker. Platforms unable to
 select files and folders together first ask which kind to open; cancellation
-leaves the workbench intact.
+leaves the workbench intact. Opening a folder replaces every root. Add Folder to
+Workspace appends one through the window's transient folder prompt, and Remove
+Folder and Move Folder Up/Down act on the explorer's selected root (the root row
+or the root above the selection). Each edit replaces the whole set computed from
+live foreground state.
 
 ## Terminal sessions and views
 

@@ -24,6 +24,7 @@ pub(super) mod operations;
 mod recovery_listing;
 mod relocate;
 mod render;
+mod roots;
 mod save;
 pub(super) mod sessions;
 mod tab_drag;
@@ -1116,7 +1117,7 @@ impl ProductShell {
     /// answered. Path validation and normalization belong to the caller.
     pub(crate) fn begin_folder_picker(
         &mut self,
-        owner: TransientOwner,
+        owner: Option<TransientOwner>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<tokio::sync::oneshot::Receiver<TransientOutcome>, TransientError> {
@@ -1147,7 +1148,7 @@ impl ProductShell {
             };
         let (completion, receiver) = tokio::sync::oneshot::channel();
         self.transient = Some(ActiveTransient {
-            owner: Some(owner),
+            owner,
             surface: None,
             focus: None,
             completion: Some(completion),

@@ -116,7 +116,6 @@ impl WorkspaceTree {
     }
 
     /// The root shown at or above the selected row.
-    #[cfg(test)]
     pub(crate) fn selected_root(&self) -> Option<&WorkspaceRoot> {
         let (id, _) = self.selected.as_ref()?;
         self.workspace.roots().iter().find(|root| root.id == *id)

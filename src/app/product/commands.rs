@@ -320,6 +320,40 @@ pub(crate) async fn toggle_explorer(context: CommandContext, (): ()) -> Result<(
         .await
 }
 
+#[command("workspace.add-folder", title = "Add Folder to Workspace…", id = ADD_FOLDER_COMMAND, participant = Workbench)]
+pub(crate) async fn add_folder(context: CommandContext, (): ()) -> Result<(), CommandOutcome> {
+    context
+        .shell(|shell, target, window, cx| {
+            shell.start_add_folder(target, window, cx);
+            Ok(())
+        })
+        .await
+}
+
+#[command("workspace.remove-folder", title = "Remove Folder from Workspace", id = REMOVE_FOLDER_COMMAND, participant = Workbench)]
+pub(crate) async fn remove_folder(context: CommandContext, (): ()) -> Result<(), CommandOutcome> {
+    context
+        .shell(|shell, _, _, cx| shell.remove_selected_root(cx))
+        .await
+}
+
+#[command("workspace.move-folder-up", title = "Move Folder Up", id = MOVE_FOLDER_UP_COMMAND, participant = Workbench)]
+pub(crate) async fn move_folder_up(context: CommandContext, (): ()) -> Result<(), CommandOutcome> {
+    context
+        .shell(|shell, _, _, cx| shell.move_selected_root(true, cx))
+        .await
+}
+
+#[command("workspace.move-folder-down", title = "Move Folder Down", id = MOVE_FOLDER_DOWN_COMMAND, participant = Workbench)]
+pub(crate) async fn move_folder_down(
+    context: CommandContext,
+    (): (),
+) -> Result<(), CommandOutcome> {
+    context
+        .shell(|shell, _, _, cx| shell.move_selected_root(false, cx))
+        .await
+}
+
 #[command("workbench.toggle-left-sidebar", title = "Toggle Left Sidebar", id = TOGGLE_LEFT_SIDEBAR_COMMAND, participant = Workbench)]
 pub(crate) async fn toggle_left_sidebar(
     context: CommandContext,

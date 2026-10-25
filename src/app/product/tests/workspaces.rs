@@ -261,3 +261,126 @@ await commands.register("workspaces.empty-ready", () => {});
     });
     host.update(cx, |host, cx| host.unload(key, cx).unwrap());
 }
+
+#[gpui::test]
+fn native_root_commands_add_reorder_and_remove_roots_without_closing_documents(
+    cx: &mut TestAppContext,
+) {
+    let first_dir = tempfile::tempdir().unwrap();
+    let second_dir = tempfile::tempdir().unwrap();
+    let file_uri = |path: &std::path::Path| {
+        ResourceUri::parse(url::Url::from_file_path(path).unwrap().as_str()).unwrap()
+    };
+    let first = file_uri(first_dir.path());
+    let documents = install_globals(cx);
+    cx.set_global(ApplicationOpenDialog(Arc::new(FixedOpenDialog(
+        OpenDialogOutcome::Selected(second_dir.path().to_path_buf()),
+    ))));
+    let (shell, window) = empty_product_window(&documents, cx);
+    shell.update(cx, |shell, cx| {
+        shell.install_workspace(first.clone(), cx);
+    });
+    let roots = |cx: &TestAppContext| {
+        cx.read(|cx| {
+            shell
+                .read(cx)
+                .workspace
+                .snapshot()
+                .roots()
+                .iter()
+                .map(|root| (root.id, root.uri.clone()))
+                .collect::<Vec<_>>()
+        })
+    };
+    let installed = roots(cx);
+
+    // Removing or moving without a selected root is unavailable.
+    for command in [
+        super::super::commands::REMOVE_FOLDER_COMMAND,
+        super::super::commands::MOVE_FOLDER_UP_COMMAND,
+    ] {
+        assert_eq!(
+            wait_for_command(dispatch_product_command(&shell, window, command, cx), cx),
+            CommandOutcome::Unavailable
+        );
+    }
+
+    let add = super::super::commands::ADD_FOLDER_COMMAND;
+    assert_eq!(
+        wait_for_command(dispatch_product_command(&shell, window, add, cx), cx),
+        CommandOutcome::Completed
+    );
+    wait_for_api_condition(cx, |cx| {
+        shell.read(cx).workspace.snapshot().roots().len() == 2
+    });
+    let added = roots(cx);
+    assert_eq!(added[0], installed[0]);
+    let second = added[1].1.clone();
+    assert_eq!(second, file_uri(second_dir.path()));
+
+    // Adding a folder that is already a root changes nothing.
+    let generation = cx.read(|cx| shell.read(cx).workspace.snapshot().generation());
+    assert_eq!(
+        wait_for_command(dispatch_product_command(&shell, window, add, cx), cx),
+        CommandOutcome::Completed
+    );
+    wait_for_api_condition(cx, |cx| {
+        shell
+            .read(cx)
+            .status
+            .to_string()
+            .contains("already in the workspace")
+    });
+    assert_eq!(
+        cx.read(|cx| shell.read(cx).workspace.snapshot().generation()),
+        generation
+    );
+
+    let tree = cx.read(|cx| shell.read(cx).workspace_tree.clone().unwrap());
+    tree.update(cx, |tree, cx| assert!(tree.activate_for_test(&second, cx)));
+    let up = super::super::commands::MOVE_FOLDER_UP_COMMAND;
+    assert_eq!(
+        wait_for_command(dispatch_product_command(&shell, window, up, cx), cx),
+        CommandOutcome::Completed
+    );
+    assert_eq!(roots(cx), [added[1].clone(), added[0].clone()]);
+    assert_eq!(
+        wait_for_command(dispatch_product_command(&shell, window, up, cx), cx),
+        CommandOutcome::Unavailable
+    );
+    let down = super::super::commands::MOVE_FOLDER_DOWN_COMMAND;
+    assert_eq!(
+        wait_for_command(dispatch_product_command(&shell, window, down, cx), cx),
+        CommandOutcome::Completed
+    );
+    assert_eq!(roots(cx), added);
+
+    let remove = super::super::commands::REMOVE_FOLDER_COMMAND;
+    let open_documents = cx.read(|cx| documents.read(cx).documents().count());
+    assert_eq!(
+        wait_for_command(dispatch_product_command(&shell, window, remove, cx), cx),
+        CommandOutcome::Completed
+    );
+    assert_eq!(roots(cx), [installed[0].clone()]);
+    assert_eq!(
+        cx.read(|cx| documents.read(cx).documents().count()),
+        open_documents
+    );
+
+    // Open replaces every root with the chosen folder.
+    shell.update(cx, |shell, cx| {
+        shell.add_workspace_root(second.clone(), cx);
+    });
+    assert_eq!(roots(cx).len(), 2);
+    assert_eq!(
+        wait_for_command(
+            dispatch_product_command(&shell, window, super::super::OPEN_COMMAND, cx),
+            cx
+        ),
+        CommandOutcome::Completed
+    );
+    wait_for_api_condition(cx, |cx| {
+        shell.read(cx).workspace.snapshot().roots().len() == 1
+    });
+    assert_eq!(roots(cx)[0].1, second);
+}

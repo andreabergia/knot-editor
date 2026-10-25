@@ -1114,7 +1114,7 @@ pub(crate) async fn pick_folder(
         host.with_transient_window(
             &request,
             arguments.target.as_deref(),
-            move |shell, window, cx| shell.begin_folder_picker(owner, window, cx),
+            move |shell, window, cx| shell.begin_folder_picker(Some(owner), window, cx),
             cx,
         )
     })??;

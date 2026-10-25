@@ -176,7 +176,11 @@ impl ProductShell {
         self.present_open_document(document, &target, false, cx);
     }
 
-    fn set_status(this: &WeakEntity<Self>, status: impl Into<SharedString>, cx: &mut AsyncApp) {
+    pub(super) fn set_status(
+        this: &WeakEntity<Self>,
+        status: impl Into<SharedString>,
+        cx: &mut AsyncApp,
+    ) {
         let status = status.into();
         let _ = this.update(cx, |shell, cx| {
             shell.status = status;

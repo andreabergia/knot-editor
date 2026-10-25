@@ -322,6 +322,10 @@ pub(crate) fn run(initial_request: Option<OpenRequest>) {
                     ),
                     MenuItem::action("New Window", ProductCommandSource::new(NEW_WINDOW_COMMAND)),
                     MenuItem::action("Open…", ProductCommandSource::new(OPEN_COMMAND)),
+                    MenuItem::action(
+                        "Add Folder to Workspace…",
+                        ProductCommandSource::new(commands::ADD_FOLDER_COMMAND),
+                    ),
                     MenuItem::action("Save", ProductCommandSource::new(SAVE_COMMAND)),
                     MenuItem::action("Save As…", ProductCommandSource::new(SAVE_AS_COMMAND)),
                     MenuItem::action(
