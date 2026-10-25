@@ -3,7 +3,8 @@
 Status: ⬜ In progress. Checkpoints 1–7 and D053 are complete and approved, and
 the [codebase health maintenance
 interlude](#maintenance-interlude--codebase-health-cleanup-) is approved.
-Checkpoints 8–10 remain unstarted; checkpoint 8 is next.
+Checkpoints 8–10 remain unstarted; checkpoint 8 is next and planned in
+[project sessions and safe switching](project-sessions-plan.md).
 
 Work identifiers: D046–D052, promoted D005, and completed maintenance interlude
 D053. [Roadmap](../roadmap.md) owns initiative priority; this plan owns execution
@@ -254,6 +255,13 @@ and rationale in [decisions](../decisions.md#unsaved-document-recovery-store)
 tests, and the `recovery` contract in `scripts/extension-api/contract.test.ts`.
 
 ### 8. Safe JS project switching and document sessions — D051, D050 ⬜
+
+Planned in [project sessions and safe switching](project-sessions-plan.md),
+which owns execution detail and the review gate. Agreed scope: a project may
+span several windows and restoring it restores all of them; membership stays
+root-derived with an active/suspended session state; one generic native
+`replaceWindows` commit swaps document tabs; active sessions are tracked live for
+hot exit; and the escape hatch is a native Restart Extension command.
 
 - Persist per-project sessions and window bindings; implement generic foreground
   capture/prepare/replace operations and JS orchestration of durable suspension.
