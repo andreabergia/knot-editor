@@ -1119,7 +1119,7 @@ impl ProductExtensionHost {
                         invocation.capture = self.command_targets.get(&root).map(|target| {
                             crate::host::protocol::CommandCapture {
                                 authority: root,
-                                window: format!("{:?}", target.window.window_id()),
+                                window: target.window.window_id().as_u64().to_string(),
                                 view: target.view.map(|view| format!("{view:?}")),
                                 tool: target.extension_tool_id(cx),
                             }
