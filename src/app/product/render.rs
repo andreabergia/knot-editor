@@ -214,6 +214,12 @@ impl ProductShell {
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.activate_tab(pane_id, tab_id, window, cx);
                     }))
+                    .on_mouse_up(
+                        MouseButton::Middle,
+                        cx.listener(move |this, _, window, cx| {
+                            this.close_tab_from_pointer(pane_id, tab_id, window, cx);
+                        }),
+                    )
             })
             .collect::<Vec<_>>();
 
@@ -257,12 +263,7 @@ impl ProductShell {
                                             },
                                         );
                                         if let Some(id) = id {
-                                            this.workbench.update(cx, |workbench, _| {
-                                                workbench.hide_tool(id);
-                                            });
-                                            this.publish_tool_layout(cx);
-                                            this.focus_active_surface(window, cx);
-                                            cx.notify();
+                                            this.hide_tool_from_pointer(id, window, cx);
                                         }
                                     })),
                             )

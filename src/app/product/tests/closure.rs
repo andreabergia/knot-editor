@@ -640,6 +640,44 @@ async fn discarding_a_dirty_final_tab_closes_it_and_installs_a_replacement(
 }
 
 #[gpui::test]
+fn middle_clicking_an_inactive_dirty_tab_closes_it_after_its_save_decision(
+    cx: &mut TestAppContext,
+) {
+    let documents = install_globals(cx);
+    let (first, second, shell, window) = two_dirty_untitled_documents_in_one_window(&documents, cx);
+    let first_tab = cx.read(|cx| {
+        let workbench = shell.read(cx).workbench.read(cx);
+        let pane = workbench.focused_pane().unwrap();
+        assert_eq!(pane.active_tab().document_id(), Some(second));
+        pane.tabs()
+            .iter()
+            .find(|tab| tab.document_id() == Some(first))
+            .unwrap()
+            .id()
+    });
+    let mut visual = VisualTestContext::from_window(window, cx);
+    visual.run_until_parked();
+    let tab = visual
+        .debug_bounds(format!("tab-{}", first_tab.value()).leak())
+        .unwrap()
+        .center();
+    visual.simulate_mouse_down(tab, MouseButton::Middle, Modifiers::default());
+    visual.simulate_mouse_up(tab, MouseButton::Middle, Modifiers::default());
+    wait_prompt(&mut visual);
+    visual.simulate_prompt_answer("Don't Save");
+    visual.run_until_parked();
+
+    visual.read(|cx| {
+        assert!(documents.read(cx).get(first).is_none());
+        let workbench = shell.read(cx).workbench.read(cx);
+        let pane = workbench.focused_pane().unwrap();
+        assert_eq!(pane.tabs().len(), 1);
+        assert_eq!(pane.active_tab().document_id(), Some(second));
+        assert!(!*cx.global::<ApplicationProtectedClosure>().0.borrow());
+    });
+}
+
+#[gpui::test]
 async fn saving_a_dirty_tab_uses_existing_persistence_before_closing(cx: &mut TestAppContext) {
     let documents = install_globals(cx);
     let (filesystems, provider) = memory_filesystems_with_provider();

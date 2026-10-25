@@ -189,6 +189,64 @@ impl ProductShell {
         );
     }
 
+    /// Close a tab chosen by pointer, such as a middle-clicked tab, whether or
+    /// not it is active. Documents and terminals go through protected closure;
+    /// a tool tab hides like its hide button.
+    pub(super) fn close_tab_from_pointer(
+        &mut self,
+        pane: PaneId,
+        tab: TabId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(tab) = self
+            .workbench
+            .read(cx)
+            .pane(pane)
+            .and_then(|pane| pane.tabs().iter().find(|candidate| candidate.id() == tab))
+        else {
+            return;
+        };
+        if let TabSurfaceId::Tool(id) = tab.surface_id() {
+            self.hide_tool_from_pointer(id, window, cx);
+            return;
+        }
+        let Some(focus) = tab.command_view().map(|view| view.focus_handle(cx)) else {
+            return;
+        };
+        let target = ProductCommandTarget {
+            window: window.window_handle(),
+            shell: cx.entity().downgrade(),
+            workbench: self.workbench.downgrade(),
+            pane,
+            tab: tab.id(),
+            surface: tab.surface_id(),
+            presentation: tab.presentation(),
+            focus: focus.downgrade(),
+            view: None,
+        };
+        // Protected closure updates this shell, so it starts outside the
+        // current update.
+        cx.defer(move |cx| {
+            super::super::product_commands::break_captured_history_group(&target, cx);
+            Self::begin_protected_close(ProtectedCloseKind::Tab, target, None, cx);
+        });
+    }
+
+    pub(super) fn hide_tool_from_pointer(
+        &mut self,
+        id: crate::app::workbench::ToolFrameId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.workbench.update(cx, |workbench, _| {
+            workbench.hide_tool(id);
+        });
+        self.publish_tool_layout(cx);
+        self.focus_active_surface(window, cx);
+        cx.notify();
+    }
+
     pub(super) fn begin_protected_operation(
         kind: ProtectedCloseKind,
         origin: ProductCommandTarget,
