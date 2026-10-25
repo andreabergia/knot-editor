@@ -200,6 +200,61 @@ declare module "knot" {
     readonly list: () => Promise<readonly string[]>;
   };
 
+  const captureIdentity: unique symbol;
+  /** Application-generated retained capture identity. Safe to persist, for
+   * example in a session record; it addresses only this package's captures. */
+  export type CaptureId = string & { readonly [captureIdentity]: true };
+  export interface RetainedCapture {
+    readonly id: CaptureId;
+    /** The document captured; restart reuse of the identity is not guaranteed. */
+    readonly document: DocumentId;
+    readonly title: string;
+    readonly kind: "untitled" | "destination" | "persisted";
+    readonly resourceUri: string | null;
+    /** Capture time in milliseconds since the Unix epoch. */
+    readonly capturedAt: number;
+  }
+  /** Restored document and its presentation. "restored" reports how the
+   * resource relates to the capture: a changed file keeps the capture-time
+   * version, so Save reaches the conflict prompt; a missing file becomes a dirty
+   * destination. "preserved" means a live document (owner, null once closed)
+   * already holds the identity or URI; the text opened as a separate untitled
+   * document instead. */
+  export type RecoveryRestore = DocumentPresentation & Readonly<
+    | { outcome: "restored"; resource: "untitled" | "unchanged" | "missing" | "changed" }
+    | { outcome: "preserved"; owner: DocumentId | null }>;
+  /**
+   * Durable document-text captures retained by this package or personal config.
+   * Available during activation. The owner is the caller's canonical identity,
+   * never an argument: another owner's capture is indistinguishable from a
+   * missing one. Captures are immutable and survive unload, failure, restart and
+   * uninstall until released; the native File › Recover Unsaved Documents… listing
+   * shows them with their owner and can restore or discard them. Automatic
+   * unsaved-document protection is independent and unaffected.
+   * RecoveryUnavailable includes a cause diagnostic.
+   */
+  export const recovery: Readonly<{
+    /** This owner's captures, newest first. Reconcile it with your own records
+     * to find and release captures a cancelled call left unreferenced. */
+    list(): Promise<readonly RetainedCapture[]>;
+    /** Capture an open document's current text, clean or dirty. Resolves only
+     * after the capture is durably committed, so a record referencing the ID may
+     * be committed next. Each call yields a new ID; earlier captures of the same
+     * document remain. Cancellation may reject after the capture committed.
+     * @throws HostError with DocumentNotFound, RecoveryUnavailable or Cancelled. */
+    retain(document: DocumentId): Promise<RetainedCapture>;
+    /** Delete a capture. Release an old capture only after the record that
+     * replaced it is durable. Resolves false when this owner holds no such ID. */
+    release(id: CaptureId): Promise<boolean>;
+    /** Restore a capture as an ordinary document with an empty undo history and
+     * present it like documents.present. Never writes a resource or replaces a
+     * live document. The capture stays retained until released.
+     * @throws HostError with CaptureNotFound, InvalidTarget, ContextUnavailable,
+     * Cancelled, RecoveryUnavailable, or the documents.open resource codes when
+     * the file baseline cannot be read. */
+    restore(id: CaptureId, options?: DocumentDestinationOptions): Promise<RecoveryRestore>;
+  }>;
+
   /** Stable host failure codes; names, messages and stacks are diagnostics.
    * Checked against native handler descriptors and common transport failures. */
   export type HostErrorCode = "ContextUnavailable" | "InvalidTarget" | "OwnershipDisposed"
@@ -208,7 +263,8 @@ declare module "knot" {
     | "ViewNotFound" | "ViewIdInUse" | "InvalidViewId"
     | "ViewRegistrationNotFound" | "ContentKindMismatch"
     | "CompletionProviderNotFound" | "CommandNameInUse" | "CommandNotFound"
-    | "InvalidUri" | "DocumentNotFound" | "TooManyWorkspaceRoots" | "OperationInProgress" | "PersistenceFailed" | "ResourceNotFound" | "ResourceWrongKind" | "InvalidUtf8" | "ProviderFailure" | "StorageUnavailable";
+    | "InvalidUri" | "DocumentNotFound" | "TooManyWorkspaceRoots" | "OperationInProgress" | "PersistenceFailed" | "ResourceNotFound" | "ResourceWrongKind" | "InvalidUtf8" | "ProviderFailure" | "StorageUnavailable"
+    | "CaptureNotFound" | "RecoveryUnavailable";
   /**
    * Native operation failure. Narrow a caught Error by name === "KnotHostError"
    * and its string code property, then dispatch on code. No error constructor

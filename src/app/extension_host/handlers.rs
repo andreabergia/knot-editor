@@ -1595,6 +1595,229 @@ async fn storage_list(context: HostContext, _: ()) -> Result<Vec<String>, Record
     Ok(context.records()?.list().await?)
 }
 
+#[derive(Debug, HostError)]
+pub(crate) enum RecoveryError {
+    #[error(transparent)]
+    Open(OpenError),
+    #[error(code = "CaptureNotFound", message = "CaptureNotFound")]
+    CaptureNotFound,
+    #[error(code = "RecoveryUnavailable", message = "Recovery: {cause}")]
+    Unavailable { cause: String },
+}
+
+impl From<AccessError> for RecoveryError {
+    fn from(error: AccessError) -> Self {
+        Self::Open(error.into())
+    }
+}
+
+impl From<OpenError> for RecoveryError {
+    fn from(error: OpenError) -> Self {
+        Self::Open(error)
+    }
+}
+
+impl From<String> for RecoveryError {
+    fn from(cause: String) -> Self {
+        Self::Unavailable { cause }
+    }
+}
+
+impl From<super::super::recovery::RestoreError> for RecoveryError {
+    fn from(error: super::super::recovery::RestoreError) -> Self {
+        use super::super::recovery::RestoreError;
+        match error {
+            RestoreError::Unavailable => Self::CaptureNotFound,
+            RestoreError::Resource(error) => Self::Open(product::operations::resource_error(error)),
+            RestoreError::Store(cause) => Self::Unavailable { cause },
+        }
+    }
+}
+
+impl HostContext {
+    /// The calling lifecycle's canonical owner, stamped at admission. Recovery
+    /// captures are never addressed by an author-supplied owner.
+    fn recovery_owner(&self) -> Result<String, RecoveryError> {
+        self.foreground(|host, _| {
+            let key = ExtensionKey::new(self.request.extension, self.request.lifecycle);
+            host.storage_owners
+                .get(&key)
+                .map(|owner| owner.identity())
+                .ok_or(AccessError::ContextUnavailable)
+        })?
+        .map_err(RecoveryError::from)
+    }
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RetainedCapture {
+    id: String,
+    document: String,
+    title: String,
+    kind: &'static str,
+    resource_uri: Option<String>,
+    captured_at: i64,
+}
+
+impl From<super::super::recovery::StoredSnapshot> for RetainedCapture {
+    fn from(snapshot: super::super::recovery::StoredSnapshot) -> Self {
+        use super::super::recovery::SnapshotState;
+        Self {
+            id: snapshot.capture_key,
+            document: snapshot.document_id.to_string(),
+            title: snapshot.title,
+            kind: match snapshot.state {
+                SnapshotState::Untitled => "untitled",
+                SnapshotState::Destination => "destination",
+                SnapshotState::Persisted => "persisted",
+            },
+            resource_uri: snapshot.resource_uri,
+            captured_at: snapshot.captured_at_ms,
+        }
+    }
+}
+
+impl HostSuccess for RetainedCapture {
+    fn encode(self) -> Result<EncodedValue, DecodeError> {
+        encode_json(self)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct CaptureLookup {
+    id: String,
+}
+
+impl HostArguments for CaptureLookup {
+    fn decode(reader: &mut dyn ArgumentReader) -> Result<Self, DecodeError> {
+        Ok(Self {
+            id: reader.text(2, "capture identity must be text")?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct CaptureRestore {
+    id: String,
+    target: Option<crate::host::protocol::DocumentDestination>,
+}
+
+impl HostArguments for CaptureRestore {
+    fn decode(reader: &mut dyn ArgumentReader) -> Result<Self, DecodeError> {
+        Ok(Self {
+            id: reader.text(2, "capture identity must be text")?,
+            target: reader.destination(3)?,
+        })
+    }
+}
+
+pub(crate) struct RecoveryRestore {
+    outcome: serde_json::Value,
+    presentation: crate::host::protocol::DocumentPresentation,
+}
+
+impl HostSuccess for RecoveryRestore {
+    fn encode(self) -> Result<EncodedValue, DecodeError> {
+        let mut value = self.outcome;
+        value["presentation"] = serde_json::to_value(self.presentation).expect("serializable");
+        encode_json(value)
+    }
+}
+
+#[host_operation("recoveryList")]
+async fn recovery_list(context: HostContext, _: ()) -> Result<Vec<RetainedCapture>, RecoveryError> {
+    let owner = context.recovery_owner()?;
+    let listing = context.foreground(|_, cx| super::super::recovery::retained(owner, cx))?;
+    Ok(listing.await?.into_iter().map(Into::into).collect())
+}
+
+#[host_operation("recoveryRetain")]
+async fn recovery_retain(
+    context: HostContext,
+    arguments: DocumentLookup,
+) -> Result<RetainedCapture, RecoveryError> {
+    let owner = context.recovery_owner()?;
+    let document = uuid::Uuid::parse_str(&arguments.id).map_err(|_| OpenError::DocumentNotFound)?;
+    let retain = context
+        .foreground(|_, cx| super::super::recovery::retain(owner, document, cx))?
+        .ok_or(OpenError::DocumentNotFound)?;
+    Ok(retain.await?.into())
+}
+
+#[host_operation("recoveryRelease")]
+async fn recovery_release(
+    context: HostContext,
+    arguments: CaptureLookup,
+) -> Result<bool, RecoveryError> {
+    let owner = context.recovery_owner()?;
+    let release =
+        context.foreground(|_, cx| super::super::recovery::release(owner, arguments.id, cx))?;
+    Ok(release.await?)
+}
+
+#[host_operation("recoveryRestore")]
+async fn recovery_restore(
+    context: HostContext,
+    arguments: CaptureRestore,
+) -> Result<RecoveryRestore, RecoveryError> {
+    use super::super::recovery::{RestoreOutcome, RestoredResource};
+    let owner = context.recovery_owner()?;
+    let request = context.request;
+    let (destination, restore) = context.foreground(|host, cx| {
+        let destination = host.document_destination(&request, arguments.target, cx)?;
+        let restore = product::operations::restore_retained(owner, arguments.id, cx);
+        Ok::<_, AccessError>((destination, restore))
+    })??;
+    let outcome = restore.await?;
+    context.foreground(move |host, cx| {
+        let (document, outcome) = match outcome {
+            RestoreOutcome::Restored { document, resource } => (
+                document,
+                serde_json::json!({
+                    "outcome": "restored",
+                    "resource": match resource {
+                        RestoredResource::Untitled => "untitled",
+                        RestoredResource::Unchanged => "unchanged",
+                        RestoredResource::Missing => "missing",
+                        RestoredResource::Changed => "changed",
+                    },
+                }),
+            ),
+            RestoreOutcome::Preserved { owner, document } => {
+                let documents = cx.global::<super::super::documents::ApplicationDocuments>();
+                let owner = documents
+                    .0
+                    .read(cx)
+                    .get(owner)
+                    .map(|owner| owner.identity());
+                (
+                    document,
+                    serde_json::json!({
+                        "outcome": "preserved",
+                        "owner": owner.map(|owner| owner.to_string()),
+                    }),
+                )
+            }
+            RestoreOutcome::AlreadyOpen { .. } => {
+                unreachable!("only automatic snapshots restore as already open")
+            }
+        };
+        let identity = cx
+            .global::<super::super::documents::ApplicationDocuments>()
+            .0
+            .read(cx)
+            .get(document)
+            .map(|document| document.identity().to_string())
+            .ok_or(OpenError::DocumentNotFound)?;
+        let (document, target) = product::operations::present_document(identity, destination, cx)?;
+        Ok(RecoveryRestore {
+            outcome,
+            presentation: host.document_presentation(document, target, cx)?,
+        })
+    })?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1682,6 +1905,82 @@ mod tests {
             });
             (host, context, key)
         })
+    }
+
+    #[gpui::test]
+    async fn retained_captures_survive_unload_and_the_unloaded_lifecycle_loses_access(
+        cx: &mut TestAppContext,
+    ) {
+        use crate::app::{
+            documents::{ApplicationDocuments, DocumentCollection},
+            model::BufferModel,
+            recovery::{ApplicationRecovery, RecoveryService, RecoveryStore, SnapshotKind},
+        };
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("recovery.sqlite3");
+        let (host, context, key) = storage_context(root.path(), cx);
+        let identity = cx.update(|cx| {
+            let documents = cx.new(|_| DocumentCollection::new());
+            cx.set_global(ApplicationDocuments(documents.clone()));
+            cx.set_global(ApplicationRecovery(RecoveryService::new(
+                RecoveryStore::open(path.clone(), cx.background_executor().clone()),
+            )));
+            let model = cx.new(|_| BufferModel::from_text("kept"));
+            documents.update(cx, |documents, cx| {
+                let document = documents.create_untitled("Untitled", model, cx);
+                documents.get(document).unwrap().identity().to_string()
+            })
+        });
+        let lookup = DocumentLookup { id: identity };
+        let capture = recovery_retain(context.clone(), lookup.clone())
+            .await
+            .unwrap();
+        assert!(matches!(
+            recovery_retain(
+                context.clone(),
+                DocumentLookup {
+                    id: "missing".into()
+                }
+            )
+            .await,
+            Err(RecoveryError::Open(OpenError::DocumentNotFound))
+        ));
+
+        host.update(cx, |host, cx| host.unload(key, cx).unwrap());
+        let cancelled = |result: Result<_, RecoveryError>| {
+            matches!(
+                result,
+                Err(RecoveryError::Open(OpenError::Access(
+                    AccessError::Cancelled
+                )))
+            )
+        };
+        assert!(cancelled(
+            recovery_list(context.clone(), ()).await.map(|_| ())
+        ));
+        assert!(cancelled(
+            recovery_retain(context.clone(), lookup).await.map(|_| ())
+        ));
+        assert!(cancelled(
+            recovery_release(
+                context,
+                CaptureLookup {
+                    id: capture.id.clone()
+                }
+            )
+            .await
+            .map(|_| ())
+        ));
+
+        // The capture is durable and owned by the canonical identity, not the lifecycle.
+        let reopened = RecoveryStore::open(path, cx.background_executor.clone());
+        let stored = reopened
+            .snapshot(SnapshotKind::Retained, capture.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.owner.as_deref(), Some("personal-config"));
+        assert_eq!(stored.text, "kept");
     }
 
     #[gpui::test]

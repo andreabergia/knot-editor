@@ -150,18 +150,24 @@ impl OpenTarget {
 
 impl OpenFailure {
     fn host_error(self) -> OpenError {
-        use super::super::open::OpenResourceError;
         match self {
             Self::InvalidTarget => OpenError::Access(AccessError::InvalidTarget),
             Self::Cancelled => OpenError::Access(AccessError::Cancelled),
-            Self::Resource(OpenResourceError::InvalidUtf8 { .. }) => OpenError::InvalidUtf8,
-            Self::Resource(OpenResourceError::Provider(error)) => match error {
-                ResourceError::InvalidUri { .. } => OpenError::InvalidUri,
-                ResourceError::NotFound { .. } => OpenError::ResourceNotFound,
-                ResourceError::WrongKind { .. } => OpenError::ResourceWrongKind,
-                _ => OpenError::ProviderFailure,
-            },
+            Self::Resource(error) => resource_error(error),
         }
+    }
+}
+
+pub(crate) fn resource_error(error: super::super::open::OpenResourceError) -> OpenError {
+    use super::super::open::OpenResourceError;
+    match error {
+        OpenResourceError::InvalidUtf8 { .. } => OpenError::InvalidUtf8,
+        OpenResourceError::Provider(error) => match error {
+            ResourceError::InvalidUri { .. } => OpenError::InvalidUri,
+            ResourceError::NotFound { .. } => OpenError::ResourceNotFound,
+            ResourceError::WrongKind { .. } => OpenError::ResourceWrongKind,
+            _ => OpenError::ProviderFailure,
+        },
     }
 }
 
@@ -279,6 +285,17 @@ pub(crate) fn present_document(
         target
     });
     Ok((document, target.public_target()))
+}
+
+/// Restore one of `owner`'s retained recovery captures through the
+/// application's registered providers.
+pub(crate) fn restore_retained(
+    owner: String,
+    capture_key: String,
+    cx: &mut App,
+) -> Task<Result<super::super::recovery::RestoreOutcome, super::super::recovery::RestoreError>> {
+    let providers = ProductShell::filesystems(cx);
+    super::super::recovery::restore_retained(owner, capture_key, providers, cx)
 }
 
 pub(crate) fn replace_roots(

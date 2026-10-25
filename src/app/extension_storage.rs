@@ -45,6 +45,16 @@ impl StorageOwner {
         Self(Owner::PersonalConfig)
     }
 
+    /// Stable owner identity recorded beside application-held data, such as
+    /// retained recovery captures. Package names are scoped, so they never
+    /// collide with the personal-config identity.
+    pub(crate) fn identity(&self) -> String {
+        match &self.0 {
+            Owner::Package(name) => name.clone(),
+            Owner::PersonalConfig => "personal-config".into(),
+        }
+    }
+
     fn relative_path(&self) -> PathBuf {
         match &self.0 {
             Owner::Package(name) => {

@@ -517,11 +517,20 @@ async fn retained_captures_restore_under_a_fresh_identity_until_discarded(cx: &m
             .retain("owner".into(), "session-1".into(), draft.clone())
             .await
             .unwrap()
+            .is_some()
     );
-    // Startup never restores retained captures; they are left for the listing.
+    // Startup neither restores nor counts retained captures; they belong to
+    // their owner and stay in the listing.
     let recovery = startup_recovery(filesystems.clone(), cx).await;
     assert!(recovery.restored.is_empty());
-    assert_eq!(recovery.remaining, 1);
+    assert_eq!(recovery.remaining, 0);
+    assert_eq!(
+        cx.update(crate::app::recovery::recoverable)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
 
     let restore = |cx: &mut TestAppContext| {
         cx.update(|cx| {
@@ -939,4 +948,314 @@ async fn quit_is_a_hot_exit_that_restores_dirty_documents_on_relaunch(cx: &mut T
             assert_eq!(document.model().read(cx).text(), text);
         });
     }
+}
+
+const RECOVERY_OWNER: &str = r#"
+import { commands, recovery, workbench } from 'knot';
+const report = value => workbench.writeClipboardText(JSON.stringify(value));
+await commands.register('owner.retain', async ({ arguments: { document } }) => {
+  const capture = await recovery.retain(document);
+  if (!Object.isFrozen(capture)) throw Error('capture is mutable');
+  await report({ capture, listed: (await recovery.list()).map(capture => capture.id) });
+});
+await commands.register('owner.list', async () => {
+  await report((await recovery.list()).map(capture => capture.id));
+});
+await commands.register('owner.restore', async ({ arguments: { id } }) => {
+  const restored = await recovery.restore(id);
+  await report({ ...restored, document: restored.document.id,
+    presented: restored.presentation.document, presentation: undefined });
+});
+await commands.register('owner.release', async ({ arguments: { id } }) => {
+  await report(await recovery.release(id));
+});
+"#;
+
+const RECOVERY_OTHER: &str = r#"
+import { commands, recovery, workbench } from 'knot';
+const code = async operation => {
+  try { await operation(); return null; } catch (error) { return error.code ?? String(error); }
+};
+await commands.register('other.probe', async ({ arguments: { id } }) => {
+  await workbench.writeClipboardText(JSON.stringify({
+    listed: (await recovery.list()).length,
+    released: await recovery.release(id),
+    restore: await code(() => recovery.restore(id)),
+    retain: await code(() => recovery.retain('not-a-document')),
+  }));
+});
+"#;
+
+fn object(fields: &[(&str, &str)]) -> CommandArgumentValue {
+    CommandArgumentValue::Object(
+        fields
+            .iter()
+            .map(|(key, value)| {
+                (
+                    (*key).to_owned(),
+                    CommandArgumentValue::String((*value).into()),
+                )
+            })
+            .collect(),
+    )
+}
+
+fn run_reporting(
+    shell: &Entity<ProductShell>,
+    window: gpui::AnyWindowHandle,
+    name: &'static str,
+    arguments: CommandArgumentValue,
+    cx: &mut TestAppContext,
+) -> serde_json::Value {
+    let execution = dispatch_product_command_with(shell, window, name, arguments, cx);
+    assert_eq!(
+        wait_for_command(execution, cx),
+        CommandOutcome::Completed,
+        "{name}"
+    );
+    cx.read(|cx| serde_json::from_str(&cx.read_from_clipboard().unwrap().text().unwrap()).unwrap())
+}
+
+fn retained_text(id: &str, cx: &mut TestAppContext) -> Option<String> {
+    let read = recovery_store(cx).snapshot(SnapshotKind::Retained, id.to_owned());
+    let (sender, receiver) = std::sync::mpsc::channel();
+    cx.spawn(async move |_| {
+        let _ = sender.send(read.await);
+    })
+    .detach();
+    cx.run_until_parked();
+    receiver
+        .recv()
+        .unwrap()
+        .unwrap()
+        .map(|snapshot| snapshot.text)
+}
+
+#[gpui::test]
+fn extension_captures_are_owner_isolated_durable_and_survive_failure_and_restart(
+    cx: &mut TestAppContext,
+) {
+    let extensions = tempfile::tempdir().unwrap();
+    let storage = tempfile::tempdir().unwrap();
+    install_extension(
+        extensions.path(),
+        "@example/recovery-owner",
+        &[],
+        &[("main.js", RECOVERY_OWNER)],
+    );
+    install_extension(
+        extensions.path(),
+        "@example/recovery-other",
+        &[],
+        &[("main.js", RECOVERY_OTHER)],
+    );
+    let documents = install_globals(cx);
+    let host = cx.update(crate::app::extension_host::install);
+    host.update(cx, |host, cx| {
+        host.set_test_storage_root(storage.path().to_owned(), cx)
+    });
+    let document = cx.update(|cx| create_untitled_document(&documents, cx));
+    let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+    let identity = cx.read(|cx| {
+        documents
+            .read(cx)
+            .get(document)
+            .unwrap()
+            .identity()
+            .to_string()
+    });
+    let (shell, window) = product_window(document, model.clone(), cx);
+    let start = |cx: &mut TestAppContext| {
+        host.update(cx, |host, cx| {
+            host.start_installed_extensions(extensions.path().to_owned(), cx)
+        });
+        wait_for_extension_report(&host, cx)
+    };
+    let report = start(cx);
+    assert!(
+        report
+            .report
+            .entries
+            .iter()
+            .all(|entry| entry.result == crate::app::extension_load::LoadResult::Loaded)
+    );
+    let edit = |text: &str, cx: &mut TestAppContext| {
+        model.update(cx, |model, cx| {
+            let len = model.text().len();
+            model.replace(0..len, text).unwrap();
+            cx.notify();
+        });
+    };
+
+    // Each retain is durable when it resolves and allocates a new capture, so
+    // captures of different revisions of one document coexist.
+    edit("first", cx);
+    let first = run_reporting(
+        &shell,
+        window,
+        "owner.retain",
+        object(&[("document", &identity)]),
+        cx,
+    );
+    let first_id = first["capture"]["id"].as_str().unwrap().to_owned();
+    assert_eq!(first["capture"]["document"], identity);
+    assert_eq!(first["capture"]["kind"], "untitled");
+    assert_eq!(first["listed"], serde_json::json!([first_id]));
+    assert_eq!(retained_text(&first_id, cx).as_deref(), Some("first"));
+    edit("second", cx);
+    let second = run_reporting(
+        &shell,
+        window,
+        "owner.retain",
+        object(&[("document", &identity)]),
+        cx,
+    );
+    let second_id = second["capture"]["id"].as_str().unwrap().to_owned();
+    assert_ne!(first_id, second_id);
+    assert_eq!(second["listed"], serde_json::json!([second_id, first_id]));
+    assert_eq!(retained_text(&second_id, cx).as_deref(), Some("second"));
+
+    // Another owner cannot list, release, or restore the captures, even with
+    // the exact ID; a foreign capture is indistinguishable from a missing one.
+    let probe = run_reporting(
+        &shell,
+        window,
+        "other.probe",
+        object(&[("id", &first_id)]),
+        cx,
+    );
+    assert_eq!(
+        probe,
+        serde_json::json!({
+            "listed": 0, "released": false,
+            "restore": "CaptureNotFound", "retain": "DocumentNotFound",
+        })
+    );
+    assert_eq!(retained_text(&first_id, cx).as_deref(), Some("first"));
+
+    // Restoring while the captured document is open preserves both: the older
+    // text opens as a separate document and the capture stays retained.
+    let restored = run_reporting(
+        &shell,
+        window,
+        "owner.restore",
+        object(&[("id", &first_id)]),
+        cx,
+    );
+    assert_eq!(restored["outcome"], "preserved");
+    assert_eq!(restored["owner"], identity);
+    assert_eq!(restored["presented"], restored["document"]);
+    assert_ne!(restored["document"], identity);
+    cx.read(|cx| {
+        let documents = documents.read(cx);
+        let copy = documents
+            .documents()
+            .find(|document| document.identity().to_string() == restored["document"])
+            .unwrap();
+        assert_eq!(copy.model().read(cx).text(), "first");
+        assert!(copy.is_dirty(cx));
+        assert_eq!(model.read(cx).text(), "second");
+    });
+    assert_eq!(retained_text(&first_id, cx).as_deref(), Some("first"));
+
+    // Release deletes only the owner's capture; a second release is false.
+    let released = run_reporting(
+        &shell,
+        window,
+        "owner.release",
+        object(&[("id", &first_id)]),
+        cx,
+    );
+    assert_eq!(released, true);
+    let again = run_reporting(
+        &shell,
+        window,
+        "owner.release",
+        object(&[("id", &first_id)]),
+        cx,
+    );
+    assert_eq!(again, false);
+    assert_eq!(retained_text(&first_id, cx), None);
+    assert_eq!(retained_text(&second_id, cx).as_deref(), Some("second"));
+
+    // A capture of a document that has since closed restores under a fresh
+    // identity and is presented in the command's window.
+    let closing = cx.new(|_| BufferModel::from_text("closed text"));
+    let closing = documents.update(cx, |documents, cx| {
+        documents.create_untitled("Notes", closing, cx)
+    });
+    let closing_identity = cx.read(|cx| {
+        documents
+            .read(cx)
+            .get(closing)
+            .unwrap()
+            .identity()
+            .to_string()
+    });
+    let third = run_reporting(
+        &shell,
+        window,
+        "owner.retain",
+        object(&[("document", &closing_identity)]),
+        cx,
+    );
+    let third_id = third["capture"]["id"].as_str().unwrap().to_owned();
+    documents.update(cx, |documents, cx| documents.remove(closing, cx));
+    let restored = run_reporting(
+        &shell,
+        window,
+        "owner.restore",
+        object(&[("id", &third_id)]),
+        cx,
+    );
+    assert_eq!(restored["outcome"], "restored");
+    assert_eq!(restored["resource"], "untitled");
+    assert_eq!(restored["presented"], restored["document"]);
+    assert_ne!(restored["document"], closing_identity);
+    cx.read(|cx| {
+        let copy = documents
+            .read(cx)
+            .documents()
+            .find(|document| document.identity().to_string() == restored["document"])
+            .unwrap();
+        assert_eq!(copy.model().read(cx).text(), "closed text");
+        assert_eq!(copy.title(), "Notes");
+    });
+    let released = run_reporting(
+        &shell,
+        window,
+        "owner.release",
+        object(&[("id", &third_id)]),
+        cx,
+    );
+    assert_eq!(released, true);
+
+    // A failing owner keeps its captures, and the native listing shows them
+    // with their owner. After a restart the same canonical owner sees them.
+    std::fs::write(
+        extensions.path().join("@example/recovery-owner/main.js"),
+        "throw new Error('activation failed');",
+    )
+    .unwrap();
+    start(cx);
+    assert_eq!(retained_text(&second_id, cx).as_deref(), Some("second"));
+    let listed = cx.update(crate::app::recovery::recoverable);
+    let (sender, receiver) = std::sync::mpsc::channel();
+    cx.spawn(async move |_| {
+        let _ = sender.send(listed.await);
+    })
+    .detach();
+    cx.run_until_parked();
+    let listed = receiver.recv().unwrap().unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].capture_key, second_id);
+    assert_eq!(listed[0].owner.as_deref(), Some("@example/recovery-owner"));
+    std::fs::write(
+        extensions.path().join("@example/recovery-owner/main.js"),
+        RECOVERY_OWNER,
+    )
+    .unwrap();
+    start(cx);
+    let listed = run_reporting(&shell, window, "owner.list", CommandArgumentValue::Null, cx);
+    assert_eq!(listed, serde_json::json!([second_id]));
 }

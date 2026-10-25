@@ -208,6 +208,10 @@ before startup requests can run; source-only diagnostic lifecycles have no
 implicit durable owner. Teardown removes lifecycle bindings while retaining
 application-owned connections and records.
 
+The same admission binding stamps the owner of retained recovery captures,
+which live in the application recovery store rather than an extension database
+(see [retained captures](documents-and-persistence.md#retained-captures)).
+
 Binding performs no I/O. Async handlers await background operations serialized
 through a reused connection per database. Native transactions never span a JS
 await. Caller lifetime is checked before database work starts; once started,

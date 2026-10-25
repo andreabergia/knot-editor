@@ -323,6 +323,16 @@ fn dispatch_product_command(
     name: &'static str,
     cx: &mut TestAppContext,
 ) -> super::super::CommandExecution {
+    dispatch_product_command_with(shell, window_handle, name, CommandArgumentValue::Null, cx)
+}
+
+fn dispatch_product_command_with(
+    shell: &Entity<ProductShell>,
+    window_handle: gpui::AnyWindowHandle,
+    name: &'static str,
+    arguments: CommandArgumentValue,
+    cx: &mut TestAppContext,
+) -> super::super::CommandExecution {
     let target = cx
         .update_window(window_handle, |_, window, cx| {
             shell.update(cx, |shell, cx| {
@@ -337,7 +347,7 @@ fn dispatch_product_command(
             dispatcher.dispatch(
                 Command {
                     name: name.into(),
-                    arguments: CommandArgumentValue::Null,
+                    arguments,
                 },
                 target,
                 cx,

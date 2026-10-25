@@ -490,7 +490,7 @@ a fresh one because the automatic role may still protect newer text.
 Startup restores unclaimed automatic snapshots before the launch gate opens
 windows, so launch requests deduplicate against them deterministically instead
 of racing them. Only the newest snapshot per URI is restored; older duplicates,
-retained captures, and unreadable baselines remain for File › Recover Unsaved
+unreadable baselines, and retained captures remain for File › Recover Unsaved
 Documents…, a native picker in the window's transient slot followed by a Restore
 / Discard prompt. That interim listing reuses existing surfaces rather than
 adding a recovery UI that project sessions will supersede.
@@ -505,3 +505,30 @@ removal rather than leaving the application.
 
 Reference: [documents and
 persistence](architecture/documents-and-persistence.md#durable-unsaved-document-recovery).
+
+## Retained recovery captures
+
+Extensions retain document text through application-stamped ownership: the
+owner is the canonical package or personal-config identity bound at admission,
+and the capture ID is application-generated. An extension therefore cannot name
+another owner, choose a table, or overwrite a capture, and a foreign ID behaves
+like a missing one. Owning by identity rather than lifecycle keeps captures
+addressable across reload, failure, and restart, which is what a session needs.
+
+Each retain creates a new immutable capture, so an owner may hold several
+captures of one document: a suspended session and its replacement can reference
+different text until the old record is released. Retain resolves only after its
+FULL-synchronized commit, which gives sessions the ordering they need without a
+separate barrier call: commit the record after retain, release the old capture
+after the record.
+
+Prefer orphans to premature deletion. Nothing removes a retained capture except
+its owner's release or the user's explicit discard; a cancelled retain may leave
+one behind. Owners reconcile their listing against their records, and the native
+listing shows every retained capture with its owner, so orphans stay inspectable.
+Startup neither restores nor counts retained captures, since their owners decide
+when to restore them. Release and discard are the same deletion, so the public
+API exposes only release.
+
+Reference: [documents and
+persistence](architecture/documents-and-persistence.md#retained-captures).

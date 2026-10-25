@@ -126,6 +126,12 @@ impl HostSuccess for () {
     }
 }
 
+impl HostSuccess for bool {
+    fn encode(self) -> Result<EncodedValue, DecodeError> {
+        Ok(EncodedValue::Json(self.into()))
+    }
+}
+
 impl HostArguments for () {
     fn decode(_: &mut dyn ArgumentReader) -> Result<Self, DecodeError> {
         Ok(())

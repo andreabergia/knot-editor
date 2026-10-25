@@ -873,3 +873,23 @@ export async function storageDelete(key) {
 export async function storageList() {
   return Object.freeze(await request("storageList"));
 }
+
+function captureFromNative(value) {
+  return Object.freeze(value);
+}
+export async function recoveryList() {
+  return Object.freeze((await request("recoveryList")).map(captureFromNative));
+}
+export async function recoveryRetain(document) {
+  return captureFromNative(await request("recoveryRetain", string(document, "document identity must be text")));
+}
+export async function recoveryRelease(id) {
+  return await request("recoveryRelease", string(id, "capture identity must be text"));
+}
+export async function recoveryRestore(id, options) {
+  const value = await request("recoveryRestore", string(id, "capture identity must be text"), destinationAuthority(options));
+  const presentation = documentPresentationFromNative(value.presentation);
+  return Object.freeze(value.outcome === "restored"
+    ? { outcome: "restored", resource: value.resource, ...presentation }
+    : { outcome: "preserved", owner: value.owner, ...presentation });
+}

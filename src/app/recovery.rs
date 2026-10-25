@@ -355,34 +355,31 @@ impl RecoveryStore {
         self.schedule(document_id, Intent::Delete(document_id));
     }
 
-    /// Retain an immutable checkpoint under an opaque owner key.
-    #[cfg_attr(
-        not(test),
-        allow(dead_code, reason = "the D050 capture-retention API exposes it")
-    )]
+    /// Retain an immutable checkpoint under an opaque capture key. Resolves with
+    /// the row's generation only after it is durably committed, or `None` when
+    /// the key already exists.
     pub(crate) fn retain(
         &self,
         owner: String,
         capture_key: String,
         draft: SnapshotDraft,
-    ) -> Task<Result<bool, String>> {
+    ) -> Task<Result<Option<u64>, String>> {
         let this = self.clone();
         self.inner.executor.spawn(async move {
             this.inner
                 .database
                 .run(|connection| {
                     let generation = this.inner.database.allocate_generation();
-                    write_retained(connection, &owner, &capture_key, &draft, generation)
+                    Ok(
+                        write_retained(connection, &owner, &capture_key, &draft, generation)?
+                            .then_some(generation),
+                    )
                 })
                 .map_err(display_error)
         })
     }
 
     /// Release a retained checkpoint. Automatic rows are never affected.
-    #[cfg_attr(
-        not(test),
-        allow(dead_code, reason = "the D050 capture-retention API exposes it")
-    )]
     pub(crate) fn release(&self, owner: String, capture_key: String) -> Task<Result<bool, String>> {
         let this = self.clone();
         self.inner.executor.spawn(async move {
@@ -494,6 +491,26 @@ impl RecoveryStore {
                          provider_version, generation, captured_at, text FROM snapshots \
                          ORDER BY captured_at DESC, generation DESC",
                         &[],
+                    )
+                })
+                .map_err(display_error)
+        })
+    }
+
+    /// One owner's retained checkpoints, newest capture first.
+    pub(crate) fn retained(&self, owner: String) -> Task<Result<Vec<StoredSnapshot>, String>> {
+        let this = self.clone();
+        self.inner.executor.spawn(async move {
+            this.inner
+                .database
+                .run(|connection| {
+                    read_rows(
+                        connection,
+                        "SELECT kind, capture_key, owner, document_id, title, resource_uri, state, \
+                         provider_version, generation, captured_at, text FROM snapshots \
+                         WHERE kind = 'retained' AND owner = ?1 \
+                         ORDER BY captured_at DESC, generation DESC",
+                        &[&owner],
                     )
                 })
                 .map_err(display_error)
@@ -945,6 +962,33 @@ pub(crate) fn restore(
     providers: Arc<FileSystemProviderRegistry>,
     cx: &mut App,
 ) -> Task<Result<RestoreOutcome, RestoreError>> {
+    restore_owned(kind, capture_key, None, providers, cx)
+}
+
+/// Restore one of `owner`'s retained captures. Another owner's capture is
+/// indistinguishable from a missing one.
+pub(crate) fn restore_retained(
+    owner: String,
+    capture_key: String,
+    providers: Arc<FileSystemProviderRegistry>,
+    cx: &mut App,
+) -> Task<Result<RestoreOutcome, RestoreError>> {
+    restore_owned(
+        SnapshotKind::Retained,
+        capture_key,
+        Some(owner),
+        providers,
+        cx,
+    )
+}
+
+fn restore_owned(
+    kind: SnapshotKind,
+    capture_key: String,
+    owner: Option<String>,
+    providers: Arc<FileSystemProviderRegistry>,
+    cx: &mut App,
+) -> Task<Result<RestoreOutcome, RestoreError>> {
     let Some(service) = service(cx) else {
         return Task::ready(Err(RestoreError::Store("recovery is unavailable".into())));
     };
@@ -953,9 +997,67 @@ pub(crate) fn restore(
         let snapshot = read
             .await
             .map_err(RestoreError::Store)?
+            .filter(|snapshot| owner.is_none() || snapshot.owner == owner)
             .ok_or(RestoreError::Unavailable)?;
         restore_snapshot(&service, snapshot, providers, cx).await
     })
+}
+
+/// Durably retain the current text of an open document, clean or dirty, under
+/// `owner`. Each call allocates a fresh capture key, so an owner may hold
+/// several captures of one document. Resolves only after the capture is
+/// committed; `None` means no open document has the identity.
+pub(crate) fn retain(
+    owner: String,
+    document_id: uuid::Uuid,
+    cx: &App,
+) -> Option<Task<Result<StoredSnapshot, String>>> {
+    let draft = {
+        let documents = cx.global::<ApplicationDocuments>().0.read(cx);
+        capture(documents.document_by_identity(document_id)?, cx)
+    };
+    let Some(service) = service(cx) else {
+        return Some(Task::ready(Err("recovery is unavailable".into())));
+    };
+    let capture_key = uuid::Uuid::new_v4().to_string();
+    let retain = service
+        .store
+        .retain(owner.clone(), capture_key.clone(), draft.clone());
+    Some(cx.background_spawn(async move {
+        let generation = retain
+            .await?
+            .expect("a fresh capture key is never already retained");
+        Ok(StoredSnapshot {
+            kind: SnapshotKind::Retained,
+            capture_key,
+            owner: Some(owner),
+            document_id: draft.document_id,
+            title: draft.title,
+            resource_uri: draft.resource_uri,
+            state: draft.state,
+            provider_version: draft.provider_version,
+            generation,
+            captured_at_ms: draft.captured_at_ms,
+            text: draft.text,
+        })
+    }))
+}
+
+/// One owner's retained captures, newest first.
+pub(crate) fn retained(owner: String, cx: &App) -> Task<Result<Vec<StoredSnapshot>, String>> {
+    match service(cx) {
+        Some(service) => service.store.retained(owner),
+        None => Task::ready(Err("recovery is unavailable".into())),
+    }
+}
+
+/// Release one of `owner`'s retained captures. Resolves `false` when the owner
+/// holds no capture with that key.
+pub(crate) fn release(owner: String, capture_key: String, cx: &App) -> Task<Result<bool, String>> {
+    match service(cx) {
+        Some(service) => service.store.release(owner, capture_key),
+        None => Task::ready(Err("recovery is unavailable".into())),
+    }
 }
 
 /// Explicitly discard one stored snapshot. Resolves `false` when it no longer exists.
@@ -1000,8 +1102,9 @@ pub(crate) struct StartupRecovery {
 /// Restore every automatic snapshot no live document claims, newest first.
 ///
 /// When several snapshots target one URI only the newest is restored; older
-/// ones, retained captures, and snapshots whose resource cannot be read stay in
-/// the store and are counted as remaining.
+/// ones and snapshots whose resource cannot be read stay in the store and are
+/// counted as remaining. Retained captures are left to their owners and the
+/// native listing, and are not counted.
 pub(crate) fn restore_at_startup(
     providers: Arc<FileSystemProviderRegistry>,
     cx: &mut App,
@@ -1021,11 +1124,14 @@ pub(crate) fn restore_at_startup(
         };
         let mut claimed = HashSet::new();
         for snapshot in snapshots {
-            if snapshot.kind == SnapshotKind::Retained
-                || snapshot
-                    .resource_uri
-                    .as_ref()
-                    .is_some_and(|uri| !claimed.insert(uri.clone()))
+            // A retained capture belongs to its owner's session, not to startup.
+            if snapshot.kind == SnapshotKind::Retained {
+                continue;
+            }
+            if snapshot
+                .resource_uri
+                .as_ref()
+                .is_some_and(|uri| !claimed.insert(uri.clone()))
             {
                 recovery.remaining += 1;
                 continue;
@@ -1180,9 +1286,10 @@ fn commit_restore(
 }
 
 fn gather(document: &Document, cx: &App) -> Option<SnapshotDraft> {
-    if !document.is_dirty(cx) {
-        return None;
-    }
+    document.is_dirty(cx).then(|| capture(document, cx))
+}
+
+fn capture(document: &Document, cx: &App) -> SnapshotDraft {
     let (state, provider_version) = match document.state() {
         DocumentState::Untitled { .. } => (SnapshotState::Untitled, None),
         DocumentState::Destination { .. } => (SnapshotState::Destination, None),
@@ -1190,7 +1297,7 @@ fn gather(document: &Document, cx: &App) -> Option<SnapshotDraft> {
             (SnapshotState::Persisted, Some(version.as_bytes().to_vec()))
         }
     };
-    Some(SnapshotDraft {
+    SnapshotDraft {
         document_id: document.identity(),
         title: document.title().to_string(),
         resource_uri: document
@@ -1200,7 +1307,7 @@ fn gather(document: &Document, cx: &App) -> Option<SnapshotDraft> {
         provider_version,
         text: document.model().read(cx).text(),
         captured_at_ms: now_ms(),
-    })
+    }
 }
 
 pub(crate) fn now_ms() -> i64 {
@@ -1365,13 +1472,15 @@ mod tests {
                 .retain("owner".into(), "retained-1".into(), draft(id, "checkpoint"))
                 .await
                 .unwrap()
+                .is_some()
         );
         // Reusing the same opaque key never overwrites the immutable capture.
         assert!(
-            !store
+            store
                 .retain("owner".into(), "retained-1".into(), draft(id, "newer"))
                 .await
                 .unwrap()
+                .is_none()
         );
         // A later automatic capture is a separate role and does not replace it.
         store.submit_automatic(draft(id, "automatic"));
@@ -1429,6 +1538,7 @@ mod tests {
                 .retain("owner".into(), "kept".into(), draft(orphan, "kept"))
                 .await
                 .unwrap()
+                .is_some()
         );
 
         let copy = draft(uuid::Uuid::new_v4(), "orphan");

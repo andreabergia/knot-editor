@@ -1,8 +1,9 @@
 //! Native listing of recoverable unsaved documents.
 //!
 //! The listing is the extension-independent path for snapshots that were not
-//! restored silently at startup: retained captures, older duplicates of one
-//! resource, and snapshots whose resource could not be read. It occupies the
+//! restored silently at startup: retained captures (labelled with their owner,
+//! including orphans whose owner no longer references them), older duplicates
+//! of one resource, and snapshots whose resource could not be read. It occupies the
 //! window's transient slot as a native picker, then asks whether to restore or
 //! discard the selected snapshot.
 
@@ -239,7 +240,10 @@ fn describe_snapshot(snapshot: &StoredSnapshot, now_ms: i64) -> String {
         captured_age(now_ms.saturating_sub(snapshot.captured_at_ms)),
     ];
     if snapshot.kind == SnapshotKind::Retained {
-        parts.push("retained".into());
+        parts.push(match &snapshot.owner {
+            Some(owner) => format!("retained by {owner}"),
+            None => "retained".into(),
+        });
     }
     parts.join(" · ")
 }
@@ -264,7 +268,7 @@ mod tests {
         let snapshot = StoredSnapshot {
             kind: SnapshotKind::Retained,
             capture_key: "key".into(),
-            owner: Some("owner".into()),
+            owner: Some("@example/projects".into()),
             document_id: uuid::Uuid::new_v4(),
             title: "notes.txt".into(),
             resource_uri: Some("file:///notes.txt".into()),
@@ -276,7 +280,7 @@ mod tests {
         };
         assert_eq!(
             describe_snapshot(&snapshot, 3 * 60 * 60_000),
-            "modified · file:///notes.txt · captured 3 h ago · retained"
+            "modified · file:///notes.txt · captured 3 h ago · retained by @example/projects"
         );
         assert_eq!(captured_age(30_000), "captured just now");
         assert_eq!(captured_age(5 * 60_000), "captured 5 min ago");

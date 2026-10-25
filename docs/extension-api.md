@@ -343,6 +343,30 @@ The bundled `@knot/projects` package is a worked example that combines one
 registry record, a contributed tree, a folder picker, text input, confirmation,
 and workspace opening through the public API only.
 
+## Retained document captures
+
+`recovery` keeps durable copies of open documents' text for workflows that must
+restore them later, such as project sessions. Native unsaved-document protection
+works without it; use it when your own records need to reference exact text.
+
+```js
+import { recovery, storage } from "knot";
+const capture = await recovery.retain(document.id); // durable once resolved
+await storage.write("session", { schema: 1, capture: capture.id });
+await recovery.release(previous.capture); // only after the new record committed
+const restored = await recovery.restore(capture.id);
+```
+
+Captures belong to your package's canonical identity; you never pass an owner,
+and other packages cannot see or release yours. They are immutable, survive
+unload, failure, restart, and uninstall, and are removed only by `release` or by
+the user discarding them from File › Recover Unsaved Documents…, which lists
+them with their owner. Reconcile `recovery.list()` with your records to release
+captures a cancelled call left unreferenced. Restore opens an ordinary document
+with an empty undo history and never writes the file; its `outcome` reports
+whether the text replaced nothing (`restored`) or opened beside a live document
+(`preserved`). Exact outcomes and errors live in the TypeScript reference.
+
 ## Native contributors
 
 Handler annotation and conversion contracts live in the

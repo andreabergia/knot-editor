@@ -139,19 +139,43 @@ place.
 Startup restores every automatic snapshot without a live document, newest per
 URI, after config and extension startup and before the launch gate opens
 windows. Queued launch requests therefore deduplicate against restored
-documents. Older duplicates, retained captures, and unreadable baselines remain
-in the store, and the first window's status points at File › Recover Unsaved
-Documents…. That native command lists them in the window's transient slot and
-restores or discards the selection. None of this depends on the extension host.
+documents. Older duplicates and unreadable baselines remain in the store, and the
+first window's status points at File › Recover Unsaved Documents…. Retained
+captures are left to their owners and not counted. That native command lists
+every leftover automatic snapshot and every retained capture, labelled with its
+owner, in the window's transient slot and restores or discards the selection.
+None of this depends on the extension host.
 
 Quit does not ask about dirty documents. It captures each one's current text and
 drains the store; when every capture commits, the documents stay protected for
 the next launch. A failed open, write, or drain makes quit fall back to the
 Save / Don't Save / Cancel prompts. Closing a tab or window still prompts.
 
-The extension-facing retention API remains in the [recovery
-plan](../plans/durable-document-recovery-plan.md). Implementation and physical
-schema live in [recovery.rs](../../src/app/recovery.rs).
+### Retained captures
+
+Extensions retain captures through the `recovery` namespace. The owner is the
+calling lifecycle's canonical identity bound at admission, the same owner that
+selects its record database, so it survives reload, restart, and installation
+moves; an author supplies only the application-generated capture ID, and a
+foreign capture is indistinguishable from a missing one. Retain copies an open
+document's text on the foreground, commits a new immutable row off it, and
+resolves only after the commit is durable. That is the barrier a session record
+commits against: write the record referencing a capture only after retain
+resolves, and release the capture it replaced only after the new record is
+durable. Each retain allocates a new ID, so an owner may hold several captures of
+one document.
+
+Retained captures are never removed implicitly: unload, activation failure,
+uninstall, and restart keep them, and a cancelled retain may still commit. A
+capture its owner no longer references is an orphan. Owners find orphans by
+reconciling `recovery.list()` with their own records; users see every retained
+capture with its owner in the native listing. Removal happens only through the
+owner's release or the user's explicit discard. Restore follows the rules above
+and presents the document in the caller's destination; the capture stays in
+place until released.
+
+Contracts live in [knot.d.ts](../../src/host/js/knot.d.ts); implementation and
+physical schema live in [recovery.rs](../../src/app/recovery.rs).
 
 ## Observation
 

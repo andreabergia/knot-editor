@@ -263,6 +263,40 @@ await storage.write("missing");
 await storage.write("undefined", undefined);
 // @ts-expect-error JSON data excludes functions
 await storage.write("function", () => {});
+
+import { recovery } from "knot";
+import type { CaptureId, RecoveryRestore, RetainedCapture } from "knot";
+const [openDocument] = await documents.list();
+if (openDocument) {
+  const capture: RetainedCapture = await recovery.retain(openDocument.id);
+  const persisted: string = capture.id;
+  const captureKind: "untitled" | "destination" | "persisted" = capture.kind;
+  const capturedAt: number = capture.capturedAt;
+  void [persisted, captureKind, capturedAt];
+  const restored: RecoveryRestore = await recovery.restore(capture.id);
+  if (restored.outcome === "restored") {
+    const resource: "untitled" | "unchanged" | "missing" | "changed" = restored.resource;
+    void resource;
+  } else {
+    const liveOwner: import("knot").DocumentId | null = restored.owner;
+    void liveOwner;
+  }
+  const restoredDocument: import("knot").DocumentInfo = restored.document;
+  void restoredDocument;
+  const released: boolean = await recovery.release(capture.id);
+  void released;
+  // @ts-expect-error captures are immutable
+  capture.title = "renamed";
+}
+const captures: readonly RetainedCapture[] = await recovery.list();
+void captures;
+// @ts-expect-error capture IDs are opaque and cannot be fabricated
+await recovery.release("forged");
+// @ts-expect-error retain takes a document identity, not a URI
+await recovery.retain(1);
+// @ts-expect-error no owner can be supplied
+await recovery.list("@other/package");
+void (null as unknown as CaptureId);
 // @ts-expect-error invalid-argument helper requires a string
 commands.invalidArguments(1);
 // @ts-expect-error no application namespace is declared
