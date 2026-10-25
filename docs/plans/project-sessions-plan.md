@@ -279,9 +279,10 @@ Implementation notes:
   restored captures only then; otherwise it keeps them for reconciliation and
   reports that the recovered text is not yet protected. Failed entries carry a
   `HostErrorCode`, and a missing root rejects the whole operation before any
-  change. A destination with no entries presents no documents; the root's
-  explorer keeps the workbench from being empty, and a workbench left with no
-  panes receives the ordinary untitled replacement.
+  change. A destination left without a normal document group, such as a
+  project with no recorded documents whose window would show only its docks,
+  receives the ordinary untitled document so docks never fill the window. A
+  dedicated empty start panel is deferred as D061.
 - No promise chain was needed: a lifecycle's command and listener roots are
   already serial, and a root's detached requests settle before the next root
   starts, so tracking can neither interleave with a switch nor record its

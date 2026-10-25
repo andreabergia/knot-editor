@@ -548,9 +548,19 @@ fn multi_window_sessions_reuse_create_and_release_windows(cx: &mut TestAppContex
         })
         .unwrap();
     assert_eq!(root(&created_shell, cx).as_deref(), Some("mem://product/a"));
-    // A destination without documents presents none; its root's explorer
-    // keeps the workbench from being empty.
-    assert!(h.texts(&created_shell, cx).is_empty());
+    // A destination without documents gets an untitled document, so its
+    // root's explorer dock never fills the window.
+    assert_eq!(h.texts(&created_shell, cx), [""]);
+    cx.read(|cx| {
+        assert!(
+            created_shell
+                .read(cx)
+                .workbench
+                .read(cx)
+                .normal_pane()
+                .is_some()
+        )
+    });
     assert_eq!(h.texts(&first_shell, cx), ["one"]);
 }
 

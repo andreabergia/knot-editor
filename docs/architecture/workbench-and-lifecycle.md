@@ -96,7 +96,9 @@ commit then creates any new windows first, removes document tabs from the reused
 and released windows without prompts, installs roots, and presents each window's
 entries in its normal document group. Documents left with no view are removed
 through the ordinary path, which retires their automatic recovery. Document
-splits collapse; terminal and tool tabs of reused windows stay where they are.
+splits collapse; terminal and tool tabs of reused windows stay where they are. A window
+left without a normal document group receives the ordinary untitled document, so
+its docks never fill it.
 
 Each entry presents a live document matching its identity or resource before
 considering staged content, so a session never duplicates an open document;

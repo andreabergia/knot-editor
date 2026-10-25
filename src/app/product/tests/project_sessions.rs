@@ -225,7 +225,20 @@ fn switching_suspends_and_restores_unsaved_documents_across_windows(cx: &mut Tes
     create_project(&fixture.shell, fixture.window, b.path(), "B", cx);
     assert_eq!(root(&fixture.shell, cx), Some(file_uri(b.path())));
     assert!(!cx.read(|cx| cx.windows().contains(&second_window)));
-    assert!(texts(&fixture.shell, cx).is_empty());
+    // A project without a session opens with an untitled document in the
+    // normal group, never only its docks.
+    assert_eq!(texts(&fixture.shell, cx), [""]);
+    cx.read(|cx| {
+        assert!(
+            fixture
+                .shell
+                .read(cx)
+                .workbench
+                .read(cx)
+                .normal_pane()
+                .is_some()
+        )
+    });
     let listed = listed_projects(&fixture.shell, fixture.window, cx);
     let (a_id, b_id) = (project_id(&listed, "A"), project_id(&listed, "B"));
     let suspended = &listed["sessions"][&a_id];

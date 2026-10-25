@@ -559,7 +559,9 @@ fn commit(
                     .workbench
                     .update(cx, |workbench, _| workbench.activate_tab(pane, tab));
             }
-            if shell.workbench.read(cx).panes().is_empty() {
+            // A window left with only docks would let them fill it; give it
+            // the ordinary untitled document in the normal group instead.
+            if shell.workbench.read(cx).normal_pane().is_none() {
                 shell.replace_empty_workbench(handle, cx);
             }
             shell.status = "session opened".into();

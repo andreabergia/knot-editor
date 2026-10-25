@@ -103,6 +103,16 @@ D005; tool-only layout memory shipped with the completed D049.
     toggles and their persistence scope (with D045), and terminal cell metrics
     for fonts whose shaped advance differs from the default.
 
+- **D061 — Empty normal-group start panel**
+  - Deferred: A workbench whose normal document group would be empty receives
+    an untitled document, so docks never fill the window, including after a
+    project switch to a session with no documents. A dedicated empty panel needs
+    its own surface, focus, and command-routing rules.
+  - Reconsider: The placeholder untitled document gets in the way in daily use,
+    or a start surface (recent projects and files, common commands) is
+    selected. Then replace the placeholder with a native empty-group panel that
+    keeps the normal group's position and accepts opened documents.
+
 - **D037 — Whole-pane dragging and arbitrary split-tree reshaping**
   - Deferred: D004 moves individual tabs into existing panes or new edge splits;
     moving groups of tabs and restructuring whole split branches is a separate
