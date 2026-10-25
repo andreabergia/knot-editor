@@ -1,11 +1,9 @@
 # Production extension APIs and JavaScript project management
 
-Status: ⬜ In progress. Checkpoints 1–7 and D053 are complete and approved, and
+Status: ⬜ In progress. Checkpoints 1–8 and D053 are complete and approved, and
 the [codebase health maintenance
 interlude](#maintenance-interlude--codebase-health-cleanup-) is approved.
-Checkpoint 8 is implemented and awaiting its review gate 🔍 in
-[project sessions and safe switching](project-sessions-plan.md); checkpoints 9
-and 10 remain unstarted.
+Checkpoints 9 and 10 remain unstarted; checkpoint 9 is next.
 
 Work identifiers: D046–D052, promoted D005, and completed maintenance interlude
 D053. [Roadmap](../roadmap.md) owns initiative priority; this plan owns execution
@@ -255,38 +253,33 @@ and rationale in [decisions](../decisions.md#unsaved-document-recovery-store)
 `src/app/recovery.rs`, `src/app/product/tests/recovery.rs`, the recovery handler
 tests, and the `recovery` contract in `scripts/extension-api/contract.test.ts`.
 
-### 8. Safe JS project switching and document sessions — D051, D050 🔍
+### 8. Safe JS project switching and document sessions — D051, D050 ✅
 
-Implemented and awaiting review. [Project sessions and safe
-switching](project-sessions-plan.md) owns execution detail, validation
-evidence, and the review gate. Agreed scope: a project may
-span several windows and restoring it restores all of them; membership stays
-root-derived with an active/suspended session state; one generic native
-`replaceWindows` commit swaps document tabs; active sessions are tracked live for
-hot exit; and the escape hatch is a native Restart Extension command.
+Approved 2026-10-25. `@knot/projects` keeps an active or suspended session record
+per project; a window belongs to a project when its root matches and the session
+is active, and a project may span several windows. Selecting a project retains
+the source windows' unsaved and untitled text, durably suspends the source, and
+swaps the windows through the generic `workbench.replaceWindows` commit, which
+revalidates retained revisions and rejects racing edits as `SessionConflict`;
+the registry retries with fresh captures. Active sessions follow tabs live for
+hot exit, losing the last window suspends without captures, startup suspends
+unbound sessions and reconciles orphan captures, removal names the unsaved text
+it discards, and partial restores commit and report skipped entries. A released
+window holding a terminal is cleared instead of closed, and a window left
+without a normal document group receives an untitled document (an empty start
+panel is D061). The native Restart Extension command stops and reloads one
+package, resolving health review P1-3.
 
-- Persist per-project sessions and window bindings; implement generic foreground
-  capture/prepare/replace operations and JS orchestration of durable suspension.
-  Sessions reference unsaved text through `recovery.retain`: commit a session
-  record only after its captures resolve, release replaced captures only after
-  the new record is durable, and release captures no record references.
-- Restore documents into a simple tab arrangement; preserve shared application
-  models and source state on failure. Define multi-window project activation.
-- Define removing a project with retained unsaved content and how project
-  sessions interact with the hot-exit quit established in checkpoint 7b. Terminal tabs are never persisted;
-  any terminal affected by replacement follows existing close behavior and does
-  not terminate during preparation or a failed switch. Review its visible treatment.
-- Add an extension escape hatch: a command that restarts or disables an
-  extension lifecycle through the existing terminating `unload`, or a coarse
-  per-turn watchdog built on `ExtensionWatchdog`. Switching depends on
-  JavaScript orchestration, and today a stuck turn can only be cleared by
-  quitting (review P1-3). Broader quotas and timeouts stay D019.
-- **Validation:** A→B→A with unsaved/untitled documents, concurrent views/windows,
-  racing edits, cancellation, missing destination resources, storage failure,
-  interruption between durable source capture and native commit, project deletion,
-  and event listeners that must not replace a session with intermediate state.
-- **Review gate:** dogfood suspension and restoration; approve failure/partial
-  restore results and lifecycle semantics before richer layout work.
+Current behavior lives in [session
+replacement](../architecture/workbench-and-lifecycle.md#session-replacement),
+[retained captures](../architecture/documents-and-persistence.md#retained-captures),
+[restarting a package](../architecture/extension-host.md#restarting-a-package),
+and the [extension guide](../extension-api.md#project-sessions); rationale in
+[decisions](../decisions.md#project-sessions) (project sessions, the replacement
+contract, and extension restart). Validation is in
+`src/app/product/tests/sessions.rs`, `tests/project_sessions.rs`,
+`tests/projects.rs`, `tests/extension_restart.rs`, and the `replaceWindows` and
+`windows.focus` contract in `scripts/extension-api/contract.test.ts`.
 
 ### 9. Multi-root workspace product behavior — D052 ⬜
 
@@ -334,7 +327,7 @@ roadmap register.
 | Finding | Where |
 | --- | --- |
 | Prototype removal, `Generated` removal, test-only fencing, symlink Save, Find stub, `ProductShell` split, hygiene | ✅ [Maintenance interlude](#maintenance-interlude--codebase-health-cleanup-) |
-| Extension restart/disable escape hatch (P1-3) | 🔍 Checkpoint 8: native Restart Extension, awaiting review |
+| Extension restart/disable escape hatch (P1-3) | ✅ Checkpoint 8: native Restart Extension |
 | Single-root error removal (P2-6) | Checkpoint 9 |
 | Editor view incremental line model, piece-table length cache, insert coalescing and edit-log bounding, CRLF policy (P0-1, P1-1, P2-7) | After checkpoint 10, as a focused plan before D002 and D031 |
 | `engine.rs` split and marshaling unification, command module regrouping, `app/terminal` and `app/extensions` directories, inline test extraction, tokio runtime removal (P1-6, P2-1–P2-4) | After checkpoint 10, as pure-move maintenance between slices |

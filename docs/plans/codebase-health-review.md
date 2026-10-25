@@ -85,8 +85,12 @@ and Git history carry the details.
   `pollster`, §4.8 `development.md` drift, and the `"generated"` document kind
   (former P2-7 item).**
 
+The runaway-turn escape hatch (former P1-3) landed in checkpoint 8 as the native
+Restart Extension command, which unloads and reloads one package.
+`ExtensionWatchdog` stays for per-turn timeouts under D019.
+
 Still-retained prototype code, tracked below: the core line index and
-anchored-range interval index (P0-1) and `ExtensionWatchdog` (P1-3).
+anchored-range interval index (P0-1).
 
 ## 3. Open findings
 
@@ -162,29 +166,6 @@ operation.
 - Bound the edit log once all consumers track a sequence watermark.
 
 Reconsider a tree (or rope) only after D013/D014 trigger.
-
-### P1-3: The product cannot stop a runaway extension turn
-
-🔍 Addressed by checkpoint 8's native Restart Extension command, which unloads a
-package through the terminating `unload` and loads it again; it awaits that
-checkpoint's review. `ExtensionWatchdog` and per-turn timeouts remain D019.
-
-`ExtensionWatchdog` exists and is tested (`host/pool.rs`), but the product
-never issues one. Before checkpoint 8, termination happened only on
-heap-limit exhaustion and on `unload`. The product never unloads except on
-startup rollback and shutdown, and no command reloads or disables an
-extension. A `while (true) {}` in a command or provider permanently occupies a
-pool worker: its commands never complete, and with a small pool other
-extensions starve. The UI stays responsive because painting never calls JS,
-which is good, but there is no recovery short of quitting.
-
-D019 deliberately defers *policy* (quotas, timeouts). A minimal escape hatch
-is still worth having now:
-
-- an "Extensions: Restart/Disable…" command that calls `unload`, which
-  already terminates the running turn, or
-- a generous per-turn wall-clock watchdog, measured in seconds, that
-  terminates the lifecycle and reports it in the startup report.
 
 ### P1-6: `host/engine.rs` mixes four concerns in one 10k-line file
 
@@ -343,8 +324,7 @@ This is the most carefully engineered part of the codebase:
 - immutable module graphs
 - rollback on failed entry
 
-Concerns are size and organization (P1-6), the missing runaway-turn escape
-hatch (P1-3), and the dual marshaling style. The 32 MiB default heap per
+Concerns are size and organization (P1-6) and the dual marshaling style. The 32 MiB default heap per
 isolate is reasonable. Reconsider it when bundled workflows (search,
 explorer) move to JS.
 
@@ -364,8 +344,7 @@ parts (D054).
 
 ## 5. Suggested sequencing
 
-1. **Extension escape hatch (P1-3)** in checkpoint 8, and the **single-root
-   error removal (P2-6)** in checkpoint 9.
+1. **Single-root error removal (P2-6)** in checkpoint 9.
 2. **Editor view data model (P0-1)** together with **piece-table quick wins
    (P1-1)** and the CRLF policy (P2-7) after checkpoint 10. This is one focused
    slice and the prerequisite for D002 syntax highlighting and D031 Find. Plan
