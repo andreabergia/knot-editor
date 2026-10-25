@@ -1818,6 +1818,96 @@ async fn recovery_restore(
     })?
 }
 
+/// Failures of `workbench.replaceWindows`. A rejection leaves every window,
+/// document, and capture as it was.
+#[derive(Debug, HostError)]
+pub(crate) enum ReplaceError {
+    #[error(transparent)]
+    Resource(OpenError),
+    #[error(code = "TooManyWorkspaceRoots", message = "TooManyWorkspaceRoots")]
+    TooManyWorkspaceRoots,
+    #[error(code = "OperationInProgress", message = "OperationInProgress")]
+    OperationInProgress,
+    #[error(code = "SessionConflict", message = "SessionConflict: {reason}")]
+    Conflict { reason: String },
+}
+
+impl From<AccessError> for ReplaceError {
+    fn from(error: AccessError) -> Self {
+        Self::Resource(error.into())
+    }
+}
+
+impl From<OpenError> for ReplaceError {
+    fn from(error: OpenError) -> Self {
+        Self::Resource(error)
+    }
+}
+
+impl From<RecoveryError> for ReplaceError {
+    fn from(error: RecoveryError) -> Self {
+        match error {
+            RecoveryError::Open(error) => Self::Resource(error),
+            RecoveryError::CaptureNotFound | RecoveryError::Unavailable { .. } => {
+                Self::Resource(OpenError::Access(AccessError::ContextUnavailable))
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ReplaceWindowsArguments {
+    request: product::sessions::ReplaceWindowsRequest,
+}
+
+impl HostArguments for ReplaceWindowsArguments {
+    fn decode(reader: &mut dyn ArgumentReader) -> Result<Self, DecodeError> {
+        let request = serde_json::to_value(reader.command_arguments(2)?)
+            .ok()
+            .and_then(|value| serde_json::from_value(value).ok())
+            .ok_or(DecodeError::Type("invalid window replacement"))?;
+        Ok(Self { request })
+    }
+}
+
+impl HostSuccess for product::sessions::ReplaceWindowsResult {
+    fn encode(self) -> Result<EncodedValue, DecodeError> {
+        encode_json(self)
+    }
+}
+
+#[host_operation("replaceWindows")]
+async fn replace_windows(
+    context: HostContext,
+    arguments: ReplaceWindowsArguments,
+) -> Result<product::sessions::ReplaceWindowsResult, ReplaceError> {
+    let owner = context.recovery_owner()?;
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    let request = context.request;
+    let caller = product::operations::OperationCaller {
+        host: context.host.clone(),
+        key: ExtensionKey::new(request.extension, request.lifecycle),
+        invocation: request.invocation,
+    };
+    context.foreground(|_, cx| {
+        product::sessions::replace_windows(
+            arguments.request,
+            owner,
+            caller,
+            move |result| {
+                let _ = sender.send(result);
+            },
+            cx,
+        )
+    })??;
+    receiver.await.map_err(|_| AccessError::Cancelled)?
+}
+
+#[host_operation("focusWindow")]
+async fn focus_window(context: HostContext, arguments: WindowLookup) -> Result<(), AccessError> {
+    context.foreground(|_, cx| product::sessions::focus_window(&arguments.target, cx))?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

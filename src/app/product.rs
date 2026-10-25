@@ -24,6 +24,7 @@ mod recovery_listing;
 mod relocate;
 mod render;
 mod save;
+pub(super) mod sessions;
 mod tab_drag;
 mod tools;
 

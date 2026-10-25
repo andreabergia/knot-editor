@@ -26,7 +26,9 @@ declare module "knot" {
   const presentationIdentity: unique symbol;
   const rootIdentity: unique symbol;
   /** Application-allocated identity, preserved across Save As and presentations.
-   * Reopening allocates a new identity; restart reuse is not guaranteed. */
+   * Reopening allocates a new identity. A document restored from automatic
+   * recovery keeps its identity across restart, so a session record may store
+   * it; other identities are restart-local. */
   export type DocumentId = string & { readonly [documentIdentity]: true };
   /** Root identity retained while its normalized URI remains installed. */
   export type RootId = string & { readonly [rootIdentity]: true };
@@ -109,6 +111,9 @@ declare module "knot" {
   export const windows: Readonly<{
     list(): Promise<readonly WindowInfo[]>;
     get(target: WindowTarget): Promise<WindowInfo | null>;
+    /** Activates the window and focuses its active tab.
+     * @throws HostError with InvalidTarget for a closed window, or Cancelled. */
+    focus(target: WindowTarget): Promise<void>;
   }>;
   /** Window-owned ordered roots; empty roots are valid. Closed windows return null. */
   export interface WorkspaceDestinationOptions {
@@ -264,7 +269,7 @@ declare module "knot" {
     | "ViewRegistrationNotFound" | "ContentKindMismatch"
     | "CompletionProviderNotFound" | "CommandNameInUse" | "CommandNotFound"
     | "InvalidUri" | "DocumentNotFound" | "TooManyWorkspaceRoots" | "OperationInProgress" | "PersistenceFailed" | "ResourceNotFound" | "ResourceWrongKind" | "InvalidUtf8" | "ProviderFailure" | "StorageUnavailable"
-    | "CaptureNotFound" | "RecoveryUnavailable";
+    | "CaptureNotFound" | "RecoveryUnavailable" | "SessionConflict";
   /**
    * Native operation failure. Narrow a caught Error by name === "KnotHostError"
    * and its string code property, then dispatch on code. No error constructor
@@ -692,6 +697,57 @@ declare module "knot" {
     invalidArguments(message: string): never;
   }>;
   export type PresentationCloseOutcome = Readonly<{ kind: "closed" | "cancelled" }>;
+  /** One document reference of a session window. A live document matching
+   * `document` or `uri` is always presented and any capture is ignored; else
+   * the capture is restored, else the file is opened. */
+  export interface SessionEntry {
+    readonly uri?: string | null;
+    readonly document?: DocumentId | null;
+    /** A capture retained by this owner. */
+    readonly capture?: CaptureId | null;
+  }
+  /** A document presented in a reused or released window. */
+  export interface SuspendedDocument {
+    readonly document: DocumentId;
+    /** Required when the document is dirty or a non-empty untitled document
+     * and its final view is removed; it must be retained at the document's
+     * current revision. */
+    readonly capture: CaptureId | null;
+  }
+  export interface SessionWindow {
+    /** An existing window to reuse; omission creates a window. */
+    readonly target?: WindowTarget;
+    /** Zero or one validated directory root. */
+    readonly roots: readonly string[];
+    readonly entries: readonly SessionEntry[];
+    /** Index of the entry whose tab is selected. */
+    readonly selected?: number | null;
+  }
+  export interface ReplaceWindowsOptions {
+    /** Every document presented in the reused and released windows, exactly. */
+    readonly suspend: readonly SuspendedDocument[];
+    /** Destination windows in order. */
+    readonly windows: readonly SessionWindow[];
+    /** Windows leaving the session. A released window holding a terminal is
+     * cleared instead of closed: its document tabs and roots are removed. */
+    readonly release?: readonly WindowTarget[];
+    /** Index of the destination window that receives focus. */
+    readonly focus?: number | null;
+  }
+  /** How one entry resolved. "live" presented an existing document; "missing"
+   * means a clean file or untitled document no longer exists; "failed" entries
+   * were skipped with a host error code while the rest committed. */
+  export type SessionEntryOutcome = Readonly<
+    | { kind: "live" | "opened"; document: DocumentId }
+    | { kind: "restored"; document: DocumentId; resource: "untitled" | "unchanged" | "missing" | "changed" }
+    | { kind: "missing" }
+    | { kind: "failed"; code: HostErrorCode; message: string }>;
+  export interface ReplaceWindowsResult {
+    readonly windows: readonly Readonly<{ window: WindowTarget; entries: readonly SessionEntryOutcome[] }>[];
+    /** True when every restored dirty document was durably protected by
+     * automatic recovery before resolution, so its captures may be released. */
+    readonly protected: boolean;
+  }
   /** Contributed view registration, captured selection, and clipboard access. */
   export const workbench: Readonly<{
     /** Atomically register and capture current metadata plus sequence watermark.
@@ -711,6 +767,20 @@ declare module "knot" {
      * Caller cancellation/unload before closure commits prevents the close; an
      * accepted save may already have persisted content and cannot be rolled back. */
     close(target: ViewTarget): Promise<PresentationCloseOutcome>;
+    /** Replace the document presentations of a set of windows in one
+     * foreground commit, without prompts: final-view text must already be
+     * retained. Resources and captures are read before the commit; a commit
+     * then revalidates the windows, the suspended documents, and each retained
+     * revision, so observers see only the committed result. New windows are
+     * created first; document tabs of reused windows are replaced in the normal
+     * document group while terminal and tool tabs stay; released windows close.
+     * Rejection changes nothing.
+     * @throws HostError with OperationInProgress during closure or another
+     * replacement, SessionConflict when an edit, tab, or document changed after
+     * the caller's capture, InvalidTarget, Cancelled (caller cancellation or
+     * unload before the commit), InvalidUri, TooManyWorkspaceRoots, or the
+     * workspaces.openFolder resource codes for a destination root. */
+    replaceWindows(options: ReplaceWindowsOptions): Promise<ReplaceWindowsResult>;
     /**
      * Register a lifecycle-owned native view, even before windows exist. The
      * contribution ID is the native view kind and command/keybinding scope.

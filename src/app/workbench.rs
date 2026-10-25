@@ -664,6 +664,24 @@ impl Workbench {
         Some(new_pane_id)
     }
 
+    /// Remove every document tab without closure decisions, collapsing panes
+    /// that become empty. Terminal and tool tabs stay where they are.
+    pub(crate) fn remove_document_tabs(&mut self) -> Vec<DocumentId> {
+        let tabs = self
+            .panes
+            .iter()
+            .flat_map(|pane| {
+                pane.tabs
+                    .iter()
+                    .filter_map(move |tab| Some((pane.id, tab.id, tab.document_id()?)))
+            })
+            .collect::<Vec<_>>();
+        for (pane, tab, _) in &tabs {
+            self.remove_tab(*pane, *tab);
+        }
+        tabs.into_iter().map(|(_, _, document)| document).collect()
+    }
+
     pub(crate) fn view_count(&self, document_id: DocumentId) -> usize {
         self.panes
             .iter()

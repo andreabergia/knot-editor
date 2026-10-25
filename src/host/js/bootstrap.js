@@ -818,6 +818,54 @@ export async function pickFolder(options) {
     ? { kind: "selected", uri: value.uri }
     : { kind: "dismissed" });
 }
+export async function focusWindow(target) {
+  await request("focusWindow", windowAuthority(target));
+}
+function sessionEntry(value) {
+  record(value, "session entry must be an object");
+  const entry = {
+    uri: optionalText(value.uri),
+    document: optionalText(value.document),
+    capture: optionalText(value.capture),
+  };
+  if (entry.uri === null && entry.document === null) {
+    throw new TypeError("session entry requires a uri or document");
+  }
+  return entry;
+}
+function optionalIndex(value) {
+  return value == null ? null : safeInteger(value);
+}
+export async function replaceWindows(options) {
+  record(options, "replaceWindows requires options");
+  const suspend = arrayItems(options.suspend, (value) => {
+    record(value, "suspended document must be an object");
+    return {
+      document: string(value.document, "document identity must be text"),
+      capture: optionalText(value.capture),
+    };
+  });
+  const windows = arrayItems(options.windows, (value) => {
+    record(value, "destination window must be an object");
+    return {
+      target: optionalWindowAuthority(value.target),
+      roots: arrayItems(value.roots, (uri) => string(uri, "workspace root URI must be text")),
+      entries: arrayItems(value.entries, sessionEntry),
+      selected: optionalIndex(value.selected),
+    };
+  });
+  const release = options.release == null ? [] : arrayItems(options.release, windowAuthority);
+  const value = await request("replaceWindows", {
+    suspend, windows, release, focus: optionalIndex(options.focus),
+  });
+  return Object.freeze({
+    protected: value.protected,
+    windows: Object.freeze(value.windows.map((window) => Object.freeze({
+      window: windowTarget(window.window),
+      entries: Object.freeze(window.entries.map((entry) => Object.freeze(entry))),
+    }))),
+  });
+}
 export async function getWorkspace(target) {
   const value = await request("getWorkspace", windowAuthority(target));
   return value === null ? null : workspaceFromNative(value);

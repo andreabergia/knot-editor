@@ -39,7 +39,7 @@ fn window_target(destination: &DocumentDestination) -> &WindowTarget {
     }
 }
 
-fn capture_window(
+pub(super) fn capture_window(
     target: &WindowTarget,
     cx: &mut App,
 ) -> Result<(Entity<ProductShell>, AnyWindowHandle), AccessError> {

@@ -173,6 +173,33 @@ pub(super) fn open_tab_transfer_window_with_bounds(
     )
 }
 
+/// Open an empty product window that inherits the fresh-window tool layout;
+/// session replacement presents its documents in the same turn.
+pub(super) fn open_session_window(
+    cx: &mut App,
+) -> anyhow::Result<(Entity<ProductShell>, AnyWindowHandle)> {
+    let bounds = Bounds::centered(None, size(px(1000.), px(720.)), cx);
+    let handle = cx.open_window(
+        WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            window_min_size: Some(size(px(480.), px(320.))),
+            focus: false,
+            ..Default::default()
+        },
+        |window, cx| {
+            let workbench = cx.new(|_| Workbench::empty());
+            cx.global::<ApplicationWorkbenches>()
+                .register(&workbench, window.window_handle());
+            let shell = cx.new(|_| ProductShell::new(workbench));
+            shell.update(cx, |shell, cx| shell.observe_extension_host(window, cx));
+            install_protected_window_close(&shell, window, cx);
+            shell.update(cx, |shell, cx| shell.restore_fresh_window_layout(cx));
+            shell
+        },
+    )?;
+    Ok((handle.entity(cx)?, handle.into()))
+}
+
 pub(super) fn dispatch_launch_request(request: Option<OpenRequest>, cx: &mut App) {
     let ready_request = cx
         .global::<ApplicationLaunchGate>()

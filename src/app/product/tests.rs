@@ -11,6 +11,7 @@ mod operations;
 mod persistence;
 mod projects;
 mod recovery;
+mod sessions;
 mod startup;
 mod terminal;
 mod tool_layout;

@@ -297,6 +297,50 @@ await recovery.retain(1);
 // @ts-expect-error no owner can be supplied
 await recovery.list("@other/package");
 void (null as unknown as CaptureId);
+
+import type { ReplaceWindowsResult, SessionEntryOutcome } from "knot";
+const [sourceWindow] = await windows.list();
+if (sourceWindow && openDocument) {
+  await windows.focus(sourceWindow.target);
+  const kept = await recovery.retain(openDocument.id);
+  const replaced: ReplaceWindowsResult = await workbench.replaceWindows({
+    suspend: [{ document: openDocument.id, capture: kept.id }],
+    windows: [
+      { target: sourceWindow.target, roots: ["file:///project/"], selected: 0,
+        entries: [{ uri: "file:///project/a.txt" }, { document: openDocument.id, capture: kept.id }] },
+      { roots: [], entries: [] },
+    ],
+    release: [],
+    focus: 0,
+  });
+  const protectedText: boolean = replaced.protected;
+  for (const window of replaced.windows) {
+    const target: import("knot").WindowTarget = window.window;
+    for (const outcome of window.entries) {
+      const entry: SessionEntryOutcome = outcome;
+      if (entry.kind === "restored") {
+        const resource: "untitled" | "unchanged" | "missing" | "changed" = entry.resource;
+        void resource;
+      } else if (entry.kind === "failed") {
+        const code: HostErrorCode = entry.code;
+        void code;
+      } else if (entry.kind !== "missing") {
+        const document: import("knot").DocumentId = entry.document;
+        void document;
+      }
+    }
+    void target;
+  }
+  void protectedText;
+  // @ts-expect-error every suspended document states its capture, even when null
+  await workbench.replaceWindows({ suspend: [{ document: openDocument.id }], windows: [] });
+  // @ts-expect-error window targets are opaque and cannot be fabricated
+  await workbench.replaceWindows({ suspend: [], windows: [{ target: "1", roots: [], entries: [] }] });
+  // @ts-expect-error captures are opaque identities
+  await workbench.replaceWindows({ suspend: [], windows: [{ roots: [], entries: [{ capture: "forged" }] }] });
+  // @ts-expect-error focus takes a live window target
+  await windows.focus("1");
+}
 // @ts-expect-error invalid-argument helper requires a string
 commands.invalidArguments(1);
 // @ts-expect-error no application namespace is declared
