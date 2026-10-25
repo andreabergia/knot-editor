@@ -9408,6 +9408,7 @@ globalThis.activationFinished = true;
         let unload_request = pool
             .receive_request_timeout(Duration::from_secs(1))
             .unwrap();
+        wait_for_state(&pool, unload_runtime, ExtensionState::AwaitingHostWork);
         pool.unload(unload_runtime).unwrap();
         assert_eq!(
             pending_unload.wait().unwrap_err().kind(),

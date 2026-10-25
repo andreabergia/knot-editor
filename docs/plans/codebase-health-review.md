@@ -286,9 +286,6 @@ limit.
   to its tests.
 - `examples/extensions/@example/*`: consider dropping `application-state` and
   `storage-demo` once `@knot/projects` covers the same APIs as a real reference.
-- One host test, `dropped_removed_and_unloaded_provider_requests_release_runtime_state`,
-  fails about once in 15 full-suite runs. Find the race before it starts to
-  mask real failures.
 
 ## 4. Design soundness: second opinion by subsystem
 
