@@ -16,24 +16,21 @@ uses an ordinary JavaScript project manager to validate native application APIs,
 extension UI, durable storage, multi-root workspaces, and session restoration
 including unsaved documents. API foundation, application state/operations, handler
 declarations, extension storage, native UI contributions, and the bundled project
-registry are complete; approval and validation notes live in that plan.
+registry, and unsaved-document recovery are complete; approval and validation
+notes live in that plan.
 
 Remaining order:
 
 | Checkpoint | Work identifiers | Outcome |
 | --- | --- | --- |
-| 7 | D050 | Unsaved-content recovery independent of extension health |
 | 8 | D051, D050 | Safe project switching with durable suspension/restoration |
 | 9 | D052 | Multiple roots throughout UI and resource operations |
 | 10 | D005, D051 | Layout, view-state, and startup restoration |
 
-Checkpoints 1–6 are complete and approved and checkpoint 7 is in progress (7a
-and 7b approved, 7c awaiting review), and the codebase health maintenance
-interlude is approved. The initiative plan schedules the remaining
+Checkpoints 1–7 and the codebase health maintenance interlude are complete and
+approved; checkpoint 8 is next. The initiative plan schedules the remaining
 [health review](plans/codebase-health-review.md) findings. Continue with the
-[extension platform plan](plans/extension-platform-and-projects-plan.md), whose
-D050 sub-checkpoints are detailed in the
-[focused recovery plan](plans/durable-document-recovery-plan.md).
+[extension platform plan](plans/extension-platform-and-projects-plan.md).
 Execute one checkpoint at a time and stop at its review gate; detailed scope and
 acceptance belong to those plans. The early project registry is an intermediate
 validation point, not initiative completion.

@@ -109,9 +109,9 @@ than the only recovery copy of text.
 
 The intended APIs support restoring documents, layouts, and view state. Native
 recovery must remain available when an extension or its session metadata fails.
-These guarantees are planned in the
-[extension platform initiative](plans/extension-platform-and-projects-plan.md);
-they are not yet implemented.
+Native recovery and extension-retained captures are implemented; session,
+layout, and view-state restoration are planned in the
+[extension platform initiative](plans/extension-platform-and-projects-plan.md).
 
 ## Non-goals
 
