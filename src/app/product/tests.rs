@@ -9,6 +9,7 @@ mod keybindings;
 mod observation;
 mod operations;
 mod persistence;
+mod project_sessions;
 mod projects;
 mod recovery;
 mod sessions;
@@ -55,7 +56,7 @@ use crate::app::{
 };
 
 struct GatedFileSystemProvider {
-    inner: Arc<MemoryFileSystemProvider>,
+    inner: Arc<dyn FileSystemProvider>,
     read_release: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
     replace_release: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
 }
@@ -415,7 +416,8 @@ fn wait_for_command(
             Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {
                 assert!(
                     std::time::Instant::now() < deadline,
-                    "command did not settle"
+                    "command did not settle; pending prompt: {:?}",
+                    cx.pending_prompt()
                 );
                 std::thread::yield_now();
             }

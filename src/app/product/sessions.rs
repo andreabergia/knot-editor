@@ -37,6 +37,7 @@ pub(crate) struct DestinationWindow {
     pub(crate) target: Option<String>,
     pub(crate) roots: Vec<String>,
     pub(crate) entries: Vec<SessionEntry>,
+    #[serde(default, deserialize_with = "index")]
     pub(crate) selected: Option<usize>,
 }
 
@@ -46,7 +47,15 @@ pub(crate) struct ReplaceWindowsRequest {
     pub(crate) windows: Vec<DestinationWindow>,
     #[serde(default)]
     pub(crate) release: Vec<String>,
+    #[serde(default, deserialize_with = "index")]
     pub(crate) focus: Option<usize>,
+}
+
+/// Transported JSON numbers are doubles; the facade validates them as
+/// nonnegative safe integers.
+fn index<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<usize>, D::Error> {
+    use serde::Deserialize;
+    Ok(Option::<f64>::deserialize(deserializer)?.map(|value| value as usize))
 }
 
 /// How one destination entry was resolved.

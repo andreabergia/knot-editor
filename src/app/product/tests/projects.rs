@@ -3,7 +3,7 @@
 use super::operations::empty_product_window;
 use super::*;
 
-fn wait_for_prompt(cx: &mut TestAppContext) {
+pub(super) fn wait_for_prompt(cx: &mut TestAppContext) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
     while !cx.has_pending_prompt() {
         cx.run_until_parked();
@@ -72,7 +72,7 @@ fn tree_tab_focused(
 }
 
 /// Makes the contributed tree the active tool tab so row events resolve against it.
-fn activate_tree_tab(
+pub(super) fn activate_tree_tab(
     shell: &Entity<ProductShell>,
     tree: &Entity<crate::app::tree_view::TreeView>,
     window: gpui::AnyWindowHandle,
@@ -122,7 +122,7 @@ fn clipboard_json(cx: &TestAppContext) -> serde_json::Value {
     cx.read(|cx| serde_json::from_str(&cx.read_from_clipboard().unwrap().text().unwrap()).unwrap())
 }
 
-fn wait_for_input_transient(shell: &Entity<ProductShell>, cx: &mut TestAppContext) {
+pub(super) fn wait_for_input_transient(shell: &Entity<ProductShell>, cx: &mut TestAppContext) {
     use crate::app::transient::TransientSurface;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
     loop {
@@ -152,7 +152,7 @@ fn wait_for_input_transient(shell: &Entity<ProductShell>, cx: &mut TestAppContex
     }
 }
 
-fn listed_projects(
+pub(super) fn listed_projects(
     shell: &Entity<ProductShell>,
     window: gpui::AnyWindowHandle,
     cx: &mut TestAppContext,
@@ -167,16 +167,16 @@ fn listed_projects(
     clipboard_json(cx)
 }
 
-struct Fixture {
-    documents: Entity<DocumentCollection>,
-    host: Entity<crate::app::extension_host::ProductExtensionHost>,
-    shell: Entity<ProductShell>,
-    window: gpui::AnyWindowHandle,
-    _storage: tempfile::TempDir,
-    extensions: tempfile::TempDir,
+pub(super) struct Fixture {
+    pub(super) documents: Entity<DocumentCollection>,
+    pub(super) host: Entity<crate::app::extension_host::ProductExtensionHost>,
+    pub(super) shell: Entity<ProductShell>,
+    pub(super) window: gpui::AnyWindowHandle,
+    pub(super) storage: tempfile::TempDir,
+    pub(super) extensions: tempfile::TempDir,
 }
 
-fn start_registry(cx: &mut TestAppContext) -> Fixture {
+pub(super) fn start_registry(cx: &mut TestAppContext) -> Fixture {
     let documents = install_globals(cx);
     let host = cx.update(crate::app::extension_host::install);
     let (shell, window) = empty_product_window(&documents, cx);
@@ -192,12 +192,12 @@ fn start_registry(cx: &mut TestAppContext) -> Fixture {
         host,
         shell,
         window,
-        _storage: storage,
+        storage,
         extensions,
     }
 }
 
-fn show_registry(
+pub(super) fn show_registry(
     shell: &Entity<ProductShell>,
     window: gpui::AnyWindowHandle,
     cx: &mut TestAppContext,
@@ -212,7 +212,7 @@ fn show_registry(
     cx.run_until_parked();
 }
 
-fn restart_registry(
+pub(super) fn restart_registry(
     host: &Entity<crate::app::extension_host::ProductExtensionHost>,
     extensions: &tempfile::TempDir,
     cx: &mut TestAppContext,
@@ -227,7 +227,7 @@ fn restart_registry(
     }));
 }
 
-fn create_project(
+pub(super) fn create_project(
     shell: &Entity<ProductShell>,
     window: gpui::AnyWindowHandle,
     directory: &std::path::Path,
@@ -242,7 +242,13 @@ fn create_project(
     cx.simulate_keystrokes(window, "cmd-a");
     cx.simulate_input(window, name);
     cx.simulate_keystrokes(window, "enter");
-    assert_eq!(wait_for_command(create, cx), CommandOutcome::Completed);
+    // Creating a project switches the window to it; when the command was
+    // captured on a document tab that the switch replaced, its completion
+    // reports the stale capture rather than a failure.
+    assert!(matches!(
+        wait_for_command(create, cx),
+        CommandOutcome::Completed | CommandOutcome::InvalidTarget
+    ));
 }
 
 #[gpui::test]
@@ -353,37 +359,85 @@ fn bundled_projects_registry_manages_roots_and_persists(cx: &mut TestAppContext)
 }
 
 #[gpui::test]
-fn opening_a_project_with_a_missing_root_is_actionable(cx: &mut TestAppContext) {
+fn switching_to_a_project_with_a_missing_root_is_actionable_and_keeps_the_source(
+    cx: &mut TestAppContext,
+) {
     let fixture = start_registry(cx);
     let tree = wait_for_contributed_view(&fixture.shell, "builtin.projects", cx);
 
-    let project_dir = tempfile::tempdir().unwrap();
-    let path = project_dir.path().to_path_buf();
+    let gone_dir = tempfile::tempdir().unwrap();
+    let path = gone_dir.path().to_path_buf();
     create_project(&fixture.shell, fixture.window, &path, "Gone", cx);
+    let other_dir = tempfile::tempdir().unwrap();
+    let other_uri = url::Url::from_file_path(other_dir.path())
+        .unwrap()
+        .to_string();
+    create_project(
+        &fixture.shell,
+        fixture.window,
+        other_dir.path(),
+        "Other",
+        cx,
+    );
     let listed = listed_projects(&fixture.shell, fixture.window, cx);
-    let id = listed["projects"][0]["id"].as_str().unwrap().to_string();
-    wait_for_api_condition(cx, |cx| {
-        tree.read(cx).visible_labels().iter().any(|l| l == "Gone")
-    });
+    let id = |name: &str| {
+        listed["projects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|project| project["name"] == name)
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let (gone, other) = (id("Gone"), id("Other"));
+    assert_eq!(listed["sessions"][&gone]["state"], "suspended");
+    assert_eq!(listed["sessions"][&other]["state"], "active");
 
+    wait_for_api_condition(cx, |cx| {
+        let labels = tree.read(cx).visible_labels();
+        labels.iter().any(|label| label == "Gone") && labels.iter().any(|label| label == "Other")
+    });
     std::fs::remove_dir_all(&path).unwrap();
     activate_tree_tab(&fixture.shell, &tree, fixture.window, cx);
     cx.update_window(fixture.window, |_, window, cx| {
         tree.update(cx, |tree, cx| {
-            tree.activate_row_for_test(&id, window.window_handle(), cx)
+            tree.activate_row_for_test(&gone, window.window_handle(), cx)
         });
     })
     .unwrap();
     wait_for_prompt(cx);
+    assert!(
+        cx.pending_prompt()
+            .is_some_and(|(_, message)| message.contains("ResourceNotFound"))
+    );
     cx.simulate_prompt_answer("OK");
 
-    // The record is retained even though opening its root failed.
+    // The record is retained and the source window stays on its project.
     let listed = listed_projects(&fixture.shell, fixture.window, cx);
-    assert_eq!(listed["projects"][0]["name"], "Gone");
     assert_eq!(
-        listed["projects"][0]["roots"][0],
+        listed["projects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|project| project["id"] == gone.as_str())
+            .unwrap()["roots"][0],
         url::Url::from_file_path(&path).unwrap().to_string()
     );
+    assert_eq!(listed["sessions"][&other]["state"], "active");
+    cx.read(|cx| {
+        assert_eq!(
+            fixture
+                .shell
+                .read(cx)
+                .workspace
+                .snapshot()
+                .root()
+                .map(ToString::to_string),
+            Some(other_uri.clone())
+        );
+    });
 }
 
 #[gpui::test]
