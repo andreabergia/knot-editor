@@ -1,4 +1,4 @@
-//! Protected presentation closure through the public host.
+//! Protected closure of tabs, windows, and quit: native prompts and the public host.
 
 use super::operations::{empty_product_window, install_operation_fixture};
 use super::*;
@@ -580,4 +580,579 @@ await commands.register("close.terminal-ready", () => {});
         assert_eq!(documents.read(cx).documents().count(), 1);
     });
     host.update(cx, |host, cx| host.unload(key, cx).unwrap());
+}
+
+#[gpui::test]
+async fn dirty_final_tab_close_cancel_preserves_the_document_and_view(cx: &mut TestAppContext) {
+    let documents = install_globals(cx);
+    let document = cx.update(|cx| create_untitled_document(&documents, cx));
+    let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+    model.update(cx, |model, _| model.replace(0..0, "unsaved").unwrap());
+    let (shell, window) = product_window(document, model, cx);
+
+    let execution = dispatch_product_command(&shell, window, CLOSE_TAB_COMMAND, cx);
+    cx.run_until_parked();
+    assert!(cx.has_pending_prompt());
+    cx.simulate_prompt_answer("Cancel");
+
+    assert_eq!(
+        execution.completion.await.unwrap(),
+        CommandOutcome::Cancelled
+    );
+    cx.read(|cx| {
+        assert!(documents.read(cx).get(document).is_some());
+        assert_eq!(shell.read(cx).workbench.read(cx).view_count(document), 1);
+    });
+}
+
+#[gpui::test]
+async fn discarding_a_dirty_final_tab_closes_it_and_installs_a_replacement(
+    cx: &mut TestAppContext,
+) {
+    let documents = install_globals(cx);
+    let document = cx.update(|cx| create_untitled_document(&documents, cx));
+    let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+    model.update(cx, |model, _| model.replace(0..0, "unsaved").unwrap());
+    let (shell, window) = product_window(document, model, cx);
+
+    let execution = dispatch_product_command(&shell, window, CLOSE_TAB_COMMAND, cx);
+    cx.run_until_parked();
+    cx.simulate_prompt_answer("Don't Save");
+
+    assert_eq!(
+        execution.completion.await.unwrap(),
+        CommandOutcome::Completed
+    );
+    cx.read(|cx| {
+        assert!(documents.read(cx).get(document).is_none());
+        let replacement = shell
+            .read(cx)
+            .workbench
+            .read(cx)
+            .focused_pane()
+            .unwrap()
+            .active_tab()
+            .document_id()
+            .unwrap();
+        assert_ne!(replacement, document);
+        assert!(documents.read(cx).get(replacement).is_some());
+    });
+}
+
+#[gpui::test]
+async fn saving_a_dirty_tab_uses_existing_persistence_before_closing(cx: &mut TestAppContext) {
+    let documents = install_globals(cx);
+    let (filesystems, provider) = memory_filesystems_with_provider();
+    cx.set_global(ApplicationFileSystems(filesystems));
+    let uri = ResourceUri::parse("mem://product/notes.txt").unwrap();
+    let opened = provider.read(uri.clone()).await.unwrap();
+    let model = cx.new(|_| BufferModel::from_text("loaded text"));
+    let document = documents.update(cx, |documents, cx| {
+        documents.create_persisted(
+            "notes.txt",
+            model.clone(),
+            uri.clone(),
+            0,
+            opened.version,
+            cx,
+        )
+    });
+    model.update(cx, |model, _| model.replace(0..0, "changed ").unwrap());
+    let (shell, window) = product_window(document, model, cx);
+
+    let execution = dispatch_product_command(&shell, window, CLOSE_TAB_COMMAND, cx);
+    cx.run_until_parked();
+    cx.simulate_prompt_answer("Save");
+
+    assert_eq!(
+        execution.completion.await.unwrap(),
+        CommandOutcome::Completed
+    );
+    assert_eq!(
+        provider.read(uri).await.unwrap().bytes,
+        b"changed loaded text"
+    );
+    cx.read(|cx| assert!(documents.read(cx).get(document).is_none()));
+}
+
+#[gpui::test]
+async fn edit_racing_protected_close_save_preserves_the_document_and_every_view(
+    cx: &mut TestAppContext,
+) {
+    let documents = install_globals(cx);
+    let root = ResourceUri::parse("mem://product/").unwrap();
+    let provider = Arc::new(MemoryFileSystemProvider::new(root).unwrap());
+    let uri = ResourceUri::parse("mem://product/notes.txt").unwrap();
+    provider.seed_file(uri.clone(), b"loaded text").unwrap();
+    let opened = provider.read(uri.clone()).await.unwrap();
+    let (replace_release, gated_replace) = tokio::sync::oneshot::channel();
+    let gated_provider = Arc::new(GatedFileSystemProvider {
+        inner: provider.clone(),
+        read_release: Mutex::new(None),
+        replace_release: Mutex::new(Some(gated_replace)),
+    });
+    let mut filesystems = FileSystemProviderRegistry::new();
+    filesystems.register("mem", gated_provider).unwrap();
+    cx.set_global(ApplicationFileSystems(Arc::new(filesystems)));
+
+    let model = cx.new(|_| BufferModel::from_text("loaded text"));
+    let document = documents.update(cx, |documents, cx| {
+        documents.create_persisted(
+            "notes.txt",
+            model.clone(),
+            uri.clone(),
+            0,
+            opened.version,
+            cx,
+        )
+    });
+    model.update(cx, |model, _| model.replace(0..0, "captured ").unwrap());
+    let (shell, window) = product_window(document, model.clone(), cx);
+    cx.update_window(window, |_, window, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.split(SplitDirection::Horizontal, window, cx)
+        });
+    })
+    .unwrap();
+
+    let execution = dispatch_product_command(&shell, window, CLOSE_WINDOW_COMMAND, cx);
+    cx.run_until_parked();
+    assert!(cx.has_pending_prompt());
+    cx.simulate_prompt_answer("Save");
+    cx.run_until_parked();
+
+    model.update(cx, |model, _| model.replace(0..0, "newer ").unwrap());
+    replace_release.send(()).unwrap();
+
+    assert!(matches!(
+        execution.completion.await.unwrap(),
+        CommandOutcome::HandlerFailure { .. }
+    ));
+    assert_eq!(
+        provider.read(uri.clone()).await.unwrap().bytes,
+        b"captured loaded text"
+    );
+    cx.read(|cx| {
+        assert!(cx.windows().contains(&window));
+        assert_eq!(model.read(cx).text(), "newer captured loaded text");
+        assert!(documents.read(cx).get(document).unwrap().is_dirty(cx));
+        assert_eq!(shell.read(cx).workbench.read(cx).view_count(document), 2);
+    });
+}
+
+#[gpui::test]
+async fn closing_one_of_multiple_views_of_a_dirty_document_does_not_prompt(
+    cx: &mut TestAppContext,
+) {
+    let documents = install_globals(cx);
+    let document = cx.update(|cx| create_untitled_document(&documents, cx));
+    let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+    model.update(cx, |model, _| model.replace(0..0, "unsaved").unwrap());
+    let (shell, window) = product_window(document, model, cx);
+    cx.update_window(window, |_, window, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.split(SplitDirection::Horizontal, window, cx)
+        });
+    })
+    .unwrap();
+
+    let execution = dispatch_product_command(&shell, window, CLOSE_TAB_COMMAND, cx);
+    assert_eq!(
+        execution.completion.await.unwrap(),
+        CommandOutcome::Completed
+    );
+    assert!(!cx.has_pending_prompt());
+    cx.read(|cx| {
+        assert!(documents.read(cx).get(document).is_some());
+        assert_eq!(shell.read(cx).workbench.read(cx).view_count(document), 1);
+    });
+}
+
+#[gpui::test]
+async fn window_close_prompts_once_for_a_multiply_viewed_dirty_document(cx: &mut TestAppContext) {
+    let documents = install_globals(cx);
+    let document = cx.update(|cx| create_untitled_document(&documents, cx));
+    let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+    model.update(cx, |model, _| model.replace(0..0, "unsaved").unwrap());
+    let (shell, window) = product_window(document, model, cx);
+    cx.update_window(window, |_, window, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.split(SplitDirection::Horizontal, window, cx)
+        });
+    })
+    .unwrap();
+
+    let execution = dispatch_product_command(&shell, window, CLOSE_WINDOW_COMMAND, cx);
+    cx.run_until_parked();
+    assert!(cx.has_pending_prompt());
+    cx.simulate_prompt_answer("Don't Save");
+
+    assert_eq!(
+        execution.completion.await.unwrap(),
+        CommandOutcome::Completed
+    );
+    assert!(!cx.has_pending_prompt());
+    cx.read(|cx| {
+        assert!(!cx.windows().contains(&window));
+        assert!(documents.read(cx).get(document).is_none());
+    });
+}
+
+#[gpui::test]
+async fn window_close_keeps_a_dirty_document_visible_in_another_window_without_prompting(
+    cx: &mut TestAppContext,
+) {
+    let documents = install_globals(cx);
+    let document = cx.update(|cx| create_untitled_document(&documents, cx));
+    let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+    model.update(cx, |model, _| model.replace(0..0, "unsaved").unwrap());
+    let (first_shell, first_window) = product_window(document, model.clone(), cx);
+    let (_second_shell, second_window) = product_window(document, model, cx);
+
+    let execution = dispatch_product_command(&first_shell, first_window, CLOSE_WINDOW_COMMAND, cx);
+    assert_eq!(
+        execution.completion.await.unwrap(),
+        CommandOutcome::Completed
+    );
+    assert!(!cx.has_pending_prompt());
+    cx.read(|cx| {
+        assert!(!cx.windows().contains(&first_window));
+        assert!(cx.windows().contains(&second_window));
+        assert!(documents.read(cx).get(document).unwrap().is_dirty(cx));
+    });
+}
+
+#[gpui::test]
+async fn quit_prompts_once_for_a_document_shared_across_windows(cx: &mut TestAppContext) {
+    let documents = install_globals(cx);
+    install_failing_recovery(cx);
+    let document = cx.update(|cx| create_untitled_document(&documents, cx));
+    let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+    model.update(cx, |model, _| model.replace(0..0, "unsaved").unwrap());
+    let (first_shell, first_window) = product_window(document, model.clone(), cx);
+    let _second = product_window(document, model, cx);
+
+    let execution = dispatch_product_command(&first_shell, first_window, QUIT_COMMAND, cx);
+    cx.run_until_parked();
+    assert!(cx.has_pending_prompt());
+    cx.simulate_prompt_answer("Don't Save");
+
+    assert_eq!(
+        execution.completion.await.unwrap(),
+        CommandOutcome::Completed
+    );
+    assert!(!cx.has_pending_prompt());
+}
+
+#[gpui::test]
+async fn multi_document_quit_applies_serial_save_and_discard_decisions(cx: &mut TestAppContext) {
+    let documents = install_globals(cx);
+    install_failing_recovery(cx);
+    let (filesystems, provider) = memory_filesystems_with_provider();
+    cx.set_global(ApplicationFileSystems(filesystems));
+    let uri = ResourceUri::parse("mem://product/notes.txt").unwrap();
+    let opened = provider.read(uri.clone()).await.unwrap();
+    let first_model = cx.new(|_| BufferModel::from_text("loaded text"));
+    let first = documents.update(cx, |documents, cx| {
+        documents.create_persisted(
+            "notes.txt",
+            first_model.clone(),
+            uri.clone(),
+            0,
+            opened.version,
+            cx,
+        )
+    });
+    first_model.update(cx, |model, _| model.replace(0..0, "saved ").unwrap());
+    let second_model = cx.new(|_| BufferModel::from_text("second"));
+    let second = documents.update(cx, |documents, cx| {
+        documents.create_untitled("Second", second_model.clone(), cx)
+    });
+    second_model.update(cx, |model, _| model.replace(0..0, "discarded ").unwrap());
+    let (shell, window) = product_window(first, first_model, cx);
+    shell.update(cx, |shell, cx| {
+        let pane = shell.workbench.read(cx).focused_pane_id().unwrap();
+        shell.workbench.update(cx, |workbench, cx| {
+            workbench
+                .open_tab_for_document(pane, second, second_model, cx)
+                .unwrap();
+        });
+    });
+
+    let execution = dispatch_product_command(&shell, window, QUIT_COMMAND, cx);
+    cx.run_until_parked();
+    assert!(cx.has_pending_prompt());
+    cx.simulate_prompt_answer("Save");
+    cx.run_until_parked();
+    assert!(cx.has_pending_prompt());
+    cx.simulate_prompt_answer("Don't Save");
+
+    assert_eq!(
+        execution.completion.await.unwrap(),
+        CommandOutcome::Completed
+    );
+    assert_eq!(
+        provider.read(uri).await.unwrap().bytes,
+        b"saved loaded text"
+    );
+    assert!(!cx.has_pending_prompt());
+}
+
+#[gpui::test]
+async fn later_quit_cancellation_preserves_every_document_and_view(cx: &mut TestAppContext) {
+    let documents = install_globals(cx);
+    install_failing_recovery(cx);
+    let (first, second, shell, window) = two_dirty_untitled_documents_in_one_window(&documents, cx);
+
+    let execution = dispatch_product_command(&shell, window, QUIT_COMMAND, cx);
+    cx.run_until_parked();
+    cx.simulate_prompt_answer("Don't Save");
+    cx.run_until_parked();
+    assert!(cx.has_pending_prompt());
+    cx.simulate_prompt_answer("Cancel");
+
+    assert_eq!(
+        execution.completion.await.unwrap(),
+        CommandOutcome::Cancelled
+    );
+    cx.read(|cx| {
+        assert!(cx.windows().contains(&window));
+        assert_eq!(shell.read(cx).workbench.read(cx).tab_snapshots().len(), 2);
+        assert!(documents.read(cx).get(first).unwrap().is_dirty(cx));
+        assert!(documents.read(cx).get(second).unwrap().is_dirty(cx));
+    });
+}
+
+#[gpui::test]
+async fn later_quit_save_failure_preserves_every_document_and_view(cx: &mut TestAppContext) {
+    let documents = install_globals(cx);
+    install_failing_recovery(cx);
+    cx.set_global(ApplicationFileSystems(memory_filesystems()));
+    cx.set_global(ApplicationSaveDialog(Arc::new(FixedSaveDialog(
+        SaveDialogOutcome::Selected(ResourceUri::parse("mem://product/src").unwrap()),
+    ))));
+    let (first, second, shell, window) = two_dirty_untitled_documents_in_one_window(&documents, cx);
+
+    let execution = dispatch_product_command(&shell, window, QUIT_COMMAND, cx);
+    cx.run_until_parked();
+    cx.simulate_prompt_answer("Don't Save");
+    cx.run_until_parked();
+    assert!(cx.has_pending_prompt());
+    cx.simulate_prompt_answer("Save");
+
+    assert!(matches!(
+        execution.completion.await.unwrap(),
+        CommandOutcome::HandlerFailure { .. }
+    ));
+    cx.read(|cx| {
+        assert!(cx.windows().contains(&window));
+        assert_eq!(shell.read(cx).workbench.read(cx).tab_snapshots().len(), 2);
+        assert!(documents.read(cx).get(first).unwrap().is_dirty(cx));
+        assert!(documents.read(cx).get(second).unwrap().is_dirty(cx));
+    });
+}
+
+#[gpui::test]
+async fn later_window_close_cancellation_preserves_every_tab(cx: &mut TestAppContext) {
+    let documents = install_globals(cx);
+    let first = cx.update(|cx| create_untitled_document(&documents, cx));
+    let first_model = cx.read(|cx| documents.read(cx).get(first).unwrap().model().clone());
+    first_model.update(cx, |model, _| model.replace(0..0, "first").unwrap());
+    let second_model = cx.new(|_| BufferModel::from_text("second"));
+    let second = cx.update(|cx| {
+        documents.update(cx, |documents, cx| {
+            documents.create_untitled("Second", second_model.clone(), cx)
+        })
+    });
+    second_model.update(cx, |model, _| model.replace(0..0, "changed ").unwrap());
+    let (shell, window) = product_window(first, first_model, cx);
+    shell.update(cx, |shell, cx| {
+        let pane = shell.workbench.read(cx).focused_pane_id().unwrap();
+        shell.workbench.update(cx, |workbench, cx| {
+            workbench
+                .open_tab_for_document(pane, second, second_model, cx)
+                .unwrap();
+        });
+    });
+
+    let execution = dispatch_product_command(&shell, window, CLOSE_WINDOW_COMMAND, cx);
+    cx.run_until_parked();
+    cx.simulate_prompt_answer("Don't Save");
+    cx.run_until_parked();
+    assert!(cx.has_pending_prompt());
+    cx.simulate_prompt_answer("Cancel");
+
+    assert_eq!(
+        execution.completion.await.unwrap(),
+        CommandOutcome::Cancelled
+    );
+    cx.read(|cx| {
+        assert!(cx.windows().contains(&window));
+        assert_eq!(shell.read(cx).workbench.read(cx).tab_snapshots().len(), 2);
+        assert!(documents.read(cx).get(first).is_some());
+        assert!(documents.read(cx).get(second).is_some());
+    });
+}
+
+#[gpui::test]
+async fn close_save_failure_preserves_the_dirty_tab(cx: &mut TestAppContext) {
+    let documents = install_globals(cx);
+    cx.set_global(ApplicationFileSystems(memory_filesystems()));
+    cx.set_global(ApplicationSaveDialog(Arc::new(FixedSaveDialog(
+        SaveDialogOutcome::Selected(ResourceUri::parse("mem://product/src").unwrap()),
+    ))));
+    let document = cx.update(|cx| create_untitled_document(&documents, cx));
+    let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+    model.update(cx, |model, _| model.replace(0..0, "unsaved").unwrap());
+    let (shell, window) = product_window(document, model, cx);
+
+    let execution = dispatch_product_command(&shell, window, CLOSE_TAB_COMMAND, cx);
+    cx.run_until_parked();
+    cx.simulate_prompt_answer("Save");
+
+    assert!(matches!(
+        execution.completion.await.unwrap(),
+        CommandOutcome::HandlerFailure { .. }
+    ));
+    cx.read(|cx| {
+        assert!(documents.read(cx).get(document).unwrap().is_dirty(cx));
+        assert_eq!(shell.read(cx).workbench.read(cx).view_count(document), 1);
+    });
+}
+
+#[gpui::test]
+async fn edit_while_discard_prompt_is_open_rejects_the_close(cx: &mut TestAppContext) {
+    let documents = install_globals(cx);
+    let document = cx.update(|cx| create_untitled_document(&documents, cx));
+    let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+    model.update(cx, |model, _| model.replace(0..0, "first edit").unwrap());
+    let (shell, window) = product_window(document, model.clone(), cx);
+
+    let execution = dispatch_product_command(&shell, window, CLOSE_TAB_COMMAND, cx);
+    cx.run_until_parked();
+    assert!(cx.has_pending_prompt());
+    model.update(cx, |model, _| model.replace(0..0, "racing edit ").unwrap());
+    cx.simulate_prompt_answer("Don't Save");
+
+    assert_eq!(
+        execution.completion.await.unwrap(),
+        CommandOutcome::InvalidTarget
+    );
+    cx.read(|cx| {
+        assert!(documents.read(cx).get(document).unwrap().is_dirty(cx));
+        assert_eq!(shell.read(cx).workbench.read(cx).view_count(document), 1);
+    });
+}
+
+#[gpui::test]
+async fn scope_change_while_prompting_rejects_window_close(cx: &mut TestAppContext) {
+    let documents = install_globals(cx);
+    let document = cx.update(|cx| create_untitled_document(&documents, cx));
+    let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+    model.update(cx, |model, _| model.replace(0..0, "unsaved").unwrap());
+    let (shell, window) = product_window(document, model, cx);
+    let execution = dispatch_product_command(&shell, window, CLOSE_WINDOW_COMMAND, cx);
+    cx.run_until_parked();
+    assert!(cx.has_pending_prompt());
+
+    let added = cx.update(|cx| create_untitled_document(&documents, cx));
+    let added_model = cx.read(|cx| documents.read(cx).get(added).unwrap().model().clone());
+    shell.update(cx, |shell, cx| {
+        let pane = shell.workbench.read(cx).focused_pane_id().unwrap();
+        shell.workbench.update(cx, |workbench, cx| {
+            workbench
+                .open_tab_for_document(pane, added, added_model, cx)
+                .unwrap();
+        });
+    });
+    cx.simulate_prompt_answer("Don't Save");
+
+    assert_eq!(
+        execution.completion.await.unwrap(),
+        CommandOutcome::InvalidTarget
+    );
+    cx.read(|cx| {
+        assert!(cx.windows().contains(&window));
+        assert_eq!(shell.read(cx).workbench.read(cx).tab_snapshots().len(), 2);
+        assert!(documents.read(cx).get(document).is_some());
+        assert!(documents.read(cx).get(added).is_some());
+    });
+}
+
+#[gpui::test]
+async fn concurrent_close_is_rejected_without_a_second_prompt(cx: &mut TestAppContext) {
+    let documents = install_globals(cx);
+    let document = cx.update(|cx| create_untitled_document(&documents, cx));
+    let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+    model.update(cx, |model, _| model.replace(0..0, "unsaved").unwrap());
+    let (shell, window) = product_window(document, model, cx);
+    let target = cx
+        .update_window(window, |_, window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.focus_active_editor(window, cx);
+                shell.capture_command_target(window, cx).unwrap()
+            })
+        })
+        .unwrap();
+    let dispatcher = cx.read(|cx| cx.global::<ApplicationProductCommands>().0.clone());
+    let first = dispatcher.update(cx, |dispatcher, cx| {
+        dispatcher.dispatch(
+            Command {
+                name: CLOSE_TAB_COMMAND.into(),
+                arguments: CommandArgumentValue::Null,
+            },
+            target.clone(),
+            cx,
+        )
+    });
+    cx.run_until_parked();
+    assert!(cx.has_pending_prompt());
+    let second = dispatcher.update(cx, |dispatcher, cx| {
+        dispatcher.dispatch(
+            Command {
+                name: CLOSE_TAB_COMMAND.into(),
+                arguments: CommandArgumentValue::Null,
+            },
+            target,
+            cx,
+        )
+    });
+
+    assert_eq!(
+        second.completion.await.unwrap(),
+        CommandOutcome::Unavailable
+    );
+    assert!(cx.has_pending_prompt());
+    cx.simulate_prompt_answer("Cancel");
+    assert_eq!(first.completion.await.unwrap(), CommandOutcome::Cancelled);
+    cx.read(|cx| assert_eq!(shell.read(cx).workbench.read(cx).view_count(document), 1));
+}
+
+#[gpui::test]
+async fn native_window_close_is_vetoed_until_protected_closure_finishes(cx: &mut TestAppContext) {
+    let documents = install_globals(cx);
+    let document = cx.update(|cx| create_untitled_document(&documents, cx));
+    let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+    model.update(cx, |model, _| model.replace(0..0, "unsaved").unwrap());
+    let (shell, window_cx) = cx.add_window_view(|window, cx| {
+        let workbench = cx.new(|cx| Workbench::new_for_document(document, model, cx));
+        cx.global::<ApplicationWorkbenches>()
+            .register(&workbench, window.window_handle());
+        ProductShell::new(workbench)
+    });
+    window_cx.update(|window, cx| {
+        install_protected_window_close(&shell, window, cx);
+        shell.read(cx).focus_active_editor(window, cx);
+    });
+
+    assert!(!window_cx.simulate_close());
+    window_cx.run_until_parked();
+    assert!(window_cx.has_pending_prompt());
+    window_cx.simulate_prompt_answer("Don't Save");
+    window_cx.run_until_parked();
+
+    window_cx.read(|cx| {
+        assert!(cx.windows().is_empty());
+        assert!(documents.read(cx).get(document).is_none());
+    });
 }

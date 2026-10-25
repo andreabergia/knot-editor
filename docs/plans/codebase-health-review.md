@@ -240,11 +240,11 @@ no behavior change. It also makes the routing table in `AGENTS.md` shorter.
 ### P2-3: Huge inline test modules
 
 `engine.rs` (5,250 test lines), `editor.rs`, `model.rs`, `buffer.rs`,
-`scheduler.rs`, and `recovery.rs` carry tests inline after `mod tests`. The
-`ProductShell` tests moved unchanged into `product/tests.rs` (8,000 lines),
-which should now be split by theme into the existing `product/tests/` files.
+`scheduler.rs`, and `recovery.rs` carry tests inline after `mod tests`.
 `terminal_session_tests.rs` shows the sibling-file alternative. This improves
-navigation and incremental-compile ergonomics.
+navigation and incremental-compile ergonomics. ✅ The product shell tests are
+already split by theme under `product/tests/`; `product/tests.rs` keeps only
+shared fixtures.
 
 ### P2-4: Three executor models
 

@@ -818,3 +818,447 @@ await commands.register("observation.stream", () => {
     );
     host.update(cx, |host, cx| host.unload(key, cx).unwrap());
 }
+
+#[gpui::test]
+fn installed_application_observer_tracks_zero_window_activation_and_native_commits(
+    cx: &mut TestAppContext,
+) {
+    fn report(
+        shell: &Entity<ProductShell>,
+        window: gpui::AnyWindowHandle,
+        cx: &mut TestAppContext,
+    ) -> serde_json::Value {
+        let execution = dispatch_product_command(shell, window, "example.application-state", cx);
+        assert_eq!(wait_for_command(execution, cx), CommandOutcome::Completed);
+        cx.read(|cx| {
+            serde_json::from_str(&cx.read_from_clipboard().unwrap().text().unwrap()).unwrap()
+        })
+    }
+    let root = tempfile::tempdir().unwrap();
+    install_extension(
+        root.path(),
+        "@example/application-state",
+        &[],
+        &[(
+            "main.js",
+            include_str!("../../../../examples/extensions/@example/application-state/dist/main.js"),
+        )],
+    );
+    install_extension(
+        root.path(),
+        "@example/broken-observer",
+        &[],
+        &[(
+            "main.js",
+            "import {workbench} from 'knot'; await workbench.observe(() => { throw new Error('failed activation listener ran'); }); throw new Error('activation failed');",
+        )],
+    );
+    let documents = install_globals(cx);
+    let host = cx.update(super::super::super::extension_host::install);
+    host.update(cx, |host, cx| {
+        host.start_installed_extensions(root.path().to_path_buf(), cx)
+    });
+    let startup = wait_for_extension_report(&host, cx);
+    assert_eq!(
+        startup.report.entries[0].result,
+        super::super::super::extension_load::LoadResult::Loaded
+    );
+    assert!(matches!(
+        startup.report.entries[1].result,
+        super::super::super::extension_load::LoadResult::Failed(_)
+    ));
+    cx.read(|cx| assert_eq!(host.read(cx).application_observer_count(), 1));
+    let document = cx.update(|cx| create_untitled_document(&documents, cx));
+    let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+    let id = cx.read(|cx| {
+        documents
+            .read(cx)
+            .get(document)
+            .unwrap()
+            .identity()
+            .to_string()
+    });
+    let (first, first_window) = product_window(document, model.clone(), cx);
+    cx.update_window(first_window, |_, window, cx| {
+        window.activate_window();
+        first.read(cx).focus_active_editor(window, cx);
+    })
+    .unwrap();
+    let initial = report(&first, first_window, cx);
+    assert_eq!(initial["initial"]["documents"], 0);
+    assert_eq!(initial["initial"]["windows"], 0);
+    assert_eq!(initial["documents"].as_array().unwrap().len(), 1);
+    assert!(
+        initial["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|event| event["type"] == "documentOpened" && event["document"] == id)
+    );
+    model.update(cx, |model, cx| {
+        model.replace(0..0, "edit").unwrap();
+        cx.notify();
+    });
+    let edited = report(&first, first_window, cx);
+    assert_eq!(edited["documents"][0]["dirty"], true);
+    assert_eq!(edited["documents"][0]["revision"], 1);
+    model.update(cx, |model, cx| {
+        model.undo().unwrap();
+        cx.notify();
+    });
+    let split = dispatch_product_command(
+        &first,
+        first_window,
+        super::super::SPLIT_HORIZONTAL_COMMAND,
+        cx,
+    );
+    assert_eq!(wait_for_command(split, cx), CommandOutcome::Completed);
+    let (second, second_window) = product_window(document, model.clone(), cx);
+    first.update(cx, |shell, cx| {
+        shell.install_workspace(ResourceUri::parse("mem://observer/").unwrap(), cx)
+    });
+    let source = cx.read(|cx| {
+        let shell = first.read(cx);
+        let pane = shell.workbench.read(cx).focused_pane().unwrap();
+        shell
+            .capture_tab_relocation(pane.id(), pane.active_tab_id(), cx)
+            .unwrap()
+    });
+    let destination = cx.read(|cx| {
+        let workbench = &second.read(cx).workbench;
+        let pane = workbench.read(cx).focused_pane().unwrap();
+        super::super::relocate::TabRelocationDestination {
+            window: second_window,
+            workbench: workbench.downgrade(),
+            tab: crate::app::workbench::TabMoveDestination::At {
+                anchor: workbench
+                    .read(cx)
+                    .capture_tab_move(pane.id(), pane.active_tab_id())
+                    .unwrap(),
+                placement: crate::app::workbench::TabMovePlacement::End,
+            },
+        }
+    });
+    assert_eq!(
+        cx.update_window(first_window, |_, window, cx| first.update(
+            cx,
+            |shell, cx| shell.relocate_tab_to(&source, &destination, window, cx)
+        ))
+        .unwrap(),
+        CommandOutcome::Completed
+    );
+    let updated = report(&first, first_window, cx);
+    let mut tabs = updated["windows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|window| {
+            window["panes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|pane| pane["tabs"].as_array().unwrap().len())
+                .sum::<usize>()
+        })
+        .collect::<Vec<_>>();
+    tabs.sort();
+    assert_eq!(tabs, [2, 2]);
+    assert_eq!(updated["documents"][0]["dirty"], false);
+    assert_eq!(updated["documents"][0]["revision"], 2);
+    assert_eq!(updated["windows"].as_array().unwrap().len(), 2);
+    let events = updated["events"].as_array().unwrap();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event["type"] == "documentOpened" && event["document"] == id)
+            .count(),
+        1
+    );
+    for kind in [
+        "documentChanged",
+        "windowOpened",
+        "presentationsChanged",
+        "workspaceChanged",
+        "activeTargetChanged",
+    ] {
+        assert!(
+            events.iter().any(|event| event["type"] == kind),
+            "missing {kind}: {events:?}"
+        );
+    }
+    let mut previous = updated["initial"]["watermark"].as_u64().unwrap();
+    for event in events {
+        let sequence = event["sequence"].as_u64().unwrap();
+        assert!(sequence > previous);
+        previous = sequence;
+    }
+    let installed_root = updated["windows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find_map(|window| window["roots"].as_array().unwrap().first())
+        .unwrap()["id"]
+        .clone();
+    first.update(cx, |shell, cx| {
+        shell.install_workspace(ResourceUri::parse("mem://observer/").unwrap(), cx)
+    });
+    let retained = report(&first, first_window, cx);
+    assert!(
+        retained["windows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|window| window["generation"] == 2 && window["roots"][0]["id"] == installed_root)
+    );
+    first.update(cx, |shell, cx| {
+        shell.replace_workspace_roots(Vec::new(), cx).unwrap()
+    });
+    let cleared = report(&first, first_window, cx);
+    assert!(
+        cleared["windows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|window| window["roots"].as_array().unwrap().is_empty())
+    );
+    let before_rejection = cleared["events"].as_array().unwrap().len();
+    first.update(cx, |shell, cx| {
+        assert!(
+            shell
+                .replace_workspace_roots(
+                    vec![
+                        ResourceUri::parse("mem://one/").unwrap(),
+                        ResourceUri::parse("mem://two/").unwrap()
+                    ],
+                    cx
+                )
+                .is_err()
+        )
+    });
+    assert_eq!(
+        report(&first, first_window, cx)["events"]
+            .as_array()
+            .unwrap()
+            .len(),
+        before_rejection
+    );
+    first.update(cx, |shell, cx| {
+        shell.install_workspace(ResourceUri::parse("mem://observer/").unwrap(), cx)
+    });
+    let reinstalled = report(&first, first_window, cx);
+    assert!(
+        reinstalled["windows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|window| window["generation"] == 4
+                && window["roots"][0]["id"] != installed_root
+                && !window["roots"].as_array().unwrap().is_empty())
+    );
+    for (shell, window) in [(&second, second_window), (&first, first_window)] {
+        let close = dispatch_product_command(shell, window, super::super::CLOSE_WINDOW_COMMAND, cx);
+        assert_eq!(wait_for_command(close, cx), CommandOutcome::Completed);
+    }
+    let replacement = cx.update(|cx| create_untitled_document(&documents, cx));
+    let replacement_model =
+        cx.read(|cx| documents.read(cx).get(replacement).unwrap().model().clone());
+    let (replacement_shell, replacement_window) =
+        product_window(replacement, replacement_model.clone(), cx);
+    let closed = report(&replacement_shell, replacement_window, cx);
+    assert!(!cx.read(|cx| model.read(cx).is_open()));
+    let events = closed["events"].as_array().unwrap();
+    assert!(
+        events
+            .iter()
+            .any(|event| event["type"] == "documentClosed" && event["document"] == id)
+    );
+    assert!(events.iter().any(|event| event["type"] == "windowClosed"));
+    let stopped = dispatch_product_command(
+        &replacement_shell,
+        replacement_window,
+        "example.stop-application-observer",
+        cx,
+    );
+    assert_eq!(wait_for_command(stopped, cx), CommandOutcome::Completed);
+    cx.read(|cx| assert_eq!(host.read(cx).application_observer_count(), 0));
+    let stopped_count = report(&replacement_shell, replacement_window, cx)["events"]
+        .as_array()
+        .unwrap()
+        .len();
+    replacement_model.update(cx, |model, cx| {
+        model.replace(0..0, "after disposal").unwrap();
+        cx.notify();
+    });
+    assert_eq!(
+        report(&replacement_shell, replacement_window, cx)["events"]
+            .as_array()
+            .unwrap()
+            .len(),
+        stopped_count
+    );
+}
+
+#[gpui::test]
+fn application_listener_can_query_edit_fail_and_dispose_without_blocking_queued_roots(
+    cx: &mut TestAppContext,
+) {
+    use crate::host::lifecycle::ExtensionKey;
+    const SOURCE: &str = r#"
+import { commands, documents, workbench } from "knot";
+let count = 0, last = 0;
+const failing = await workbench.observe(() => { throw new Error("isolated observer failure"); });
+const observation = await workbench.observe(async (event) => {
+  if (event.sequence <= observation.watermark || event.sequence <= last) throw new Error("observation order");
+  last = event.sequence;
+  if (event.type !== "documentChanged") return;
+  count++;
+  const current = await documents.get(event.document.id);
+  const snapshot = await current.buffer.snapshot();
+  await current.buffer.applyEdits([{ range: { startByteOffset: 0, endByteOffset: 0 }, text: "listener " }], { ifRevision: snapshot.revision });
+  const disposal = observation.dispose();
+  if (disposal !== observation.dispose()) throw new Error("disposal promise changed");
+  await disposal;
+});
+await commands.register("observation.verify", async () => {
+  if (count !== 1) throw new Error(`listener count ${count}`);
+  if (!(await (await documents.list())[0].buffer.snapshot()).text.startsWith("listener ")) throw new Error("listener mutation missing");
+  await failing.dispose();
+});
+await commands.register("observation.live", () => {});
+await commands.register("observation.install-for-unload", async () => { await workbench.observe(() => {}); });
+"#;
+    let documents = install_globals(cx);
+    let host = cx.update(super::super::super::extension_host::install);
+    let key = ExtensionKey::new(ExtensionId::new(708), ExtensionLifecycleId::new(1));
+    host.update(cx, |host, cx| {
+        let execution = host.load_test_source(key, SOURCE).unwrap();
+        cx.spawn(async move |_, _| {
+            execution.await.unwrap();
+        })
+        .detach();
+    });
+    wait_for_api_condition(cx, |cx| {
+        cx.global::<ApplicationProductCommands>()
+            .0
+            .read(cx)
+            .catalog()
+            .borrow()
+            .resolve("observation.install-for-unload")
+            .is_ok()
+    });
+    let document = cx.update(|cx| create_untitled_document(&documents, cx));
+    let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+    let (shell, window) = product_window(document, model.clone(), cx);
+    model.update(cx, |model, cx| {
+        model.replace(0..0, "edit").unwrap();
+        cx.notify();
+    });
+    let verify = dispatch_product_command(&shell, window, "observation.verify", cx);
+    assert_eq!(wait_for_command(verify, cx), CommandOutcome::Completed);
+    cx.read(|cx| assert_eq!(host.read(cx).application_observer_count(), 0));
+    let install = dispatch_product_command(&shell, window, "observation.install-for-unload", cx);
+    assert_eq!(wait_for_command(install, cx), CommandOutcome::Completed);
+    cx.read(|cx| assert_eq!(host.read(cx).application_observer_count(), 1));
+    host.update(cx, |host, cx| host.unload(key, cx).unwrap());
+    cx.read(|cx| assert_eq!(host.read(cx).application_observer_count(), 0));
+}
+
+#[gpui::test]
+fn application_queries_use_live_product_state_and_distinct_target_authority(
+    cx: &mut TestAppContext,
+) {
+    use crate::host::lifecycle::ExtensionKey;
+    const SOURCE: &str = r#"
+import { commands, documents, windows, workspaces, editor } from "knot";
+if ((await documents.list()).length || (await windows.list()).length) throw new Error("startup catalog not empty");
+let savedId, savedWindows;
+await commands.register("queries.catalog", async ({ target }) => {
+  const docs = await documents.list();
+  const wins = await windows.list();
+  if (docs.length !== 1 || wins.length !== 2) throw new Error("catalog scope/dedup");
+  const doc = docs[0];
+  if (doc.kind !== "untitled" || doc.title !== "Clean" || doc.dirty || doc.resourceUri !== null || doc.revision !== 0) throw new Error("document metadata");
+  if ((await doc.buffer.snapshot()).text !== "owned") throw new Error("document buffer");
+  if ((await documents.get(doc.id)).buffer !== doc.buffer) throw new Error("document lookup");
+  if (await documents.get("missing") !== null) throw new Error("missing identity");
+  for (const win of wins) {
+const pane = win.panes[0], tab = pane.tabs[0];
+if (tab.document !== doc.id || tab.buffer !== doc.buffer || tab.kind !== "document") throw new Error("presentation association");
+if (pane.selected !== tab.target || tab.target.pane !== pane.target || tab.target.window !== win.target) throw new Error("target identity");
+const again = await windows.get(win.target);
+if (again.panes[0].tabs[0].target !== tab.target) throw new Error("unstable target");
+const workspace = await workspaces.get(win.target);
+if (workspace.window !== win.target || workspace.roots.length !== 0 || workspace.generation !== 0) throw new Error("empty workspace");
+for (const value of [docs, doc, wins, win, pane, pane.tabs, tab, tab.target, workspace, workspace.roots]) {
+  if (!Object.isFrozen(value)) throw new Error("mutable snapshot");
+}
+  }
+  for (const invalid of [target, {}, wins[0].panes[0].target, wins[0].panes[0].tabs[0].target]) {
+try { await windows.get(invalid); } catch (error) {
+  if (error.code === "InvalidTarget") continue;
+  throw error;
+}
+throw new Error("invalid live window accepted");
+  }
+  try { await editor.activeBuffer(wins[0].panes[0].tabs[0].target); throw new Error("live target gained invocation authority"); }
+  catch (error) { if (error.code !== "InvalidTarget") throw error; }
+  savedId = doc.id; savedWindows = wins.map(win => win.target);
+});
+await commands.register("queries.closed", async () => {
+  if (await documents.get(savedId) !== null) throw new Error("closed document catalogued");
+  const values = await Promise.all(savedWindows.map(target => windows.get(target)));
+  if (values.filter(value => value === null).length !== 1) throw new Error("closed window catalogued");
+  const closed = savedWindows[values.findIndex(value => value === null)];
+  if (await workspaces.get(closed) !== null) throw new Error("closed workspace catalogued");
+});
+await commands.register("queries.terminal", async () => {
+  const wins = await windows.list();
+  const terminal = wins.flatMap(win => win.panes.flatMap(pane => pane.tabs)).find(tab => tab.kind === "terminal");
+  if (!terminal || terminal.buffer !== null || terminal.document !== null) throw new Error("terminal pretends to be a document");
+  if (!wins.some(win => win.currentTarget === terminal.target)) throw new Error("terminal focus missing");
+});
+"#;
+    let documents = install_globals(cx);
+    let host = cx.update(super::super::super::extension_host::install);
+    let key = ExtensionKey::new(ExtensionId::new(707), ExtensionLifecycleId::new(1));
+    host.update(cx, |host, cx| {
+        let execution = host.load_test_source(key, SOURCE).unwrap();
+        cx.spawn(async move |_, _| {
+            execution.await.unwrap();
+        })
+        .detach();
+    });
+    wait_for_api_condition(cx, |cx| {
+        cx.global::<ApplicationProductCommands>()
+            .0
+            .read(cx)
+            .catalog()
+            .borrow()
+            .resolve("queries.terminal")
+            .is_ok()
+    });
+    let model = cx.new(|_| BufferModel::from_text("owned"));
+    let document = documents.update(cx, |documents, cx| {
+        documents.create_untitled("Clean", model.clone(), cx)
+    });
+    let (first, first_window) = product_window(document, model.clone(), cx);
+    let (second, second_window) = product_window(document, model, cx);
+    let (_diagnostic, _) =
+        cx.add_window_view(|_, cx| crate::app::tree_view::TreeView::new("diagnostic", "1", cx));
+    for (shell, window, command) in [
+        (&first, first_window, "queries.catalog"),
+        (&first, first_window, CLOSE_TAB_COMMAND),
+        (&second, second_window, super::super::CLOSE_WINDOW_COMMAND),
+        (&first, first_window, "queries.closed"),
+        (&first, first_window, NEW_TERMINAL_COMMAND),
+        (&first, first_window, "queries.terminal"),
+    ] {
+        let execution = dispatch_product_command(shell, window, command, cx);
+        assert_eq!(
+            wait_for_command(execution, cx),
+            CommandOutcome::Completed,
+            "{command}"
+        );
+    }
+    host.update(cx, |host, cx| host.unload(key, cx).unwrap());
+}

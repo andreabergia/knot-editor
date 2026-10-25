@@ -235,8 +235,8 @@ directory; see [documents and
 persistence](../architecture/documents-and-persistence.md). Generated-document
 rationale lives in [decisions](../decisions.md#generated-text-surfaces).
 `ProductShell` concerns live in `src/app/product/{save,open,closure,tools,render,launch}.rs`.
-Its inline tests moved unchanged to `product/tests.rs`; splitting them by theme
-belongs to the post-initiative test extraction. One host engine test,
+Its inline tests moved to `product/tests.rs` and were later split by theme under
+`product/tests/`, leaving shared fixtures in `product/tests.rs`. One host engine test,
 `dropped_removed_and_unloaded_provider_requests_release_runtime_state`, was
 already flaky before the interlude (about one failure in 15 full-suite runs).
 
