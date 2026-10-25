@@ -328,6 +328,10 @@ pub(crate) fn run(initial_request: Option<OpenRequest>) {
                         "Recover Unsaved Documents…",
                         ProductCommandSource::new(commands::RECOVER_COMMAND),
                     ),
+                    MenuItem::action(
+                        "Restart Extension…",
+                        ProductCommandSource::new(commands::RESTART_EXTENSION_COMMAND),
+                    ),
                     MenuItem::action("Close Tab", ProductCommandSource::new(CLOSE_TAB_COMMAND)),
                     MenuItem::action(
                         "Close Window",
