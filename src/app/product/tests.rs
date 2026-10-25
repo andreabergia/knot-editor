@@ -6260,6 +6260,61 @@ async fn save_creates_a_destination_before_binding_it_as_persisted(cx: &mut Test
     });
 }
 
+#[cfg(unix)]
+#[gpui::test]
+fn opening_and_saving_through_a_symlink_keeps_the_link_and_updates_its_target(
+    cx: &mut TestAppContext,
+) {
+    let links = tempfile::tempdir().unwrap();
+    let targets = tempfile::tempdir().unwrap();
+    let target = targets.path().join("dotfile");
+    let link = links.path().join(".dotfile");
+    std::fs::write(&target, "linked text").unwrap();
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+    let documents = install_globals(cx);
+    cx.set_global(ApplicationOpenDialog(Arc::new(FixedOpenDialog(
+        OpenDialogOutcome::Selected(link.clone()),
+    ))));
+    let document = cx.update(|cx| create_untitled_document(&documents, cx));
+    let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+    let (shell, window) = product_window(document, model, cx);
+    let execution = dispatch_product_command(&shell, window, super::OPEN_COMMAND, cx);
+    assert_eq!(wait_for_command(execution, cx), CommandOutcome::Completed);
+    let opened = cx.read(|cx| {
+        let pane = shell.read(cx).workbench.read(cx).focused_pane().unwrap();
+        pane.active_tab().editor().unwrap().read(cx).model().clone()
+    });
+    assert_eq!(cx.read(|cx| opened.read(cx).text()), "linked text");
+    opened.update(cx, |model, cx| {
+        let len = model.text().len();
+        model.replace(0..len, "saved through the link").unwrap();
+        cx.notify();
+    });
+
+    let execution = dispatch_product_command(&shell, window, SAVE_COMMAND, cx);
+    assert_eq!(wait_for_command(execution, cx), CommandOutcome::Completed);
+    assert!(
+        std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(std::fs::read_link(&link).unwrap(), target);
+    assert_eq!(
+        std::fs::read_to_string(&target).unwrap(),
+        "saved through the link"
+    );
+    cx.read(|cx| {
+        let document = documents
+            .read(cx)
+            .documents()
+            .find(|document| document.model() == &opened)
+            .unwrap();
+        assert!(matches!(document.state(), DocumentState::Persisted { .. }));
+        assert!(!document.is_dirty(cx));
+    });
+}
+
 #[gpui::test]
 async fn edit_racing_save_keeps_the_newer_revision_dirty(cx: &mut TestAppContext) {
     let documents = install_globals(cx);
