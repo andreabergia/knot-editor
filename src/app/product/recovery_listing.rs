@@ -184,7 +184,7 @@ impl ProductShell {
         });
     }
 
-    fn in_window<R>(
+    pub(super) fn in_window<R>(
         this: &WeakEntity<Self>,
         window: AnyWindowHandle,
         cx: &mut AsyncApp,

@@ -584,3 +584,30 @@ fn a_partial_restore_commits_and_reports_what_was_skipped(cx: &mut TestAppContex
     assert_eq!(root(&fixture.shell, cx), Some(file_uri(a.path())));
     assert_eq!(texts(&fixture.shell, cx), ["one"]);
 }
+
+#[gpui::test]
+fn restarting_the_registry_keeps_bound_sessions_active(cx: &mut TestAppContext) {
+    let fixture = start_registry(cx);
+    let a = project_dir("one.txt", "one");
+    create_project(&fixture.shell, fixture.window, a.path(), "A", cx);
+    let a_id = project_id(&listed_projects(&fixture.shell, fixture.window, cx), "A");
+
+    let restart = dispatch_product_command(
+        &fixture.shell,
+        fixture.window,
+        super::super::commands::RESTART_EXTENSION_COMMAND,
+        cx,
+    );
+    assert_eq!(wait_for_command(restart, cx), CommandOutcome::Completed);
+    wait_for_api_condition(cx, |cx| fixture.shell.read(cx).transient.is_some());
+    cx.simulate_input(fixture.window, OWNER);
+    cx.simulate_keystrokes(fixture.window, "enter");
+    wait_for_prompt(cx);
+    assert_eq!(cx.pending_prompt().unwrap().0, "Restarted @knot/projects");
+    cx.simulate_prompt_answer("OK");
+    cx.run_until_parked();
+
+    let listed = listed_projects(&fixture.shell, fixture.window, cx);
+    assert_eq!(listed["sessions"][&a_id]["state"], "active");
+    assert_eq!(root(&fixture.shell, cx), Some(file_uri(a.path())));
+}

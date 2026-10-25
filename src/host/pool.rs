@@ -218,7 +218,7 @@ impl ExtensionPool {
 
     #[allow(
         dead_code,
-        reason = "the stuck-extension escape hatch (checkpoint 8) issues it"
+        reason = "per-turn timeouts (D019) issue it; Restart Extension unloads instead"
     )]
     pub(crate) fn watchdog(
         &self,
@@ -242,7 +242,7 @@ impl ExtensionPool {
 /// Cloneable, non-V8 watchdog for forcefully interrupting one isolate.
 #[allow(
     dead_code,
-    reason = "the stuck-extension escape hatch (checkpoint 8) issues it"
+    reason = "per-turn timeouts (D019) issue it; Restart Extension unloads instead"
 )]
 pub(crate) struct ExtensionWatchdog {
     handle: engine::TerminationHandle,
@@ -250,7 +250,7 @@ pub(crate) struct ExtensionWatchdog {
 
 #[allow(
     dead_code,
-    reason = "the stuck-extension escape hatch (checkpoint 8) issues it"
+    reason = "per-turn timeouts (D019) issue it; Restart Extension unloads instead"
 )]
 impl ExtensionWatchdog {
     pub(crate) fn terminate(&self) -> bool {

@@ -162,6 +162,19 @@ pub(crate) async fn recover(context: CommandContext, (): ()) -> Result<(), Comma
         .await
 }
 
+#[command("extensions.restart", title = "Restart Extension…", id = RESTART_EXTENSION_COMMAND, participant = Workbench)]
+pub(crate) async fn restart_extension(
+    context: CommandContext,
+    (): (),
+) -> Result<(), CommandOutcome> {
+    context
+        .shell(|shell, target, window, cx| {
+            shell.start_extension_restart(target, window, cx);
+            Ok(())
+        })
+        .await
+}
+
 #[command("editor.show-completions", title = "Show Completions", id = SHOW_COMPLETIONS_COMMAND, participant = Workbench)]
 pub(crate) async fn show_completions(
     context: CommandContext,

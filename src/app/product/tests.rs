@@ -4,6 +4,7 @@ mod closure;
 mod commands;
 mod editing;
 mod extension_api;
+mod extension_restart;
 mod git_status;
 mod keybindings;
 mod observation;
