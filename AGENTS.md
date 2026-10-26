@@ -74,8 +74,9 @@ updated. Use ✅ and other emoji to mark executed steps.
 - Code comments and module documentation must describe the current design and
   behavior only. Do not record migrations, previous locations, roadmap phases,
   or implementation history in code; Git history is the source for that.
-- When executing multiple steps or tasks, split them into logical commits as
-  you go.
+- When executing multiple steps or tasks, commit each logical step as soon as
+  it is done and verified, before starting the next one. Never accumulate
+  several steps of work and try to split them into commits at the end.
 - Don't use conventional commits.
 - Run `cargo fmt` once at the end of Rust work, before committing. Do not use
   `cargo fmt --check` or manually format individual files.
