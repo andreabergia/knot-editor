@@ -400,8 +400,11 @@ captures you restored from can be released once your new record is durable.
 
 `@knot/projects` keeps one `session:<projectId>` record per project, separate
 from its registry record. A session is `active` while the project has windows;
-a window belongs to it when its root matches and the session is active, so
-opening a suspended project's folder by hand never binds it. Selecting a project
+a window belongs to it when its roots equal the project's roots, in any order,
+and the session is active, so opening a suspended project's folders by hand
+never binds it. Adding or removing a folder in a bound window updates the
+project and its other windows; clearing the folders, or choosing another
+project's folders, takes the window out of the project. Selecting a project
 suspends the current one, retaining its unsaved and untitled text in the
 suspended record, and restores the destination's windows; a project may span
 several windows. While active, the record follows tabs live, so a hot-exit quit

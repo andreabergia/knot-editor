@@ -254,13 +254,6 @@ an easy simplification consistent with "keep the design simple."
 - gpui `0.2` is a pre-1.0 framework pulled from crates.io. Expect API churn.
   Keeping usage behind Knot-owned views, as you do now, is the right hedge.
 
-### P2-6: Single-root workspace limit is enforced deep in the model
-
-`WorkspaceState::replace_roots` rejects more than one root
-(`TooManyWorkspaceRoots`). This is expected before D052. Note it so that
-checkpoint 9 removes the error type entirely, rather than raising a
-limit.
-
 ### P2-7: Small items
 
 - The editor normalizes CRLF on input (`editor.rs:1254`) and trims a
@@ -344,11 +337,10 @@ parts (D054).
 
 ## 5. Suggested sequencing
 
-1. **Single-root error removal (P2-6)** in checkpoint 9.
-2. **Editor view data model (P0-1)** together with **piece-table quick wins
+1. **Editor view data model (P0-1)** together with **piece-table quick wins
    (P1-1)** and the CRLF policy (P2-7) after checkpoint 10. This is one focused
    slice and the prerequisite for D002 syntax highlighting and D031 Find. Plan
    it in `docs/plans/`.
-3. **Structural splits (P1-6, P2-1, P2-2, P2-3, P2-4).** These are pure moves,
+2. **Structural splits (P1-6, P2-1, P2-2, P2-3, P2-4).** These are pure moves,
    best done between slices, one subsystem per commit, so history stays
    readable and the plans don't collide.

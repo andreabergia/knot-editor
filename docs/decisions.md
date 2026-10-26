@@ -157,10 +157,17 @@ selection. Native code owns workspaces and roots; the registry asks the
 application to open or replace them, so project identity and policy stay in
 JavaScript while the application keeps every private bypass closed.
 
-A window belongs to a project when its root matches the project's root and the
-project's session is active; the registry persists no per-window binding, and
-roots are unique per project. Overlapping or multi-root matching arrives with
-multi-root workspaces.
+A window belongs to a project when its roots equal the project's roots, ignoring
+order, and the project's session is active. No two projects share a root set,
+while one folder may belong to several projects. The registry persists no
+per-window binding: the binding lives in memory and is rederived from root sets
+at activation, so a restart can never resurrect a stale association.
+
+Projects follow root edits. When a bound window's roots change to a set no other
+project uses, the project adopts it and its other windows follow through the
+public `replaceRoots`, so a project stays one root set across its windows without
+a separate Add Folder to Project command. Clearing the roots, or choosing
+another project's set, unbinds the window instead of merging projects.
 
 The Projects tool starts hidden. Its visibility and dock selection are native
 tool-layout state: a command-invoked extension show or hide publishes the
@@ -445,6 +452,26 @@ saving the captured content state leaves racing edits dirty. Application-wide UR
 ownership prevents two open documents from claiming the same destination.
 
 Reference: [documents and persistence](architecture/documents-and-persistence.md).
+
+## Multi-root workspaces
+
+A window holds an ordered list of roots. Proposed sets are deduplicated after
+normalization, keeping the first occurrence, rather than rejected: two spellings
+of one folder are the same root, so an error would only make callers normalize
+first. Retained URIs keep their root IDs, which makes add, remove, and reorder
+plain replacements of the whole list with no separate mutation API.
+
+Nested and overlapping roots are allowed, because a monorepo and one of its
+packages are both reasonable roots. Each root is browsed independently: explorer
+expansion and selection are keyed by root ID and URI so the two copies of a
+folder stay independent, while directory listings are cached by URI. Every root
+is a top-level row, even when there is only one, so root actions always have an
+obvious target and there is one layout and keyboard model. Folder Open keeps
+replacing every root, matching its single-root meaning; Add Folder appends.
+Removing a root never closes documents, since documents are independent of
+workspace containment.
+
+Reference: [documents and persistence](architecture/documents-and-persistence.md#workspaces-and-resource-trees).
 
 ## Application document and root identity
 

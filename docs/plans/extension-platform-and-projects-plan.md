@@ -3,8 +3,8 @@
 Status: ⬜ In progress. Checkpoints 1–8 and D053 are complete and approved, and
 the [codebase health maintenance
 interlude](#maintenance-interlude--codebase-health-cleanup-) is approved.
-Checkpoint 9 is in progress (9a native multi-root support done, 9b next);
-checkpoint 10 remains unstarted.
+Checkpoint 9 is implemented and awaits its review gate; checkpoint 10 remains
+unstarted.
 
 Work identifiers: D046–D052, promoted D005, and completed maintenance interlude
 D053. [Roadmap](../roadmap.md) owns initiative priority; this plan owns execution
@@ -370,41 +370,43 @@ sub-checkpoints, 9a native and 9b projects, with one review gate at the end.
   explorer [architecture references](../architecture/documents-and-persistence.md#workspaces-and-resource-trees)
   describe the new behavior; the decision record waits for the review gate.
 
-#### 9b. Multi-root projects ⬜
+#### 9b. Multi-root projects ✅
 
-- ⬜ Membership compares order-insensitive root sets instead of first roots.
+- ✅ Membership compares order-insensitive root sets instead of first roots.
   `projects.create` rejects a root set another project already uses. The
   Projects tree and picker describe a project by its first root's label plus
   `+N`.
-- ⬜ Live tracking keeps an in-memory window→project binding, adopts root edits
+- ✅ Live tracking keeps an in-memory window→project binding, adopts root edits
   from bound windows into the project record, and propagates them to the
   project's other windows with `workspaces.replaceRoots`. Switching passes the
   project's full root list to `replaceWindows`.
-- ⬜ Records: schema 1 already stores `roots` as an array, so existing
+- ✅ Records: schema 1 already stores `roots` as an array, so existing
   single-root records load unchanged and keep their IDs. The registry schema
   stays 1 unless 9b needs a field, in which case it gains a read-time upgrade.
   Update the header comment and the
   [bundled project registry decision](../decisions.md#bundled-project-registry) wording
   about first-root matching.
-- **Validation:** `tests/projects.rs` and `tests/project_sessions.rs` for
+- ✅ **Validation:** `tests/projects.rs` and `tests/project_sessions.rs` for
   set-equality membership regardless of order; adding and removing a root in
   a bound window updating the record and the project's second window; clearing
   roots unbinding (and suspending on the last window); a set colliding with
   another project unbinding instead of merging; a stored single-root schema-1
   record loading with its ID; and a multi-root project switched away, restored,
   and restored again after restart (startup suspension and capture
-  reconciliation included).
+  reconciliation included). All live in `product/tests/project_sessions.rs`;
+  the existing registry reload test covers a stored schema-1 record keeping
+  its ID, and the schema stayed 1.
 
 #### Documentation and review gate
 
-- ⬜ Update the workspaces section of
+- ✅ Update the workspaces section of
   [documents and persistence](../architecture/documents-and-persistence.md#workspaces-and-resource-trees),
   the explorer notes in [workbench lifecycle](../architecture/workbench-and-lifecycle.md),
   and `architecture.md` only if ownership changes (it should not). Add a
   *Multi-root workspaces* decision recording deduplication over rejection,
   allowed overlap with `(RootId, URI)` view state, replace-on-Open, and
   projects following root edits. Remove P2-6 from the health-review table.
-- **Review gate:** approve root semantics and native navigation in the product:
+- ⏸️ **Review gate:** approve root semantics and native navigation in the product:
   add, remove, and reorder roots; overlapping roots; Open replacing roots;
   projects following edits across two windows; and a multi-root project
   surviving switch and restart.
@@ -443,7 +445,7 @@ roadmap register.
 | --- | --- |
 | Prototype removal, `Generated` removal, test-only fencing, symlink Save, Find stub, `ProductShell` split, hygiene | ✅ [Maintenance interlude](#maintenance-interlude--codebase-health-cleanup-) |
 | Extension restart/disable escape hatch (P1-3) | ✅ Checkpoint 8: native Restart Extension |
-| Single-root error removal (P2-6) | Checkpoint 9 |
+| Single-root error removal (P2-6) | ✅ Checkpoint 9a |
 | Editor view incremental line model, piece-table length cache, insert coalescing and edit-log bounding, CRLF policy (P0-1, P1-1, P2-7) | After checkpoint 10, as a focused plan before D002 and D031 |
 | `engine.rs` split and marshaling unification, command module regrouping, `app/terminal` and `app/extensions` directories, inline test extraction, tokio runtime removal (P1-6, P2-1–P2-4) | After checkpoint 10, as pure-move maintenance between slices |
 
