@@ -771,6 +771,7 @@ view = await workbench.registerView({
   placement: { location: "left", visible: false },
   actions: [
     { label: "New Project", command: "projects.create" },
+    { label: "New Window", command: "projects.new-window" },
     { label: "Refresh", command: "projects.refresh" },
   ],
 });
@@ -857,6 +858,24 @@ await commands.registerForView(VIEW_ID, "projects.select", async ({ target }) =>
   const label = await workbench.selectedText();
   const project = label === null ? null : projectByName(label);
   if (project !== null) await switchTo(project, target.windowTarget);
+});
+
+// A window opened with the project's roots binds to it like any other window
+// with those roots.
+await commands.register("projects.new-window", async ({ target }) => {
+  await reload();
+  await syncBindings(await windows.list());
+  const id = bindings.get(target.windowTarget);
+  const project = id === undefined ? null : projectById(id);
+  if (project === null) {
+    await report("this window is not part of a project; select a project first");
+    return;
+  }
+  try {
+    await windows.open({ roots: project.roots });
+  } catch (error) {
+    await report(`cannot open a window for ${project.name}: ${describe(error)}`);
+  }
 });
 
 await commands.register("projects.rename", async ({ arguments: args }) => {

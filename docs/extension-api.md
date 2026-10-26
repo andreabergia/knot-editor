@@ -406,7 +406,9 @@ a window belongs to it when its roots equal the project's roots, in any order,
 and the session is active, so opening a suspended project's folders by hand
 never binds it. Adding or removing a folder in a bound window updates the
 project and its other windows; clearing the folders, or choosing another
-project's folders, takes the window out of the project. Selecting a project
+project's folders, takes the window out of the project. The Projects tool's
+New Window action (`projects.new-window`) opens another window on the current
+window's project, while File › New Blank Window opens one outside any project. Selecting a project
 suspends the current one, retaining its unsaved and untitled text in the
 suspended record, and restores the destination's windows; a project may span
 several windows. While active, the record follows tabs live, so a hot-exit quit

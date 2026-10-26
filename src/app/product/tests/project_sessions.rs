@@ -811,3 +811,34 @@ fn a_multi_root_project_restores_every_root_across_switches_and_restarts(cx: &mu
     assert_eq!(texts(&fixture.shell, cx), ["see dirty"]);
     assert!(!cx.has_pending_prompt());
 }
+
+#[gpui::test]
+fn a_new_project_window_opens_with_the_project_roots_and_joins_it(cx: &mut TestAppContext) {
+    let fixture = start_registry(cx);
+    let a = project_dir("one.txt", "one");
+    let c = project_dir("c.txt", "see");
+    let (a_uri, c_uri) = (file_uri(a.path()), file_uri(c.path()));
+    create_project(&fixture.shell, fixture.window, a.path(), "A", cx);
+    set_roots(&fixture.shell, &[&a_uri, &c_uri], cx);
+    let a_id = project_id(&listed_projects(&fixture.shell, fixture.window, cx), "A");
+
+    let opened =
+        dispatch_product_command(&fixture.shell, fixture.window, "projects.new-window", cx);
+    assert_eq!(wait_for_command(opened, cx), CommandOutcome::Completed);
+    let shells = product_shells(cx);
+    assert_eq!(shells.len(), 2);
+    let (_, created) = shells
+        .iter()
+        .find(|(window, _)| *window != fixture.window)
+        .unwrap();
+    wait_for_roots(created, &[&a_uri, &c_uri], cx);
+    assert_eq!(session_windows(&fixture, &a_id, cx), 2);
+
+    // A window outside every project has no project to open.
+    let (blank, blank_window) = empty_product_window(&fixture.documents, cx);
+    let refused = dispatch_product_command(&blank, blank_window, "projects.new-window", cx);
+    wait_for_prompt(cx);
+    cx.simulate_prompt_answer("OK");
+    assert_eq!(wait_for_command(refused, cx), CommandOutcome::Completed);
+    assert_eq!(product_shells(cx).len(), 3);
+}
