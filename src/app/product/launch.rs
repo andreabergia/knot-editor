@@ -36,7 +36,7 @@ pub(super) fn open_product_window_with(
     request: Option<OpenRequest>,
     recovery: Option<crate::app::recovery::StartupRecovery>,
     cx: &mut App,
-) {
+) -> AnyWindowHandle {
     let documents = cx.global::<ApplicationDocuments>().0.clone();
     let mut restored = recovery
         .as_ref()
@@ -113,7 +113,8 @@ pub(super) fn open_product_window_with(
             shell
         },
     )
-    .expect("product window must open");
+    .expect("product window must open")
+    .into()
 }
 
 pub(super) fn open_tab_transfer_window(cx: &mut App) -> anyhow::Result<WindowHandle<ProductShell>> {

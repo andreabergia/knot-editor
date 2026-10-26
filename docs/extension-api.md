@@ -250,7 +250,9 @@ presentations, and `workspaces` for window-owned roots. Queries work during
 activation and callbacks, including before product windows exist. Document IDs
 survive Save As; across restart only a document restored from automatic recovery
 keeps its ID. Retain returned live target objects rather than serializing or
-reconstructing them. `windows.focus(target)` activates a window.
+reconstructing them. `windows.focus(target)` activates a window, and
+`windows.open({ roots })` opens a new one with those roots, closing it again if
+a root is rejected.
 
 Use `documents.open` for files, `createUntitled` for new documents, and `present`
 for another presentation of a live document. These return committed document and

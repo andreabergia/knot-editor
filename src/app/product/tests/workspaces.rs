@@ -384,3 +384,36 @@ fn native_root_commands_add_reorder_and_remove_roots_without_closing_documents(
     });
     assert_eq!(roots(cx)[0].1, second);
 }
+
+#[gpui::test]
+fn opening_a_window_applies_its_roots_or_closes_it_again(cx: &mut TestAppContext) {
+    let documents = install_globals(cx);
+    let (filesystems, _) = memory_filesystems_with_provider();
+    cx.set_global(ApplicationFileSystems(filesystems));
+    let (_shell, _window) = empty_product_window(&documents, cx);
+    let host = cx.update(extension_host::install);
+    let key = install_operation_fixture(
+        &host,
+        r#"
+import { commands, windows } from "knot";
+const blank = await windows.open();
+if (blank.workspace.roots.length !== 0) throw new Error("blank window has roots");
+const opened = await windows.open({ roots: ["mem://product/src", "mem://product/"] });
+const roots = opened.workspace.roots.map((root) => root.uri);
+if (roots.join() !== "mem://product/src,mem://product/") throw new Error(`roots ${roots}`);
+if ((await windows.list()).length !== 3) throw new Error("expected three windows");
+let code = null;
+try {
+  await windows.open({ roots: ["mem://product/missing"] });
+} catch (error) {
+  code = error.code;
+}
+if (code !== "ResourceNotFound") throw new Error(`missing root ${code}`);
+if ((await windows.list()).length !== 3) throw new Error("rejected window stayed open");
+await commands.register("windows.open-ready", () => {});
+"#,
+        "windows.open-ready",
+        cx,
+    );
+    host.update(cx, |host, cx| host.unload(key, cx).unwrap());
+}

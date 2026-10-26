@@ -724,6 +724,21 @@ impl ProductShell {
     }
 }
 
+/// Open a blank product window, as New Blank Window does.
+pub(crate) fn open_window(cx: &mut App) -> WindowTarget {
+    let handle = launch::open_product_window_with(None, None, cx);
+    WindowTarget {
+        window: handle.window_id().as_u64().to_string(),
+    }
+}
+
+/// Remove a window from `open_window` whose roots could not be applied.
+pub(crate) fn discard_window(target: &WindowTarget, cx: &mut App) {
+    if let Ok((_, handle)) = operations::capture_window(target, cx) {
+        let _ = cx.update_window(handle, |_, window, _| window.remove_window());
+    }
+}
+
 /// Activate a product window and focus its active surface.
 pub(crate) fn focus_window(target: &WindowTarget, cx: &mut App) -> Result<(), AccessError> {
     let (shell, handle) = operations::capture_window(target, cx)?;

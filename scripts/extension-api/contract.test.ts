@@ -341,6 +341,11 @@ if (sourceWindow && openDocument) {
   await workbench.replaceWindows({ suspend: [], windows: [{ roots: [], entries: [{ capture: "forged" }] }] });
   // @ts-expect-error focus takes a live window target
   await windows.focus("1");
+  const opened: import("knot").WindowInfo = await windows.open({ roots: ["file:///project"] });
+  await windows.focus(opened.target);
+  await windows.open();
+  // @ts-expect-error roots are URI strings
+  await windows.open({ roots: [opened.target] });
 }
 // @ts-expect-error invalid-argument helper requires a string
 commands.invalidArguments(1);

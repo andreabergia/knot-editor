@@ -111,10 +111,21 @@ declare module "knot" {
   export const windows: Readonly<{
     list(): Promise<readonly WindowInfo[]>;
     get(target: WindowTarget): Promise<WindowInfo | null>;
+    /** Opens a focused blank window, as New Blank Window does, then applies the
+     * roots like workspaces.replaceRoots. When the roots are rejected the window
+     * is closed again.
+     * @throws HostError with ResourceNotFound, ResourceWrongKind, InvalidUri,
+     * ProviderFailure, InvalidTarget, or Cancelled. */
+    open(options?: OpenWindowOptions): Promise<WindowInfo>;
     /** Activates the window and focuses its active tab.
      * @throws HostError with InvalidTarget for a closed window, or Cancelled. */
     focus(target: WindowTarget): Promise<void>;
   }>;
+  export interface OpenWindowOptions {
+    /** Ordered roots for the new window; omission or an empty list opens it
+     * without roots. */
+    readonly roots?: readonly string[];
+  }
   /** Window-owned ordered roots; empty roots are valid. Closed windows return null. */
   export interface WorkspaceDestinationOptions {
     /** Omission captures the command's window or active product window at admission. */

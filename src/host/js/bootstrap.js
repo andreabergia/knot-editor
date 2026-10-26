@@ -818,6 +818,13 @@ export async function pickFolder(options) {
     ? { kind: "selected", uri: value.uri }
     : { kind: "dismissed" });
 }
+export async function openWindow(options) {
+  const roots = options === undefined
+    ? undefined
+    : record(options, "window options must be an object").roots;
+  const uris = roots === undefined ? [] : arrayItems(roots, uri => string(uri, "workspace root URI must be text"));
+  return windowFromNative(await request("openWindow", uris));
+}
 export async function focusWindow(target) {
   await request("focusWindow", windowAuthority(target));
 }

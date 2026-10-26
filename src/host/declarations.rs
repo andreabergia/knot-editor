@@ -162,6 +162,12 @@ impl HostSuccess for super::protocol::WorkspaceInfo {
     }
 }
 
+impl HostSuccess for super::protocol::WindowInfo {
+    fn encode(self) -> Result<EncodedValue, DecodeError> {
+        encode_json(self)
+    }
+}
+
 impl HostSuccess for super::protocol::PresentationCloseOutcome {
     fn encode(self) -> Result<EncodedValue, DecodeError> {
         encode_json(self)

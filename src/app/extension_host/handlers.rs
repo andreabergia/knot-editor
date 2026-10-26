@@ -1899,6 +1899,55 @@ async fn replace_windows(
     receiver.await.map_err(|_| AccessError::Cancelled)?
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct OpenWindowArguments {
+    pub roots: Vec<String>,
+}
+
+impl HostArguments for OpenWindowArguments {
+    fn decode(reader: &mut dyn ArgumentReader) -> Result<Self, DecodeError> {
+        Ok(Self {
+            roots: reader.text_list(2)?,
+        })
+    }
+}
+
+#[host_operation("openWindow")]
+async fn open_window(
+    context: HostContext,
+    arguments: OpenWindowArguments,
+) -> Result<crate::host::protocol::WindowInfo, WorkspaceError> {
+    // The window's shell observes the host, so it opens after this host update.
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    context.foreground(|_, cx| {
+        cx.defer(move |cx| {
+            let _ = sender.send(product::sessions::open_window(cx));
+        })
+    })?;
+    let target = receiver.await.map_err(|_| AccessError::Cancelled)?;
+    if !arguments.roots.is_empty() {
+        let replaced = replace_workspace_roots(
+            context.clone(),
+            WorkspaceArguments {
+                roots: arguments.roots,
+                target: Some(target.clone()),
+            },
+        )
+        .await;
+        if let Err(error) = replaced {
+            let _ = context.foreground(|_, cx| product::sessions::discard_window(&target, cx));
+            return Err(error);
+        }
+    }
+    let window = context.foreground(|host, cx| {
+        host.application_snapshot(cx)
+            .windows
+            .into_iter()
+            .find(|window| window.target == target)
+    })?;
+    Ok(window.ok_or(AccessError::InvalidTarget)?)
+}
+
 #[host_operation("focusWindow")]
 async fn focus_window(context: HostContext, arguments: WindowLookup) -> Result<(), AccessError> {
     context.foreground(|_, cx| product::sessions::focus_window(&arguments.target, cx))?
