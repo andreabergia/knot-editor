@@ -320,7 +320,10 @@ pub(crate) fn run(initial_request: Option<OpenRequest>) {
                         "Move Terminal to New Window",
                         ProductCommandSource::new(MOVE_TERMINAL_TO_NEW_WINDOW_COMMAND),
                     ),
-                    MenuItem::action("New Window", ProductCommandSource::new(NEW_WINDOW_COMMAND)),
+                    MenuItem::action(
+                        "New Blank Window",
+                        ProductCommandSource::new(NEW_WINDOW_COMMAND),
+                    ),
                     MenuItem::action("Open…", ProductCommandSource::new(OPEN_COMMAND)),
                     MenuItem::action(
                         "Add Folder to Workspace…",

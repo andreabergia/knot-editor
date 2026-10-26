@@ -234,7 +234,7 @@ pub(crate) async fn show_extension_report(
         .await
 }
 
-#[command("window.new", title = "New Window", id = NEW_WINDOW_COMMAND, participant = Application)]
+#[command("window.new", title = "New Blank Window", id = NEW_WINDOW_COMMAND, participant = Application)]
 pub(crate) async fn new_window(context: CommandContext, (): ()) -> Result<(), CommandOutcome> {
     context
         .foreground(move |target, _, cx| {
