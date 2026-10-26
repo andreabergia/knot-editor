@@ -397,6 +397,23 @@ sub-checkpoints, 9a native and 9b projects, with one review gate at the end.
   the existing registry reload test covers a stored schema-1 record keeping
   its ID, and the schema stayed 1.
 
+#### 9c. Blank and project windows ✅
+
+Added after trying 9b in the product: a second window could only join a project
+by opening exactly its folders by hand.
+
+- ✅ The native New Window command is now **New Blank Window** and keeps
+  opening a window outside any project.
+- ✅ `windows.open({ roots })` opens a focused blank window and applies the
+  roots through the shared root-replacement path, closing the window again when
+  a root is rejected. Validated in `product/tests/workspaces.rs`.
+- ✅ `@knot/projects` adds `projects.new-window`, a **New Window** action on the
+  Projects tool, which opens a window with the current window's project roots;
+  that window binds by root-set equality like any other. Outside a project it
+  reports that there is no project. Validated in
+  `product/tests/project_sessions.rs`. Extension commands still appear in the
+  palette by name, since the API has no command titles.
+
 #### Documentation and review gate
 
 - ✅ Update the workspaces section of
@@ -408,8 +425,9 @@ sub-checkpoints, 9a native and 9b projects, with one review gate at the end.
   projects following root edits. Remove P2-6 from the health-review table.
 - ⏸️ **Review gate:** approve root semantics and native navigation in the product:
   add, remove, and reorder roots; overlapping roots; Open replacing roots;
-  projects following edits across two windows; and a multi-root project
-  surviving switch and restart.
+  projects following edits across two windows; New Blank Window versus the
+  Projects New Window action; and a multi-root project surviving switch and
+  restart.
 
 ### 10. Layout, view state, and startup restoration — D005, D051 ⬜
 
