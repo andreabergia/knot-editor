@@ -624,3 +624,190 @@ fn restarting_the_registry_keeps_bound_sessions_active(cx: &mut TestAppContext) 
     assert_eq!(listed["sessions"][&a_id]["state"], "active");
     assert_eq!(root(&fixture.shell, cx), Some(file_uri(a.path())));
 }
+
+fn set_roots(shell: &Entity<ProductShell>, uris: &[&str], cx: &mut TestAppContext) {
+    shell.update(cx, |shell, cx| {
+        let roots = uris
+            .iter()
+            .map(|uri| ResourceUri::parse(uri).unwrap())
+            .collect();
+        shell.replace_workspace_roots(roots, cx);
+        cx.notify();
+    });
+    cx.run_until_parked();
+}
+
+fn roots(shell: &Entity<ProductShell>, cx: &TestAppContext) -> Vec<String> {
+    cx.read(|cx| {
+        shell
+            .read(cx)
+            .workspace
+            .snapshot()
+            .roots()
+            .iter()
+            .map(|root| root.uri.to_string())
+            .collect()
+    })
+}
+
+fn wait_for_roots(shell: &Entity<ProductShell>, expected: &[&str], cx: &mut TestAppContext) {
+    wait_for_api_condition(cx, |cx| {
+        shell
+            .read(cx)
+            .workspace
+            .snapshot()
+            .roots()
+            .iter()
+            .map(|root| root.uri.to_string())
+            .eq(expected.iter().map(|uri| uri.to_string()))
+    });
+    cx.run_until_parked();
+}
+
+fn session_windows(fixture: &Fixture, id: &str, cx: &mut TestAppContext) -> usize {
+    listed_projects(&fixture.shell, fixture.window, cx)["sessions"][id]["windows"]
+        .as_array()
+        .unwrap()
+        .len()
+}
+
+fn project_roots(listed: &Value, id: &str) -> Vec<String> {
+    listed["projects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|project| project["id"] == id)
+        .unwrap()["roots"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|root| root.as_str().unwrap().to_owned())
+        .collect()
+}
+
+#[gpui::test]
+fn root_edits_in_a_bound_window_move_the_project_and_its_other_windows(cx: &mut TestAppContext) {
+    let fixture = start_registry(cx);
+    let a = project_dir("one.txt", "one");
+    let c = project_dir("c.txt", "see");
+    let (a_uri, c_uri) = (file_uri(a.path()), file_uri(c.path()));
+    create_project(&fixture.shell, fixture.window, a.path(), "A", cx);
+    let a_id = project_id(&listed_projects(&fixture.shell, fixture.window, cx), "A");
+    let (second, _) = empty_product_window(&fixture.documents, cx);
+    set_root(&second, Some(&a_uri), cx);
+    assert_eq!(session_windows(&fixture, &a_id, cx), 2);
+
+    // Adding a folder in one window updates the record and the other window.
+    set_roots(&fixture.shell, &[&a_uri, &c_uri], cx);
+    wait_for_roots(&second, &[&a_uri, &c_uri], cx);
+    let listed = listed_projects(&fixture.shell, fixture.window, cx);
+    assert_eq!(
+        project_roots(&listed, &a_id),
+        [a_uri.clone(), c_uri.clone()]
+    );
+    let tree = wait_for_contributed_view(&fixture.shell, "builtin.projects", cx);
+    wait_for_api_condition(cx, |cx| {
+        tree.read(cx).description_for_test(&a_id).as_deref()
+            == Some(&*format!(
+                "{} +1",
+                a.path().file_name().unwrap().to_str().unwrap()
+            ))
+    });
+
+    // Membership ignores order: a window with the roots reversed joins.
+    let (third, _) = empty_product_window(&fixture.documents, cx);
+    set_roots(&third, &[&c_uri, &a_uri], cx);
+    assert_eq!(session_windows(&fixture, &a_id, cx), 3);
+    let listed = listed_projects(&fixture.shell, fixture.window, cx);
+    assert_eq!(
+        project_roots(&listed, &a_id),
+        [a_uri.clone(), c_uri.clone()]
+    );
+
+    // Removing a folder in another window follows back the same way.
+    set_roots(&second, &[&c_uri], cx);
+    wait_for_roots(&fixture.shell, &[&c_uri], cx);
+    wait_for_roots(&third, &[&c_uri], cx);
+    let listed = listed_projects(&fixture.shell, fixture.window, cx);
+    assert_eq!(project_roots(&listed, &a_id), std::slice::from_ref(&c_uri));
+    assert_eq!(listed["sessions"][&a_id]["state"], "active");
+    assert!(!cx.has_pending_prompt());
+}
+
+#[gpui::test]
+fn clearing_or_matching_another_project_unbinds_the_window(cx: &mut TestAppContext) {
+    let fixture = start_registry(cx);
+    let a = project_dir("one.txt", "one");
+    let b = project_dir("b.txt", "bee");
+    let (a_uri, b_uri) = (file_uri(a.path()), file_uri(b.path()));
+    create_project(&fixture.shell, fixture.window, b.path(), "B", cx);
+    create_project(&fixture.shell, fixture.window, a.path(), "A", cx);
+    let listed = listed_projects(&fixture.shell, fixture.window, cx);
+    let (a_id, b_id) = (project_id(&listed, "A"), project_id(&listed, "B"));
+    let b_session = listed["sessions"][&b_id].clone();
+    assert_eq!(b_session["state"], "suspended");
+    let (second, _) = empty_product_window(&fixture.documents, cx);
+    set_root(&second, Some(&a_uri), cx);
+    assert_eq!(session_windows(&fixture, &a_id, cx), 2);
+
+    // B's roots leave A unchanged; the window binds to neither project.
+    set_root(&second, Some(&b_uri), cx);
+    let listed = listed_projects(&fixture.shell, fixture.window, cx);
+    assert_eq!(project_roots(&listed, &a_id), std::slice::from_ref(&a_uri));
+    assert_eq!(project_roots(&listed, &b_id), std::slice::from_ref(&b_uri));
+    assert_eq!(roots(&fixture.shell, cx), std::slice::from_ref(&a_uri));
+    assert_eq!(
+        listed["sessions"][&a_id]["windows"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(listed["sessions"][&b_id], b_session);
+
+    // Clearing the last bound window's roots suspends A with its roots kept.
+    set_root(&fixture.shell, None, cx);
+    let listed = listed_projects(&fixture.shell, fixture.window, cx);
+    assert_eq!(listed["sessions"][&a_id]["state"], "suspended");
+    assert_eq!(project_roots(&listed, &a_id), [a_uri]);
+    assert_eq!(roots(&second, cx), [b_uri]);
+}
+
+#[gpui::test]
+fn a_multi_root_project_restores_every_root_across_switches_and_restarts(cx: &mut TestAppContext) {
+    let fixture = start_registry(cx);
+    let a = project_dir("one.txt", "one");
+    let c = project_dir("c.txt", "see");
+    let b = project_dir("b.txt", "bee");
+    let (a_uri, c_uri) = (file_uri(a.path()), file_uri(c.path()));
+    create_project(&fixture.shell, fixture.window, a.path(), "A", cx);
+    set_roots(&fixture.shell, &[&a_uri, &c_uri], cx);
+    open_path(&fixture.shell, &c.path().join("c.txt"), cx);
+    type_text(&fixture.shell, " dirty", cx);
+    let a_id = project_id(&listed_projects(&fixture.shell, fixture.window, cx), "A");
+
+    create_project(&fixture.shell, fixture.window, b.path(), "B", cx);
+    select_project(&fixture, &a_id, cx);
+    wait_for_roots(&fixture.shell, &[&a_uri, &c_uri], cx);
+    assert_eq!(texts(&fixture.shell, cx), ["see dirty"]);
+
+    // Suspended with its text, A survives a restart and restores both roots.
+    let b_id = project_id(&listed_projects(&fixture.shell, fixture.window, cx), "B");
+    select_project(&fixture, &b_id, cx);
+    wait_for_roots(&fixture.shell, &[&file_uri(b.path())], cx);
+    // Listing runs after the switch finishes recording, so the restart cannot
+    // interrupt it.
+    assert_eq!(
+        listed_projects(&fixture.shell, fixture.window, cx)["sessions"][&b_id]["state"],
+        "active"
+    );
+    restart_registry(&fixture.host, &fixture.extensions, cx);
+    let listed = listed_projects(&fixture.shell, fixture.window, cx);
+    assert_eq!(listed["sessions"][&a_id]["state"], "suspended");
+    assert_eq!(captures(&listed["sessions"][&a_id]).len(), 1);
+    assert_eq!(retained(cx).len(), 1);
+    select_project(&fixture, &a_id, cx);
+    wait_for_roots(&fixture.shell, &[&a_uri, &c_uri], cx);
+    assert_eq!(texts(&fixture.shell, cx), ["see dirty"]);
+    assert!(!cx.has_pending_prompt());
+}

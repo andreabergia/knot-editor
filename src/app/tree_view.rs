@@ -498,6 +498,11 @@ impl TreeView {
     }
 
     #[cfg(test)]
+    pub(crate) fn description_for_test(&self, id: &str) -> Option<String> {
+        self.item(id).and_then(|item| item.description.clone())
+    }
+
+    #[cfg(test)]
     pub(crate) fn action_focus_for_test(&self) -> Option<(Option<String>, usize)> {
         self.action_focus
             .as_ref()

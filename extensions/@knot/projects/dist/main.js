@@ -1,14 +1,16 @@
 // Bundled project registry and project sessions. Each project has a stable
-// identity, a name, and an ordered roots array; this checkpoint records one root
-// per project. Records are application-global extension storage and the
+// identity, a name, and an ordered set of roots that no other project shares.
+// Records are application-global extension storage and the
 // presentation is a contributed tree. Root selection, window replacement, and
 // text retention are the application's public operations, so this package needs
 // no private host access.
 //
-// A project's session is active or suspended. A window belongs to a project
-// when its root matches the project's root and the session is active, so a
-// manually opened folder never binds a suspended project and its retained
-// captures stay safe. Switching suspends the source project's windows with
+// A project's session is active or suspended. A window binds to a project when
+// its roots equal the project's roots, in any order, and the session is active,
+// so a manually opened folder never binds a suspended project and its retained
+// captures stay safe. Bindings live in memory: root edits in a bound window move
+// the project and its other windows to the new roots, while clearing the roots
+// or choosing another project's roots unbinds the window. Switching suspends the source project's windows with
 // their unsaved text retained and replaces them with the destination's in one
 // native commit. Commands and listeners are serial roots of this package, so a
 // switch never interleaves with live tracking and no intermediate state is
@@ -152,6 +154,9 @@ let view = null;
 /** Last durable session record per project ID.
  * @type {Map<string, Session>} */
 const sessions = new Map();
+/** Project ID per bound window.
+ * @type {Map<WindowTarget, string>} */
+const bindings = new Map();
 
 /** Reloads the shared record, retaining the last good state on failure. */
 async function reload() {
@@ -278,14 +283,29 @@ function sameSession(left, right) {
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
-/** @param {Project} project @returns {string | null} */
-function rootOf(project) {
-  return project.roots[0] ?? null;
+/** @param {WindowInfo} window @returns {string[]} */
+function windowRoots(window) {
+  return window.workspace.roots.map((root) => root.uri);
 }
 
-/** @param {WindowInfo} window @returns {string | null} */
-function windowRoot(window) {
-  return window.workspace.roots[0]?.uri ?? null;
+/** Order-insensitive equality of two deduplicated root lists.
+ * @param {readonly string[]} left @param {readonly string[]} right */
+function sameRoots(left, right) {
+  return left.length === right.length && left.every((root) => right.includes(root));
+}
+
+/** @param {readonly string[]} roots @returns {Project | null} */
+function projectWithRoots(roots) {
+  if (roots.length === 0) return null;
+  return registry.projects.find((project) => sameRoots(project.roots, roots)) ?? null;
+}
+
+/** The first root's folder name, plus the number of further roots.
+ * @param {Project} project @returns {string | null} */
+function rootsLabel(project) {
+  const [first, ...rest] = project.roots;
+  if (first === undefined) return null;
+  return rest.length === 0 ? suggestedName(first) : `${suggestedName(first)} +${rest.length}`;
 }
 
 /** @param {Project} project */
@@ -293,18 +313,84 @@ function isActive(project) {
   return sessions.get(project.id)?.state === "active";
 }
 
-/** Windows whose root matches the project, in listing order.
+/** Windows bound to the project, in listing order.
  * @param {Project} project @param {readonly WindowInfo[]} list */
-function rootWindows(project, list) {
-  const root = rootOf(project);
-  return root === null ? [] : list.filter((window) => windowRoot(window) === root);
+function boundWindows(project, list) {
+  return list.filter((window) => bindings.get(window.target) === project.id);
 }
 
-/** @param {WindowInfo} window @returns {Project | null} */
-function activeProjectFor(window) {
-  const root = windowRoot(window);
-  if (root === null) return null;
-  return registry.projects.find((project) => rootOf(project) === root && isActive(project)) ?? null;
+/** Windows whose roots equal the project's, in listing order.
+ * @param {Project} project @param {readonly WindowInfo[]} list */
+function matchingWindows(project, list) {
+  return list.filter((window) => sameRoots(windowRoots(window), project.roots));
+}
+
+/**
+ * Moves a project to the roots of its edited window and applies them to the
+ * project's other windows. Returns the windows given the new roots.
+ * @param {Project} project @param {string[]} roots @param {WindowInfo} edited
+ * @param {readonly WindowInfo[]} list @returns {Promise<Set<WindowTarget>>}
+ */
+async function adoptRoots(project, roots, edited, list) {
+  /** @type {Set<WindowTarget>} */
+  const followed = new Set();
+  const next = {
+    ...registry,
+    projects: registry.projects.map((entry) => (entry.id === project.id ? { ...entry, roots } : entry)),
+  };
+  try {
+    await commit(next);
+  } catch (error) {
+    bindings.delete(edited.target);
+    await report(`cannot update the folders of ${project.name}: ${describe(error)}`);
+    return followed;
+  }
+  for (const window of boundWindows(project, list)) {
+    if (window === edited) continue;
+    followed.add(window.target);
+    try {
+      await workspaces.replaceRoots(roots, { target: window.target });
+    } catch {
+      // A window whose roots cannot follow leaves the project.
+      bindings.delete(window.target);
+    }
+  }
+  return followed;
+}
+
+/**
+ * Brings the window bindings up to date with the listed windows. A bound
+ * window whose roots changed to a set no other project uses moves its project;
+ * clearing the roots or matching another project unbinds it. Unbound windows
+ * bind to the active project with exactly their roots.
+ * @param {readonly WindowInfo[]} list
+ */
+async function syncBindings(list) {
+  const live = new Set(list.map((window) => window.target));
+  for (const target of [...bindings.keys()]) if (!live.has(target)) bindings.delete(target);
+  /** @type {Set<WindowTarget>} */
+  const followed = new Set();
+  for (const window of list) {
+    const id = bindings.get(window.target);
+    if (id === undefined || followed.has(window.target)) continue;
+    const project = projectById(id);
+    if (project === null || !isActive(project)) {
+      bindings.delete(window.target);
+      continue;
+    }
+    const roots = windowRoots(window);
+    if (sameRoots(roots, project.roots)) continue;
+    if (roots.length === 0 || projectWithRoots(roots) !== null) {
+      bindings.delete(window.target);
+      continue;
+    }
+    for (const target of await adoptRoots(project, roots, window, list)) followed.add(target);
+  }
+  for (const window of list) {
+    if (bindings.has(window.target)) continue;
+    const project = projectWithRoots(windowRoots(window));
+    if (project !== null && isActive(project)) bindings.set(window.target, project.id);
+  }
 }
 
 /** Distinct documents presented in windows, in tab order.
@@ -399,7 +485,7 @@ function documentsById(list) {
  */
 async function trackProject(project, list, byId) {
   const session = sessions.get(project.id);
-  const bound = rootWindows(project, list);
+  const bound = boundWindows(project, list);
   /** @type {Session} */
   const next =
     bound.length === 0
@@ -427,12 +513,15 @@ async function trackProject(project, list, byId) {
 
 /** Live tracking: rewrite active records that changed. Suspended records are never written. */
 async function track() {
-  const active = registry.projects.filter(isActive);
-  if (active.length === 0) return;
+  if (!registry.projects.some(isActive)) {
+    bindings.clear();
+    return;
+  }
   try {
     const [list, docs] = await Promise.all([windows.list(), documents.list()]);
+    await syncBindings(list);
     const byId = documentsById(docs);
-    for (const project of active) await trackProject(project, list, byId);
+    for (const project of registry.projects.filter(isActive)) await trackProject(project, list, byId);
   } catch {
     // Tracking is retried on the next change; quit stops storage first, so a
     // shutdown never records windows closing.
@@ -494,13 +583,14 @@ function problem(outcome, entry) {
  * @param {Project} project @param {WindowTarget} origin
  */
 async function switchTo(project, origin) {
-  const root = rootOf(project);
-  if (root === null) {
+  if (project.roots.length === 0) {
     await report(`${project.name} has no root; rename or recreate the project`);
     return;
   }
+  const initialList = await windows.list();
+  await syncBindings(initialList);
   if (isActive(project)) {
-    const bound = rootWindows(project, await windows.list());
+    const bound = boundWindows(project, initialList);
     if (bound.length > 0) {
       await windows.focus(bound[0].target);
       await recordSelection(project);
@@ -511,16 +601,16 @@ async function switchTo(project, origin) {
   const destination = sessions.get(project.id)?.windows ?? [];
   const targets = destination.length > 0 ? destination : [{ entries: [], selected: null }];
   // The source is fixed before the first attempt suspends its record.
-  const initial = (await windows.list()).find((window) => window.target === origin) ?? null;
-  const source = initial === null ? null : activeProjectFor(initial);
+  const sourceId = bindings.get(origin);
+  const source = sourceId === undefined ? null : projectById(sourceId);
   for (let attempt = 1; ; attempt += 1) {
     const [list, docs] = await Promise.all([windows.list(), documents.list()]);
     const byId = documentsById(docs);
     const originWindow = list.find((window) => window.target === origin) ?? null;
     /** @type {WindowInfo[]} */
     let sources = [];
-    if (source !== null && originWindow !== null && windowRoot(originWindow) === rootOf(source)) {
-      sources = [originWindow, ...rootWindows(source, list).filter((window) => window !== originWindow)];
+    if (source !== null && originWindow !== null && sameRoots(windowRoots(originWindow), source.roots)) {
+      sources = [originWindow, ...boundWindows(source, list).filter((window) => window !== originWindow)];
     } else if (originWindow !== null && (await isReusable(originWindow, byId))) {
       sources = [originWindow];
     }
@@ -551,7 +641,7 @@ async function switchTo(project, origin) {
         suspend: presented.map((id) => ({ document: id, capture: captures.get(id) ?? null })),
         windows: targets.map((window, index) => ({
           target: sources[index]?.target,
-          roots: [root],
+          roots: project.roots,
           entries: window.entries,
           selected: window.selected,
         })),
@@ -578,12 +668,13 @@ async function switchTo(project, origin) {
       schema: SESSION_SCHEMA,
       state: "active",
       windows: await Promise.all(
-        rootWindows(project, after).map((window) => describeWindow(window, byIdAfter, new Map())),
+        matchingWindows(project, after).map((window) => describeWindow(window, byIdAfter, new Map())),
       ),
     };
     // Captures restored without durable automatic protection stay retained
     // until a later reconciliation, after automatic recovery has caught up.
     await writeSession(project.id, next, { keepCaptures: !result.protected });
+    await syncBindings(after);
     if (result.protected) {
       await reconcileCaptures();
     } else {
@@ -608,9 +699,10 @@ async function switchTo(project, origin) {
  * its entries. Only state is written; nothing is released. */
 async function suspendUnbound() {
   const list = await windows.list();
+  await syncBindings(list);
   for (const project of registry.projects) {
     const session = sessions.get(project.id);
-    if (session?.state !== "active" || rootWindows(project, list).length > 0) continue;
+    if (session?.state !== "active" || boundWindows(project, list).length > 0) continue;
     await writeSession(project.id, { ...session, state: "suspended" }, { keepCaptures: true });
   }
 }
@@ -656,15 +748,12 @@ view = await workbench.registerView({
             },
           ];
         }
-        const workspace = await workspaces.get(context.window);
-        const activeRoot = workspace === null ? null : (workspace.roots[0]?.uri ?? null);
         return registry.projects.map((project) => {
-          const root = rootOf(project);
-          const active = root !== null && root === activeRoot && isActive(project);
+          const active = bindings.get(context.window) === project.id;
           return {
             id: project.id,
             label: project.name,
-            description: root,
+            description: rootsLabel(project),
             icon: "folder",
             collapsibleState: "none",
             statusText: active ? "active" : null,
@@ -701,8 +790,8 @@ await commands.register("projects.create", async ({ target }) => {
   const picked = await workspaces.pickFolder();
   if (picked.kind === "dismissed") return;
   await reload();
-  const existing = registry.projects.find((project) => rootOf(project) === picked.uri);
-  if (existing !== undefined) {
+  const existing = projectWithRoots([picked.uri]);
+  if (existing !== null) {
     await report(`${existing.name} already uses this folder`);
     return;
   }
@@ -753,7 +842,7 @@ await commands.register("projects.select", async ({ target }) => {
     items: registry.projects.map((project) => ({
       id: project.id,
       label: project.name,
-      description: rootOf(project),
+      description: rootsLabel(project),
     })),
   });
   if (picked.kind === "dismissed") return;
