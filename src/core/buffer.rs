@@ -48,13 +48,13 @@
 //! - `Original`: the buffer's load-time text. Pieces referencing it never
 //!   move; the buffer holds it for the lifetime of the `TextBuffer`.
 //! - `Add`: an append-only byte sink. Every inserted span is pushed here and
-//!   referenced by a freshly-issued piece. Appending lets old pieces keep
-//!   their `(Add, start, len)` references stable forever.
+//!   referenced by a freshly-issued piece, or by extending the piece that
+//!   already ends at the sink's end (see coalescing below). Appending lets
+//!   old pieces keep their `(Add, start, len)` references stable forever.
 //!
-//! A `Piece` is a reference `(backing, start, len)` fixed at creation, plus
-//! a monotonically-increasing `PieceId` issued from a global counter. Pieces
-//! are never mutated in place except for the split rule's "left retains id"
-//! case, which only shortens `len` — never moves `start` or changes `backing`.
+//! A `Piece` is a reference `(backing, start)` fixed at creation, plus a
+//! monotonically-increasing `PieceId` issued from a global counter. Only
+//! `len` ever changes: the split rule shortens it, and coalescing extends it.
 //!
 //! ## Split rule
 //!
@@ -62,7 +62,15 @@
 //! original `start`, with `len` shortened to the split offset), the right
 //! half gets a fresh id. Degenerate splits (offset 0 or `len`) are elided —
 //! the new piece is spliced in directly, no zero-length halves created.
-//! Adjacent pieces are never coalesced.
+//!
+//! ## Coalescing
+//!
+//! An insert at the end of an `Add` piece whose span ends at the end of the
+//! sink extends that piece instead of creating one, so typing grows one piece
+//! rather than one per keystroke. Existing positions in the piece keep their
+//! offsets, and a sticky-left position at its old end still resolves before
+//! the inserted text. A split-shortened piece never qualifies, because its
+//! right half still references later bytes of the sink.
 //!
 //! ## UTF-8 boundary policy
 //!
@@ -165,17 +173,17 @@ pub enum BufferEdit {
     Insert {
         at: usize,
         inserted_len: usize,
-        /// Id of the freshly-inserted piece (the new piece added to
-        /// the chain at `split.insert_at`). Sticky-`After` anchors
-        /// sitting on a boundary-elided insert relocate to
-        /// `(inserted_piece, inserted_len)`.
-        inserted_piece: PieceId,
+        /// Position at the end of the inserted span: `(new_piece,
+        /// inserted_len)` for a fresh piece, or the extended piece's new
+        /// end when the insert coalesced. Sticky-`After` anchors sitting on
+        /// a boundary-elided insert relocate here.
+        inserted_end: Position,
         /// The piece ending at logical offset `at` *pre-insert*, and
         /// the offset-within-that-piece corresponding to the boundary
         /// `at`. `None` iff `at == 0` (no piece to the left of the
         /// buffer start). A sticky-`After` anchor whose token is
         /// `(left_piece.id, left_piece_offset)` (i.e. sitting exactly
-        /// at the boundary) relocates to `(inserted_piece, inserted_len)`;
+        /// at the boundary) relocates to `inserted_end`;
         /// a sticky-`Before` anchor keeps its token and resolves to
         /// `at` post-edit, matching sticky-`Before` semantics.
         ///
@@ -190,7 +198,7 @@ pub enum BufferEdit {
         /// to relocate sticky-`Before` anchors anchored to the buffer's
         /// first piece at offset 0 — those would otherwise resolve to
         /// `n` post-edit (chain shift), but sticky-`Before` requires them to
-        /// stay at `0`. Relocate to `(inserted_piece, 0)`.
+        /// stay at `0`.
         pre_first_piece: Option<PieceId>,
         splits: Vec<Split>,
     },
@@ -246,9 +254,8 @@ enum Backing {
 
 /// A reference to a contiguous span of one backing buffer.
 ///
-/// `(backing, start, len)` is fixed at creation. The only field ever
-/// mutated after creation is `len`, and only under the split rule
-/// (left half retains id, shortened to the split offset).
+/// `(backing, start)` is fixed at creation. Only `len` changes: the split
+/// rule shortens the left half, and coalescing extends a trailing `Add` piece.
 #[derive(Clone, Copy, Debug)]
 struct Piece {
     id: PieceId,
@@ -430,15 +437,30 @@ impl TextBuffer {
             Some((p.id, p.len))
         };
 
-        let inserted_piece = self.next_id;
-        let new_piece = Piece {
-            id: inserted_piece,
-            backing: Backing::Add,
-            start: add_start,
-            len: text.len(),
+        let coalesce = splits.is_empty()
+            && split.insert_at > 0
+            && matches!(
+                self.pieces[split.insert_at - 1],
+                Piece { backing: Backing::Add, start, len, .. } if start + len == add_start
+            );
+        let inserted_end = if coalesce {
+            let piece = &mut self.pieces[split.insert_at - 1];
+            piece.len += text.len();
+            Position::new(piece.id, piece.len as u32)
+        } else {
+            let id = self.next_id;
+            self.next_id += 1;
+            self.pieces.insert(
+                split.insert_at,
+                Piece {
+                    id,
+                    backing: Backing::Add,
+                    start: add_start,
+                    len: text.len(),
+                },
+            );
+            Position::new(id, text.len() as u32)
         };
-        self.next_id += 1;
-        self.pieces.insert(split.insert_at, new_piece);
         self.len += text.len();
 
         // Keep the line index valid for the edited span.
@@ -449,7 +471,7 @@ impl TextBuffer {
         self.edits.push(BufferEdit::Insert {
             at,
             inserted_len: text.len(),
-            inserted_piece,
+            inserted_end,
             left_piece,
             pre_first_piece,
             splits,
@@ -1641,6 +1663,50 @@ mod tests {
             }
             other => panic!("expected Insert, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn contiguous_typing_coalesces_into_one_piece() {
+        let mut b = TextBuffer::new();
+        for (at, ch) in "hello".char_indices() {
+            b.insert(at, &ch.to_string());
+        }
+        assert_eq!(b.pieces.len(), 1);
+        let inside = b.position_at(2).unwrap();
+        let end = b.position_at(5).unwrap();
+        b.insert(5, "!");
+        assert_eq!(b.pieces.len(), 1);
+        assert_eq!(s(&b), "hello!");
+        assert_eq!(b.resolve(inside), Some(2));
+        assert_eq!(b.resolve(end), Some(5), "sticky-left end stays before");
+        match b.edits_since(0).last() {
+            Some(BufferEdit::Insert { inserted_end, .. }) => {
+                assert_eq!(*inserted_end, Position::new(b.pieces[0].id, 6));
+            }
+            other => panic!("expected Insert, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn inserts_not_at_the_sink_end_do_not_coalesce() {
+        // Original-backed pieces never extend.
+        let mut b = TextBuffer::from_text("ab");
+        b.insert(2, "c");
+        assert_eq!(b.pieces.len(), 2);
+        // A typed piece no longer ends at the sink once something else was
+        // appended.
+        b.insert(0, "x");
+        b.insert(4, "d");
+        assert_eq!(b.pieces.len(), 4);
+        b.insert(5, "e");
+        assert_eq!(b.pieces.len(), 4, "\"d\" ends at the sink and extends");
+        // The left half of a split typed piece never extends, because its
+        // right half references the sink after it.
+        b.insert(5, "f");
+        assert_eq!(b.pieces.len(), 6);
+        b.insert(5, "g");
+        assert_eq!(b.pieces.len(), 7);
+        assert_eq!(s(&b), "xabcdgfe");
     }
 
     #[test]

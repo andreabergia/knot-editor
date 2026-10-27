@@ -414,8 +414,7 @@ impl AnchoredRangeStore {
     ) {
         match edit {
             BufferEdit::Insert {
-                inserted_len,
-                inserted_piece,
+                inserted_end,
                 left_piece,
                 pre_first_piece,
                 splits,
@@ -426,7 +425,7 @@ impl AnchoredRangeStore {
                         buffer,
                         split.old_piece,
                         split.split_offset,
-                        Position::new(*inserted_piece, *inserted_len as u32),
+                        *inserted_end,
                     );
                     self.remap_split_right_half(
                         buffer,
@@ -437,17 +436,9 @@ impl AnchoredRangeStore {
                 }
                 if splits.is_empty() {
                     if let Some((piece, offset)) = left_piece {
-                        self.move_exact_boundary(
-                            buffer,
-                            *piece,
-                            *offset,
-                            Position::new(*inserted_piece, *inserted_len as u32),
-                        );
+                        self.move_exact_boundary(buffer, *piece, *offset, *inserted_end);
                     } else if pre_first_piece.is_none() {
-                        self.move_unanchored_endpoints(
-                            buffer,
-                            Position::new(*inserted_piece, *inserted_len as u32),
-                        );
+                        self.move_unanchored_endpoints(buffer, *inserted_end);
                     }
                 }
             }
@@ -712,6 +703,30 @@ mod tests {
         b.insert(5, "X");
         store.stabilize(&b);
         assert_eq!(store.resolve(&b, id), Some(0..6));
+    }
+
+    #[test]
+    fn coalesced_insert_repairs_like_a_piece_boundary() {
+        // Typing at the end of a typed span extends its piece instead of
+        // adding one; boundary endpoints must move exactly as they do at the
+        // end of an ordinary piece.
+        let resolve_after_typing = |mut b: TextBuffer, mut store: AnchoredRangeStore| {
+            let empty = store.add(&b, 3, 3);
+            let ending = store.add(&b, 2, 3);
+            let inside = store.add(&b, 1, 2);
+            b.insert(3, "d");
+            store.stabilize(&b);
+            assert_eq!(b.read_range(0..b.len()), "abcd");
+            [empty, ending, inside].map(|id| store.resolve(&b, id))
+        };
+        let mut typed = TextBuffer::from_text("ab");
+        let mut typed_store = AnchoredRangeStore::new();
+        typed.insert(2, "c");
+        typed_store.stabilize(&typed);
+        assert_eq!(
+            resolve_after_typing(typed, typed_store),
+            resolve_after_typing(TextBuffer::from_text("abc"), AnchoredRangeStore::new())
+        );
     }
 
     #[test]
@@ -999,7 +1014,7 @@ mod tests {
         BufferEdit::Insert {
             at,
             inserted_len: len,
-            inserted_piece: 0,
+            inserted_end: Position::new(0, len as u32),
             left_piece: None,
             pre_first_piece: None,
             splits: vec![],

@@ -194,7 +194,7 @@ Each step is one commit, with `cargo test --all-targets` and clippy passing.
    the byte and UTF-16 line index at construction, and exposes `&self` line
    queries. Core tests cover UTF-16 starts across inserts, deletes, undo, and
    non-BMP text.
-2. ⬜ **Insert coalescing.** Extend the trailing `Add` piece on contiguous
+2. ✅ **Insert coalescing.** Extend the trailing `Add` piece on contiguous
    inserts, with the `BufferEdit::Insert` span change and anchored-range
    relocation. Add boundary tests for sticky-before and sticky-after anchors on
    coalesced inserts.
