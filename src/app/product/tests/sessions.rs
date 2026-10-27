@@ -76,7 +76,7 @@ impl Harness {
             super::super::sessions::replace_windows(
                 serde_json::from_value(request).unwrap(),
                 OWNER.into(),
-                caller,
+                Some(caller),
                 move |result| *sink.borrow_mut() = Some(result),
                 cx,
             )

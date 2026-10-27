@@ -889,6 +889,7 @@ function applicationSnapshotFromNative(value) {
     windows: Object.freeze(value.windows.map(windowFromNative)),
     activeWindow: value.activeWindow === null ? null : windowTarget(value.activeWindow),
     activeTarget: value.activeTarget === null ? null : presentationTarget(value.activeTarget),
+    launched: value.launched,
   });
 }
 export async function observeWorkbench(listener) {
@@ -909,6 +910,7 @@ globalThis.__knotDispatchApplicationChange = async (subscription, value) => {
     case "documentClosed": payload = { document: value.document }; break;
     case "windowOpened": case "presentationsChanged": payload = { window: windowFromNative(value.window) }; break;
     case "windowClosed": case "viewStateChanged": payload = { window: windowTarget(value.window) }; break;
+    case "launched": payload = {}; break;
     case "workspaceChanged": payload = { workspace: workspaceFromNative(value.workspace) }; break;
     case "activeTargetChanged": payload = {
       activeWindow: value.activeWindow === null ? null : windowTarget(value.activeWindow),

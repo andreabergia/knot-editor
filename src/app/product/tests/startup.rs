@@ -20,7 +20,7 @@ fn launch_gate_keeps_requests_ordered_and_discards_them_on_failure() {
     assert!(failed.request(Some(second)).is_none());
 
     let mut empty = LaunchGate::Pending(Vec::new());
-    assert_eq!(empty.complete(), vec![None]);
+    assert!(empty.complete().is_empty());
 }
 
 #[gpui::test]

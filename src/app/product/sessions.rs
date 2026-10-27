@@ -54,6 +54,10 @@ pub(crate) struct ReplaceWindowsRequest {
     pub(crate) release: Vec<String>,
     #[serde(default, deserialize_with = "index")]
     pub(crate) focus: Option<usize>,
+    /// Native startup restoration drops roots that no longer exist instead of
+    /// rejecting every window.
+    #[serde(skip)]
+    pub(crate) drop_missing_roots: bool,
 }
 
 /// Transported JSON numbers are doubles; the facade validates them as
@@ -158,7 +162,7 @@ fn parse_uri(uri: &str) -> Result<super::super::resource::ResourceUri, OpenError
 pub(crate) fn replace_windows(
     request: ReplaceWindowsRequest,
     owner: String,
-    caller: operations::OperationCaller,
+    caller: Option<operations::OperationCaller>,
     completion: impl FnOnce(Result<ReplaceWindowsResult, ReplaceError>) + 'static,
     cx: &mut App,
 ) -> Result<(), ReplaceError> {
@@ -203,7 +207,14 @@ pub(crate) fn replace_windows(
             ProductShell::set_protected_closure_active(false, cx);
             let (roots, entries) = staged?;
             commit(
-                &request, &owner, &caller, layouts, released, roots, entries, cx,
+                &request,
+                &owner,
+                caller.as_ref(),
+                layouts,
+                released,
+                roots,
+                entries,
+                cx,
             )
         });
         let (result, restored) = match committed {
@@ -291,6 +302,7 @@ async fn stage(
             .await
             {
                 Ok(OpenResource::Directory(uri)) => directories.push(uri),
+                _ if request.drop_missing_roots => {}
                 Ok(_) => return Err(OpenError::ResourceWrongKind.into()),
                 Err(error) => return Err(operations::resource_error(error).into()),
             }
@@ -410,14 +422,14 @@ fn conflict(reason: &str) -> ReplaceError {
 fn commit(
     request: &ReplaceWindowsRequest,
     owner: &str,
-    caller: &operations::OperationCaller,
+    caller: Option<&operations::OperationCaller>,
     layouts: Vec<Option<Option<WindowLayout>>>,
     released: Vec<CapturedWindow>,
     roots: Vec<Vec<super::super::resource::ResourceUri>>,
     staged: Vec<Vec<Staged>>,
     cx: &mut App,
 ) -> Result<(ReplaceWindowsResult, bool), ReplaceError> {
-    if !caller.is_live(cx) {
+    if caller.is_some_and(|caller| !caller.is_live(cx)) {
         return Err(AccessError::Cancelled.into());
     }
     let sources = released.iter().collect::<Vec<_>>();
@@ -800,7 +812,7 @@ impl ProductShell {
 
     /// Present a document in this window's normal document group, reusing an
     /// existing tab.
-    fn present_session_document(
+    pub(super) fn present_session_document(
         &mut self,
         document: DocumentId,
         cx: &mut Context<Self>,
@@ -824,6 +836,50 @@ impl ProductShell {
             workbench.open_document_in_normal_group(document, model, cx)
         })
     }
+}
+
+/// Restore the recorded product windows at startup: a replacement with no
+/// sources whose entries are the layouts' document tabs. Documents resolve live
+/// by identity first, so restored recovery documents are presented, then by
+/// opening their file; untitled documents nobody recovered are pruned.
+pub(crate) fn restore_windows(
+    record: crate::app::window_sessions::WindowSession,
+    completion: impl FnOnce(Result<ReplaceWindowsResult, ReplaceError>) + 'static,
+    cx: &mut App,
+) -> Result<(), ReplaceError> {
+    let windows = record
+        .windows
+        .into_iter()
+        .map(|window| DestinationWindow {
+            entries: window
+                .layout
+                .documents()
+                .into_iter()
+                .map(|(document, uri)| SessionEntry {
+                    uri,
+                    document,
+                    capture: None,
+                })
+                .collect(),
+            roots: window.roots,
+            selected: None,
+            layout: Some(serde_json::to_value(window.layout).expect("layouts serialize")),
+        })
+        .collect::<Vec<_>>();
+    let focus = record.active.filter(|active| *active < windows.len());
+    replace_windows(
+        ReplaceWindowsRequest {
+            suspend: Vec::new(),
+            windows,
+            release: Vec::new(),
+            focus,
+            drop_missing_roots: true,
+        },
+        String::new(),
+        None,
+        completion,
+        cx,
+    )
 }
 
 /// Open a blank product window, as New Blank Window does.

@@ -227,6 +227,34 @@ impl WindowLayout {
         }
     }
 
+    /// Distinct document references of this layout's document tabs, as
+    /// identity and URI, in layout order.
+    pub(crate) fn documents(&self) -> Vec<(Option<String>, Option<String>)> {
+        fn walk(node: &LayoutNode, documents: &mut Vec<(Option<String>, Option<String>)>) {
+            match node {
+                LayoutNode::Pane { tabs, .. } => {
+                    for tab in tabs {
+                        if let LayoutTab::Document { document, uri, .. } = tab {
+                            let reference = (document.clone(), uri.clone());
+                            if !documents.contains(&reference) {
+                                documents.push(reference);
+                            }
+                        }
+                    }
+                }
+                LayoutNode::Split { first, second, .. } => {
+                    walk(first, documents);
+                    walk(second, documents);
+                }
+            }
+        }
+        let mut documents = Vec::new();
+        if let Some(root) = &self.root {
+            walk(root, &mut documents);
+        }
+        documents
+    }
+
     /// Whether any tab of this layout presents the given tool.
     pub(crate) fn names_tool(&self, tool: &str) -> bool {
         fn walk(node: &LayoutNode, tool: &str) -> bool {

@@ -19,6 +19,7 @@ mod terminal;
 mod tool_layout;
 mod tools;
 mod transient;
+mod window_restore;
 mod workbench;
 mod workspaces;
 use std::path::Path;

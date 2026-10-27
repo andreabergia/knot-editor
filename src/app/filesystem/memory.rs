@@ -54,6 +54,21 @@ impl MemoryFileSystemProvider {
         ensure_directory(&mut hierarchy, &path, &uri)
     }
 
+    #[cfg(test)]
+    pub(crate) fn remove(&self, uri: ResourceUri) -> Result<(), ResourceError> {
+        let uri = self.normalize_scoped(uri)?;
+        let mut path = relative_segments(&self.root, &uri);
+        let name = path.pop().unwrap_or_default();
+        let mut hierarchy = self
+            .hierarchy
+            .write()
+            .map_err(|error| ResourceError::io("lock memory provider", error))?;
+        directory_mut(&mut hierarchy, &path, &uri)?
+            .children
+            .remove(&name);
+        Ok(())
+    }
+
     pub(crate) fn seed_file(
         &self,
         uri: ResourceUri,

@@ -101,7 +101,7 @@ impl ProductShell {
         Ok(())
     }
 
-    fn root_uris(&self) -> Vec<ResourceUri> {
+    pub(crate) fn root_uris(&self) -> Vec<ResourceUri> {
         self.workspace
             .snapshot()
             .roots()

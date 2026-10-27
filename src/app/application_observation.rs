@@ -109,6 +109,9 @@ impl ApplicationObservation {
                 active_target: snapshot.active_target.clone(),
             });
         }
+        if snapshot.launched && !self.snapshot.launched {
+            changes.push(ApplicationChange::Launched);
+        }
         self.snapshot = snapshot;
         changes
             .into_iter()
@@ -264,6 +267,7 @@ mod tests {
             windows: vec![window],
             active_window: Some(target.clone()),
             active_target: Some(view.clone()),
+            launched: false,
         };
         let opened = owner.commit(snapshot.clone());
         assert!(matches!(
@@ -327,6 +331,25 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn launch_is_reported_once_after_the_startup_windows() {
+        let mut owner = ApplicationObservation::default();
+        let launched = ApplicationSnapshot {
+            documents: vec![document(0, false)],
+            launched: true,
+            ..Default::default()
+        };
+        let events = owner.commit(launched.clone());
+        assert!(matches!(
+            events[0].change,
+            ApplicationChange::DocumentOpened { .. }
+        ));
+        assert_eq!(events[1].change, ApplicationChange::Launched);
+        assert!(owner.commit(launched).is_empty());
+        let key = ExtensionKey::new(ExtensionId::new(1), ExtensionLifecycleId::new(1));
+        assert!(owner.subscribe(key).snapshot.launched);
     }
 
     #[test]

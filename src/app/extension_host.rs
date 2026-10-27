@@ -149,6 +149,16 @@ pub(crate) fn view_state_changed(window: crate::host::protocol::WindowTarget, cx
     }
 }
 
+struct ApplicationLaunched;
+
+impl Global for ApplicationLaunched {}
+
+/// Record that startup committed its windows; observers see `launched` once.
+pub(crate) fn launched(cx: &mut App) {
+    cx.set_global(ApplicationLaunched);
+    application_changed(cx);
+}
+
 pub(crate) fn startup_report(cx: &App) -> Option<StartupReportSnapshot> {
     let host = entity(cx)?;
     host.read(cx).startup_report.clone()
@@ -169,6 +179,14 @@ pub(crate) fn quit_after_storage(cx: &mut App) {
     let Some(drain) = host.update(cx, |host, _| host.shutdown_storage()) else {
         return;
     };
+    let window_flush = cx.spawn(async move |cx| {
+        // Windows are recorded once the shell that started quit is released,
+        // and before quitting closes them.
+        match cx.update(super::window_sessions::record_for_quit) {
+            Ok(Some(flush)) => flush.await.is_ok(),
+            _ => true,
+        }
+    });
     // A debounced tool-layout write may still be pending; force it out before
     // exiting so the last customization survives the restart.
     let layout_flush = cx
@@ -187,6 +205,7 @@ pub(crate) fn quit_after_storage(cx: &mut App) {
         if let Some(flush) = layout_flush {
             let _ = flush.await;
         }
+        window_flush.await;
         let _ = cx.update(|cx| cx.quit());
     })
     .detach();
@@ -1742,6 +1761,7 @@ impl ProductExtensionHost {
         let active = cx.active_window();
         let mut snapshot = ApplicationSnapshot {
             documents: document_infos,
+            launched: cx.has_global::<ApplicationLaunched>(),
             ..Default::default()
         };
         for handle in cx.windows() {

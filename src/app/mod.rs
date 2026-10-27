@@ -53,6 +53,7 @@ mod transient;
 mod tree_view;
 mod typography;
 mod window_layout;
+mod window_sessions;
 mod workbench;
 mod workspace;
 mod workspace_tree;

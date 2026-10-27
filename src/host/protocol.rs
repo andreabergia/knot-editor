@@ -584,6 +584,8 @@ pub struct ApplicationSnapshot {
     pub windows: Vec<WindowInfo>,
     pub active_window: Option<WindowTarget>,
     pub active_target: Option<PresentationTarget>,
+    /// Whether startup has committed its restored and requested windows.
+    pub launched: bool,
 }
 
 /// Destination captured when a resource operation is admitted.
@@ -664,6 +666,8 @@ pub enum ApplicationChange {
     ViewStateChanged {
         window: WindowTarget,
     },
+    /// Startup committed its restored and requested windows; sent once.
+    Launched,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]

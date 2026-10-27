@@ -159,6 +159,10 @@ declare module "knot" {
     readonly windows: readonly WindowInfo[];
     readonly activeWindow: WindowTarget | null;
     readonly activeTarget: ViewTarget | null;
+    /** True once startup has committed its restored windows and launch
+     * requests. Extensions activate before any window exists; wait for the
+     * launched event before reconciling state against startup windows. */
+    readonly launched: boolean;
   }
   export type ApplicationChange =
     | { readonly type: "documentOpened" | "documentChanged"; readonly document: DocumentInfo }
@@ -170,7 +174,9 @@ declare module "knot" {
     /** The window's captured layout changed: cursor, selection, scroll, focused
      * pane, dock size, window bounds, or structure. Reported about a second
      * after changes settle; structural changes also report presentationsChanged. */
-    | { readonly type: "viewStateChanged"; readonly window: WindowTarget };
+    | { readonly type: "viewStateChanged"; readonly window: WindowTarget }
+    /** Sent once, when launched becomes true. */
+    | { readonly type: "launched" };
   export type ApplicationEvent = ApplicationChange & { readonly sequence: number };
   export interface WorkbenchObservation extends Disposable {
     readonly snapshot: ApplicationSnapshot;

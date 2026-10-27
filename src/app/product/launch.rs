@@ -267,24 +267,38 @@ pub(in crate::app) fn finish_product_startup(
 ) {
     match result {
         Ok(()) => {
-            // Restore unsaved work before the launch gate opens, so queued open
-            // requests deduplicate against restored documents.
+            // Restore unsaved work, then the recorded windows, before the
+            // launch gate opens, so restored windows present recovered
+            // documents and queued requests deduplicate against both.
             let recovery =
                 crate::app::recovery::restore_at_startup(ProductShell::filesystems(cx), cx);
             cx.spawn(async move |cx| {
                 let recovery = recovery.await;
-                let _ = cx.update(|cx| {
-                    let requests = cx
-                        .global::<ApplicationLaunchGate>()
-                        .0
-                        .borrow_mut()
-                        .complete();
-                    let mut recovery = Some(recovery);
-                    for request in requests {
-                        open_product_window_with(request, recovery.take(), cx);
+                let record = match cx.update(|cx| crate::app::window_sessions::take_for_restore(cx))
+                {
+                    Ok(task) => task.await,
+                    Err(_) => None,
+                };
+                let restored = match record {
+                    Some(record) => {
+                        let (sender, receiver) = tokio::sync::oneshot::channel();
+                        let started = cx.update(|cx| {
+                            sessions::restore_windows(
+                                record,
+                                move |result| {
+                                    let _ = sender.send(result);
+                                },
+                                cx,
+                            )
+                        });
+                        match started {
+                            Ok(Ok(())) => receiver.await.ok().and_then(Result::ok),
+                            _ => None,
+                        }
                     }
-                    cx.activate(true);
-                });
+                    None => None,
+                };
+                let _ = cx.update(|cx| open_launch_windows(restored, recovery, cx));
             })
             .detach();
         }
@@ -294,6 +308,69 @@ pub(in crate::app) fn finish_product_startup(
             crate::app::personal_config_error::open(diagnostic, cx);
         }
     }
+}
+
+/// Open each queued request in its own window after restoration. Recovered
+/// documents no window presents go to the first restored window, else to the
+/// first opened one; with nothing restored or requested one window opens.
+/// The last request window ends up focused, else the previously active
+/// restored window. Then window recording starts and extensions learn that
+/// launch finished.
+fn open_launch_windows(
+    restored: Option<sessions::ReplaceWindowsResult>,
+    recovery: crate::app::recovery::StartupRecovery,
+    cx: &mut App,
+) {
+    let requests = cx
+        .global::<ApplicationLaunchGate>()
+        .0
+        .borrow_mut()
+        .complete()
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+    let restored = restored
+        .map(|result| result.windows)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|window| operations::capture_window(&window.window, cx).ok())
+        .collect::<Vec<_>>();
+    let mut recovery = Some(recovery);
+    if let Some((shell, _)) = restored.first() {
+        let recovery = recovery.take().expect("recovery is unclaimed");
+        let workbenches = cx.global::<ApplicationWorkbenches>();
+        let unpresented = recovery
+            .restored
+            .iter()
+            .copied()
+            .filter(|document| workbenches.view_count(*document, cx) == 0)
+            .collect::<Vec<_>>();
+        let status = recovery_listing::startup_status(&recovery);
+        shell.update(cx, |shell, cx| {
+            for document in unpresented {
+                if ProductShell::documents(cx).read(cx).get(document).is_some() {
+                    shell.present_session_document(document, cx);
+                }
+            }
+            if let Some(status) = status {
+                shell.status = status.into();
+            }
+            cx.notify();
+        });
+    }
+    if restored.is_empty() && requests.is_empty() {
+        open_product_window_with(None, recovery.take(), cx);
+    }
+    let mut last = None;
+    for request in requests {
+        last = Some(open_product_window_with(Some(request), recovery.take(), cx));
+    }
+    if let Some(last) = last {
+        let _ = cx.update_window(last, |_, window, _| window.activate_window());
+    }
+    crate::app::window_sessions::start_recording(cx);
+    crate::app::extension_host::launched(cx);
+    cx.activate(true);
 }
 
 pub(crate) fn run(initial_request: Option<OpenRequest>) {
@@ -341,6 +418,11 @@ pub(crate) fn run(initial_request: Option<OpenRequest>) {
                 cx.background_executor().clone(),
             ),
         ));
+        // Load the recorded windows beside the tool arrangement; startup
+        // restores them once config and extensions have started.
+        let sessions_path = crate::app::window_sessions::user_path()
+            .unwrap_or_else(|_| std::env::temp_dir().join("knot-window-session.sqlite3"));
+        crate::app::window_sessions::install(sessions_path, cx.background_executor().clone(), cx);
         cx.set_global(ApplicationLaunchGate(RefCell::new(LaunchGate::Pending(
             Vec::new(),
         ))));

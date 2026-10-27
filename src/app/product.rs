@@ -115,14 +115,11 @@ impl LaunchGate {
         }
     }
 
+    /// The queued requests; `None` entries are reopen requests without a
+    /// resource.
     fn complete(&mut self) -> Vec<Option<OpenRequest>> {
         match std::mem::replace(self, Self::Ready) {
-            Self::Pending(mut requests) => {
-                if requests.is_empty() {
-                    requests.push(None);
-                }
-                requests
-            }
+            Self::Pending(requests) => requests,
             Self::Ready => Vec::new(),
             Self::Failed => {
                 *self = Self::Failed;
@@ -402,6 +399,8 @@ pub(crate) struct ProductShell {
     extension_report_open: bool,
     extension_report_subscription: Option<Subscription>,
     view_state: view_state::ViewStateTracking,
+    /// Creation order across product windows; window identities are reused.
+    created: u64,
 }
 
 /// One live transient interaction owned by this window. Native interactions
@@ -485,7 +484,16 @@ impl ProductShell {
             extension_report_open: false,
             extension_report_subscription: None,
             view_state: Default::default(),
+            created: {
+                static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+                NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            },
         }
+    }
+
+    /// Orders product windows by creation.
+    pub(crate) fn creation_order(&self) -> u64 {
+        self.created
     }
 
     fn observe_extension_host(&mut self, native_window: &mut Window, cx: &mut Context<Self>) {

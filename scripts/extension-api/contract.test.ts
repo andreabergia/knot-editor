@@ -230,6 +230,10 @@ const observation = await workbench.observe(async (event) => {
     const documentId: DocumentId = event.document.id;
     await documents.get(documentId);
   }
+  if (event.type === "launched") {
+    // @ts-expect-error the launch event carries no window
+    void event.window;
+  }
   if (event.type === "viewStateChanged") {
     const settled: import("knot").WindowLayout = await workbench.captureLayout(event.window);
     void settled;
@@ -239,6 +243,8 @@ const observation = await workbench.observe(async (event) => {
 });
 const watermark: number = observation.watermark;
 const observedWindows: readonly import("knot").WindowInfo[] = observation.snapshot.windows;
+const launchedAlready: boolean = observation.snapshot.launched;
+void launchedAlready;
 await observation.dispose();
 void [watermark, observedWindows];
 // @ts-expect-error an application observer requires a listener

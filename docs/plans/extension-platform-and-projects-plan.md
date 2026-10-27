@@ -444,17 +444,17 @@ one review gate at the end.
   fires when the captured layout differs from the last one the window
   reported, so a structural change also reports it after the debounce.
 
-#### 10b. Native window hot exit and startup ⬜
+#### 10b. Native window hot exit and startup ✅ implemented, awaiting the review gate
 
-- ⬜ Window session record: generalize the tool-layout store's single versioned
+- ✅ Window session record: generalize the tool-layout store's single versioned
   row, debounce, and flush to hold a second record, or add a sibling store with
   the same mechanics. Flush it in `quit_after_storage` beside the tool layout,
   and capture windows before quit closes them.
-- ⬜ Startup restoration in `finish_product_startup`, after recovery restore and
+- ✅ Startup restoration in `finish_product_startup`, after recovery restore and
   before draining the launch gate. It reuses session-replacement staging and
   commit with no sources, presents leftover recovered documents, opens requests,
   and emits `launched`.
-- ⬜ `launched` in the application snapshot and events; `knot.d.ts` and the
+- ✅ `launched` in the application snapshot and events; `knot.d.ts` and the
   [extension guide](../extension-api.md).
 - **Validation:** product tests for the startup paths: restore of several
   multi-root windows with splits, shared views, docks, and dirty documents;
@@ -466,6 +466,12 @@ one review gate at the end.
   package pruned; terminal panes restored in place with fresh shells; a reopen
   after launch restoring
   nothing; and quit, restart, and quit again producing the same windows.
+- **Notes:** `RecordStore` in `src/app/record_store.rs` now backs both the
+  tool-only snapshot and `window_sessions`, each in its own SQLite file.
+  Native restoration drops roots that no longer exist instead of failing
+  every window. Windows record in creation order because native window
+  identities are reused. The extension guide update lands with the
+  documentation step. Validation is in `src/app/product/tests/window_restore.rs`.
 
 #### 10c. Projects restoration ⬜
 

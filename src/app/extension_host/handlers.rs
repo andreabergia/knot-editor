@@ -1889,7 +1889,7 @@ async fn replace_windows(
         product::sessions::replace_windows(
             arguments.request,
             owner,
-            caller,
+            Some(caller),
             move |result| {
                 let _ = sender.send(result);
             },
