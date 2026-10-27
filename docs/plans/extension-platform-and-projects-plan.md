@@ -355,7 +355,8 @@ one review gate at the end.
 - **Geometry.** A layout records logical bounds, windowed, maximized, or
   fullscreen state, and the display UUID. gpui cannot move an existing window,
   so geometry applies only to windows that restoration creates; reused windows
-  keep theirs. Saved bounds are used when they overlap a connected display
+  keep theirs until native positioning lands
+  ([D062](../roadmap.md#platforms-and-accessibility)). Saved bounds are used when they overlap a connected display
   enough to reach the title bar. Otherwise the window is sized to fit and centered
   on the saved display if it is still connected, or else on the primary display.
 - **View-state events.** A new `viewStateChanged { window }` observation event
