@@ -232,6 +232,20 @@ impl BufferModel {
         start..end
     }
 
+    /// The terminator inserted newlines should use: `\r\n` when the first
+    /// line ends with one, otherwise `\n`.
+    pub(crate) fn line_ending(&self) -> &'static str {
+        if self.buffer.line_count() < 2 {
+            return "\n";
+        }
+        let end = self.line_range(0).end;
+        if end > 0 && self.is_char_boundary(end - 1) && self.read(end - 1..end) == "\r" {
+            "\r\n"
+        } else {
+            "\n"
+        }
+    }
+
     pub(crate) fn line_of_offset(&self, offset: usize) -> usize {
         self.buffer.line_of_offset(offset)
     }
@@ -1487,6 +1501,15 @@ mod tests {
         assert_eq!(model.offset_of_utf16(5), 7);
         assert_eq!(model.len(), 10);
         assert!(!model.is_char_boundary(2));
+    }
+
+    #[test]
+    fn line_ending_follows_the_first_terminator() {
+        assert_eq!(BufferModel::from_text("").line_ending(), "\n");
+        assert_eq!(BufferModel::from_text("a\r").line_ending(), "\n");
+        assert_eq!(BufferModel::from_text("a\nb\r\n").line_ending(), "\n");
+        assert_eq!(BufferModel::from_text("a\r\nb\n").line_ending(), "\r\n");
+        assert_eq!(BufferModel::from_text("\r\n").line_ending(), "\r\n");
     }
 
     #[test]

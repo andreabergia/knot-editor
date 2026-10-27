@@ -209,7 +209,7 @@ Each step is one commit, with `cargo test --all-targets` and clippy passing.
    completion, and painting through the model. Clamp horizontal scroll to
    the widest shaped width. Place contributions with `line_of_offset`. Add the
    no-whole-read test.
-6. ⬜ **CRLF policy.** `line_ending()`, newline conversion of editor input, and
+6. ✅ **CRLF policy.** `line_ending()`, newline conversion of editor input, and
    tests for typing, pasting, IME, and deleting across `\r\n` in a CRLF buffer.
 7. ⬜ **Remove unused core surface.** Delete the anchored-range interval index,
    make `core` private to the crate, and remove anything the compiler then

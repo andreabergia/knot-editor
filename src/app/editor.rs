@@ -967,7 +967,7 @@ impl EditorView {
     }
 
     /// Replace a byte range, or the implicit replacement range, with `text`,
-    /// leaving the caret after it.
+    /// leaving the caret after it. Newlines take the buffer's line ending.
     fn replace_text_with_grouping(
         &mut self,
         range: Option<Range<usize>>,
@@ -980,8 +980,11 @@ impl EditorView {
             return;
         }
         self.preferred_x = None;
-        let text: String = text.replace("\r\n", "\n").replace('\r', "\n");
         let model = self.model.read(cx);
+        let text = text
+            .replace("\r\n", "\n")
+            .replace('\r', "\n")
+            .replace('\n', model.line_ending());
         let range = range.unwrap_or_else(|| self.implicit_replacement_range(model));
         let before = self.history_view_state(model);
         let after_offset = range.start + text.len();
@@ -2291,8 +2294,8 @@ type EditorPaintState = (
 #[cfg(test)]
 mod tests {
     use gpui::{
-        AppContext, EntityInputHandler, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent,
-        ScrollDelta, ScrollWheelEvent, TestAppContext, point, px,
+        AppContext, ClipboardItem, EntityInputHandler, Modifiers, MouseButton, MouseDownEvent,
+        MouseMoveEvent, ScrollDelta, ScrollWheelEvent, TestAppContext, point, px,
     };
 
     use super::{
@@ -2645,6 +2648,32 @@ mod tests {
                 assert_eq!((view.cursor_line, view.cursor_col), (1, 0));
                 view.execute_editing_command("editor.delete-backward", window, cx);
                 assert_eq!(view.text(cx), "ab");
+            })
+        });
+    }
+
+    #[gpui::test]
+    fn inserted_newlines_follow_a_crlf_buffer(cx: &mut TestAppContext) {
+        let model = cx.new(|_| BufferModel::from_text("a\r\nb"));
+        let (editor, cx) = cx.add_window_view(|_, cx| EditorView::new(model, cx));
+        cx.update(|window, cx| {
+            editor.update(cx, |view, cx| {
+                view.execute_editing_command("editor.move-line-end", window, cx);
+                view.execute_editing_command("editor.insert-newline", window, cx);
+                assert_eq!(view.text(cx), "a\r\n\r\nb");
+                assert_eq!((view.cursor_line, view.cursor_col), (1, 0));
+
+                cx.write_to_clipboard(ClipboardItem::new_string("1\n2\r\n3".into()));
+                view.execute_editing_command("editor.paste", window, cx);
+                assert_eq!(view.text(cx), "a\r\n1\r\n2\r\n3\r\nb");
+                assert_eq!((view.cursor_line, view.cursor_col), (3, 1));
+
+                view.replace_text_in_range(None, "\n", window, cx);
+                assert_eq!(view.text(cx), "a\r\n1\r\n2\r\n3\r\n\r\nb");
+
+                view.execute_editing_command("editor.delete-backward", window, cx);
+                view.execute_editing_command("editor.delete-forward", window, cx);
+                assert_eq!(view.text(cx), "a\r\n1\r\n2\r\n3b");
             })
         });
     }
