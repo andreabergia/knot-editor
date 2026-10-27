@@ -329,14 +329,15 @@ D005; tool-only layout memory shipped with the completed D049.
 
 - **D062 — Positioning existing windows**
   - Deferred: gpui 0.2.2 sets a window's bounds only at creation and can
-    afterwards only resize it, so session restoration applies saved geometry to
-    the windows it creates while reused windows keep their position and size.
-  - Reconsider: Switching projects into reused windows, or restoring onto
-    changed displays, leaves windows visibly misplaced in daily use. Then add a
-    small native per-platform window-frame operation (`NSWindow` frame on macOS,
-    `SetWindowPos` on Windows, X11 configure requests) beside gpui rather than
-    vendoring it, and apply session geometry to reused windows. Wayland
-    compositors own placement, so positioning there stays best-effort.
+    afterwards only resize it. Session restoration and project switching always
+    create their windows, so they apply saved geometry at creation and no
+    product path needs to move an existing window.
+  - Reconsider: A workflow needs to move or re-frame an open window, such as
+    window arrangement commands, an extension API, or reusing windows during
+    restoration. Then add a small native per-platform window-frame operation
+    (`NSWindow` frame on macOS, `SetWindowPos` on Windows, X11 configure
+    requests) beside gpui rather than vendoring it. Wayland compositors own
+    placement, so positioning there stays best-effort.
 
 - **D035 — macOS distribution**
   - Deferred: Local `Knot.app` builds cover dogfooding without release

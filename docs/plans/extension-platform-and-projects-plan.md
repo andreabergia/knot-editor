@@ -16,7 +16,8 @@ open documents, and presentation state. Users can create/select/rename/remove
 projects, switch between them, and resume them after restarting Knot, including
 untitled documents and unsaved changes. Initial validation uses one root; the
 completed initiative supports multiple roots and window/pane/tab/view restoration.
-No terminal state or terminal tabs are restored.
+Terminal tabs are restored by position as fresh shells; no terminal process
+or content is restored.
 
 The platform is equally important to the outcome: an ordinary installed JS
 extension can observe application state, open resources, contribute native UI,
@@ -322,17 +323,27 @@ one review gate at the end.
 - **One layout value.** `workbench.captureLayout(window)` returns a documented,
   versioned JSON `WindowLayout`: window geometry, the split tree with dock
   groups, ordered tabs and the selected tab per pane, the focused pane, dock
-  sizes, and per-tab editor view state. A document tab records its document ID
-  and resource URI; a tool tab records its stable tool ID. Terminal tabs are
-  omitted. Authors store the value verbatim; it never contains pane, tab, view,
-  or window handles.
+  sizes, and per-tab view state. Authors store the value verbatim; it never
+  contains pane, tab, view, or window handles.
+- **Every tab kind is restored by position.** Each tab records its kind and
+  only what that kind needs to recreate a presentation in the same pane and
+  order: a document tab its document ID and resource URI, a tool tab its stable
+  tool ID, and a terminal tab nothing. A restored terminal starts a fresh shell
+  as New Terminal does; process, scrollback, and contents are not restored
+  (D043). Future kinds, such as interactive generated views (D027), join the
+  same rule. A tab is pruned only when its kind cannot be recreated.
+- **Switching closes and opens windows.** `replaceWindows` no longer reuses
+  windows: every destination window is created with its layout and geometry,
+  and every source window is released and closed. Closing stops a released
+  window's terminals, as closing any window does, so checkpoint 8's
+  clear-instead-of-close exception and the reused-window rules go away. Source
+  text is still retained before the commit.
 - **Restoring a layout.** `SessionWindow.layout` is optional. When present,
   each document tab resolves to the window's entry with the same document ID,
-  else the same URI. The layout then replaces the window's document and tool
-  arrangement. When absent, entries present in the normal group as today.
-  Pruning drops unmatched or unresolved document tabs, unregistered tools,
-  and duplicates of one document within a pane. It then collapses empty panes and one-child
-  splits. A window left without a normal group receives the ordinary untitled
+  else the same URI. When absent, entries present in the normal group of a
+  fresh window as today. Pruning drops unmatched or unresolved document tabs,
+  unregistered tools, and duplicates of one document within a pane. It then
+  collapses empty panes and one-child splits. A window left without a normal group receives the ordinary untitled
   document. An out-of-range selection or focus falls back to the first
   tab or the normal group. A layout with an unsupported version or invalid shape
   is ignored and the window falls back to the entries-only arrangement; each
@@ -342,9 +353,6 @@ one review gate at the end.
   and keep their remembered placement. Restoration never publishes the
   tool-only default; New Blank Window, `windows.open`, and launch-request windows
   still inherit it.
-- **Terminals.** Terminal tabs of a reused window move to the end of the
-  restored normal group, unselected. Released windows keep checkpoint 8's
-  clear-instead-of-close rule.
 - **Shared documents and view state.** Each document tab gets its own
   `EditorView`, so a split of one document restores as two independent views of
   one shared model. View state is the anchor and caret as byte offsets, the top
@@ -353,10 +361,10 @@ one review gate at the end.
   changed or missing content never yields an invalid position. Folding and zoom
   do not exist yet and are not recorded.
 - **Geometry.** A layout records logical bounds, windowed, maximized, or
-  fullscreen state, and the display UUID. gpui cannot move an existing window,
-  so geometry applies only to windows that restoration creates; reused windows
-  keep theirs until native positioning lands
-  ([D062](../roadmap.md#platforms-and-accessibility)). Saved bounds are used when they overlap a connected display
+  fullscreen state, and the display UUID. Restoration always creates its
+  windows, so geometry is applied at creation and moving an existing window
+  stays [D062](../roadmap.md#platforms-and-accessibility). Saved bounds are used
+  when they overlap a connected display
   enough to reach the title bar. Otherwise the window is sized to fit and centered
   on the saved display if it is still connected, or else on the primary display.
 - **View-state events.** A new `viewStateChanged { window }` observation event
@@ -405,21 +413,27 @@ one review gate at the end.
 - ⬜ A `window_layout` module: capture a `Workbench` (with its editor views and
   native window bounds) into the versioned layout, and build a pruned,
   invariant-checked arrangement from a layout plus resolved documents and
-  registered tools. Pruning lives in one place shared by both restorers.
+  registered tools. Each tab kind recreates its presentation through one
+  per-kind step (open document view, attach tool, start terminal), so a new
+  kind adds a step rather than a special case. Pruning lives in one place
+  shared by both restorers.
 - ⬜ `workbench.captureLayout` handler and `WindowLayout` declarations in
-  `knot.d.ts`. `SessionWindow.layout` in `replaceWindows` applies the layout
-  in the same commit, with geometry for created windows and the per-window
-  `layout` outcome.
+  `knot.d.ts`. `replaceWindows` drops window reuse (`SessionWindow.target`):
+  it creates every destination window with its layout and geometry in the same
+  commit and closes every released window, stopping its terminals, and reports
+  the per-window `layout` outcome. Update `@knot/projects` switching in the
+  same step so the bundled package keeps working.
 - ⬜ The `viewStateChanged` event: per-window debounce fed by editor view state,
   focus, dock-resize, and `observe_window_bounds` changes.
 - **Validation:** unit tests for layout round-trip, pruning (unknown tools,
-  unmatched documents, terminal-only panes, nested one-child splits, bad
+  unmatched documents, nested one-child splits, bad
   selection and focus), unsupported versions, offset clamping on shorter and
   multi-byte text, and display fitting as a pure function over display bounds.
   Product tests in `product/tests/sessions.rs` for `replaceWindows` with layouts:
   splits with two views of one document keeping independent view state, tools
-  in a document group and in docks, hidden unnamed tools, reused-window terminals
-  moving to the normal group, an ignored layout falling back, and no tool-layout
+  in a document group and in docks, hidden unnamed tools, terminal panes
+  restored in place as fresh shells, released windows closing and stopping
+  their terminals, an ignored layout falling back, and no tool-layout
   publish. Observation tests for event coalescing. `captureLayout` and
   `replaceWindows` layout cases in `scripts/extension-api/contract.test.ts`.
 
@@ -442,7 +456,8 @@ one review gate at the end.
   clamping view state; a missing clean file skipped; a lost or unsupported record
   opening the default window; a consumed record after a simulated interrupted
   restore; config failure writing nothing; a contributed tool from a failed
-  package pruned; terminal tabs omitted; a reopen after launch restoring
+  package pruned; terminal panes restored in place with fresh shells; a reopen
+  after launch restoring
   nothing; and quit, restart, and quit again producing the same windows.
 
 #### 10c. Projects restoration ⬜
@@ -470,7 +485,11 @@ one review gate at the end.
   observation events, `architecture.md` for application-owned window restoration,
   and the [extension guide](../extension-api.md#project-sessions). Add
   decisions for native window hot exit with projects rebinding, the shared
-  versioned layout value, and restore-and-open precedence. In
+  versioned layout value, restore-and-open precedence, and restoring every tab
+  kind by position. Revise the [session replacement
+  contract](../decisions.md#session-replacement-contract) and [project
+  sessions](../decisions.md#project-sessions) decisions where switching now
+  closes and opens windows and stops released terminals. In
   [design](../design.md), replace the planned layout and startup restoration
   sentence with current behavior.
 - **Review gate:** review the complete product workflow and API documentation:
@@ -506,7 +525,7 @@ tests, and end-to-end validation using the shipped JS extension. Use focused
 tests at their owning boundary and product integration tests for cross-boundary
 behavior. No native-app/browser automation is required for manual review.
 
-Excluded: terminal restoration/process persistence, persistent undo/history,
+Excluded: terminal process/content persistence, persistent undo/history,
 remote providers, arbitrary UI/WebViews, generic SQL/native filesystem access
 from JS, collaboration/sync, settings/secrets systems, archive installation,
 and unrelated explorer editing features. These exclusions do not excuse missing
