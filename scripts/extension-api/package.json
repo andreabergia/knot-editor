@@ -1,7 +1,0 @@
-{
-  "name": "knot-extension-api-check",
-  "private": true,
-  "type": "module",
-  "scripts": { "check": "tsc -p tsconfig.json" },
-  "devDependencies": { "typescript": "5.7.3" }
-}

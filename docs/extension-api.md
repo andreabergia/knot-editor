@@ -31,9 +31,9 @@ entries share one lifecycle around installed-package startup; config failure
 stops product startup. Directory selection and loading are described in
 [host startup](architecture/extension-host.md#package-admission-and-startup).
 
-Run `scripts/check-extension-api.sh` with Node/npm to check declarations and
+Run `scripts/check-extensions.sh` with Node/npm to check declarations and
 JavaScript examples using the lockfile-pinned TypeScript compiler. The
-[checked examples](../scripts/extension-api/examples/) cover commands, providers,
+[checked examples](../scripts/extensions/examples/) cover commands, providers,
 cleanup, errors, and keybindings. This check runs in CI; Rust/V8 tests separately
 validate runtime behavior.
 
@@ -209,7 +209,7 @@ do not become semantic results. A participant can decline, and a valid invocatio
 can return `unavailable` for a command unsupported by its captured surface. Calling
 from activation or unrelated callbacks rejects `ContextUnavailable`.
 
-The checked [activation example](../scripts/extension-api/examples/activation.js)
+The checked [activation example](../scripts/extensions/examples/activation.js)
 includes `guide.compose`, which awaits another JavaScript command, and
 `guide.select-all`, which awaits the native `editor.select-all` command. The
 contributed view's `copy` registration shares the native command name and handles
@@ -311,7 +311,7 @@ fetching and painting happen separately. Lifecycle teardown releases registratio
 without requiring a final callback.
 
 Handle `KnotHostError` by stable `code`, as in the
-[error example](../scripts/extension-api/examples/errors.js), rather than matching
+[error example](../scripts/extensions/examples/errors.js), rather than matching
 message text. Narrow optional diagnostic `details` before reading fields. On
 `RevisionConflict`, choose whether to abandon work or deliberately read a new
 snapshot. Cancellation does not roll back a commit that already succeeded.

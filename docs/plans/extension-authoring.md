@@ -174,7 +174,7 @@ installed examples, and move with the tooling.
 
 ## Steps
 
-1. ⬜ **Toolchain.** Move `scripts/extension-api` to `scripts/extensions`, add
+1. ✅ **Toolchain.** Move `scripts/extension-api` to `scripts/extensions`, add
    the base config, check/test/build scripts, and `just ext`. Add `build.rs`
    and the generated bundled table, ignore `dist/`, and install Node in CI.
    Convert projects mechanically to a single `src/main.ts` with no behavior

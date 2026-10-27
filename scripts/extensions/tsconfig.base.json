@@ -1,0 +1,20 @@
+{
+  // Shared compiler settings for every extension package. A package extends
+  // this file, compiles src/ to dist/, and sees only ES2022 and the knot API.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022"],
+    "types": [],
+    "strict": true,
+    "exactOptionalPropertyTypes": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "verbatimModuleSyntax": true,
+    "noEmitOnError": true,
+    "skipLibCheck": false
+  },
+  "files": ["../../src/host/js/knot.d.ts"]
+}

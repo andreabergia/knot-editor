@@ -461,11 +461,11 @@ fn checked_authoring_examples_run_as_an_installed_version_one_package(cx: &mut T
             ),
             (
                 "activation.js",
-                include_str!("../../../../scripts/extension-api/examples/activation.js"),
+                include_str!("../../../../scripts/extensions/examples/activation.js"),
             ),
             (
                 "errors.js",
-                include_str!("../../../../scripts/extension-api/examples/errors.js"),
+                include_str!("../../../../scripts/extensions/examples/errors.js"),
             ),
         ],
     );

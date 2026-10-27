@@ -1,0 +1,13 @@
+{
+  "name": "knot-extensions",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "node tasks.mjs check",
+    "build": "node tasks.mjs build"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.0",
+    "typescript": "7.0.2"
+  }
+}

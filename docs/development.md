@@ -33,7 +33,7 @@ commits. [Dependabot](../.github/dependabot.yml) checks for action updates
 weekly.
 
 The extension contract has a separate authoring check, also run in CI:
-`scripts/check-extension-api.sh`. With Node/npm installed, it uses `npm ci` and a
+`scripts/check-extensions.sh`. With Node/npm installed, it uses `npm ci` and a
 lockfile-pinned TypeScript compiler to check declarations, installed JavaScript
 examples, authoring samples and positive/negative type fixtures without emitting code.
 It does not use a global `tsc`. Runtime contracts still require Rust/V8 tests;

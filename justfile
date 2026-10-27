@@ -24,8 +24,12 @@ app:
 app-release:
     scripts/build-macos-app.sh --release
 
-# Format, lint, and test all Rust targets
-check: fmt lint test
+# Type-check and test extension packages
+ext:
+    scripts/check-extensions.sh
+
+# Format, lint, and test all Rust targets and extension packages
+check: fmt lint test ext
 
 # Copies all the example apps in the correct macOS directory
 install-example-apps-mac:

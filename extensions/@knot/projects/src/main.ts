@@ -23,6 +23,18 @@
 // unchanged and never switched to, and while one exists no capture is released
 // as an orphan, because that record may reference it.
 import { commands, documents, recovery, storage, windows, workbench, workspaces } from "knot";
+import type {
+  CaptureId,
+  DocumentId,
+  DocumentInfo,
+  JsonValue,
+  SessionEntryOutcome,
+  TreeItem,
+  ViewContext,
+  ViewRegistration,
+  WindowInfo,
+  WindowTarget,
+} from "knot";
 
 const RECORD_KEY = "projects";
 const SCHEMA = 1;
@@ -31,32 +43,42 @@ const SESSION_PREFIX = "session:";
 const SWITCH_ATTEMPTS = 3;
 const VIEW_ID = "builtin.projects";
 
-/** @typedef {import("knot").JsonValue} JsonValue */
-/** @typedef {import("knot").TreeItem} TreeItem */
-/** @typedef {import("knot").ViewContext} ViewContext */
-/** @typedef {import("knot").ViewRegistration} ViewRegistration */
-/** @typedef {import("knot").WindowInfo} WindowInfo */
-/** @typedef {import("knot").WindowTarget} WindowTarget */
-/** @typedef {import("knot").DocumentInfo} DocumentInfo */
-/** @typedef {import("knot").DocumentId} DocumentId */
-/** @typedef {import("knot").CaptureId} CaptureId */
-/** @typedef {import("knot").SessionEntryOutcome} SessionEntryOutcome */
-/** @typedef {{ id: string, name: string, roots: string[], createdAt: number | null, lastOpenedAt: number | null }} Project */
-/** @typedef {{ schema: number, projects: Project[], recentProjectId: string | null }} Registry */
-/** @typedef {{ uri?: string, document?: DocumentId, capture?: CaptureId }} Entry */
-/** @typedef {{ entries: Entry[], selected: number | null, layout: JsonValue | null }} SessionWindow */
-/** @typedef {{ schema: number, state: "active" | "suspended", windows: SessionWindow[] }} Session */
+type Project = {
+  id: string;
+  name: string;
+  roots: string[];
+  createdAt: number | null;
+  lastOpenedAt: number | null;
+};
+type Registry = {
+  schema: number;
+  projects: Project[];
+  recentProjectId: string | null;
+};
+type Entry = {
+  uri?: string;
+  document?: DocumentId;
+  capture?: CaptureId;
+};
+type SessionWindow = {
+  entries: Entry[];
+  selected: number | null;
+  layout: JsonValue | null;
+};
+type Session = {
+  schema: number;
+  state: "active" | "suspended";
+  windows: SessionWindow[];
+};
 
-/** @returns {Registry} */
-function emptyRegistry() {
+function emptyRegistry(): Registry {
   return { schema: SCHEMA, projects: [], recentProjectId: null };
 }
 
-/** @param {unknown} error @returns {string} */
-function describe(error) {
+function describe(error: unknown): string {
   const code =
     error !== null && typeof error === "object"
-      ? /** @type {{ code?: unknown }} */ (error).code
+      ? (error as { code?: unknown }).code
       : undefined;
   const message = error instanceof Error ? error.message : undefined;
   if (typeof code === "string") {
@@ -65,22 +87,19 @@ function describe(error) {
   return message ?? String(error);
 }
 
-/** @param {unknown} error @returns {string | null} */
-function errorCode(error) {
+function errorCode(error: unknown): string | null {
   if (error === null || typeof error !== "object") return null;
-  const code = /** @type {{ code?: unknown }} */ (error).code;
+  const code = (error as { code?: unknown }).code;
   return typeof code === "string" ? code : null;
 }
 
-/** @param {JsonValue} value @returns {Record<string, JsonValue> | null} */
-function object(value) {
+function object(value: JsonValue): Record<string, JsonValue> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? /** @type {Record<string, JsonValue>} */ (value)
+    ? (value as Record<string, JsonValue>)
     : null;
 }
 
-/** @param {JsonValue} value @returns {Project | null} */
-function projectFromJson(value) {
+function projectFromJson(value: JsonValue): Project | null {
   const record = object(value);
   if (record === null) return null;
   if (typeof record.id !== "string" || record.id.length === 0) return null;
@@ -96,8 +115,7 @@ function projectFromJson(value) {
   };
 }
 
-/** @returns {Promise<Registry>} */
-async function readRegistry() {
+async function readRegistry(): Promise<Registry> {
   const result = await storage.read(RECORD_KEY);
   if (!result.found) return emptyRegistry();
   const record = object(result.value);
@@ -119,28 +137,26 @@ async function readRegistry() {
   };
 }
 
-/** @param {JsonValue} value @returns {Entry | null} */
-function entryFromJson(value) {
+function entryFromJson(value: JsonValue): Entry | null {
   const record = object(value);
   if (record === null) return null;
-  /** @type {Entry} */
-  const entry = {};
+  const entry: Entry = {};
   if (typeof record.uri === "string") entry.uri = record.uri;
-  if (typeof record.document === "string") entry.document = /** @type {DocumentId} */ (record.document);
-  if (typeof record.capture === "string") entry.capture = /** @type {CaptureId} */ (record.capture);
+  if (typeof record.document === "string") entry.document = record.document as DocumentId;
+  if (typeof record.capture === "string") entry.capture = record.capture as CaptureId;
   return entry.uri === undefined && entry.document === undefined ? null : entry;
 }
 
-/** Reads a session record; schema 1 windows have no layout. Any other schema
+/**
+ * Reads a session record; schema 1 windows have no layout. Any other schema
  * or shape is unreadable and must be preserved as stored.
- * @param {JsonValue} value @returns {Session | "unreadable"} */
-function sessionFromJson(value) {
+ */
+function sessionFromJson(value: JsonValue): Session | "unreadable" {
   const record = object(value);
   if (record === null || (record.schema !== 1 && record.schema !== SESSION_SCHEMA)) return "unreadable";
   if (!Array.isArray(record.windows)) return "unreadable";
   if (record.state !== "active" && record.state !== "suspended") return "unreadable";
-  /** @type {SessionWindow[]} */
-  const sessionWindows = [];
+  const sessionWindows: SessionWindow[] = [];
   for (const window of record.windows) {
     const fields = object(window);
     if (fields === null || !Array.isArray(fields.entries)) return "unreadable";
@@ -156,21 +172,15 @@ function sessionFromJson(value) {
   return { schema: SESSION_SCHEMA, state: record.state, windows: sessionWindows };
 }
 
-/** @type {Registry} */
-let registry = emptyRegistry();
-/** @type {string | null} */
-let loadFailure = null;
-/** @type {ViewRegistration | null} */
-let view = null;
-/** Last durable session record per project ID.
- * @type {Map<string, Session>} */
-const sessions = new Map();
-/** Projects whose session record has an unknown schema.
- * @type {Set<string>} */
-const unreadable = new Set();
-/** Project ID per bound window.
- * @type {Map<WindowTarget, string>} */
-const bindings = new Map();
+let registry: Registry = emptyRegistry();
+let loadFailure: string | null = null;
+let view: ViewRegistration | null = null;
+/** Last durable session record per project ID. */
+const sessions = new Map<string, Session>();
+/** Projects whose session record has an unknown schema. */
+const unreadable = new Set<string>();
+/** Project ID per bound window. */
+const bindings = new Map<WindowTarget, string>();
 /** Whether startup windows are committed; tracking waits for them. */
 let launched = false;
 
@@ -188,18 +198,18 @@ async function refreshTree() {
   if (view !== null) await view.invalidate(null);
 }
 
-/** @param {Registry} next */
-async function commit(next) {
+async function commit(next: Registry) {
   await storage.write(RECORD_KEY, next);
   registry = next;
   loadFailure = null;
   await refreshTree();
 }
 
-/** Shows a message in the command's window, or in an explicit one when a
+/**
+ * Shows a message in the command's window, or in an explicit one when a
  * switch closed the command's window.
- * @param {string} message @param {WindowTarget} [target] */
-async function report(message, target) {
+ */
+async function report(message: string, target?: WindowTarget) {
   try {
     await workbench.showMessage({
       title: "Projects",
@@ -215,8 +225,7 @@ function newProjectId() {
   return `p-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-/** @param {string} uri @returns {string} */
-function suggestedName(uri) {
+function suggestedName(uri: string): string {
   const segment = uri.split("/").filter((part) => part.length > 0).pop() ?? "project";
   try {
     return decodeURIComponent(segment);
@@ -225,42 +234,35 @@ function suggestedName(uri) {
   }
 }
 
-/** @param {Registry} candidate @param {string} name @param {string | null} exceptId */
-function nameTaken(candidate, name, exceptId) {
+function nameTaken(candidate: Registry, name: string, exceptId: string | null) {
   const normalized = name.trim().toLowerCase();
   return candidate.projects.some(
     (project) => project.id !== exceptId && project.name.trim().toLowerCase() === normalized,
   );
 }
 
-/** @param {string} id @returns {Project | null} */
-function projectById(id) {
+function projectById(id: string): Project | null {
   return registry.projects.find((project) => project.id === id) ?? null;
 }
 
-/** @param {string} name @returns {Project | null} */
-function projectByName(name) {
+function projectByName(name: string): Project | null {
   const normalized = name.trim().toLowerCase();
   return (
     registry.projects.find((project) => project.name.trim().toLowerCase() === normalized) ?? null
   );
 }
 
-/** @param {JsonValue} value @returns {string | null} */
-function idArgument(value) {
+function idArgument(value: JsonValue): string | null {
   const record = object(value);
   return record !== null && typeof record.id === "string" ? record.id : null;
 }
 
-/** @param {string} id */
-function sessionKey(id) {
+function sessionKey(id: string) {
   return `${SESSION_PREFIX}${id}`;
 }
 
-/** @param {Session | null | undefined} session @returns {Set<CaptureId>} */
-function capturesOf(session) {
-  /** @type {Set<CaptureId>} */
-  const captures = new Set();
+function capturesOf(session: Session | null | undefined): Set<CaptureId> {
+  const captures = new Set<CaptureId>();
   for (const window of session?.windows ?? []) {
     for (const entry of window.entries) {
       if (entry.capture !== undefined) captures.add(entry.capture);
@@ -269,8 +271,7 @@ function capturesOf(session) {
   return captures;
 }
 
-/** @param {Iterable<CaptureId>} captures */
-async function release(captures) {
+async function release(captures: Iterable<CaptureId>) {
   for (const capture of captures) {
     try {
       await recovery.release(capture);
@@ -280,8 +281,7 @@ async function release(captures) {
   }
 }
 
-/** @param {string} id @returns {Promise<Session | "unreadable" | null>} */
-async function readSession(id) {
+async function readSession(id: string): Promise<Session | "unreadable" | null> {
   const result = await storage.read(sessionKey(id));
   return result.found ? sessionFromJson(result.value) : null;
 }
@@ -289,9 +289,8 @@ async function readSession(id) {
 /**
  * Durably replaces a session record, then releases the captures the previous
  * record referenced and the new one does not.
- * @param {string} id @param {Session} next @param {{ keepCaptures?: boolean }} [options]
  */
-async function writeSession(id, next, options = {}) {
+async function writeSession(id: string, next: Session, options: { keepCaptures?: boolean } = {}) {
   const previous = sessions.get(id) ?? null;
   await storage.write(sessionKey(id), next);
   sessions.set(id, next);
@@ -300,62 +299,51 @@ async function writeSession(id, next, options = {}) {
   await release([...capturesOf(previous)].filter((capture) => !kept.has(capture)));
 }
 
-/** @param {Session} left @param {Session} right */
-function sameSession(left, right) {
+function sameSession(left: Session, right: Session) {
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
-/** @param {WindowInfo} window @returns {string[]} */
-function windowRoots(window) {
+function windowRoots(window: WindowInfo): string[] {
   return window.workspace.roots.map((root) => root.uri);
 }
 
-/** Order-insensitive equality of two deduplicated root lists.
- * @param {readonly string[]} left @param {readonly string[]} right */
-function sameRoots(left, right) {
+/** Order-insensitive equality of two deduplicated root lists. */
+function sameRoots(left: readonly string[], right: readonly string[]) {
   return left.length === right.length && left.every((root) => right.includes(root));
 }
 
-/** @param {readonly string[]} roots @returns {Project | null} */
-function projectWithRoots(roots) {
+function projectWithRoots(roots: readonly string[]): Project | null {
   if (roots.length === 0) return null;
   return registry.projects.find((project) => sameRoots(project.roots, roots)) ?? null;
 }
 
-/** The first root's folder name, plus the number of further roots.
- * @param {Project} project @returns {string | null} */
-function rootsLabel(project) {
+/** The first root's folder name, plus the number of further roots. */
+function rootsLabel(project: Project): string | null {
   const [first, ...rest] = project.roots;
   if (first === undefined) return null;
   return rest.length === 0 ? suggestedName(first) : `${suggestedName(first)} +${rest.length}`;
 }
 
-/** @param {Project} project */
-function isActive(project) {
+function isActive(project: Project) {
   return sessions.get(project.id)?.state === "active";
 }
 
-/** Windows bound to the project, in listing order.
- * @param {Project} project @param {readonly WindowInfo[]} list */
-function boundWindows(project, list) {
+/** Windows bound to the project, in listing order. */
+function boundWindows(project: Project, list: readonly WindowInfo[]) {
   return list.filter((window) => bindings.get(window.target) === project.id);
 }
 
-/** Windows whose roots equal the project's, in listing order.
- * @param {Project} project @param {readonly WindowInfo[]} list */
-function matchingWindows(project, list) {
+/** Windows whose roots equal the project's, in listing order. */
+function matchingWindows(project: Project, list: readonly WindowInfo[]) {
   return list.filter((window) => sameRoots(windowRoots(window), project.roots));
 }
 
 /**
  * Moves a project to the roots of its edited window and applies them to the
  * project's other windows. Returns the windows given the new roots.
- * @param {Project} project @param {string[]} roots @param {WindowInfo} edited
- * @param {readonly WindowInfo[]} list @returns {Promise<Set<WindowTarget>>}
  */
-async function adoptRoots(project, roots, edited, list) {
-  /** @type {Set<WindowTarget>} */
-  const followed = new Set();
+async function adoptRoots(project: Project, roots: string[], edited: WindowInfo, list: readonly WindowInfo[]): Promise<Set<WindowTarget>> {
+  const followed = new Set<WindowTarget>();
   const next = {
     ...registry,
     projects: registry.projects.map((entry) => (entry.id === project.id ? { ...entry, roots } : entry)),
@@ -385,13 +373,11 @@ async function adoptRoots(project, roots, edited, list) {
  * window whose roots changed to a set no other project uses moves its project;
  * clearing the roots or matching another project unbinds it. Unbound windows
  * bind to the active project with exactly their roots.
- * @param {readonly WindowInfo[]} list
  */
-async function syncBindings(list) {
+async function syncBindings(list: readonly WindowInfo[]) {
   const live = new Set(list.map((window) => window.target));
   for (const target of [...bindings.keys()]) if (!live.has(target)) bindings.delete(target);
-  /** @type {Set<WindowTarget>} */
-  const followed = new Set();
+  const followed = new Set<WindowTarget>();
   for (const window of list) {
     const id = bindings.get(window.target);
     if (id === undefined || followed.has(window.target)) continue;
@@ -415,11 +401,9 @@ async function syncBindings(list) {
   }
 }
 
-/** Distinct documents presented in windows, in tab order.
- * @param {readonly WindowInfo[]} list @returns {DocumentId[]} */
-function presentedDocuments(list) {
-  /** @type {DocumentId[]} */
-  const ids = [];
+/** Distinct documents presented in windows, in tab order. */
+function presentedDocuments(list: readonly WindowInfo[]): DocumentId[] {
+  const ids: DocumentId[] = [];
   for (const window of list) {
     for (const pane of window.panes) {
       for (const tab of pane.tabs) {
@@ -430,8 +414,7 @@ function presentedDocuments(list) {
   return ids;
 }
 
-/** @param {readonly WindowInfo[]} list @param {DocumentId} document */
-function viewCount(list, document) {
+function viewCount(list: readonly WindowInfo[], document: DocumentId) {
   let count = 0;
   for (const window of list) {
     for (const pane of window.panes) {
@@ -441,33 +424,26 @@ function viewCount(list, document) {
   return count;
 }
 
-/** @param {DocumentInfo} document */
-async function isEmpty(document) {
+async function isEmpty(document: DocumentInfo) {
   return (await document.buffer.snapshot()).text.length === 0;
 }
 
-/** Whether the document's text is lost when it stops being live.
- * @param {DocumentInfo} document */
-async function needsCapture(document) {
+/** Whether the document's text is lost when it stops being live. */
+async function needsCapture(document: DocumentInfo) {
   return document.dirty || (document.kind === "untitled" && !(await isEmpty(document)));
 }
 
 /**
  * Describes one window's documents. Clean files are references only; dirty
  * documents also record their identity, and captures when given.
- * @param {WindowInfo} window @param {Map<DocumentId, DocumentInfo>} byId
- * @param {Map<DocumentId, CaptureId>} captures @returns {Promise<SessionWindow>}
  */
-async function describeWindow(window, byId, captures) {
-  /** @type {Entry[]} */
-  const entries = [];
-  /** @type {DocumentId[]} */
-  const listed = [];
+async function describeWindow(window: WindowInfo, byId: Map<DocumentId, DocumentInfo>, captures: Map<DocumentId, CaptureId>): Promise<SessionWindow> {
+  const entries: Entry[] = [];
+  const listed: DocumentId[] = [];
   for (const id of presentedDocuments([window])) {
     const document = byId.get(id);
     if (document === undefined) continue;
-    /** @type {Entry} */
-    let entry;
+    let entry: Entry;
     if (document.kind === "persisted" && !document.dirty && document.resourceUri !== null) {
       entry = { uri: document.resourceUri };
     } else if (document.kind === "untitled") {
@@ -498,8 +474,7 @@ async function describeWindow(window, byId, captures) {
   };
 }
 
-/** @param {readonly DocumentInfo[]} list */
-function documentsById(list) {
+function documentsById(list: readonly DocumentInfo[]) {
   return new Map(list.map((document) => [document.id, document]));
 }
 
@@ -507,21 +482,18 @@ function documentsById(list) {
  * Records an active project's current membership. Losing its last window
  * suspends it with its last membership and no captures, because closure
  * already asked about dirty documents.
- * @param {Project} project @param {readonly WindowInfo[]} list @param {Map<DocumentId, DocumentInfo>} byId
  */
-async function trackProject(project, list, byId) {
+async function trackProject(project: Project, list: readonly WindowInfo[], byId: Map<DocumentId, DocumentInfo>) {
   const session = sessions.get(project.id);
   const bound = boundWindows(project, list);
-  /** @type {Session} */
-  const next =
+  const next: Session =
     bound.length === 0
       ? {
           schema: SESSION_SCHEMA,
           state: "suspended",
           windows: (session?.windows ?? []).map((window) => ({
             entries: window.entries.map((entry) => {
-              /** @type {Entry} */
-              const reference = {};
+              const reference: Entry = {};
               if (entry.uri !== undefined) reference.uri = entry.uri;
               if (entry.document !== undefined) reference.document = entry.document;
               return reference;
@@ -538,7 +510,9 @@ async function trackProject(project, list, byId) {
   if (session === undefined || !sameSession(session, next)) await writeSession(project.id, next);
 }
 
-/** Live tracking: rewrite active records that changed. Suspended records are never written. */
+/**
+ * Live tracking: rewrite active records that changed. Suspended records are never written.
+ */
 async function track() {
   if (!launched) return;
   if (!registry.projects.some(isActive)) {
@@ -556,13 +530,14 @@ async function track() {
   }
 }
 
-/** Releases this package's captures that no session record references. An
+/**
+ * Releases this package's captures that no session record references. An
  * unreadable record may reference any capture, so nothing is released while
- * one exists. */
+ * one exists.
+ */
 async function reconcileCaptures() {
   if (unreadable.size > 0) return;
-  /** @type {Set<CaptureId>} */
-  const referenced = new Set();
+  const referenced = new Set<CaptureId>();
   for (const session of sessions.values()) {
     for (const capture of capturesOf(session)) referenced.add(capture);
   }
@@ -570,8 +545,7 @@ async function reconcileCaptures() {
   await release(listed.map((capture) => capture.id).filter((id) => !referenced.has(id)));
 }
 
-/** @param {Project} project */
-async function recordSelection(project) {
+async function recordSelection(project: Project) {
   const next = {
     ...registry,
     recentProjectId: project.id,
@@ -587,20 +561,20 @@ async function recordSelection(project) {
   }
 }
 
-/** A window that can host another project: no root and no documents beyond
+/**
+ * A window that can host another project: no root and no documents beyond
  * one clean, empty untitled document.
- * @param {WindowInfo} window @param {Map<DocumentId, DocumentInfo>} byId */
-async function isReusable(window, byId) {
+ */
+async function isReusable(window: WindowInfo, byId: Map<DocumentId, DocumentInfo>) {
   if (window.workspace.roots.length > 0) return false;
-  const presented = presentedDocuments([window]);
-  if (presented.length > 1) return false;
-  const document = presented.length === 1 ? byId.get(presented[0]) : undefined;
-  if (document === undefined) return presented.length === 0;
+  const [first, ...rest] = presentedDocuments([window]);
+  if (first === undefined) return true;
+  const document = rest.length === 0 ? byId.get(first) : undefined;
+  if (document === undefined) return false;
   return document.kind === "untitled" && !document.dirty && (await isEmpty(document));
 }
 
-/** @param {SessionEntryOutcome} outcome @param {Entry} entry */
-function problem(outcome, entry) {
+function problem(outcome: SessionEntryOutcome, entry: Entry) {
   const name = entry.uri !== undefined ? suggestedName(entry.uri) : "an untitled document";
   if (outcome.kind === "missing") return `${name} no longer exists`;
   if (outcome.kind === "failed") return `${name} could not be restored (${outcome.code})`;
@@ -611,9 +585,8 @@ function problem(outcome, entry) {
  * Switches the originating window to a project. The source project's windows
  * are suspended with their unsaved text retained before the native commit, so
  * a failed, cancelled, or interrupted switch never loses text.
- * @param {Project} project @param {WindowTarget} origin
  */
-async function switchTo(project, origin) {
+async function switchTo(project: Project, origin: WindowTarget) {
   if (unreadable.has(project.id)) {
     await report(`${project.name} has a session record this version cannot read; it is kept unchanged`);
     return;
@@ -625,9 +598,9 @@ async function switchTo(project, origin) {
   const initialList = await windows.list();
   await syncBindings(initialList);
   if (isActive(project)) {
-    const bound = boundWindows(project, initialList);
-    if (bound.length > 0) {
-      await windows.focus(bound[0].target);
+    const [bound] = boundWindows(project, initialList);
+    if (bound !== undefined) {
+      await windows.focus(bound.target);
       await recordSelection(project);
       await refreshTree();
       return;
@@ -643,16 +616,14 @@ async function switchTo(project, origin) {
     const [list, docs] = await Promise.all([windows.list(), documents.list()]);
     const byId = documentsById(docs);
     const originWindow = list.find((window) => window.target === origin) ?? null;
-    /** @type {WindowInfo[]} */
-    let sources = [];
+    let sources: WindowInfo[] = [];
     if (source !== null && originWindow !== null && sameRoots(windowRoots(originWindow), source.roots)) {
       sources = [originWindow, ...boundWindows(source, list).filter((window) => window !== originWindow)];
     } else if (originWindow !== null && (await isReusable(originWindow, byId))) {
       sources = [originWindow];
     }
     const presented = presentedDocuments(sources);
-    /** @type {Map<DocumentId, CaptureId>} */
-    const captures = new Map();
+    const captures = new Map<DocumentId, CaptureId>();
     try {
       for (const id of presented) {
         const document = byId.get(id);
@@ -699,8 +670,7 @@ async function switchTo(project, origin) {
     }
     const [after, afterDocs] = await Promise.all([windows.list(), documents.list()]);
     const byIdAfter = documentsById(afterDocs);
-    /** @type {Session} */
-    const next = {
+    const next: Session = {
       schema: SESSION_SCHEMA,
       state: "active",
       windows: await Promise.all(
@@ -732,8 +702,10 @@ async function switchTo(project, origin) {
   }
 }
 
-/** Marks every active session without a bound window as suspended, keeping
- * its entries. Only state is written; nothing is released. */
+/**
+ * Marks every active session without a bound window as suspended, keeping
+ * its entries. Only state is written; nothing is released.
+ */
 async function suspendUnbound() {
   const list = await windows.list();
   await syncBindings(list);
@@ -754,8 +726,10 @@ async function loadSessions() {
   }
 }
 
-/** Once startup windows exist, rebinds restored windows by root set and
- * suspends the remaining active sessions. */
+/**
+ * Once startup windows exist, rebinds restored windows by root set and
+ * suspends the remaining active sessions.
+ */
 async function afterLaunch() {
   launched = true;
   try {
@@ -780,12 +754,7 @@ view = await workbench.registerView({
   content: {
     kind: "tree",
     provider: {
-      /**
-       * @param {string | null} parentId
-       * @param {ViewContext} context
-       * @returns {Promise<TreeItem[]>}
-       */
-      async getChildren(parentId, context) {
+      async getChildren(parentId: string | null, context: ViewContext): Promise<TreeItem[]> {
         if (parentId !== null) return [];
         if (loadFailure !== null) {
           return [
@@ -1021,11 +990,9 @@ await commands.register("projects.refresh", async () => {
   if (loadFailure !== null) await report(`cannot read projects: ${loadFailure}`);
 });
 
-/** Membership-relevant document metadata; revision-only changes are ignored.
- * @type {Map<string, string>} */
-const tracked = new Map();
-/** @param {DocumentInfo} document */
-function membershipChanged(document) {
+/** Membership-relevant document metadata; revision-only changes are ignored. */
+const tracked = new Map<string, string>();
+function membershipChanged(document: DocumentInfo) {
   const key = `${document.kind}|${document.resourceUri}|${document.dirty}`;
   if (tracked.get(document.id) === key) return false;
   tracked.set(document.id, key);
