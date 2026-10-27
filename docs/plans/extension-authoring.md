@@ -159,8 +159,10 @@ module-level variables.
 
 ### Examples
 
-No Rust test loads `examples/extensions`; they are type-checked and installed by
-hand. Most predate real consumers:
+Most examples predate real consumers. Several product tests also loaded them as
+fixtures; those sources move to `src/app/product/tests/fixtures/` so host
+coverage stays, while `build.rs` compiles TypeScript examples into `OUT_DIR` so
+the git-status product test installs the real built package:
 
 | Example | Demonstrates | Proposal |
 | --- | --- | --- |
@@ -179,7 +181,7 @@ installed examples, and move with the tooling.
    and the generated bundled table, ignore `dist/`, and install Node in CI.
    Convert projects mechanically to a single `src/main.ts` with no behavior
    change. Rust suites pass.
-2. ⬜ **Examples.** Drop the obsolete examples, convert `git-status` to
+2. ✅ **Examples.** Drop the obsolete examples, convert `git-status` to
    TypeScript, and update the install recipe to build it first.
 3. ⬜ **Split projects** into the modules above with `start()` and one state
    object. No behavior change; Rust suites pass.

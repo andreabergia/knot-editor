@@ -7,10 +7,29 @@ fn install_git_status(extensions: &Path) {
         extensions,
         "@example/git-status",
         &[],
-        &[(
-            "dist/main.js",
-            include_str!("../../../../examples/extensions/@example/git-status/dist/main.js"),
-        )],
+        &[
+            (
+                "dist/main.js",
+                include_str!(concat!(
+                    env!("OUT_DIR"),
+                    "/examples/git-status/dist/main.js"
+                )),
+            ),
+            (
+                "dist/extension.js",
+                include_str!(concat!(
+                    env!("OUT_DIR"),
+                    "/examples/git-status/dist/extension.js"
+                )),
+            ),
+            (
+                "dist/model.js",
+                include_str!(concat!(
+                    env!("OUT_DIR"),
+                    "/examples/git-status/dist/model.js"
+                )),
+            ),
+        ],
     );
 }
 

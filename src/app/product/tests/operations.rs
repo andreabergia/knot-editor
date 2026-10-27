@@ -442,10 +442,7 @@ fn installed_open_command_consumes_the_committed_result_in_its_originating_windo
         root.path(),
         "@example/application-state",
         &[],
-        &[(
-            "main.js",
-            include_str!("../../../../examples/extensions/@example/application-state/dist/main.js"),
-        )],
+        &[("main.js", include_str!("fixtures/application_state.js"))],
     );
     let host = cx.update(extension_host::install);
     host.update(cx, |host, cx| {

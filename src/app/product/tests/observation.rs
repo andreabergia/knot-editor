@@ -839,10 +839,7 @@ fn installed_application_observer_tracks_zero_window_activation_and_native_commi
         root.path(),
         "@example/application-state",
         &[],
-        &[(
-            "main.js",
-            include_str!("../../../../examples/extensions/@example/application-state/dist/main.js"),
-        )],
+        &[("main.js", include_str!("fixtures/application_state.js"))],
     );
     install_extension(
         root.path(),

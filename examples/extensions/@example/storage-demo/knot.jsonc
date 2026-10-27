@@ -1,6 +1,0 @@
-{
-  "name": "@example/storage-demo",
-  "apiVersion": 1,
-  "version": "1.0.0",
-  "main": "dist/main.js"
-}

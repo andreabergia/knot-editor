@@ -31,8 +31,10 @@ ext:
 # Format, lint, and test all Rust targets and extension packages
 check: fmt lint test ext
 
-# Copies all the example apps in the correct macOS directory
+# Builds the example extensions and copies them into the macOS extensions directory
 install-example-apps-mac:
+    npm --prefix scripts/extensions ci --ignore-scripts --no-audit --no-fund
+    npm --prefix scripts/extensions run build examples/extensions/@example/git-status
     rm -rf ~/Library/Application\ Support/Knot/extensions/@example
     mkdir -p "$HOME/Library/Application Support/Knot/extensions"
     cp -av examples/extensions/@example "$HOME/Library/Application Support/Knot/extensions"

@@ -216,7 +216,7 @@ contributed view's `copy` registration shares the native command name and handle
 it only when that view instance claims the command. Dispose these registrations
 when removing the feature; native definitions retain their application ownership.
 
-The [Git-status fixture](../examples/extensions/@example/git-status/dist/main.js)
+The [Git-status fixture](../examples/extensions/@example/git-status/src/extension.ts)
 uses only the public API for grouped frames, row/group/frame actions, file
 activation, a read-only log frame, and refresh after actions.
 
@@ -298,9 +298,8 @@ Listeners can await host work or their own disposal because commits do not wait
 for listeners. A query may already see newer state than the event. Dispose and
 observe again when a fresh baseline is needed.
 
-The checked [application observer](../examples/extensions/@example/application-state/dist/main.js)
-loads through the product host. Run `example.application-state` to copy current
-metadata and event history for inspection.
+The bundled [project registry](../extensions/@knot/projects/src/main.ts) is a
+complete observer: it waits for `launched`, then tracks windows and documents.
 
 ## Acknowledge cleanup and handle failures
 
@@ -342,9 +341,8 @@ value shapes and schema versions. Awaited writes acknowledge commit; rejection
 following cancellation does not establish whether a write committed. Damaged or
 incompatible databases fail without replacement.
 
-The [storage demo](../examples/extensions/@example/storage-demo/dist/main.js) uses
-only public APIs. Run `example.storage-report`, restart Knot, and run it again:
-its activation count increases and records remain. Precise JSON validation,
+The bundled [project registry](../extensions/@knot/projects/src/main.ts) keeps
+its records in storage through public APIs only. Precise JSON validation,
 ordering, cancellation, and failure contracts live in the TypeScript reference;
 SQLite ownership and shutdown belong to
 [host architecture](architecture/extension-host.md#extension-record-storage).

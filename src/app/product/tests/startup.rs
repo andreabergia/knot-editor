@@ -931,9 +931,31 @@ fn extension_startup_rescans_changed_directories_and_cleans_old_registrations(
 }
 
 #[gpui::test]
-fn checked_in_extension_example_runs_through_the_product_command_bridge(cx: &mut TestAppContext) {
+fn installed_packages_run_through_the_product_command_bridge(cx: &mut TestAppContext) {
     let storage = tempfile::tempdir().unwrap();
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/extensions");
+    let installed = tempfile::tempdir().unwrap();
+    let root = installed.path().to_path_buf();
+    install_extension(
+        &root,
+        "@example/text-utils",
+        &[],
+        &[("main.js", include_str!("fixtures/text_utils.js"))],
+    );
+    install_extension(
+        &root,
+        "@example/word-tools",
+        &["@example/text-utils"],
+        &[
+            ("main.js", include_str!("fixtures/word_tools.js")),
+            ("names.js", include_str!("fixtures/word_tools_names.js")),
+        ],
+    );
+    install_extension(
+        &root,
+        "@example/storage-demo",
+        &[],
+        &[("main.js", include_str!("fixtures/storage_demo.js"))],
+    );
     let documents = install_globals(cx);
     let host = cx.update(super::super::super::extension_host::install);
     host.update(cx, |host, cx| {
@@ -946,7 +968,7 @@ fn checked_in_extension_example_runs_through_the_product_command_bridge(cx: &mut
         host.start_installed_extensions(root.clone(), cx)
     });
     let report = wait_for_extension_report(&host, cx);
-    assert_eq!(report.report.entries.len(), 5);
+    assert_eq!(report.report.entries.len(), 3);
     assert!(
         report
             .report

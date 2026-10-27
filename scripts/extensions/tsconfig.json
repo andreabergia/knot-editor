@@ -13,7 +13,6 @@
   },
   "include": [
     "../../src/host/js/knot.d.ts",
-    "../../examples/extensions/**/*.js",
     "examples/*.js",
     "contract.test.ts"
   ]

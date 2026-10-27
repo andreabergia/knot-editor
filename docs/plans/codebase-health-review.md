@@ -259,8 +259,6 @@ an easy simplification consistent with "keep the design simple."
   dominant ending on load and use it for inserted newlines.
 - `CommandOrigin` exists only under `cfg(test)` in `app/mod.rs`. Move it next
   to its tests.
-- `examples/extensions/@example/*`: consider dropping `application-state` and
-  `storage-demo` once `@knot/projects` covers the same APIs as a real reference.
 
 ## 4. Design soundness: second opinion by subsystem
 

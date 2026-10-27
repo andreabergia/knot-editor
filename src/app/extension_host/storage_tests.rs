@@ -78,7 +78,13 @@ fn installed_storage_is_usable_during_activation_and_survives_reload(cx: &mut Te
     write_package(
         &packages,
         "@example/storage-demo",
-        include_str!("../../../examples/extensions/@example/storage-demo/dist/main.js"),
+        r#"
+        import { storage } from 'knot';
+        const previous = await storage.read('activations');
+        await storage.write('activations', previous.found ? previous.value + 1 : 1);
+        await storage.write('example', { version: 1, tags: ['durable', 'private'], optional: null });
+        await storage.delete('obsolete');
+    "#,
     );
     write_package(
         &packages,
