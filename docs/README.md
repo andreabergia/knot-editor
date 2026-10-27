@@ -9,9 +9,8 @@ Current sources of truth:
 - [decisions.md](decisions.md) records validated choices and rationale, with
   links to subsystem references and essential supporting measurements.
 - [design.md](design.md) describes product vision and long-term principles.
-- [roadmap.md](roadmap.md) records the prioritized initiative and the unordered
-  register of deferred work. The current initiative is
-  [production extension APIs and JavaScript projects](plans/extension-platform-and-projects-plan.md).
+- [roadmap.md](roadmap.md) records the prioritized work and the unordered
+  register of deferred work.
 - [plans/](plans/) contains active executable slice plans.
 - [extension-api.md](extension-api.md) is the extension-author guide for setup and common
   workflows; precise API contracts live beside the TypeScript declarations.
