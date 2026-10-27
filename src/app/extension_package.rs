@@ -827,7 +827,14 @@ mod tests {
             .find(|package| package.origin == PackageOrigin::Bundled)
             .expect("bundled package is discovered");
         assert_eq!(bundled.manifest.name, "@knot/projects");
-        assert_eq!(bundled.sources.len(), 1);
+        assert!(bundled.sources.contains_key("dist/main.js"));
+        assert!(bundled.sources.contains_key("dist/switch.js"));
+        assert!(
+            bundled
+                .sources
+                .keys()
+                .all(|path| path.starts_with("dist/") && path.ends_with(".js"))
+        );
         assert_eq!(
             bundled.module_root().unwrap(),
             "file:///knot/bundled/%40knot/projects/"
