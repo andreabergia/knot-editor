@@ -144,11 +144,12 @@ module-level variables.
 
 | Module | Contents |
 | --- | --- |
-| `errors.ts` | `describe`, `errorCode` |
-| `registry.ts` | `Project`, `Registry`, parsing, name rules, lookups, labels, IDs (pure) |
+| `json.ts` | JSON object narrowing |
+| `report.ts` | `describe`, `errorCode`, user messages |
+| `registry.ts` | `Project`, `Registry`, parsing, name rules, lookups, labels, IDs, record updates (pure) |
 | `session.ts` | `Session`, parsing incl. schema 1, captures, suspended references (pure) |
 | `layout.ts` | Presented documents, view counts, roots equality, window entries and selection (pure) |
-| `bindings.ts` | Pure binding plan (keep, unbind, bind, adopt) and its application |
+| `bindings.ts` | Pure per-window decision (keep, adopt, unbind) and its application |
 | `state.ts` | `ProjectsState`, reload/commit, session writes and capture release |
 | `tracking.ts` | Live tracking, launch handling, unbound suspension, reconciliation |
 | `switch.ts` | `switchTo` and its retry loop |
@@ -183,7 +184,7 @@ installed examples, and move with the tooling.
    change. Rust suites pass.
 2. ✅ **Examples.** Drop the obsolete examples, convert `git-status` to
    TypeScript, and update the install recipe to build it first.
-3. ⬜ **Split projects** into the modules above with `start()` and one state
+3. ✅ **Split projects** into the modules above with `start()` and one state
    object. No behavior change; Rust suites pass.
 4. ⬜ **Fake `knot` and pure tests.** Add the resolve hook and fake, and pure
    tests for registry, session, layout, bindings, and tree.

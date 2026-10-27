@@ -298,7 +298,7 @@ Listeners can await host work or their own disposal because commits do not wait
 for listeners. A query may already see newer state than the event. Dispose and
 observe again when a fresh baseline is needed.
 
-The bundled [project registry](../extensions/@knot/projects/src/main.ts) is a
+The bundled [project registry](../extensions/@knot/projects/src/) is a
 complete observer: it waits for `launched`, then tracks windows and documents.
 
 ## Acknowledge cleanup and handle failures
@@ -341,7 +341,7 @@ value shapes and schema versions. Awaited writes acknowledge commit; rejection
 following cancellation does not establish whether a write committed. Damaged or
 incompatible databases fail without replacement.
 
-The bundled [project registry](../extensions/@knot/projects/src/main.ts) keeps
+The bundled [project registry](../extensions/@knot/projects/src/) keeps
 its records in storage through public APIs only. Precise JSON validation,
 ordering, cancellation, and failure contracts live in the TypeScript reference;
 SQLite ownership and shutdown belong to
