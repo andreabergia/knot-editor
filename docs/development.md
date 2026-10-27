@@ -45,6 +45,14 @@ positive/negative type fixtures, then runs the package tests under `node:test`
 with an in-memory host (see the [extension guide](extension-api.md#write-and-test-in-typescript)).
 It does not use a global `tsc`. Runtime contracts still require Rust/V8 tests.
 
+## Website
+
+`website/` holds the static site served at <https://knot-editor.com>. It has no
+build step: open `website/index.html` in a browser to preview it. The
+[website workflow](../.github/workflows/pages.yml) publishes the folder to
+GitHub Pages when a push to `main` changes it. The custom domain is configured
+in the repository's Pages settings, with DNS records managed in Cloudflare.
+
 ## Manual terminal fixtures
 
 Two scripts exercise terminal behavior that automated tests cannot judge. Run
