@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Knot — a modern programmable editor</title>
+  <meta name="description" content="Knot is a programmable editor inspired by Emacs, with a native GPU-rendered interface, asynchronous execution, and extensions written in JavaScript and TypeScript.">
+  <meta name="color-scheme" content="light dark">
+  <link rel="canonical" href="https://knot-editor.com/">
+  <link rel="icon" href="/favicon.ico" sizes="any">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://knot-editor.com/">
+  <meta property="og:title" content="Knot — a modern programmable editor">
+  <meta property="og:description" content="A programmable editor inspired by Emacs, with a native interface, asynchronous execution, and JavaScript extensions.">
+  <meta property="og:image" content="https://knot-editor.com/icon-512.png">
+  <meta name="twitter:card" content="summary">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="/">
+      <img src="/knot-icon.svg" alt="" width="32" height="32">
+      <span>Knot</span>
+    </a>
+    <nav>
+      <a href="https://github.com/knot-editor/knot-editor">GitHub</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="hero">
+      <img class="hero-icon" src="/knot-icon.svg" alt="Knot icon" width="128" height="128">
+      <h1>A modern programmable editor</h1>
+      <p class="lede">
+        Knot is an editing environment inspired by Emacs: everything is
+        scriptable, but with a native interface, asynchronous execution, and
+        language tooling built in. It aims to feel lightweight, fast,
+        inspectable, and extensible.
+      </p>
+      <p class="actions">
+        <a class="button primary" href="https://github.com/knot-editor/knot-editor">View on GitHub</a>
+      </p>
+      <p class="status"><strong>Early development.</strong> There are no releases yet — follow along on GitHub.</p>
+    </section>
+
+    <section class="features" aria-label="Features">
+      <article>
+        <h2>Programmable to the core</h2>
+        <p>Configuration, keybindings, extensions, and workflows are ordinary
+        JavaScript or TypeScript. Built-in features use the same public APIs
+        your extensions do — bundled code gets no special privileges.</p>
+      </article>
+      <article>
+        <h2>Native and fast</h2>
+        <p>A GPU-rendered interface written in Rust. Text shaping, input, and
+        rendering stay native, so scripting never costs you responsiveness.</p>
+      </article>
+      <article>
+        <h2>Never blocks</h2>
+        <p>Language servers, search, Git, and external commands run
+        asynchronously. Extensions progress independently of each other and
+        of your typing.</p>
+      </article>
+      <article>
+        <h2>Workflows you can replace</h2>
+        <p>Higher-level workflows such as projects ship as ordinary bundled
+        extensions built on public primitives. Disable them, replace them, or
+        write your own.</p>
+      </article>
+      <article>
+        <h2>A real terminal</h2>
+        <p>An integrated terminal backed by a mature emulator, with sessions
+        that survive moving between windows and layouts.</p>
+      </article>
+      <article>
+        <h2>Your work is safe</h2>
+        <p>Unsaved changes are preserved natively and windows restore at
+        startup, even if an extension misbehaves.</p>
+      </article>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <p>Knot is free software, licensed under the
+      <a href="https://github.com/knot-editor/knot-editor/blob/main/LICENSE">GPL-3.0</a>.
+      Developed primarily on macOS, with Linux and Windows support in progress.</p>
+  </footer>
+</body>
+</html>
