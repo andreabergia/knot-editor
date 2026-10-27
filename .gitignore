@@ -3,3 +3,4 @@
 /scripts/extensions/node_modules
 /extensions/*/*/dist
 /examples/extensions/*/*/dist
+/scripts/extensions/.test-build

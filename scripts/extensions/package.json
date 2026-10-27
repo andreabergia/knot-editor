@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "check": "node tasks.mjs check",
+    "test": "node tasks.mjs test",
     "build": "node tasks.mjs build"
   },
   "devDependencies": {

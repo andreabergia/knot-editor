@@ -1,0 +1,18 @@
+{
+  // Compiles every package's sources and tests with the fake host, mirroring
+  // repository paths under .test-build.
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "../..",
+    "outDir": ".test-build",
+    "types": ["node"],
+    "paths": { "knot/testing": ["./testing/host.ts"] }
+  },
+  "include": [
+    "testing/*.ts",
+    "../../extensions/*/*/src",
+    "../../extensions/*/*/test",
+    "../../examples/extensions/*/*/src",
+    "../../examples/extensions/*/*/test"
+  ]
+}

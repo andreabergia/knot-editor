@@ -186,7 +186,7 @@ installed examples, and move with the tooling.
    TypeScript, and update the install recipe to build it first.
 3. ✅ **Split projects** into the modules above with `start()` and one state
    object. No behavior change; Rust suites pass.
-4. ⬜ **Fake `knot` and pure tests.** Add the resolve hook and fake, and pure
+4. ✅ **Fake `knot` and pure tests.** Add the resolve hook and fake, and pure
    tests for registry, session, layout, bindings, and tree.
 5. ⬜ **Fake-host tests** for create, rename, remove (release only after both
    deletes), select, switch retry on `SessionConflict`, source reactivation on
