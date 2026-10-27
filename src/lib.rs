@@ -1,7 +1,7 @@
 //! Knot editor library.
 
 mod app;
-pub mod core;
+mod core;
 mod host;
 
 pub use app::run;

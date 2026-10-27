@@ -6,9 +6,6 @@
 //! only endpoints whose pieces were affected; untouched endpoints continue to
 //! resolve through their existing tokens.
 //!
-//! Range queries use a derived interval index. Mutations mark the index dirty,
-//! and [`AnchoredRangeStore::query_range`] rebuilds it lazily before querying.
-//!
 //! A deletion that fully consumes a normal range removes it and its endpoint
 //! index entries. Persistent ranges instead collapse at the surviving edit
 //! boundary for cursor and selection geometry.
@@ -26,42 +23,20 @@ pub struct StabilizationResult {
     pub consumed: Vec<AnchoredRangeId>,
 }
 
-/// Which side of an inserted span an endpoint sticks to.
-///
-/// - `Before` (sticky-left, default for a selection *start*): text inserted
-///   at the endpoint's offset lands *before* it; the endpoint keeps its byte.
-/// - `After` (sticky-right, default for a selection *end*): text inserted at
-///   the endpoint's offset lands *after* it; the endpoint relocates past the
-///   inserted span.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Stickiness {
-    Before,
-    After,
-}
-
-/// An endpoint: a stable `Position` token plus a stickiness.
+/// An endpoint: a stable `Position` token.
 #[derive(Clone, Copy, Debug)]
 pub struct Anchor {
     pos: Position,
-    sticky: Stickiness,
 }
 
 impl Anchor {
-    pub fn new(pos: Position, sticky: Stickiness) -> Self {
-        Self { pos, sticky }
+    pub fn new(pos: Position) -> Self {
+        Self { pos }
     }
 
     /// Resolve this endpoint to a byte offset through the buffer.
     pub fn resolve(&self, buf: &TextBuffer) -> Option<usize> {
         buf.resolve(self.pos)
-    }
-
-    pub fn pos(&self) -> Position {
-        self.pos
-    }
-
-    pub fn sticky(&self) -> Stickiness {
-        self.sticky
     }
 }
 
@@ -105,13 +80,6 @@ impl EndpointKey {
 ///
 /// Buffer-agnostic by design (see module docs): pass `&TextBuffer` to the
 /// methods that need it.
-#[derive(Clone, Copy, Debug)]
-struct IntervalEntry {
-    start: usize,
-    end: usize,
-    id: AnchoredRangeId,
-}
-
 pub struct AnchoredRangeStore {
     anchored_ranges: HashMap<AnchoredRangeId, AnchoredRange>,
     /// Endpoint index keyed by stable piece id, then endpoint offset within
@@ -122,10 +90,6 @@ pub struct AnchoredRangeStore {
     /// possible when the buffer is empty and a zero-width anchored range survives
     /// at offset 0).
     unanchored_endpoints: BTreeSet<EndpointKey>,
-    /// Derived interval index for `query_range`: sorted by `start`,
-    /// rebuilt lazily on the next query after edits or mutations.
-    interval_index: Vec<IntervalEntry>,
-    index_dirty: bool,
     /// High-water mark into `buffer`'s edit log.
     cursor: usize,
     next_id: AnchoredRangeId,
@@ -137,36 +101,20 @@ impl AnchoredRangeStore {
             anchored_ranges: HashMap::new(),
             endpoints_by_piece: BTreeMap::new(),
             unanchored_endpoints: BTreeSet::new(),
-            interval_index: Vec::new(),
-            index_dirty: true,
             cursor: 0,
             next_id: 1,
         }
     }
 
     /// Number of anchored ranges currently held.
+    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.anchored_ranges.len()
     }
 
+    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.anchored_ranges.is_empty()
-    }
-
-    fn mark_index_dirty(&mut self) {
-        self.index_dirty = true;
-    }
-
-    fn rebuild_index(&mut self, buffer: &TextBuffer) {
-        self.interval_index.clear();
-        for (&id, ann) in &self.anchored_ranges {
-            let s = ann.start.resolve(buffer).unwrap_or(ann.idx_start);
-            let e = ann.end.resolve(buffer).unwrap_or(ann.idx_end);
-            let (start, end) = if s <= e { (s, e) } else { (e, s) };
-            self.interval_index.push(IntervalEntry { start, end, id });
-        }
-        self.interval_index.sort_unstable_by_key(|e| e.start);
-        self.index_dirty = false;
     }
 
     fn insert_endpoint_index(&mut self, pos: Position, key: EndpointKey) {
@@ -306,8 +254,8 @@ impl AnchoredRangeStore {
             .expect("start offset out of range");
         let e_pos = buffer.position_at(end).expect("end offset out of range");
 
-        let start_a = Anchor::new(s_pos, Stickiness::Before);
-        let end_a = Anchor::new(e_pos, Stickiness::After);
+        let start_a = Anchor::new(s_pos);
+        let end_a = Anchor::new(e_pos);
 
         let ann = AnchoredRange {
             id,
@@ -320,7 +268,6 @@ impl AnchoredRangeStore {
         self.anchored_ranges.insert(id, ann);
         self.insert_endpoint_index(s_pos, EndpointKey::start(id));
         self.insert_endpoint_index(e_pos, EndpointKey::end(id));
-        self.mark_index_dirty();
 
         id
     }
@@ -329,7 +276,6 @@ impl AnchoredRangeStore {
     pub fn remove(&mut self, id: AnchoredRangeId) {
         if let Some(ann) = self.anchored_ranges.remove(&id) {
             self.remove_anchored_range_endpoints(&ann);
-            self.mark_index_dirty();
         }
     }
 
@@ -346,28 +292,8 @@ impl AnchoredRangeStore {
         if s <= e { Some(s..e) } else { Some(e..s) }
     }
 
-    /// All anchored range ids overlapping `[a, b)`. Uses a
-    /// lazily-rebuilt interval index sorted by start byte for O(log n + k)
-    /// binary-search lookup; the index is rebuilt once on the first query
-    /// after edits.
-    pub fn query_range(&mut self, buffer: &TextBuffer, a: usize, b: usize) -> Vec<AnchoredRangeId> {
-        if a >= b {
-            return Vec::new();
-        }
-        if self.index_dirty {
-            self.rebuild_index(buffer);
-        }
-        let start_idx = self.interval_index.partition_point(|e| e.start < b);
-        let out: Vec<AnchoredRangeId> = self.interval_index[..start_idx]
-            .iter()
-            .filter(|e| e.end > a)
-            .map(|e| e.id)
-            .collect();
-        // Already in start order from the sorted index.
-        out
-    }
-
     /// Iterate over all live anchored ranges.
+    #[cfg(test)]
     pub fn iter_live(&self) -> impl Iterator<Item = (&AnchoredRangeId, &AnchoredRange)> {
         self.anchored_ranges.iter()
     }
@@ -398,7 +324,6 @@ impl AnchoredRangeStore {
             self.apply_edit_incremental(buffer, edit, &mut consumed_ids);
         }
         self.cursor += edits.len();
-        self.mark_index_dirty();
         StabilizationResult {
             consumed: consumed_ids,
         }
@@ -605,9 +530,7 @@ mod tests {
     use super::*;
 
     // Expected byte-offset transform for the randomized correctness oracle.
-    // Both stickiness modes resolve to the same byte after an edit; their
-    // distinction is in how the store anchors the surviving piece.
-    fn transform_offset(off: usize, _sticky: Stickiness, edit: &BufferEdit) -> usize {
+    fn transform_offset(off: usize, edit: &BufferEdit) -> usize {
         match edit {
             BufferEdit::Insert {
                 at, inserted_len, ..
@@ -651,20 +574,7 @@ mod tests {
         let id = store.add(&b, 0, 5);
         store.remove(id);
         assert!(store.resolve(&b, id).is_none());
-        assert!(store.query_range(&b, 0, 11).is_empty());
-    }
-
-    #[test]
-    fn position_at_boundary_anchoring_default_stickiness() {
-        // start defaults to Before (sticky-left), end to After (sticky-right).
-        let b = text();
-        let mut store = AnchoredRangeStore::new();
-        let id = store.add(&b, 0, 11);
-        assert_eq!(
-            store.anchored_ranges[&id].start.sticky(),
-            Stickiness::Before
-        );
-        assert_eq!(store.anchored_ranges[&id].end.sticky(), Stickiness::After);
+        assert!(store.is_empty());
     }
 
     #[test]
@@ -813,97 +723,6 @@ mod tests {
     }
 
     #[test]
-    fn query_range_returns_overlapping_excludes_nonoverlapping() {
-        let b = text();
-        let mut store = AnchoredRangeStore::new();
-        let a = store.add(&b, 0, 5);
-        let c = store.add(&b, 6, 11);
-        let _far = store.add(&b, 9, 11);
-        let hits = store.query_range(&b, 4, 7);
-        assert!(hits.contains(&a), "a [0,5) overlaps [4,7)");
-        assert!(hits.contains(&c), "c [6,11) overlaps [4,7)");
-        assert_eq!(hits.len(), 2);
-    }
-
-    #[test]
-    fn query_range_consistent_with_linear_scan() {
-        let b = text();
-        let mut store = AnchoredRangeStore::new();
-        for i in 0..5 {
-            store.add(&b, i, i + 2);
-        }
-        // Every query must match a brute-force linear scan over resolved ranges.
-        for a in 0..=11 {
-            assert!(
-                store.query_range(&b, a, a).is_empty(),
-                "empty range must match nothing"
-            );
-            for bnd in (a + 1)..=11 {
-                let q = store.query_range(&b, a, bnd);
-                let mut expected = Vec::new();
-                for id in store.anchored_ranges.keys().copied() {
-                    if let Some(r) = store.resolve(&b, id)
-                        && r.start < bnd
-                        && r.end > a
-                    {
-                        expected.push(id);
-                    }
-                }
-                let mut q = q;
-                q.sort();
-                expected.sort();
-                assert_eq!(q, expected, "query [{a},{bnd}) mismatch");
-            }
-        }
-    }
-
-    #[test]
-    fn query_range_stays_correct_after_unrelated_shift() {
-        let mut b = text();
-        let mut store = AnchoredRangeStore::new();
-        let id = store.add(&b, 6, 11);
-        b.insert(0, ">>");
-        store.stabilize(&b);
-        assert_eq!(store.resolve(&b, id), Some(8..13));
-        assert_eq!(store.query_range(&b, 8, 13), vec![id]);
-        assert!(store.query_range(&b, 6, 8).is_empty());
-    }
-
-    #[test]
-    fn query_range_with_index_fast_path_matches_linear_scan() {
-        let b = text();
-        let mut store = AnchoredRangeStore::new();
-        for i in 0..5 {
-            store.add(&b, i, i + 2);
-        }
-        // A no-op stabilize marks the index dirty (lazy rebuild on next query).
-        store.stabilize(&b);
-        assert!(
-            store.index_dirty,
-            "index should be dirty after stabilize (lazy)"
-        );
-        // Every query must match a brute-force linear scan oracle.
-        for a in 0..=11 {
-            for bnd in (a + 1)..=11 {
-                let q = store.query_range(&b, a, bnd);
-                let mut expected = Vec::new();
-                for id in store.anchored_ranges.keys().copied() {
-                    if let Some(r) = store.resolve(&b, id)
-                        && r.start < bnd
-                        && r.end > a
-                    {
-                        expected.push(id);
-                    }
-                }
-                let mut q = q;
-                q.sort();
-                expected.sort();
-                assert_eq!(q, expected, "index fast-path query [{a},{bnd}) mismatch");
-            }
-        }
-    }
-
-    #[test]
     fn zero_width_boundary_survives_empty_delete_and_reanchors_on_insert() {
         let mut b = TextBuffer::from_text("a");
         let mut store = AnchoredRangeStore::new();
@@ -931,13 +750,8 @@ mod tests {
         store.stabilize(&b);
         assert_eq!(b.read_range(0..b.len()), "hellorld");
 
-        // Removed entirely — no tombstone, no query presence, no iter_live
-        // entry.
+        // Removed entirely — no tombstone and no iter_live entry.
         assert_eq!(store.resolve(&b, victim), None, "victim fully consumed");
-        assert!(
-            !store.query_range(&b, 0, b.len()).contains(&victim),
-            "victim must not appear in query_range"
-        );
         assert!(
             !store.iter_live().any(|(id, _)| *id == victim),
             "victim must not appear in iter_live"
@@ -1077,8 +891,8 @@ mod tests {
                         if o_collapsed[i] {
                             continue;
                         }
-                        o_start[i] = transform_offset(o_start[i], Stickiness::Before, &e);
-                        o_end[i] = transform_offset(o_end[i], Stickiness::After, &e);
+                        o_start[i] = transform_offset(o_start[i], &e);
+                        o_end[i] = transform_offset(o_end[i], &e);
                     }
                 }
                 1 => {
@@ -1096,8 +910,8 @@ mod tests {
                         // delete stays valid at its point).
                         let s_in = o_start[i] > at && o_start[i] < end;
                         let e_in = o_end[i] > at && o_end[i] < end;
-                        o_start[i] = transform_offset(o_start[i], Stickiness::Before, &e);
-                        o_end[i] = transform_offset(o_end[i], Stickiness::After, &e);
+                        o_start[i] = transform_offset(o_start[i], &e);
+                        o_end[i] = transform_offset(o_end[i], &e);
                         if (s_in || e_in) && o_start[i] >= o_end[i] {
                             o_collapsed[i] = true;
                         }
@@ -1118,14 +932,14 @@ mod tests {
                         }
                         let s_in = o_start[i] > at && o_start[i] < end;
                         let e_in = o_end[i] > at && o_end[i] < end;
-                        o_start[i] = transform_offset(o_start[i], Stickiness::Before, &d);
-                        o_end[i] = transform_offset(o_end[i], Stickiness::After, &d);
+                        o_start[i] = transform_offset(o_start[i], &d);
+                        o_end[i] = transform_offset(o_end[i], &d);
                         if (s_in || e_in) && o_start[i] >= o_end[i] {
                             o_collapsed[i] = true;
                             continue;
                         }
-                        o_start[i] = transform_offset(o_start[i], Stickiness::Before, &ii);
-                        o_end[i] = transform_offset(o_end[i], Stickiness::After, &ii);
+                        o_start[i] = transform_offset(o_start[i], &ii);
+                        o_end[i] = transform_offset(o_end[i], &ii);
                     }
                 }
             }

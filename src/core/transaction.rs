@@ -546,10 +546,6 @@ mod tests {
 
         // Victim is wholly consumed and removed — no tombstone anywhere.
         assert_eq!(store.resolve(&b, victim), None, "victim consumed");
-        assert!(
-            !store.query_range(&b, 0, b.len()).contains(&victim),
-            "victim absent from query_range"
-        );
         assert_eq!(store.len(), 3, "only three live anchored ranges remain");
 
         // Live anchored ranges follow the established insert/delete semantics:
@@ -562,8 +558,10 @@ mod tests {
         assert_eq!(store.resolve(&b, bsticky), Some(3..6));
         assert_eq!(store.resolve(&b, partial), Some(4..7));
 
-        // All three live anchored ranges remain queryable.
-        let visible = store.query_range(&b, 0, b.len());
+        // All three live anchored ranges remain.
+        let live =
+            |store: &AnchoredRangeStore| store.iter_live().map(|(id, _)| *id).collect::<Vec<_>>();
+        let visible = live(&store);
         assert_eq!(visible.len(), 3);
         assert!(visible.contains(&unaffected));
         assert!(visible.contains(&bsticky));
@@ -579,7 +577,7 @@ mod tests {
             None,
             "victim not revived by undo"
         );
-        let after_undo = store.query_range(&b, 0, b.len());
+        let after_undo = live(&store);
         assert!(after_undo.contains(&unaffected));
         assert!(after_undo.contains(&bsticky));
         assert!(after_undo.contains(&partial));
@@ -598,7 +596,7 @@ mod tests {
         assert_eq!(store.resolve(&b, unaffected), Some(0..2));
         assert_eq!(store.resolve(&b, bsticky), Some(3..6));
         assert_eq!(store.resolve(&b, partial), Some(4..7));
-        let after_redo = store.query_range(&b, 0, b.len());
+        let after_redo = live(&store);
         assert_eq!(after_redo.len(), 3);
         assert!(after_redo.contains(&unaffected));
         assert!(after_redo.contains(&bsticky));
