@@ -29,13 +29,21 @@ and its completion controller/surface. Multiple views share a model while
 retaining independent presentation state. Completion ownership is detailed in
 [semantic UI](semantic-ui.md#completion-ownership-and-aggregation).
 
+A view keeps no copy of the text. It reads the lines it paints, measures, or
+edits from the model, and converts positions, including the platform's
+document-wide UTF-16 offsets, through the buffer's line index, so editing cost
+does not grow with document size. A test guards that editing, navigation, IME,
+scrolling, and painting never read the whole document.
+
 Movement and deletion respect grapheme boundaries; word navigation uses Unicode
 word boundaries and vertical movement retains a shaped x coordinate. Text,
 selection, caret, hit testing, and IME bounds share one shaping projection and
-horizontal offset. Editing/navigation reveal the caret; wheel scrolling may move
-away from it. Clipboard operations use source text; expanded tabs are only a
-rendering projection. UTF-16 platform input is converted to UTF-8 model edits,
-with a synchronous projection refresh before resolving the resulting caret.
+horizontal offset. The caret never sits inside a `\r\n` terminator, and
+inserted newlines from typing, paste, and IME take the buffer's line ending.
+Editing/navigation reveal the caret; wheel scrolling may move away from it, up
+to the widest line shaped since the text last changed. Clipboard operations use
+source text; expanded tabs are only a rendering projection. A view's own edit
+refreshes its derived state synchronously before resolving the resulting caret.
 Other views update through their persistent positions.
 
 Restorable view state is the anchor and caret as byte offsets, the start of the

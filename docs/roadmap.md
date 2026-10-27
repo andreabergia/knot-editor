@@ -22,17 +22,17 @@ Extension authoring (D056) is complete: bundled packages and examples are
 TypeScript compiled at build time, split into modules, and tested under
 `node:test` against an in-memory host.
 
-The remaining [health review](plans/codebase-health-review.md) findings come
-next, in this order:
+The editor view data model is complete: views read lines from the model
+instead of a private text copy, typing coalesces in the piece table, the
+consumed edit log is discarded, and inserted newlines follow the buffer's line
+ending. D002 and D031 can build on the view's line model.
 
-| Order | Findings | Outcome |
-| --- | --- | --- |
-| 1 | P0-1, P1-1, P2-7 | [Editor view data model](plans/editor-view-data-model.md): model-backed line reads, piece-table length cache, insert coalescing and edit-log bounding, and CRLF policy, before D002 and D031 |
-| 2 | P1-6, P2-1–P2-4 | `engine.rs` split and marshaling unification, command module regrouping, `app/terminal` and `app/extensions` directories, an `editor.rs` split into input, movement, and painting, inline test extraction, and tokio runtime removal, as pure-move maintenance between slices |
-
-Pull the editor view work forward only if dogfooding on large files becomes
-disruptive; restored view state uses byte offsets that do not depend on the
-view's line representation. This work takes priority over the deferred register.
+The remaining [health review](plans/codebase-health-review.md) findings
+(P1-6, P2-1–P2-4) come next as pure-move maintenance between slices: the
+`engine.rs` split and marshaling unification, command module regrouping,
+`app/terminal` and `app/extensions` directories, an `editor.rs` split into
+input, movement, and painting, inline test extraction, and tokio runtime
+removal. This work takes priority over the deferred register.
 
 ## Deferred register
 
@@ -140,9 +140,9 @@ view's line representation. This work takes priority over the deferred register.
   - Reconsider: Users need edit history across restarts or branching history.
     Byte-offset view state already survives restarts and project switches.
 
-- **D013 — Piece-table compaction and edit-log reclamation**
-  - Deferred: Prototype storage is append-only and no real workload has shown
-    unacceptable growth.
+- **D013 — Piece-table compaction**
+  - Deferred: The add buffer is append-only, and edits other than contiguous
+    typing still add pieces. No real workload has shown unacceptable growth.
   - Reconsider: Long editing sessions produce measured memory or stabilization
     problems.
 

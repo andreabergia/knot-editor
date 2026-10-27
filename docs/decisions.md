@@ -39,6 +39,22 @@ shifts accounted for about 88% of indexed latency; position issuance and
 resolution were sub-microsecond. This supports deferring index replacement until
 real workloads justify it; absolute tails included system noise.
 
+Views read lines from the model instead of keeping a private copy of the text,
+which had made every keystroke cost O(document) per view. The line index is
+therefore maintained eagerly, and it also records UTF-16 line starts: platform
+text input speaks document-wide UTF-16 offsets, and without the index every IME
+callback scanned from the start of the document. This keeps the core UTF-8:
+text, edits, and positions stay in bytes, and the earlier rejection of a
+whole-document UTF-16 table concerned a JavaScript adapter that exceeded the
+isolate heap, not one integer per line in Rust. A model-side index would have
+repeated the incremental update on each commit path.
+
+Contiguous typing extends the trailing add piece rather than adding one per
+keystroke, and the consumed edit log is discarded, so ordinary typing no longer
+degrades every buffer operation over a long session. Inserted newlines follow
+the buffer's first line terminator rather than a dominant one, which would need
+a whole-document scan for a rare mixed-ending case.
+
 Reference: [core and buffers](architecture/core-and-buffers.md).
 
 ## Anchored ranges and contributions

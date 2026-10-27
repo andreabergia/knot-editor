@@ -59,18 +59,26 @@ by stale views. Disposal, cancellation, and host release follow the shared
 - A `Position` identifies a piece and offset. Splits preserve the left piece ID
   and allocate a right piece ID; edit-log records repair affected stale
   positions. Unrelated positions require no work.
-- The line-start index is intentionally replaceable. Its linear suffix update
-  dominates large-buffer edit cost; replacement remains deferred pending
-  real workload evidence.
-- Inserted backing storage and the edit log are append-only. Compaction and reclamation are deferred.
+- The line index is maintained on every edit and records each line start as
+  both a byte offset and a UTF-16 offset, so views and platform text input
+  convert positions without scanning the document. It is intentionally
+  replaceable: its linear suffix update dominates large-buffer edit cost, and
+  replacement remains deferred pending real workload evidence.
+- Inserted backing storage is append-only. Contiguous typing extends the piece
+  at the end of the add buffer instead of adding one per keystroke; other
+  edits still add pieces, and compaction remains deferred.
+- Edit-log sequence numbers are monotonic. `BufferModel` discards entries once
+  its anchored-range store has consumed them, so the retained log holds at most
+  one commit.
 
 ## Anchored ranges
 
-- `AnchoredRangeStore` owns stable range geometry only. Each endpoint combines
-  a `Position` with before/after boundary stickiness.
+- `AnchoredRangeStore` owns stable range geometry only. Each endpoint is a
+  `Position`; an insert exactly at an endpoint moves it past the inserted text,
+  so a range excludes text inserted at its start and includes text inserted at
+  its end.
 - Stabilization consumes one authoritative buffer edit stream. It repairs only
   affected endpoints; untouched ranges retain stable tokens.
-- Query indexes are derived caches, never the source of truth.
 - A fully consumed anchored range is removed. Undoing text does not revive it;
   provider-derived state may be republished under a new ID.
 
@@ -85,7 +93,8 @@ by stale views. Disposal, cancellation, and host release follow the shared
   preceding text state, while retaining the buffer-identity check.
 - `BufferModel` stores undo and redo entries as `EditTransaction`s. Replay is a
   normal public model commit: it stabilizes anchors, advances the revision,
-  invalidates snapshots, and publishes a coherent text edit before its caller
+  invalidates snapshots, and publishes one text edit covering the replayed
+  primitives, read from the replaced span only, before its caller
   notifies observing views. A separate content identity follows history replay so
   documents can recognize a return to a saved state without making public
   revisions non-monotonic.

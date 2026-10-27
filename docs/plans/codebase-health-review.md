@@ -7,10 +7,10 @@ technical debt is.
 Status: active input. The [roadmap](../roadmap.md#selected-work)
 schedules each open finding. The codebase health maintenance interlude
 resolved the prototype inventory, the symlink Save bug, the Find stub, the
-`ProductShell` split, and the documentation drift; this document now keeps only
-the open findings. The additions to checkpoints 8 and 9 landed; the
-post-initiative work remains. Remove this document once every scheduled cleanup has landed or
-moved to the roadmap register; Git retains it.
+`ProductShell` split, and the documentation drift, and the editor view data
+model slice resolved the view, piece-table, and CRLF findings. This document
+now keeps only the open findings, all structural. Remove it once every
+scheduled cleanup has landed or moved to the roadmap register; Git retains it.
 
 ## Summary
 
@@ -20,20 +20,10 @@ are real and enforced by the type system. The test suite is large (≈730 Rust
 tests) and fast (whole suite ≈4 s on an M-series Mac), and CI is strict
 (clippy `-D warnings`, `--locked`, cargo-audit, pinned actions).
 
-The remaining debt falls into three areas:
-
-1. **The editor view is still a prototype renderer.** On every edit it
-   materializes the whole document several times and rebuilds a
-   `Vec<String>` line projection. The core-buffer benchmarks in
-   `decisions.md` don't measure this path, and it is the product's main
-   scalability ceiling. (P0)
-2. **Some modules are too large and others too scattered.** `engine.rs` is
-   about 5,100 lines of production code plus 5,200 of inline tests. Command
-   routing is spread across six modules, and `src/app` is a flat directory of
-   about 45 files using name prefixes as namespaces. (P1/P2)
-3. **There are a few real correctness gaps.** The product has no way to stop a
-   runaway extension turn. The core buffer has O(pieces) operations that grow
-   with every keystroke. CRLF files get mixed line endings after edits. (P0/P1)
+The remaining debt is structural: **some modules are too large and others too
+scattered.** `engine.rs` is about 5,100 lines of production code plus 5,200 of
+inline tests. Command routing is spread across six modules, and `src/app` is a
+flat directory of about 45 files using name prefixes as namespaces. (P1/P2)
 
 None of these calls the overall architecture into question. The
 core/app/host split, captured command targets, the typed host boundary,
@@ -42,8 +32,8 @@ protected closure, and the recovery store are well reasoned and well tested.
 | Area | Health | Notes |
 | --- | --- | --- |
 | Architecture & docs | 🟢 Good | Docs reflect code; decisions carry rationale and evidence. |
-| Core text model | 🟡 Fair | Sound concept; linear-scan piece chain without coalescing. |
-| Editor view | 🔴 Weak | Whole-document rebuild per edit; prototype `Seg`/projection model. |
+| Core text model | 🟢 Good | Cached length, eager byte/UTF-16 line index, coalesced typing, bounded edit log. |
+| Editor view | 🟢 Good / 🟡 size | Reads lines from the model; `editor.rs` is still one large module. |
 | Workbench / product shell | 🟢 Good | Behavior well tested; `ProductShell` split by concern under `product/`. |
 | Extension host (V8) | 🟢 Good / 🟡 size | Careful lifecycle design; one 10k-line file; two marshaling styles; no escape hatch. |
 | Persistence & recovery | 🟢 Good | Thoughtful; Save follows symlinks and syncs the parent directory. |
@@ -86,83 +76,12 @@ The runaway-turn escape hatch (former P1-3) landed as the native
 Restart Extension command, which unloads and reloads one package.
 `ExtensionWatchdog` stays for per-turn timeouts under D019.
 
-Still-retained prototype code, tracked below: the core line index and
-anchored-range interval index (P0-1).
+The editor view data model slice resolved **P0-1** (whole-document rebuild per
+edit), **P1-1** (piece-table length, coalescing, and edit-log growth), and the
+**CRLF** item of P2-7. Views now read lines through the core line index, the
+unused interval index is gone, and `core` is private to the crate.
 
 ## 3. Open findings
-
-### P0-1: The editor view rebuilds the whole document on every edit
-
-`EditorView` (`src/app/editor.rs`) keeps a `lines: Vec<String>` and a parallel
-`segs: Vec<Vec<Seg>>` projection. Its model observer (`editor.rs:290`) does
-this on **every** model notification:
-
-- `this.flat_doc() != model.text()`: `flat_doc()` is `lines.join("\n")`
-  (a full copy), and `model.text()` is `read_range(0..len)` (another full
-  copy).
-- `rebuild_projection(&model.text(), …)`: a third full copy, then
-  `text.split('\n').map(String::from)` allocates one `String` per line, plus a
-  `Vec<Seg>` per line.
-- `project_contributions` rebuilds `line_starts` from scratch.
-
-`replace_text_with_grouping` runs the same rebuild again after the model
-update. Coordinate conversions (`to_flat_byte`, `to_flat_utf16`,
-`flat_byte_to_position`) are linear scans over `lines`. Every open view of the
-buffer repeats all of this.
-
-The result: every keystroke costs O(document size) in allocations, multiplied
-by the number of views. The 29 MiB fixture in `decisions.md` validated the
-*core* (p50 678 µs), but this layer makes typing in a large file unusable
-long before the core becomes the bottleneck. `Seg` with `color/bold/italic`
-is a leftover from the syntax-highlight prototype; nothing but the default is
-ever produced.
-
-**Recommendation** (one focused slice, before D002 syntax highlighting builds
-on top of it):
-
-- Give the view an incremental line model driven by `CommittedBufferChange`
-  (the model already emits edit events), or query the core line index that
-  already exists (`TextBuffer::line_start` / `line_of_offset`), which is
-  currently unused.
-- Keep only per-visible-line shaping caches in the view. Read line text from
-  the model on demand.
-- Replace `flat_doc()` comparisons with revision comparisons.
-- Resolve contributions for the visible range only, using the anchored-range
-  interval index that already exists and is also unused.
-- Add a benchmark or test with a large buffer that asserts edits don't copy
-  the whole text (for example, count `BufferModel::text()` calls in a test
-  build).
-- If the slice does not use the line index or the interval index, remove them.
-  `core` is still `pub`, so the compiler does not report them as dead.
-
-### P1-1: Core piece table: linear operations, no coalescing
-
-`TextBuffer` (`src/core/buffer.rs`) stores pieces in a `Vec<Piece>`:
-
-- `len()` sums every piece (`buffer.rs:325`), and is called from
-  `assert!`s on every insert, delete, read, and `position_at`.
-- `resolve`, `position_at`, and `split_at` are linear walks.
-- Adjacent pieces are never coalesced, so each typed character appends a
-  piece, and the chain grows without bound over a session (D013 defers
-  compaction).
-- The edit log grows without bound too (`take_edits` is unused).
-
-This is fine for the prototype's benchmarks, but cost grows with *session
-length*, not file size. A long editing session in one file degrades every
-operation.
-
-**Recommendation (cheap first steps):**
-
-- Cache the total length.
-- Coalesce an insert into the previous `Add` piece when the insert is
-  contiguous both in the logical text and in the add buffer. This is the
-  common typing case and needs no change to the stable-ID contract for
-  existing positions: the left piece keeps its id, and only positions at
-  its old end need the sticky-left rule. Verify against the existing
-  position tests.
-- Bound the edit log once all consumers track a sequence watermark.
-
-Reconsider a tree (or rope) only after D013/D014 trigger.
 
 ### P1-6: `host/engine.rs` mixes four concerns in one 10k-line file
 
@@ -253,31 +172,25 @@ an easy simplification consistent with "keep the design simple."
 
 ### P2-7: Small items
 
-- The editor normalizes CRLF on input (`editor.rs:1254`) and trims a
-  trailing `\r` for line ends, but stores files verbatim. A CRLF file will
-  therefore get mixed line endings after edits. Pick a policy: detect the
-  dominant ending on load and use it for inserted newlines.
 - `CommandOrigin` exists only under `cfg(test)` in `app/mod.rs`. Move it next
   to its tests.
 
 ## 4. Design soundness: second opinion by subsystem
 
-### 4.1 Core and buffers 🟡
+### 4.1 Core and buffers 🟢
 
 The design is sound: a piece table with stable IDs, an edit log as the single
 anchor-repair path, and undo through ordinary mutations. Separating content
 identity from monotonic revisions (so undo can return to clean) is a nice
-touch. The implementation is still prototype-shaped (P1-1). `core` is still
-`pub` from the library crate, so its API surface isn't checked for dead code;
-make it private once P0-1 settles which of its unused indexes survive.
+touch. A tree representation stays deferred under D013/D014.
 
-### 4.2 Editor view 🔴
+### 4.2 Editor view 🟢
 
-See P0-1. The grapheme- and shaped-x movement, IME handling, and
-viewport-culled painting are good. The data model underneath them is not.
-`editor.rs` (2,400 production lines) would also benefit from splitting
-input/IME, movement, painting, and completion once P0-1 changes the data
-model.
+The grapheme- and shaped-x movement, IME handling, and viewport-culled
+painting are good, and the view now reads lines from the model. `editor.rs`
+(about 2,300 production lines) would benefit from splitting input/IME,
+movement, painting, and completion; the roadmap schedules it with the
+structural splits.
 
 ### 4.3 Documents, persistence, recovery 🟢
 
@@ -332,10 +245,6 @@ parts (D054).
 
 ## 5. Suggested sequencing
 
-1. **Editor view data model (P0-1)** together with **piece-table quick wins
-   (P1-1)** and the CRLF policy (P2-7). This is one focused
-   slice and the prerequisite for D002 syntax highlighting and D031 Find,
-   planned in [editor view data model](editor-view-data-model.md).
-2. **Structural splits (P1-6, P2-1, P2-2, P2-3, P2-4).** These are pure moves,
+1. **Structural splits (P1-6, P2-1, P2-2, P2-3, P2-4).** These are pure moves,
    best done between slices, one subsystem per commit, so history stays
    readable and the plans don't collide.
