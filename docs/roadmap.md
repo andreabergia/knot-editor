@@ -271,6 +271,17 @@ view's line representation. This work takes priority over the deferred register.
   - Reconsider: Daily use needs configurable fonts or terminal preferences;
     define their scope and persistence with the application settings model.
 
+- **D063 — Migrate the terminal engine to libghostty**
+  - Deferred: The `alacritty_terminal` adapter meets current terminal
+    behavior. Ghostty VT was rejected earlier for its separate PTY
+    integration, pre-1.0 FFI, Zig packaging, integration size, and poor debug
+    parsing performance.
+  - Reconsider: libghostty offers a stable embeddable API and packaging that
+    fits the Rust build, or it covers terminal behavior Alacritty lacks (such
+    as D041 protocols). Then replace the emulator behind the existing
+    application-owned session without changing its PTY ownership or
+    single-attachment contract.
+
 - **D038 — Remote PTYs**
   - Deferred: Local interactive sessions cover current terminal workflows.
   - Reconsider: Daily use requires remote shells; select transport,
