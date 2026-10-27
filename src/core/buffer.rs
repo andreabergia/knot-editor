@@ -1,8 +1,15 @@
 //! `TextBuffer`: stable-ID piece-table backing store.
 //!
 //! The buffer has monotonic stable piece IDs, insert / delete / replace /
-//! read-range operations, a lazy incrementally maintained line index, and a
+//! read-range operations, an incrementally maintained line index, and a
 //! `Position` / `BufferEdit` surface for stable external ranges.
+//!
+//! ## Line index
+//!
+//! Every line start is recorded both as a byte offset and as a UTF-16 offset.
+//! Text and every public position stay UTF-8; the UTF-16 column lets platform
+//! text input, which speaks document-wide UTF-16 offsets, convert in
+//! O(log lines + line length) instead of scanning from the buffer start.
 //!
 //! ## Position tokens
 //!
@@ -219,6 +226,15 @@ pub enum BufferEdit {
     },
 }
 
+/// Start of one line, as UTF-8 byte and UTF-16 code-unit offsets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct LineStart {
+    byte: usize,
+    utf16: usize,
+}
+
+const BUFFER_START: LineStart = LineStart { byte: 0, utf16: 0 };
+
 /// Which backing buffer a piece references.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Backing {
@@ -263,15 +279,14 @@ pub struct TextBuffer {
     pieces: Vec<Piece>,
     /// Global monotonic piece-id counter. Never reused.
     next_id: PieceId,
-    /// Lazy line index:
-    /// - `None` — not yet built. Built on first query that needs it.
-    /// - `Some(vec)` — kept valid under edits via incremental update
-    ///   (`update_line_starts`), never rebuilt wholesale.
+    /// Total length of the logical text, in UTF-8 bytes.
+    len: usize,
+    /// Line index, kept valid under every edit by `update_line_starts`.
     ///
-    /// `vec` is sorted ascending. `vec[0] == 0` always (line 0 starts at
-    /// byte offset 0); even an empty buffer stores `[0]`. A trailing `'\n'`
-    /// creates one extra empty line, so `"abc\n"` has `vec == [0, 4]`.
-    line_starts: Option<Vec<usize>>,
+    /// Sorted ascending. Entry 0 is always the buffer start, even for an empty
+    /// buffer. A trailing `'\n'` creates one extra empty line, so `"abc\n"`
+    /// has byte starts `[0, 4]`.
+    line_starts: Vec<LineStart>,
     /// Append-only edit log. Each `insert` / `delete` pushes one
     /// `BufferEdit`. `replace` decomposes into a delete-then-insert pair
     /// and pushes two. The log is unbounded until `take_edits` drains it.
@@ -287,13 +302,16 @@ impl TextBuffer {
     pub fn from_text(text: impl Into<Box<str>>) -> Self {
         let original = text.into();
         let len = original.len();
+        let mut line_starts = vec![BUFFER_START];
+        scan_line_starts(&original, BUFFER_START, &mut line_starts);
         let mut buf = TextBuffer {
             instance_id: NEXT_BUFFER_ID.fetch_add(1, Ordering::Relaxed),
             original,
             add: String::new(),
             pieces: Vec::new(),
             next_id: 1,
-            line_starts: None,
+            len,
+            line_starts,
             edits: Vec::new(),
         };
         if len > 0 {
@@ -316,14 +334,15 @@ impl TextBuffer {
             add: String::new(),
             pieces: Vec::new(),
             next_id: 1,
-            line_starts: None,
+            len: 0,
+            line_starts: vec![BUFFER_START],
             edits: Vec::new(),
         }
     }
 
     /// Total length of the logical text, in UTF-8 bytes.
     pub fn len(&self) -> usize {
-        self.pieces.iter().map(|p| p.len).sum()
+        self.len
     }
 
     /// Stable identity of this `TextBuffer` instance.
@@ -336,7 +355,7 @@ impl TextBuffer {
 
     /// Whether the logical text is empty.
     pub fn is_empty(&self) -> bool {
-        self.pieces.is_empty() || self.len() == 0
+        self.len == 0
     }
 
     /// Read a byte range of the logical text into a `String`.
@@ -351,24 +370,25 @@ impl TextBuffer {
         debug_assert!(self.is_char_boundary(range.end));
 
         let mut out = String::with_capacity(range.end - range.start);
-        let mut offset = 0usize;
-        for p in &self.pieces {
-            let p_end = offset + p.len;
-            if p_end <= range.start {
-                offset = p_end;
-                continue;
-            }
-            if offset >= range.end {
-                break;
-            }
-            // Overlap with [range.start, range.end).
-            let slice_start = offset.max(range.start) - offset;
-            let slice_end = p_end.min(range.end) - offset;
-            let bytes = self.backing_slice(*p);
-            out.push_str(&bytes[slice_start..slice_end]);
-            offset = p_end;
+        for chunk in self.chunks(range) {
+            out.push_str(chunk);
         }
         out
+    }
+
+    /// The logical text in `range` as borrowed piece slices, in order.
+    fn chunks(&self, range: Range<usize>) -> impl Iterator<Item = &str> {
+        let mut offset = 0usize;
+        self.pieces.iter().map_while(move |p| {
+            let p_start = offset;
+            offset += p.len;
+            if p_start >= range.end {
+                return None;
+            }
+            let slice_start = p_start.max(range.start).min(offset) - p_start;
+            let slice_end = offset.min(range.end) - p_start;
+            Some(&self.backing_slice(*p)[slice_start..slice_end])
+        })
     }
 
     /// Insert `text` at byte offset `at`.
@@ -419,9 +439,10 @@ impl TextBuffer {
         };
         self.next_id += 1;
         self.pieces.insert(split.insert_at, new_piece);
+        self.len += text.len();
 
         // Keep the line index valid for the edited span.
-        self.update_line_starts(at..at, text);
+        self.update_line_starts(at..at, text, 0);
 
         // Record the edit event. `at` and `inserted_len` are byte
         // offsets into the pre-edit logical text.
@@ -448,6 +469,7 @@ impl TextBuffer {
         if range.is_empty() {
             return;
         }
+        let removed_utf16 = self.chunks(range.clone()).map(utf16_len).sum();
 
         // Split the chain at both ends, then drop the pieces in between.
         // Both calls share one `splits` vec so the ordering in the
@@ -493,9 +515,10 @@ impl TextBuffer {
         };
 
         self.pieces.drain(left.insert_at..right.insert_at);
+        self.len -= range.len();
 
         // Keep the line index valid for the edited span.
-        self.update_line_starts(range.clone(), "");
+        self.update_line_starts(range.clone(), "", removed_utf16);
 
         // Record the edit event. `range` is the pre-edit byte span.
         self.edits.push(BufferEdit::Delete {
@@ -530,37 +553,64 @@ impl TextBuffer {
     // ---- Line index ------------------------------------------------
 
     /// Number of lines. The buffer always has at least one line (line 0,
-    /// possibly empty), so this returns `>= 1`. Builds the line index
-    /// lazily on first call.
-    pub fn line_count(&mut self) -> usize {
-        self.ensure_line_starts();
-        self.line_starts.as_ref().unwrap().len()
+    /// possibly empty), so this returns `>= 1`.
+    pub fn line_count(&self) -> usize {
+        self.line_starts.len()
     }
 
     /// Byte offset of the start of `line` (0-indexed). `line` must be
-    /// `< line_count()`. Builds the line index lazily on first call.
-    pub fn line_start(&mut self, line: usize) -> usize {
-        self.ensure_line_starts();
-        let starts = self.line_starts.as_ref().unwrap();
+    /// `< line_count()`.
+    pub fn line_start(&self, line: usize) -> usize {
         assert!(
-            line < starts.len(),
+            line < self.line_starts.len(),
             "line {line} out of range ({})",
-            starts.len()
+            self.line_starts.len()
         );
-        starts[line]
+        self.line_starts[line].byte
     }
 
     /// 0-indexed line number of the line containing byte offset `offset`.
     /// `offset` must satisfy `0 <= offset <= len()`. `len()` maps to the
-    /// last line. Builds the line index lazily on first call.
-    pub fn line_of_offset(&mut self, offset: usize) -> usize {
+    /// last line.
+    pub fn line_of_offset(&self, offset: usize) -> usize {
         assert!(offset <= self.len());
-        self.ensure_line_starts();
-        let starts = self.line_starts.as_ref().unwrap();
         // First index where `starts[i] > offset`; the line containing
-        // `offset` is the one before it. `saturating_sub` covers `offset`
-        // landing on or before the first entry (always 0 here).
-        starts.partition_point(|&s| s <= offset).saturating_sub(1)
+        // `offset` is the one before it. Entry 0 is always 0.
+        self.line_starts.partition_point(|s| s.byte <= offset) - 1
+    }
+
+    /// UTF-16 code-unit offset of byte offset `offset`, which must be a char
+    /// boundary `<= len()`.
+    pub fn utf16_of_offset(&self, offset: usize) -> usize {
+        debug_assert!(self.is_char_boundary(offset));
+        let start = self.line_starts[self.line_of_offset(offset)];
+        start.utf16
+            + self
+                .chunks(start.byte..offset)
+                .map(utf16_len)
+                .sum::<usize>()
+    }
+
+    /// Byte offset of UTF-16 code-unit offset `utf16`. An offset inside a
+    /// surrogate pair rounds up to the end of its scalar, and an offset past
+    /// the end clamps to `len()`.
+    pub fn offset_of_utf16(&self, utf16: usize) -> usize {
+        let line = self.line_starts.partition_point(|s| s.utf16 <= utf16) - 1;
+        let start = self.line_starts[line];
+        let end = self
+            .line_starts
+            .get(line + 1)
+            .map_or(self.len, |next| next.byte);
+        let mut units = start.utf16;
+        let mut offset = start.byte;
+        for ch in self.chunks(start.byte..end).flat_map(str::chars) {
+            if units >= utf16 {
+                break;
+            }
+            units += ch.len_utf16();
+            offset += ch.len_utf8();
+        }
+        offset
     }
 
     // ---- Position tokens -------------------------------------
@@ -678,38 +728,16 @@ impl TextBuffer {
         &buf[p.start..p.start + p.len]
     }
 
-    /// Build the line index from scratch by scanning all piece content for
-    /// `'\n'` bytes. O(total length). Called once per buffer lifetime, on
-    /// the first line-index query; subsequent edits keep it valid via
-    /// `update_line_starts`.
-    fn ensure_line_starts(&mut self) {
-        if self.line_starts.is_some() {
-            return;
-        }
-        let mut starts: Vec<usize> = vec![0];
-        let mut acc = 0usize;
-        for p in &self.pieces {
-            let bytes = self.backing_slice(*p).as_bytes();
-            for (i, &b) in bytes.iter().enumerate() {
-                if b == b'\n' {
-                    starts.push(acc + i + 1);
-                }
-            }
-            acc += p.len;
-        }
-        self.line_starts = Some(starts);
-    }
-
     /// Incrementally update the line index after an edit that replaced the
-    /// byte span `[range.start, range.end)` with `new_text` (whose byte
-    /// length is `new_text.len()`).
+    /// byte span `[range.start, range.end)`, which held `removed_utf16` UTF-16
+    /// code units, with `new_text`. Called after the piece chain changed.
     ///
-    /// No-op if the line index isn't built yet (lazy: edits don't force a
-    /// build). Otherwise splices the K-entry delta for the edited span and
-    /// fixes up the surviving suffix in O(n−i).
+    /// Splices the K-entry delta for the edited span and fixes up the
+    /// surviving suffix in O(n−i).
     ///
     /// Algorithm:
-    /// - `delta = new_text.len() - (range.end - range.start)` (signed).
+    /// - `delta = new_text.len() - (range.end - range.start)` (signed), and
+    ///   likewise in UTF-16 code units.
     /// - `lo`  = first index where `starts[i] >= range.start` → kept
     ///   unchanged.
     /// - `hi`  = first index where `starts[i] > range.end` → suffix to
@@ -721,36 +749,37 @@ impl TextBuffer {
     ///   2. For each `'\n'` at index `i` in `new_text`, emit a new line
     ///      start at `range.start + i + 1`.
     /// - The new array is `[starts[..lo], middle, [s + delta for s in starts[hi..]]]`.
-    fn update_line_starts(&mut self, range: Range<usize>, new_text: &str) {
-        let Some(starts) = self.line_starts.as_mut() else {
-            return;
-        };
-
-        let delta: isize = new_text.len() as isize - (range.end - range.start) as isize;
-        let lo = starts.partition_point(|&s| s < range.start);
-        let hi = starts.partition_point(|&s| s <= range.end);
+    fn update_line_starts(&mut self, range: Range<usize>, new_text: &str, removed_utf16: usize) {
+        let byte_delta = new_text.len() as isize - range.len() as isize;
+        let utf16_delta = utf16_len(new_text) as isize - removed_utf16 as isize;
+        let lo = self.line_starts.partition_point(|s| s.byte < range.start);
+        let hi = self.line_starts.partition_point(|s| s.byte <= range.end);
 
         // Build the middle section: surviving line at `range.start` (if any)
-        // plus new line starts from `'\n'`s in `new_text`.
-        let mut middle: Vec<usize> = Vec::new();
-        if lo < starts.len() && starts[lo] == range.start {
-            middle.push(range.start);
+        // plus new line starts from `'\n'`s in `new_text`. The text before
+        // `range.start` is unchanged, so its UTF-16 offset is still valid.
+        let mut middle = Vec::new();
+        if self
+            .line_starts
+            .get(lo)
+            .is_some_and(|start| start.byte == range.start)
+        {
+            middle.push(self.line_starts[lo]);
         }
-        for (i, &b) in new_text.as_bytes().iter().enumerate() {
-            if b == b'\n' {
-                middle.push(range.start + i + 1);
-            }
+        if new_text.contains('\n') {
+            let base = LineStart {
+                byte: range.start,
+                utf16: self.utf16_of_offset(range.start),
+            };
+            scan_line_starts(new_text, base, &mut middle);
         }
 
-        // Assemble the new line index.
-        let mut new_starts: Vec<usize> =
-            Vec::with_capacity(lo + middle.len() + (starts.len() - hi));
-        new_starts.extend_from_slice(&starts[..lo]);
-        new_starts.extend(middle);
-        for &s in &starts[hi..] {
-            new_starts.push((s as isize + delta) as usize);
+        let tail = lo + middle.len();
+        self.line_starts.splice(lo..hi, middle);
+        for start in &mut self.line_starts[tail..] {
+            start.byte = start.byte.wrapping_add_signed(byte_delta);
+            start.utf16 = start.utf16.wrapping_add_signed(utf16_delta);
         }
-        *starts = new_starts;
     }
 
     /// Whether `offset` is a UTF-8 scalar boundary in the logical text.
@@ -863,6 +892,25 @@ impl TextBuffer {
         // caught this; reaching here is a bug.
         unreachable!("split_at({at}) past end of len {}", self.len())
     }
+}
+
+/// Append the start of every line that follows a `'\n'` in `text`, where
+/// `text` begins at `base`.
+fn scan_line_starts(text: &str, base: LineStart, out: &mut Vec<LineStart>) {
+    let mut utf16 = base.utf16;
+    for (i, ch) in text.char_indices() {
+        utf16 += ch.len_utf16();
+        if ch == '\n' {
+            out.push(LineStart {
+                byte: base.byte + i + 1,
+                utf16,
+            });
+        }
+    }
+}
+
+fn utf16_len(text: &str) -> usize {
+    text.chars().map(char::len_utf16).sum()
 }
 
 impl Default for TextBuffer {
@@ -1136,14 +1184,21 @@ mod tests {
 
     // ---- Line index ----------------------------------------------
 
-    /// Peek the line-index state directly (assumes built).
-    fn ls(b: &TextBuffer) -> &[usize] {
-        b.line_starts.as_ref().expect("line_starts built")
+    /// Peek the byte line starts directly.
+    fn ls(b: &TextBuffer) -> Vec<usize> {
+        b.line_starts.iter().map(|start| start.byte).collect()
+    }
+
+    /// Assert the incrementally maintained index equals a rebuild from text.
+    fn assert_index_matches_text(b: &TextBuffer) {
+        let mut rebuilt = vec![BUFFER_START];
+        scan_line_starts(&s(b), BUFFER_START, &mut rebuilt);
+        assert_eq!(b.line_starts, rebuilt, "text {:?}", s(b));
     }
 
     #[test]
     fn line_index_empty_buffer() {
-        let mut b = TextBuffer::new();
+        let b = TextBuffer::new();
         assert_eq!(b.line_count(), 1);
         assert_eq!(b.line_start(0), 0);
         assert_eq!(b.line_of_offset(0), 0);
@@ -1152,7 +1207,7 @@ mod tests {
 
     #[test]
     fn line_index_single_line() {
-        let mut b = TextBuffer::from_text("hello");
+        let b = TextBuffer::from_text("hello");
         assert_eq!(b.line_count(), 1);
         assert_eq!(b.line_start(0), 0);
         for off in 0..=b.len() {
@@ -1163,7 +1218,7 @@ mod tests {
 
     #[test]
     fn line_index_multi_line() {
-        let mut b = TextBuffer::from_text("ab\ncd\nef");
+        let b = TextBuffer::from_text("ab\ncd\nef");
         // Bytes: a(0) b(1) \n(2) c(3) d(4) \n(5) e(6) f(7). len 8.
         assert_eq!(b.line_count(), 3);
         assert_eq!(b.line_start(0), 0);
@@ -1181,7 +1236,7 @@ mod tests {
 
     #[test]
     fn line_index_trailing_newline_creates_empty_last_line() {
-        let mut b = TextBuffer::from_text("abc\n");
+        let b = TextBuffer::from_text("abc\n");
         assert_eq!(b.line_count(), 2);
         assert_eq!(b.line_start(0), 0);
         assert_eq!(b.line_start(1), 4);
@@ -1189,15 +1244,31 @@ mod tests {
     }
 
     #[test]
-    fn line_index_lazy_until_first_query() {
-        // Edits before first query don't build the index; they leave it None.
-        let mut b = TextBuffer::from_text("abc");
-        b.insert(3, "def");
+    fn line_index_tracks_utf16_starts_across_edits() {
+        let mut b = TextBuffer::from_text("a😀\nβ\n日本\n");
+        assert_index_matches_text(&b);
+        b.insert(1, "é\n🎉");
+        assert_index_matches_text(&b);
         b.delete(0..1);
-        assert!(b.line_starts.is_none(), "should still be lazy after edits");
-        // First query triggers the build.
-        assert_eq!(b.line_count(), 1);
-        assert!(b.line_starts.is_some());
+        assert_index_matches_text(&b);
+        let len = b.len();
+        b.replace(3..len - 1, "x\n😀\ny");
+        assert_index_matches_text(&b);
+        b.delete(0..b.len());
+        assert_index_matches_text(&b);
+        assert_eq!(b.len(), 0);
+    }
+
+    #[test]
+    fn utf16_conversions_round_trip_and_round_up_inside_pairs() {
+        let b = TextBuffer::from_text("a😀\nβc");
+        // a(0) 😀(1..5) \n(5) β(6..8) c(8); UTF-16: a 0, 😀 1..3, \n 3, β 4, c 5.
+        for (byte, utf16) in [(0, 0), (1, 1), (5, 3), (6, 4), (8, 5), (9, 6)] {
+            assert_eq!(b.utf16_of_offset(byte), utf16, "byte {byte}");
+            assert_eq!(b.offset_of_utf16(utf16), byte, "utf16 {utf16}");
+        }
+        assert_eq!(b.offset_of_utf16(2), 5, "inside the surrogate pair");
+        assert_eq!(b.offset_of_utf16(100), b.len());
     }
 
     #[test]
@@ -1318,8 +1389,6 @@ mod tests {
         // spans, and verify the index matches a fresh scan of the text.
         let text = "the quick brown fox\njumps over\nthe lazy dog\n";
         let mut b = TextBuffer::from_text(text);
-        // Force a build so subsequent edits go through the incremental path.
-        let _ = b.line_count();
 
         let mut rng_state: u64 = 0xdead_beef;
         let mut next_rand = || {

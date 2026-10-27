@@ -190,7 +190,7 @@ capture, are outside the view and unaffected.
 
 Each step is one commit, with `cargo test --all-targets` and clippy passing.
 
-1. ⬜ **Cached length and eager line index.** `TextBuffer` keeps `len`, builds
+1. ✅ **Cached length and eager line index.** `TextBuffer` keeps `len`, builds
    the byte and UTF-16 line index at construction, and exposes `&self` line
    queries. Core tests cover UTF-16 starts across inserts, deletes, undo, and
    non-BMP text.
