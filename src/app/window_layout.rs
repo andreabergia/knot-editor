@@ -117,16 +117,39 @@ impl WindowGeometry {
     }
 }
 
+/// Transported JSON numbers are doubles; offsets and indices decode from their
+/// integral values.
+fn integral(value: serde_json::Value) -> serde_json::Value {
+    use serde_json::Value;
+    match value {
+        Value::Number(number) => match number.as_f64() {
+            Some(float) if float.fract() == 0. && (0. ..=u64::MAX as f64).contains(&float) => {
+                Value::from(float as u64)
+            }
+            _ => Value::Number(number),
+        },
+        Value::Array(items) => Value::Array(items.into_iter().map(integral).collect()),
+        Value::Object(fields) => Value::Object(
+            fields
+                .into_iter()
+                .map(|(key, value)| (key, integral(value)))
+                .collect(),
+        ),
+        other => other,
+    }
+}
+
 impl WindowLayout {
     /// Decode a stored layout. An unsupported version or invalid shape yields
     /// `None`, so callers fall back to their layout-free arrangement.
     pub(crate) fn decode(value: &serde_json::Value) -> Option<Self> {
+        let value = integral(value.clone());
         if value.get("version").and_then(serde_json::Value::as_u64)
             != Some(u64::from(WINDOW_LAYOUT_VERSION))
         {
             return None;
         }
-        let layout: Self = serde_json::from_value(value.clone()).ok()?;
+        let layout: Self = serde_json::from_value(value).ok()?;
         let sizes = layout.dock_sizes.to_array();
         let geometry = layout.geometry.as_ref().is_none_or(|geometry| {
             [geometry.x, geometry.y, geometry.width, geometry.height]
@@ -559,6 +582,10 @@ mod tests {
         );
         let encoded = serde_json::to_value(&original).unwrap();
         assert_eq!(WindowLayout::decode(&encoded).unwrap(), original);
+        // Extension transport delivers every number as a double.
+        let doubles: serde_json::Value =
+            serde_json::from_str(&encoded.to_string().replace(":1,", ":1.0,")).unwrap();
+        assert_eq!(WindowLayout::decode(&doubles).unwrap(), original);
         let payload = encoded.to_string();
         for forbidden in ["pane\":", "tab\":", "window\":", "presentation"] {
             assert!(!payload.contains(forbidden), "layout leaks {forbidden}");

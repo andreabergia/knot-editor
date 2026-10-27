@@ -14,12 +14,19 @@
 // their unsaved text retained, closes them, and opens the destination's in one
 // native commit. Commands and listeners are serial roots of this package, so a
 // switch never interleaves with live tracking and no intermediate state is
-// recorded.
+// recorded. Each session window stores its captured layout, so switching back
+// and restarting restore splits, docks, and view state.
+//
+// Native hot exit restores product windows at startup; this package waits for
+// launch to finish before suspending sessions without a window, so restored
+// windows rebind by root set. A session record with an unknown schema is kept
+// unchanged and never switched to, and while one exists no capture is released
+// as an orphan, because that record may reference it.
 import { commands, documents, recovery, storage, windows, workbench, workspaces } from "knot";
 
 const RECORD_KEY = "projects";
 const SCHEMA = 1;
-const SESSION_SCHEMA = 1;
+const SESSION_SCHEMA = 2;
 const SESSION_PREFIX = "session:";
 const SWITCH_ATTEMPTS = 3;
 const VIEW_ID = "builtin.projects";
@@ -37,7 +44,7 @@ const VIEW_ID = "builtin.projects";
 /** @typedef {{ id: string, name: string, roots: string[], createdAt: number | null, lastOpenedAt: number | null }} Project */
 /** @typedef {{ schema: number, projects: Project[], recentProjectId: string | null }} Registry */
 /** @typedef {{ uri?: string, document?: DocumentId, capture?: CaptureId }} Entry */
-/** @typedef {{ entries: Entry[], selected: number | null }} SessionWindow */
+/** @typedef {{ entries: Entry[], selected: number | null, layout: JsonValue | null }} SessionWindow */
 /** @typedef {{ schema: number, state: "active" | "suspended", windows: SessionWindow[] }} Session */
 
 /** @returns {Registry} */
@@ -124,23 +131,27 @@ function entryFromJson(value) {
   return entry.uri === undefined && entry.document === undefined ? null : entry;
 }
 
-/** @param {JsonValue} value @returns {Session | null} */
+/** Reads a session record; schema 1 windows have no layout. Any other schema
+ * or shape is unreadable and must be preserved as stored.
+ * @param {JsonValue} value @returns {Session | "unreadable"} */
 function sessionFromJson(value) {
   const record = object(value);
-  if (record === null || record.schema !== SESSION_SCHEMA || !Array.isArray(record.windows)) return null;
-  if (record.state !== "active" && record.state !== "suspended") return null;
+  if (record === null || (record.schema !== 1 && record.schema !== SESSION_SCHEMA)) return "unreadable";
+  if (!Array.isArray(record.windows)) return "unreadable";
+  if (record.state !== "active" && record.state !== "suspended") return "unreadable";
   /** @type {SessionWindow[]} */
   const sessionWindows = [];
   for (const window of record.windows) {
     const fields = object(window);
-    if (fields === null || !Array.isArray(fields.entries)) return null;
+    if (fields === null || !Array.isArray(fields.entries)) return "unreadable";
     const entries = [];
     for (const entry of fields.entries) {
       const parsed = entryFromJson(entry);
       if (parsed !== null) entries.push(parsed);
     }
     const selected = typeof fields.selected === "number" ? fields.selected : null;
-    sessionWindows.push({ entries, selected });
+    const layout = record.schema === 1 ? null : (fields.layout ?? null);
+    sessionWindows.push({ entries, selected, layout });
   }
   return { schema: SESSION_SCHEMA, state: record.state, windows: sessionWindows };
 }
@@ -154,9 +165,14 @@ let view = null;
 /** Last durable session record per project ID.
  * @type {Map<string, Session>} */
 const sessions = new Map();
+/** Projects whose session record has an unknown schema.
+ * @type {Set<string>} */
+const unreadable = new Set();
 /** Project ID per bound window.
  * @type {Map<WindowTarget, string>} */
 const bindings = new Map();
+/** Whether startup windows are committed; tracking waits for them. */
+let launched = false;
 
 /** Reloads the shared record, retaining the last good state on failure. */
 async function reload() {
@@ -264,7 +280,7 @@ async function release(captures) {
   }
 }
 
-/** @param {string} id @returns {Promise<Session | null>} */
+/** @param {string} id @returns {Promise<Session | "unreadable" | null>} */
 async function readSession(id) {
   const result = await storage.read(sessionKey(id));
   return result.found ? sessionFromJson(result.value) : null;
@@ -475,7 +491,11 @@ async function describeWindow(window, byId, captures) {
       .find((tab) => tab?.document != null)?.document ??
     null;
   const selected = selectedDocument === null ? -1 : listed.indexOf(selectedDocument);
-  return { entries, selected: selected < 0 ? null : selected };
+  return {
+    entries,
+    selected: selected < 0 ? null : selected,
+    layout: await workbench.captureLayout(window.target),
+  };
 }
 
 /** @param {readonly DocumentInfo[]} list */
@@ -507,6 +527,7 @@ async function trackProject(project, list, byId) {
               return reference;
             }),
             selected: window.selected,
+            layout: window.layout,
           })),
         }
       : {
@@ -519,6 +540,7 @@ async function trackProject(project, list, byId) {
 
 /** Live tracking: rewrite active records that changed. Suspended records are never written. */
 async function track() {
+  if (!launched) return;
   if (!registry.projects.some(isActive)) {
     bindings.clear();
     return;
@@ -534,8 +556,11 @@ async function track() {
   }
 }
 
-/** Releases this package's captures that no session record references. */
+/** Releases this package's captures that no session record references. An
+ * unreadable record may reference any capture, so nothing is released while
+ * one exists. */
 async function reconcileCaptures() {
+  if (unreadable.size > 0) return;
   /** @type {Set<CaptureId>} */
   const referenced = new Set();
   for (const session of sessions.values()) {
@@ -589,6 +614,10 @@ function problem(outcome, entry) {
  * @param {Project} project @param {WindowTarget} origin
  */
 async function switchTo(project, origin) {
+  if (unreadable.has(project.id)) {
+    await report(`${project.name} has a session record this version cannot read; it is kept unchanged`);
+    return;
+  }
   if (project.roots.length === 0) {
     await report(`${project.name} has no root; rename or recreate the project`);
     return;
@@ -605,7 +634,8 @@ async function switchTo(project, origin) {
     }
   }
   const destination = sessions.get(project.id)?.windows ?? [];
-  const targets = destination.length > 0 ? destination : [{ entries: [], selected: null }];
+  const targets =
+    destination.length > 0 ? destination : [{ entries: [], selected: null, layout: null }];
   // The source is fixed before the first attempt suspends its record.
   const sourceId = bindings.get(origin);
   const source = sourceId === undefined ? null : projectById(sourceId);
@@ -649,6 +679,7 @@ async function switchTo(project, origin) {
           roots: project.roots,
           entries: window.entries,
           selected: window.selected,
+          layout: window.layout,
         })),
         release: sources.map((window) => window.target),
         focus: 0,
@@ -715,17 +746,30 @@ async function suspendUnbound() {
 
 async function loadSessions() {
   sessions.clear();
+  unreadable.clear();
   for (const project of registry.projects) {
     const session = await readSession(project.id);
-    if (session !== null) sessions.set(project.id, session);
+    if (session === "unreadable") unreadable.add(project.id);
+    else if (session !== null) sessions.set(project.id, session);
   }
+}
+
+/** Once startup windows exist, rebinds restored windows by root set and
+ * suspends the remaining active sessions. */
+async function afterLaunch() {
+  launched = true;
+  try {
+    await suspendUnbound();
+    await reconcileCaptures();
+  } catch (error) {
+    loadFailure = loadFailure ?? describe(error);
+  }
+  await refreshTree();
 }
 
 await reload();
 try {
   await loadSessions();
-  await suspendUnbound();
-  await reconcileCaptures();
 } catch (error) {
   loadFailure = loadFailure ?? describe(error);
 }
@@ -756,14 +800,15 @@ view = await workbench.registerView({
         }
         return registry.projects.map((project) => {
           const active = bindings.get(context.window) === project.id;
+          const broken = unreadable.has(project.id);
           return {
             id: project.id,
             label: project.name,
-            description: rootsLabel(project),
+            description: broken ? "session record unreadable" : rootsLabel(project),
             icon: "folder",
             collapsibleState: "none",
-            statusText: active ? "active" : null,
-            badge: active ? "success" : null,
+            statusText: broken ? "unreadable" : active ? "active" : null,
+            badge: broken ? "error" : active ? "success" : null,
             command: "projects.select",
             actions: [
               { label: "Rename", command: "projects.rename", arguments: { id: project.id } },
@@ -988,10 +1033,16 @@ function membershipChanged(document) {
 }
 
 await reload();
-await workbench.observe(async (event) => {
+const observation = await workbench.observe(async (event) => {
+  if (event.type === "launched") {
+    await afterLaunch();
+    return;
+  }
   if (event.type === "documentChanged" && !membershipChanged(event.document)) return;
   if (event.type === "documentOpened") membershipChanged(event.document);
   if (event.type === "documentClosed") tracked.delete(event.document);
   await track();
   if (event.type === "workspaceChanged" || event.type === "windowClosed") await refreshTree();
 });
+// A package restarted after launch sees it in the snapshot instead of an event.
+if (observation.snapshot.launched) await afterLaunch();

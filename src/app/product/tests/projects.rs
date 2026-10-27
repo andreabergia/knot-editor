@@ -212,6 +212,8 @@ pub(super) fn start_registry(cx: &mut TestAppContext) -> Fixture {
     let documents = install_globals(cx);
     let host = cx.update(crate::app::extension_host::install);
     let (shell, window) = empty_product_window(&documents, cx);
+    // The registry acts once startup windows exist.
+    cx.update(crate::app::extension_host::launched);
     let storage = tempfile::tempdir().unwrap();
     let extensions = tempfile::tempdir().unwrap();
     host.update(cx, |host, cx| {

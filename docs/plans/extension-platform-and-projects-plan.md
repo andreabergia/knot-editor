@@ -473,11 +473,11 @@ one review gate at the end.
   identities are reused. The extension guide update lands with the
   documentation step. Validation is in `src/app/product/tests/window_restore.rs`.
 
-#### 10c. Projects restoration ⬜
+#### 10c. Projects restoration ✅ implemented, awaiting the review gate
 
-- ⬜ `@knot/projects` session schema 2 with per-window layouts, a read-time
+- ✅ `@knot/projects` session schema 2 with per-window layouts, a read-time
   upgrade from schema 1, and preserved unreadable records.
-- ⬜ Defer startup suspension, reconciliation, and tracking to `launched`, and
+- ✅ Defer startup suspension, reconciliation, and tracking to `launched`, and
   rebind restored windows. Track `viewStateChanged`. Switching captures and
   passes layouts.
 - **Validation:** `tests/project_sessions.rs` and `tests/projects.rs` for a
@@ -488,6 +488,11 @@ one review gate at the end.
   preserved with its captures; repeated switching and restart producing no
   duplicate windows or documents; and the extension failing at startup while
   native windows and recovery still restore.
+- **Notes:** the tests live in `src/app/product/tests/project_sessions.rs`
+  and `src/app/product/tests/window_restore.rs`. Layout decoding accepts the
+  doubles that extension transport delivers for offsets and indices. An
+  unreadable project shows an "unreadable" error status and its switch reports
+  that the record is kept unchanged.
 
 #### Documentation and review gate
 

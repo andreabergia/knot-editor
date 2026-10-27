@@ -410,10 +410,15 @@ fn closing_the_last_window_suspends_without_captures(cx: &mut TestAppContext) {
     assert_eq!(wait_for_command(close, cx), CommandOutcome::Completed);
     let listed = listed_projects(&fixture.shell, fixture.window, cx);
     assert_eq!(listed["sessions"][&a_id]["state"], "active");
+    let windows = &listed["sessions"][&a_id]["windows"];
+    assert_eq!(windows.as_array().unwrap().len(), 1);
     assert_eq!(
-        listed["sessions"][&a_id]["windows"],
-        serde_json::json!([{ "entries": [{ "uri": file_uri(&a.path().join("one.txt")) }], "selected": 0 }])
+        windows[0]["entries"],
+        serde_json::json!([{ "uri": file_uri(&a.path().join("one.txt")) }])
     );
+    assert_eq!(windows[0]["selected"], 0);
+    // Each session window keeps its captured layout.
+    assert_eq!(windows[0]["layout"]["version"], 1);
 
     // Closing the last one suspends the project with its last membership.
     let (other, other_window) = empty_product_window(&fixture.documents, cx);
@@ -848,4 +853,340 @@ fn a_new_project_window_opens_with_the_project_roots_and_joins_it(cx: &mut TestA
     cx.simulate_prompt_answer("OK");
     assert_eq!(wait_for_command(refused, cx), CommandOutcome::Completed);
     assert_eq!(product_shells(cx).len(), 3);
+}
+
+fn package_storage(fixture: &Fixture) -> crate::app::extension_storage::ExtensionStorage {
+    crate::app::extension_storage::ExtensionStorage::new(
+        fixture.storage.path().to_owned(),
+        crate::app::extension_storage::test_executor(),
+    )
+}
+
+fn write_record(fixture: &Fixture, key: &str, value: Value) {
+    let storage = package_storage(fixture);
+    pollster::block_on(
+        storage
+            .for_owner(crate::app::extension_storage::StorageOwner::bundled(OWNER).unwrap())
+            .write(key.to_owned(), value),
+    )
+    .unwrap();
+    pollster::block_on(storage.shutdown());
+}
+
+fn read_record(fixture: &Fixture, key: &str) -> Option<Value> {
+    let storage = package_storage(fixture);
+    let value = pollster::block_on(
+        storage
+            .for_owner(crate::app::extension_storage::StorageOwner::bundled(OWNER).unwrap())
+            .read(key.to_owned()),
+    )
+    .unwrap();
+    pollster::block_on(storage.shutdown());
+    value
+}
+
+/// A window's arrangement without document identities, which restored
+/// captures and reopened files replace.
+fn arrangement(window: gpui::AnyWindowHandle, cx: &mut TestAppContext) -> Value {
+    fn forget(node: &mut Value) {
+        for tab in node["tabs"].as_array_mut().into_iter().flatten() {
+            tab["document"] = Value::Null;
+        }
+        for child in ["first", "second"] {
+            if node.get(child).is_some() {
+                forget(&mut node[child]);
+            }
+        }
+    }
+    let target = crate::host::protocol::WindowTarget {
+        window: window.window_id().as_u64().to_string(),
+    };
+    let layout = cx
+        .update(|cx| super::super::sessions::capture_layout(&target, cx))
+        .unwrap();
+    let mut layout = serde_json::to_value(layout).unwrap();
+    forget(&mut layout["root"]);
+    serde_json::json!({ "root": layout["root"], "focused": layout["focused"], "dockSizes": layout["dockSizes"] })
+}
+
+fn split_with_view_state(
+    shell: &Entity<ProductShell>,
+    state: crate::app::editor::EditorViewState,
+    cx: &mut TestAppContext,
+) {
+    shell.update(cx, |shell, cx| {
+        let pane = shell.workbench.read(cx).normal_pane().unwrap();
+        shell.workbench.update(cx, |workbench, cx| {
+            workbench.split_pane(
+                pane,
+                crate::app::workbench::SplitDirection::Horizontal,
+                crate::app::workbench::SplitPlacement::After,
+                cx,
+            );
+            workbench.set_dock_size(crate::app::workbench::DockLocation::Left, 300.);
+        });
+    });
+    let editor = cx.read(|cx| {
+        shell
+            .read(cx)
+            .workbench
+            .read(cx)
+            .focused_pane()
+            .unwrap()
+            .active_tab()
+            .editor()
+            .unwrap()
+            .clone()
+    });
+    editor.update(cx, |editor, cx| editor.restore_view_state(state, cx));
+    cx.run_until_parked();
+}
+
+fn document_count(fixture: &Fixture, cx: &TestAppContext) -> usize {
+    cx.read(|cx| fixture.documents.read(cx).documents().count())
+}
+
+#[gpui::test]
+fn a_multi_root_layout_with_shared_views_survives_repeated_switches(cx: &mut TestAppContext) {
+    let mut fixture = start_registry(cx);
+    let a = project_dir("one.txt", &"line\n".repeat(200));
+    let c = project_dir("c.txt", "see");
+    let b = project_dir("b.txt", "bee");
+    let (a_uri, c_uri) = (file_uri(a.path()), file_uri(c.path()));
+    fixture.create_project(a.path(), "A", cx);
+    set_roots(&fixture.shell, &[&a_uri, &c_uri], cx);
+    open_path(&fixture.shell, &a.path().join("one.txt"), cx);
+    type_text(&fixture.shell, "dirty", cx);
+    let state = crate::app::editor::EditorViewState {
+        anchor: 10,
+        caret: 25,
+        top: 20,
+        scroll_x: 0.,
+    };
+    split_with_view_state(&fixture.shell, state, cx);
+    let a_id = project_id(&listed_projects(&fixture.shell, fixture.window, cx), "A");
+    fixture.create_project(b.path(), "B", cx);
+    let b_id = project_id(&listed_projects(&fixture.shell, fixture.window, cx), "B");
+
+    // The empty placeholder tab is pruned on the first return; every later
+    // return and restart reproduces that arrangement exactly.
+    let mut before = None;
+    for round in 0..3 {
+        select_project(&fixture, &a_id, cx);
+        fixture.follow_roots(&[&a_uri, &c_uri], cx);
+        // Selecting through the tree focuses the Projects tool before each
+        // switch, so focus and the dock's selection are not compared.
+        let mut current = arrangement(fixture.window, cx);
+        current["focused"] = Value::Null;
+        current["root"]["first"]["selected"] = Value::Null;
+        assert_eq!(current["root"]["second"]["kind"], "split");
+        assert_eq!(current["dockSizes"]["left"], 300.);
+        assert_eq!(
+            before.get_or_insert(current.clone()),
+            &current,
+            "round {round}"
+        );
+        let views = cx.read(|cx| {
+            fixture
+                .shell
+                .read(cx)
+                .workbench
+                .read(cx)
+                .panes()
+                .iter()
+                .flat_map(|pane| pane.tabs())
+                .filter_map(|tab| tab.editor().cloned())
+                .collect::<Vec<_>>()
+        });
+        cx.read(|cx| {
+            let models = views
+                .iter()
+                .map(|view| view.read(cx).model().clone())
+                .collect::<Vec<_>>();
+            assert_eq!(models[models.len() - 1], models[models.len() - 2]);
+            assert_eq!(views.last().unwrap().read(cx).view_state(), state);
+            assert!(models[models.len() - 1].read(cx).text().ends_with("dirty"));
+        });
+        select_project(&fixture, &b_id, cx);
+        fixture.follow_roots(&[&file_uri(b.path())], cx);
+        // Switching never duplicates windows or documents.
+        assert_eq!(product_shells(cx).len(), 1);
+        assert!(document_count(&fixture, cx) <= 2);
+    }
+    // Listing waits for the last switch to finish recording before restarting.
+    assert_eq!(
+        listed_projects(&fixture.shell, fixture.window, cx)["sessions"][&b_id]["state"],
+        "active"
+    );
+    restart_registry(&fixture.host, &fixture.extensions, cx);
+    select_project(&fixture, &a_id, cx);
+    fixture.follow_roots(&[&a_uri, &c_uri], cx);
+    let mut restarted = arrangement(fixture.window, cx);
+    restarted["focused"] = Value::Null;
+    restarted["root"]["first"]["selected"] = Value::Null;
+    assert_eq!(Some(restarted), before);
+    assert_eq!(product_shells(cx).len(), 1);
+}
+
+#[gpui::test]
+fn schema_one_records_switch_without_a_layout(cx: &mut TestAppContext) {
+    let mut fixture = start_registry(cx);
+    let a = project_dir("one.txt", "one");
+    let b = project_dir("b.txt", "bee");
+    fixture.create_project(a.path(), "A", cx);
+    fixture.create_project(b.path(), "B", cx);
+    let a_id = project_id(&listed_projects(&fixture.shell, fixture.window, cx), "A");
+    write_record(
+        &fixture,
+        &format!("session:{a_id}"),
+        serde_json::json!({
+            "schema": 1, "state": "suspended",
+            "windows": [{ "entries": [{ "uri": file_uri(&a.path().join("one.txt")) }], "selected": 0 }],
+        }),
+    );
+    restart_registry(&fixture.host, &fixture.extensions, cx);
+    select_project(&fixture, &a_id, cx);
+    fixture.follow_roots(&[&file_uri(a.path())], cx);
+    assert_eq!(texts(&fixture.shell, cx), ["one"]);
+    // The record is upgraded when it is next written.
+    let listed = listed_projects(&fixture.shell, fixture.window, cx);
+    assert_eq!(listed["sessions"][&a_id]["schema"], 2);
+    assert!(listed["sessions"][&a_id]["windows"][0]["layout"].is_object());
+}
+
+#[gpui::test]
+fn unknown_session_schemas_are_preserved_with_their_captures(cx: &mut TestAppContext) {
+    let mut fixture = start_registry(cx);
+    let a = project_dir("one.txt", "one");
+    let b = project_dir("b.txt", "bee");
+    fixture.create_project(a.path(), "A", cx);
+    open_path(&fixture.shell, &a.path().join("one.txt"), cx);
+    type_text(&fixture.shell, " kept", cx);
+    fixture.create_project(b.path(), "B", cx);
+    let listed = listed_projects(&fixture.shell, fixture.window, cx);
+    let a_id = project_id(&listed, "A");
+    let capture = captures(&listed["sessions"][&a_id]).remove(0);
+    let future = serde_json::json!({
+        "schema": 99, "state": "suspended", "future": true,
+        "windows": [{ "entries": [{ "capture": capture }] }],
+    });
+    write_record(&fixture, &format!("session:{a_id}"), future.clone());
+
+    // A restart reconciles nothing while the record is unreadable.
+    restart_registry(&fixture.host, &fixture.extensions, cx);
+    assert_eq!(retained(cx).len(), 1);
+    let tree = wait_for_contributed_view(&fixture.shell, "builtin.projects", cx);
+    wait_for_api_condition(cx, |cx| {
+        tree.read(cx)
+            .status_for_test(&a_id)
+            .is_some_and(|(status, _)| status.as_deref() == Some("unreadable"))
+    });
+    select_project(&fixture, &a_id, cx);
+    wait_for_prompt(cx);
+    assert!(cx.pending_prompt().unwrap().1.contains("cannot read"));
+    cx.simulate_prompt_answer("OK");
+    cx.run_until_parked();
+    assert_eq!(roots(&fixture.shell, cx), [file_uri(b.path())]);
+    assert_eq!(
+        read_record(&fixture, &format!("session:{a_id}")).map(normalized),
+        Some(normalized(future))
+    );
+    assert_eq!(retained(cx).len(), 1);
+}
+
+#[gpui::test]
+fn restored_windows_rebind_after_launch_and_unrestored_sessions_suspend(cx: &mut TestAppContext) {
+    let mut fixture = start_registry(cx);
+    let sessions = tempfile::tempdir().unwrap();
+    let path = sessions.path().join("window-session.sqlite3");
+    let executor = cx.background_executor.clone();
+    cx.update(|cx| {
+        crate::app::window_sessions::install(path.clone(), executor.clone(), cx);
+        crate::app::window_sessions::start_recording(cx);
+    });
+    let a = project_dir("one.txt", "one");
+    let c = project_dir("c.txt", "see");
+    fixture.create_project(a.path(), "A", cx);
+    open_path(&fixture.shell, &a.path().join("one.txt"), cx);
+    type_text(&fixture.shell, " dirty", cx);
+    let (second, second_window) = empty_product_window(&fixture.documents, cx);
+    super::projects::create_project(&second, second_window, c.path(), "C", cx);
+    let listed = listed_projects(&fixture.shell, fixture.window, cx);
+    let (a_id, c_id) = (project_id(&listed, "A"), project_id(&listed, "C"));
+    assert_eq!(listed["sessions"][&c_id]["state"], "active");
+
+    // Quit records only A's window, as if C's window had not been recorded.
+    let drain = cx.update(|cx| crate::app::recovery::drain(cx));
+    let drained = std::rc::Rc::new(RefCell::new(None));
+    let sink = drained.clone();
+    cx.spawn(async move |_| *sink.borrow_mut() = Some(drain.await))
+        .detach();
+    cx.run_until_parked();
+    assert!(drained.borrow_mut().take().unwrap().is_ok());
+    cx.update(crate::app::window_sessions::record);
+    let mut record = cx.read(crate::app::window_sessions::current).unwrap();
+    record
+        .windows
+        .retain(|window| window.roots == [file_uri(a.path())]);
+    record.active = Some(0);
+    cx.update(|cx| {
+        crate::app::window_sessions::stop_for_test(cx);
+        cx.global::<crate::app::window_sessions::ApplicationWindowSessions>()
+            .publish_for_test(record);
+    });
+    let flushed = cx.read(crate::app::window_sessions::flush);
+    let sink = drained.clone();
+    cx.spawn(async move |_| *sink.borrow_mut() = Some(flushed.await))
+        .detach();
+    cx.run_until_parked();
+    assert!(drained.borrow_mut().take().unwrap().is_ok());
+
+    // A fresh application: the registry activates before any window exists.
+    for window in cx.read(|cx| cx.windows()) {
+        let _ = cx.update_window(window, |_, window, _| window.remove_window());
+    }
+    cx.run_until_parked();
+    let documents = cx.new(|_| DocumentCollection::new());
+    cx.set_global(ApplicationDocuments(documents.clone()));
+    let recovery_path = cx.read(|cx| {
+        cx.global::<TestRecoveryDir>()
+            .0
+            .path()
+            .join("recovery.sqlite3")
+    });
+    cx.set_global(ApplicationRecovery(
+        crate::app::recovery::RecoveryService::new(crate::app::recovery::RecoveryStore::open(
+            recovery_path,
+            executor.clone(),
+        )),
+    ));
+    cx.set_global(ApplicationWorkbenches(RefCell::new(Vec::new())));
+    cx.update(|cx| {
+        crate::app::extension_host::reset_launched_for_test(cx);
+        crate::app::window_sessions::install(path, executor, cx);
+    });
+    restart_registry(&fixture.host, &fixture.extensions, cx);
+    install_launch_gate(cx);
+    cx.update(|cx| super::super::finish_product_startup(Ok(()), cx));
+    assert!(wait_for_product_startup(cx));
+    cx.run_until_parked();
+
+    // The restored window rebinds to A with its text; no window or document
+    // was added, and C, whose window did not return, is suspended.
+    let shells = product_shells(cx);
+    assert_eq!(shells.len(), 1);
+    (fixture.window, fixture.shell) = shells[0].clone();
+    fixture.documents = documents;
+    assert_eq!(texts(&fixture.shell, cx), ["one dirty"]);
+    let listed = listed_projects(&fixture.shell, fixture.window, cx);
+    assert_eq!(listed["sessions"][&a_id]["state"], "active");
+    assert_eq!(listed["sessions"][&c_id]["state"], "suspended");
+    let tree = wait_for_contributed_view(&fixture.shell, "builtin.projects", cx);
+    wait_for_api_condition(cx, |cx| {
+        tree.read(cx)
+            .status_for_test(&a_id)
+            .is_some_and(|(status, _)| status.as_deref() == Some("active"))
+    });
+    assert_eq!(product_shells(cx).len(), 1);
+    assert_eq!(document_count(&fixture, cx), 1);
 }

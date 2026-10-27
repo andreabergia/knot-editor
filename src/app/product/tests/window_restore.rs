@@ -79,6 +79,13 @@ impl Launch {
 
     /// Stop as a crash would, without recording, then start again.
     fn relaunch(&self, requests: Vec<OpenRequest>, cx: &mut TestAppContext) {
+        self.reset(cx);
+        self.start(requests, cx);
+    }
+
+    /// Stop as a crash would and install fresh application state on the same
+    /// stores.
+    fn reset(&self, cx: &mut TestAppContext) {
         cx.update(|cx| window_sessions::stop_for_test(cx));
         let recovery = cx.read(|cx| {
             cx.global::<crate::app::recovery::ApplicationRecovery>()
@@ -107,7 +114,6 @@ impl Launch {
         ));
         cx.set_global(ApplicationWorkbenches(RefCell::new(Vec::new())));
         self.install_sessions(cx);
-        self.start(requests, cx);
     }
 
     fn open_file(
@@ -560,4 +566,36 @@ fn a_failed_config_launch_never_records_windows(cx: &mut TestAppContext) {
     }
     assert!(cx.read(window_sessions::current).is_none());
     assert!(!launch.path().exists());
+}
+
+#[gpui::test]
+fn native_windows_and_recovery_restore_when_an_extension_fails_at_startup(cx: &mut TestAppContext) {
+    let launch = Launch::new(cx);
+    launch.start(Vec::new(), cx);
+    let (_, shell) = shells(cx).remove(0);
+    let one = launch.open_file(&shell, "a/one.txt", cx);
+    edit(one, " unsaved", cx);
+    let drain = cx.update(|cx| crate::app::recovery::drain(cx));
+    wait(drain, cx).unwrap();
+    let recorded = cx.update(window_sessions::record_for_quit).unwrap();
+    wait(recorded, cx).unwrap();
+
+    launch.reset(cx);
+    let extensions = tempfile::tempdir().unwrap();
+    install_extension(
+        extensions.path(),
+        "@example/broken",
+        &[],
+        &[("main.js", "throw new Error('package failed');")],
+    );
+    install_launch_gate(cx);
+    let host = cx.update(super::super::super::extension_host::install);
+    host.update(cx, |host, cx| {
+        host.start_product_startup(None, Ok(extensions.path().to_path_buf()), cx)
+    });
+    assert!(wait_for_product_startup(cx));
+    cx.run_until_parked();
+    let windows = shells(cx);
+    assert_eq!(windows.len(), 1);
+    assert_eq!(texts(&windows[0].1, cx), ["one unsaved"]);
 }

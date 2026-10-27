@@ -159,6 +159,13 @@ pub(crate) fn launched(cx: &mut App) {
     application_changed(cx);
 }
 
+#[cfg(test)]
+pub(crate) fn reset_launched_for_test(cx: &mut App) {
+    if cx.has_global::<ApplicationLaunched>() {
+        cx.remove_global::<ApplicationLaunched>();
+    }
+}
+
 pub(crate) fn startup_report(cx: &App) -> Option<StartupReportSnapshot> {
     let host = entity(cx)?;
     host.read(cx).startup_report.clone()
