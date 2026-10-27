@@ -198,7 +198,7 @@ Each step is one commit, with `cargo test --all-targets` and clippy passing.
    inserts, with the `BufferEdit::Insert` span change and anchored-range
    relocation. Add boundary tests for sticky-before and sticky-after anchors on
    coalesced inserts.
-3. ⬜ **Bounded edit log.** Monotonic `edit_seq`, and a drain after
+3. ✅ **Bounded edit log.** Monotonic `edit_seq`, and a drain after
    stabilization in `BufferModel`.
 4. ⬜ **Model line API and undo replay edit.** Add the `BufferModel` line,
    range, boundary, and UTF-16 queries, the test-only whole-read counter, and

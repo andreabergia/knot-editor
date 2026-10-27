@@ -34,12 +34,12 @@
 //! ## Edit log
 //!
 //! Every `insert` / `delete` (and `replace`, which decomposes into a
-//! delete-then-insert pair) pushes one `BufferEdit` event onto an
-//! unbounded `Vec<BufferEdit>`. Fields are byte offsets into the
-//! *pre-edit* logical text, so an observer replaying stale `Position`s
-//! can reason about each edit against the buffer state *in which the
-//! position was issued*. Compaction is deferred — the log only grows,
-//! bounded only by a future `take_edits` drain.
+//! delete-then-insert pair) pushes one `BufferEdit` event onto the log.
+//! Fields are byte offsets into the *pre-edit* logical text, so an observer
+//! replaying stale `Position`s can reason about each edit against the buffer
+//! state *in which the position was issued*. Sequence numbers are monotonic
+//! for the buffer's lifetime; the owner discards entries once every observer
+//! has consumed them, so the retained log stays bounded.
 //!
 //! ## Backing store
 //!
@@ -294,10 +294,11 @@ pub struct TextBuffer {
     /// buffer. A trailing `'\n'` creates one extra empty line, so `"abc\n"`
     /// has byte starts `[0, 4]`.
     line_starts: Vec<LineStart>,
-    /// Append-only edit log. Each `insert` / `delete` pushes one
-    /// `BufferEdit`. `replace` decomposes into a delete-then-insert pair
-    /// and pushes two. The log is unbounded until `take_edits` drains it.
+    /// Retained edit log. Each `insert` / `delete` pushes one `BufferEdit`.
+    /// `replace` decomposes into a delete-then-insert pair and pushes two.
     edits: Vec<BufferEdit>,
+    /// Sequence number of `edits[0]`: how many edits were discarded.
+    discarded_edits: usize,
 }
 
 impl TextBuffer {
@@ -320,6 +321,7 @@ impl TextBuffer {
             len,
             line_starts,
             edits: Vec::new(),
+            discarded_edits: 0,
         };
         if len > 0 {
             buf.pieces.push(Piece {
@@ -344,6 +346,7 @@ impl TextBuffer {
             len: 0,
             line_starts: vec![BUFFER_START],
             edits: Vec::new(),
+            discarded_edits: 0,
         }
     }
 
@@ -717,7 +720,7 @@ impl TextBuffer {
     /// assigned to the *next* edit (zero on a fresh buffer, incremented
     /// by one per `insert` / `delete`).
     pub fn edit_seq(&self) -> usize {
-        self.edits.len()
+        self.discarded_edits + self.edits.len()
     }
 
     /// Slice of all edits with sequence number `>= seq`. `seq` is the
@@ -725,18 +728,31 @@ impl TextBuffer {
     /// cursor, polls `edits_since(cursor)` each cycle, then advances
     /// its cursor by the returned slice's length.
     ///
-    /// `seq` is clamped to the current log length, so a stale cursor
-    /// from before a `take_edits` drain simply sees the whole log.
+    /// `seq` must not precede discarded edits. A `seq` past the end yields
+    /// an empty slice.
     pub fn edits_since(&self, seq: usize) -> &[BufferEdit] {
-        let start = seq.min(self.edits.len());
+        assert!(
+            seq >= self.discarded_edits,
+            "edits before {} were discarded (requested {seq})",
+            self.discarded_edits
+        );
+        let start = (seq - self.discarded_edits).min(self.edits.len());
         &self.edits[start..]
     }
 
-    /// Drain the whole edit log and return it. Useful for tests and for
-    /// bounded-memory production callers that have caught up to the
-    /// current `edit_seq` and can discard history.
-    pub fn take_edits(&mut self) -> Vec<BufferEdit> {
-        std::mem::take(&mut self.edits)
+    #[cfg(test)]
+    pub(crate) fn retained_edits(&self) -> usize {
+        self.edits.len()
+    }
+
+    /// Discard every edit with sequence number `< seq`, once all observers
+    /// have consumed them. `edit_seq` is unaffected.
+    pub fn discard_edits_before(&mut self, seq: usize) {
+        let count = seq
+            .saturating_sub(self.discarded_edits)
+            .min(self.edits.len());
+        self.edits.drain(..count);
+        self.discarded_edits += count;
     }
 
     // ---- Internals -------------------------------------------------------
@@ -1630,17 +1646,31 @@ mod tests {
     }
 
     #[test]
-    fn take_edits_drains_log() {
+    fn discarding_edits_keeps_sequence_numbers() {
         let mut b = TextBuffer::from_text("abc");
         b.insert(3, "X");
-        let drained = b.take_edits();
-        assert_eq!(drained.len(), 1);
-        assert_eq!(b.edit_seq(), 0);
-        // Subsequent edits start fresh.
         b.delete(0..1);
-        let second = b.take_edits();
-        assert_eq!(second.len(), 1);
-        assert!(matches!(second[0], BufferEdit::Delete { .. }));
+        b.discard_edits_before(1);
+        assert_eq!(b.edit_seq(), 2);
+        assert_eq!(b.edits_since(1).len(), 1);
+        assert!(matches!(b.edits_since(1)[0], BufferEdit::Delete { .. }));
+        b.discard_edits_before(b.edit_seq());
+        assert!(b.edits_since(2).is_empty());
+        b.insert(0, "Y");
+        assert_eq!(b.edit_seq(), 3);
+        assert!(matches!(
+            b.edits_since(2)[0],
+            BufferEdit::Insert { at: 0, .. }
+        ));
+    }
+
+    #[test]
+    #[should_panic(expected = "were discarded")]
+    fn reading_discarded_edits_panics() {
+        let mut b = TextBuffer::from_text("abc");
+        b.insert(3, "X");
+        b.discard_edits_before(1);
+        b.edits_since(0);
     }
 
     #[test]

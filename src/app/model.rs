@@ -323,6 +323,8 @@ impl BufferModel {
 
     fn stabilize_anchored_ranges(&mut self) {
         let consumed = self.anchored_ranges.stabilize(&self.buffer).consumed;
+        // The store is the log's only observer.
+        self.buffer.discard_edits_before(self.buffer.edit_seq());
         if consumed.is_empty() {
             return;
         }
@@ -1365,6 +1367,11 @@ mod tests {
         assert_eq!(model.text(), "aXYZc");
         assert_eq!(model.revision(), 1);
         assert_eq!(model.edit_seq(), 2);
+        assert_eq!(
+            model.buffer.retained_edits(),
+            0,
+            "stabilized edits are discarded"
+        );
 
         assert!(!model.replace(0..0, "").unwrap());
         assert_eq!(model.revision(), 1);
