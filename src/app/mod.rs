@@ -34,6 +34,7 @@ mod personal_config;
 mod personal_config_error;
 mod product;
 mod product_commands;
+mod record_store;
 mod recovery;
 mod resource;
 mod terminal_colors;

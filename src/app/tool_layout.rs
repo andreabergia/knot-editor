@@ -13,17 +13,12 @@
 //! into a single write; [`ToolLayoutStore::flush`] forces a pending write out,
 //! which the quit path awaits before exiting.
 
-use std::{
-    path::{Path, PathBuf},
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+use std::{path::PathBuf, time::Duration};
 
 use gpui::{BackgroundExecutor, Global, Task};
-use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 
-use super::workbench::DockLocation;
+use super::{record_store::RecordStore, workbench::DockLocation};
 
 pub(crate) const TOOL_LAYOUT_VERSION: u32 = 1;
 pub(crate) const EXPLORER_TOOL_ID: &str = "knot.explorer";
@@ -31,9 +26,6 @@ pub(crate) const EXPLORER_TOOL_ID: &str = "knot.explorer";
 /// Trailing-edge debounce for automatic writes. Pointer-drag resizes publish
 /// on every movement; only the settled arrangement reaches SQLite.
 const WRITE_DEBOUNCE: Duration = Duration::from_millis(300);
-
-const APPLICATION_ID: i64 = 0x4b4e4f54;
-const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS tool_layout(state INTEGER PRIMARY KEY CHECK(state = 0), version INTEGER NOT NULL, payload TEXT NOT NULL CHECK(json_valid(payload))) STRICT";
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -105,73 +97,6 @@ impl ToolLayoutSnapshot {
     pub(crate) fn tool(&self, id: &str) -> Option<&StoredTool> {
         self.tools.iter().find(|tool| tool.id == id)
     }
-
-    fn encode(&self) -> String {
-        serde_json::to_string(self).expect("tool layout snapshot must serialize")
-    }
-
-    fn decode(payload: &str) -> Option<Self> {
-        let snapshot: Self = serde_json::from_str(payload).ok()?;
-        (snapshot.version == TOOL_LAYOUT_VERSION).then_some(snapshot)
-    }
-}
-
-fn read_snapshot(path: &Path) -> ToolLayoutSnapshot {
-    // Never create the database on read: a fresh install simply uses defaults.
-    if !path.is_file() {
-        return ToolLayoutSnapshot::product_default();
-    }
-    let snapshot = (|| {
-        let connection = Connection::open(path).ok()?;
-        let (version, payload): (u32, String) = connection
-            .query_row(
-                "SELECT version, payload FROM tool_layout WHERE state = 0",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .ok()?;
-        (version == TOOL_LAYOUT_VERSION)
-            .then(|| ToolLayoutSnapshot::decode(&payload))
-            .flatten()
-    })();
-    snapshot.unwrap_or_else(ToolLayoutSnapshot::product_default)
-}
-
-fn write_snapshot(path: &Path, snapshot: &ToolLayoutSnapshot) -> Result<(), String> {
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        std::fs::create_dir_all(parent)
-            .map_err(|error| format!("tool layout {}: {error}", path.display()))?;
-    }
-    let connection = Connection::open(path)
-        .map_err(|error| format!("tool layout {}: {error}", path.display()))?;
-    connection
-        .execute_batch(&format!(
-            "PRAGMA application_id = {APPLICATION_ID}; {SCHEMA}"
-        ))
-        .map_err(|error| format!("tool layout {}: {error}", path.display()))?;
-    connection
-        .execute(
-            "INSERT INTO tool_layout(state, version, payload) VALUES (0, ?1, ?2) \
-             ON CONFLICT(state) DO UPDATE SET version = excluded.version, payload = excluded.payload",
-            params![TOOL_LAYOUT_VERSION, snapshot.encode()],
-        )
-        .map_err(|error| format!("tool layout {}: {error}", path.display()))?;
-    Ok(())
-}
-
-struct StoreState {
-    current: ToolLayoutSnapshot,
-    pending: Option<ToolLayoutSnapshot>,
-    generation: u64,
-    last_error: Option<String>,
-}
-
-struct Inner {
-    path: PathBuf,
-    executor: BackgroundExecutor,
-    state: Mutex<StoreState>,
 }
 
 /// Application-owned tool-layout persistence boundary.
@@ -182,7 +107,7 @@ struct Inner {
 /// records the error without disturbing the window.
 #[derive(Clone)]
 pub(crate) struct ToolLayoutStore {
-    inner: Arc<Inner>,
+    record: RecordStore<ToolLayoutSnapshot>,
 }
 
 impl ToolLayoutStore {
@@ -195,28 +120,27 @@ impl ToolLayoutStore {
     /// Load the persisted default synchronously; missing, corrupt, or
     /// versioned-away records fall back to product defaults without I/O noise.
     pub(crate) fn open(path: PathBuf, executor: BackgroundExecutor) -> Self {
-        let current = read_snapshot(&path);
         Self {
-            inner: Arc::new(Inner {
+            record: RecordStore::open(
                 path,
+                "tool_layout",
+                TOOL_LAYOUT_VERSION,
+                WRITE_DEBOUNCE,
                 executor,
-                state: Mutex::new(StoreState {
-                    current,
-                    pending: None,
-                    generation: 0,
-                    last_error: None,
-                }),
-            }),
+            ),
         }
     }
 
     pub(crate) fn current(&self) -> ToolLayoutSnapshot {
-        self.inner.state.lock().unwrap().current.clone()
+        self.record
+            .current()
+            .filter(|snapshot| snapshot.version == TOOL_LAYOUT_VERSION)
+            .unwrap_or_else(ToolLayoutSnapshot::product_default)
     }
 
     #[cfg(test)]
     pub(crate) fn last_error(&self) -> Option<String> {
-        self.inner.state.lock().unwrap().last_error.clone()
+        self.record.last_error()
     }
 
     /// Record a user-customized arrangement and schedule a coalesced write.
@@ -226,73 +150,15 @@ impl ToolLayoutStore {
     pub(crate) fn publish(&self, snapshot: ToolLayoutSnapshot) {
         let mut snapshot = snapshot;
         snapshot.customized = true;
-        let generation = {
-            let mut state = self.inner.state.lock().unwrap();
-            if state.current == snapshot {
-                return;
-            }
-            state.current = snapshot.clone();
-            state.pending = Some(snapshot);
-            state.generation += 1;
-            state.generation
-        };
-        let this = self.clone();
-        self.inner
-            .executor
-            .spawn(async move {
-                this.inner.executor.timer(WRITE_DEBOUNCE).await;
-                this.write_if_current(generation);
-            })
-            .detach();
+        if self.current() != snapshot {
+            self.record.publish(snapshot);
+        }
     }
 
     /// Write the pending snapshot now, off the foreground. Used by tests and
     /// the quit path; on failure the snapshot stays pending for a later retry.
     pub(crate) fn flush(&self) -> Task<Result<(), String>> {
-        let pending = self.inner.state.lock().unwrap().pending.take();
-        let this = self.clone();
-        self.inner.executor.spawn(async move {
-            let Some(snapshot) = pending else {
-                return Ok(());
-            };
-            match write_snapshot(&this.inner.path, &snapshot) {
-                Ok(()) => {
-                    this.inner.state.lock().unwrap().last_error = None;
-                    Ok(())
-                }
-                Err(error) => {
-                    let mut state = this.inner.state.lock().unwrap();
-                    state.last_error = Some(error.clone());
-                    state.pending = Some(snapshot);
-                    Err(error)
-                }
-            }
-        })
-    }
-
-    fn write_if_current(&self, generation: u64) {
-        let pending = {
-            let mut state = self.inner.state.lock().unwrap();
-            if state.generation != generation {
-                return;
-            }
-            state.pending.take()
-        };
-        // Only one of the debounce timer and flush can take the pending write;
-        // both persist the same snapshot, so whichever runs first wins.
-        let Some(snapshot) = pending else {
-            return;
-        };
-        match write_snapshot(&self.inner.path, &snapshot) {
-            Ok(()) => {
-                self.inner.state.lock().unwrap().last_error = None;
-            }
-            Err(error) => {
-                let mut state = self.inner.state.lock().unwrap();
-                state.last_error = Some(error);
-                state.pending = Some(snapshot);
-            }
-        }
+        self.record.flush()
     }
 }
 
@@ -303,6 +169,8 @@ impl Global for ApplicationToolLayout {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use std::path::Path;
 
     fn open_store(path: &Path, cx: &gpui::TestAppContext) -> ToolLayoutStore {
         ToolLayoutStore::open(path.to_owned(), cx.background_executor.clone())
@@ -395,8 +263,10 @@ mod tests {
             ToolLayoutSnapshot::product_default()
         );
         let future = dir.path().join("future.sqlite3");
-        let connection = Connection::open(&future).unwrap();
-        connection.execute_batch(SCHEMA).unwrap();
+        let connection = rusqlite::Connection::open(&future).unwrap();
+        connection
+            .execute_batch(&crate::app::record_store::test_schema("tool_layout"))
+            .unwrap();
         connection
             .execute(
                 "INSERT INTO tool_layout(state, version, payload) VALUES (0, 999, '{\"version\":999}')",

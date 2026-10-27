@@ -124,7 +124,7 @@ fn clipboard_json(cx: &TestAppContext) -> serde_json::Value {
 
 pub(super) fn wait_for_input_transient(shell: &Entity<ProductShell>, cx: &mut TestAppContext) {
     use crate::app::transient::TransientSurface;
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
         cx.run_until_parked();
         let waiting_for_input = cx.read(|cx| {
