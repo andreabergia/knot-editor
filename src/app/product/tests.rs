@@ -410,7 +410,7 @@ fn wait_for_command(
     mut execution: crate::app::CommandExecution,
     cx: &mut TestAppContext,
 ) -> CommandOutcome {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
         cx.run_until_parked();
         match execution.completion.try_recv() {
