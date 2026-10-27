@@ -4,7 +4,7 @@ Reviewed at `9616773` (2026-10-24). This is an onboarding-style assessment: what
 is left over from the prototype, whether the design holds up, and where the
 technical debt is.
 
-Status: active input. The [roadmap](../roadmap.md#selected-work-codebase-health-follow-ups)
+Status: active input. The [roadmap](../roadmap.md#selected-work)
 schedules each open finding. The codebase health maintenance interlude
 resolved the prototype inventory, the symlink Save bug, the Find stub, the
 `ProductShell` split, and the documentation drift; this document now keeps only

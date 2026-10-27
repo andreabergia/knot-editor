@@ -9,7 +9,7 @@ trigger for reconsideration. IDs are never renumbered or reused. New items take
 the next unused ID. When an item is promoted, its slice plan retains the ID and
 the item is removed from this register.
 
-## Selected work: codebase health follow-ups
+## Selected work
 
 The production extension APIs and JavaScript projects initiative (D046–D053,
 D005) is complete: an ordinary bundled JavaScript extension manages named
@@ -18,8 +18,13 @@ to the windows Knot restores at startup. Current behavior lives in the
 [architecture](architecture.md) references and rationale in
 [decisions](decisions.md).
 
-The remaining [health review](plans/codebase-health-review.md) findings come
-next, in this order:
+[Extension authoring](plans/extension-authoring.md) (D056) comes first: a
+TypeScript toolchain, test harness, and module layout shared by bundled and
+installed packages, applied to `@knot/projects`. Later bundled workflows start
+on it.
+
+The remaining [health review](plans/codebase-health-review.md) findings follow,
+in this order:
 
 | Order | Findings | Outcome |
 | --- | --- | --- |
@@ -216,17 +221,6 @@ view's line representation. This work takes priority over the deferred register.
     earlier sequencing completes; pulling the migration forward requires
     explicitly re-scoping the native multi-root resource tree to the packaged
     extension.
-
-- **D056 — TypeScript authoring for bundled extensions**
-  - Deferred: Bundled packages ship checked plain JavaScript compiled into the
-    binary. The extension API check runs `tsc` with `--checkJs` against the
-    declarations, and installed packages take built JavaScript directly; nothing
-    compiles TypeScript into the shipped sources yet.
-  - Reconsider: A bundled workflow's size or shared types make hand-written
-    JavaScript and JSDoc the dominant authoring cost. Then define a build step
-    that type-checks and emits captured sources for bundled packages, with no
-    runtime transpiler, and decide whether installed packages may also ship
-    TypeScript.
 
 - **D057 — Extension and product localization (i18n)**
   - Deferred: Contributed view titles, tree labels, status text, native prompt
