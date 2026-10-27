@@ -188,7 +188,7 @@ installed examples, and move with the tooling.
    object. No behavior change; Rust suites pass.
 4. ✅ **Fake `knot` and pure tests.** Add the resolve hook and fake, and pure
    tests for registry, session, layout, bindings, and tree.
-5. ⬜ **Fake-host tests** for create, rename, remove (release only after both
+5. ✅ **Fake-host tests** for create, rename, remove (release only after both
    deletes), select, switch retry on `SessionConflict`, source reactivation on
    failure, launch suspension, and unreadable-record preservation, plus a
    `git-status` suite. Trim Rust cases that now duplicate pure policy coverage.

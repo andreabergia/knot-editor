@@ -468,87 +468,6 @@ fn startup_suspends_active_sessions_without_a_window(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn removal_reports_and_releases_suspended_text_only_after_the_deletes(cx: &mut TestAppContext) {
-    let mut fixture = start_registry(cx);
-    let a = project_dir("one.txt", "one");
-    let b = project_dir("b.txt", "bee");
-    fixture.create_project(a.path(), "A", cx);
-    open_path(&fixture.shell, &a.path().join("one.txt"), cx);
-    type_text(&fixture.shell, " unsaved", cx);
-    new_untitled(&fixture.shell, fixture.window, "scratch", cx);
-    fixture.create_project(b.path(), "B", cx);
-    let listed = listed_projects(&fixture.shell, fixture.window, cx);
-    let (a_id, b_id) = (project_id(&listed, "A"), project_id(&listed, "B"));
-    assert_eq!(retained(cx).len(), 2);
-
-    let remove = |id: &str, cx: &mut TestAppContext| {
-        dispatch_product_command_with(
-            &fixture.shell,
-            fixture.window,
-            "projects.remove",
-            CommandArgumentValue::Object(
-                [("id".to_owned(), CommandArgumentValue::String(id.into()))].into(),
-            ),
-            cx,
-        )
-    };
-    let removal = remove(&a_id, cx);
-    wait_for_prompt(cx);
-    let (_, message) = cx.pending_prompt().unwrap();
-    assert!(message.contains("2 unsaved documents in its suspended session will be discarded"));
-    // Cancelling keeps the record and its captures.
-    cx.simulate_prompt_answer("Cancel");
-    assert_eq!(wait_for_command(removal, cx), CommandOutcome::Completed);
-    assert_eq!(retained(cx).len(), 2);
-
-    let removal = remove(&a_id, cx);
-    wait_for_prompt(cx);
-    cx.simulate_prompt_answer("Remove");
-    assert_eq!(wait_for_command(removal, cx), CommandOutcome::Completed);
-    assert!(retained(cx).is_empty());
-    let listed = listed_projects(&fixture.shell, fixture.window, cx);
-    assert!(listed["sessions"].get(&a_id).is_none());
-
-    // Removing the active project says nothing about unsaved text and leaves
-    // its window as it is.
-    let removal = remove(&b_id, cx);
-    wait_for_prompt(cx);
-    let (_, message) = cx.pending_prompt().unwrap();
-    assert_eq!(message, "Open documents and folders stay open.");
-    cx.simulate_prompt_answer("Remove");
-    assert_eq!(wait_for_command(removal, cx), CommandOutcome::Completed);
-    assert_eq!(root(&fixture.shell, cx), Some(file_uri(b.path())));
-    let listed = listed_projects(&fixture.shell, fixture.window, cx);
-    assert_eq!(listed["projects"].as_array().unwrap().len(), 0);
-}
-
-#[gpui::test]
-fn activation_releases_captures_no_session_references(cx: &mut TestAppContext) {
-    let fixture = start_registry(cx);
-    let document = cx.read(|cx| {
-        fixture
-            .documents
-            .read(cx)
-            .documents()
-            .next()
-            .unwrap()
-            .identity()
-    });
-    let orphan = cx
-        .update(|cx| crate::app::recovery::retain(OWNER.into(), document, cx))
-        .unwrap();
-    let result = std::rc::Rc::new(RefCell::new(None));
-    let sink = result.clone();
-    cx.spawn(async move |_| *sink.borrow_mut() = Some(orphan.await))
-        .detach();
-    cx.run_until_parked();
-    assert!(result.borrow_mut().take().unwrap().is_ok());
-    assert_eq!(retained(cx).len(), 1);
-    restart_registry(&fixture.host, &fixture.extensions, cx);
-    assert!(retained(cx).is_empty());
-}
-
-#[gpui::test]
 fn quit_records_no_window_closure(cx: &mut TestAppContext) {
     let mut fixture = start_registry(cx);
     let a = project_dir("one.txt", "one");
@@ -649,19 +568,6 @@ fn set_roots(shell: &Entity<ProductShell>, uris: &[&str], cx: &mut TestAppContex
     cx.run_until_parked();
 }
 
-fn roots(shell: &Entity<ProductShell>, cx: &TestAppContext) -> Vec<String> {
-    cx.read(|cx| {
-        shell
-            .read(cx)
-            .workspace
-            .snapshot()
-            .roots()
-            .iter()
-            .map(|root| root.uri.to_string())
-            .collect()
-    })
-}
-
 fn wait_for_roots(shell: &Entity<ProductShell>, expected: &[&str], cx: &mut TestAppContext) {
     wait_for_api_condition(cx, |cx| {
         shell
@@ -744,45 +650,6 @@ fn root_edits_in_a_bound_window_move_the_project_and_its_other_windows(cx: &mut 
     assert_eq!(project_roots(&listed, &a_id), std::slice::from_ref(&c_uri));
     assert_eq!(listed["sessions"][&a_id]["state"], "active");
     assert!(!cx.has_pending_prompt());
-}
-
-#[gpui::test]
-fn clearing_or_matching_another_project_unbinds_the_window(cx: &mut TestAppContext) {
-    let mut fixture = start_registry(cx);
-    let a = project_dir("one.txt", "one");
-    let b = project_dir("b.txt", "bee");
-    let (a_uri, b_uri) = (file_uri(a.path()), file_uri(b.path()));
-    fixture.create_project(b.path(), "B", cx);
-    fixture.create_project(a.path(), "A", cx);
-    let listed = listed_projects(&fixture.shell, fixture.window, cx);
-    let (a_id, b_id) = (project_id(&listed, "A"), project_id(&listed, "B"));
-    let b_session = listed["sessions"][&b_id].clone();
-    assert_eq!(b_session["state"], "suspended");
-    let (second, _) = empty_product_window(&fixture.documents, cx);
-    set_root(&second, Some(&a_uri), cx);
-    assert_eq!(session_windows(&fixture, &a_id, cx), 2);
-
-    // B's roots leave A unchanged; the window binds to neither project.
-    set_root(&second, Some(&b_uri), cx);
-    let listed = listed_projects(&fixture.shell, fixture.window, cx);
-    assert_eq!(project_roots(&listed, &a_id), std::slice::from_ref(&a_uri));
-    assert_eq!(project_roots(&listed, &b_id), std::slice::from_ref(&b_uri));
-    assert_eq!(roots(&fixture.shell, cx), std::slice::from_ref(&a_uri));
-    assert_eq!(
-        listed["sessions"][&a_id]["windows"]
-            .as_array()
-            .unwrap()
-            .len(),
-        1
-    );
-    assert_eq!(listed["sessions"][&b_id], b_session);
-
-    // Clearing the last bound window's roots suspends A with its roots kept.
-    set_root(&fixture.shell, None, cx);
-    let listed = listed_projects(&fixture.shell, fixture.window, cx);
-    assert_eq!(listed["sessions"][&a_id]["state"], "suspended");
-    assert_eq!(project_roots(&listed, &a_id), [a_uri]);
-    assert_eq!(roots(&second, cx), [b_uri]);
 }
 
 #[gpui::test]
@@ -871,18 +738,6 @@ fn write_record(fixture: &Fixture, key: &str, value: Value) {
     )
     .unwrap();
     pollster::block_on(storage.shutdown());
-}
-
-fn read_record(fixture: &Fixture, key: &str) -> Option<Value> {
-    let storage = package_storage(fixture);
-    let value = pollster::block_on(
-        storage
-            .for_owner(crate::app::extension_storage::StorageOwner::bundled(OWNER).unwrap())
-            .read(key.to_owned()),
-    )
-    .unwrap();
-    pollster::block_on(storage.shutdown());
-    value
 }
 
 /// A window's arrangement without document identities, which restored
@@ -1052,46 +907,6 @@ fn schema_one_records_switch_without_a_layout(cx: &mut TestAppContext) {
     let listed = listed_projects(&fixture.shell, fixture.window, cx);
     assert_eq!(listed["sessions"][&a_id]["schema"], 2);
     assert!(listed["sessions"][&a_id]["windows"][0]["layout"].is_object());
-}
-
-#[gpui::test]
-fn unknown_session_schemas_are_preserved_with_their_captures(cx: &mut TestAppContext) {
-    let mut fixture = start_registry(cx);
-    let a = project_dir("one.txt", "one");
-    let b = project_dir("b.txt", "bee");
-    fixture.create_project(a.path(), "A", cx);
-    open_path(&fixture.shell, &a.path().join("one.txt"), cx);
-    type_text(&fixture.shell, " kept", cx);
-    fixture.create_project(b.path(), "B", cx);
-    let listed = listed_projects(&fixture.shell, fixture.window, cx);
-    let a_id = project_id(&listed, "A");
-    let capture = captures(&listed["sessions"][&a_id]).remove(0);
-    let future = serde_json::json!({
-        "schema": 99, "state": "suspended", "future": true,
-        "windows": [{ "entries": [{ "capture": capture }] }],
-    });
-    write_record(&fixture, &format!("session:{a_id}"), future.clone());
-
-    // A restart reconciles nothing while the record is unreadable.
-    restart_registry(&fixture.host, &fixture.extensions, cx);
-    assert_eq!(retained(cx).len(), 1);
-    let tree = wait_for_contributed_view(&fixture.shell, "builtin.projects", cx);
-    wait_for_api_condition(cx, |cx| {
-        tree.read(cx)
-            .status_for_test(&a_id)
-            .is_some_and(|(status, _)| status.as_deref() == Some("unreadable"))
-    });
-    select_project(&fixture, &a_id, cx);
-    wait_for_prompt(cx);
-    assert!(cx.pending_prompt().unwrap().1.contains("cannot read"));
-    cx.simulate_prompt_answer("OK");
-    cx.run_until_parked();
-    assert_eq!(roots(&fixture.shell, cx), [file_uri(b.path())]);
-    assert_eq!(
-        read_record(&fixture, &format!("session:{a_id}")).map(normalized),
-        Some(normalized(future))
-    );
-    assert_eq!(retained(cx).len(), 1);
 }
 
 #[gpui::test]
