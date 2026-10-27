@@ -420,9 +420,24 @@ fn closing_the_last_window_suspends_without_captures(cx: &mut TestAppContext) {
     // Each session window keeps its captured layout.
     assert_eq!(windows[0]["layout"]["version"], 1);
 
-    // Closing the last one suspends the project with its last membership.
+    // Closing the last one suspends the project with its last membership,
+    // which records the dirty document's identity once tracking sees it.
     let (other, other_window) = empty_product_window(&fixture.documents, cx);
     type_text(&fixture.shell, " dirty", cx);
+    let one = file_uri(&a.path().join("one.txt"));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let dirty = loop {
+        let listed = listed_projects(&other, other_window, cx);
+        let entry = listed["sessions"][&a_id]["windows"][0]["entries"][0].clone();
+        if entry["document"].is_string() {
+            break entry;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "tracking never recorded the edit"
+        );
+    };
+    assert_eq!(dirty["uri"], one);
     let close = dispatch_product_command(&fixture.shell, fixture.window, CLOSE_WINDOW_COMMAND, cx);
     wait_for_prompt(cx);
     cx.simulate_prompt_answer("Don't Save");
@@ -430,10 +445,7 @@ fn closing_the_last_window_suspends_without_captures(cx: &mut TestAppContext) {
     let listed = listed_projects(&other, other_window, cx);
     let session = &listed["sessions"][&a_id];
     assert_eq!(session["state"], "suspended");
-    assert_eq!(
-        session["windows"][0]["entries"],
-        serde_json::json!([{ "uri": file_uri(&a.path().join("one.txt")) }])
-    );
+    assert_eq!(session["windows"][0]["entries"], serde_json::json!([dirty]));
     assert!(captures(session).is_empty());
     assert!(retained(cx).is_empty());
 }
@@ -957,6 +969,12 @@ fn restored_windows_rebind_after_launch_and_unrestored_sessions_suspend(cx: &mut
     assert!(drained.borrow_mut().take().unwrap().is_ok());
 
     // A fresh application: the registry activates before any window exists.
+    // Quitting stops the registry before windows close, so it never records
+    // their closure.
+    fixture.host.update(cx, |host, cx| {
+        host.unload_package_for_test("@knot/projects", cx)
+    });
+    cx.run_until_parked();
     for window in cx.read(|cx| cx.windows()) {
         let _ = cx.update_window(window, |_, window, _| window.remove_window());
     }

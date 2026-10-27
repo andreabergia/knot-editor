@@ -731,6 +731,15 @@ impl ProductExtensionHost {
         Some(done_receiver)
     }
 
+    /// Stop one package with a terminating unload, as quitting would.
+    #[cfg(test)]
+    pub(crate) fn unload_package_for_test(&mut self, name: &str, cx: &mut Context<Self>) {
+        if let Some(key) = self.package_keys.get(name).copied() {
+            let _ = self.pool.unload(key);
+            self.remove_lifecycle(key, cx);
+        }
+    }
+
     /// Stop one package with a terminating unload, rediscover it (bundled
     /// sources, or its installed directory re-read from disk), and load a fresh
     /// lifecycle. The outcome replaces the package's startup report entry.
