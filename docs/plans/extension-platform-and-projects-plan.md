@@ -1,10 +1,9 @@
 # Production extension APIs and JavaScript project management
 
-Status: ⬜ In progress. Checkpoints 1–8 and D053 are complete and approved, and
+Status: ⬜ In progress. Checkpoints 1–9 and D053 are complete and approved, and
 the [codebase health maintenance
 interlude](#maintenance-interlude--codebase-health-cleanup-) is approved.
-Checkpoint 9 is implemented and awaits its review gate; checkpoint 10 remains
-unstarted.
+Checkpoint 10 is next.
 
 Work identifiers: D046–D052, promoted D005, and completed maintenance interlude
 D053. [Roadmap](../roadmap.md) owns initiative priority; this plan owns execution
@@ -56,9 +55,8 @@ root replacement, and protected closure; see
 [documents](../architecture/documents-and-persistence.md) and
 [workbench lifecycle](../architecture/workbench-and-lifecycle.md).
 
-D052 extends the existing ordered root collection beyond its current one-root
-limit; the duplicate, overlap, ordering, and replacement rules are settled in
-[checkpoint 9](#9-multi-root-workspace-product-behavior--d052-).
+✅ D052 carries multiple ordered roots through the model, explorer, public API,
+and projects; see [checkpoint 9](#9-multi-root-workspace-product-behavior--d052-).
 Files remain independent of workspace containment. JS project identity is
 independent of roots and stable across rename/root changes; the native application
 owns workspaces, not project policy.
@@ -283,151 +281,31 @@ contract, and extension restart). Validation is in
 `tests/projects.rs`, `tests/extension_restart.rs`, and the `replaceWindows` and
 `windows.focus` contract in `scripts/extension-api/contract.test.ts`.
 
-### 9. Multi-root workspace product behavior — D052 ⬜
+### 9. Multi-root workspace product behavior — D052 ✅
 
-Remove single-root enforcement, including the `TooManyWorkspaceRoots` error
-type rather than a raised limit, then carry multiple roots through the native
-model, explorer, public API, and `@knot/projects`. Execute in two
-sub-checkpoints, 9a native and 9b projects, with one review gate at the end.
+Approved 2026-10-27. A window holds an ordered list of roots: proposed sets are
+deduplicated after normalization, retained roots keep their IDs, nested and
+overlapping roots are allowed, and `TooManyWorkspaceRoots` is gone. The explorer
+shows every root as a top-level row with disambiguated labels and keys view
+state by root and URI. Open replaces every root; Add Folder to Workspace…,
+Remove Folder from Workspace, and Move Folder Up/Down edit the selected root,
+and removing a root never closes documents. `@knot/projects` matches windows by
+order-insensitive root sets through an in-memory binding: root edits in a bound
+window move the project and its other windows, while clearing the roots or
+matching another project unbinds the window. Switching restores every root.
+File › New Blank Window opens a window outside any project, and the Projects
+tool's New Window action opens one on the current project through the new
+`windows.open({ roots })`. Health review P2-6 is resolved.
 
-#### Root semantics (approved for planning 2026-10-25)
-
-- **Ordering and identity.** A window's roots are an ordered list. Order is
-  user-visible (explorer order) and deterministic; retained normalized URIs keep
-  their `RootId` across any replacement, so add, remove, and reorder are all
-  replacements of the whole set.
-- **Duplicates.** Normalization can make different inputs equal, so a proposed
-  set is deduplicated after normalization, keeping the first occurrence, rather
-  than rejected. Adding a root that is already present is a no-op. No new error
-  code.
-- **Overlap.** Nested and overlapping roots are allowed. Each root is browsed on
-  its own, so a file under both appears under both. Expansion and selection are
-  keyed by `(RootId, URI)` so the two copies stay independent, while cached
-  directory listings can be shared by URI.
-- **Labels.** A root row shows the last path segment. Roots with the same
-  segment add their parent segment (`src — knot`, `src — other`). There are no
-  user-assigned root names; projects own naming.
-- **Explorer layout.** Every root is a top-level expandable row, even when there
-  is only one, expanded on first install. One layout and keyboard model gives
-  root-level actions an obvious target.
-- **Folder Open.** Native Open of a folder keeps replacing the window's roots.
-  A new **Add Folder to Workspace…** command appends one. **Remove Folder from
-  Workspace** and **Move Folder Up/Down** act on the explorer's selected root:
-  the root row itself, or the root that contains the selected row. Launch
-  requests for a directory keep opening a window with that single root.
-- **Root removal.** Removing a root never closes documents: files stay
-  independent of workspace containment, and there is no prompt.
-- **Invalidation.** Every root-set change bumps the generation, so in-flight
-  enumeration and Open/root requests captured earlier are rejected as today.
-  Retained roots keep their expansion, selection, and cached children, and
-  directories that were loading are re-requested under the new snapshot. A
-  removed root drops its state, and a new root requests its children.
-- **Projects follow root edits.** A window belongs to an active project when its
-  root set equals the project's root set, ignoring order. No two projects may
-  share a root set, but one folder may belong to several projects. When a
-  bound window's roots change to a non-empty set that no other project uses,
-  live tracking updates the project's roots and applies the same set to the
-  project's other windows. Clearing a window's roots, or changing them to
-  another project's set, unbinds that window. The binding used to detect the
-  edit is in memory only; the registry still persists no per-window binding.
-
-#### 9a. Native multi-root model, explorer, and API ✅
-
-- ✅ `WorkspaceState::replace_roots` becomes infallible and deduplicates;
-  delete `TooManyWorkspaceRoots`, `WorkspaceSnapshot::root()`, and the
-  single-root helpers (`replace_root`, `install_workspace`'s `expect`). Remove
-  the error from `WorkspaceError`, `ReplaceError`, the handler error enums,
-  and `knot.d.ts`. Drop the D052
-  `dead_code` allowances, deleting `is_descendant_of` if nothing uses it.
-- ✅ `product::operations::replace_roots` and `workbench.replaceWindows` accept
-  any number of roots per window and deduplicate after normalization. They
-  still validate every root before one commit.
-- ✅ `WorkspaceTree`: top-level root rows with disambiguated labels;
-  expansion and selection keyed by `(RootId, URI)`; a per-root visited set so
-  overlapping roots both render; Left from a top-level entry selects its root
-  row; `set_workspace` preserves retained-root state as described above.
-- ✅ Native commands Add Folder to Workspace…, Remove Folder from Workspace,
-  and Move Folder Up/Down. They go through the shared root-replacement path,
-  appear in the palette, and put Add Folder in the File menu. The explorer
-  frame auto-shows on a non-empty root set as today; tool-layout memory is
-  unchanged.
-- ✅ `knot.d.ts` and the [extension guide](../extension-api.md):
-  `replaceRoots` takes an ordered set with the deduplication rule, and there
-  are no separate add/remove methods because retained IDs make read-modify-
-  replace sufficient. Update the `workspaces` and `replaceWindows` cases in
-  `scripts/extension-api/contract.test.ts`.
-- ✅ **Validation:** `workspace.rs` unit tests for deduplication after
-  normalization, retained IDs across reorder/add/remove, and generation bumps.
-  `workspace_tree.rs` tests for root rows and labels, overlapping roots with
-  independent expansion and selection, deterministic order, and stale responses
-  across add/remove while enumeration is in flight. Product tests in
-  `product/tests/workspaces.rs` for the native commands, Open replacing every
-  root, Add Folder of an existing root as a no-op, root removal leaving
-  documents open, and an extension `replaceRoots` racing a native Add Folder
-  (rejects `InvalidTarget`). A `replaceWindows` case with multi-root
-  destinations in `product/tests/sessions.rs`. The race is covered by the
-  existing `roots` scenario of the pending-operation test. The workspace and
-  explorer [architecture references](../architecture/documents-and-persistence.md#workspaces-and-resource-trees)
-  describe the new behavior; the decision record waits for the review gate.
-
-#### 9b. Multi-root projects ✅
-
-- ✅ Membership compares order-insensitive root sets instead of first roots.
-  `projects.create` rejects a root set another project already uses. The
-  Projects tree and picker describe a project by its first root's label plus
-  `+N`.
-- ✅ Live tracking keeps an in-memory window→project binding, adopts root edits
-  from bound windows into the project record, and propagates them to the
-  project's other windows with `workspaces.replaceRoots`. Switching passes the
-  project's full root list to `replaceWindows`.
-- ✅ Records: schema 1 already stores `roots` as an array, so existing
-  single-root records load unchanged and keep their IDs. The registry schema
-  stays 1 unless 9b needs a field, in which case it gains a read-time upgrade.
-  Update the header comment and the
-  [bundled project registry decision](../decisions.md#bundled-project-registry) wording
-  about first-root matching.
-- ✅ **Validation:** `tests/projects.rs` and `tests/project_sessions.rs` for
-  set-equality membership regardless of order; adding and removing a root in
-  a bound window updating the record and the project's second window; clearing
-  roots unbinding (and suspending on the last window); a set colliding with
-  another project unbinding instead of merging; a stored single-root schema-1
-  record loading with its ID; and a multi-root project switched away, restored,
-  and restored again after restart (startup suspension and capture
-  reconciliation included). All live in `product/tests/project_sessions.rs`;
-  the existing registry reload test covers a stored schema-1 record keeping
-  its ID, and the schema stayed 1.
-
-#### 9c. Blank and project windows ✅
-
-Added after trying 9b in the product: a second window could only join a project
-by opening exactly its folders by hand.
-
-- ✅ The native New Window command is now **New Blank Window** and keeps
-  opening a window outside any project.
-- ✅ `windows.open({ roots })` opens a focused blank window and applies the
-  roots through the shared root-replacement path, closing the window again when
-  a root is rejected. Validated in `product/tests/workspaces.rs`.
-- ✅ `@knot/projects` adds `projects.new-window`, a **New Window** action on the
-  Projects tool, which opens a window with the current window's project roots;
-  that window binds by root-set equality like any other. Outside a project it
-  reports that there is no project. Validated in
-  `product/tests/project_sessions.rs`. Extension commands still appear in the
-  palette by name, since the API has no command titles.
-
-#### Documentation and review gate
-
-- ✅ Update the workspaces section of
-  [documents and persistence](../architecture/documents-and-persistence.md#workspaces-and-resource-trees),
-  the explorer notes in [workbench lifecycle](../architecture/workbench-and-lifecycle.md),
-  and `architecture.md` only if ownership changes (it should not). Add a
-  *Multi-root workspaces* decision recording deduplication over rejection,
-  allowed overlap with `(RootId, URI)` view state, replace-on-Open, and
-  projects following root edits. Remove P2-6 from the health-review table.
-- ⏸️ **Review gate:** approve root semantics and native navigation in the product:
-  add, remove, and reorder roots; overlapping roots; Open replacing roots;
-  projects following edits across two windows; New Blank Window versus the
-  Projects New Window action; and a multi-root project surviving switch and
-  restart.
+Current behavior lives in [workspaces and resource
+trees](../architecture/documents-and-persistence.md#workspaces-and-resource-trees),
+[workbench lifecycle](../architecture/workbench-and-lifecycle.md), and the
+[extension guide](../extension-api.md#project-sessions); rationale in
+[decisions](../decisions.md#multi-root-workspaces) (multi-root workspaces and the
+bundled project registry). Validation is in `src/app/workspace.rs`,
+`src/app/workspace_tree.rs`, `src/app/product/tests/workspaces.rs`,
+`tests/sessions.rs`, `tests/project_sessions.rs`, and the `workspaces` and
+`windows.open` contract in `scripts/extension-api/contract.test.ts`.
 
 ### 10. Layout, view state, and startup restoration — D005, D051 ⬜
 
@@ -463,7 +341,7 @@ roadmap register.
 | --- | --- |
 | Prototype removal, `Generated` removal, test-only fencing, symlink Save, Find stub, `ProductShell` split, hygiene | ✅ [Maintenance interlude](#maintenance-interlude--codebase-health-cleanup-) |
 | Extension restart/disable escape hatch (P1-3) | ✅ Checkpoint 8: native Restart Extension |
-| Single-root error removal (P2-6) | ✅ Checkpoint 9a |
+| Single-root error removal (P2-6) | ✅ Checkpoint 9 |
 | Editor view incremental line model, piece-table length cache, insert coalescing and edit-log bounding, CRLF policy (P0-1, P1-1, P2-7) | After checkpoint 10, as a focused plan before D002 and D031 |
 | `engine.rs` split and marshaling unification, command module regrouping, `app/terminal` and `app/extensions` directories, inline test extraction, tokio runtime removal (P1-6, P2-1–P2-4) | After checkpoint 10, as pure-move maintenance between slices |
 

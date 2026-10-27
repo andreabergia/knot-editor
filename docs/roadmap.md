@@ -16,18 +16,17 @@ uses an ordinary JavaScript project manager to validate native application APIs,
 extension UI, durable storage, multi-root workspaces, and session restoration
 including unsaved documents. API foundation, application state/operations, handler
 declarations, extension storage, native UI contributions, and the bundled project
-registry, unsaved-document recovery, and project sessions with safe switching
-are complete; approval and validation notes live in that plan.
+registry, unsaved-document recovery, project sessions with safe switching, and
+multi-root workspaces are complete; approval and validation notes live in that plan.
 
 Remaining order:
 
 | Checkpoint | Work identifiers | Outcome |
 | --- | --- | --- |
-| 9 | D052 | Multiple roots throughout UI and resource operations |
 | 10 | D005, D051 | Layout, view-state, and startup restoration |
 
-Checkpoints 1–8 and the codebase health maintenance interlude are complete and
-approved; checkpoint 9 is next. The initiative plan schedules the remaining
+Checkpoints 1–9 and the codebase health maintenance interlude are complete and
+approved; checkpoint 10 is next. The initiative plan schedules the remaining
 [health review](plans/codebase-health-review.md) findings. Continue with the
 [extension platform plan](plans/extension-platform-and-projects-plan.md).
 Execute one checkpoint at a time and stop at its review gate; detailed scope and
