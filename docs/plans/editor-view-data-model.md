@@ -200,10 +200,11 @@ Each step is one commit, with `cargo test --all-targets` and clippy passing.
    coalesced inserts.
 3. ✅ **Bounded edit log.** Monotonic `edit_seq`, and a drain after
    stabilization in `BufferModel`.
-4. ⬜ **Model line API and undo replay edit.** Add the `BufferModel` line,
+4. ✅ **Model line API and undo replay edit.** Committed with step 5, which
+   is its first user. Add the `BufferModel` line,
    range, boundary, and UTF-16 queries, the test-only whole-read counter, and
    the replay edit derived from applied primitives.
-5. ⬜ **View reads from the model.** Remove `lines`, `segs`, `Seg`, and
+5. ✅ **View reads from the model.** Remove `lines`, `segs`, `Seg`, and
    `flat_doc`. Route conversions, movement, deletion, IME, clipboard,
    completion, and painting through the model. Clamp horizontal scroll to
    the widest shaped width. Place contributions with `line_of_offset`. Add the

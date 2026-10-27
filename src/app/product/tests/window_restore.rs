@@ -355,7 +355,7 @@ fn several_windows_restore_with_splits_shared_views_docks_dirty_text_and_fresh_t
     });
     let views = editors(first, cx);
     cx.read(|cx| {
-        assert_eq!(views[1].read(cx).view_state(), state);
+        assert_eq!(views[1].read(cx).view_state(cx), state);
         assert_eq!(views[1].read(cx).model(), views[2].read(cx).model());
     });
     // The terminal pane restored in place with a fresh shell.
@@ -475,7 +475,7 @@ fn changed_files_clamp_view_state_and_missing_clean_files_are_skipped(cx: &mut T
     let (_, shell) = shells(cx).remove(0);
     assert_eq!(texts(&shell, cx), ["é\n".repeat(10)]);
     let view = editors(&shell, cx).pop().unwrap();
-    let state = cx.read(|cx| view.read(cx).view_state());
+    let state = cx.read(|cx| view.read(cx).view_state(cx));
     assert_eq!(state.caret, "é\n".repeat(10).len());
     assert!(state.top <= state.caret);
 }

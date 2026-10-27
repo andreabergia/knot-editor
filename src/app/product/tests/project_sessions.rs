@@ -871,7 +871,7 @@ fn a_multi_root_layout_with_shared_views_survives_repeated_switches(cx: &mut Tes
                 .map(|view| view.read(cx).model().clone())
                 .collect::<Vec<_>>();
             assert_eq!(models[models.len() - 1], models[models.len() - 2]);
-            assert_eq!(views.last().unwrap().read(cx).view_state(), state);
+            assert_eq!(views.last().unwrap().read(cx).view_state(cx), state);
             assert!(models[models.len() - 1].read(cx).text().ends_with("dirty"));
         });
         select_project(&fixture, &b_id, cx);

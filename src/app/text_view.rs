@@ -61,11 +61,11 @@ impl TextView {
     }
 
     pub(crate) fn selected_text(&self, cx: &App) -> Option<String> {
-        let range = self.editor.read(cx).selected_byte_range()?;
+        let range = self.editor.read(cx).selected_byte_range(cx)?;
         if range.is_empty() {
             return None;
         }
-        Some(self.model.read(cx).text()[range].to_owned())
+        Some(self.model.read(cx).read(range))
     }
 
     pub(crate) fn handle_command(

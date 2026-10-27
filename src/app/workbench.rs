@@ -1168,9 +1168,9 @@ mod tests {
                 editor.restore_view_state(state(9, 30.), cx)
             });
 
-            assert_eq!(first_editor.read(cx).view_state(), state(1, 10.));
-            assert_eq!(second_editor.read(cx).view_state(), selection);
-            assert_eq!(third_editor.read(cx).view_state(), state(9, 30.));
+            assert_eq!(first_editor.read(cx).view_state(cx), state(1, 10.));
+            assert_eq!(second_editor.read(cx).view_state(cx), selection);
+            assert_eq!(third_editor.read(cx).view_state(cx), state(9, 30.));
         });
     }
 }

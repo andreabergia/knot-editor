@@ -108,7 +108,7 @@ fn dirty_last_document_view_moves_to_new_window_without_closure(cx: &mut TestApp
         assert_eq!(moved.document_id(), Some(document));
         assert_eq!(moved.editor(), Some(&editor));
         assert_eq!(
-            editor.read(cx).view_state(),
+            editor.read(cx).view_state(cx),
             crate::app::editor::EditorViewState {
                 anchor: 1,
                 caret: 8,

@@ -14,7 +14,7 @@ use gpui::{AppContext, Entity, WeakEntity};
 use crate::{
     core::{
         anchored_range::{AnchoredRangeId, AnchoredRangeStore},
-        buffer::TextBuffer,
+        buffer::{BufferEdit, TextBuffer},
     },
     host::protocol::{
         BufferHandle, BufferSubscriptionId, ByteRange, CommandName, CommandRegistrationId,
@@ -118,6 +118,9 @@ pub struct BufferModel {
     history: EditHistory,
     history_replay_generation: u64,
     history_view_restore: Option<HistoryViewRestore>,
+    /// Whole-document reads, so tests can assert that views never make them.
+    #[cfg(test)]
+    whole_text_reads: std::cell::Cell<usize>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -181,11 +184,67 @@ impl BufferModel {
             history: EditHistory::default(),
             history_replay_generation: 0,
             history_view_restore: None,
+            #[cfg(test)]
+            whole_text_reads: Default::default(),
         }
     }
 
     pub fn text(&self) -> String {
-        self.buffer.read_range(0..self.buffer.len())
+        self.read(0..self.buffer.len())
+    }
+
+    /// Text in a byte range on character boundaries.
+    pub(crate) fn read(&self, range: Range<usize>) -> String {
+        #[cfg(test)]
+        if range.start == 0 && range.end == self.buffer.len() && !range.is_empty() {
+            self.whole_text_reads.set(self.whole_text_reads.get() + 1);
+        }
+        self.buffer.read_range(range)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn whole_text_reads(&self) -> usize {
+        self.whole_text_reads.get()
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.buffer.len()
+    }
+
+    pub(crate) fn is_char_boundary(&self, offset: usize) -> bool {
+        self.buffer.is_char_boundary(offset)
+    }
+
+    /// Number of lines; always at least one.
+    pub(crate) fn line_count(&self) -> usize {
+        self.buffer.line_count()
+    }
+
+    /// Byte range of `line`, excluding its `\n` terminator but including any
+    /// preceding `\r`.
+    pub(crate) fn line_range(&self, line: usize) -> Range<usize> {
+        let start = self.buffer.line_start(line);
+        let end = if line + 1 < self.buffer.line_count() {
+            self.buffer.line_start(line + 1) - 1
+        } else {
+            self.buffer.len()
+        };
+        start..end
+    }
+
+    pub(crate) fn line_of_offset(&self, offset: usize) -> usize {
+        self.buffer.line_of_offset(offset)
+    }
+
+    /// Document-wide UTF-16 offset of a byte offset on a character boundary.
+    pub(crate) fn utf16_of_offset(&self, offset: usize) -> usize {
+        self.buffer.utf16_of_offset(offset)
+    }
+
+    /// Byte offset of a document-wide UTF-16 offset. Offsets inside a
+    /// surrogate pair round up; offsets past the end clamp.
+    pub(crate) fn offset_of_utf16(&self, utf16: usize) -> usize {
+        self.buffer.offset_of_utf16(utf16)
     }
 
     pub fn revision(&self) -> u64 {
@@ -658,7 +717,7 @@ impl BufferModel {
         if self.access_policy == BufferAccessPolicy::ReadOnly {
             return Err(BufferAccessError::ReadOnly);
         }
-        let before = self.text();
+        let seq = self.buffer.edit_seq();
         let state = if undo {
             self.history.undo(&mut self.buffer)
         } else {
@@ -669,9 +728,8 @@ impl BufferModel {
         };
         self.content_state = state.content_state;
         let view_state = state.view_state;
+        let edit = self.covering_edit(seq);
         self.stabilize_anchored_ranges();
-        let after = self.text();
-        let edit = replacement_between(&before, &after);
         let before_revision = self.revision;
         self.advance_revision();
         if let Some(view_state) = view_state {
@@ -729,34 +787,42 @@ impl BufferModel {
         self.open = false;
     }
 
+    /// One replacement, in pre-edit coordinates, covering every primitive
+    /// applied since `seq`. Reads only the replaced span.
+    fn covering_edit(&self, seq: usize) -> crate::host::protocol::TextEdit {
+        // `start..end` is the changed span in current coordinates, and
+        // `before_len` its length before the first primitive.
+        let mut span: Option<(usize, usize, usize)> = None;
+        for edit in self.buffer.edits_since(seq) {
+            let (at, removed, inserted) = match edit {
+                BufferEdit::Insert {
+                    at, inserted_len, ..
+                } => (*at, 0, *inserted_len),
+                BufferEdit::Delete { range, .. } => (range.start, range.len(), 0),
+            };
+            span = Some(match span {
+                None => (at, at + inserted, removed),
+                Some((start, end, before_len)) => {
+                    let new_start = start.min(at);
+                    let new_end = end.max(at + removed);
+                    let before_len = before_len + (start - new_start) + (new_end - end);
+                    (new_start, new_end + inserted - removed, before_len)
+                }
+            });
+        }
+        let (start, end, before_len) = span.expect("history replay applied no primitive");
+        crate::host::protocol::TextEdit {
+            range: ByteRange {
+                start_byte_offset: start,
+                end_byte_offset: start + before_len,
+            },
+            text: self.read(start..end),
+        }
+    }
+
     #[cfg(test)]
     fn edit_seq(&self) -> usize {
         self.buffer.edit_seq()
-    }
-}
-
-fn replacement_between(before: &str, after: &str) -> crate::host::protocol::TextEdit {
-    let prefix = before
-        .char_indices()
-        .zip(after.char_indices())
-        .take_while(|((_, left), (_, right))| left == right)
-        .last()
-        .map_or(0, |((index, ch), _)| index + ch.len_utf8());
-    let before_tail = &before[prefix..];
-    let after_tail = &after[prefix..];
-    let suffix = before_tail
-        .chars()
-        .rev()
-        .zip(after_tail.chars().rev())
-        .take_while(|(left, right)| left == right)
-        .map(|(ch, _)| ch.len_utf8())
-        .sum::<usize>();
-    crate::host::protocol::TextEdit {
-        range: ByteRange {
-            start_byte_offset: prefix,
-            end_byte_offset: before.len() - suffix,
-        },
-        text: after[prefix..after.len() - suffix].into(),
     }
 }
 
@@ -1375,6 +1441,52 @@ mod tests {
 
         assert!(!model.replace(0..0, "").unwrap());
         assert_eq!(model.revision(), 1);
+    }
+
+    #[test]
+    fn history_replay_reports_one_edit_covering_its_primitives() {
+        let mut model = BufferModel::from_text("<one two three>");
+        let edit = |start, end, text: &str| TextEdit {
+            range: ByteRange {
+                start_byte_offset: start,
+                end_byte_offset: end,
+            },
+            text: text.into(),
+        };
+        assert!(
+            model
+                .apply_edits(&[edit(1, 4, "1"), edit(9, 14, "3")], 0)
+                .unwrap()
+        );
+        assert_eq!(model.text(), "<1 two 3>");
+        model.pending_changes.clear();
+
+        assert!(model.undo().unwrap());
+        assert_eq!(
+            model.take_pending_change().unwrap().edits,
+            vec![edit(1, 8, "one two three")]
+        );
+        assert!(model.redo().unwrap());
+        assert_eq!(
+            model.take_pending_change().unwrap().edits,
+            vec![edit(1, 14, "1 two 3")]
+        );
+        assert_eq!(model.whole_text_reads(), 1, "only the assertion above");
+    }
+
+    #[test]
+    fn line_queries_and_utf16_conversions() {
+        let model = BufferModel::from_text("a😀\r\nβ\n");
+        assert_eq!(model.line_count(), 3);
+        assert_eq!(model.line_range(0), 0..6);
+        assert_eq!(model.read(model.line_range(0)), "a😀\r");
+        assert_eq!(model.line_range(1), 7..9);
+        assert_eq!(model.line_range(2), 10..10);
+        assert_eq!(model.line_of_offset(8), 1);
+        assert_eq!(model.utf16_of_offset(7), 5);
+        assert_eq!(model.offset_of_utf16(5), 7);
+        assert_eq!(model.len(), 10);
+        assert!(!model.is_char_boundary(2));
     }
 
     #[test]

@@ -191,7 +191,7 @@ impl WindowLayout {
                                         .map(ToString::to_string),
                                     view: tab
                                         .editor()
-                                        .map(|editor| editor.read(cx).view_state())
+                                        .map(|editor| editor.read(cx).view_state(cx))
                                         .unwrap_or_default(),
                                 }
                             }

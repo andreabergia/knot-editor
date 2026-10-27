@@ -377,7 +377,7 @@ fn desktop_release_moves_dirty_last_view_and_replaces_source(cx: &mut TestAppCon
             );
             assert!(editor.focus_handle(cx).is_focused(window));
             assert_eq!(
-                editor.read(cx).view_state(),
+                editor.read(cx).view_state(cx),
                 crate::app::editor::EditorViewState {
                     anchor: 0,
                     caret: 0,

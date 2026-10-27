@@ -513,7 +513,7 @@ fn product_editor_captures_mouse_selection_outside_its_pane(cx: &mut TestAppCont
     window_cx.simulate_mouse_up(outside, MouseButton::Left, Modifiers::default());
 
     window_cx.read(|cx| {
-        assert_eq!(editor.read(cx).selected_byte_range(), Some(0..text.len()));
+        assert_eq!(editor.read(cx).selected_byte_range(cx), Some(0..text.len()));
     });
 }
 

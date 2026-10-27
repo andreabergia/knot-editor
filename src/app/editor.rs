@@ -3,6 +3,8 @@
 //! Caret and selection use byte positions backed by model anchors. Movement and
 //! pointer hit testing use grapheme boundaries and shaped visual coordinates.
 //! Views independently own scrolling, selection, completion, and IME preedit.
+//! A view keeps no copy of the text: it reads the lines it needs from the model
+//! and converts positions through the model's line index.
 
 pub(super) mod native_commands;
 
@@ -30,16 +32,6 @@ use super::{
 };
 
 static NEXT_HISTORY_CONTEXT: AtomicU64 = AtomicU64::new(1);
-
-/// One styled segment of a projected line, with byte offsets into `lines`.
-#[derive(Clone, Copy)]
-struct Seg {
-    start: usize,
-    end: usize,
-    color: u32,
-    bold: bool,
-    italic: bool,
-}
 
 /// One diagnostic decoration to render as a wavy underline overlay. `start`
 /// and `end` are byte columns within `line`; `color` is an RGB u32. This is
@@ -113,10 +105,15 @@ pub struct EditorView {
     element_id: usize,
     rendering: EditorRenderingOptions,
     /// Authoritative document state. Everything below is presentation state
-    /// or a derived rendering projection.
+    /// or derived from the model's current revision.
     model: Entity<BufferModel>,
-    lines: Vec<String>,
-    segs: Vec<Vec<Seg>>,
+    /// The model's line count as of the last refresh.
+    line_count: usize,
+    /// The model revision this view last refreshed from.
+    seen_revision: u64,
+    /// Widest line width shaped since the text last changed. Bounds horizontal
+    /// scrolling without shaping lines that were never displayed.
+    max_line_width: f32,
     /// Renderer-local projection of shared, anchored buffer contributions.
     decorations: Vec<RenderedDecoration>,
     gutter_markers: Vec<RenderedGutterMarker>,
@@ -154,10 +151,10 @@ pub struct EditorView {
     suppress_drag_selection: bool,
     position_range: Option<AnchoredRangeId>,
     selection_reversed: bool,
-    /// IME preedit (marked) range as flat UTF-16 offsets into the
-    /// `lines.join("\\n")` document. `None` = no active composition. Set by
-    /// `replace_and_mark_text_in_range`, cleared by `replace_text_in_range` /
-    /// `unmark_text`. The element paints an underline over this span.
+    /// IME preedit (marked) range as document-wide UTF-16 offsets. `None` =
+    /// no active composition. Set by `replace_and_mark_text_in_range`,
+    /// cleared by `replace_text_in_range` / `unmark_text`. The element paints
+    /// an underline over this span.
     marked_range_utf16: Option<Range<usize>>,
     focus: FocusHandle,
     history_context: u64,
@@ -184,6 +181,11 @@ impl EditorView {
     }
 
     #[cfg(test)]
+    fn text(&self, cx: &App) -> String {
+        self.model.read(cx).text()
+    }
+
+    #[cfg(test)]
     pub(crate) fn completion_state(&self) -> Option<(usize, usize, usize, u64)> {
         let controller = self.completion.as_ref()?;
         let snapshot = controller.snapshot();
@@ -195,9 +197,10 @@ impl EditorView {
         ))
     }
 
-    pub(crate) fn selected_byte_range(&self) -> Option<Range<usize>> {
+    pub(crate) fn selected_byte_range(&self, cx: &App) -> Option<Range<usize>> {
+        let model = self.model.read(cx);
         self.selection_range().map(|(start, end)| {
-            self.to_flat_byte(start.0, start.1)..self.to_flat_byte(end.0, end.1)
+            to_flat_byte(model, start.0, start.1)..to_flat_byte(model, end.0, end.1)
         })
     }
 
@@ -209,19 +212,14 @@ impl EditorView {
 
     /// The restorable presentation state: selection ends and the top visible
     /// line as byte offsets, and horizontal scroll in pixels.
-    pub(crate) fn view_state(&self) -> EditorViewState {
-        let caret = self.to_flat_byte(self.cursor_line, self.cursor_col);
-        let anchor = if self.has_selection {
-            self.to_flat_byte(self.anchor_line, self.anchor_col)
-        } else {
-            caret
-        };
-        let top_line =
-            ((self.scroll / LINE_HEIGHT) as usize).min(self.lines.len().saturating_sub(1));
+    pub(crate) fn view_state(&self, cx: &App) -> EditorViewState {
+        let model = self.model.read(cx);
+        let state = self.history_view_state(model);
+        let top_line = ((self.scroll / LINE_HEIGHT) as usize).min(self.line_count - 1);
         EditorViewState {
-            anchor,
-            caret,
-            top: self.to_flat_byte(top_line, 0),
+            anchor: state.anchor,
+            caret: state.caret,
+            top: model.line_range(top_line).start,
             scroll_x: self.scroll_x,
         }
     }
@@ -231,18 +229,18 @@ impl EditorView {
     /// an invalid position; the restored scroll is kept instead of revealing
     /// the caret.
     pub(crate) fn restore_view_state(&mut self, state: EditorViewState, cx: &mut Context<Self>) {
-        let text = self.flat_doc();
+        let model = self.model.read(cx);
         let snap = |offset: usize| {
-            let mut offset = offset.min(text.len());
-            while !text.is_char_boundary(offset) {
+            let mut offset = offset.min(model.len());
+            while !model.is_char_boundary(offset) {
                 offset -= 1;
             }
             offset
         };
-        (self.anchor_line, self.anchor_col) = self.flat_byte_to_position(snap(state.anchor));
-        (self.cursor_line, self.cursor_col) = self.flat_byte_to_position(snap(state.caret));
+        (self.anchor_line, self.anchor_col) = flat_byte_to_position(model, snap(state.anchor));
+        (self.cursor_line, self.cursor_col) = flat_byte_to_position(model, snap(state.caret));
         self.has_selection = snap(state.anchor) != snap(state.caret);
-        self.scroll = self.flat_byte_to_position(snap(state.top)).0 as f32 * LINE_HEIGHT;
+        self.scroll = flat_byte_to_position(model, snap(state.top)).0 as f32 * LINE_HEIGHT;
         self.scroll_x = state.scroll_x.max(0.);
         self.preferred_x = None;
         self.reveal_caret = false;
@@ -262,21 +260,17 @@ impl EditorView {
         self.break_history_group(cx);
         self.marked_range_utf16 = None;
         self.preferred_x = None;
-        let anchor = self.flat_byte_to_position(range.start_byte_offset);
-        let caret = self.flat_byte_to_position(range.end_byte_offset);
-        self.anchor_line = anchor.0;
-        self.anchor_col = anchor.1;
-        self.cursor_line = caret.0;
-        self.cursor_col = caret.1;
+        let model = self.model.read(cx);
+        (self.anchor_line, self.anchor_col) = flat_byte_to_position(model, range.start_byte_offset);
+        (self.cursor_line, self.cursor_col) = flat_byte_to_position(model, range.end_byte_offset);
         self.has_selection = range.start_byte_offset != range.end_byte_offset;
         self.focus.focus(window);
         self.finish_position_change(cx);
     }
 
-    /// Build an editor using the default projection for arbitrary buffer text.
+    /// Build an editor presenting `model`.
     pub fn new(model: Entity<BufferModel>, cx: &mut Context<Self>) -> Self {
-        let (lines, segs) = default_projection(&model.read(cx).text());
-        Self::from_projection(model, lines, segs, 0, EditorRenderingOptions::default(), cx)
+        Self::with_rendering(model, 0, EditorRenderingOptions::default(), cx)
     }
 
     #[cfg(test)]
@@ -286,22 +280,23 @@ impl EditorView {
         rendering: EditorRenderingOptions,
         cx: &mut Context<Self>,
     ) -> Self {
-        let mut editor = Self::new(model, cx);
-        editor.element_id = element_id;
-        editor.rendering = rendering;
-        editor
+        Self::with_rendering(model, element_id, rendering, cx)
     }
 
-    fn from_projection(
+    fn with_rendering(
         model: Entity<BufferModel>,
-        lines: Vec<String>,
-        segs: Vec<Vec<Seg>>,
         element_id: usize,
         rendering: EditorRenderingOptions,
         cx: &mut Context<Self>,
     ) -> Self {
-        let (decorations, gutter_markers, contribution_actions) =
-            project_contributions(&lines, model.read(cx).resolved_contributions());
+        let (line_count, seen_revision, (decorations, gutter_markers, contribution_actions)) = {
+            let model = model.read(cx);
+            (
+                model.line_count(),
+                model.revision(),
+                project_contributions(model, model.resolved_contributions()),
+            )
+        };
 
         let position_range = model.update(cx, |model, _| model.add_view_position(0..0));
         let model_subscription = cx.observe(&model, |this, model, cx| {
@@ -313,17 +308,14 @@ impl EditorView {
                 this.completion_surface = None;
                 this.completion_tasks.clear();
             }
-            if this.flat_doc() != model.text() {
+            if this.seen_revision != model.revision() {
+                this.text_changed(model);
                 this.marked_range_utf16 = None;
                 this.preferred_x = None;
             }
-            this.rebuild_projection(
-                &model.text(),
-                model.resolved_contributions(),
-                model.resolve_view_position(this.position_range),
-            );
+            this.refresh(model, model.resolve_view_position(this.position_range));
             if let Some(restore) = model.history_view_restore() {
-                this.apply_history_view_restore(restore.generation, &restore.state);
+                this.apply_history_view_restore(model, restore.generation, &restore.state);
             }
             this.sync_view_position(cx);
             cx.notify();
@@ -338,8 +330,9 @@ impl EditorView {
             element_id,
             rendering,
             model,
-            lines,
-            segs,
+            line_count,
+            seen_revision,
+            max_line_width: 0.,
             decorations,
             gutter_markers,
             contribution_actions,
@@ -375,50 +368,29 @@ impl EditorView {
         }
     }
 
-    fn rebuild_projection(
-        &mut self,
-        text: &str,
-        contributions: Vec<ResolvedEditorContribution>,
-        position: Option<Range<usize>>,
-    ) {
-        (self.lines, self.segs) = default_projection(text);
+    /// Record that the model text changed: shaped widths no longer apply.
+    fn text_changed(&mut self, model: &BufferModel) {
+        self.seen_revision = model.revision();
+        self.max_line_width = 0.;
+    }
+
+    /// Refresh state derived from the model and, when given, move the
+    /// selection to the model's anchored view position.
+    fn refresh(&mut self, model: &BufferModel, position: Option<Range<usize>>) {
+        self.line_count = model.line_count();
         (
             self.decorations,
             self.gutter_markers,
             self.contribution_actions,
-        ) = project_contributions(&self.lines, contributions);
+        ) = project_contributions(model, model.resolved_contributions());
         if let Some(position) = position {
-            self.restore_view_position(position);
+            self.restore_view_position(model, position);
         }
-    }
-
-    fn to_flat_byte(&self, line: usize, byte_col: usize) -> usize {
-        self.lines
-            .iter()
-            .take(line)
-            .map(|line| line.len() + 1)
-            .sum::<usize>()
-            + byte_col
-    }
-
-    fn flat_byte_to_position(&self, mut offset: usize) -> (usize, usize) {
-        for (line, text) in self.lines.iter().enumerate() {
-            if offset <= text.len() {
-                return (line, offset);
-            }
-            offset = offset.saturating_sub(text.len() + 1);
-        }
-        let line = self.lines.len().saturating_sub(1);
-        (line, self.line_end(line))
     }
 
     fn sync_view_position(&mut self, cx: &mut Context<Self>) {
-        let caret = self.to_flat_byte(self.cursor_line, self.cursor_col);
-        let anchor = if self.has_selection {
-            self.to_flat_byte(self.anchor_line, self.anchor_col)
-        } else {
-            caret
-        };
+        let state = self.history_view_state(self.model.read(cx));
+        let (anchor, caret) = (state.anchor, state.caret);
         self.selection_reversed = self.has_selection && caret < anchor;
         let range = anchor.min(caret)..anchor.max(caret);
         self.position_range = self.model.update(cx, |model, _| {
@@ -440,9 +412,9 @@ impl EditorView {
             .update(cx, |model, _| model.break_history_group());
     }
 
-    fn restore_view_position(&mut self, range: Range<usize>) {
-        let start = self.flat_byte_to_position(range.start);
-        let end = self.flat_byte_to_position(range.end);
+    fn restore_view_position(&mut self, model: &BufferModel, range: Range<usize>) {
+        let start = flat_byte_to_position(model, range.start);
+        let end = flat_byte_to_position(model, range.end);
         if self.has_selection && !range.is_empty() {
             if self.selection_reversed {
                 (self.cursor_line, self.cursor_col) = start;
@@ -458,10 +430,10 @@ impl EditorView {
         self.clamp_scroll();
     }
 
-    fn history_view_state(&self) -> HistoryViewState {
-        let caret = self.to_flat_byte(self.cursor_line, self.cursor_col);
+    fn history_view_state(&self, model: &BufferModel) -> HistoryViewState {
+        let caret = to_flat_byte(model, self.cursor_line, self.cursor_col);
         let anchor = if self.has_selection {
-            self.to_flat_byte(self.anchor_line, self.anchor_col)
+            to_flat_byte(model, self.anchor_line, self.anchor_col)
         } else {
             caret
         };
@@ -472,7 +444,12 @@ impl EditorView {
         }
     }
 
-    fn apply_history_view_restore(&mut self, generation: u64, state: &HistoryViewState) {
+    fn apply_history_view_restore(
+        &mut self,
+        model: &BufferModel,
+        generation: u64,
+        state: &HistoryViewState,
+    ) {
         if generation <= self.last_history_restore_generation {
             return;
         }
@@ -480,8 +457,8 @@ impl EditorView {
         if state.context != self.history_context {
             return;
         }
-        (self.anchor_line, self.anchor_col) = self.flat_byte_to_position(state.anchor);
-        (self.cursor_line, self.cursor_col) = self.flat_byte_to_position(state.caret);
+        (self.anchor_line, self.anchor_col) = flat_byte_to_position(model, state.anchor);
+        (self.cursor_line, self.cursor_col) = flat_byte_to_position(model, state.caret);
         self.has_selection = state.anchor != state.caret;
         self.selection_reversed = state.caret < state.anchor;
         self.reveal_caret = true;
@@ -493,54 +470,10 @@ impl EditorView {
         if self.scroll < 0. {
             self.scroll = 0.;
         }
-        let max = ((self.lines.len() as f32) * LINE_HEIGHT - self.viewport_h).max(0.);
+        let max = ((self.line_count as f32) * LINE_HEIGHT - self.viewport_h).max(0.);
         if self.scroll > max {
             self.scroll = max;
         }
-    }
-
-    /// Last valid byte column on `line` (== `lines[line].len()`), with the
-    /// empty-line case folded to 0.
-    fn line_end(&self, line: usize) -> usize {
-        self.lines
-            .get(line)
-            .map(|s| s.len() - usize::from(line + 1 < self.lines.len() && s.ends_with('\r')))
-            .unwrap_or(0)
-    }
-
-    /// Previous grapheme-cluster boundary before `col` on `line`; 0 if
-    /// already at the start. This keeps the caret out of emoji ZWJ and
-    /// modifier sequences, which must be edited as a single user-perceived
-    /// character.
-    fn prev_boundary(&self, line: usize, col: usize) -> usize {
-        let s = match self.lines.get(line) {
-            Some(s) => s,
-            None => return 0,
-        };
-        if col == 0 {
-            return 0;
-        }
-        s.grapheme_indices(true)
-            .take_while(|(start, _)| *start < col)
-            .last()
-            .map_or(0, |(start, _)| start)
-    }
-
-    /// Next grapheme-cluster boundary after `col` on `line`; line end if at
-    /// the end.
-    fn next_boundary(&self, line: usize, col: usize) -> usize {
-        let s = match self.lines.get(line) {
-            Some(s) => s,
-            None => return 0,
-        };
-        if col >= s.len() {
-            return s.len();
-        }
-        s.grapheme_indices(true)
-            .map(|(start, _)| start)
-            .find(|start| *start > col)
-            .unwrap_or(s.len())
-            .min(self.line_end(line))
     }
 
     /// After any cursor move, scroll just enough to keep the caret inside
@@ -569,7 +502,7 @@ impl EditorView {
             self.break_history_group(cx);
             self.marked_range_utf16 = None;
             self.preferred_x = None;
-            let replay = self.model.update(cx, |model, cx| {
+            let changed = self.model.update(cx, |model, cx| {
                 let changed = if command == commands::UNDO_COMMAND {
                     model.undo()
                 } else {
@@ -579,19 +512,14 @@ impl EditorView {
                 if changed {
                     cx.notify();
                 }
-                changed.then(|| {
-                    (
-                        model.text(),
-                        model.resolved_contributions(),
-                        model.resolve_view_position(self.position_range),
-                        model.history_view_restore().cloned(),
-                    )
-                })
+                changed
             });
-            if let Some((text, contributions, position, restore)) = replay {
-                self.rebuild_projection(&text, contributions, position);
-                if let Some(restore) = restore {
-                    self.apply_history_view_restore(restore.generation, &restore.state);
+            if changed {
+                let model = self.model.read(cx);
+                self.text_changed(model);
+                self.refresh(model, model.resolve_view_position(self.position_range));
+                if let Some(restore) = model.history_view_restore() {
+                    self.apply_history_view_restore(model, restore.generation, &restore.state);
                 }
                 self.sync_view_position(cx);
                 cx.notify();
@@ -607,10 +535,8 @@ impl EditorView {
             if command == commands::CUT_COMMAND && !self.model.read(cx).is_editable() {
                 return true;
             }
-            if let Some((start, end)) = self.selection_range() {
-                let text = self.flat_doc()
-                    [self.to_flat_byte(start.0, start.1)..self.to_flat_byte(end.0, end.1)]
-                    .to_owned();
+            if let Some(range) = self.selected_byte_range(cx) {
+                let text = self.model.read(cx).read(range);
                 cx.write_to_clipboard(ClipboardItem::new_string(text));
                 if command == commands::CUT_COMMAND {
                     self.replace_text_with_grouping(None, "", None, window, cx);
@@ -630,8 +556,8 @@ impl EditorView {
             self.marked_range_utf16 = None;
             self.anchor_line = 0;
             self.anchor_col = 0;
-            self.cursor_line = self.lines.len() - 1;
-            self.cursor_col = self.line_end(self.cursor_line);
+            self.cursor_line = self.line_count - 1;
+            self.cursor_col = line_end(self.model.read(cx), self.cursor_line);
             self.has_selection = self.cursor_line != 0 || self.cursor_col != 0;
             self.preferred_x = None;
             self.finish_position_change(cx);
@@ -662,33 +588,13 @@ impl EditorView {
             if self.has_selection || self.marked_range_utf16.is_some() {
                 self.replace_text_with_grouping(None, "", None, window, cx);
             } else {
-                let doc = self.flat_doc();
-                let caret = self.to_flat_byte(self.cursor_line, self.cursor_col);
-                let (start, end) = if command.ends_with("backward") {
-                    (
-                        doc.grapheme_indices(true)
-                            .map(|(i, _)| i)
-                            .take_while(|i| *i < caret)
-                            .last()
-                            .unwrap_or(caret),
-                        caret,
-                    )
-                } else {
-                    (
-                        caret,
-                        doc.grapheme_indices(true)
-                            .map(|(i, _)| i)
-                            .find(|i| *i > caret)
-                            .unwrap_or(doc.len()),
-                    )
-                };
-                if start != end {
+                let backward = command.ends_with("backward");
+                let range = self.grapheme_deletion_range(self.model.read(cx), backward);
+                if !range.is_empty() {
                     self.replace_text_with_grouping(
-                        Some(
-                            self.byte_col_to_utf16(&doc, start)..self.byte_col_to_utf16(&doc, end),
-                        ),
+                        Some(range),
                         "",
-                        Some(if command.ends_with("backward") {
+                        Some(if backward {
                             EditGroupKind::DeleteBackward
                         } else {
                             EditGroupKind::DeleteForward
@@ -710,7 +616,8 @@ impl EditorView {
             };
         self.break_history_group(cx);
         self.marked_range_utf16 = None;
-        let last = self.lines.len() - 1;
+        let model = self.model.read(cx);
+        let last = self.line_count - 1;
         let forward = matches!(
             movement,
             "right" | "down" | "word-right" | "line-end" | "page-down" | "document-end"
@@ -719,38 +626,28 @@ impl EditorView {
         let target = match movement {
             "left" if self.cursor_col > 0 => (
                 self.cursor_line,
-                self.prev_boundary(self.cursor_line, self.cursor_col),
+                prev_boundary(model, self.cursor_line, self.cursor_col),
             ),
             "left" if self.cursor_line > 0 => {
-                (self.cursor_line - 1, self.line_end(self.cursor_line - 1))
+                (self.cursor_line - 1, line_end(model, self.cursor_line - 1))
             }
             "left" => (0, 0),
-            "right" if self.cursor_col < self.line_end(self.cursor_line) => (
+            "right" if self.cursor_col < line_end(model, self.cursor_line) => (
                 self.cursor_line,
-                self.next_boundary(self.cursor_line, self.cursor_col),
+                next_boundary(model, self.cursor_line, self.cursor_col),
             ),
             "right" if self.cursor_line < last => (self.cursor_line + 1, 0),
-            "right" => (last, self.line_end(last)),
+            "right" => (last, line_end(model, last)),
             "line-start" => (self.cursor_line, 0),
-            "line-end" => (self.cursor_line, self.line_end(self.cursor_line)),
+            "line-end" => (self.cursor_line, line_end(model, self.cursor_line)),
             "document-start" => (0, 0),
-            "document-end" => (last, self.line_end(last)),
+            "document-end" => (last, line_end(model, last)),
             "word-left" | "word-right" => {
-                let doc = self.flat_doc();
-                let caret = self.to_flat_byte(self.cursor_line, self.cursor_col);
-                let offset = if forward {
-                    doc.unicode_word_indices()
-                        .map(|(i, word)| i + word.len())
-                        .find(|i| *i > caret)
-                        .unwrap_or(doc.len())
-                } else {
-                    doc.unicode_word_indices()
-                        .map(|(i, _)| i)
-                        .take_while(|i| *i < caret)
-                        .last()
-                        .unwrap_or(0)
-                };
-                self.flat_byte_to_position(offset)
+                let caret = to_flat_byte(model, self.cursor_line, self.cursor_col);
+                flat_byte_to_position(
+                    model,
+                    word_boundary(model, self.cursor_line, caret, forward),
+                )
             }
             "up" | "down" | "page-up" | "page-down" => {
                 let rows = if movement.starts_with("page-") {
@@ -763,9 +660,11 @@ impl EditorView {
                 } else {
                     self.cursor_line.saturating_sub(rows)
                 };
-                let x = self.preferred_x.unwrap_or_else(|| self.caret_x(window));
+                let x = self
+                    .preferred_x
+                    .unwrap_or_else(|| self.caret_x(model, window));
                 self.preferred_x = Some(x);
-                (line, self.column_for_x(line, x, window))
+                (line, self.column_for_x(model, line, x, window))
             }
             _ => return false,
         };
@@ -792,42 +691,53 @@ impl EditorView {
         true
     }
 
+    /// The byte range one grapheme before or after the caret. At a line edge
+    /// it covers the whole line terminator, `\n` or `\r\n`.
+    fn grapheme_deletion_range(&self, model: &BufferModel, backward: bool) -> Range<usize> {
+        let (line, col) = (self.cursor_line, self.cursor_col);
+        let caret = to_flat_byte(model, line, col);
+        if backward {
+            if col > 0 {
+                to_flat_byte(model, line, prev_boundary(model, line, col))..caret
+            } else if line > 0 {
+                to_flat_byte(model, line - 1, line_end(model, line - 1))..caret
+            } else {
+                caret..caret
+            }
+        } else if col < line_end(model, line) {
+            caret..to_flat_byte(model, line, next_boundary(model, line, col))
+        } else if line + 1 < self.line_count {
+            caret..model.line_range(line + 1).start
+        } else {
+            caret..caret
+        }
+    }
+
     pub(crate) fn has_selection(&self) -> bool {
         self.selection_range().is_some()
     }
 
-    fn caret_x(&self, window: &Window) -> Pixels {
-        let text = &self.lines[self.cursor_line];
-        let shaped = shape_editor_line(
-            window,
-            text.clone().into(),
-            px(FONT_SIZE),
-            &runs_for(text, &self.segs[self.cursor_line]),
-            None,
-        );
-        x_for_index_dir(&shaped, self.cursor_col, text)
-            + self.line_x_offset(self.cursor_line, shaped.width, self.bounds.size.width)
+    fn caret_x(&self, model: &BufferModel, window: &Window) -> Pixels {
+        let text = line_text(model, self.cursor_line);
+        let shaped =
+            shape_editor_line(window, text.clone().into(), px(FONT_SIZE), &runs_for(&text));
+        x_for_index_dir(&shaped, self.cursor_col, &text)
+            + self.line_x_offset(&text, shaped.width, self.bounds.size.width)
             + px(self.scroll_x)
     }
 
-    fn column_for_x(&self, line: usize, x: Pixels, window: &Window) -> usize {
-        let text = &self.lines[line];
-        let shaped = shape_editor_line(
-            window,
-            text.clone().into(),
-            px(FONT_SIZE),
-            &runs_for(text, &self.segs[line]),
-            None,
-        );
+    fn column_for_x(&self, model: &BufferModel, line: usize, x: Pixels, window: &Window) -> usize {
+        let text = line_text(model, line);
+        let shaped =
+            shape_editor_line(window, text.clone().into(), px(FONT_SIZE), &runs_for(&text));
         let offset =
-            self.line_x_offset(line, shaped.width, self.bounds.size.width) + px(self.scroll_x);
+            self.line_x_offset(&text, shaped.width, self.bounds.size.width) + px(self.scroll_x);
         text.grapheme_indices(true)
             .map(|(i, _)| i)
-            .filter(|i| *i <= self.line_end(line))
-            .chain(std::iter::once(self.line_end(line)))
+            .chain(std::iter::once(text.len()))
             .min_by(|a, b| {
-                f32::from((x_for_index_dir(&shaped, *a, text) + offset - x).abs()).total_cmp(
-                    &f32::from((x_for_index_dir(&shaped, *b, text) + offset - x).abs()),
+                f32::from((x_for_index_dir(&shaped, *a, &text) + offset - x).abs()).total_cmp(
+                    &f32::from((x_for_index_dir(&shaped, *b, &text) + offset - x).abs()),
                 )
             })
             .unwrap_or(0)
@@ -844,7 +754,7 @@ impl EditorView {
         self.break_history_group(cx);
         self.drag_anchor = None;
         self.marked_range_utf16 = None;
-        let (line, col) = self.hit_test(ev.position, window);
+        let (line, col) = self.hit_test(self.model.read(cx), ev.position, window);
         let gutter = ev.position.x <= self.bounds.origin.x + px(14.);
         if let Some(action) = self.contribution_actions.iter().rev().find(|action| {
             action.line == line
@@ -879,17 +789,18 @@ impl EditorView {
         });
         self.preferred_x = None;
         if ev.click_count >= 2 && !ev.modifiers.shift {
+            let model = self.model.read(cx);
             let (start, end) = if ev.click_count >= 3 {
                 (
                     (line, 0),
-                    if line + 1 < self.lines.len() {
+                    if line + 1 < self.line_count {
                         (line + 1, 0)
                     } else {
-                        (line, self.line_end(line))
+                        (line, line_end(model, line))
                     },
                 )
             } else {
-                let text = &self.lines[line];
+                let text = line_text(model, line);
                 let (start, segment) = text
                     .split_word_bound_indices()
                     .find(|(start, segment)| col < start + segment.len())
@@ -939,7 +850,7 @@ impl EditorView {
         let Some(anchor) = self.drag_anchor else {
             return;
         };
-        let (line, col) = self.hit_test(ev.position, window);
+        let (line, col) = self.hit_test(self.model.read(cx), ev.position, window);
         (self.anchor_line, self.anchor_col) = anchor;
         self.cursor_line = line;
         self.cursor_col = col;
@@ -955,10 +866,11 @@ impl EditorView {
     /// The caret, selection, IME preedit, decoration, and hit-test all add
     /// this offset to their x computations so they stay consistent with the
     /// right-aligned text.
-    fn line_x_offset(&self, line: usize, shaped_w: Pixels, pane_w: Pixels) -> Pixels {
-        (match self.lines.get(line) {
-            Some(s) if is_rtl_line(s) => (pane_w - shaped_w).max(px(0.)),
-            _ => px(0.),
+    fn line_x_offset(&self, text: &str, shaped_w: Pixels, pane_w: Pixels) -> Pixels {
+        (if is_rtl_line(text) {
+            (pane_w - shaped_w).max(px(0.))
+        } else {
+            px(0.)
         }) - px(self.scroll_x)
     }
 
@@ -967,39 +879,31 @@ impl EditorView {
     /// not glyph starts: a single emoji glyph may cover multiple UTF-8 code
     /// points, and its start alone is not enough to place a caret on either
     /// visible edge.
-    fn hit_test(&self, p: Point<Pixels>, window: &Window) -> (usize, usize) {
+    fn hit_test(&self, model: &BufferModel, p: Point<Pixels>, window: &Window) -> (usize, usize) {
         let origin = self.bounds.origin;
         let line = ((f32::from(p.y - origin.y) + self.scroll) / LINE_HEIGHT).floor() as usize;
-        let line = line.min(self.lines.len().saturating_sub(1));
-        let col = if self.lines.get(line).map(|s| s.is_empty()).unwrap_or(true) {
-            0
-        } else {
-            let runs = runs_for(&self.lines[line], &self.segs[line]);
-            let shaped = shape_editor_line(
-                window,
-                SharedString::from(self.lines[line].clone()),
-                px(FONT_SIZE),
-                &runs,
-                None,
-            );
-            let x_off = self.line_x_offset(line, shaped.width, self.bounds.size.width);
-            let x = p.x - origin.x - x_off;
-            let text = &self.lines[line];
-            let mut boundaries: Vec<usize> = text
-                .grapheme_indices(true)
-                .map(|(start, _)| start)
-                .collect();
-            boundaries.retain(|column| *column <= self.line_end(line));
-            boundaries.push(self.line_end(line));
-            boundaries
-                .into_iter()
-                .min_by(|a, b| {
-                    let a_distance = f32::from((x_for_index_dir(&shaped, *a, text) - x).abs());
-                    let b_distance = f32::from((x_for_index_dir(&shaped, *b, text) - x).abs());
-                    a_distance.total_cmp(&b_distance)
-                })
-                .unwrap_or(0)
-        };
+        let line = line.min(self.line_count - 1);
+        let text = line_text(model, line);
+        if text.is_empty() {
+            return (line, 0);
+        }
+        let shaped = shape_editor_line(
+            window,
+            SharedString::from(text.clone()),
+            px(FONT_SIZE),
+            &runs_for(&text),
+        );
+        let x = p.x - origin.x - self.line_x_offset(&text, shaped.width, self.bounds.size.width);
+        let col = text
+            .grapheme_indices(true)
+            .map(|(start, _)| start)
+            .chain(std::iter::once(text.len()))
+            .min_by(|a, b| {
+                let a_distance = f32::from((x_for_index_dir(&shaped, *a, &text) - x).abs());
+                let b_distance = f32::from((x_for_index_dir(&shaped, *b, &text) - x).abs());
+                a_distance.total_cmp(&b_distance)
+            })
+            .unwrap_or(0);
         (line, col)
     }
 
@@ -1016,74 +920,11 @@ impl EditorView {
         if a <= c { Some((a, c)) } else { Some((c, a)) }
     }
 
-    // ── Flat-UTF16 document model ───────────────────────────────────────
-    //
-    // The IME API speaks in flat UTF-16 offsets into the whole document
-    // (lines joined by "\n"). These helpers convert between the (line,
-    // byte_col) caret space and the flat UTF-16 offset space, and perform
-    // text splices that rebuild the `lines`/`segs` storage. Editing resets
-    // segments to a single default-color segment per line.
-
-    /// Full document as a single String, lines joined by "\n".
-    fn flat_doc(&self) -> String {
-        self.lines.join("\n")
-    }
-
-    /// Convert a (line, byte_col) position to a flat UTF-16 offset.
-    fn to_flat_utf16(&self, line: usize, byte_col: usize) -> usize {
-        let mut off = 0usize;
-        for (i, l) in self.lines.iter().enumerate() {
-            if i == line {
-                return off + self.byte_col_to_utf16(l, byte_col);
-            }
-            off += l.chars().map(char::len_utf16).sum::<usize>() + 1; // +1 for "\n"
-        }
-        off
-    }
-
-    /// Convert a flat UTF-16 offset to a (line, byte_col) position.
-    fn flat_utf16_to_position(&self, mut off: usize) -> (usize, usize) {
-        for (i, l) in self.lines.iter().enumerate() {
-            let line_utf16_len = l.chars().map(char::len_utf16).sum::<usize>();
-            if off <= line_utf16_len {
-                return (i, self.utf16_to_byte_col(l, off));
-            }
-            off -= line_utf16_len + 1;
-        }
-        let last_line = self.lines.len().saturating_sub(1);
-        (last_line, self.line_end(last_line))
-    }
-
-    /// Convert a UTF-16 offset within `s` to a UTF-8 byte offset.
-    fn utf16_to_byte_col(&self, s: &str, utf16_off: usize) -> usize {
-        let mut utf16_count = 0usize;
-        for (byte_idx, ch) in s.char_indices() {
-            if utf16_count >= utf16_off {
-                return byte_idx;
-            }
-            utf16_count += ch.len_utf16();
-        }
-        s.len()
-    }
-
-    /// Convert a UTF-8 byte offset within `s` to a UTF-16 offset.
-    fn byte_col_to_utf16(&self, s: &str, byte_off: usize) -> usize {
-        let mut utf16_count = 0usize;
-        for (byte_idx, ch) in s.char_indices() {
-            if byte_idx >= byte_off {
-                break;
-            }
-            utf16_count += ch.len_utf16();
-        }
-        utf16_count
-    }
-
-    /// Commit a replacement to the authoritative model. Its notification
-    /// refreshes the derived line/segment projection.
+    /// Commit a replacement to the authoritative model and refresh derived
+    /// state before resolving the resulting caret.
     fn splice(
         &mut self,
-        byte_start: usize,
-        byte_end: usize,
+        range: Range<usize>,
         text: &str,
         grouping: Option<EditGroupKind>,
         view: HistoryViewChange,
@@ -1094,7 +935,7 @@ impl EditorView {
         model.update(cx, |model, cx| {
             let changed = if let Some(kind) = grouping {
                 model.replace_grouped_from_view(
-                    byte_start..byte_end,
+                    range,
                     text,
                     EditGrouping {
                         context: self.history_context,
@@ -1103,7 +944,7 @@ impl EditorView {
                     view,
                 )
             } else {
-                model.replace_from_view(byte_start..byte_end, text, view)
+                model.replace_from_view(range, text, view)
             }
             .unwrap_or(false);
             if changed {
@@ -1111,77 +952,191 @@ impl EditorView {
             }
         });
         let model = model.read(cx);
-        self.rebuild_projection(&model.text(), model.resolved_contributions(), None);
+        self.text_changed(model);
+        self.refresh(model, None);
     }
 
-    /// Determine the byte range to replace given an optional UTF-16 range.
-    /// If `range` is `None`, replace the marked range if there is one,
-    /// otherwise the current selection, otherwise the caret (zero-length).
-    /// If `range` is `Some`, convert it from UTF-16 to byte offsets.
-    fn resolve_replacement_range(&self, range: Option<Range<usize>>) -> (usize, usize) {
-        let doc = self.flat_doc();
-        match range {
-            Some(r) => {
-                let start = self.utf16_to_byte_col(&doc, r.start);
-                let end = self.utf16_to_byte_col(&doc, r.end);
-                (start, end)
-            }
-            None => {
-                if let Some(mr) = &self.marked_range_utf16 {
-                    let start = self.utf16_to_byte_col(&doc, mr.start);
-                    let end = self.utf16_to_byte_col(&doc, mr.end);
-                    (start, end)
-                } else if self.has_selection {
-                    let caret = self.to_flat_utf16(self.cursor_line, self.cursor_col);
-                    let anchor = self.to_flat_utf16(self.anchor_line, self.anchor_col);
-                    let (s, e) = if caret <= anchor {
-                        (caret, anchor)
-                    } else {
-                        (anchor, caret)
-                    };
-                    let start = self.utf16_to_byte_col(&doc, s);
-                    let end = self.utf16_to_byte_col(&doc, e);
-                    (start, end)
-                } else {
-                    let caret = self.to_flat_utf16(self.cursor_line, self.cursor_col);
-                    let byte = self.utf16_to_byte_col(&doc, caret);
-                    (byte, byte)
-                }
-            }
+    /// The byte range replaced by input that names no range: the marked text
+    /// if there is one, otherwise the selection, otherwise the caret.
+    fn implicit_replacement_range(&self, model: &BufferModel) -> Range<usize> {
+        if let Some(marked) = &self.marked_range_utf16 {
+            return model.offset_of_utf16(marked.start)..model.offset_of_utf16(marked.end);
         }
+        let state = self.history_view_state(model);
+        state.anchor.min(state.caret)..state.anchor.max(state.caret)
+    }
+
+    /// Replace a byte range, or the implicit replacement range, with `text`,
+    /// leaving the caret after it.
+    fn replace_text_with_grouping(
+        &mut self,
+        range: Option<Range<usize>>,
+        text: &str,
+        grouping: Option<EditGroupKind>,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.model.read(cx).is_editable() {
+            return;
+        }
+        self.preferred_x = None;
+        let text: String = text.replace("\r\n", "\n").replace('\r', "\n");
+        let model = self.model.read(cx);
+        let range = range.unwrap_or_else(|| self.implicit_replacement_range(model));
+        let before = self.history_view_state(model);
+        let after_offset = range.start + text.len();
+        let after = HistoryViewState {
+            context: self.history_context,
+            anchor: after_offset,
+            caret: after_offset,
+        };
+        self.splice(
+            range,
+            &text,
+            grouping,
+            HistoryViewChange { before, after },
+            cx,
+        );
+        self.marked_range_utf16 = None;
+        (self.cursor_line, self.cursor_col) =
+            flat_byte_to_position(self.model.read(cx), after_offset);
+        self.has_selection = false;
+        self.finish_position_change(cx);
+    }
+
+    /// Convert an optional platform UTF-16 range to bytes.
+    fn bytes_for_utf16(&self, range: Option<Range<usize>>, cx: &App) -> Option<Range<usize>> {
+        let model = self.model.read(cx);
+        range.map(|range| model.offset_of_utf16(range.start)..model.offset_of_utf16(range.end))
     }
 }
 
+/// Byte range of `line`'s content: the line without its terminator, so a
+/// `\r` before `\n` is excluded. The caret never sits inside a terminator.
+fn content_range(model: &BufferModel, line: usize) -> Range<usize> {
+    let range = model.line_range(line);
+    let crlf = line + 1 < model.line_count()
+        && range.end > range.start
+        && model.is_char_boundary(range.end - 1)
+        && model.read(range.end - 1..range.end) == "\r";
+    range.start..range.end - usize::from(crlf)
+}
+
+/// Text of `line`'s content.
+fn line_text(model: &BufferModel, line: usize) -> String {
+    model.read(content_range(model, line))
+}
+
+/// Last caret column on `line`.
+fn line_end(model: &BufferModel, line: usize) -> usize {
+    content_range(model, line).len()
+}
+
+fn to_flat_byte(model: &BufferModel, line: usize, byte_col: usize) -> usize {
+    model.line_range(line).start + byte_col
+}
+
+/// The (line, byte_col) caret for a byte offset, clamped to the text and kept
+/// out of line terminators.
+fn flat_byte_to_position(model: &BufferModel, offset: usize) -> (usize, usize) {
+    let offset = offset.min(model.len());
+    let line = model.line_of_offset(offset);
+    let content = content_range(model, line);
+    (line, (offset - content.start).min(content.len()))
+}
+
+fn to_flat_utf16(model: &BufferModel, line: usize, byte_col: usize) -> usize {
+    model.utf16_of_offset(to_flat_byte(model, line, byte_col))
+}
+
+fn flat_utf16_to_position(model: &BufferModel, offset: usize) -> (usize, usize) {
+    flat_byte_to_position(model, model.offset_of_utf16(offset))
+}
+
+/// Previous grapheme-cluster boundary before `col` on `line`; 0 if already at
+/// the start. This keeps the caret out of emoji ZWJ and modifier sequences,
+/// which must be edited as a single user-perceived character.
+fn prev_boundary(model: &BufferModel, line: usize, col: usize) -> usize {
+    if col == 0 {
+        return 0;
+    }
+    line_text(model, line)
+        .grapheme_indices(true)
+        .take_while(|(start, _)| *start < col)
+        .last()
+        .map_or(0, |(start, _)| start)
+}
+
+/// Next grapheme-cluster boundary after `col` on `line`; line end if at the end.
+fn next_boundary(model: &BufferModel, line: usize, col: usize) -> usize {
+    let text = line_text(model, line);
+    text.grapheme_indices(true)
+        .map(|(start, _)| start)
+        .find(|start| *start > col)
+        .unwrap_or(text.len())
+}
+
+/// The nearest Unicode word end after `caret`, or word start before it. Words
+/// never span lines, so the scan reads lines outward from the caret's line.
+fn word_boundary(model: &BufferModel, line: usize, caret: usize, forward: bool) -> usize {
+    let words = |line: usize| {
+        let range = model.line_range(line);
+        let text = model.read(range.clone());
+        text.unicode_word_indices()
+            .map(|(i, word)| (range.start + i, range.start + i + word.len()))
+            .collect::<Vec<_>>()
+    };
+    if forward {
+        (line..model.line_count())
+            .find_map(|line| {
+                words(line)
+                    .into_iter()
+                    .map(|(_, end)| end)
+                    .find(|end| *end > caret)
+            })
+            .unwrap_or(model.len())
+    } else {
+        (0..=line)
+            .rev()
+            .find_map(|line| {
+                words(line)
+                    .into_iter()
+                    .map(|(start, _)| start)
+                    .take_while(|start| *start < caret)
+                    .last()
+            })
+            .unwrap_or(0)
+    }
+}
+
+/// Convert a UTF-16 offset within `s` to a UTF-8 byte offset.
+fn utf16_to_byte_col(s: &str, utf16_off: usize) -> usize {
+    let mut utf16_count = 0usize;
+    for (byte_idx, ch) in s.char_indices() {
+        if utf16_count >= utf16_off {
+            return byte_idx;
+        }
+        utf16_count += ch.len_utf16();
+    }
+    s.len()
+}
+
 fn project_contributions(
-    lines: &[String],
+    model: &BufferModel,
     contributions: Vec<ResolvedEditorContribution>,
 ) -> (
     Vec<RenderedDecoration>,
     Vec<RenderedGutterMarker>,
     Vec<RenderedContributionAction>,
 ) {
-    let mut line_starts = Vec::with_capacity(lines.len());
-    let mut next_start = 0;
-    for line in lines {
-        line_starts.push(next_start);
-        next_start += line.len() + 1;
-    }
-
-    let line_at = |offset| {
-        line_starts
-            .partition_point(|&start| start <= offset)
-            .saturating_sub(1)
-            .min(lines.len().saturating_sub(1))
-    };
-
     let mut decorations = Vec::new();
     let mut gutter_markers = Vec::new();
     let mut actions = Vec::new();
     for contribution in contributions {
         let start = contribution.range.start_byte_offset;
         let end = contribution.range.end_byte_offset;
-        let first_line = line_at(start);
-        let last_line = line_at(end);
+        let first_line = model.line_of_offset(start);
+        let last_line = model.line_of_offset(end);
 
         if let Some(token) = contribution.gutter {
             gutter_markers.push(RenderedGutterMarker {
@@ -1195,8 +1150,10 @@ fn project_contributions(
         }
 
         for line in first_line..=last_line {
-            let line_start = line_starts[line];
-            let line_end = line_start + lines[line].len();
+            let Range {
+                start: line_start,
+                end: line_end,
+            } = model.line_range(line);
             let segment_start = start.max(line_start);
             let segment_end = end.min(line_end);
 
@@ -1247,66 +1204,6 @@ fn gutter_color(token: GutterToken) -> u32 {
     }
 }
 
-fn default_projection(text: &str) -> (Vec<String>, Vec<Vec<Seg>>) {
-    let lines: Vec<String> = text.split('\n').map(String::from).collect();
-    let segs = lines
-        .iter()
-        .map(|line| {
-            vec![Seg {
-                start: 0,
-                end: line.len(),
-                color: DEFAULT_COLOR,
-                bold: false,
-                italic: false,
-            }]
-        })
-        .collect();
-    (lines, segs)
-}
-
-impl EditorView {
-    fn replace_text_with_grouping(
-        &mut self,
-        range: Option<Range<usize>>,
-        text: &str,
-        grouping: Option<EditGroupKind>,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if !self.model.read(cx).is_editable() {
-            return;
-        }
-        self.preferred_x = None;
-        let text: String = text.replace("\r\n", "\n").replace('\r', "\n");
-        let (byte_start, byte_end) = self.resolve_replacement_range(range);
-        let before = self.history_view_state();
-        let after_offset = byte_start + text.len();
-        let after = HistoryViewState {
-            context: self.history_context,
-            anchor: after_offset,
-            caret: after_offset,
-        };
-        self.splice(
-            byte_start,
-            byte_end,
-            &text,
-            grouping,
-            HistoryViewChange { before, after },
-            cx,
-        );
-        self.marked_range_utf16 = None;
-
-        let doc = self.flat_doc();
-        let insert_end_byte = byte_start + text.len();
-        let insert_end_utf16 = self.byte_col_to_utf16(&doc, insert_end_byte.min(doc.len()));
-        let (line, col) = self.flat_utf16_to_position(insert_end_utf16);
-        self.cursor_line = line;
-        self.cursor_col = col;
-        self.has_selection = false;
-        self.finish_position_change(cx);
-    }
-}
-
 impl Focusable for EditorView {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus.clone()
@@ -1316,23 +1213,23 @@ impl Focusable for EditorView {
 impl EventEmitter<EditorContributionAction> for EditorView {}
 
 impl EntityInputHandler for EditorView {
-    /// Return the substring of the flat document at the given UTF-16 range.
-    /// Report scalar-aligned offsets when a request splits a UTF-16 surrogate pair.
+    /// Return the text at the given document-wide UTF-16 range. Report
+    /// scalar-aligned offsets when a request splits a UTF-16 surrogate pair.
     fn text_for_range(
         &mut self,
         range: Range<usize>,
         adjusted: &mut Option<Range<usize>>,
         _window: &mut Window,
-        _cx: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) -> Option<String> {
-        let doc = self.flat_doc();
-        let start = self.utf16_to_byte_col(&doc, range.start);
-        let end = self.utf16_to_byte_col(&doc, range.end);
-        if start > doc.len() || end > doc.len() || start > end {
+        let model = self.model.read(cx);
+        let start = model.offset_of_utf16(range.start);
+        let end = model.offset_of_utf16(range.end);
+        if start > end {
             return None;
         }
-        *adjusted = Some(self.byte_col_to_utf16(&doc, start)..self.byte_col_to_utf16(&doc, end));
-        Some(doc[start..end].to_string())
+        *adjusted = Some(model.utf16_of_offset(start)..model.utf16_of_offset(end));
+        Some(model.read(start..end))
     }
 
     /// Return the current selection as a `UTF16Selection`. When there is no
@@ -1343,11 +1240,12 @@ impl EntityInputHandler for EditorView {
         &mut self,
         _ignore_disabled_input: bool,
         _window: &mut Window,
-        _cx: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) -> Option<UTF16Selection> {
-        let caret = self.to_flat_utf16(self.cursor_line, self.cursor_col);
+        let model = self.model.read(cx);
+        let caret = to_flat_utf16(model, self.cursor_line, self.cursor_col);
         if self.has_selection {
-            let anchor = self.to_flat_utf16(self.anchor_line, self.anchor_col);
+            let anchor = to_flat_utf16(model, self.anchor_line, self.anchor_col);
             let (start, end, reversed) = if anchor <= caret {
                 (anchor, caret, false)
             } else {
@@ -1390,7 +1288,7 @@ impl EntityInputHandler for EditorView {
         &mut self,
         range: Option<Range<usize>>,
         text: &str,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let grouping = if self.marked_range_utf16.is_some() {
@@ -1398,7 +1296,8 @@ impl EntityInputHandler for EditorView {
         } else {
             EditGroupKind::Typing
         };
-        self.replace_text_with_grouping(range, text, Some(grouping), _window, cx);
+        let range = self.bytes_for_utf16(range, cx);
+        self.replace_text_with_grouping(range, text, Some(grouping), window, cx);
     }
 
     /// Replace text at the given range (or current selection / marked range
@@ -1419,27 +1318,22 @@ impl EntityInputHandler for EditorView {
             return;
         }
         self.preferred_x = None;
-        let (byte_start, byte_end) = self.resolve_replacement_range(range);
-
-        // Compute the UTF-16 offset where the marked text will start.
-        let doc = self.flat_doc();
-        let marked_start_utf16 = self.byte_col_to_utf16(&doc, byte_start);
-
+        let range = self.bytes_for_utf16(range, cx);
+        let model = self.model.read(cx);
+        let range = range.unwrap_or_else(|| self.implicit_replacement_range(model));
+        let marked_start_utf16 = model.utf16_of_offset(range.start);
         let marked_utf16_len: usize = new_text.chars().map(char::len_utf16).sum();
-        let (sel_start_rel, sel_end_rel) = match new_selected_range.clone() {
-            Some(r) => (r.start, r.end),
-            None => (marked_utf16_len, marked_utf16_len),
-        };
-        let anchor = byte_start + self.utf16_to_byte_col(new_text, sel_start_rel);
-        let caret = byte_start + self.utf16_to_byte_col(new_text, sel_end_rel);
+        let selected = new_selected_range.unwrap_or(marked_utf16_len..marked_utf16_len);
+        let anchor = range.start + utf16_to_byte_col(new_text, selected.start);
+        let caret = range.start + utf16_to_byte_col(new_text, selected.end);
+        let before = self.history_view_state(model);
 
         self.splice(
-            byte_start,
-            byte_end,
+            range,
             new_text,
             Some(EditGroupKind::Composition),
             HistoryViewChange {
-                before: self.history_view_state(),
+                before,
                 after: HistoryViewState {
                     context: self.history_context,
                     anchor,
@@ -1449,19 +1343,11 @@ impl EntityInputHandler for EditorView {
             cx,
         );
 
-        // Marked range = [marked_start, marked_start + utf16_len(new_text)).
         self.marked_range_utf16 = Some(marked_start_utf16..marked_start_utf16 + marked_utf16_len);
-
-        // Caret + anchor from new_selected_range (relative to marked start).
-        let anchor_utf16 = marked_start_utf16 + sel_start_rel.min(marked_utf16_len);
-        let caret_utf16 = marked_start_utf16 + sel_end_rel.min(marked_utf16_len);
-        let (al, ac) = self.flat_utf16_to_position(anchor_utf16);
-        let (cl, cc) = self.flat_utf16_to_position(caret_utf16);
-        self.anchor_line = al;
-        self.anchor_col = ac;
-        self.cursor_line = cl;
-        self.cursor_col = cc;
-        self.has_selection = anchor_utf16 != caret_utf16;
+        let model = self.model.read(cx);
+        (self.anchor_line, self.anchor_col) = flat_byte_to_position(model, anchor);
+        (self.cursor_line, self.cursor_col) = flat_byte_to_position(model, caret);
+        self.has_selection = anchor != caret;
 
         self.finish_position_change(cx);
     }
@@ -1476,12 +1362,13 @@ impl EntityInputHandler for EditorView {
         range_utf16: Range<usize>,
         element_bounds: Bounds<Pixels>,
         window: &mut Window,
-        _cx: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
-        let (start_line, start_col) = self.flat_utf16_to_position(range_utf16.start);
-        let (end_line, end_col) = self.flat_utf16_to_position(range_utf16.end);
+        let model = self.model.read(cx);
+        let (start_line, start_col) = flat_utf16_to_position(model, range_utf16.start);
+        let (end_line, end_col) = flat_utf16_to_position(model, range_utf16.end);
         let line = start_line;
-        let line_str = self.lines.get(line)?;
+        let line_str = line_text(model, line);
         let top = element_bounds.origin.y + px(line as f32 * LINE_HEIGHT) - px(self.scroll);
 
         if line_str.is_empty() {
@@ -1491,17 +1378,15 @@ impl EntityInputHandler for EditorView {
             });
         }
 
-        let runs = runs_for(line_str, &self.segs[line]);
         let shaped = shape_editor_line(
             window,
             SharedString::from(line_str.clone()),
             px(FONT_SIZE),
-            &runs,
-            None,
+            &runs_for(&line_str),
         );
-        let x0 = x_for_index_dir(&shaped, start_col, line_str);
+        let x0 = x_for_index_dir(&shaped, start_col, &line_str);
         let x1 = if start_line == end_line {
-            x_for_index_dir(&shaped, end_col, line_str)
+            x_for_index_dir(&shaped, end_col, &line_str)
         } else {
             element_bounds.size.width
         };
@@ -1510,7 +1395,7 @@ impl EntityInputHandler for EditorView {
         } else {
             (x0, (x1 - x0).max(px(1.)))
         };
-        let x_off = self.line_x_offset(line, shaped.width, element_bounds.size.width);
+        let x_off = self.line_x_offset(&line_str, shaped.width, element_bounds.size.width);
         Some(Bounds {
             origin: point(element_bounds.origin.x + x_off + origin_x, top),
             size: size(width, px(LINE_HEIGHT)),
@@ -1522,10 +1407,11 @@ impl EntityInputHandler for EditorView {
         &mut self,
         point: Point<Pixels>,
         window: &mut Window,
-        _cx: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) -> Option<usize> {
-        let (line, col) = self.hit_test(point, window);
-        Some(self.to_flat_utf16(line, col))
+        let model = self.model.read(cx);
+        let (line, col) = self.hit_test(model, point, window);
+        Some(to_flat_utf16(model, line, col))
     }
 }
 
@@ -1545,7 +1431,7 @@ impl Render for EditorView {
         let completion = self
             .completion_surface
             .as_ref()
-            .map(|surface| surface.render(self.completion_anchor(window)));
+            .map(|surface| surface.render(self.completion_anchor(self.model.read(cx), window)));
         div()
             .id(("editor", self.element_id))
             .size_full()
@@ -1570,32 +1456,15 @@ impl Render for EditorView {
             // content up, i.e. the viewport descends — scroll increases.
             // ScrollWheelEvent delta is positive for swipes upward (toward
             // content top), so we invert it here.
-            .on_scroll_wheel(cx.listener(|this, ev: &ScrollWheelEvent, window, cx| {
+            .on_scroll_wheel(cx.listener(|this, ev: &ScrollWheelEvent, _, cx| {
                 let (dx, dy) = match ev.delta {
                     ScrollDelta::Pixels(p) => (f32::from(p.x), f32::from(p.y)),
                     ScrollDelta::Lines(p) => (p.x * LINE_HEIGHT, p.y * LINE_HEIGHT),
                 };
                 this.scroll -= dy;
-                let max_width = this
-                    .lines
-                    .iter()
-                    .zip(&this.segs)
-                    .map(|(line, segs)| {
-                        f32::from(
-                            shape_editor_line(
-                                window,
-                                line.clone().into(),
-                                px(FONT_SIZE),
-                                &runs_for(line, segs),
-                                None,
-                            )
-                            .width,
-                        )
-                    })
-                    .fold(0., f32::max);
                 this.scroll_x = (this.scroll_x - dx).clamp(
                     0.,
-                    (max_width + 2. - f32::from(this.bounds.size.width)).max(0.),
+                    (this.max_line_width + 2. - f32::from(this.bounds.size.width)).max(0.),
                 );
                 this.reveal_caret = false;
                 this.clamp_scroll();
@@ -1614,25 +1483,20 @@ impl EditorView {
         cx: &mut Context<Self>,
     ) -> Vec<(CompletionProviderRegistration, CompletionRequest)> {
         self.dismiss_completion();
-        let cursor_byte_offset = self.to_flat_byte(self.cursor_line, self.cursor_col);
-        let Some((text, revision)) = self.model.read_with(cx, |model, _| {
-            model
-                .is_editable()
-                .then(|| (model.text(), model.revision()))
-        }) else {
-            return Vec::new();
-        };
-        if cursor_byte_offset > text.len() || !text.is_char_boundary(cursor_byte_offset) {
+        let model = self.model.read(cx);
+        if !model.is_editable() {
             return Vec::new();
         }
-        let mut prefix_start = cursor_byte_offset;
-        while prefix_start > 0 {
-            let byte = text.as_bytes()[prefix_start - 1];
-            if !byte.is_ascii_alphanumeric() && byte != b'_' {
-                break;
-            }
-            prefix_start -= 1;
-        }
+        let revision = model.revision();
+        let line_start = model.line_range(self.cursor_line).start;
+        let cursor_byte_offset = line_start + self.cursor_col;
+        let line_prefix = model.read(line_start..cursor_byte_offset);
+        let prefix_len = line_prefix
+            .bytes()
+            .rev()
+            .take_while(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+            .count();
+        let prefix_start = cursor_byte_offset - prefix_len;
         let generation = self.next_completion_generation;
         self.next_completion_generation = self
             .next_completion_generation
@@ -1643,7 +1507,7 @@ impl EditorView {
             revision,
             cursor_byte_offset,
             prefix_start..cursor_byte_offset,
-            text[prefix_start..cursor_byte_offset].into(),
+            line_prefix[line_prefix.len() - prefix_len..].into(),
             generation,
             providers,
         );
@@ -1716,21 +1580,20 @@ impl EditorView {
         self.completion_tasks.clear();
     }
 
-    fn completion_anchor(&self, window: &mut Window) -> Point<Pixels> {
-        let line = self.cursor_line.min(self.lines.len().saturating_sub(1));
-        let text = self.lines.get(line).map(String::as_str).unwrap_or("");
+    fn completion_anchor(&self, model: &BufferModel, window: &mut Window) -> Point<Pixels> {
+        let line = self.cursor_line;
+        let text = line_text(model, line);
         let x = if text.is_empty() {
             px(0.)
         } else {
             let shaped = shape_editor_line(
                 window,
-                SharedString::from(text.to_owned()),
+                SharedString::from(text.clone()),
                 px(FONT_SIZE),
-                &runs_for(text, &self.segs[line]),
-                None,
+                &runs_for(&text),
             );
-            self.line_x_offset(line, shaped.width, self.bounds.size.width)
-                + x_for_index_dir(&shaped, self.cursor_col, text)
+            self.line_x_offset(&text, shaped.width, self.bounds.size.width)
+                + x_for_index_dir(&shaped, self.cursor_col, &text)
         };
         let y = px((line + 1) as f32 * LINE_HEIGHT - self.scroll);
         point(
@@ -1869,13 +1732,13 @@ impl Element for EditorElement {
         window: &mut Window,
         cx: &mut App,
     ) {
-        self.entity.update(cx, |view, _| {
+        self.entity.update(cx, |view, cx| {
             let resized = view.bounds.size != bounds.size;
             view.bounds = bounds;
             view.viewport_h = f32::from(bounds.size.height);
             if view.reveal_caret || (resized && !view.preserve_scroll_on_layout) {
                 view.ensure_cursor_visible(view.viewport_h);
-                let x = f32::from(view.caret_x(window));
+                let x = f32::from(view.caret_x(view.model.read(cx), window));
                 let width = f32::from(bounds.size.width);
                 if x < view.scroll_x {
                     view.scroll_x = x.max(0.);
@@ -1903,13 +1766,11 @@ impl Element for EditorElement {
             }
         });
         let scroll_x = self.entity.read(cx).scroll_x;
-        // Read the view state, compute the visible range, then clone just
-        // the visible lines + segs out of the borrow before painting:
-        // `ShapedLine::paint` takes `cx: &mut App`, but `entity.read(cx)`
-        // borrows `cx: &App` for as long as the borrow lives. Cloning only
-        // the on-screen rows keeps the per-frame cost to ~viewport-height
-        // small String copies. We also pull the caret + focus handle so we
-        // can paint the caret after the lines without re-borrowing the view.
+        // Read the view state, compute the visible range, then read just the
+        // visible lines out of the model before painting: `ShapedLine::paint`
+        // takes `cx: &mut App`, but `entity.read(cx)` borrows `cx: &App` for
+        // as long as the borrow lives. We also pull the caret + focus handle
+        // so we can paint the caret after the lines without re-borrowing.
         let (
             scroll,
             scroll_max,
@@ -1923,13 +1784,12 @@ impl Element for EditorElement {
             entity,
         ): EditorPaintState = {
             let view = self.entity.read(cx);
-            let max = (view.lines.len() as f32) * LINE_HEIGHT;
+            let model = view.model.read(cx);
+            let max = (view.line_count as f32) * LINE_HEIGHT;
             let first = (view.scroll / LINE_HEIGHT).floor() as usize;
             let visible_rows = (f32::from(bounds.size.height) / LINE_HEIGHT).ceil() as usize + 1;
-            let last = (first + visible_rows).min(view.lines.len());
-            let vis = (first..last)
-                .map(|ix| (ix, view.lines[ix].clone(), view.segs[ix].clone()))
-                .collect();
+            let last = (first + visible_rows).min(view.line_count);
+            let vis = (first..last).map(|ix| (ix, line_text(model, ix))).collect();
             // Only paint the caret when it's on a visible line; otherwise it
             // is clipped anyway, so skip the shaping cost.
             let caret = if view.cursor_line >= first && view.cursor_line < last {
@@ -1938,11 +1798,10 @@ impl Element for EditorElement {
                 None
             };
             // Convert marked UTF-16 range to (line, byte_col) start/end for
-            // underline painting. Done inside the borrow since flat_utf16_to_position
-            // needs &self.
+            // underline painting.
             let marked = view.marked_range_utf16.as_ref().map(|mr| {
-                let s = view.flat_utf16_to_position(mr.start);
-                let e = view.flat_utf16_to_position(mr.end);
+                let s = flat_utf16_to_position(model, mr.start);
+                let e = flat_utf16_to_position(model, mr.end);
                 (s, e)
             });
             // Only copy decorations that fall on visible lines.
@@ -2006,7 +1865,7 @@ impl Element for EditorElement {
         // extent doesn't bleed into neighbouring panes.
         let mask = Some(ContentMask { bounds });
         let pane_w = bounds.size.width;
-        window.with_content_mask(mask, |window| {
+        let widest = window.with_content_mask(mask, |window| {
             // Shape each visible non-empty line once and reuse the
             // `ShapedLine` for both the selection highlight and the text
             // paint, so we don't pay for shaping twice per frame. The third
@@ -2016,17 +1875,15 @@ impl Element for EditorElement {
             // `x_for_index_dir` for per-character direction detection.
             let shaped: Vec<(usize, ShapedLine, Pixels, &str)> = vis
                 .iter()
-                .filter_map(|(ix, line, row)| {
+                .filter_map(|(ix, line)| {
                     if line.is_empty() {
                         return None;
                     }
-                    let runs = runs_for(line, row);
                     let s = shape_editor_line(
                         window,
                         SharedString::from(line.clone()),
                         font_size,
-                        &runs,
-                        None,
+                        &runs_for(line),
                     );
                     let x_off = if is_rtl_line(line) {
                         (pane_w - s.width).max(px(0.))
@@ -2083,7 +1940,7 @@ impl Element for EditorElement {
                 // Empty interior lines: no shaped line above, so paint a
                 // full-width highlight here so the selection looks unbroken
                 // across blank lines.
-                for (ix, line, _row) in &vis {
+                for (ix, line) in &vis {
                     if line.is_empty() && *ix > start.0 && *ix < end.0 {
                         let top = bounds.origin.y + px(*ix as f32 * LINE_HEIGHT) - px(scroll);
                         let rect = Bounds {
@@ -2229,6 +2086,13 @@ impl Element for EditorElement {
                 };
                 window.paint_quad(fill(marker_bounds, rgb(marker.color)));
             }
+            shaped
+                .iter()
+                .map(|(_, s, _, _)| f32::from(s.width))
+                .fold(0., f32::max)
+        });
+        self.entity.update(cx, |view, _| {
+            view.max_line_width = view.max_line_width.max(widest);
         });
 
         // Scrollbar overlay: paint a thin vertical thumb at the right edge
@@ -2252,7 +2116,6 @@ impl Element for EditorElement {
     }
 }
 
-/// Map a line's owned `Seg` rows to gpui `TextRun`s covering the whole line.
 /// Four-column tab stops are a rendering projection; source byte offsets stay intact.
 fn expand_tabs(text: &str) -> String {
     let mut out = String::new();
@@ -2275,7 +2138,6 @@ fn shape_editor_line(
     text: SharedString,
     font_size: Pixels,
     runs: &[TextRun],
-    _: Option<Pixels>,
 ) -> ShapedLine {
     if !text.contains('\t') {
         return window.text_system().shape_line(text, font_size, runs, None);
@@ -2296,24 +2158,19 @@ fn shape_editor_line(
         .shape_line(expand_tabs(&text).into(), font_size, &projected_runs, None)
 }
 
-fn runs_for(line: &str, segs: &[Seg]) -> Vec<TextRun> {
-    let mut out = Vec::with_capacity(segs.len());
-    let total = line.len();
-    for s in segs {
-        let len = s.end.min(total) - s.start.min(total);
-        if len == 0 {
-            continue;
-        }
-        out.push(TextRun {
-            len,
-            font: make_font(s.bold, s.italic),
-            color: rgb(s.color).into(),
-            background_color: None,
-            underline: None,
-            strikethrough: None,
-        });
+/// One default-styled run covering the whole line.
+fn runs_for(line: &str) -> Vec<TextRun> {
+    if line.is_empty() {
+        return Vec::new();
     }
-    out
+    vec![TextRun {
+        len: line.len(),
+        font: make_font(false, false),
+        color: rgb(DEFAULT_COLOR).into(),
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    }]
 }
 
 /// Heuristic: is this line's base direction right-to-left? Scans for the
@@ -2421,7 +2278,7 @@ const LINE_HEIGHT: f32 = 20.0;
 type EditorPaintState = (
     f32,
     f32,
-    Vec<(usize, String, Vec<Seg>)>,
+    Vec<(usize, String)>,
     Option<(usize, usize)>,
     Option<((usize, usize), (usize, usize))>,
     Option<((usize, usize), (usize, usize))>,
@@ -2440,7 +2297,8 @@ mod tests {
 
     use super::{
         BufferModel, ContributionSource, EditorRenderingOptions, EditorView, EditorViewState,
-        LINE_HEIGHT, ResolvedEditorContribution, default_projection, project_contributions,
+        LINE_HEIGHT, ResolvedEditorContribution, flat_utf16_to_position, project_contributions,
+        to_flat_utf16,
     };
     use crate::{
         app::completion::CompletionProviderRegistry,
@@ -2461,28 +2319,28 @@ mod tests {
                 view.replace_text_in_range(None, "a", window, cx);
                 view.replace_text_in_range(None, "👩‍💻", window, cx);
                 view.replace_text_in_range(None, "é", window, cx);
-                assert_eq!(view.flat_doc(), "a👩‍💻é");
+                assert_eq!(view.text(cx), "a👩‍💻é");
                 view.execute_editing_command("editor.delete-backward", window, cx);
-                assert_eq!(view.flat_doc(), "a👩‍💻");
+                assert_eq!(view.text(cx), "a👩‍💻");
                 view.execute_editing_command("editor.select-all", window, cx);
                 view.execute_editing_command("editor.cut", window, cx);
-                assert_eq!(view.flat_doc(), "");
+                assert_eq!(view.text(cx), "");
                 view.execute_editing_command("editor.paste", window, cx);
-                assert_eq!(view.flat_doc(), "a👩‍💻");
+                assert_eq!(view.text(cx), "a👩‍💻");
                 view.replace_and_mark_text_in_range(None, "に", Some(0..1), window, cx);
                 assert_eq!(view.marked_range_utf16, Some(6..7));
                 view.replace_and_mark_text_in_range(None, "日本", Some(2..2), window, cx);
-                assert_eq!(view.flat_doc(), "a👩‍💻日本");
+                assert_eq!(view.text(cx), "a👩‍💻日本");
                 view.replace_text_in_range(None, "日本語", window, cx);
-                assert_eq!(view.flat_doc(), "a👩‍💻日本語");
+                assert_eq!(view.text(cx), "a👩‍💻日本語");
                 assert_eq!(view.marked_range_utf16, None);
                 view.execute_editing_command("editor.undo", window, cx);
-                assert_eq!(view.flat_doc(), "a👩‍💻");
+                assert_eq!(view.text(cx), "a👩‍💻");
                 view.execute_editing_command("editor.redo", window, cx);
-                assert_eq!(view.flat_doc(), "a👩‍💻日本語");
+                assert_eq!(view.text(cx), "a👩‍💻日本語");
                 view.execute_editing_command("editor.select-all", window, cx);
                 view.replace_text_in_range(None, "one\r\ntwo\rthree", window, cx);
-                assert_eq!(view.flat_doc(), "one\ntwo\nthree");
+                assert_eq!(view.text(cx), "one\ntwo\nthree");
             })
         });
     }
@@ -2499,29 +2357,29 @@ mod tests {
                 view.replace_text_in_range(None, "β", window, cx);
                 view.replace_text_in_range(None, "c", window, cx);
                 view.execute_editing_command("editor.undo", window, cx);
-                assert_eq!(view.flat_doc(), "");
+                assert_eq!(view.text(cx), "");
                 view.execute_editing_command("editor.redo", window, cx);
-                assert_eq!(view.flat_doc(), "aβc");
+                assert_eq!(view.text(cx), "aβc");
 
                 view.execute_editing_command("editor.move-document-end", window, cx);
                 view.execute_editing_command("editor.delete-backward", window, cx);
                 view.execute_editing_command("editor.delete-backward", window, cx);
-                assert_eq!(view.flat_doc(), "a");
+                assert_eq!(view.text(cx), "a");
                 view.execute_editing_command("editor.undo", window, cx);
-                assert_eq!(view.flat_doc(), "aβc");
+                assert_eq!(view.text(cx), "aβc");
 
                 view.execute_editing_command("editor.move-document-end", window, cx);
                 view.execute_editing_command("editor.move-left", window, cx);
                 view.replace_text_in_range(None, "X", window, cx);
-                assert_eq!(view.flat_doc(), "aβXc");
+                assert_eq!(view.text(cx), "aβXc");
                 view.execute_editing_command("editor.undo", window, cx);
-                assert_eq!(view.flat_doc(), "aβc");
+                assert_eq!(view.text(cx), "aβc");
 
                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(" pasted".into()));
                 view.execute_editing_command("editor.paste", window, cx);
-                assert_eq!(view.flat_doc(), "aβ pastedc");
+                assert_eq!(view.text(cx), "aβ pastedc");
                 view.execute_editing_command("editor.undo", window, cx);
-                assert_eq!(view.flat_doc(), "aβc");
+                assert_eq!(view.text(cx), "aβc");
             });
         });
     }
@@ -2552,7 +2410,7 @@ mod tests {
         cx.read(|cx| {
             let origin = origin.read(cx);
             let other = other.read(cx);
-            assert_eq!(origin.flat_doc(), "abcdef");
+            assert_eq!(origin.text(cx), "abcdef");
             assert_eq!((origin.anchor_col, origin.cursor_col), (4, 1));
             assert!(origin.has_selection);
             assert!(origin.selection_reversed);
@@ -2569,7 +2427,7 @@ mod tests {
 
         cx.read(|cx| {
             let origin = origin.read(cx);
-            assert_eq!(origin.flat_doc(), "aXYef");
+            assert_eq!(origin.text(cx), "aXYef");
             assert_eq!((origin.cursor_line, origin.cursor_col), (0, 3));
             assert!(!origin.has_selection);
         });
@@ -2599,7 +2457,7 @@ mod tests {
 
         cx.read(|cx| {
             let survivor = survivor.read(cx);
-            assert_eq!(survivor.flat_doc(), "text");
+            assert_eq!(survivor.text(cx), "text");
             assert_eq!((survivor.cursor_line, survivor.cursor_col), (0, 0));
         });
     }
@@ -2630,7 +2488,7 @@ mod tests {
 
         cx.read(|cx| {
             let origin = origin.read(cx);
-            assert_eq!(origin.flat_doc(), "zabcdef");
+            assert_eq!(origin.text(cx), "zabcdef");
             assert_eq!((origin.cursor_line, origin.cursor_col), (0, 5));
             assert!(!origin.has_selection);
         });
@@ -2651,7 +2509,7 @@ mod tests {
                 view.execute_editing_command("editor.move-document-start", window, cx);
                 view.viewport_h = 2. * super::LINE_HEIGHT;
                 view.execute_editing_command("editor.select-page-down", window, cx);
-                assert_eq!(view.selected_byte_range(), Some(0..10));
+                assert_eq!(view.selected_byte_range(cx), Some(0..10));
                 view.execute_editing_command("editor.move-document-end", window, cx);
                 assert_eq!((view.cursor_line, view.cursor_col), (4, 4));
                 view.execute_editing_command("editor.move-word-left", window, cx);
@@ -2670,10 +2528,12 @@ mod tests {
         cx.update(|window, cx| {
             editor.update(cx, |view, cx| {
                 view.cursor_col = 1;
-                let tab_x = view.caret_x(window);
+                let model = view.model.read(cx);
+                let tab_x = view.caret_x(model, window);
                 assert!(f32::from(tab_x) > 20.);
                 assert_eq!(
                     view.hit_test(
+                        model,
                         point(view.bounds.origin.x + tab_x, view.bounds.origin.y + px(5.)),
                         window
                     ),
@@ -2702,16 +2562,16 @@ mod tests {
         cx.refresh().unwrap();
         cx.update(|window, cx| {
             editor.update(cx, |view, cx| {
-                let position = |view: &mut EditorView, col| {
+                let position = |view: &mut EditorView, col, cx: &gpui::App| {
                     view.cursor_col = col;
                     point(
-                        view.bounds.origin.x + view.caret_x(window),
+                        view.bounds.origin.x + view.caret_x(view.model.read(cx), window),
                         view.bounds.origin.y + px(5.),
                     )
                 };
-                let start = position(view, 3);
-                let end = position(view, 8);
-                let before = position(view, 1);
+                let start = position(view, 3, cx);
+                let end = position(view, 8, cx);
+                let before = position(view, 1, cx);
                 view.on_mouse_move(
                     &MouseMoveEvent {
                         position: end,
@@ -2744,7 +2604,7 @@ mod tests {
                         cx,
                     );
                 }
-                assert_eq!(view.selected_byte_range(), Some(1..3));
+                assert_eq!(view.selected_byte_range(cx), Some(1..3));
                 view.on_mouse_down(
                     &MouseDownEvent {
                         position: start,
@@ -2756,7 +2616,7 @@ mod tests {
                     window,
                     cx,
                 );
-                assert_eq!(view.selected_byte_range(), Some(0..5));
+                assert_eq!(view.selected_byte_range(cx), Some(0..5));
                 view.on_mouse_down(
                     &MouseDownEvent {
                         position: start,
@@ -2768,7 +2628,7 @@ mod tests {
                     window,
                     cx,
                 );
-                assert_eq!(view.selected_byte_range(), Some(0..11));
+                assert_eq!(view.selected_byte_range(cx), Some(0..11));
             })
         });
     }
@@ -2784,7 +2644,7 @@ mod tests {
                 view.execute_editing_command("editor.move-right", window, cx);
                 assert_eq!((view.cursor_line, view.cursor_col), (1, 0));
                 view.execute_editing_command("editor.delete-backward", window, cx);
-                assert_eq!(view.flat_doc(), "ab");
+                assert_eq!(view.text(cx), "ab");
             })
         });
     }
@@ -2805,7 +2665,7 @@ mod tests {
                 view.select_reveal_and_focus(
                     ByteRange {
                         start_byte_offset: 0,
-                        end_byte_offset: 1,
+                        end_byte_offset: "日".len(),
                     },
                     window,
                     cx,
@@ -2823,15 +2683,94 @@ mod tests {
         cx.read(|cx| assert_eq!(editor.read(cx).marked_range_utf16, None));
     }
 
-    #[test]
-    fn projection_refreshes_from_authoritative_buffer_text() {
-        let mut model = BufferModel::from_text("one\ntwo");
-        model.replace(0..3, "three").unwrap();
-        let (lines, segs) = default_projection(&model.text());
+    #[gpui::test]
+    fn editing_a_large_buffer_never_reads_the_whole_text(cx: &mut TestAppContext) {
+        let text = (0..100_000)
+            .map(|line| format!("line {line} with some words"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let model = cx.new(|_| BufferModel::from_text(text));
+        let (editor, cx) = cx.add_window_view(|_, cx| EditorView::new(model.clone(), cx));
+        let (other, cx) = cx.add_window_view(|_, cx| EditorView::new(model.clone(), cx));
+        cx.refresh().unwrap();
+        cx.update(|window, cx| {
+            editor.update(cx, |view, cx| {
+                view.focus.focus(window);
+                view.restore_view_state(
+                    EditorViewState {
+                        anchor: 50_000,
+                        caret: 50_000,
+                        top: 49_000,
+                        scroll_x: 0.,
+                    },
+                    cx,
+                );
+                for command in [
+                    "editor.move-word-right",
+                    "editor.move-word-left",
+                    "editor.move-down",
+                    "editor.move-page-down",
+                    "editor.move-line-end",
+                    "editor.select-left",
+                    "editor.select-up",
+                    "editor.delete-backward",
+                    "editor.delete-forward",
+                    "editor.insert-newline",
+                    "editor.undo",
+                    "editor.redo",
+                ] {
+                    assert!(
+                        view.execute_editing_command(command, window, cx),
+                        "{command}"
+                    );
+                }
+                view.replace_text_in_range(None, "typed", window, cx);
+                view.replace_and_mark_text_in_range(None, "に", Some(1..1), window, cx);
+                let selection = view.selected_text_range(false, window, cx).unwrap();
+                view.text_for_range(selection.range, &mut None, window, cx);
+                view.replace_text_in_range(None, "日", window, cx);
+            })
+        });
+        cx.simulate_event(ScrollWheelEvent {
+            position: cx.read(|cx| editor.read(cx).interaction_bounds().center()),
+            delta: ScrollDelta::Pixels(point(px(-30.), px(-200.))),
+            ..Default::default()
+        });
+        cx.refresh().unwrap();
+        cx.run_until_parked();
 
-        assert_eq!(lines, ["three", "two"]);
-        assert_eq!(segs[0][0].end, "three".len());
-        assert_eq!(segs[1][0].end, "two".len());
+        cx.read(|cx| {
+            assert!(other.read(cx).paint_count > 0);
+            assert_eq!(model.read(cx).whole_text_reads(), 0);
+        });
+    }
+
+    #[gpui::test]
+    fn horizontal_scroll_is_bounded_by_the_widest_shaped_line(cx: &mut TestAppContext) {
+        let text = format!("{}\nshort", "x".repeat(400));
+        let model = cx.new(|_| BufferModel::from_text(text));
+        let (editor, cx) = cx.add_window_view(|_, cx| EditorView::new(model.clone(), cx));
+        cx.refresh().unwrap();
+        cx.simulate_event(ScrollWheelEvent {
+            position: cx.read(|cx| editor.read(cx).interaction_bounds().center()),
+            delta: ScrollDelta::Pixels(point(px(-100_000.), px(0.))),
+            ..Default::default()
+        });
+        let long_width = cx.read(|cx| {
+            let view = editor.read(cx);
+            let limit = view.max_line_width + 2. - f32::from(view.bounds.size.width);
+            assert!(limit > 0.);
+            assert_eq!(view.scroll_x, limit);
+            view.max_line_width
+        });
+
+        model.update(cx, |model, cx| {
+            model.replace(0..400, "x").unwrap();
+            cx.notify();
+        });
+        cx.run_until_parked();
+        // Text changes forget widths; the repaint measures the remaining lines.
+        cx.read(|cx| assert!(editor.read(cx).max_line_width < long_width / 10.));
     }
 
     #[gpui::test]
@@ -2842,7 +2781,7 @@ mod tests {
         cx.read(|cx| {
             let editor = editor.read(cx);
             assert_eq!(editor.model(), &model);
-            assert_eq!(editor.lines, ["generated", "text"]);
+            assert_eq!(editor.line_count, 2);
             assert!(editor.rendering.show_gutter_markers);
         });
     }
@@ -2965,7 +2904,7 @@ mod tests {
                     window,
                     cx,
                 );
-                assert_eq!(editor.selected_byte_range(), None);
+                assert_eq!(editor.selected_byte_range(cx), None);
             });
         });
     }
@@ -3016,9 +2955,9 @@ mod tests {
 
     #[test]
     fn contribution_projection_indexes_multiline_ranges() {
-        let lines = vec!["aa".into(), "bbbb".into(), "cc".into()];
+        let model = BufferModel::from_text("aa\nbbbb\ncc");
         let (decorations, gutters, actions) = project_contributions(
-            &lines,
+            &model,
             vec![ResolvedEditorContribution {
                 range: ByteRange {
                     start_byte_offset: 1,
@@ -3065,15 +3004,15 @@ mod tests {
         let editor = cx.new(|cx| EditorView::new(model, cx));
 
         cx.read(|cx| {
-            let editor = editor.read(cx);
+            let model = editor.read(cx).model.read(cx);
             let second_line_start = 5;
             let family_utf16_len = family.chars().map(char::len_utf16).sum::<usize>();
 
-            assert_eq!(editor.flat_utf16_to_position(1), (0, 1));
-            assert_eq!(editor.flat_utf16_to_position(3), (0, "a😀".len()));
-            assert_eq!(editor.flat_utf16_to_position(second_line_start), (1, 0));
+            assert_eq!(flat_utf16_to_position(model, 1), (0, 1));
+            assert_eq!(flat_utf16_to_position(model, 3), (0, "a😀".len()));
+            assert_eq!(flat_utf16_to_position(model, second_line_start), (1, 0));
             assert_eq!(
-                editor.flat_utf16_to_position(second_line_start + family_utf16_len),
+                flat_utf16_to_position(model, second_line_start + family_utf16_len),
                 (1, family.len())
             );
 
@@ -3086,8 +3025,8 @@ mod tests {
                 (1, family.len()),
                 (1, second_line.len()),
             ] {
-                let utf16 = editor.to_flat_utf16(line, byte_col);
-                assert_eq!(editor.flat_utf16_to_position(utf16), (line, byte_col));
+                let utf16 = to_flat_utf16(model, line, byte_col);
+                assert_eq!(flat_utf16_to_position(model, utf16), (line, byte_col));
             }
         });
     }
@@ -3105,8 +3044,8 @@ mod tests {
         editor.update(cx, |editor, cx| editor.restore_view_state(state, cx));
         cx.read(|cx| {
             let editor = editor.read(cx);
-            assert_eq!(editor.view_state(), state);
-            assert_eq!(editor.selected_byte_range(), Some(4..9));
+            assert_eq!(editor.view_state(cx), state);
+            assert_eq!(editor.selected_byte_range(cx), Some(4..9));
             assert_eq!(editor.scroll, 2. * LINE_HEIGHT);
         });
 
@@ -3126,7 +3065,7 @@ mod tests {
         });
         cx.read(|cx| {
             assert_eq!(
-                editor.read(cx).view_state(),
+                editor.read(cx).view_state(cx),
                 EditorViewState {
                     anchor: 2,
                     caret: "é😀\nb".len(),
@@ -3194,8 +3133,7 @@ mod tests {
             let second = second.read(cx);
 
             assert_eq!(first.model, second.model);
-            assert_eq!(first.lines, second.lines);
-            assert_eq!(first.lines[0], "shared");
+            assert_eq!(first.text(cx), "shared\none\ntwo\nthree");
             assert_eq!(first.decorations.len(), 1);
             assert_eq!(first.decorations.len(), second.decorations.len());
             assert_eq!(first.gutter_markers.len(), second.gutter_markers.len());
@@ -3233,8 +3171,7 @@ mod tests {
         cx.read(|cx| {
             let first = first.read(cx);
             let second = second.read(cx);
-            assert_eq!(first.lines[0], "023456789");
-            assert_eq!(second.lines, first.lines);
+            assert_eq!(first.text(cx), "023456789");
             assert_eq!((second.anchor_line, second.anchor_col), (0, 3));
             assert_eq!((second.cursor_line, second.cursor_col), (0, 6));
             assert!(second.has_selection);

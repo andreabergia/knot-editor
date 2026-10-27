@@ -74,7 +74,7 @@ fn every_same_pane_insertion_preserves_editor_and_order(cx: &mut TestAppContext)
                     Some(&editor)
                 );
                 assert_eq!(
-                    editor.read(cx).view_state(),
+                    editor.read(cx).view_state(cx),
                     crate::app::editor::EditorViewState {
                         anchor: 1,
                         caret: 8,

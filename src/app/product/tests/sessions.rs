@@ -1102,8 +1102,8 @@ fn layouts_restore_splits_shared_views_docks_and_fresh_terminals(cx: &mut TestAp
     assert_ne!(views[0], views[1]);
     cx.read(|cx| {
         assert_eq!(views[0].read(cx).model(), views[1].read(cx).model());
-        assert_eq!(views[0].read(cx).view_state(), states[0]);
-        assert_eq!(views[1].read(cx).view_state(), states[1]);
+        assert_eq!(views[0].read(cx).view_state(cx), states[0]);
+        assert_eq!(views[1].read(cx).view_state(cx), states[1]);
     });
     // The terminal restores in place as a fresh shell; the old one stopped.
     let terminals = terminal_sessions(&restored, cx);
