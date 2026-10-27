@@ -10,10 +10,17 @@ and reopen callbacks. CLI and platform requests join a launch queue while
 [personal config and extensions](extension-host.md#package-admission-and-startup)
 start. Successful startup first restores
 [unsaved documents](documents-and-persistence.md#durable-unsaved-document-recovery),
-then opens queued product windows, or one empty window, presenting restored
-documents in the first, and activates the app. Fatal config failure discards the queue and opens a
-focused diagnostic window with Copy and Quit; product windows remain unavailable
-for that launch.
+then the [recorded product windows](#native-window-hot-exit), then opens each
+queued request in its own window. Recovered documents that no restored window
+presents go to the first opened window, so text is never hidden. With nothing
+restored or requested one empty window opens. The last request window is
+focused, else the previously active restored window, and the app activates.
+`ApplicationSnapshot.launched` and a one-time `launched` event then tell
+extensions that startup windows exist; extensions activate before any window
+does. A reopen after launch opens an empty window and restores nothing. Fatal
+config failure discards the queue and opens a focused diagnostic window with
+Copy and Quit; product windows remain unavailable for that launch, and nothing
+is recorded.
 
 ## Editor views
 
@@ -30,6 +37,13 @@ away from it. Clipboard operations use source text; expanded tabs are only a
 rendering projection. UTF-16 platform input is converted to UTF-8 model edits,
 with a synchronous projection refresh before resolving the resulting caret.
 Other views update through their persistent positions.
+
+Restorable view state is the anchor and caret as byte offsets, the start of the
+top visible line as a byte offset, and horizontal scroll in pixels. Applying it
+clamps each offset to the current text and snaps back to a character boundary,
+so a changed or shorter file never yields an invalid position, and keeps the
+restored scroll instead of revealing the caret. Folding and zoom do not exist
+yet and are not recorded.
 
 ## Workbench and protected closure
 
@@ -76,29 +90,69 @@ Extension closure additionally revalidates caller lifecycle/cancellation before
 save and close admission. Completion follows the foreground transition without
 awaiting observation listeners.
 
+## Window layouts
+
+One versioned `WindowLayout` value serves both restorers: native window hot exit
+and extension sessions through `workbench.captureLayout`. It records logical
+window bounds, windowed, maximized, or fullscreen state, and the display UUID;
+the split tree with dock groups; ordered tabs and the selected tab per pane; the
+focused pane; dock sizes; and each editor tab's view state. Every tab kind is
+restored by position and records only what recreates it: a document tab its
+document identity and resource URI, a tool tab its stable tool ID, and a
+terminal tab nothing, so a restored terminal starts a fresh shell. The value
+never contains pane, tab, view, or window handles.
+
+Restoring plans a pruned arrangement in one place for both restorers. Document
+tabs resolve to the window's entry with the same document identity, else the
+same normalized URI. Unmatched documents, unregistered or repeated tools, and
+repeated documents within a pane are dropped, then empty panes and one-child
+splits collapse; a second pane claiming a taken dock becomes ordinary, and an
+out-of-range selection or focus falls back to the first tab or the normal group.
+Each surviving tab is then recreated by its kind's step (a fresh editor view of
+the shared model, the registered tool frame, a new terminal session), so a
+split of one document restores as independent views of one model. Tools the
+layout does not name are hidden and keep their remembered placement; entries
+it does not place open in the normal group. Restoration never publishes the
+[tool-only default](#automatic-tool-layout-memory). An unsupported version or
+invalid shape is ignored and the entries are arranged as without a layout.
+
+Restored windows are always created, so geometry is applied at creation and
+moving an existing window stays deferred. Saved bounds are kept when enough of
+their title bar lies on a connected display; otherwise the window is sized to
+fit and centered on its saved display if connected, else on the primary one.
+
+Cursor, selection, and scroll changes, focus, dock resizing, window bounds, and
+shell changes restart a per-window trailing-edge debounce of about a second.
+When it settles the window captures its layout: a layout that differs from the
+last one it reported sends a `viewStateChanged` observation event, and a
+changed layout or root set re-records the native window session.
+
 ## Session replacement
 
-`workbench.replaceWindows` swaps the document presentations of a set of windows
-in one foreground commit. It knows windows, documents, roots, and retained
-captures, never projects; the [project registry](../extension-api.md#project-sessions)
-builds its switch on it. Admission claims the protected-closure slot, so it never
-interleaves with closure prompts, quit, or another replacement, and captures
-every reused and released window. Staging validates destination roots, reads
-files, and loads retained captures off the foreground without creating
-documents, so observers see nothing until the commit.
+`workbench.replaceWindows` closes a set of windows and opens their replacements
+in one foreground commit. It knows windows, documents, roots, layouts, and
+retained captures, never projects; the
+[project registry](../extension-api.md#project-sessions) builds its switch on
+it, and native startup reuses it with no released windows. Admission claims the
+protected-closure slot, so it never interleaves with closure prompts, quit, or
+another replacement, and captures every released window. Staging validates
+destination roots, reads files, and loads retained captures off the foreground
+without creating documents, so observers see nothing until the commit.
 
-The commit first revalidates: the caller is live, every captured window is live,
-the documents presented in reused and released windows equal the caller's
+The commit first revalidates: the caller is live, every released window is
+live, the documents presented in the released windows equal the caller's
 suspended set exactly, and each document whose final view is removed, when dirty
 or a non-empty untitled document, names a capture retained at its current
 revision. A mismatch rejects with `SessionConflict` and nothing changes. The
-commit then creates any new windows first, removes document tabs from the reused
-and released windows without prompts, installs roots, and presents each window's
-entries in its normal document group. Documents left with no view are removed
-through the ordinary path, which retires their automatic recovery. Document
-splits collapse; terminal and tool tabs of reused windows stay where they are. A window
-left without a normal document group receives the ordinary untitled document, so
-its docks never fill it.
+commit then creates every destination window with its geometry, so a failed
+creation leaves the sources intact, and closes every released window as any
+window closes, stopping its terminals. Each destination installs its roots, then
+its [layout](#window-layouts) or, without one, presents its entries in the
+normal document group. Documents left with no view are removed through the
+ordinary path, which retires their automatic recovery. A window left without a
+normal document group receives the ordinary untitled document, so its docks
+never fill it. Each window's result reports whether its layout was applied or
+ignored.
 
 Each entry presents a live document matching its identity or resource before
 considering staged content, so a session never duplicates an open document;
@@ -108,9 +162,23 @@ rest commits. Restored dirty documents are drained to durable automatic recovery
 before the operation resolves, so the caller can release the captures they came
 from.
 
-A released window closes unless it holds a terminal. A window with a terminal
-is cleared instead: its document tabs and roots are removed and it stays open
-with its terminals and tools, so a switch never stops a terminal session.
+## Native window hot exit
+
+The application records every product window's roots and layout in one
+application-owned record beside the tool-only snapshot, in its own SQLite file
+with the same debounce and flush. Recording starts once startup has opened its
+windows, so diagnostic windows and a launch whose config failed never write.
+Settled window changes and window closure re-record every product window in
+creation order; closing a window removes it, so quitting with no windows
+restores none. Quit records the windows before closing them and stops
+recording, and the quit path flushes the record before exit.
+
+Startup marks the record consumed durably before restoring it through the
+session commit, so a crash during restoration loses only the arrangement and
+the next launch opens the default window. Documents resolve live by identity
+first, so restored recovery documents are presented in place, then by opening
+their file; untitled documents nobody recovered are pruned, and roots that no
+longer exist are dropped. Unsaved text keeps its own recovery path.
 
 ## Tab relocation
 
@@ -158,7 +226,8 @@ code](../../src/app/product/tab_drag.rs).
 ## Automatic tool-layout memory
 
 One application-owned `ToolLayoutStore` holds a single versioned tool-only
-snapshot in SQLite beside extension storage. It records stable namespaced tool
+snapshot in SQLite beside extension storage, on the shared single-record store
+that also backs [native window hot exit](#native-window-hot-exit). It records stable namespaced tool
 IDs, dock location, group order, dock sizes, visibility, the selected tool per
 dock, and hidden tools' remembered locations. Documents, terminals, document
 splits, and live handles never enter the record; a tool in a document group

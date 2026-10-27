@@ -26,7 +26,7 @@ Remaining order:
 | 10 | D005, D051 | Layout, view-state, and startup restoration |
 
 Checkpoints 1–9 and the codebase health maintenance interlude are complete and
-approved; checkpoint 10 is next. The initiative plan schedules the remaining
+approved; checkpoint 10 is implemented and awaits its review gate. The initiative plan schedules the remaining
 [health review](plans/codebase-health-review.md) findings. Continue with the
 [extension platform plan](plans/extension-platform-and-projects-plan.md).
 Execute one checkpoint at a time and stop at its review gate; detailed scope and

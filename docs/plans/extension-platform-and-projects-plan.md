@@ -3,7 +3,8 @@
 Status: ⬜ In progress. Checkpoints 1–9 and D053 are complete and approved, and
 the [codebase health maintenance
 interlude](#maintenance-interlude--codebase-health-cleanup-) is approved.
-Checkpoint 10 is planned and next.
+Checkpoint 10 is implemented (10a–10c and documentation) and awaits its review
+gate.
 
 Work identifiers: D046–D052, promoted D005, and completed maintenance interlude
 D053. [Roadmap](../roadmap.md) owns initiative priority; this plan owns execution
@@ -310,7 +311,7 @@ bundled project registry). Validation is in `src/app/workspace.rs`,
 `tests/sessions.rs`, `tests/project_sessions.rs`, and the `workspaces` and
 `windows.open` contract in `scripts/extension-api/contract.test.ts`.
 
-### 10. Layout, view state, and startup restoration — D005, D051 ⬜
+### 10. Layout, view state, and startup restoration — D005, D051 🔍 awaiting review
 
 One versioned window layout serves two restorers. Native hot exit restores every
 product window at startup; `@knot/projects` stores the same layout in its session
@@ -496,7 +497,7 @@ one review gate at the end.
 
 #### Documentation and review gate
 
-- ⬜ Update [workbench lifecycle](../architecture/workbench-and-lifecycle.md)
+- ✅ Update [workbench lifecycle](../architecture/workbench-and-lifecycle.md)
   (launch, session replacement with layouts, window hot exit, editor view state),
   [documents and persistence](../architecture/documents-and-persistence.md)
   where startup ordering changes, [extension host](../architecture/extension-host.md)

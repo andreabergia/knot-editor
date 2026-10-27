@@ -289,6 +289,11 @@ closure can remain committed even if the later close cancels.
 For change-driven features, call `workbench.observe` before querying separately:
 it returns an atomic initial snapshot, sequence watermark, and disposer. Later
 events describe committed metadata changes; read text through buffer APIs.
+`viewStateChanged` reports a window whose cursor, selection, scroll, focus,
+dock sizes, bounds, or structure settled about a second after a change. Packages
+activate before startup has restored windows: when the snapshot's `launched` is
+false, wait for the one-time `launched` event before reconciling state against
+the startup windows.
 Listeners can await host work or their own disposal because commits do not wait
 for listeners. A query may already see newer state than the event. Dispose and
 observe again when a fresh baseline is needed.
@@ -374,21 +379,31 @@ whether the text replaced nothing (`restored`) or opened beside a live document
 
 ## Project sessions
 
-`workbench.replaceWindows` swaps the documents of a set of windows in one native
-commit, without prompts. It is how `@knot/projects` switches projects, and any
-package can build the same workflow. The caller first retains the text of every
-document whose last view it removes, records those captures durably, and then
-asks for the replacement:
+`workbench.replaceWindows` closes a set of windows and opens their replacements
+in one native commit, without prompts. It is how `@knot/projects` switches
+projects, and any package can build the same workflow. The caller first retains
+the text of every document whose last view it removes, captures each window's
+layout, records both durably, and then asks for the replacement:
 
 ```js
 const capture = await recovery.retain(document.id);
-await storage.write("session", { windows: [{ entries: [{ uri, document: document.id, capture: capture.id }] }] });
+const layout = await workbench.captureLayout(window.target);
+await storage.write("session", { windows: [{ entries: [{ uri, document: document.id, capture: capture.id }], layout }] });
 const result = await workbench.replaceWindows({
-  suspend: [{ document: document.id, capture: capture.id }], // every document in the reused windows
-  windows: [{ target: window.target, roots: [root], entries: destinationEntries, selected: 0 }],
-  release: surplusWindows,
+  suspend: [{ document: document.id, capture: capture.id }], // every document in the released windows
+  windows: [{ roots: [root], entries: destinationEntries, layout: destinationLayout }],
+  release: [window.target],
 });
 ```
+
+Every destination window is created with its layout and geometry, and every
+released window closes as any window does, stopping its terminals. A layout is
+plain versioned JSON: store it verbatim. Its document tabs find their entry by
+document identity, else by file; unmatched documents and tools no longer
+registered are pruned, splits of one document come back as independent views of
+one shared document, and terminal tabs return in place as fresh shells. Each
+window reports whether its layout was `applied` or `ignored`, the latter for an
+unsupported version, in which case its entries open as without a layout.
 
 Files load and captures restore before the commit, which then rechecks that
 nothing changed since your captures: an edit after retain, an unexpected tab, or
@@ -401,21 +416,27 @@ is true, restored dirty text is already covered by automatic recovery and the
 captures you restored from can be released once your new record is durable.
 
 `@knot/projects` keeps one `session:<projectId>` record per project, separate
-from its registry record. A session is `active` while the project has windows;
-a window belongs to it when its roots equal the project's roots, in any order,
-and the session is active, so opening a suspended project's folders by hand
-never binds it. Adding or removing a folder in a bound window updates the
-project and its other windows; clearing the folders, or choosing another
-project's folders, takes the window out of the project. The Projects tool's
-New Window action (`projects.new-window`) opens another window on the current
-window's project, while File › New Blank Window opens one outside any project. Selecting a project
-suspends the current one, retaining its unsaved and untitled text in the
-suspended record, and restores the destination's windows; a project may span
-several windows. While active, the record follows tabs live, so a hot-exit quit
-leaves an accurate record and the next launch presents the documents hot exit
-restored. Closing a project's last window suspends it without captures, because
-closure already asked about dirty documents. Removing a suspended project says
-how many unsaved documents its record discards.
+from its registry record, with each window's entries and layout. A session is
+`active` while the project has windows; a window belongs to it when its roots
+equal the project's roots, in any order, and the session is active, so opening a
+suspended project's folders by hand never binds it. Adding or removing a folder
+in a bound window updates the project and its other windows; clearing the
+folders, or choosing another project's folders, takes the window out of the
+project. The Projects tool's New Window action (`projects.new-window`) opens
+another window on the current window's project, while File › New Blank Window
+opens one outside any project. Selecting a project suspends the current one,
+retaining its unsaved and untitled text and layouts in the suspended record,
+and restores the destination's windows with their splits, docks, and view
+state; a project may span several windows. While active, the record follows
+tabs and view state live. At startup Knot itself restores every window from the
+last session and only then reports `launched`; the registry then rebinds the
+restored windows by their roots and suspends active projects whose windows did
+not return. Closing a project's last window suspends it without captures,
+because closure already asked about dirty documents. Removing a suspended
+project says how many unsaved documents its record discards. A session record
+written by a newer version is kept unchanged, marked unreadable in the Projects
+tool, and never switched to; while one exists, no retained capture is released
+as an orphan.
 
 If a package stops responding, File › Restart Extension… stops and reloads it,
 re-reading an installed package from disk.

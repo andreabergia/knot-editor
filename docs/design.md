@@ -107,12 +107,12 @@ independently of extension health. Extensions own project membership and session
 restoration policy, storing document references and presentation metadata rather
 than the only recovery copy of text.
 
-The intended APIs support restoring documents, layouts, and view state. Native
-recovery must remain available when an extension or its session metadata fails.
-Native recovery, extension-retained captures, and project sessions that suspend
-and restore documents are implemented; layout, view-state, and startup
-restoration are planned in the
-[extension platform initiative](plans/extension-platform-and-projects-plan.md).
+Documents, layouts, and view state are restorable. Native recovery and window
+restoration remain available when an extension or its session metadata fails:
+the application restores every window from the last session at startup, and
+project sessions rebind to those windows and restore their own layouts when
+switching. Terminals return in place as fresh shells; their processes and
+contents are not restored.
 
 ## Non-goals
 

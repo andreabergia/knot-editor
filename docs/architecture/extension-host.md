@@ -206,6 +206,13 @@ not publish metadata events. All documents are tracked independently of author
 buffer lookup. One buffer-commit drain routes text edits to buffer subscribers;
 application observation compares metadata without consuming those edits again.
 
+Two events are not derived from metadata alone. `viewStateChanged` follows a
+window's settled [layout change](workbench-and-lifecycle.md#window-layouts); the
+host commits pending metadata first, so it never precedes the window's own
+structural events. `launched` is sent once when startup has committed its
+restored and requested windows; the snapshot's `launched` field reports it to
+packages that start later, such as a restarted one.
+
 Observation refreshes the committed baseline and captures registration, snapshot,
 and watermark in one foreground request. The engine installs the author listener
 before that root finishes; subsequent notifications run through the ordinary FIFO

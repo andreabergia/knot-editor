@@ -142,9 +142,11 @@ document UUID; retained restores allocate a fresh one and leave the capture in
 place.
 
 Startup restores every automatic snapshot without a live document, newest per
-URI, after config and extension startup and before the launch gate opens
-windows. Queued launch requests therefore deduplicate against restored
-documents. Older duplicates and unreadable baselines remain in the store, and the
+URI, after config and extension startup and before it restores the
+[recorded windows](workbench-and-lifecycle.md#native-window-hot-exit) and opens
+queued requests. Restored windows present restored documents by identity, and
+queued launch requests deduplicate against both; restored documents that no
+window presents open in the first window. Older duplicates and unreadable baselines remain in the store, and the
 first window's status points at File › Recover Unsaved Documents…. Retained
 captures are left to their owners and not counted. That native command lists
 every leftover automatic snapshot and every retained capture, labelled with its

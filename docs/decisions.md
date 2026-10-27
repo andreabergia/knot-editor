@@ -185,14 +185,17 @@ root-derived activation while protecting suspended text: opening a suspended
 project's folder by hand never binds the window, so tracking can never overwrite
 the record holding its captures. Only a switch carries captures; losing the last
 window by closure suspends without them because closure already decided about
-dirty documents. Startup only marks unbound active records suspended and never
-releases anything.
+dirty documents. Startup waits for `launched`, so natively restored windows
+rebind by root set first; it then marks the remaining active records suspended
+and never releases anything. A record with an unknown schema is preserved rather
+than overwritten and blocks orphan reconciliation, because a newer version's
+record may reference any capture.
 
-A project may span several windows and restoring it restores all of them. Source
-windows pair with destination windows in order, extras are created, and surplus
-windows are released, which keeps the record's per-window shape ready for
-layout restoration without a migration. Active records describe membership only:
-dirty active text is protected by automatic recovery and hot exit, and automatic
+A project may span several windows and restoring it restores all of them:
+switching closes every source window and creates every destination window with
+its stored layout, so each window's record is self-contained and no source
+window's leftover presentation leaks into another project. Active records
+describe membership only: dirty active text is protected by automatic recovery and hot exit, and automatic
 restores keep their document UUID, so an active record's document references
 survive restart. Captures are released only after the record that drops them is
 durable; orphans are reconciled at activation rather than released implicitly.
@@ -223,14 +226,65 @@ tab rejects as `SessionConflict` with nothing changed rather than losing text.
 
 A live document always wins over staged content, which keeps one source of truth
 per file: documents open elsewhere and documents restored by hot exit are
-presented rather than duplicated, and checkpoint 7's preserved untitled copy
-never arises from a session. Restored dirty documents are durably protected
-before resolution so callers can release captures immediately. A released window
-holding a terminal is cleared instead of closed, so a switch never stops a
-terminal, and only document tabs of reused windows are replaced.
+presented rather than duplicated, and a retained restore's preserved untitled
+copy never arises from a session. Restored dirty documents are durably protected
+before resolution so callers can release captures immediately.
+
+Switching closes released windows rather than reusing them: windows are always
+created with their layout and geometry, which keeps one creation path for
+startup and switching, avoids moving existing windows (D062), and makes a
+released window's terminals stop as closing any window does. Terminals come
+back in place as fresh shells, and the rejected alternative, clearing a
+released window that held a terminal, left a window outside every session.
 
 References: [workbench lifecycle](architecture/workbench-and-lifecycle.md#session-replacement)
 and [documents](architecture/documents-and-persistence.md#retained-captures).
+
+## Window layouts and restoration by position
+
+One versioned JSON layout serves native window hot exit and extension sessions,
+so both restorers share capture, pruning, and installation, and extensions store
+it verbatim without a parallel schema. It holds no handles: every tab kind
+records only what recreates it in the same position (a document's identity and
+URI, a tool's stable ID, nothing for a terminal), and a future kind joins by
+adding one recreation step. A tab is pruned only when its kind cannot be
+recreated, and pruning lives in one place, so a stored layout can never produce
+an invalid workbench. View state is byte offsets that clamp and snap to
+character boundaries, which survive changed files without remembering line
+models.
+
+The layout is captured on demand and announced through a debounced
+`viewStateChanged` event rather than pushed with every change, so cursor
+movement costs one capture per settled second and listeners write only changed
+records. Restoration never publishes the tool-only default, which keeps restored
+windows from overwriting the arrangement new windows inherit.
+
+References: [workbench lifecycle](architecture/workbench-and-lifecycle.md#window-layouts)
+and [extension guide](extension-api.md#project-sessions).
+
+## Native window hot exit and launch precedence
+
+Startup restoration is native hot exit extended to windows: the application,
+not the project extension, records every product window and restores them before
+launch requests open, so a broken or slow extension never loses the user's
+windows, matching how unsaved text is protected. Projects rebind to restored
+windows by root set after `launched` instead of reopening them, so there is one
+restorer at startup and no duplicate windows. The record is marked consumed
+durably before restoration commits, trading the arrangement for a guaranteed
+clean next launch if restoration itself crashes.
+
+Precedence is recovered documents, then recorded windows, then each queued
+request in its own window. Documents resolve live by identity first, so restored
+recovery text is presented in place; requests deduplicate against everything
+restored; the last request window takes focus because it is what the user just
+asked for, else the previously active window. Recovered documents no window
+presents open in the first window, so text is never hidden. A reopen after
+launch is a request for a window, not a restore. Missing roots are dropped
+rather than failing every window. A launch whose config failed records nothing,
+so the next successful launch still restores the last good session.
+
+References: [workbench lifecycle](architecture/workbench-and-lifecycle.md#native-window-hot-exit)
+and [documents](architecture/documents-and-persistence.md#durable-unsaved-document-recovery).
 
 ## Extension restart
 
