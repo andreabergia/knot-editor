@@ -1,6 +1,6 @@
 # Product Roadmap and Deferred Work
 
-The selected initiative below has an explicit implementation order. The deferred
+The selected work below has an explicit implementation order. The deferred
 register that follows remains unordered. Completed decisions remain in
 `decisions.md`; proposed architecture and checkpoint details live in active plans.
 
@@ -9,34 +9,26 @@ trigger for reconsideration. IDs are never renumbered or reused. New items take
 the next unused ID. When an item is promoted, its slice plan retains the ID and
 the item is removed from this register.
 
-## Selected initiative: production extension APIs and JavaScript projects
+## Selected work: codebase health follow-ups
 
-The [extension platform and project management plan](plans/extension-platform-and-projects-plan.md)
-uses an ordinary JavaScript project manager to validate native application APIs,
-extension UI, durable storage, multi-root workspaces, and session restoration
-including unsaved documents. API foundation, application state/operations, handler
-declarations, extension storage, native UI contributions, and the bundled project
-registry, unsaved-document recovery, project sessions with safe switching, and
-multi-root workspaces are complete; approval and validation notes live in that plan.
+The production extension APIs and JavaScript projects initiative (D046–D053,
+D005) is complete: an ordinary bundled JavaScript extension manages named
+multi-root projects, switches them with unsaved text and layouts, and rebinds
+to the windows Knot restores at startup. Current behavior lives in the
+[architecture](architecture.md) references and rationale in
+[decisions](decisions.md).
 
-Remaining order:
+The remaining [health review](plans/codebase-health-review.md) findings come
+next, in this order:
 
-| Checkpoint | Work identifiers | Outcome |
+| Order | Findings | Outcome |
 | --- | --- | --- |
-| 10 | D005, D051 | Layout, view-state, and startup restoration |
+| 1 | P0-1, P1-1, P2-7 | Editor view incremental line model, piece-table length cache, insert coalescing and edit-log bounding, and CRLF policy, as a focused plan before D002 and D031 |
+| 2 | P1-6, P2-1–P2-4 | `engine.rs` split and marshaling unification, command module regrouping, `app/terminal` and `app/extensions` directories, inline test extraction, and tokio runtime removal, as pure-move maintenance between slices |
 
-Checkpoints 1–9 and the codebase health maintenance interlude are complete and
-approved; checkpoint 10 is implemented and awaits its review gate. The initiative plan schedules the remaining
-[health review](plans/codebase-health-review.md) findings. Continue with the
-[extension platform plan](plans/extension-platform-and-projects-plan.md).
-Execute one checkpoint at a time and stop at its review gate; detailed scope and
-acceptance belong to those plans. The early project registry is an intermediate
-validation point, not initiative completion.
-
-This initiative takes priority over the deferred register. Persistent undo (D012),
-general UI/WebViews (D021), terminal restoration (D043), and broad scheduling
-policy (D019) remain deferred. Exact view-state restoration belongs to selected
-D005; tool-only layout memory shipped with the completed D049.
+Pull the editor view work forward only if dogfooding on large files becomes
+disruptive; restored view state uses byte offsets that do not depend on the
+view's line representation. This work takes priority over the deferred register.
 
 ## Deferred register
 
@@ -142,7 +134,7 @@ D005; tool-only layout memory shipped with the completed D049.
 - **D012 — Persistent undo and history trees**
   - Deferred: Session-local linear undo is sufficient for dogfooding.
   - Reconsider: Users need edit history across restarts or branching history.
-    Persistent view-state restoration is selected under D005.
+    Byte-offset view state already survives restarts and project switches.
 
 - **D013 — Piece-table compaction and edit-log reclamation**
   - Deferred: Prototype storage is append-only and no real workload has shown
@@ -271,7 +263,8 @@ D005; tool-only layout memory shipped with the completed D049.
 - **D043 — Persistent terminal sessions**
   - Deferred: Live local sessions survive view reconstruction, but not application
     exit. Persistent processes/grid restoration need a separate lifecycle contract.
-  - Reconsider: Workbench restoration (D005) requires terminal continuity.
+  - Reconsider: Restored terminal tabs, which start fresh shells, need their
+    processes or scrollback to continue.
 
 - **D044 — Simultaneous terminal views**
   - Deferred: A sole attachment keeps input ownership and PTY resize authority

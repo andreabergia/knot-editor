@@ -4,14 +4,12 @@ Reviewed at `9616773` (2026-10-24). This is an onboarding-style assessment: what
 is left over from the prototype, whether the design holds up, and where the
 technical debt is.
 
-Status: active input. The [extension platform
-plan](extension-platform-and-projects-plan.md#follow-up-from-the-codebase-health-review)
-schedules each finding. The [maintenance
-interlude](extension-platform-and-projects-plan.md#maintenance-interlude--codebase-health-cleanup-)
+Status: active input. The [roadmap](../roadmap.md#selected-work-codebase-health-follow-ups)
+schedules each open finding. The codebase health maintenance interlude
 resolved the prototype inventory, the symlink Save bug, the Find stub, the
 `ProductShell` split, and the documentation drift; this document now keeps only
-the open findings. The additions to checkpoints 8 and 9 and the post-initiative
-work remain. Remove this document once every scheduled cleanup has landed or
+the open findings. The additions to checkpoints 8 and 9 landed; the
+post-initiative work remains. Remove this document once every scheduled cleanup has landed or
 moved to the roadmap register; Git retains it.
 
 ## Summary
@@ -68,9 +66,8 @@ protected closure, and the recovery store are well reasoned and well tested.
 
 ## 2. Resolved by the maintenance interlude
 
-These findings landed and are recorded here only for orientation. The
-[interlude completion note](extension-platform-and-projects-plan.md#maintenance-interlude--codebase-health-cleanup-)
-and Git history carry the details.
+These findings landed and are recorded here only for orientation. Git history
+carries the details.
 
 - **Prototype inventory (former §2.1/§2.2, P1-2).** The native search-results
   controller, generated document state, the compact completion surface, the
@@ -85,7 +82,7 @@ and Git history carry the details.
   `pollster`, §4.8 `development.md` drift, and the `"generated"` document kind
   (former P2-7 item).**
 
-The runaway-turn escape hatch (former P1-3) landed in checkpoint 8 as the native
+The runaway-turn escape hatch (former P1-3) landed as the native
 Restart Extension command, which unloads and reloads one package.
 `ExtensionWatchdog` stays for per-turn timeouts under D019.
 
@@ -338,7 +335,7 @@ parts (D054).
 ## 5. Suggested sequencing
 
 1. **Editor view data model (P0-1)** together with **piece-table quick wins
-   (P1-1)** and the CRLF policy (P2-7) after checkpoint 10. This is one focused
+   (P1-1)** and the CRLF policy (P2-7). This is one focused
    slice and the prerequisite for D002 syntax highlighting and D031 Find. Plan
    it in `docs/plans/`.
 2. **Structural splits (P1-6, P2-1, P2-2, P2-3, P2-4).** These are pure moves,

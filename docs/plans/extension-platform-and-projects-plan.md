@@ -1,10 +1,8 @@
 # Production extension APIs and JavaScript project management
 
-Status: ⬜ In progress. Checkpoints 1–9 and D053 are complete and approved, and
-the [codebase health maintenance
-interlude](#maintenance-interlude--codebase-health-cleanup-) is approved.
-Checkpoint 10 is implemented (10a–10c and documentation) and awaits its review
-gate.
+Status: ✅ Complete. Checkpoints 1–10, D053, and the [codebase health
+maintenance interlude](#maintenance-interlude--codebase-health-cleanup-) are
+approved.
 
 Work identifiers: D046–D052, promoted D005, and completed maintenance interlude
 D053. [Roadmap](../roadmap.md) owns initiative priority; this plan owns execution
@@ -311,7 +309,7 @@ bundled project registry). Validation is in `src/app/workspace.rs`,
 `tests/sessions.rs`, `tests/project_sessions.rs`, and the `workspaces` and
 `windows.open` contract in `scripts/extension-api/contract.test.ts`.
 
-### 10. Layout, view state, and startup restoration — D005, D051 🔍 awaiting review
+### 10. Layout, view state, and startup restoration — D005, D051 ✅
 
 One versioned window layout serves two restorers. Native hot exit restores every
 product window at startup; `@knot/projects` stores the same layout in its session
@@ -405,7 +403,7 @@ one review gate at the end.
   never switched to. While any such record exists, capture reconciliation is
   skipped, so its captures are never released as orphans.
 
-#### 10a. Layout capture and restore ✅ implemented, awaiting the review gate
+#### 10a. Layout capture and restore ✅
 
 - ✅ Editor view state: read and apply anchor, caret, top position, and
   horizontal scroll on `EditorView`, with clamping and character-boundary
@@ -445,7 +443,7 @@ one review gate at the end.
   fires when the captured layout differs from the last one the window
   reported, so a structural change also reports it after the debounce.
 
-#### 10b. Native window hot exit and startup ✅ implemented, awaiting the review gate
+#### 10b. Native window hot exit and startup ✅
 
 - ✅ Window session record: generalize the tool-layout store's single versioned
   row, debounce, and flush to hold a second record, or add a sibling store with
@@ -474,7 +472,7 @@ one review gate at the end.
   identities are reused. The extension guide update lands with the
   documentation step. Validation is in `src/app/product/tests/window_restore.rs`.
 
-#### 10c. Projects restoration ✅ implemented, awaiting the review gate
+#### 10c. Projects restoration ✅
 
 - ✅ `@knot/projects` session schema 2 with per-window layouts, a read-time
   upgrade from schema 1, and preserved unreadable records.
@@ -511,7 +509,8 @@ one review gate at the end.
   closes and opens windows and stops released terminals. In
   [design](../design.md), replace the planned layout and startup restoration
   sentence with current behavior.
-- **Review gate:** review the complete product workflow and API documentation:
+- ✅ **Review gate:** approved 2026-10-27 after a manual review of the
+  product workflow. Review the complete product workflow and API documentation:
   quit and relaunch with several project and blank windows, splits, docks,
   dirty documents, and a launch request; switching projects with layouts; and a
   changed display. Then mark the initiative complete. Preserve durable details
