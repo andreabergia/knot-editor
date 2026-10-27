@@ -18,13 +18,12 @@ to the windows Knot restores at startup. Current behavior lives in the
 [architecture](architecture.md) references and rationale in
 [decisions](decisions.md).
 
-[Extension authoring](plans/extension-authoring.md) (D056) comes first: a
-TypeScript toolchain, test harness, and module layout shared by bundled and
-installed packages, applied to `@knot/projects`. Later bundled workflows start
-on it.
+Extension authoring (D056) is complete: bundled packages and examples are
+TypeScript compiled at build time, split into modules, and tested under
+`node:test` against an in-memory host.
 
-The remaining [health review](plans/codebase-health-review.md) findings follow,
-in this order:
+The remaining [health review](plans/codebase-health-review.md) findings come
+next, in this order:
 
 | Order | Findings | Outcome |
 | --- | --- | --- |

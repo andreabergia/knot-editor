@@ -6,7 +6,7 @@ local commands and CI, installing it when it is not already available. The
 minimal profile includes the compiler and Cargo; Clippy and rustfmt are added
 explicitly.
 
-Run `just check` for local formatting, Clippy, and tests. Run `just app` to build
+Run `just check` for local formatting, Clippy, and Rust and extension tests. Run `just app` to build
 the macOS app bundle locally.
 
 The [CI workflow](../.github/workflows/ci.yml) runs on pull requests and pushes
@@ -32,13 +32,18 @@ The workflow has read-only repository permissions and pins external actions to
 commits. [Dependabot](../.github/dependabot.yml) checks for action updates
 weekly.
 
-The extension contract has a separate authoring check, also run in CI:
-`scripts/check-extensions.sh`. With Node/npm installed, it uses `npm ci` and a
-lockfile-pinned TypeScript compiler to check declarations, every TypeScript
-extension package, authoring samples and positive/negative type fixtures without
-emitting code.
-It does not use a global `tsc`. Runtime contracts still require Rust/V8 tests;
-see the [extension guide](extension-api.md) for authoring.
+Building Knot requires Node.js and npm. `build.rs` installs the lockfile-pinned
+TypeScript compiler in `scripts/extensions` when it is missing or older than the
+lockfile, compiles every bundled package under `extensions/@knot` into Cargo's
+output directory, and embeds the emitted modules. It also compiles the TypeScript
+examples for the product tests that install them. CI installs a pinned Node in
+every job that builds Rust.
+
+`scripts/check-extensions.sh`, run by `just ext` and in CI, uses `npm ci` to check
+declarations, every TypeScript package and its tests, authoring samples, and
+positive/negative type fixtures, then runs the package tests under `node:test`
+with an in-memory host (see the [extension guide](extension-api.md#write-and-test-in-typescript)).
+It does not use a global `tsc`. Runtime contracts still require Rust/V8 tests.
 
 ## Manual terminal fixtures
 

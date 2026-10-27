@@ -3,7 +3,7 @@
 The [TypeScript declarations](../src/host/js/knot.d.ts) are the API version 1
 reference for parameters, defaults, errors, completion, and lifetime rules.
 This guide covers setup and common workflows. Knot runs JavaScript; TypeScript
-is optional authoring tooling, not a runtime.
+is the recommended authoring language and compiles before installation.
 
 ## Package and check your code
 
@@ -31,11 +31,40 @@ entries share one lifecycle around installed-package startup; config failure
 stops product startup. Directory selection and loading are described in
 [host startup](architecture/extension-host.md#package-admission-and-startup).
 
-Run `scripts/check-extensions.sh` with Node/npm to check declarations and
-JavaScript examples using the lockfile-pinned TypeScript compiler. The
+Run `scripts/check-extensions.sh` with Node/npm to check declarations and every
+TypeScript package with the lockfile-pinned compiler, then run package tests. The
 [checked examples](../scripts/extensions/examples/) cover commands, providers,
 cleanup, errors, and keybindings. This check runs in CI; Rust/V8 tests separately
 validate runtime behavior.
+
+## Write and test in TypeScript
+
+A TypeScript package keeps `src/*.ts`, `test/*.test.ts`, and a `tsconfig.json`
+beside its manifest; Knot loads only the emitted `dist/` modules, one per source
+file. The [git-status example](../examples/extensions/@example/git-status/) and
+the bundled [project registry](../extensions/@knot/projects/) show the layout.
+In this repository, packages extend the shared
+[base configuration](../scripts/extensions/tsconfig.base.json), which sees only
+ES2022 and the `knot` declarations. Import sibling modules by their emitted
+name, such as `./model.js`. `npm --prefix scripts/extensions run build <dir>`
+emits one package's `dist/`; Cargo builds bundled packages itself.
+
+Keep policy in plain functions over plain data and keep mutable state out of
+module scope: export `start()` to create state and register contributions, and
+make `main.ts` only `await start()`. Tests then exercise policy directly and run
+whole flows from a fresh start.
+
+`npm --prefix scripts/extensions test` compiles every package's sources and tests
+and runs them with `node:test`. Under test, `"knot"` resolves to an
+[in-memory host](../scripts/extensions/testing/host.ts) typed against the
+declarations, and tests import its controls from `"knot/testing"`: arrange
+windows, documents, and records; queue prompt answers; run commands and emit
+application events; make the next call to an operation fail with a host error;
+and inspect records, captures, messages, and views. Each test file runs in its
+own process; call `reset()` before each test. The fake implements only what tests
+need, and anything else throws `not faked`. It does not reproduce host
+validation, scheduling, or durability, so behavior crossing the native boundary
+still needs product tests.
 
 ## Register a command
 

@@ -38,8 +38,9 @@ duplicates and rejected dependencies remain diagnosable. Discovery runs on gpui'
 background executor; the foreground admits valid packages in dependency order
 and awaits entry completion before loading dependents.
 
-Bundled packages are compiled into the binary and merged into the same discovery
-result, without reading sources from disk. They use canonical `@knot/...`
+Bundled packages are written in TypeScript, compiled by `build.rs` into the
+binary, and merged into the same discovery result, without reading sources from
+disk. They use canonical `@knot/...`
 identities, the same manifest, API-version, dependency, and rollback rules, and a
 synthetic module root instead of a captured directory. The reserved scope cannot
 be claimed by an installed package, making bundled identity structural rather

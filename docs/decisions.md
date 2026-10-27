@@ -136,7 +136,8 @@ Reference: [extension host](architecture/extension-host.md).
 Compile bundled workflow packages into the binary instead of installing them
 beside it or copying them into user data. Sources stay in the repository, work
 identically in development and release without packaging steps, and cannot
-drift from the shipped binary.
+drift from the shipped binary. The build compiles their TypeScript, so emitted
+JavaScript is never committed.
 
 Bundled packages use the reserved `@knot` scope and the same manifest, API-version,
 dependency, and rollback rules as installed packages. The reserved scope makes
@@ -148,6 +149,29 @@ A bundled package failure is reported and fails its dependents without stopping
 product startup.
 
 Reference: [extension host](architecture/extension-host.md#package-admission-and-startup).
+
+## Extension authoring and tests
+
+Write bundled packages and examples in full TypeScript, compiled per file without
+a bundler, so the runtime keeps loading ordinary captured modules and readable
+stack traces need no source maps (D032). Compiling in `build.rs` makes Node a
+build requirement; that was preferred over committing generated `dist/`, a Rust
+TypeScript compiler dependency, or restricting authors to type-erasable syntax.
+Installed packages still take built JavaScript, so TypeScript stays authoring
+tooling rather than a runtime.
+
+Test extension policy under `node:test` against an in-memory `knot` host rather
+than only through product tests, which need a shell, V8 pool, and SQLite for
+every policy case. Resolving the `knot` specifier to the fake keeps extension
+code free of dependency injection. Typing the fake against the declarations
+makes API drift a check failure. Implementing behavior instead of mocks keeps
+flow tests readable, and `not faked` failures keep its surface demand-driven.
+The fake is not a second host: product tests remain the authority for anything
+crossing the native boundary. Packages create state in `start()` so each test
+starts fresh without module reloading.
+
+References: [extension guide](extension-api.md#write-and-test-in-typescript)
+and [development](development.md).
 
 ## Bundled project registry
 
@@ -173,7 +197,7 @@ The Projects tool starts hidden. Its visibility and dock selection are native
 tool-layout state: a command-invoked extension show or hide publishes the
 fresh-window default like any other explicit user arrangement.
 
-References: [extension guide](../extension-api.md) and
+References: [extension guide](extension-api.md) and
 [workbench lifecycle](architecture/workbench-and-lifecycle.md#automatic-tool-layout-memory).
 
 ## Project sessions
