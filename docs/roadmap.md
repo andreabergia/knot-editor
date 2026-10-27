@@ -27,8 +27,8 @@ next, in this order:
 
 | Order | Findings | Outcome |
 | --- | --- | --- |
-| 1 | P0-1, P1-1, P2-7 | Editor view incremental line model, piece-table length cache, insert coalescing and edit-log bounding, and CRLF policy, as a focused plan before D002 and D031 |
-| 2 | P1-6, P2-1–P2-4 | `engine.rs` split and marshaling unification, command module regrouping, `app/terminal` and `app/extensions` directories, inline test extraction, and tokio runtime removal, as pure-move maintenance between slices |
+| 1 | P0-1, P1-1, P2-7 | [Editor view data model](plans/editor-view-data-model.md): model-backed line reads, piece-table length cache, insert coalescing and edit-log bounding, and CRLF policy, before D002 and D031 |
+| 2 | P1-6, P2-1–P2-4 | `engine.rs` split and marshaling unification, command module regrouping, `app/terminal` and `app/extensions` directories, an `editor.rs` split into input, movement, and painting, inline test extraction, and tokio runtime removal, as pure-move maintenance between slices |
 
 Pull the editor view work forward only if dogfooding on large files becomes
 disruptive; restored view state uses byte offsets that do not depend on the

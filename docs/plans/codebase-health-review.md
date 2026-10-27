@@ -334,8 +334,8 @@ parts (D054).
 
 1. **Editor view data model (P0-1)** together with **piece-table quick wins
    (P1-1)** and the CRLF policy (P2-7). This is one focused
-   slice and the prerequisite for D002 syntax highlighting and D031 Find. Plan
-   it in `docs/plans/`.
+   slice and the prerequisite for D002 syntax highlighting and D031 Find,
+   planned in [editor view data model](editor-view-data-model.md).
 2. **Structural splits (P1-6, P2-1, P2-2, P2-3, P2-4).** These are pure moves,
    best done between slices, one subsystem per commit, so history stays
    readable and the plans don't collide.
