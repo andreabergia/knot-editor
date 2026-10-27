@@ -660,6 +660,10 @@ pub enum ApplicationChange {
         active_window: Option<WindowTarget>,
         active_target: Option<PresentationTarget>,
     },
+    /// The window's captured layout changed after its view-state debounce.
+    ViewStateChanged {
+        window: WindowTarget,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]

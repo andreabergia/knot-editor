@@ -29,6 +29,7 @@ mod save;
 pub(super) mod sessions;
 mod tab_drag;
 mod tools;
+mod view_state;
 
 #[cfg(test)]
 use super::product_commands::SHOW_COMPLETIONS_COMMAND;
@@ -400,6 +401,7 @@ pub(crate) struct ProductShell {
     tasks: Vec<Task<()>>,
     extension_report_open: bool,
     extension_report_subscription: Option<Subscription>,
+    view_state: view_state::ViewStateTracking,
 }
 
 /// One live transient interaction owned by this window. Native interactions
@@ -482,14 +484,17 @@ impl ProductShell {
             tasks: Vec::new(),
             extension_report_open: false,
             extension_report_subscription: None,
+            view_state: Default::default(),
         }
     }
 
     fn observe_extension_host(&mut self, native_window: &mut Window, cx: &mut Context<Self>) {
         self.window = Some(native_window.window_handle());
-        self.application_observer = Some(cx.observe(&cx.entity(), |_, _, cx| {
-            super::extension_host::application_changed(cx)
+        self.application_observer = Some(cx.observe(&cx.entity(), |this, _, cx| {
+            super::extension_host::application_changed(cx);
+            this.schedule_view_state(cx);
         }));
+        self.observe_window_bounds(native_window, cx);
         self.application_activation =
             Some(cx.observe_window_activation(native_window, |_, _, cx| {
                 super::extension_host::application_changed(cx)
@@ -563,14 +568,16 @@ impl ProductShell {
             }
             self.application_focus.push((
                 handle.clone(),
-                cx.on_focus(&handle, window, |_, _, cx| {
-                    super::extension_host::application_changed(cx)
+                cx.on_focus(&handle, window, |this, _, cx| {
+                    super::extension_host::application_changed(cx);
+                    this.schedule_view_state(cx);
                 }),
                 cx.on_blur(&handle, window, |_, _, cx| {
                     super::extension_host::application_changed(cx)
                 }),
             ));
         }
+        self.observe_editor_view_state(cx);
     }
 
     pub(crate) fn application_window(

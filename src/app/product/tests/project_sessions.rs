@@ -2,8 +2,7 @@
 
 use super::operations::empty_product_window;
 use super::projects::{
-    Fixture, activate_tree_tab, create_project, listed_projects, restart_registry, start_registry,
-    wait_for_prompt,
+    Fixture, activate_tree_tab, listed_projects, restart_registry, start_registry, wait_for_prompt,
 };
 use super::*;
 use crate::app::recovery::{ApplicationRecovery, StoredSnapshot};
@@ -63,19 +62,6 @@ fn set_root(shell: &Entity<ProductShell>, uri: Option<&str>, cx: &mut TestAppCon
             .unwrap_or_default();
         shell.replace_workspace_roots(roots, cx);
         cx.notify();
-    });
-    cx.run_until_parked();
-}
-
-/// Waits until the window shows a root; switches finish on the provider runtime.
-fn wait_for_root(shell: &Entity<ProductShell>, uri: &str, cx: &mut TestAppContext) {
-    wait_for_api_condition(cx, |cx| {
-        shell
-            .read(cx)
-            .workspace
-            .snapshot()
-            .first_root()
-            .is_some_and(|root| root.to_string() == uri)
     });
     cx.run_until_parked();
 }
@@ -180,6 +166,28 @@ fn captures(session: &Value) -> Vec<String> {
         .collect()
 }
 
+impl Fixture {
+    /// Wait until the focused window shows exactly these roots, then follow it.
+    fn follow_roots(&mut self, expected: &[&str], cx: &mut TestAppContext) {
+        wait_for_api_condition(cx, |cx| {
+            cx.active_window()
+                .and_then(|window| window.downcast::<ProductShell>())
+                .and_then(|window| window.read(cx).ok())
+                .is_some_and(|shell| {
+                    shell
+                        .workspace
+                        .snapshot()
+                        .roots()
+                        .iter()
+                        .map(|root| root.uri.to_string())
+                        .eq(expected.iter().map(|uri| uri.to_string()))
+                })
+        });
+        cx.run_until_parked();
+        self.follow(cx);
+    }
+}
+
 fn select_project(fixture: &Fixture, id: &str, cx: &mut TestAppContext) {
     let tree = wait_for_contributed_view(&fixture.shell, "builtin.projects", cx);
     wait_for_api_condition(cx, |cx| tree.read(cx).status_for_test(id).is_some());
@@ -208,11 +216,11 @@ fn product_shells(cx: &mut TestAppContext) -> Vec<(gpui::AnyWindowHandle, Entity
 
 #[gpui::test]
 fn switching_suspends_and_restores_unsaved_documents_across_windows(cx: &mut TestAppContext) {
-    let fixture = start_registry(cx);
+    let mut fixture = start_registry(cx);
     let a = project_dir("one.txt", "one");
     std::fs::write(a.path().join("two.txt"), "two").unwrap();
     let b = project_dir("b.txt", "bee");
-    create_project(&fixture.shell, fixture.window, a.path(), "A", cx);
+    fixture.create_project(a.path(), "A", cx);
     assert_eq!(root(&fixture.shell, cx), Some(file_uri(a.path())));
     open_path(&fixture.shell, &a.path().join("one.txt"), cx);
     type_text(&fixture.shell, " edited", cx);
@@ -222,7 +230,7 @@ fn switching_suspends_and_restores_unsaved_documents_across_windows(cx: &mut Tes
     set_root(&second, Some(&file_uri(a.path())), cx);
     open_path(&second, &a.path().join("two.txt"), cx);
 
-    create_project(&fixture.shell, fixture.window, b.path(), "B", cx);
+    fixture.create_project(b.path(), "B", cx);
     assert_eq!(root(&fixture.shell, cx), Some(file_uri(b.path())));
     assert!(!cx.read(|cx| cx.windows().contains(&second_window)));
     // A project without a session opens with an untitled document in the
@@ -260,7 +268,7 @@ fn switching_suspends_and_restores_unsaved_documents_across_windows(cx: &mut Tes
 
     // Back to A: both windows return with their documents and dirty text.
     select_project(&fixture, &a_id, cx);
-    wait_for_root(&fixture.shell, &file_uri(a.path()), cx);
+    fixture.follow_roots(&[&file_uri(a.path())], cx);
     assert_eq!(root(&fixture.shell, cx), Some(file_uri(a.path())));
     assert_eq!(texts(&fixture.shell, cx), ["one edited", "scratch"]);
     let shells = product_shells(cx);
@@ -282,13 +290,13 @@ fn switching_suspends_and_restores_unsaved_documents_across_windows(cx: &mut Tes
 
 #[gpui::test]
 fn a_switch_racing_an_edit_retries_with_fresh_captures(cx: &mut TestAppContext) {
-    let fixture = start_registry(cx);
+    let mut fixture = start_registry(cx);
     let a = project_dir("one.txt", "one");
     let b = project_dir("b.txt", "bee");
-    create_project(&fixture.shell, fixture.window, a.path(), "A", cx);
+    fixture.create_project(a.path(), "A", cx);
     open_path(&fixture.shell, &a.path().join("one.txt"), cx);
     type_text(&fixture.shell, " first", cx);
-    create_project(&fixture.shell, fixture.window, b.path(), "B", cx);
+    fixture.create_project(b.path(), "B", cx);
     open_path(&fixture.shell, &b.path().join("b.txt"), cx);
     type_text(&fixture.shell, " typed", cx);
     let listed = listed_projects(&fixture.shell, fixture.window, cx);
@@ -331,7 +339,7 @@ fn a_switch_racing_an_edit_retries_with_fresh_captures(cx: &mut TestAppContext) 
     }
     type_text(&fixture.shell, " racing", cx);
     release.send(()).unwrap();
-    wait_for_root(&fixture.shell, &file_uri(a.path()), cx);
+    fixture.follow_roots(&[&file_uri(a.path())], cx);
     assert!(!cx.has_pending_prompt());
     assert_eq!(texts(&fixture.shell, cx), ["one first"]);
     let listed = listed_projects(&fixture.shell, fixture.window, cx);
@@ -347,13 +355,13 @@ fn a_switch_racing_an_edit_retries_with_fresh_captures(cx: &mut TestAppContext) 
 
 #[gpui::test]
 fn a_suspended_root_opened_manually_is_never_bound_or_overwritten(cx: &mut TestAppContext) {
-    let fixture = start_registry(cx);
+    let mut fixture = start_registry(cx);
     let a = project_dir("one.txt", "one");
     let b = project_dir("b.txt", "bee");
-    create_project(&fixture.shell, fixture.window, a.path(), "A", cx);
+    fixture.create_project(a.path(), "A", cx);
     open_path(&fixture.shell, &a.path().join("one.txt"), cx);
     type_text(&fixture.shell, " kept", cx);
-    create_project(&fixture.shell, fixture.window, b.path(), "B", cx);
+    fixture.create_project(b.path(), "B", cx);
     let listed = listed_projects(&fixture.shell, fixture.window, cx);
     let a_id = project_id(&listed, "A");
     let suspended = listed["sessions"][&a_id].clone();
@@ -379,10 +387,10 @@ fn a_suspended_root_opened_manually_is_never_bound_or_overwritten(cx: &mut TestA
 
 #[gpui::test]
 fn closing_the_last_window_suspends_without_captures(cx: &mut TestAppContext) {
-    let fixture = start_registry(cx);
+    let mut fixture = start_registry(cx);
     let a = project_dir("one.txt", "one");
     std::fs::write(a.path().join("two.txt"), "two").unwrap();
-    create_project(&fixture.shell, fixture.window, a.path(), "A", cx);
+    fixture.create_project(a.path(), "A", cx);
     let (second, second_window) = empty_product_window(&fixture.documents, cx);
     set_root(&second, Some(&file_uri(a.path())), cx);
     open_path(&fixture.shell, &a.path().join("one.txt"), cx);
@@ -427,9 +435,9 @@ fn closing_the_last_window_suspends_without_captures(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn startup_suspends_active_sessions_without_a_window(cx: &mut TestAppContext) {
-    let fixture = start_registry(cx);
+    let mut fixture = start_registry(cx);
     let a = project_dir("one.txt", "one");
-    create_project(&fixture.shell, fixture.window, a.path(), "A", cx);
+    fixture.create_project(a.path(), "A", cx);
     open_path(&fixture.shell, &a.path().join("one.txt"), cx);
     let listed = listed_projects(&fixture.shell, fixture.window, cx);
     let a_id = project_id(&listed, "A");
@@ -456,14 +464,14 @@ fn startup_suspends_active_sessions_without_a_window(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn removal_reports_and_releases_suspended_text_only_after_the_deletes(cx: &mut TestAppContext) {
-    let fixture = start_registry(cx);
+    let mut fixture = start_registry(cx);
     let a = project_dir("one.txt", "one");
     let b = project_dir("b.txt", "bee");
-    create_project(&fixture.shell, fixture.window, a.path(), "A", cx);
+    fixture.create_project(a.path(), "A", cx);
     open_path(&fixture.shell, &a.path().join("one.txt"), cx);
     type_text(&fixture.shell, " unsaved", cx);
     new_untitled(&fixture.shell, fixture.window, "scratch", cx);
-    create_project(&fixture.shell, fixture.window, b.path(), "B", cx);
+    fixture.create_project(b.path(), "B", cx);
     let listed = listed_projects(&fixture.shell, fixture.window, cx);
     let (a_id, b_id) = (project_id(&listed, "A"), project_id(&listed, "B"));
     assert_eq!(retained(cx).len(), 2);
@@ -537,9 +545,9 @@ fn activation_releases_captures_no_session_references(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn quit_records_no_window_closure(cx: &mut TestAppContext) {
-    let fixture = start_registry(cx);
+    let mut fixture = start_registry(cx);
     let a = project_dir("one.txt", "one");
-    create_project(&fixture.shell, fixture.window, a.path(), "A", cx);
+    fixture.create_project(a.path(), "A", cx);
     open_path(&fixture.shell, &a.path().join("one.txt"), cx);
     let listed = listed_projects(&fixture.shell, fixture.window, cx);
     let a_id = project_id(&listed, "A");
@@ -577,14 +585,14 @@ fn quit_records_no_window_closure(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn a_partial_restore_commits_and_reports_what_was_skipped(cx: &mut TestAppContext) {
-    let fixture = start_registry(cx);
+    let mut fixture = start_registry(cx);
     let a = project_dir("one.txt", "one");
     std::fs::write(a.path().join("gone.txt"), "soon gone").unwrap();
     let b = project_dir("b.txt", "bee");
-    create_project(&fixture.shell, fixture.window, a.path(), "A", cx);
+    fixture.create_project(a.path(), "A", cx);
     open_path(&fixture.shell, &a.path().join("one.txt"), cx);
     open_path(&fixture.shell, &a.path().join("gone.txt"), cx);
-    create_project(&fixture.shell, fixture.window, b.path(), "B", cx);
+    fixture.create_project(b.path(), "B", cx);
     let a_id = project_id(&listed_projects(&fixture.shell, fixture.window, cx), "A");
     std::fs::remove_file(a.path().join("gone.txt")).unwrap();
 
@@ -593,16 +601,15 @@ fn a_partial_restore_commits_and_reports_what_was_skipped(cx: &mut TestAppContex
     let (_, message) = cx.pending_prompt().unwrap();
     assert_eq!(message, "Opened A. gone.txt no longer exists.");
     cx.simulate_prompt_answer("OK");
-    cx.run_until_parked();
-    assert_eq!(root(&fixture.shell, cx), Some(file_uri(a.path())));
+    fixture.follow_roots(&[&file_uri(a.path())], cx);
     assert_eq!(texts(&fixture.shell, cx), ["one"]);
 }
 
 #[gpui::test]
 fn restarting_the_registry_keeps_bound_sessions_active(cx: &mut TestAppContext) {
-    let fixture = start_registry(cx);
+    let mut fixture = start_registry(cx);
     let a = project_dir("one.txt", "one");
-    create_project(&fixture.shell, fixture.window, a.path(), "A", cx);
+    fixture.create_project(a.path(), "A", cx);
     let a_id = project_id(&listed_projects(&fixture.shell, fixture.window, cx), "A");
 
     let restart = dispatch_product_command(
@@ -687,11 +694,11 @@ fn project_roots(listed: &Value, id: &str) -> Vec<String> {
 
 #[gpui::test]
 fn root_edits_in_a_bound_window_move_the_project_and_its_other_windows(cx: &mut TestAppContext) {
-    let fixture = start_registry(cx);
+    let mut fixture = start_registry(cx);
     let a = project_dir("one.txt", "one");
     let c = project_dir("c.txt", "see");
     let (a_uri, c_uri) = (file_uri(a.path()), file_uri(c.path()));
-    create_project(&fixture.shell, fixture.window, a.path(), "A", cx);
+    fixture.create_project(a.path(), "A", cx);
     let a_id = project_id(&listed_projects(&fixture.shell, fixture.window, cx), "A");
     let (second, _) = empty_product_window(&fixture.documents, cx);
     set_root(&second, Some(&a_uri), cx);
@@ -726,7 +733,7 @@ fn root_edits_in_a_bound_window_move_the_project_and_its_other_windows(cx: &mut 
 
     // Removing a folder in another window follows back the same way.
     set_roots(&second, &[&c_uri], cx);
-    wait_for_roots(&fixture.shell, &[&c_uri], cx);
+    fixture.follow_roots(&[&c_uri], cx);
     wait_for_roots(&third, &[&c_uri], cx);
     let listed = listed_projects(&fixture.shell, fixture.window, cx);
     assert_eq!(project_roots(&listed, &a_id), std::slice::from_ref(&c_uri));
@@ -736,12 +743,12 @@ fn root_edits_in_a_bound_window_move_the_project_and_its_other_windows(cx: &mut 
 
 #[gpui::test]
 fn clearing_or_matching_another_project_unbinds_the_window(cx: &mut TestAppContext) {
-    let fixture = start_registry(cx);
+    let mut fixture = start_registry(cx);
     let a = project_dir("one.txt", "one");
     let b = project_dir("b.txt", "bee");
     let (a_uri, b_uri) = (file_uri(a.path()), file_uri(b.path()));
-    create_project(&fixture.shell, fixture.window, b.path(), "B", cx);
-    create_project(&fixture.shell, fixture.window, a.path(), "A", cx);
+    fixture.create_project(b.path(), "B", cx);
+    fixture.create_project(a.path(), "A", cx);
     let listed = listed_projects(&fixture.shell, fixture.window, cx);
     let (a_id, b_id) = (project_id(&listed, "A"), project_id(&listed, "B"));
     let b_session = listed["sessions"][&b_id].clone();
@@ -775,26 +782,26 @@ fn clearing_or_matching_another_project_unbinds_the_window(cx: &mut TestAppConte
 
 #[gpui::test]
 fn a_multi_root_project_restores_every_root_across_switches_and_restarts(cx: &mut TestAppContext) {
-    let fixture = start_registry(cx);
+    let mut fixture = start_registry(cx);
     let a = project_dir("one.txt", "one");
     let c = project_dir("c.txt", "see");
     let b = project_dir("b.txt", "bee");
     let (a_uri, c_uri) = (file_uri(a.path()), file_uri(c.path()));
-    create_project(&fixture.shell, fixture.window, a.path(), "A", cx);
+    fixture.create_project(a.path(), "A", cx);
     set_roots(&fixture.shell, &[&a_uri, &c_uri], cx);
     open_path(&fixture.shell, &c.path().join("c.txt"), cx);
     type_text(&fixture.shell, " dirty", cx);
     let a_id = project_id(&listed_projects(&fixture.shell, fixture.window, cx), "A");
 
-    create_project(&fixture.shell, fixture.window, b.path(), "B", cx);
+    fixture.create_project(b.path(), "B", cx);
     select_project(&fixture, &a_id, cx);
-    wait_for_roots(&fixture.shell, &[&a_uri, &c_uri], cx);
+    fixture.follow_roots(&[&a_uri, &c_uri], cx);
     assert_eq!(texts(&fixture.shell, cx), ["see dirty"]);
 
     // Suspended with its text, A survives a restart and restores both roots.
     let b_id = project_id(&listed_projects(&fixture.shell, fixture.window, cx), "B");
     select_project(&fixture, &b_id, cx);
-    wait_for_roots(&fixture.shell, &[&file_uri(b.path())], cx);
+    fixture.follow_roots(&[&file_uri(b.path())], cx);
     // Listing runs after the switch finishes recording, so the restart cannot
     // interrupt it.
     assert_eq!(
@@ -807,18 +814,18 @@ fn a_multi_root_project_restores_every_root_across_switches_and_restarts(cx: &mu
     assert_eq!(captures(&listed["sessions"][&a_id]).len(), 1);
     assert_eq!(retained(cx).len(), 1);
     select_project(&fixture, &a_id, cx);
-    wait_for_roots(&fixture.shell, &[&a_uri, &c_uri], cx);
+    fixture.follow_roots(&[&a_uri, &c_uri], cx);
     assert_eq!(texts(&fixture.shell, cx), ["see dirty"]);
     assert!(!cx.has_pending_prompt());
 }
 
 #[gpui::test]
 fn a_new_project_window_opens_with_the_project_roots_and_joins_it(cx: &mut TestAppContext) {
-    let fixture = start_registry(cx);
+    let mut fixture = start_registry(cx);
     let a = project_dir("one.txt", "one");
     let c = project_dir("c.txt", "see");
     let (a_uri, c_uri) = (file_uri(a.path()), file_uri(c.path()));
-    create_project(&fixture.shell, fixture.window, a.path(), "A", cx);
+    fixture.create_project(a.path(), "A", cx);
     set_roots(&fixture.shell, &[&a_uri, &c_uri], cx);
     let a_id = project_id(&listed_projects(&fixture.shell, fixture.window, cx), "A");
 

@@ -1948,6 +1948,20 @@ async fn open_window(
     Ok(window.ok_or(AccessError::InvalidTarget)?)
 }
 
+impl HostSuccess for crate::app::window_layout::WindowLayout {
+    fn encode(self) -> Result<EncodedValue, DecodeError> {
+        encode_json(self)
+    }
+}
+
+#[host_operation("captureLayout")]
+async fn capture_layout(
+    context: HostContext,
+    arguments: WindowLookup,
+) -> Result<crate::app::window_layout::WindowLayout, AccessError> {
+    context.foreground(|_, cx| product::sessions::capture_layout(&arguments.target, cx))?
+}
+
 #[host_operation("focusWindow")]
 async fn focus_window(context: HostContext, arguments: WindowLookup) -> Result<(), AccessError> {
     context.foreground(|_, cx| product::sessions::focus_window(&arguments.target, cx))?

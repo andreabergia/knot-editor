@@ -112,17 +112,20 @@ impl ApplicationObservation {
         self.snapshot = snapshot;
         changes
             .into_iter()
-            .map(|change| {
-                self.sequence = self
-                    .sequence
-                    .checked_add(1)
-                    .expect("application event sequence exhausted");
-                ApplicationEvent {
-                    sequence: self.sequence,
-                    change,
-                }
-            })
+            .map(|change| self.push(change))
             .collect()
+    }
+
+    /// Sequence a change that snapshot comparison cannot derive.
+    pub(crate) fn push(&mut self, change: ApplicationChange) -> ApplicationEvent {
+        self.sequence = self
+            .sequence
+            .checked_add(1)
+            .expect("application event sequence exhausted");
+        ApplicationEvent {
+            sequence: self.sequence,
+            change,
+        }
     }
 
     pub(crate) fn subscribe(&mut self, key: ExtensionKey) -> WorkbenchObservation {

@@ -1,18 +1,21 @@
-//! Session replacement: one revalidated foreground commit that swaps the
-//! document presentations of a set of windows.
+//! Session replacement: one revalidated foreground commit that closes a set of
+//! windows and opens their replacements with restored layouts.
 //!
 //! Admission claims the protected-closure slot, so a replacement never
 //! interleaves with closure prompts, quit, or another replacement. Staging
 //! validates roots, reads destination resources, and loads retained captures
 //! off the foreground without creating documents. The commit then revalidates
-//! every captured window, the exact set of presented source documents, and the
+//! every released window, the exact set of presented source documents, and the
 //! retained revision of each document whose final view is removed. Any mismatch
-//! rejects with nothing changed; otherwise the windows change in one turn, so
-//! observers see only the committed result.
+//! rejects with nothing changed; otherwise every destination window is created
+//! and every released window closed in one turn, so observers see only the
+//! committed result.
 
 use super::super::extension_host::handlers::{AccessError, OpenError, ReplaceError};
 use super::*;
 use crate::app::recovery::{RestoreOutcome, RestoredResource, StagedRestore};
+use crate::app::window_layout::{PlannedTab, WindowLayout};
+use crate::app::workbench::ArrangedTab;
 use crate::host::{declarations::HostError as _, protocol::WindowTarget};
 
 /// One document presented in a window leaving its current session, with the
@@ -33,12 +36,14 @@ pub(crate) struct SessionEntry {
 
 #[derive(Clone, Debug, PartialEq, serde::Deserialize)]
 pub(crate) struct DestinationWindow {
-    /// An existing window to reuse; `None` creates a window.
-    pub(crate) target: Option<String>,
     pub(crate) roots: Vec<String>,
     pub(crate) entries: Vec<SessionEntry>,
     #[serde(default, deserialize_with = "index")]
     pub(crate) selected: Option<usize>,
+    /// A captured [`WindowLayout`]; decoded at admission and ignored when its
+    /// version or shape is unsupported.
+    #[serde(default)]
+    pub(crate) layout: Option<serde_json::Value>,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Deserialize)]
@@ -77,10 +82,22 @@ pub(crate) enum EntryOutcome {
     Failed { code: &'static str, message: String },
 }
 
+/// Whether a destination window's layout was restored.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum LayoutOutcome {
+    Applied,
+    /// An unsupported version or invalid shape; the entries were arranged as
+    /// if no layout had been given.
+    Ignored,
+}
+
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub(crate) struct ReplacedWindow {
     pub(crate) window: WindowTarget,
     pub(crate) entries: Vec<EntryOutcome>,
+    /// `None` when the window had no layout.
+    pub(crate) layout: Option<LayoutOutcome>,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
@@ -159,18 +176,6 @@ pub(crate) fn replace_windows(
         );
     }
     let mut named = HashSet::new();
-    let mut destinations = Vec::new();
-    for window in &request.windows {
-        destinations.push(match &window.target {
-            Some(target) => {
-                if !named.insert(target.clone()) {
-                    return Err(AccessError::InvalidTarget.into());
-                }
-                Some(capture(target, cx)?)
-            }
-            None => None,
-        });
-    }
     let mut released = Vec::new();
     for target in &request.release {
         if !named.insert(target.clone()) {
@@ -178,6 +183,11 @@ pub(crate) fn replace_windows(
         }
         released.push(capture(target, cx)?);
     }
+    let layouts = request
+        .windows
+        .iter()
+        .map(|window| window.layout.as_ref().map(WindowLayout::decode))
+        .collect::<Vec<_>>();
     if request
         .focus
         .is_some_and(|focus| focus >= request.windows.len())
@@ -193,14 +203,7 @@ pub(crate) fn replace_windows(
             ProductShell::set_protected_closure_active(false, cx);
             let (roots, entries) = staged?;
             commit(
-                &request,
-                &owner,
-                &caller,
-                destinations,
-                released,
-                roots,
-                entries,
-                cx,
+                &request, &owner, &caller, layouts, released, roots, entries, cx,
             )
         });
         let (result, restored) = match committed {
@@ -408,7 +411,7 @@ fn commit(
     request: &ReplaceWindowsRequest,
     owner: &str,
     caller: &operations::OperationCaller,
-    destinations: Vec<Option<CapturedWindow>>,
+    layouts: Vec<Option<Option<WindowLayout>>>,
     released: Vec<CapturedWindow>,
     roots: Vec<Vec<super::super::resource::ResourceUri>>,
     staged: Vec<Vec<Staged>>,
@@ -417,11 +420,7 @@ fn commit(
     if !caller.is_live(cx) {
         return Err(AccessError::Cancelled.into());
     }
-    let sources = destinations
-        .iter()
-        .flatten()
-        .chain(released.iter())
-        .collect::<Vec<_>>();
+    let sources = released.iter().collect::<Vec<_>>();
     if sources.iter().any(|window| !window.is_live(cx)) {
         return Err(AccessError::InvalidTarget.into());
     }
@@ -475,86 +474,92 @@ fn commit(
         }
     }
 
-    let mut created = Vec::new();
-    for _ in destinations.iter().filter(|window| window.is_none()) {
-        match launch::open_session_window(cx) {
-            Ok((shell, handle)) => created.push(CapturedWindow { shell, handle }),
+    // Every destination window is created before anything changes, so a
+    // failed creation leaves the source windows intact.
+    let mut destinations = Vec::new();
+    for layout in &layouts {
+        let geometry = layout
+            .as_ref()
+            .and_then(|layout| layout.as_ref())
+            .and_then(|layout| layout.geometry.as_ref());
+        match launch::open_session_window(geometry, cx) {
+            Ok((shell, handle)) => destinations.push(CapturedWindow { shell, handle }),
             Err(_) => {
-                for window in created {
+                for window in destinations {
                     let _ = cx.update_window(window.handle, |_, window, _| window.remove_window());
                 }
                 return Err(AccessError::InvalidTarget.into());
             }
         }
     }
-    let mut created = created.into_iter();
-    let destinations = destinations
-        .into_iter()
-        .map(|window| window.unwrap_or_else(|| created.next().expect("created per new window")))
-        .collect::<Vec<_>>();
 
-    for window in destinations.iter().chain(released.iter()) {
-        window.shell.update(cx, |shell, cx| {
+    // Released windows close as any window does, stopping their terminals.
+    for window in &released {
+        let terminals = window.shell.update(cx, |shell, cx| {
             shell.next_open_generation();
             shell
                 .workbench
                 .update(cx, |workbench, _| workbench.remove_document_tabs());
-            cx.notify();
+            shell
+                .workbench
+                .read(cx)
+                .tab_snapshots()
+                .into_iter()
+                .filter_map(|tab| match tab.surface {
+                    TabSurfaceId::Terminal(id) => Some(id),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
         });
-    }
-    for window in &released {
-        let terminals = window
-            .shell
-            .read(cx)
-            .workbench
-            .read(cx)
-            .tab_snapshots()
-            .iter()
-            .any(|tab| matches!(tab.surface, TabSurfaceId::Terminal(_)));
-        if terminals {
-            // A window with a terminal stays open, so a switch never stops it.
-            window.shell.update(cx, |shell, cx| {
-                shell.replace_workspace_roots(Vec::new(), cx);
-                shell.status = "session moved to another window".into();
-                cx.notify();
-            });
-        } else {
-            let _ = cx.update_window(window.handle, |_, window, cx| {
-                tab_drag::cancel_source_window(window, cx);
-                window.remove_window();
-            });
-        }
+        ProductShell::close_terminal_ids(terminals, cx);
+        let _ = cx.update_window(window.handle, |_, window, cx| {
+            tab_drag::cancel_source_window(window, cx);
+            window.remove_window();
+        });
     }
 
     let mut restored = false;
     let mut outcomes = Vec::new();
-    for ((window, (destination, roots)), staged) in destinations
+    for (((window, (destination, roots)), staged), layout) in destinations
         .iter()
         .zip(request.windows.iter().zip(roots))
         .zip(staged)
+        .zip(layouts)
     {
         let mut entries = Vec::new();
-        let mut presented = Vec::new();
+        let mut resolved = Vec::new();
         for (entry, staged) in destination.entries.iter().zip(staged) {
             let (outcome, document) = resolve(entry, staged, &mut restored, cx);
             entries.push(outcome);
-            presented.push(document);
+            resolved.push(document);
         }
         let handle = window.handle;
-        window.shell.update(cx, |shell, cx| {
+        let outcome = window.shell.update(cx, |shell, cx| {
             shell.replace_workspace_roots(roots, cx);
+            let outcome = match &layout {
+                Some(Some(layout)) => {
+                    shell.apply_layout(layout, &destination.entries, &resolved, cx);
+                    Some(LayoutOutcome::Applied)
+                }
+                Some(None) => Some(LayoutOutcome::Ignored),
+                None => None,
+            };
+            // Entries the layout does not place still present in the normal
+            // group, so restored text is never hidden.
             let mut tabs = Vec::new();
-            for document in presented {
+            for document in resolved {
                 tabs.push(document.map(|document| shell.present_session_document(document, cx)));
             }
-            let selected = destination
-                .selected
-                .and_then(|index| tabs.get(index).copied().flatten())
-                .or_else(|| tabs.iter().flatten().next().copied());
-            if let Some((pane, tab)) = selected {
-                shell
-                    .workbench
-                    .update(cx, |workbench, _| workbench.activate_tab(pane, tab));
+            if outcome != Some(LayoutOutcome::Applied) {
+                let selected = destination
+                    .selected
+                    .and_then(|index| tabs.get(index).copied().flatten())
+                    .or_else(|| tabs.iter().flatten().next().copied());
+                if let Some((pane, tab)) = selected {
+                    shell
+                        .workbench
+                        .update(cx, |workbench, _| workbench.activate_tab(pane, tab));
+                }
             }
             // A window left with only docks would let them fill it; give it
             // the ordinary untitled document in the normal group instead.
@@ -563,10 +568,12 @@ fn commit(
             }
             shell.status = "session opened".into();
             cx.notify();
+            outcome
         });
         outcomes.push(ReplacedWindow {
             window: window.target(),
             entries,
+            layout: outcome,
         });
     }
 
@@ -696,6 +703,101 @@ fn resolve(
 }
 
 impl ProductShell {
+    /// Capture this window's layout with its native geometry.
+    pub(crate) fn capture_layout(&self, window: &Window, cx: &App) -> WindowLayout {
+        use crate::app::window_layout::{WindowGeometry, WindowState};
+        let (state, bounds) = match window.window_bounds() {
+            WindowBounds::Windowed(bounds) => (WindowState::Windowed, bounds),
+            WindowBounds::Maximized(bounds) => (WindowState::Maximized, bounds),
+            WindowBounds::Fullscreen(bounds) => (WindowState::Fullscreen, bounds),
+        };
+        let geometry = WindowGeometry {
+            x: f32::from(bounds.origin.x),
+            y: f32::from(bounds.origin.y),
+            width: f32::from(bounds.size.width),
+            height: f32::from(bounds.size.height),
+            state,
+            display: window
+                .display(cx)
+                .and_then(|display| display.uuid().ok())
+                .map(|uuid| uuid.to_string()),
+        };
+        WindowLayout::capture(
+            self.workbench.read(cx),
+            Some(geometry),
+            Self::documents(cx).read(cx),
+            cx,
+        )
+    }
+
+    /// Arrange this fresh window from a layout. Document tabs resolve to the
+    /// window's entry with the same document identity, else the same URI;
+    /// each tab kind is then recreated by its own step. Never publishes the
+    /// tool-only default.
+    fn apply_layout(
+        &mut self,
+        layout: &WindowLayout,
+        entries: &[SessionEntry],
+        resolved: &[Option<DocumentId>],
+        cx: &mut Context<Self>,
+    ) {
+        let normalized = |uri: &str| parse_uri(uri).ok().map(|uri| uri.to_string());
+        let resolve = |document: Option<&str>, uri: Option<&str>| {
+            let candidates = entries.iter().zip(resolved);
+            document
+                .and_then(|document| {
+                    candidates
+                        .clone()
+                        .find(|(entry, _)| entry.document.as_deref() == Some(document))
+                        .and_then(|(_, resolved)| *resolved)
+                })
+                .or_else(|| {
+                    let uri = normalized(uri?)?;
+                    candidates
+                        .clone()
+                        .find(|(entry, _)| {
+                            entry.uri.as_deref().and_then(normalized).as_ref() == Some(&uri)
+                        })
+                        .and_then(|(_, resolved)| *resolved)
+                })
+        };
+        if layout.names_tool(crate::app::tool_layout::EXPLORER_TOOL_ID) {
+            self.ensure_explorer(false, cx);
+        }
+        let plan = {
+            let workbench = self.workbench.read(cx);
+            layout.plan(resolve, |tool| workbench.tool_by_stable_id(tool).is_some())
+        };
+        let documents = Self::documents(cx);
+        let root = plan.map(|plan| {
+            plan.map(&mut |tab| match tab {
+                PlannedTab::Document { document, view } => ArrangedTab::Document {
+                    document,
+                    model: documents
+                        .read(cx)
+                        .get(document)
+                        .expect("resolved documents are live")
+                        .model()
+                        .clone(),
+                    view,
+                },
+                PlannedTab::Tool(tool) => ArrangedTab::Tool(
+                    self.workbench
+                        .read(cx)
+                        .tool_by_stable_id(&tool)
+                        .expect("planned tools are registered"),
+                ),
+                PlannedTab::Terminal => {
+                    let (id, view) = self.create_terminal(cx);
+                    ArrangedTab::Terminal(id, Some(view))
+                }
+            })
+        });
+        let sizes = layout.dock_sizes.to_array();
+        self.workbench
+            .update(cx, |workbench, cx| workbench.arrange(root, sizes, cx));
+    }
+
     /// Present a document in this window's normal document group, reusing an
     /// existing tab.
     fn present_session_document(
@@ -737,6 +839,18 @@ pub(crate) fn discard_window(target: &WindowTarget, cx: &mut App) {
     if let Ok((_, handle)) = operations::capture_window(target, cx) {
         let _ = cx.update_window(handle, |_, window, _| window.remove_window());
     }
+}
+
+/// Capture a product window's layout.
+pub(crate) fn capture_layout(
+    target: &WindowTarget,
+    cx: &mut App,
+) -> Result<WindowLayout, AccessError> {
+    let (shell, handle) = operations::capture_window(target, cx)?;
+    cx.update_window(handle, |_, window, cx| {
+        shell.read(cx).capture_layout(window, cx)
+    })
+    .map_err(|_| AccessError::InvalidTarget)
 }
 
 /// Activate a product window and focus its active surface.

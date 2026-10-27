@@ -404,26 +404,26 @@ one review gate at the end.
   never switched to. While any such record exists, capture reconciliation is
   skipped, so its captures are never released as orphans.
 
-#### 10a. Layout capture and restore ⬜
+#### 10a. Layout capture and restore ✅ implemented, awaiting the review gate
 
-- ⬜ Editor view state: read and apply anchor, caret, top position, and
+- ✅ Editor view state: read and apply anchor, caret, top position, and
   horizontal scroll on `EditorView`, with clamping and character-boundary
   snapping. This replaces the test-only presentation-state helpers where
   practical.
-- ⬜ A `window_layout` module: capture a `Workbench` (with its editor views and
+- ✅ A `window_layout` module: capture a `Workbench` (with its editor views and
   native window bounds) into the versioned layout, and build a pruned,
   invariant-checked arrangement from a layout plus resolved documents and
   registered tools. Each tab kind recreates its presentation through one
   per-kind step (open document view, attach tool, start terminal), so a new
   kind adds a step rather than a special case. Pruning lives in one place
   shared by both restorers.
-- ⬜ `workbench.captureLayout` handler and `WindowLayout` declarations in
+- ✅ `workbench.captureLayout` handler and `WindowLayout` declarations in
   `knot.d.ts`. `replaceWindows` drops window reuse (`SessionWindow.target`):
   it creates every destination window with its layout and geometry in the same
   commit and closes every released window, stopping its terminals, and reports
   the per-window `layout` outcome. Update `@knot/projects` switching in the
   same step so the bundled package keeps working.
-- ⬜ The `viewStateChanged` event: per-window debounce fed by editor view state,
+- ✅ The `viewStateChanged` event: per-window debounce fed by editor view state,
   focus, dock-resize, and `observe_window_bounds` changes.
 - **Validation:** unit tests for layout round-trip, pruning (unknown tools,
   unmatched documents, nested one-child splits, bad
@@ -436,6 +436,13 @@ one review gate at the end.
   their terminals, an ignored layout falling back, and no tool-layout
   publish. Observation tests for event coalescing. `captureLayout` and
   `replaceWindows` layout cases in `scripts/extension-api/contract.test.ts`.
+- **Notes:** the layout lives in `src/app/window_layout.rs` and installs
+  through `Workbench::arrange`; a result's `layout` is null when none was
+  given. A switch's reports now target the created window, because the
+  command's own window closed. Entries a layout does not place still open in
+  the normal group, so restored text is never hidden. `viewStateChanged`
+  fires when the captured layout differs from the last one the window
+  reported, so a structural change also reports it after the debounce.
 
 #### 10b. Native window hot exit and startup ⬜
 

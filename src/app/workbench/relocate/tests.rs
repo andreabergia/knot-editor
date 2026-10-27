@@ -37,8 +37,16 @@ fn every_same_pane_insertion_preserves_editor_and_order(cx: &mut TestAppContext)
                     .editor()
                     .unwrap()
                     .clone();
-                editor.update(cx, |editor, _| {
-                    editor.set_test_presentation_state(1, 2, Some((0, 1)), 12.)
+                editor.update(cx, |editor, cx| {
+                    editor.restore_view_state(
+                        crate::app::editor::EditorViewState {
+                            anchor: 1,
+                            caret: 8,
+                            top: 6,
+                            scroll_x: 12.,
+                        },
+                        cx,
+                    )
                 });
                 let placement = if slot == 4 {
                     TabMovePlacement::End
@@ -66,8 +74,13 @@ fn every_same_pane_insertion_preserves_editor_and_order(cx: &mut TestAppContext)
                     Some(&editor)
                 );
                 assert_eq!(
-                    editor.read(cx).test_presentation_state(),
-                    (1, 2, Some((0, 1)), 12.)
+                    editor.read(cx).view_state(),
+                    crate::app::editor::EditorViewState {
+                        anchor: 1,
+                        caret: 8,
+                        top: 6,
+                        scroll_x: 12.
+                    }
                 );
                 assert_eq!(workbench.view_count(document), 4);
                 workbench.debug_assert_invariants();

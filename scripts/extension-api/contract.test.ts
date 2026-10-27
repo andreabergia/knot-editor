@@ -230,6 +230,10 @@ const observation = await workbench.observe(async (event) => {
     const documentId: DocumentId = event.document.id;
     await documents.get(documentId);
   }
+  if (event.type === "viewStateChanged") {
+    const settled: import("knot").WindowLayout = await workbench.captureLayout(event.window);
+    void settled;
+  }
   // @ts-expect-error application event payloads are immutable
   event.sequence = sequence + 1;
 });
@@ -299,19 +303,29 @@ await recovery.retain(1);
 await recovery.list("@other/package");
 void (null as unknown as CaptureId);
 
-import type { ReplaceWindowsResult, SessionEntryOutcome } from "knot";
+import type { LayoutNode, LayoutTab, ReplaceWindowsResult, SessionEntryOutcome, WindowLayout } from "knot";
 const [sourceWindow] = await windows.list();
 if (sourceWindow && openDocument) {
   await windows.focus(sourceWindow.target);
   const kept = await recovery.retain(openDocument.id);
+  const layout: WindowLayout = await workbench.captureLayout(sourceWindow.target);
+  const version: 1 = layout.version;
+  const describeNode = (node: LayoutNode): number => node.kind === "split"
+    ? describeNode(node.first) + describeNode(node.second)
+    : node.tabs.filter((tab: LayoutTab) => tab.kind === "document" && tab.view.caret >= 0).length;
+  void [version, layout.geometry?.state, layout.root === null ? 0 : describeNode(layout.root)];
+  // Layouts are JSON data, so a session record can store them verbatim.
+  await storage.write("session", { layout });
+  // @ts-expect-error layouts are read-only snapshots
+  layout.focused = 0;
   const replaced: ReplaceWindowsResult = await workbench.replaceWindows({
     suspend: [{ document: openDocument.id, capture: kept.id }],
     windows: [
-      { target: sourceWindow.target, roots: ["file:///project/"], selected: 0,
+      { roots: ["file:///project/"], selected: 0, layout,
         entries: [{ uri: "file:///project/a.txt" }, { document: openDocument.id, capture: kept.id }] },
-      { roots: ["file:///project/", "file:///notes/"], entries: [] },
+      { roots: ["file:///project/", "file:///notes/"], entries: [], layout: null },
     ],
-    release: [],
+    release: [sourceWindow.target],
     focus: 0,
   });
   const protectedText: boolean = replaced.protected;
@@ -330,13 +344,18 @@ if (sourceWindow && openDocument) {
         void document;
       }
     }
-    void target;
+    const applied: "applied" | "ignored" | null = window.layout;
+    void [target, applied];
   }
   void protectedText;
   // @ts-expect-error every suspended document states its capture, even when null
   await workbench.replaceWindows({ suspend: [{ document: openDocument.id }], windows: [] });
   // @ts-expect-error window targets are opaque and cannot be fabricated
-  await workbench.replaceWindows({ suspend: [], windows: [{ target: "1", roots: [], entries: [] }] });
+  await workbench.replaceWindows({ suspend: [], windows: [], release: ["1"] });
+  // @ts-expect-error destination windows are always created, never reused
+  await workbench.replaceWindows({ suspend: [], windows: [{ target: sourceWindow.target, roots: [], entries: [] }] });
+  // @ts-expect-error captureLayout takes a live window target
+  await workbench.captureLayout("1");
   // @ts-expect-error captures are opaque identities
   await workbench.replaceWindows({ suspend: [], windows: [{ roots: [], entries: [{ capture: "forged" }] }] });
   // @ts-expect-error focus takes a live window target

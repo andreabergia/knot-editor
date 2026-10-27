@@ -166,7 +166,11 @@ declare module "knot" {
     | { readonly type: "windowOpened" | "presentationsChanged"; readonly window: WindowInfo }
     | { readonly type: "windowClosed"; readonly window: WindowTarget }
     | { readonly type: "workspaceChanged"; readonly workspace: WorkspaceInfo }
-    | { readonly type: "activeTargetChanged"; readonly activeWindow: WindowTarget | null; readonly activeTarget: ViewTarget | null };
+    | { readonly type: "activeTargetChanged"; readonly activeWindow: WindowTarget | null; readonly activeTarget: ViewTarget | null }
+    /** The window's captured layout changed: cursor, selection, scroll, focused
+     * pane, dock size, window bounds, or structure. Reported about a second
+     * after changes settle; structural changes also report presentationsChanged. */
+    | { readonly type: "viewStateChanged"; readonly window: WindowTarget };
   export type ApplicationEvent = ApplicationChange & { readonly sequence: number };
   export interface WorkbenchObservation extends Disposable {
     readonly snapshot: ApplicationSnapshot;
@@ -719,7 +723,7 @@ declare module "knot" {
     /** A capture retained by this owner. */
     readonly capture?: CaptureId | null;
   }
-  /** A document presented in a reused or released window. */
+  /** A document presented in a released window. */
   export interface SuspendedDocument {
     readonly document: DocumentId;
     /** Required when the document is dirty or a non-empty untitled document
@@ -727,23 +731,65 @@ declare module "knot" {
      * current revision. */
     readonly capture: CaptureId | null;
   }
+  /** Restorable editor state as UTF-8 byte offsets; top is the start of the
+   * first visible line. Offsets clamp to shorter text on restore. */
+  export type EditorViewState = Readonly<{
+    anchor: number;
+    caret: number;
+    top: number;
+    /** Horizontal scroll in logical pixels. */
+    scrollX: number;
+  }>;
+  /** Each tab kind records only what recreates it in the same position. A
+   * terminal tab restores as a fresh shell; no process or content survives. */
+  export type LayoutTab =
+    | Readonly<{ kind: "document"; document: DocumentId | null; uri: string | null; view: EditorViewState }>
+    | Readonly<{ kind: "tool"; tool: string }>
+    | Readonly<{ kind: "terminal" }>;
+  export type LayoutNode =
+    | Readonly<{ kind: "pane"; dock: "left" | "right" | "bottom" | null; selected: number; tabs: readonly LayoutTab[] }>
+    | Readonly<{ kind: "split"; direction: "horizontal" | "vertical"; first: LayoutNode; second: LayoutNode }>;
+  /** Logical bounds, presentation state, and the display UUID. */
+  export type WindowGeometry = Readonly<{
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    state: "windowed" | "maximized" | "fullscreen";
+    display: string | null;
+  }>;
+  /** Versioned, JSON-compatible window layout from workbench.captureLayout.
+   * Store it verbatim; it holds no live handles and is assignable to JsonValue. */
+  export type WindowLayout = Readonly<{
+    version: 1;
+    geometry: WindowGeometry | null;
+    root: LayoutNode | null;
+    /** Index of the focused pane in layout order. */
+    focused: number | null;
+    dockSizes: Readonly<{ left: number; right: number; bottom: number }>;
+  }>;
   export interface SessionWindow {
-    /** An existing window to reuse; omission creates a window. */
-    readonly target?: WindowTarget;
     /** Ordered directory roots, validated and deduplicated as in
      * workspaces.replaceRoots. */
     readonly roots: readonly string[];
     readonly entries: readonly SessionEntry[];
-    /** Index of the entry whose tab is selected. */
+    /** Index of the entry whose tab is selected when no layout applies. */
     readonly selected?: number | null;
+    /** A captured layout. Each document tab resolves to the entry with the
+     * same document, else the same URI; unmatched document tabs, unregistered
+     * tools, and repeated documents in a pane are pruned, then empty panes and
+     * one-child splits collapse. Entries the layout does not place open in the
+     * normal group, and tools it does not name are hidden. An unsupported
+     * version or shape is ignored. Geometry is fitted to connected displays. */
+    readonly layout?: WindowLayout | JsonValue | null;
   }
   export interface ReplaceWindowsOptions {
-    /** Every document presented in the reused and released windows, exactly. */
+    /** Every document presented in the released windows, exactly. */
     readonly suspend: readonly SuspendedDocument[];
-    /** Destination windows in order. */
+    /** Destination windows in order; each one is created. */
     readonly windows: readonly SessionWindow[];
-    /** Windows leaving the session. A released window holding a terminal is
-     * cleared instead of closed: its document tabs and roots are removed. */
+    /** Windows leaving the session. They close as any window does, stopping
+     * their terminals. */
     readonly release?: readonly WindowTarget[];
     /** Index of the destination window that receives focus. */
     readonly focus?: number | null;
@@ -757,7 +803,10 @@ declare module "knot" {
     | { kind: "missing" }
     | { kind: "failed"; code: HostErrorCode; message: string }>;
   export interface ReplaceWindowsResult {
-    readonly windows: readonly Readonly<{ window: WindowTarget; entries: readonly SessionEntryOutcome[] }>[];
+    /** Created windows in destination order. layout is null without a layout
+     * and "ignored" for an unsupported version or shape. */
+    readonly windows: readonly Readonly<{ window: WindowTarget; entries: readonly SessionEntryOutcome[];
+      layout: "applied" | "ignored" | null }>[];
     /** True when every restored dirty document was durably protected by
      * automatic recovery before resolution, so its captures may be released. */
     readonly protected: boolean;
@@ -781,20 +830,23 @@ declare module "knot" {
      * Caller cancellation/unload before closure commits prevents the close; an
      * accepted save may already have persisted content and cannot be rolled back. */
     close(target: ViewTarget): Promise<PresentationCloseOutcome>;
-    /** Replace the document presentations of a set of windows in one
-     * foreground commit, without prompts: final-view text must already be
-     * retained. Resources and captures are read before the commit; a commit
-     * then revalidates the windows, the suspended documents, and each retained
-     * revision, so observers see only the committed result. New windows are
-     * created first; document tabs of reused windows are replaced in the normal
-     * document group while terminal and tool tabs stay; released windows close.
-     * Rejection changes nothing.
+    /** Close a set of windows and open their replacements in one foreground
+     * commit, without prompts: final-view text must already be retained.
+     * Resources and captures are read before the commit; a commit then
+     * revalidates the released windows, the suspended documents, and each
+     * retained revision, so observers see only the committed result. Every
+     * destination window is created with its layout and geometry before the
+     * released windows close. Restoration never changes the fresh-window tool
+     * default. Rejection changes nothing.
      * @throws HostError with OperationInProgress during closure or another
      * replacement, SessionConflict when an edit, tab, or document changed after
      * the caller's capture, InvalidTarget, Cancelled (caller cancellation or
      * unload before the commit), InvalidUri, or the
      * workspaces.openFolder resource codes for a destination root. */
     replaceWindows(options: ReplaceWindowsOptions): Promise<ReplaceWindowsResult>;
+    /** Capture a window's layout for a later replaceWindows.
+     * @throws HostError with InvalidTarget for a closed window, or Cancelled. */
+    captureLayout(window: WindowTarget): Promise<WindowLayout>;
     /**
      * Register a lifecycle-owned native view, even before windows exist. The
      * contribution ID is the native view kind and command/keybinding scope.

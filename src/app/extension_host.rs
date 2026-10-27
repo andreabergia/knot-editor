@@ -136,6 +136,19 @@ pub(crate) fn application_changed(cx: &mut App) {
     super::application_observation::changed(cx);
 }
 
+/// Publish a window's settled view-state change after committing any pending
+/// metadata changes, so the event follows the window's structural events.
+pub(crate) fn view_state_changed(window: crate::host::protocol::WindowTarget, cx: &mut App) {
+    if let Some(host) = entity(cx) {
+        host.update(cx, |host, cx| {
+            host.publish_application_change(
+                crate::host::protocol::ApplicationChange::ViewStateChanged { window },
+                cx,
+            )
+        });
+    }
+}
+
 pub(crate) fn startup_report(cx: &App) -> Option<StartupReportSnapshot> {
     let host = entity(cx)?;
     host.read(cx).startup_report.clone()
@@ -1765,6 +1778,22 @@ impl ProductExtensionHost {
                     .pool
                     .dispatch_application_change(key, subscription, event.clone());
             }
+        }
+    }
+
+    fn publish_application_change(
+        &mut self,
+        change: crate::host::protocol::ApplicationChange,
+        cx: &mut Context<Self>,
+    ) {
+        self.refresh_application_observation(cx);
+        let event = self.application_observation.push(change);
+        #[cfg(test)]
+        self.application_events.push(event.clone());
+        for (subscription, key) in self.application_observation.subscriptions() {
+            let _ = self
+                .pool
+                .dispatch_application_change(key, subscription, event.clone());
         }
     }
 

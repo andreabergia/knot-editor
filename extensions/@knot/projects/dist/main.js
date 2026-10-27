@@ -11,7 +11,7 @@
 // captures stay safe. Bindings live in memory: root edits in a bound window move
 // the project and its other windows to the new roots, while clearing the roots
 // or choosing another project's roots unbinds the window. Switching suspends the source project's windows with
-// their unsaved text retained and replaces them with the destination's in one
+// their unsaved text retained, closes them, and opens the destination's in one
 // native commit. Commands and listeners are serial roots of this package, so a
 // switch never interleaves with live tracking and no intermediate state is
 // recorded.
@@ -180,10 +180,16 @@ async function commit(next) {
   await refreshTree();
 }
 
-/** @param {string} message */
-async function report(message) {
+/** Shows a message in the command's window, or in an explicit one when a
+ * switch closed the command's window.
+ * @param {string} message @param {WindowTarget} [target] */
+async function report(message, target) {
   try {
-    await workbench.showMessage({ title: "Projects", message });
+    await workbench.showMessage({
+      title: "Projects",
+      message,
+      ...(target === undefined ? {} : { target }),
+    });
   } catch {
     // A report without a live window is not actionable; the tree still updates.
   }
@@ -639,13 +645,12 @@ async function switchTo(project, origin) {
     try {
       result = await workbench.replaceWindows({
         suspend: presented.map((id) => ({ document: id, capture: captures.get(id) ?? null })),
-        windows: targets.map((window, index) => ({
-          target: sources[index]?.target,
+        windows: targets.map((window) => ({
           roots: project.roots,
           entries: window.entries,
           selected: window.selected,
         })),
-        release: sources.slice(targets.length).map((window) => window.target),
+        release: sources.map((window) => window.target),
         focus: 0,
       });
     } catch (error) {
@@ -675,10 +680,11 @@ async function switchTo(project, origin) {
     // until a later reconciliation, after automatic recovery has caught up.
     await writeSession(project.id, next, { keepCaptures: !result.protected });
     await syncBindings(after);
+    const opened = result.windows[0]?.window;
     if (result.protected) {
       await reconcileCaptures();
     } else {
-      await report(`${project.name} opened, but its recovered text is not yet protected`);
+      await report(`${project.name} opened, but its recovered text is not yet protected`, opened);
     }
     await recordSelection(project);
     await refreshTree();
@@ -690,7 +696,7 @@ async function switchTo(project, origin) {
         if (described !== null) problems.push(described);
       }
     }
-    if (problems.length > 0) await report(`Opened ${project.name}. ${problems.join("; ")}.`);
+    if (problems.length > 0) await report(`Opened ${project.name}. ${problems.join("; ")}.`, opened);
     return;
   }
 }

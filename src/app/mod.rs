@@ -51,6 +51,7 @@ pub(crate) mod tool_layout;
 mod transient;
 mod tree_view;
 mod typography;
+mod window_layout;
 mod workbench;
 mod workspace;
 mod workspace_tree;

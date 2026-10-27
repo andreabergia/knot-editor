@@ -175,15 +175,24 @@ pub(super) fn open_tab_transfer_window_with_bounds(
 }
 
 /// Open an empty product window that inherits the fresh-window tool layout;
-/// session replacement presents its documents in the same turn.
+/// session replacement presents its documents in the same turn. Saved
+/// geometry is fitted to the connected displays.
 pub(super) fn open_session_window(
+    geometry: Option<&crate::app::window_layout::WindowGeometry>,
     cx: &mut App,
 ) -> anyhow::Result<(Entity<ProductShell>, AnyWindowHandle)> {
-    let bounds = Bounds::centered(None, size(px(1000.), px(720.)), cx);
+    let (window_bounds, display_id) = match geometry {
+        Some(geometry) => restored_bounds(geometry, cx),
+        None => (
+            WindowBounds::Windowed(Bounds::centered(None, size(px(1000.), px(720.)), cx)),
+            None,
+        ),
+    };
     let handle = cx.open_window(
         WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            window_bounds: Some(window_bounds),
             window_min_size: Some(size(px(480.), px(320.))),
+            display_id,
             focus: false,
             ..Default::default()
         },
@@ -199,6 +208,45 @@ pub(super) fn open_session_window(
         },
     )?;
     Ok((handle.entity(cx)?, handle.into()))
+}
+
+/// Saved geometry fitted to the connected displays, as window options.
+fn restored_bounds(
+    geometry: &crate::app::window_layout::WindowGeometry,
+    cx: &App,
+) -> (WindowBounds, Option<DisplayId>) {
+    use crate::app::window_layout::{DisplayArea, Rect, WindowState, fit_to_displays};
+    let displays = cx.displays();
+    let primary = cx.primary_display().map(|display| display.id());
+    let areas = displays
+        .iter()
+        .map(|display| {
+            let bounds = display.bounds();
+            DisplayArea {
+                uuid: display.uuid().ok().map(|uuid| uuid.to_string()),
+                bounds: Rect {
+                    x: f32::from(bounds.origin.x),
+                    y: f32::from(bounds.origin.y),
+                    width: f32::from(bounds.size.width),
+                    height: f32::from(bounds.size.height),
+                },
+            }
+        })
+        .collect::<Vec<_>>();
+    let primary = displays
+        .iter()
+        .position(|display| Some(display.id()) == primary);
+    let (rect, display) = fit_to_displays(geometry, &areas, primary);
+    let bounds = Bounds::new(
+        point(px(rect.x), px(rect.y)),
+        size(px(rect.width), px(rect.height)),
+    );
+    let bounds = match geometry.state {
+        WindowState::Windowed => WindowBounds::Windowed(bounds),
+        WindowState::Maximized => WindowBounds::Maximized(bounds),
+        WindowState::Fullscreen => WindowBounds::Fullscreen(bounds),
+    };
+    (bounds, display.map(|index| displays[index].id()))
 }
 
 pub(super) fn dispatch_launch_request(request: Option<OpenRequest>, cx: &mut App) {

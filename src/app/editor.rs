@@ -93,6 +93,17 @@ impl Default for EditorRenderingOptions {
     }
 }
 
+/// Restorable editor presentation state. Offsets are absolute UTF-8 byte
+/// positions in the shared buffer; `top` is the start of the first visible line.
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct EditorViewState {
+    pub(crate) anchor: usize,
+    pub(crate) caret: usize,
+    pub(crate) top: usize,
+    pub(crate) scroll_x: f32,
+}
+
 const DEFAULT_COLOR: u32 = 0xC0C0C0;
 const ERROR_COLOR: u32 = 0xF48771;
 const WARNING_COLOR: u32 = 0xE2C08D;
@@ -196,33 +207,48 @@ impl EditorView {
         self.preserve_scroll_on_layout = true;
     }
 
-    #[cfg(test)]
-    pub(crate) fn set_test_presentation_state(
-        &mut self,
-        cursor_line: usize,
-        cursor_col: usize,
-        anchor: Option<(usize, usize)>,
-        scroll: f32,
-    ) {
-        self.cursor_line = cursor_line;
-        self.cursor_col = cursor_col;
-        self.has_selection = anchor.is_some();
-        if let Some((anchor_line, anchor_col)) = anchor {
-            self.anchor_line = anchor_line;
-            self.anchor_col = anchor_col;
+    /// The restorable presentation state: selection ends and the top visible
+    /// line as byte offsets, and horizontal scroll in pixels.
+    pub(crate) fn view_state(&self) -> EditorViewState {
+        let caret = self.to_flat_byte(self.cursor_line, self.cursor_col);
+        let anchor = if self.has_selection {
+            self.to_flat_byte(self.anchor_line, self.anchor_col)
+        } else {
+            caret
+        };
+        let top_line =
+            ((self.scroll / LINE_HEIGHT) as usize).min(self.lines.len().saturating_sub(1));
+        EditorViewState {
+            anchor,
+            caret,
+            top: self.to_flat_byte(top_line, 0),
+            scroll_x: self.scroll_x,
         }
-        self.scroll = scroll;
     }
 
-    #[cfg(test)]
-    pub(crate) fn test_presentation_state(&self) -> (usize, usize, Option<(usize, usize)>, f32) {
-        (
-            self.cursor_line,
-            self.cursor_col,
-            self.has_selection
-                .then_some((self.anchor_line, self.anchor_col)),
-            self.scroll,
-        )
+    /// Apply a restored presentation state. Offsets clamp to the current text
+    /// and snap back to a character boundary, so changed content never yields
+    /// an invalid position; the restored scroll is kept instead of revealing
+    /// the caret.
+    pub(crate) fn restore_view_state(&mut self, state: EditorViewState, cx: &mut Context<Self>) {
+        let text = self.flat_doc();
+        let snap = |offset: usize| {
+            let mut offset = offset.min(text.len());
+            while !text.is_char_boundary(offset) {
+                offset -= 1;
+            }
+            offset
+        };
+        (self.anchor_line, self.anchor_col) = self.flat_byte_to_position(snap(state.anchor));
+        (self.cursor_line, self.cursor_col) = self.flat_byte_to_position(snap(state.caret));
+        self.has_selection = snap(state.anchor) != snap(state.caret);
+        self.scroll = self.flat_byte_to_position(snap(state.top)).0 as f32 * LINE_HEIGHT;
+        self.scroll_x = state.scroll_x.max(0.);
+        self.preferred_x = None;
+        self.reveal_caret = false;
+        self.preserve_scroll_on_layout = true;
+        self.sync_view_position(cx);
+        cx.notify();
     }
 
     #[cfg(test)]
@@ -2413,8 +2439,8 @@ mod tests {
     };
 
     use super::{
-        BufferModel, ContributionSource, EditorRenderingOptions, EditorView,
-        ResolvedEditorContribution, default_projection, project_contributions,
+        BufferModel, ContributionSource, EditorRenderingOptions, EditorView, EditorViewState,
+        LINE_HEIGHT, ResolvedEditorContribution, default_projection, project_contributions,
     };
     use crate::{
         app::completion::CompletionProviderRegistry,
@@ -3063,6 +3089,51 @@ mod tests {
                 let utf16 = editor.to_flat_utf16(line, byte_col);
                 assert_eq!(editor.flat_utf16_to_position(utf16), (line, byte_col));
             }
+        });
+    }
+
+    #[gpui::test]
+    fn view_state_round_trips_and_clamps_to_shorter_multibyte_text(cx: &mut TestAppContext) {
+        let model = cx.new(|_| BufferModel::from_text("one\ntwo\nthree\nfour"));
+        let editor = cx.new(|cx| EditorView::new(model.clone(), cx));
+        let state = EditorViewState {
+            anchor: 4,
+            caret: 9,
+            top: 8,
+            scroll_x: 14.,
+        };
+        editor.update(cx, |editor, cx| editor.restore_view_state(state, cx));
+        cx.read(|cx| {
+            let editor = editor.read(cx);
+            assert_eq!(editor.view_state(), state);
+            assert_eq!(editor.selected_byte_range(), Some(4..9));
+            assert_eq!(editor.scroll, 2. * LINE_HEIGHT);
+        });
+
+        // Offsets past the end clamp, and offsets inside a scalar snap back.
+        let shorter = cx.new(|_| BufferModel::from_text("é😀\nb"));
+        let editor = cx.new(|cx| EditorView::new(shorter, cx));
+        editor.update(cx, |editor, cx| {
+            editor.restore_view_state(
+                EditorViewState {
+                    anchor: 3,
+                    caret: 400,
+                    top: 400,
+                    scroll_x: -5.,
+                },
+                cx,
+            )
+        });
+        cx.read(|cx| {
+            assert_eq!(
+                editor.read(cx).view_state(),
+                EditorViewState {
+                    anchor: 2,
+                    caret: "é😀\nb".len(),
+                    top: "é😀\n".len(),
+                    scroll_x: 0.,
+                }
+            );
         });
     }
 

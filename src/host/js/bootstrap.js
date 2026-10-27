@@ -855,10 +855,10 @@ export async function replaceWindows(options) {
   const windows = arrayItems(options.windows, (value) => {
     record(value, "destination window must be an object");
     return {
-      target: optionalWindowAuthority(value.target),
       roots: arrayItems(value.roots, (uri) => string(uri, "workspace root URI must be text")),
       entries: arrayItems(value.entries, sessionEntry),
       selected: optionalIndex(value.selected),
+      layout: value.layout == null ? null : validateJsonValue(value.layout),
     };
   });
   const release = options.release == null ? [] : arrayItems(options.release, windowAuthority);
@@ -870,8 +870,12 @@ export async function replaceWindows(options) {
     windows: Object.freeze(value.windows.map((window) => Object.freeze({
       window: windowTarget(window.window),
       entries: Object.freeze(window.entries.map((entry) => Object.freeze(entry))),
+      layout: window.layout,
     }))),
   });
+}
+export async function captureLayout(target) {
+  return validateJsonValue(await request("captureLayout", windowAuthority(target)));
 }
 export async function getWorkspace(target) {
   const value = await request("getWorkspace", windowAuthority(target));
@@ -904,7 +908,7 @@ globalThis.__knotDispatchApplicationChange = async (subscription, value) => {
     case "documentOpened": case "documentChanged": payload = { document: documentFromNative(value.document) }; break;
     case "documentClosed": payload = { document: value.document }; break;
     case "windowOpened": case "presentationsChanged": payload = { window: windowFromNative(value.window) }; break;
-    case "windowClosed": payload = { window: windowTarget(value.window) }; break;
+    case "windowClosed": case "viewStateChanged": payload = { window: windowTarget(value.window) }; break;
     case "workspaceChanged": payload = { workspace: workspaceFromNative(value.workspace) }; break;
     case "activeTargetChanged": payload = {
       activeWindow: value.activeWindow === null ? null : windowTarget(value.activeWindow),

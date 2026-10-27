@@ -52,7 +52,8 @@ pub(crate) enum TabSurfaceId {
     Tool(ToolFrameId),
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
 pub(crate) enum SplitDirection {
     Horizontal,
     Vertical,
@@ -826,8 +827,11 @@ struct RemovedTab {
 mod tools;
 pub(crate) use tools::{DockLocation, ToolContent, ToolFrame, ToolFrameId, ToolPlacement};
 
+mod arrange;
 mod close;
 mod relocate;
+
+pub(crate) use arrange::ArrangedTab;
 
 pub(crate) use relocate::{SplitEdge, TabMoveCapture, TabMoveDestination, TabMovePlacement};
 
@@ -1144,28 +1148,29 @@ mod tests {
             assert_eq!(second_editor.read(cx).model(), &model);
             assert_eq!(third_editor.read(cx).model(), &model);
 
-            first_editor.update(cx, |editor, _| {
-                editor.set_test_presentation_state(0, 1, None, 10.)
+            let state = |caret, scroll_x| crate::app::editor::EditorViewState {
+                anchor: caret,
+                caret,
+                top: 0,
+                scroll_x,
+            };
+            let selection = crate::app::editor::EditorViewState {
+                anchor: 4,
+                caret: 6,
+                top: 4,
+                scroll_x: 20.,
+            };
+            first_editor.update(cx, |editor, cx| {
+                editor.restore_view_state(state(1, 10.), cx)
             });
-            second_editor.update(cx, |editor, _| {
-                editor.set_test_presentation_state(1, 2, Some((0, 0)), 20.)
-            });
-            third_editor.update(cx, |editor, _| {
-                editor.set_test_presentation_state(2, 3, None, 30.)
+            second_editor.update(cx, |editor, cx| editor.restore_view_state(selection, cx));
+            third_editor.update(cx, |editor, cx| {
+                editor.restore_view_state(state(9, 30.), cx)
             });
 
-            assert_eq!(
-                first_editor.read(cx).test_presentation_state(),
-                (0, 1, None, 10.)
-            );
-            assert_eq!(
-                second_editor.read(cx).test_presentation_state(),
-                (1, 2, Some((0, 0)), 20.)
-            );
-            assert_eq!(
-                third_editor.read(cx).test_presentation_state(),
-                (2, 3, None, 30.)
-            );
+            assert_eq!(first_editor.read(cx).view_state(), state(1, 10.));
+            assert_eq!(second_editor.read(cx).view_state(), selection);
+            assert_eq!(third_editor.read(cx).view_state(), state(9, 30.));
         });
     }
 }

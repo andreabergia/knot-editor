@@ -176,6 +176,38 @@ pub(super) struct Fixture {
     pub(super) extensions: tempfile::TempDir,
 }
 
+/// The focused product window; a switch closes its source windows and
+/// focuses the first destination.
+pub(super) fn active_shell(cx: &TestAppContext) -> (Entity<ProductShell>, gpui::AnyWindowHandle) {
+    let window = cx.read(|cx| cx.active_window()).expect("an active window");
+    let shell = cx.read(|cx| {
+        window
+            .downcast::<ProductShell>()
+            .unwrap()
+            .entity(cx)
+            .unwrap()
+    });
+    (shell, window)
+}
+
+impl Fixture {
+    /// Follow the window a switch focused.
+    pub(super) fn follow(&mut self, cx: &TestAppContext) {
+        (self.shell, self.window) = active_shell(cx);
+    }
+
+    pub(super) fn create_project(
+        &mut self,
+        directory: &std::path::Path,
+        name: &str,
+        cx: &mut TestAppContext,
+    ) {
+        let (shell, window) = (self.shell.clone(), self.window);
+        create_project(&shell, window, directory, name, cx);
+        self.follow(cx);
+    }
+}
+
 pub(super) fn start_registry(cx: &mut TestAppContext) -> Fixture {
     let documents = install_globals(cx);
     let host = cx.update(crate::app::extension_host::install);
@@ -233,7 +265,7 @@ pub(super) fn create_project(
     directory: &std::path::Path,
     name: &str,
     cx: &mut TestAppContext,
-) {
+) -> (Entity<ProductShell>, gpui::AnyWindowHandle) {
     cx.set_global(ApplicationOpenDialog(Arc::new(FixedOpenDialog(
         OpenDialogOutcome::Selected(directory.to_path_buf()),
     ))));
@@ -249,24 +281,20 @@ pub(super) fn create_project(
         wait_for_command(create, cx),
         CommandOutcome::Completed | CommandOutcome::InvalidTarget
     ));
+    active_shell(cx)
 }
 
 #[gpui::test]
 fn bundled_projects_registry_manages_roots_and_persists(cx: &mut TestAppContext) {
-    let fixture = start_registry(cx);
-    let tree = wait_for_contributed_view(&fixture.shell, "builtin.projects", cx);
+    let mut fixture = start_registry(cx);
 
     let project_dir = tempfile::tempdir().unwrap();
     let uri = url::Url::from_file_path(project_dir.path())
         .unwrap()
         .to_string();
-    create_project(
-        &fixture.shell,
-        fixture.window,
-        project_dir.path(),
-        "Knot Editor",
-        cx,
-    );
+    fixture.create_project(project_dir.path(), "Knot Editor", cx);
+    // Creating the project replaced the blank window with the project's.
+    let tree = wait_for_contributed_view(&fixture.shell, "builtin.projects", cx);
 
     wait_for_api_condition(cx, |cx| {
         tree.read(cx)
@@ -362,23 +390,16 @@ fn bundled_projects_registry_manages_roots_and_persists(cx: &mut TestAppContext)
 fn switching_to_a_project_with_a_missing_root_is_actionable_and_keeps_the_source(
     cx: &mut TestAppContext,
 ) {
-    let fixture = start_registry(cx);
-    let tree = wait_for_contributed_view(&fixture.shell, "builtin.projects", cx);
+    let mut fixture = start_registry(cx);
 
     let gone_dir = tempfile::tempdir().unwrap();
     let path = gone_dir.path().to_path_buf();
-    create_project(&fixture.shell, fixture.window, &path, "Gone", cx);
+    fixture.create_project(&path, "Gone", cx);
     let other_dir = tempfile::tempdir().unwrap();
     let other_uri = url::Url::from_file_path(other_dir.path())
         .unwrap()
         .to_string();
-    create_project(
-        &fixture.shell,
-        fixture.window,
-        other_dir.path(),
-        "Other",
-        cx,
-    );
+    fixture.create_project(other_dir.path(), "Other", cx);
     let listed = listed_projects(&fixture.shell, fixture.window, cx);
     let id = |name: &str| {
         listed["projects"]
@@ -392,6 +413,7 @@ fn switching_to_a_project_with_a_missing_root_is_actionable_and_keeps_the_source
             .to_string()
     };
     let (gone, other) = (id("Gone"), id("Other"));
+    let tree = wait_for_contributed_view(&fixture.shell, "builtin.projects", cx);
     assert_eq!(listed["sessions"][&gone]["state"], "suspended");
     assert_eq!(listed["sessions"][&other]["state"], "active");
 
@@ -442,33 +464,28 @@ fn switching_to_a_project_with_a_missing_root_is_actionable_and_keeps_the_source
 
 #[gpui::test]
 fn project_selection_stays_in_the_capturing_window(cx: &mut TestAppContext) {
-    let fixture = start_registry(cx);
+    let mut fixture = start_registry(cx);
     let first_dir = tempfile::tempdir().unwrap();
     let first_uri = url::Url::from_file_path(first_dir.path())
         .unwrap()
         .to_string();
-    create_project(
-        &fixture.shell,
-        fixture.window,
-        first_dir.path(),
-        "First",
-        cx,
-    );
+    fixture.create_project(first_dir.path(), "First", cx);
 
     let (second_shell, second_window) = empty_product_window(&fixture.documents, cx);
     show_registry(&second_shell, second_window, cx);
-    let second_tree = wait_for_contributed_view(&second_shell, "builtin.projects", cx);
     let second_dir = tempfile::tempdir().unwrap();
     let second_uri = url::Url::from_file_path(second_dir.path())
         .unwrap()
         .to_string();
-    create_project(
+    // The blank second window is replaced by the new project's window.
+    let (second_shell, second_window) = create_project(
         &second_shell,
         second_window,
         second_dir.path(),
         "Second",
         cx,
     );
+    let second_tree = wait_for_contributed_view(&second_shell, "builtin.projects", cx);
 
     let listed = listed_projects(&second_shell, second_window, cx);
     let second_id = listed["projects"]

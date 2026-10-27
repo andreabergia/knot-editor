@@ -38,7 +38,8 @@ await commands.register("switch.go", async () => {
   const { window, document, capture } = await source();
   await workbench.replaceWindows({
     suspend: [{ document: document.id, capture: capture.id }],
-    windows: [{ target: window.target, roots: [], entries: [] }],
+    windows: [{ roots: [], entries: [] }],
+    release: [window.target],
   });
 });
 "#;

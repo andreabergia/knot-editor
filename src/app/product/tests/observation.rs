@@ -1266,3 +1266,81 @@ await commands.register("queries.terminal", async () => {
     }
     host.update(cx, |host, cx| host.unload(key, cx).unwrap());
 }
+
+#[gpui::test]
+fn view_state_changes_coalesce_into_one_settled_event_per_window(cx: &mut TestAppContext) {
+    use crate::app::editor::EditorViewState;
+    let documents = install_globals(cx);
+    let host = cx.update(extension_host::install);
+    let document = cx.update(|cx| create_untitled_document(&documents, cx));
+    let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+    model.update(cx, |model, _| {
+        model.replace(0..0, &"line\n".repeat(50)).unwrap()
+    });
+    let (shell, window) = product_window(document, model, cx);
+    let (_, other) = product_window(
+        document,
+        cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone()),
+        cx,
+    );
+    cx.executor()
+        .advance_clock(super::super::view_state::VIEW_STATE_DEBOUNCE * 2);
+    take_events(&host, cx);
+    let editor = cx.read(|cx| {
+        shell
+            .read(cx)
+            .workbench
+            .read(cx)
+            .focused_pane()
+            .unwrap()
+            .active_tab()
+            .editor()
+            .unwrap()
+            .clone()
+    });
+    let settled = |cx: &mut TestAppContext| {
+        take_events(&host, cx)
+            .into_iter()
+            .filter_map(|event| match event.change {
+                ApplicationChange::ViewStateChanged { window } => Some(window.window),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    // Cursor moves inside the debounce restart it and report once settled.
+    for caret in [5, 10, 15] {
+        editor.update(cx, |editor, cx| {
+            editor.restore_view_state(
+                EditorViewState {
+                    anchor: caret,
+                    caret,
+                    top: 0,
+                    scroll_x: 0.,
+                },
+                cx,
+            )
+        });
+        cx.executor()
+            .advance_clock(super::super::view_state::VIEW_STATE_DEBOUNCE / 2);
+        assert!(settled(cx).is_empty());
+    }
+    cx.executor()
+        .advance_clock(super::super::view_state::VIEW_STATE_DEBOUNCE);
+    assert_eq!(settled(cx), [window.window_id().as_u64().to_string()]);
+    // An unchanged layout reports nothing, and other windows stay quiet.
+    shell.update(cx, |_, cx| cx.notify());
+    cx.executor()
+        .advance_clock(super::super::view_state::VIEW_STATE_DEBOUNCE * 2);
+    assert!(settled(cx).is_empty());
+    // A focused-pane or dock-size change is view state too.
+    shell.update(cx, |shell, cx| {
+        shell.workbench.update(cx, |workbench, _| {
+            workbench.set_dock_size(crate::app::workbench::DockLocation::Bottom, 300.)
+        });
+        cx.notify();
+    });
+    cx.executor()
+        .advance_clock(super::super::view_state::VIEW_STATE_DEBOUNCE * 2);
+    assert_eq!(settled(cx), [window.window_id().as_u64().to_string()]);
+    let _ = other;
+}

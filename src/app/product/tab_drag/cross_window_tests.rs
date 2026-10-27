@@ -334,8 +334,16 @@ fn desktop_release_moves_dirty_last_view_and_replaces_source(cx: &mut TestAppCon
                     .active_tab();
                 let editor = tab.editor().unwrap().clone();
                 let document = tab.document_id().unwrap();
-                editor.update(cx, |editor, _| {
-                    editor.set_test_presentation_state(0, 3, Some((0, 1)), 12.)
+                editor.update(cx, |editor, cx| {
+                    editor.restore_view_state(
+                        crate::app::editor::EditorViewState {
+                            anchor: 0,
+                            caret: 0,
+                            top: 0,
+                            scroll_x: 12.,
+                        },
+                        cx,
+                    )
                 });
                 (
                     document,
@@ -369,8 +377,13 @@ fn desktop_release_moves_dirty_last_view_and_replaces_source(cx: &mut TestAppCon
             );
             assert!(editor.focus_handle(cx).is_focused(window));
             assert_eq!(
-                editor.read(cx).test_presentation_state(),
-                (0, 3, Some((0, 1)), 12.)
+                editor.read(cx).view_state(),
+                crate::app::editor::EditorViewState {
+                    anchor: 0,
+                    caret: 0,
+                    top: 0,
+                    scroll_x: 12.
+                }
             );
             assert_eq!(
                 cx.global::<ApplicationWorkbenches>()
