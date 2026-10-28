@@ -821,7 +821,7 @@ async fn launch_requests_open_alongside_recovery_when_an_extension_fails(cx: &mu
     };
     seed(&[&edited, &older], cx).await;
 
-    let host = cx.update(super::super::super::extension_host::install);
+    let host = cx.update(super::super::super::extensions::host::install);
     cx.update(|cx| super::super::dispatch_launch_request(Some(request), cx));
     cx.update(|cx| super::super::dispatch_launch_request(Some(other), cx));
     host.update(cx, |host, cx| {
@@ -1050,7 +1050,7 @@ fn extension_captures_are_owner_isolated_durable_and_survive_failure_and_restart
         &[("main.js", RECOVERY_OTHER)],
     );
     let documents = install_globals(cx);
-    let host = cx.update(crate::app::extension_host::install);
+    let host = cx.update(crate::app::extensions::host::install);
     host.update(cx, |host, cx| {
         host.set_test_storage_root(storage.path().to_owned(), cx)
     });
@@ -1077,7 +1077,7 @@ fn extension_captures_are_owner_isolated_durable_and_survive_failure_and_restart
             .report
             .entries
             .iter()
-            .all(|entry| entry.result == crate::app::extension_load::LoadResult::Loaded)
+            .all(|entry| entry.result == crate::app::extensions::load::LoadResult::Loaded)
     );
     let edit = |text: &str, cx: &mut TestAppContext| {
         model.update(cx, |model, cx| {

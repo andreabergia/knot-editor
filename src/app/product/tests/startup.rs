@@ -56,7 +56,7 @@ fn personal_config_gates_product_windows_and_keeps_extension_failures_independen
     );
     install_globals(cx);
     install_launch_gate(cx);
-    let host = cx.update(super::super::super::extension_host::install);
+    let host = cx.update(super::super::super::extensions::host::install);
     cx.update(|cx| super::super::dispatch_launch_request(None, cx));
     assert!(cx.windows().is_empty());
     host.update(cx, |host, cx| {
@@ -69,7 +69,7 @@ fn personal_config_gates_product_windows_and_keeps_extension_failures_independen
     assert!(wait_for_product_startup(cx));
     assert_eq!(cx.windows().len(), 1);
     let report = cx
-        .read(super::super::super::extension_host::startup_report)
+        .read(super::super::super::extensions::host::startup_report)
         .unwrap();
     assert!(
         report
@@ -77,9 +77,9 @@ fn personal_config_gates_product_windows_and_keeps_extension_failures_independen
             .entries
             .iter()
             .any(|entry| entry.name.as_deref() == Some("@example/good")
-                && entry.result == super::super::super::extension_load::LoadResult::Loaded)
+                && entry.result == super::super::super::extensions::load::LoadResult::Loaded)
     );
-    assert!(report.report.entries.iter().any(|entry| entry.name.as_deref() == Some("@example/bad") && matches!(&entry.result, super::super::super::extension_load::LoadResult::Failed(cause) if cause.contains("package failed"))));
+    assert!(report.report.entries.iter().any(|entry| entry.name.as_deref() == Some("@example/bad") && matches!(&entry.result, super::super::super::extensions::load::LoadResult::Failed(cause) if cause.contains("package failed"))));
     let names = cx.read(|cx| {
         cx.global::<ApplicationProductCommands>()
             .0
@@ -105,7 +105,7 @@ fn queued_file_open_runs_only_after_configured_startup(cx: &mut TestAppContext) 
     let uri = request.uri().clone();
     let documents = install_globals(cx);
     install_launch_gate(cx);
-    let host = cx.update(super::super::super::extension_host::install);
+    let host = cx.update(super::super::super::extensions::host::install);
     cx.update(|cx| super::super::dispatch_launch_request(Some(request), cx));
     assert!(cx.windows().is_empty());
     host.update(cx, |host, cx| {
@@ -151,7 +151,7 @@ fn pre_init_failure_skips_extensions_and_opens_only_the_error_window(cx: &mut Te
     );
     install_globals(cx);
     install_launch_gate(cx);
-    let host = cx.update(super::super::super::extension_host::install);
+    let host = cx.update(super::super::super::extensions::host::install);
     let queued = OpenRequest::from_uri_for_product(
         ResourceUri::parse("file:///never-open-on-failure.txt").unwrap(),
     );
@@ -167,7 +167,7 @@ fn pre_init_failure_skips_extensions_and_opens_only_the_error_window(cx: &mut Te
     assert!(!wait_for_product_startup(cx));
     assert_eq!(cx.windows().len(), 1);
     assert!(
-        cx.read(super::super::super::extension_host::startup_report)
+        cx.read(super::super::super::extensions::host::startup_report)
             .is_none()
     );
     assert!(cx.read(|cx| cx.global::<ApplicationWorkbenches>().0.borrow().is_empty()));
@@ -198,7 +198,7 @@ fn invalid_config_import_prevents_extension_discovery(cx: &mut TestAppContext) {
     );
     install_globals(cx);
     install_launch_gate(cx);
-    let host = cx.update(super::super::super::extension_host::install);
+    let host = cx.update(super::super::super::extensions::host::install);
     host.update(cx, |host, cx| {
         host.start_product_startup(
             Some(config.path().to_path_buf()),
@@ -209,7 +209,7 @@ fn invalid_config_import_prevents_extension_discovery(cx: &mut TestAppContext) {
     assert!(!wait_for_product_startup(cx));
     assert_eq!(cx.windows().len(), 1);
     assert!(
-        cx.read(super::super::super::extension_host::startup_report)
+        cx.read(super::super::super::extensions::host::startup_report)
             .is_none()
     );
     assert_eq!(cx.read(|cx| host.read(cx).lifecycle_count()), 0);
@@ -240,7 +240,7 @@ fn post_init_failure_unloads_config_and_installed_extensions(cx: &mut TestAppCon
     );
     install_globals(cx);
     install_launch_gate(cx);
-    let host = cx.update(super::super::super::extension_host::install);
+    let host = cx.update(super::super::super::extensions::host::install);
     host.update(cx, |host, cx| {
         host.start_product_startup(
             Some(config.path().to_path_buf()),
@@ -252,11 +252,11 @@ fn post_init_failure_unloads_config_and_installed_extensions(cx: &mut TestAppCon
     assert_eq!(cx.windows().len(), 1);
     assert!(cx.read(|cx| cx.global::<ApplicationWorkbenches>().0.borrow().is_empty()));
     let report = cx
-        .read(super::super::super::extension_host::startup_report)
+        .read(super::super::super::extensions::host::startup_report)
         .unwrap();
     assert_eq!(
         report.report.entries[0].result,
-        super::super::super::extension_load::LoadResult::Loaded
+        super::super::super::extensions::load::LoadResult::Loaded
     );
     assert_eq!(cx.read(|cx| host.read(cx).lifecycle_count()), 0);
     let names = cx.read(|cx| {
@@ -270,7 +270,7 @@ fn post_init_failure_unloads_config_and_installed_extensions(cx: &mut TestAppCon
     assert!(!names.contains(&"config.before".to_owned()));
     assert!(!names.contains(&"extension.before".to_owned()));
     assert_eq!(
-        cx.read(super::super::super::extension_host::completion_provider_count),
+        cx.read(super::super::super::extensions::host::completion_provider_count),
         0
     );
 }
@@ -293,7 +293,7 @@ fn post_init_validation_failure_waits_for_installed_extensions(cx: &mut TestAppC
     );
     install_globals(cx);
     install_launch_gate(cx);
-    let host = cx.update(super::super::super::extension_host::install);
+    let host = cx.update(super::super::super::extensions::host::install);
     host.update(cx, |host, cx| {
         host.start_product_startup(
             Some(config.path().to_path_buf()),
@@ -303,11 +303,11 @@ fn post_init_validation_failure_waits_for_installed_extensions(cx: &mut TestAppC
     });
     assert!(!wait_for_product_startup(cx));
     let report = cx
-        .read(super::super::super::extension_host::startup_report)
+        .read(super::super::super::extensions::host::startup_report)
         .unwrap();
     assert_eq!(
         report.report.entries[0].result,
-        super::super::super::extension_load::LoadResult::Loaded
+        super::super::super::extensions::load::LoadResult::Loaded
     );
     assert_eq!(cx.read(|cx| host.read(cx).lifecycle_count()), 0);
     assert!(cx.read(|cx| cx.global::<ApplicationWorkbenches>().0.borrow().is_empty()));
@@ -375,7 +375,7 @@ fn installed_api_version_rejection_prevents_evaluation_and_preserves_dependency_
         )],
     );
     let documents = install_globals(cx);
-    let host = cx.update(super::super::super::extension_host::install);
+    let host = cx.update(super::super::super::extensions::host::install);
     let document = cx.update(|cx| create_untitled_document(&documents, cx));
     let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
     let (_shell, _window) = product_window(document, model, cx);
@@ -406,7 +406,7 @@ fn installed_api_version_rejection_prevents_evaluation_and_preserves_dependency_
                 .find(|entry| entry.name.as_ref() == Some(name))
                 .unwrap();
             assert!(
-                matches!(&entry.result, super::super::super::extension_load::LoadResult::Failed(cause) if cause.contains("apiVersion") && cause.contains("expected") && cause.contains("declared")),
+                matches!(&entry.result, super::super::super::extensions::load::LoadResult::Failed(cause) if cause.contains("apiVersion") && cause.contains("expected") && cause.contains("declared")),
                 "{entry:?}"
             );
         }
@@ -418,8 +418,8 @@ fn installed_api_version_rejection_prevents_evaluation_and_preserves_dependency_
         .filter(|entry| entry.name.as_deref() == Some("@example/duplicate"))
         .collect::<Vec<_>>();
     assert_eq!(duplicates.len(), 2);
-    assert!(duplicates.iter().all(|entry| matches!(&entry.result, super::super::super::extension_load::LoadResult::Failed(cause) if cause.contains("duplicate package ID"))));
-    assert!(duplicates.iter().any(|entry| matches!(&entry.result, super::super::super::extension_load::LoadResult::Failed(cause) if cause.contains("unsupported apiVersion"))));
+    assert!(duplicates.iter().all(|entry| matches!(&entry.result, super::super::super::extensions::load::LoadResult::Failed(cause) if cause.contains("duplicate package ID"))));
+    assert!(duplicates.iter().any(|entry| matches!(&entry.result, super::super::super::extensions::load::LoadResult::Failed(cause) if cause.contains("unsupported apiVersion"))));
     cx.read(|cx| {
         assert_eq!(
             cx.read_from_clipboard().unwrap().text().unwrap(),
@@ -472,7 +472,7 @@ fn checked_authoring_examples_run_as_an_installed_version_one_package(cx: &mut T
     let documents = install_globals(cx);
     cx.update(super::super::bind_product_keys);
     let original_binding = cx.read(|cx| keymap_command(cx, "cmd-g", Some("editor")));
-    let host = cx.update(super::super::super::extension_host::install);
+    let host = cx.update(super::super::super::extensions::host::install);
     let document = cx.update(|cx| create_untitled_document(&documents, cx));
     let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
     model.update(cx, |model, _| model.replace(0..0, "text").unwrap());
@@ -483,7 +483,7 @@ fn checked_authoring_examples_run_as_an_installed_version_one_package(cx: &mut T
     let report = wait_for_extension_report(&host, cx);
     assert_eq!(
         report.report.entries[0].result,
-        super::super::super::extension_load::LoadResult::Loaded
+        super::super::super::extensions::load::LoadResult::Loaded
     );
     cx.read(|cx| {
         assert_eq!(
@@ -557,7 +557,7 @@ fn checked_authoring_examples_run_as_an_installed_version_one_package(cx: &mut T
     assert_eq!(wait_for_command(copy, cx), CommandOutcome::Completed);
     cx.read(|cx| assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), "Guide"));
     wait_for_api_condition(cx, |cx| {
-        super::super::super::extension_host::completion_provider_count(cx) == 1
+        super::super::super::extensions::host::completion_provider_count(cx) == 1
     });
     cx.update_window(window, |_, window, cx| {
         copy_editor.read(cx).focus_handle(cx).focus(window);
@@ -597,7 +597,7 @@ fn checked_authoring_examples_run_as_an_installed_version_one_package(cx: &mut T
             original_binding
         );
         assert_eq!(
-            super::super::super::extension_host::completion_provider_count(cx),
+            super::super::super::extensions::host::completion_provider_count(cx),
             0
         );
         assert!(
@@ -701,7 +701,7 @@ fn on_disk_extensions_load_in_order_invoke_dependencies_and_isolate_failures(
     std::fs::write(invalid.join("knot.jsonc"), "{ invalid").unwrap();
 
     let documents = install_globals(cx);
-    let host = cx.update(super::super::super::extension_host::install);
+    let host = cx.update(super::super::super::extensions::host::install);
     let document = cx.update(|cx| create_untitled_document(&documents, cx));
     let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
     let (shell, window) = product_window(document, model.clone(), cx);
@@ -722,23 +722,23 @@ fn on_disk_extensions_load_in_order_invoke_dependencies_and_isolate_failures(
     };
     assert_eq!(
         result("@example/base"),
-        super::super::super::extension_load::LoadResult::Loaded
+        super::super::super::extensions::load::LoadResult::Loaded
     );
     assert_eq!(
         result("@example/dependent"),
-        super::super::super::extension_load::LoadResult::Loaded
+        super::super::super::extensions::load::LoadResult::Loaded
     );
     assert_eq!(
         result("@example/independent"),
-        super::super::super::extension_load::LoadResult::Loaded
+        super::super::super::extensions::load::LoadResult::Loaded
     );
     assert!(
-        matches!(result("@example/broken"), super::super::super::extension_load::LoadResult::Failed(cause) if cause.contains("broken entry"))
+        matches!(result("@example/broken"), super::super::super::extensions::load::LoadResult::Failed(cause) if cause.contains("broken entry"))
     );
     assert!(
-        matches!(result("@example/blocked"), super::super::super::extension_load::LoadResult::Failed(cause) if cause.contains("@example/broken"))
+        matches!(result("@example/blocked"), super::super::super::extensions::load::LoadResult::Failed(cause) if cause.contains("@example/broken"))
     );
-    assert!(report.report.entries.iter().any(|entry| entry.directory == invalid && matches!(&entry.result, super::super::super::extension_load::LoadResult::Failed(cause) if cause.contains("invalid knot.jsonc"))));
+    assert!(report.report.entries.iter().any(|entry| entry.directory == invalid && matches!(&entry.result, super::super::super::extensions::load::LoadResult::Failed(cause) if cause.contains("invalid knot.jsonc"))));
     let definitions = cx.read(|cx| {
         cx.global::<ApplicationProductCommands>()
             .0
@@ -779,7 +779,7 @@ fn on_disk_extensions_load_in_order_invoke_dependencies_and_isolate_failures(
     }
     assert_eq!(cx.read(|cx| model.read(cx).text()), "base ");
     assert_eq!(
-        cx.read(super::super::super::extension_host::completion_provider_count),
+        cx.read(super::super::super::extensions::host::completion_provider_count),
         1
     );
 
@@ -813,7 +813,7 @@ fn extension_startup_shows_known_outcomes_while_a_later_entry_is_pending(cx: &mu
     std::fs::write(invalid.join("knot.jsonc"), "{ invalid").unwrap();
 
     install_globals(cx);
-    let host = cx.update(super::super::super::extension_host::install);
+    let host = cx.update(super::super::super::extensions::host::install);
     host.update(cx, |host, cx| {
         host.start_installed_extensions(root.path().to_path_buf(), cx)
     });
@@ -821,17 +821,17 @@ fn extension_startup_shows_known_outcomes_while_a_later_entry_is_pending(cx: &mu
     loop {
         cx.run_until_parked();
         let report = cx
-            .read(super::super::super::extension_host::startup_report)
+            .read(super::super::super::extensions::host::startup_report)
             .unwrap();
         if report.report.entries.len() == 2 {
             assert_eq!(
                 report.state,
-                super::super::super::extension_host::StartupState::Loading
+                super::super::super::extensions::host::StartupState::Loading
             );
             assert_eq!(report.report.entries[0].directory, invalid);
             assert!(matches!(
                 &report.report.entries[0].result,
-                super::super::super::extension_load::LoadResult::Failed(cause)
+                super::super::super::extensions::load::LoadResult::Failed(cause)
                     if cause.contains("invalid knot.jsonc")
             ));
             assert_eq!(
@@ -840,7 +840,7 @@ fn extension_startup_shows_known_outcomes_while_a_later_entry_is_pending(cx: &mu
             );
             assert_eq!(
                 report.report.entries[1].result,
-                super::super::super::extension_load::LoadResult::Loaded
+                super::super::super::extensions::load::LoadResult::Loaded
             );
             break;
         }
@@ -873,7 +873,7 @@ fn extension_startup_rescans_changed_directories_and_cleans_old_registrations(
         )],
     );
     install_globals(cx);
-    let host = cx.update(super::super::super::extension_host::install);
+    let host = cx.update(super::super::super::extensions::host::install);
     host.update(cx, |host, cx| {
         host.start_installed_extensions(root.path().to_path_buf(), cx)
     });
@@ -884,7 +884,7 @@ fn extension_startup_rescans_changed_directories_and_cleans_old_registrations(
         Some("@example/old")
     );
     assert_eq!(
-        cx.read(super::super::super::extension_host::completion_provider_count),
+        cx.read(super::super::super::extensions::host::completion_provider_count),
         1
     );
 
@@ -912,10 +912,10 @@ fn extension_startup_rescans_changed_directories_and_cleans_old_registrations(
     );
     assert_eq!(
         second.report.entries[0].result,
-        super::super::super::extension_load::LoadResult::Loaded
+        super::super::super::extensions::load::LoadResult::Loaded
     );
     assert_eq!(
-        cx.read(super::super::super::extension_host::completion_provider_count),
+        cx.read(super::super::super::extensions::host::completion_provider_count),
         0
     );
     let definitions = cx.read(|cx| {
@@ -957,7 +957,7 @@ fn installed_packages_run_through_the_product_command_bridge(cx: &mut TestAppCon
         &[("main.js", include_str!("fixtures/storage_demo.js"))],
     );
     let documents = install_globals(cx);
-    let host = cx.update(super::super::super::extension_host::install);
+    let host = cx.update(super::super::super::extensions::host::install);
     host.update(cx, |host, cx| {
         host.set_test_storage_root(storage.path().to_owned(), cx)
     });
@@ -974,7 +974,7 @@ fn installed_packages_run_through_the_product_command_bridge(cx: &mut TestAppCon
             .report
             .entries
             .iter()
-            .all(|entry| entry.result == super::super::super::extension_load::LoadResult::Loaded)
+            .all(|entry| entry.result == super::super::super::extensions::load::LoadResult::Loaded)
     );
     let mut execution = dispatch_product_command(&shell, window, "example.greet", cx);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
@@ -1002,9 +1002,10 @@ fn installed_packages_run_through_the_product_command_bridge(cx: &mut TestAppCon
                 host.start_installed_extensions(root.clone(), cx)
             });
             let report = wait_for_extension_report(&host, cx);
-            assert!(report.report.entries.iter().all(
-                |entry| entry.result == super::super::super::extension_load::LoadResult::Loaded
-            ));
+            assert!(
+                report.report.entries.iter().all(|entry| entry.result
+                    == super::super::super::extensions::load::LoadResult::Loaded)
+            );
         }
         let execution = dispatch_product_command(&shell, window, "example.storage-report", cx);
         assert_eq!(wait_for_command(execution, cx), CommandOutcome::Completed);

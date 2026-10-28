@@ -14,8 +14,8 @@ records rationale; public API contracts live in [knot.d.ts](../../src/host/js/kn
 | `host::lifecycle` | Extension identity, scheduler-visible state, and failure data |
 | `host::pool` | V8-free application control, awaitable event inbox, diagnostics, and shutdown |
 | `host::module_graph` | Validation of immutable captured sources without V8 or filesystem access |
-| `app::extension_package`, `personal_config`, `extension_load` | Background source discovery, admission, startup ordering, and outcomes |
-| `app::extension_host` | Foreground routing, resource ownership, observation, and lifecycle cleanup |
+| `app::extensions::{package, load}`, `personal_config` | Background source discovery, admission, startup ordering, and outcomes |
+| `app::extensions::host` | Foreground routing, resource ownership, observation, and lifecycle cleanup |
 
 ```text
 extension JavaScript
@@ -136,7 +136,7 @@ own decoding and response transport rather than per-operation routing tables.
 Native commands share this async contract with command-specific adapters.
 Implementation contracts live in
 [declarations](../../src/host/declarations.rs) and
-[application handlers](../../src/app/extension_host/handlers.rs).
+[application handlers](../../src/app/extensions/host/handlers.rs).
 
 Owned contexts retain weak host/application access and caller authority. Short
 foreground closures revalidate lifecycle, cancellation, and resource identity,
@@ -223,7 +223,7 @@ recovery, or backpressure mechanism is introduced.
 
 ## Extension record storage
 
-`app::extension_storage` owns separate SQLite databases selected by canonical
+`app::extensions::storage` owns separate SQLite databases selected by canonical
 package identity or personal config, independently of lifecycle IDs and installation
 paths. Built-in `@knot/...` identities are accepted only for bundled packages;
 installed packages cannot use the reserved scope. Admission binds the owner
@@ -241,7 +241,7 @@ await. Caller lifetime is checked before database work starts; once started,
 work finishes normally even if its caller disappears. Failures preserve damaged
 or incompatible databases. Public value, ordering, and error contracts live in
 [knot.d.ts](../../src/host/js/knot.d.ts); implementation and physical schema live in
-[extension_storage.rs](../../src/app/extension_storage.rs).
+[extensions/storage.rs](../../src/app/extensions/storage.rs).
 
 Product and config-diagnostic quit stop storage admission synchronously, then
 await admitted work and connection release before gpui quit. Host release also

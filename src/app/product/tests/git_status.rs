@@ -51,7 +51,7 @@ fn git_status_frame_groups_actions_and_log_through_public_apis(cx: &mut TestAppC
     install_git_status(extensions.path());
     let storage = tempfile::tempdir().unwrap();
     let documents = install_globals(cx);
-    let host = cx.update(crate::app::extension_host::install);
+    let host = cx.update(crate::app::extensions::host::install);
     let document = cx.update(|cx| create_untitled_document(&documents, cx));
     let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
     let (shell, window) = product_window(document, model, cx);
@@ -67,7 +67,7 @@ fn git_status_frame_groups_actions_and_log_through_public_apis(cx: &mut TestAppC
             .report
             .entries
             .iter()
-            .all(|entry| entry.result == crate::app::extension_load::LoadResult::Loaded),
+            .all(|entry| entry.result == crate::app::extensions::load::LoadResult::Loaded),
     );
     assert_eq!(report.report.entries.len(), 1);
 
@@ -219,7 +219,7 @@ fn git_status_transient_flows_round_trip_through_commands(cx: &mut TestAppContex
     install_git_status(extensions.path());
     let storage = tempfile::tempdir().unwrap();
     let documents = install_globals(cx);
-    let host = cx.update(crate::app::extension_host::install);
+    let host = cx.update(crate::app::extensions::host::install);
     let document = cx.update(|cx| create_untitled_document(&documents, cx));
     let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
     let (shell, window) = product_window(document, model, cx);
@@ -235,7 +235,7 @@ fn git_status_transient_flows_round_trip_through_commands(cx: &mut TestAppContex
             .report
             .entries
             .iter()
-            .all(|entry| entry.result == crate::app::extension_load::LoadResult::Loaded),
+            .all(|entry| entry.result == crate::app::extensions::load::LoadResult::Loaded),
     );
 
     let tree = wait_for_contributed_view(&shell, "example.git-status", cx);

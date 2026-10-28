@@ -12,7 +12,7 @@ use crate::host::protocol::{
     RequestContext,
 };
 
-use super::extension_host::handlers::AccessError;
+use super::extensions::host::handlers::AccessError;
 #[cfg(test)]
 use super::model::CommandCatalog;
 #[cfg(test)]

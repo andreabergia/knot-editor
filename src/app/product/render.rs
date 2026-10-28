@@ -294,9 +294,11 @@ impl Render for ProductShell {
             cx.listener(|this: &mut Self, _: &MouseDownEvent, _: &mut Window, cx| {
                 this.finish_transient(TransientOutcome::Dismissed, cx);
             });
-        let startup_report = crate::app::extension_host::startup_report(cx);
+        let startup_report = crate::app::extensions::host::startup_report(cx);
         let extension_button_label = match &startup_report {
-            Some(report) if report.state == crate::app::extension_host::StartupState::Complete => {
+            Some(report)
+                if report.state == crate::app::extensions::host::StartupState::Complete =>
+            {
                 let failures = report
                     .report
                     .entries
@@ -304,7 +306,7 @@ impl Render for ProductShell {
                     .filter(|entry| {
                         matches!(
                             entry.result,
-                            crate::app::extension_load::LoadResult::Failed(_)
+                            crate::app::extensions::load::LoadResult::Failed(_)
                         )
                     })
                     .count();
@@ -469,11 +471,11 @@ impl Render for ProductShell {
 }
 
 pub(super) fn render_extension_report(
-    snapshot: Option<crate::app::extension_host::StartupReportSnapshot>,
+    snapshot: Option<crate::app::extensions::host::StartupReportSnapshot>,
     shell: &Entity<ProductShell>,
 ) -> AnyElement {
-    use crate::app::extension_host::StartupState;
-    use crate::app::extension_load::LoadResult;
+    use crate::app::extensions::host::StartupState;
+    use crate::app::extensions::load::LoadResult;
 
     let (root, state, entries) = match snapshot {
         Some(snapshot) => (

@@ -1,7 +1,7 @@
 //! Transient extension interactions own one window-local overlay.
 use super::operations::empty_product_window;
 use super::*;
-use crate::app::extension_host::handlers::TransientError;
+use crate::app::extensions::host::handlers::TransientError;
 use crate::app::transient::{PromptText, TransientOutcome, TransientOwner};
 use crate::host::protocol::{CommandInvocationId, PickerItem};
 
@@ -311,7 +311,7 @@ await commands.register("transient.await-picker", async () => {
 });
 "#;
     let documents = install_globals(cx);
-    let host = cx.update(crate::app::extension_host::install);
+    let host = cx.update(crate::app::extensions::host::install);
     let key = ExtensionKey::new(ExtensionId::new(711), ExtensionLifecycleId::new(1));
     host.update(cx, |host, cx| {
         let execution = host.load_test_source(key, SOURCE).unwrap();
@@ -357,7 +357,7 @@ await rejects(() => workbench.showMessage({ title: "Notice" }), "ContextUnavaila
 await commands.register("transient.context-free-ok", () => {});
 "#;
     let _documents = install_globals(cx);
-    let host = cx.update(crate::app::extension_host::install);
+    let host = cx.update(crate::app::extensions::host::install);
     let key = ExtensionKey::new(ExtensionId::new(712), ExtensionLifecycleId::new(1));
     host.update(cx, |host, cx| {
         let execution = host.load_test_source(key, SOURCE).unwrap();

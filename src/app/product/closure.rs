@@ -659,7 +659,7 @@ impl ProductShell {
                     }),
                     cx,
                 );
-                crate::app::extension_host::quit_after_storage(cx);
+                crate::app::extensions::host::quit_after_storage(cx);
                 Ok(())
             }
         }

@@ -13,8 +13,8 @@
 //! Keep V8 conversion in the host adapters and update the checked TypeScript
 //! facade/declarations when exposing or changing a public capability.
 
-use super::super::extension_storage::{OwnerStorage, StorageError};
 use super::*;
+use crate::app::extensions::storage::{OwnerStorage, StorageError};
 use crate::host::declarations::{
     ArgumentReader, DecodeError, EncodedValue, HostArguments, HostError, HostSuccess, encode_json,
     host_operation,
@@ -573,7 +573,7 @@ pub(crate) async fn close_presentation(
     context.foreground(|_, _| result).map_err(Into::into)
 }
 
-pub(crate) use super::super::extension_buffers::BufferError;
+pub(crate) use crate::app::extensions::buffers::BufferError;
 use crate::host::protocol::{
     BufferHandle, BufferSubscriptionId, ByteRange, EditorContribution, TextEdit, TextSnapshot,
 };
@@ -746,14 +746,14 @@ pub(crate) async fn dispose_editor_contributions(
     })?
 }
 
-use super::super::extension_semantics::{SemanticError, ViewPresentation};
+use crate::app::extensions::semantics::{SemanticError, ViewPresentation};
 use crate::host::protocol::{
     CompletionProviderRegistrationId, ConfirmationResult, FolderPickerResult, InputResult,
     PickerItem, PickerResult, ProviderIdentity, TreeAction, TreeProviderRegistrationId,
     ViewContentKind,
 };
 
-use super::super::transient::{PromptText, TransientOutcome, TransientOwner};
+use crate::app::transient::{PromptText, TransientOutcome, TransientOwner};
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct TreeArguments {
@@ -1258,7 +1258,7 @@ pub(crate) async fn unregister_completion_provider(
     })?
 }
 
-use super::super::extension_commands::CommandError;
+use crate::app::extension_commands::CommandError;
 use crate::host::protocol::{
     Command, CommandInvokeDispatch, CommandName, CommandOutcome, CommandRegistrationId,
 };
@@ -1457,22 +1457,22 @@ pub(crate) async fn mutate_keybindings(
 ) -> Result<(), KeymapError> {
     let key = ExtensionKey::new(context.request.extension, context.request.lifecycle);
     context.foreground(|host, cx| {
-        if !cx.has_global::<super::super::keymaps::ApplicationKeymaps>() {
+        if !cx.has_global::<crate::app::keymaps::ApplicationKeymaps>() {
             return Err(KeymapError::invalid(
                 "application keymap is unavailable".into(),
             ));
         }
         let owner = if host.personal_config_key == Some(key) {
-            super::super::keymaps::BindingOwner::Personal(key.extension, key.lifecycle)
+            crate::app::keymaps::BindingOwner::Personal(key.extension, key.lifecycle)
         } else {
-            super::super::keymaps::BindingOwner::Extension(key.extension, key.lifecycle)
+            crate::app::keymaps::BindingOwner::Extension(key.extension, key.lifecycle)
         };
         let result = cx
-            .global_mut::<super::super::keymaps::ApplicationKeymaps>()
+            .global_mut::<crate::app::keymaps::ApplicationKeymaps>()
             .0
             .apply_batch(owner, &arguments.mutations);
         if matches!(result, Ok(true)) {
-            super::super::keymaps::rebuild(cx);
+            crate::app::keymaps::rebuild(cx);
         }
         result.map(|_| ()).map_err(KeymapError::invalid)
     })?
@@ -1621,9 +1621,9 @@ impl From<String> for RecoveryError {
     }
 }
 
-impl From<super::super::recovery::RestoreError> for RecoveryError {
-    fn from(error: super::super::recovery::RestoreError) -> Self {
-        use super::super::recovery::RestoreError;
+impl From<crate::app::recovery::RestoreError> for RecoveryError {
+    fn from(error: crate::app::recovery::RestoreError) -> Self {
+        use crate::app::recovery::RestoreError;
         match error {
             RestoreError::Unavailable => Self::CaptureNotFound,
             RestoreError::Resource(error) => Self::Open(product::operations::resource_error(error)),
@@ -1658,9 +1658,9 @@ pub(crate) struct RetainedCapture {
     captured_at: i64,
 }
 
-impl From<super::super::recovery::StoredSnapshot> for RetainedCapture {
-    fn from(snapshot: super::super::recovery::StoredSnapshot) -> Self {
-        use super::super::recovery::SnapshotState;
+impl From<crate::app::recovery::StoredSnapshot> for RetainedCapture {
+    fn from(snapshot: crate::app::recovery::StoredSnapshot) -> Self {
+        use crate::app::recovery::SnapshotState;
         Self {
             id: snapshot.capture_key,
             document: snapshot.document_id.to_string(),
@@ -1726,7 +1726,7 @@ impl HostSuccess for RecoveryRestore {
 #[host_operation("recoveryList")]
 async fn recovery_list(context: HostContext, _: ()) -> Result<Vec<RetainedCapture>, RecoveryError> {
     let owner = context.recovery_owner()?;
-    let listing = context.foreground(|_, cx| super::super::recovery::retained(owner, cx))?;
+    let listing = context.foreground(|_, cx| crate::app::recovery::retained(owner, cx))?;
     Ok(listing.await?.into_iter().map(Into::into).collect())
 }
 
@@ -1738,7 +1738,7 @@ async fn recovery_retain(
     let owner = context.recovery_owner()?;
     let document = uuid::Uuid::parse_str(&arguments.id).map_err(|_| OpenError::DocumentNotFound)?;
     let retain = context
-        .foreground(|_, cx| super::super::recovery::retain(owner, document, cx))?
+        .foreground(|_, cx| crate::app::recovery::retain(owner, document, cx))?
         .ok_or(OpenError::DocumentNotFound)?;
     Ok(retain.await?.into())
 }
@@ -1750,7 +1750,7 @@ async fn recovery_release(
 ) -> Result<bool, RecoveryError> {
     let owner = context.recovery_owner()?;
     let release =
-        context.foreground(|_, cx| super::super::recovery::release(owner, arguments.id, cx))?;
+        context.foreground(|_, cx| crate::app::recovery::release(owner, arguments.id, cx))?;
     Ok(release.await?)
 }
 
@@ -1759,7 +1759,7 @@ async fn recovery_restore(
     context: HostContext,
     arguments: CaptureRestore,
 ) -> Result<RecoveryRestore, RecoveryError> {
-    use super::super::recovery::{RestoreOutcome, RestoredResource};
+    use crate::app::recovery::{RestoreOutcome, RestoredResource};
     let owner = context.recovery_owner()?;
     let request = context.request;
     let (destination, restore) = context.foreground(|host, cx| {
@@ -1783,7 +1783,7 @@ async fn recovery_restore(
                 }),
             ),
             RestoreOutcome::Preserved { owner, document } => {
-                let documents = cx.global::<super::super::documents::ApplicationDocuments>();
+                let documents = cx.global::<crate::app::documents::ApplicationDocuments>();
                 let owner = documents
                     .0
                     .read(cx)
@@ -1802,7 +1802,7 @@ async fn recovery_restore(
             }
         };
         let identity = cx
-            .global::<super::super::documents::ApplicationDocuments>()
+            .global::<crate::app::documents::ApplicationDocuments>()
             .0
             .read(cx)
             .get(document)
@@ -1977,8 +1977,7 @@ mod tests {
     async fn immediate_handler_commits_and_rejects_a_disposed_context(cx: &mut TestAppContext) {
         let key = ExtensionKey::new(ExtensionId::new(702), ExtensionLifecycleId::new(1));
         let (host, context) = cx.update(|cx| {
-            let commands =
-                cx.new(super::super::super::product_commands::ProductCommandDispatcher::new);
+            let commands = cx.new(crate::app::product_commands::ProductCommandDispatcher::new);
             cx.set_global(ApplicationProductCommands(commands));
             let host = install(cx);
             let context = host.update(cx, |host, cx| {
@@ -2031,8 +2030,7 @@ mod tests {
     ) -> (Entity<ProductExtensionHost>, HostContext, ExtensionKey) {
         let key = ExtensionKey::new(ExtensionId::new(703), ExtensionLifecycleId::new(1));
         cx.update(|cx| {
-            let commands =
-                cx.new(super::super::super::product_commands::ProductCommandDispatcher::new);
+            let commands = cx.new(crate::app::product_commands::ProductCommandDispatcher::new);
             cx.set_global(ApplicationProductCommands(commands));
             let host = install(cx);
             let context = host.update(cx, |host, cx| {
@@ -2040,7 +2038,7 @@ mod tests {
                 host.set_test_storage_root(root.to_owned(), cx);
                 host.storage_owners.insert(
                     key,
-                    super::super::super::extension_storage::StorageOwner::personal_config(),
+                    crate::app::extensions::storage::StorageOwner::personal_config(),
                 );
                 HostContext::new(
                     crate::host::protocol::RequestContext {
@@ -2193,12 +2191,10 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let (host, context, key) = storage_context(root.path(), cx);
         host.update(cx, |host, _| {
-            host.storage = Ok(
-                super::super::super::extension_storage::ExtensionStorage::new(
-                    root.path().to_owned(),
-                    super::super::super::extension_storage::test_executor(),
-                ),
-            );
+            host.storage = Ok(crate::app::extensions::storage::ExtensionStorage::new(
+                root.path().to_owned(),
+                crate::app::extensions::storage::test_executor(),
+            ));
         });
         let (started, ready) = std::sync::mpsc::channel();
         let (resume, gate) = std::sync::mpsc::channel();
@@ -2211,16 +2207,14 @@ mod tests {
         pollster::block_on(pending).unwrap();
         let drain = host.update(cx, |host, _| host.shutdown_storage().unwrap());
         pollster::block_on(drain);
-        let reopened = super::super::super::extension_storage::ExtensionStorage::new(
+        let reopened = crate::app::extensions::storage::ExtensionStorage::new(
             root.path().to_owned(),
-            super::super::super::extension_storage::test_executor(),
+            crate::app::extensions::storage::test_executor(),
         );
         assert_eq!(
             pollster::block_on(
                 reopened
-                    .for_owner(
-                        super::super::super::extension_storage::StorageOwner::personal_config()
-                    )
+                    .for_owner(crate::app::extensions::storage::StorageOwner::personal_config())
                     .read("key".into())
             )
             .unwrap(),
@@ -2259,12 +2253,10 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let (host, context, _) = storage_context(root.path(), cx);
         host.update(cx, |host, _| {
-            host.storage = Ok(
-                super::super::super::extension_storage::ExtensionStorage::new(
-                    root.path().to_owned(),
-                    super::super::super::extension_storage::test_executor(),
-                ),
-            );
+            host.storage = Ok(crate::app::extensions::storage::ExtensionStorage::new(
+                root.path().to_owned(),
+                crate::app::extensions::storage::test_executor(),
+            ));
         });
         let (started, ready) = std::sync::mpsc::channel();
         let (resume, gate) = std::sync::mpsc::channel();

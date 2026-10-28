@@ -14,14 +14,14 @@ use crate::host::protocol::{
     TreeProviderRegistrationId, ViewContentKind, ViewId,
 };
 
-use super::extension_host::handlers::{
+use crate::app::extensions::host::handlers::{
     AccessError, CompletionArguments, CompletionRegistrationArguments, ReplaceViewTextArguments,
     TreeArguments, TreeInvalidationArguments, TreeRegistrationArguments,
 };
-use super::tool_layout::StoredLocation;
+use crate::app::tool_layout::StoredLocation;
 use crate::host::declarations::HostError;
 
-use super::{
+use crate::app::{
     completion::{CompletionProviderRegistration, CompletionProviderRegistry},
     text_view::TextView,
     tree_view::{TreeProviderIdentity, TreeView, TreeViewRegistrationError},

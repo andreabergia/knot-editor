@@ -3,7 +3,7 @@
 use super::*;
 use crate::app::{
     entry::parse_launch_arguments,
-    extension_host::{self, ProductExtensionHost},
+    extensions::{self, host::ProductExtensionHost},
 };
 use crate::host::protocol::{ApplicationChange, ApplicationEvent, DocumentInfo, DocumentKind};
 
@@ -66,7 +66,7 @@ fn open_entry_points_share_document_identity_and_publish_only_committed_resource
     cx: &mut TestAppContext,
 ) {
     let documents = install_globals(cx);
-    let host = cx.update(extension_host::install);
+    let host = cx.update(extensions::host::install);
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("notes.txt");
     std::fs::write(&path, "native file").unwrap();
@@ -176,7 +176,7 @@ fn open_entry_points_share_document_identity_and_publish_only_committed_resource
 #[gpui::test]
 async fn stale_open_does_not_publish_or_leak_a_document(cx: &mut TestAppContext) {
     let documents = install_globals(cx);
-    let host = cx.update(extension_host::install);
+    let host = cx.update(extensions::host::install);
     let (_, provider) = memory_filesystems_with_provider();
     let (release, gate) = tokio::sync::oneshot::channel();
     let gated = Arc::new(GatedFileSystemProvider {
@@ -228,7 +228,7 @@ async fn save_as_and_racing_edits_publish_current_metadata_without_changing_iden
     cx: &mut TestAppContext,
 ) {
     let documents = install_globals(cx);
-    let host = cx.update(extension_host::install);
+    let host = cx.update(extensions::host::install);
     let (_, provider) = memory_filesystems_with_provider();
     let (release, gate) = tokio::sync::oneshot::channel();
     let gated = Arc::new(GatedFileSystemProvider {
@@ -338,7 +338,7 @@ async fn completed_save_remains_observable_when_a_later_close_prompt_is_cancelle
     cx: &mut TestAppContext,
 ) {
     let documents = install_globals(cx);
-    let host = cx.update(extension_host::install);
+    let host = cx.update(extensions::host::install);
     let (filesystems, provider) = memory_filesystems_with_provider();
     cx.set_global(ApplicationFileSystems(filesystems));
     let uri = ResourceUri::parse("mem://product/notes.txt").unwrap();
@@ -414,7 +414,7 @@ async fn replaced_or_closed_open_presentations_cannot_accept_in_flight_results(
     cx: &mut TestAppContext,
 ) {
     let documents = install_globals(cx);
-    let host = cx.update(extension_host::install);
+    let host = cx.update(extensions::host::install);
     for close_window in [false, true] {
         let (_, provider) = memory_filesystems_with_provider();
         let (release, gate) = tokio::sync::oneshot::channel();
@@ -493,7 +493,7 @@ async fn reordering_retains_exact_targets_while_replacement_and_transfer_change_
             .unwrap()
     }
     let documents = install_globals(cx);
-    let host = cx.update(extension_host::install);
+    let host = cx.update(extensions::host::install);
     let document = cx.update(|cx| create_untitled_document(&documents, cx));
     let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
     let (shell, window) = product_window(document, model.clone(), cx);
@@ -628,7 +628,7 @@ fn empty_workbench_and_clean_untitled_documents_keep_their_actual_metadata(
     cx: &mut TestAppContext,
 ) {
     let documents = install_globals(cx);
-    let host = cx.update(extension_host::install);
+    let host = cx.update(extensions::host::install);
     let handle = cx.update(open_tab_transfer_window).unwrap();
     let window = handle.into();
     let opened = take_events(&host, cx);
@@ -712,7 +712,7 @@ fn native_focus_loss_and_deactivation_publish_null_targets_without_repaint_event
     cx: &mut TestAppContext,
 ) {
     let documents = install_globals(cx);
-    let host = cx.update(extension_host::install);
+    let host = cx.update(extensions::host::install);
     let document = cx.update(|cx| create_untitled_document(&documents, cx));
     let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
     let (shell, visual) = cx.add_window_view(|window, cx| {
@@ -764,7 +764,7 @@ fn native_focus_loss_and_deactivation_publish_null_targets_without_repaint_event
 fn application_metadata_and_buffer_listeners_share_each_edit_once(cx: &mut TestAppContext) {
     use crate::host::lifecycle::ExtensionKey;
     let documents = install_globals(cx);
-    let host = cx.update(extension_host::install);
+    let host = cx.update(extensions::host::install);
     let key = ExtensionKey::new(ExtensionId::new(709), ExtensionLifecycleId::new(1));
     host.update(cx, |host, cx| {
         let execution = host.load_test_source(key, r#"
@@ -851,18 +851,18 @@ fn installed_application_observer_tracks_zero_window_activation_and_native_commi
         )],
     );
     let documents = install_globals(cx);
-    let host = cx.update(super::super::super::extension_host::install);
+    let host = cx.update(super::super::super::extensions::host::install);
     host.update(cx, |host, cx| {
         host.start_installed_extensions(root.path().to_path_buf(), cx)
     });
     let startup = wait_for_extension_report(&host, cx);
     assert_eq!(
         startup.report.entries[0].result,
-        super::super::super::extension_load::LoadResult::Loaded
+        super::super::super::extensions::load::LoadResult::Loaded
     );
     assert!(matches!(
         startup.report.entries[1].result,
-        super::super::super::extension_load::LoadResult::Failed(_)
+        super::super::super::extensions::load::LoadResult::Failed(_)
     ));
     cx.read(|cx| assert_eq!(host.read(cx).application_observer_count(), 1));
     let document = cx.update(|cx| create_untitled_document(&documents, cx));
@@ -1129,7 +1129,7 @@ await commands.register("observation.live", () => {});
 await commands.register("observation.install-for-unload", async () => { await workbench.observe(() => {}); });
 "#;
     let documents = install_globals(cx);
-    let host = cx.update(super::super::super::extension_host::install);
+    let host = cx.update(super::super::super::extensions::host::install);
     let key = ExtensionKey::new(ExtensionId::new(708), ExtensionLifecycleId::new(1));
     host.update(cx, |host, cx| {
         let execution = host.load_test_source(key, SOURCE).unwrap();
@@ -1220,7 +1220,7 @@ await commands.register("queries.terminal", async () => {
 });
 "#;
     let documents = install_globals(cx);
-    let host = cx.update(super::super::super::extension_host::install);
+    let host = cx.update(super::super::super::extensions::host::install);
     let key = ExtensionKey::new(ExtensionId::new(707), ExtensionLifecycleId::new(1));
     host.update(cx, |host, cx| {
         let execution = host.load_test_source(key, SOURCE).unwrap();
@@ -1268,7 +1268,7 @@ await commands.register("queries.terminal", async () => {
 fn view_state_changes_coalesce_into_one_settled_event_per_window(cx: &mut TestAppContext) {
     use crate::app::editor::EditorViewState;
     let documents = install_globals(cx);
-    let host = cx.update(extension_host::install);
+    let host = cx.update(extensions::host::install);
     let document = cx.update(|cx| create_untitled_document(&documents, cx));
     let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
     model.update(cx, |model, _| {

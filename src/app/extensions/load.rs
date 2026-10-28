@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::path::PathBuf;
 
-use super::extension_package::{DiscoveryReport, InstalledPackage};
+use crate::app::extensions::package::{DiscoveryReport, InstalledPackage};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum LoadResult {
@@ -276,7 +276,7 @@ mod tests {
     use std::task::{Context, Poll, Waker};
 
     use super::*;
-    use crate::app::extension_package::{Manifest, PackageOrigin, discover};
+    use crate::app::extensions::package::{Manifest, PackageOrigin, discover};
     use crate::host::{
         lifecycle::{ExtensionKey, ExtensionState},
         module_graph::ModuleGraph,
@@ -465,7 +465,7 @@ mod tests {
     fn rejected_version_causes_propagate_without_skipping_independent_admission() {
         let mut rejected = Vec::new();
         for name in ["@test/rejected", "@test/other", "@test/third"] {
-            rejected.push(crate::app::extension_package::PackageDiagnostic {
+            rejected.push(crate::app::extensions::package::PackageDiagnostic {
                 directory: PathBuf::from(name),
                 name: Some(name.into()),
                 cause: "unsupported apiVersion: expected 1, declared 2".into(),

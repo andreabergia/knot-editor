@@ -169,7 +169,7 @@ pub(super) fn listed_projects(
 
 pub(super) struct Fixture {
     pub(super) documents: Entity<DocumentCollection>,
-    pub(super) host: Entity<crate::app::extension_host::ProductExtensionHost>,
+    pub(super) host: Entity<crate::app::extensions::host::ProductExtensionHost>,
     pub(super) shell: Entity<ProductShell>,
     pub(super) window: gpui::AnyWindowHandle,
     pub(super) storage: tempfile::TempDir,
@@ -210,10 +210,10 @@ impl Fixture {
 
 pub(super) fn start_registry(cx: &mut TestAppContext) -> Fixture {
     let documents = install_globals(cx);
-    let host = cx.update(crate::app::extension_host::install);
+    let host = cx.update(crate::app::extensions::host::install);
     let (shell, window) = empty_product_window(&documents, cx);
     // The registry acts once startup windows exist.
-    cx.update(crate::app::extension_host::launched);
+    cx.update(crate::app::extensions::host::launched);
     let storage = tempfile::tempdir().unwrap();
     let extensions = tempfile::tempdir().unwrap();
     host.update(cx, |host, cx| {
@@ -247,7 +247,7 @@ pub(super) fn show_registry(
 }
 
 pub(super) fn restart_registry(
-    host: &Entity<crate::app::extension_host::ProductExtensionHost>,
+    host: &Entity<crate::app::extensions::host::ProductExtensionHost>,
     extensions: &tempfile::TempDir,
     cx: &mut TestAppContext,
 ) {
@@ -257,7 +257,7 @@ pub(super) fn restart_registry(
     let report = wait_for_extension_report(host, cx);
     assert!(report.report.entries.iter().any(|entry| {
         entry.name.as_deref() == Some("@knot/projects")
-            && entry.result == crate::app::extension_load::LoadResult::Loaded
+            && entry.result == crate::app::extensions::load::LoadResult::Loaded
     }));
 }
 

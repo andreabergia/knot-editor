@@ -2,7 +2,7 @@
 
 use super::operations::empty_product_window;
 use super::*;
-use crate::app::extension_load::LoadResult;
+use crate::app::extensions::load::LoadResult;
 
 const LOOP_V1: &str = r#"
 import { commands, workbench } from "knot";
@@ -45,7 +45,7 @@ await commands.register("switch.go", async () => {
 "#;
 
 struct Fixture {
-    host: Entity<crate::app::extension_host::ProductExtensionHost>,
+    host: Entity<crate::app::extensions::host::ProductExtensionHost>,
     documents: Entity<DocumentCollection>,
     shell: Entity<ProductShell>,
     window: gpui::AnyWindowHandle,
@@ -59,7 +59,7 @@ fn start(packages: &[(&str, &[&str], &str)], cx: &mut TestAppContext) -> Fixture
         install_extension(extensions.path(), name, requires, &[("main.js", source)]);
     }
     let documents = install_globals(cx);
-    let host = cx.update(crate::app::extension_host::install);
+    let host = cx.update(crate::app::extensions::host::install);
     let storage = tempfile::tempdir().unwrap();
     host.update(cx, |host, cx| {
         host.set_test_storage_root(storage.path().to_owned(), cx)
@@ -125,7 +125,7 @@ impl Fixture {
 
     fn report_entry(&self, name: &str, cx: &TestAppContext) -> LoadResult {
         cx.read(|cx| {
-            crate::app::extension_host::startup_report(cx)
+            crate::app::extensions::host::startup_report(cx)
                 .unwrap()
                 .report
                 .entries
@@ -200,7 +200,7 @@ fn restart_terminates_a_stuck_turn_and_rereads_the_installed_package(cx: &mut Te
     assert!(resolves("loop.added", cx));
     assert!(!resolves("loop.spin", cx));
     assert!(cx.read(|cx| {
-        crate::app::extension_host::view_definitions(cx)
+        crate::app::extensions::host::view_definitions(cx)
             .iter()
             .any(|definition| definition.id == "@example/loop.view")
     }));

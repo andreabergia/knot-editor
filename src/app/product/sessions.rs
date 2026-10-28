@@ -11,7 +11,7 @@
 //! and every released window closed in one turn, so observers see only the
 //! committed result.
 
-use super::super::extension_host::handlers::{AccessError, OpenError, ReplaceError};
+use super::super::extensions::host::handlers::{AccessError, OpenError, ReplaceError};
 use super::*;
 use crate::app::recovery::{RestoreOutcome, RestoredResource, StagedRestore};
 use crate::app::window_layout::{PlannedTab, WindowLayout};

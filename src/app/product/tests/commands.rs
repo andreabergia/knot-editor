@@ -26,7 +26,7 @@ fn pooled_fixture_commands_and_completions_use_the_product_target(cx: &mut TestA
     let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
     let (shell, window) = product_window(document, model.clone(), cx);
     let host = cx.update(|cx| {
-        let host = super::super::super::extension_host::install(cx);
+        let host = super::super::super::extensions::host::install(cx);
         host.update(cx, |host, cx| host.start_test_fixture("product", cx));
         host
     });
@@ -113,7 +113,7 @@ fn pooled_fixture_commands_and_completions_use_the_product_target(cx: &mut TestA
 
     drop(host);
     cx.update(|cx| {
-        drop(cx.remove_global::<super::super::super::extension_host::ApplicationExtensionHost>())
+        drop(cx.remove_global::<super::super::super::extensions::host::ApplicationExtensionHost>())
     });
     cx.run_until_parked();
 }

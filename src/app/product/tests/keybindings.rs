@@ -54,7 +54,7 @@ fn script_keybindings_follow_config_phases_and_runtime_replacement(cx: &mut Test
     install_globals(cx);
     cx.update(super::super::bind_product_keys);
     install_launch_gate(cx);
-    let host = cx.update(super::super::super::extension_host::install);
+    let host = cx.update(super::super::super::extensions::host::install);
     host.update(cx, |host, cx| {
         host.start_product_startup(
             Some(config.path().to_path_buf()),
@@ -75,11 +75,11 @@ fn script_keybindings_follow_config_phases_and_runtime_replacement(cx: &mut Test
         ));
     });
     let report = cx
-        .read(super::super::super::extension_host::startup_report)
+        .read(super::super::super::extensions::host::startup_report)
         .unwrap();
     assert!(report.report.entries.iter().any(|entry| {
         entry.name.as_deref() == Some("@example/bad")
-            && matches!(&entry.result, super::super::super::extension_load::LoadResult::Failed(cause) if cause.contains("failed after binding"))
+            && matches!(&entry.result, super::super::super::extensions::load::LoadResult::Failed(cause) if cause.contains("failed after binding"))
     }));
     assert!(cx.read(|cx| {
         cx.global::<ApplicationProductCommands>()
@@ -209,7 +209,7 @@ fn config_remaps_product_keys_without_changing_menu_or_palette_dispatch(cx: &mut
     install_globals(cx);
     cx.update(super::super::bind_product_keys);
     install_launch_gate(cx);
-    let host = cx.update(super::super::super::extension_host::install);
+    let host = cx.update(super::super::super::extensions::host::install);
     host.update(cx, |host, cx| {
         host.start_product_startup(
             Some(config.path().to_path_buf()),
@@ -354,7 +354,7 @@ fn config_global_copy_binding_routes_to_editor_and_extension_view(cx: &mut TestA
     let documents = install_globals(cx);
     cx.update(super::super::bind_product_keys);
     install_launch_gate(cx);
-    let host = cx.update(super::super::super::extension_host::install);
+    let host = cx.update(super::super::super::extensions::host::install);
     host.update(cx, |host, cx| {
         host.start_product_startup(
             Some(config.path().to_path_buf()),
@@ -461,7 +461,7 @@ fn invalid_config_keybinding_batch_rolls_back_before_product_readiness(cx: &mut 
     install_globals(cx);
     cx.update(super::super::bind_product_keys);
     install_launch_gate(cx);
-    let host = cx.update(super::super::super::extension_host::install);
+    let host = cx.update(super::super::super::extensions::host::install);
     host.update(cx, |host, cx| {
         host.start_product_startup(
             Some(config.path().to_path_buf()),
@@ -502,21 +502,21 @@ fn invalid_extension_keybinding_batch_does_not_block_other_extensions(cx: &mut T
     install_globals(cx);
     cx.update(super::super::bind_product_keys);
     install_launch_gate(cx);
-    let host = cx.update(super::super::super::extension_host::install);
+    let host = cx.update(super::super::super::extensions::host::install);
     host.update(cx, |host, cx| {
         host.start_product_startup(None, Ok(extensions.path().to_path_buf()), cx)
     });
     assert!(wait_for_product_startup(cx));
     let report = cx
-        .read(super::super::super::extension_host::startup_report)
+        .read(super::super::super::extensions::host::startup_report)
         .unwrap();
     assert!(report.report.entries.iter().any(|entry| {
         entry.name.as_deref() == Some("@example/good")
-            && entry.result == super::super::super::extension_load::LoadResult::Loaded
+            && entry.result == super::super::super::extensions::load::LoadResult::Loaded
     }));
     assert!(report.report.entries.iter().any(|entry| {
         entry.name.as_deref() == Some("@example/bad")
-            && matches!(&entry.result, super::super::super::extension_load::LoadResult::Failed(cause) if cause.contains("keybinding operation 2"))
+            && matches!(&entry.result, super::super::super::extensions::load::LoadResult::Failed(cause) if cause.contains("keybinding operation 2"))
     }));
     cx.read(|cx| {
         assert_eq!(
@@ -533,7 +533,7 @@ fn unloading_a_script_lifecycle_removes_its_keybindings(cx: &mut TestAppContext)
 
     install_globals(cx);
     cx.update(super::super::bind_product_keys);
-    let host = cx.update(super::super::super::extension_host::install);
+    let host = cx.update(super::super::super::extensions::host::install);
     let key = ExtensionKey::new(ExtensionId::new(91), ExtensionLifecycleId::new(1));
     let loaded = Arc::new(Mutex::new(false));
     let done = loaded.clone();
@@ -818,7 +818,7 @@ fn personal_config_ctrl_shift_p_opens_command_palette(cx: &mut TestAppContext) {
     install_globals(cx);
     cx.update(super::super::bind_product_keys);
     install_launch_gate(cx);
-    let host = cx.update(super::super::super::extension_host::install);
+    let host = cx.update(super::super::super::extensions::host::install);
     host.update(cx, |host, cx| {
         host.start_product_startup(
             Some(config.path().to_path_buf()),

@@ -2,7 +2,7 @@
 
 use super::operations::{empty_product_window, install_operation_fixture};
 use super::*;
-use crate::app::extension_host;
+use crate::app::extensions;
 
 const SOURCE: &str = r#"
 import { commands, documents, windows, workbench } from "knot";
@@ -97,7 +97,7 @@ fn public_close_preserves_cancel_and_invalidates_the_final_document_after_save_o
         cx.set_global(ApplicationSaveDialog(Arc::new(FixedSaveDialog(
             SaveDialogOutcome::Selected(destination.clone()),
         ))));
-        let host = cx.update(extension_host::install);
+        let host = cx.update(extensions::host::install);
         let key = install_operation_fixture(&host, SOURCE, "close.invalid", cx);
         let (first, first_window) = empty_product_window(&documents, cx);
         let (control, control_window) = empty_product_window(&documents, cx);
@@ -166,7 +166,7 @@ fn public_close_preserves_cancel_and_invalidates_the_final_document_after_save_o
 #[gpui::test]
 fn public_close_keeps_a_shared_dirty_document_live_without_prompting(cx: &mut TestAppContext) {
     let documents = install_globals(cx);
-    let host = cx.update(extension_host::install);
+    let host = cx.update(extensions::host::install);
     let key = install_operation_fixture(&host, SOURCE, "close.invalid", cx);
     let (first, first_window) = empty_product_window(&documents, cx);
     let (control, control_window) = empty_product_window(&documents, cx);
@@ -207,7 +207,7 @@ fn public_close_rejects_concurrent_closure_and_save_failure_without_removing_the
     cx.set_global(ApplicationSaveDialog(Arc::new(FixedSaveDialog(
         SaveDialogOutcome::Selected(ResourceUri::parse("mem://product/src").unwrap()),
     ))));
-    let host = cx.update(extension_host::install);
+    let host = cx.update(extensions::host::install);
     let key = install_operation_fixture(&host, SOURCE, "close.invalid", cx);
     let (first, first_window) = empty_product_window(&documents, cx);
     let (control, control_window) = empty_product_window(&documents, cx);
@@ -248,7 +248,7 @@ fn public_close_rejects_concurrent_closure_and_save_failure_without_removing_the
 #[gpui::test]
 fn replacing_a_prompted_editor_cannot_close_its_replacement(cx: &mut TestAppContext) {
     let documents = install_globals(cx);
-    let host = cx.update(extension_host::install);
+    let host = cx.update(extensions::host::install);
     let key = install_operation_fixture(&host, SOURCE, "close.invalid", cx);
     let (first, first_window) = empty_product_window(&documents, cx);
     let (control, control_window) = empty_product_window(&documents, cx);
@@ -296,7 +296,7 @@ fn replacing_a_prompted_editor_cannot_close_its_replacement(cx: &mut TestAppCont
 fn public_close_cancellation_before_commit_keeps_the_presentation(cx: &mut TestAppContext) {
     for (unload, answer) in [(false, "Don't Save"), (true, "Save")] {
         let documents = install_globals(cx);
-        let host = cx.update(extension_host::install);
+        let host = cx.update(extensions::host::install);
         let key = install_operation_fixture(&host, SOURCE, "close.invalid", cx);
         let (first, first_window) = empty_product_window(&documents, cx);
         let (control, control_window) = empty_product_window(&documents, cx);
@@ -355,7 +355,7 @@ fn an_edit_racing_a_public_close_save_preserves_the_live_dirty_document(cx: &mut
     let mut filesystems = FileSystemProviderRegistry::new();
     filesystems.register("mem", gated.clone()).unwrap();
     cx.set_global(ApplicationFileSystems(Arc::new(filesystems)));
-    let host = cx.update(extension_host::install);
+    let host = cx.update(extensions::host::install);
     let key = install_operation_fixture(&host, SOURCE, "close.invalid", cx);
     let (first, first_window) = empty_product_window(&documents, cx);
     let (control, control_window) = empty_product_window(&documents, cx);
@@ -404,7 +404,7 @@ fn activation_can_close_the_final_tab_and_observe_its_replacement(cx: &mut TestA
     let documents = install_globals(cx);
     let (shell, _) = empty_product_window(&documents, cx);
     let old_workbench = cx.read(|cx| shell.read(cx).workbench.clone());
-    let host = cx.update(extension_host::install);
+    let host = cx.update(extensions::host::install);
     let key = install_operation_fixture(
         &host,
         r#"
@@ -433,7 +433,7 @@ await commands.register("close.activation-ready", () => {});
 #[gpui::test]
 fn an_observation_listener_can_close_and_dispose_without_deadlocking(cx: &mut TestAppContext) {
     let documents = install_globals(cx);
-    let host = cx.update(extension_host::install);
+    let host = cx.update(extensions::host::install);
     let key = install_operation_fixture(
         &host,
         r#"
@@ -483,7 +483,7 @@ await commands.register("close.listener-trigger", async () => { id = (await docu
 #[gpui::test]
 fn a_transferred_presentation_cannot_be_closed_through_its_old_target(cx: &mut TestAppContext) {
     let documents = install_globals(cx);
-    let host = cx.update(extension_host::install);
+    let host = cx.update(extensions::host::install);
     let key = install_operation_fixture(&host, SOURCE, "close.invalid", cx);
     let (first, first_window) = empty_product_window(&documents, cx);
     let (control, control_window) = empty_product_window(&documents, cx);
@@ -552,7 +552,7 @@ fn public_close_removes_a_terminal_without_closing_document_models(cx: &mut Test
         ),
         CommandOutcome::Completed
     );
-    let host = cx.update(extension_host::install);
+    let host = cx.update(extensions::host::install);
     let key = install_operation_fixture(
         &host,
         r#"

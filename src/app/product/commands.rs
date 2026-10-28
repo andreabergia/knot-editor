@@ -188,7 +188,7 @@ pub(crate) async fn show_completions(
         .await?;
     context
         .foreground(move |target, _, cx| {
-            Ok(super::super::extension_host::start_completion(
+            Ok(super::super::extensions::host::start_completion(
                 target.clone(),
                 cx,
             ))

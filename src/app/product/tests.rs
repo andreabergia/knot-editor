@@ -369,14 +369,14 @@ fn install_extension(root: &Path, name: &str, requires: &[&str], files: &[(&str,
 }
 
 fn wait_for_extension_report(
-    _host: &Entity<super::super::extension_host::ProductExtensionHost>,
+    _host: &Entity<super::super::extensions::host::ProductExtensionHost>,
     cx: &mut TestAppContext,
-) -> super::super::extension_host::StartupReportSnapshot {
+) -> super::super::extensions::host::StartupReportSnapshot {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
     loop {
         cx.run_until_parked();
-        if let Some(report) = cx.read(super::super::extension_host::startup_report)
-            && report.state == super::super::extension_host::StartupState::Complete
+        if let Some(report) = cx.read(super::super::extensions::host::startup_report)
+            && report.state == super::super::extensions::host::StartupState::Complete
         {
             return report;
         }

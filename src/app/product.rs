@@ -46,7 +46,7 @@ use super::{
     CommandCompletion, CommandPalette, CommandPaletteEntry, CommandPaletteEvent,
     documents::{ApplicationDocuments, DocumentCollection, DocumentId, DocumentState},
     entry::OpenRequest,
-    extension_host::handlers::TransientError,
+    extensions::host::handlers::TransientError,
     filesystem::{
         FileSystemProviderRegistry, LocalFileSystemProvider, ResourceError, ResourceKind,
         ResourceStat, ResourceVersion,
@@ -499,15 +499,15 @@ impl ProductShell {
     fn observe_extension_host(&mut self, native_window: &mut Window, cx: &mut Context<Self>) {
         self.window = Some(native_window.window_handle());
         self.application_observer = Some(cx.observe(&cx.entity(), |this, _, cx| {
-            super::extension_host::application_changed(cx);
+            super::extensions::host::application_changed(cx);
             this.schedule_view_state(cx);
         }));
         self.observe_window_bounds(native_window, cx);
         self.application_activation =
             Some(cx.observe_window_activation(native_window, |_, _, cx| {
-                super::extension_host::application_changed(cx)
+                super::extensions::host::application_changed(cx)
             }));
-        super::extension_host::application_changed(cx);
+        super::extensions::host::application_changed(cx);
         // A closed window drops its live frames and any pending transient
         // interaction; other windows keep theirs.
         let shell = cx.weak_entity();
@@ -528,14 +528,14 @@ impl ProductShell {
                 });
             });
         }));
-        if let Some(host) = super::extension_host::entity(cx) {
+        if let Some(host) = super::extensions::host::entity(cx) {
             self.extension_report_subscription = Some(cx.observe(&host, |this, _, cx| {
                 this.sync_contributed_views(cx);
                 cx.notify();
             }));
             self._contributed_view_release = Some(cx.on_release(|this, cx| {
                 for (_, instance) in std::mem::take(&mut this.contributed_views) {
-                    super::extension_host::detach_view_instance(instance.instance_id(cx), cx);
+                    super::extensions::host::detach_view_instance(instance.instance_id(cx), cx);
                 }
             }));
             // Host notifications reconcile definitions while it lives; release
@@ -577,11 +577,11 @@ impl ProductShell {
             self.application_focus.push((
                 handle.clone(),
                 cx.on_focus(&handle, window, |this, _, cx| {
-                    super::extension_host::application_changed(cx);
+                    super::extensions::host::application_changed(cx);
                     this.schedule_view_state(cx);
                 }),
                 cx.on_blur(&handle, window, |_, _, cx| {
-                    super::extension_host::application_changed(cx)
+                    super::extensions::host::application_changed(cx)
                 }),
             ));
         }

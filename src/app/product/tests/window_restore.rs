@@ -550,7 +550,7 @@ fn a_failed_config_launch_never_records_windows(cx: &mut TestAppContext) {
     .unwrap();
     let launch = Launch::new(cx);
     install_launch_gate(cx);
-    let host = cx.update(super::super::super::extension_host::install);
+    let host = cx.update(super::super::super::extensions::host::install);
     host.update(cx, |host, cx| {
         host.start_product_startup(
             Some(config.path().to_path_buf()),
@@ -589,7 +589,7 @@ fn native_windows_and_recovery_restore_when_an_extension_fails_at_startup(cx: &m
         &[("main.js", "throw new Error('package failed');")],
     );
     install_launch_gate(cx);
-    let host = cx.update(super::super::super::extension_host::install);
+    let host = cx.update(super::super::super::extensions::host::install);
     host.update(cx, |host, cx| {
         host.start_product_startup(None, Ok(extensions.path().to_path_buf()), cx)
     });

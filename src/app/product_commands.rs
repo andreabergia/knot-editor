@@ -213,7 +213,7 @@ impl ProductCommandDispatcher {
                 },
                 CommandClaim::Extension { handler, view } => {
                     let result = if view.is_some() {
-                        super::extension_host::start_view_command(
+                        super::extensions::host::start_view_command(
                             command.clone(),
                             target.clone(),
                             handler,
@@ -221,7 +221,7 @@ impl ProductCommandDispatcher {
                             cx,
                         )
                     } else {
-                        super::extension_host::start_global_command(
+                        super::extensions::host::start_global_command(
                             command.clone(),
                             target.clone(),
                             handler,

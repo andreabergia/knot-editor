@@ -3,7 +3,7 @@
 use std::rc::Rc;
 
 use super::*;
-use crate::app::extension_host::handlers::{AccessError, OpenError, ReplaceError};
+use crate::app::extensions::host::handlers::{AccessError, OpenError, ReplaceError};
 use crate::app::product::sessions::{EntryOutcome, ReplaceWindowsResult};
 use crate::app::recovery::{ApplicationRecovery, SnapshotKind};
 use crate::app::workbench::{DockLocation, SplitPlacement, ToolPlacement};
@@ -14,7 +14,7 @@ const OWNER: &str = "@example/sessions";
 
 struct Harness {
     documents: Entity<DocumentCollection>,
-    host: Entity<crate::app::extension_host::ProductExtensionHost>,
+    host: Entity<crate::app::extensions::host::ProductExtensionHost>,
     key: ExtensionKey,
     provider: Arc<MemoryFileSystemProvider>,
     read_gate: Arc<GatedFileSystemProvider>,
@@ -40,7 +40,7 @@ fn harness(cx: &mut TestAppContext) -> Harness {
     let mut providers = FileSystemProviderRegistry::new();
     providers.register("mem", read_gate.clone()).unwrap();
     cx.set_global(ApplicationFileSystems(Arc::new(providers)));
-    let host = cx.update(crate::app::extension_host::install);
+    let host = cx.update(crate::app::extensions::host::install);
     let key = ExtensionKey::new(ExtensionId::new(901), ExtensionLifecycleId::new(1));
     host.update(cx, |host, _| {
         host.load(key, crate::host::pool::ExtensionConfig::default())

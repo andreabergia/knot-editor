@@ -471,7 +471,7 @@ re-reading an installed package from disk.
 ## Native contributors
 
 Handler annotation and conversion contracts live in the
-[host handler module](../src/app/extension_host/handlers.rs) and
+[host handler module](../src/app/extensions/host/handlers.rs) and
 [command declarations](../src/app/command_declarations.rs). See
 [host architecture](architecture/extension-host.md) and
 [commands](architecture/commands.md) for ownership and routing.

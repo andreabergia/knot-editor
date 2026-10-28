@@ -505,13 +505,13 @@ fn quit_records_no_window_closure(cx: &mut TestAppContext) {
             .any(|event| serde_json::to_value(&event.change).unwrap()["type"] == "windowClosed")
     );
     // The durable record still describes the window as it was at quit.
-    let storage = crate::app::extension_storage::ExtensionStorage::new(
+    let storage = crate::app::extensions::storage::ExtensionStorage::new(
         fixture.storage.path().to_owned(),
-        crate::app::extension_storage::test_executor(),
+        crate::app::extensions::storage::test_executor(),
     );
     let stored = pollster::block_on(
         storage
-            .for_owner(crate::app::extension_storage::StorageOwner::bundled(OWNER).unwrap())
+            .for_owner(crate::app::extensions::storage::StorageOwner::bundled(OWNER).unwrap())
             .read(format!("session:{a_id}")),
     )
     .unwrap();
@@ -734,10 +734,10 @@ fn a_new_project_window_opens_with_the_project_roots_and_joins_it(cx: &mut TestA
     assert_eq!(product_shells(cx).len(), 3);
 }
 
-fn package_storage(fixture: &Fixture) -> crate::app::extension_storage::ExtensionStorage {
-    crate::app::extension_storage::ExtensionStorage::new(
+fn package_storage(fixture: &Fixture) -> crate::app::extensions::storage::ExtensionStorage {
+    crate::app::extensions::storage::ExtensionStorage::new(
         fixture.storage.path().to_owned(),
-        crate::app::extension_storage::test_executor(),
+        crate::app::extensions::storage::test_executor(),
     )
 }
 
@@ -745,7 +745,7 @@ fn write_record(fixture: &Fixture, key: &str, value: Value) {
     let storage = package_storage(fixture);
     pollster::block_on(
         storage
-            .for_owner(crate::app::extension_storage::StorageOwner::bundled(OWNER).unwrap())
+            .for_owner(crate::app::extensions::storage::StorageOwner::bundled(OWNER).unwrap())
             .write(key.to_owned(), value),
     )
     .unwrap();
@@ -995,7 +995,7 @@ fn restored_windows_rebind_after_launch_and_unrestored_sessions_suspend(cx: &mut
     ));
     cx.set_global(ApplicationWorkbenches(RefCell::new(Vec::new())));
     cx.update(|cx| {
-        crate::app::extension_host::reset_launched_for_test(cx);
+        crate::app::extensions::host::reset_launched_for_test(cx);
         crate::app::window_sessions::install(path, executor, cx);
     });
     restart_registry(&fixture.host, &fixture.extensions, cx);

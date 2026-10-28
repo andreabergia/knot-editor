@@ -1,6 +1,8 @@
 //! Destination admission and semantic product operations for extension requests.
 
-use super::super::extension_host::handlers::{AccessError, CloseError, OpenError, WorkspaceError};
+use super::super::extensions::host::handlers::{
+    AccessError, CloseError, OpenError, WorkspaceError,
+};
 use super::*;
 use crate::host::{
     lifecycle::ExtensionKey,
@@ -11,7 +13,7 @@ use crate::host::{
 
 #[derive(Clone)]
 pub(crate) struct OperationCaller {
-    pub(crate) host: WeakEntity<super::super::extension_host::ProductExtensionHost>,
+    pub(crate) host: WeakEntity<super::super::extensions::host::ProductExtensionHost>,
     pub(crate) key: ExtensionKey,
     pub(crate) invocation: Option<CommandInvocationId>,
 }

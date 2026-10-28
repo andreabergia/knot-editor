@@ -141,7 +141,7 @@ async fn semantic_open_rejects_a_replaced_presentation_without_creating_a_docume
     assert_eq!(cx.read(|cx| documents.read(cx).documents().count()), 1);
 }
 
-use crate::app::extension_host::{self, ProductExtensionHost};
+use crate::app::extensions::{self, host::ProductExtensionHost};
 use crate::host::lifecycle::ExtensionKey;
 
 pub(super) fn install_operation_fixture(
@@ -189,7 +189,7 @@ fn public_open_captures_destinations_and_returns_shared_document_metadata(cx: &m
     let documents = install_globals(cx);
     let (filesystems, _) = memory_filesystems_with_provider();
     cx.set_global(ApplicationFileSystems(filesystems));
-    let host = cx.update(extension_host::install);
+    let host = cx.update(extensions::host::install);
     let key = install_operation_fixture(
         &host,
         r#"
@@ -252,7 +252,7 @@ fn public_open_keeps_the_admitted_window_when_focus_changes_during_read(cx: &mut
     let mut filesystems = FileSystemProviderRegistry::new();
     filesystems.register("mem", provider.clone()).unwrap();
     cx.set_global(ApplicationFileSystems(Arc::new(filesystems)));
-    let host = cx.update(extension_host::install);
+    let host = cx.update(extensions::host::install);
     let (first, first_window) = empty_product_window(&documents, cx);
     let (second, second_window) = empty_product_window(&documents, cx);
     let key = install_operation_fixture(
@@ -303,7 +303,7 @@ fn public_open_rejects_replaced_targets_and_unloaded_callers_after_io(cx: &mut T
         let mut filesystems = FileSystemProviderRegistry::new();
         filesystems.register("mem", provider.clone()).unwrap();
         cx.set_global(ApplicationFileSystems(Arc::new(filesystems)));
-        let host = cx.update(extension_host::install);
+        let host = cx.update(extensions::host::install);
         let (shell, window) = empty_product_window(&documents, cx);
         let key = install_operation_fixture(
             &host,
@@ -378,7 +378,7 @@ fn activation_and_listeners_can_open_with_explicit_targets(cx: &mut TestAppConte
     let documents = install_globals(cx);
     let (filesystems, _) = memory_filesystems_with_provider();
     cx.set_global(ApplicationFileSystems(filesystems));
-    let host = cx.update(extension_host::install);
+    let host = cx.update(extensions::host::install);
     let (shell, window) = empty_product_window(&documents, cx);
     let key = install_operation_fixture(
         &host,
@@ -444,13 +444,13 @@ fn installed_open_command_consumes_the_committed_result_in_its_originating_windo
         &[],
         &[("main.js", include_str!("fixtures/application_state.js"))],
     );
-    let host = cx.update(extension_host::install);
+    let host = cx.update(extensions::host::install);
     host.update(cx, |host, cx| {
         host.start_installed_extensions(root.path().to_path_buf(), cx)
     });
     assert_eq!(
         wait_for_extension_report(&host, cx).report.entries[0].result,
-        crate::app::extension_load::LoadResult::Loaded
+        crate::app::extensions::load::LoadResult::Loaded
     );
     let (first, first_window) = empty_product_window(&documents, cx);
     let mut opened = begin_open(&first, "mem://product/notes.txt", cx);
@@ -546,7 +546,7 @@ fn public_untitled_creation_and_present_share_native_tabs_and_dirty_state(cx: &m
     let documents = install_globals(cx);
     let (filesystems, _) = memory_filesystems_with_provider();
     cx.set_global(ApplicationFileSystems(filesystems));
-    let host = cx.update(extension_host::install);
+    let host = cx.update(extensions::host::install);
     let key = install_operation_fixture(
         &host,
         r#"
@@ -648,7 +648,7 @@ fn public_open_rejects_pane_or_window_loss_and_command_cancellation_without_leak
         let mut filesystems = FileSystemProviderRegistry::new();
         filesystems.register("mem", provider.clone()).unwrap();
         cx.set_global(ApplicationFileSystems(Arc::new(filesystems)));
-        let host = cx.update(extension_host::install);
+        let host = cx.update(extensions::host::install);
         let (first, first_window) = empty_product_window(&documents, cx);
         assert_eq!(
             wait_for_command(
@@ -774,13 +774,13 @@ fn pick_folder_returns_a_normalized_directory_and_reports_path_failures(cx: &mut
         &[],
         &[("main.js", FOLDER_PICKER_MAIN)],
     );
-    let host = cx.update(extension_host::install);
+    let host = cx.update(extensions::host::install);
     host.update(cx, |host, cx| {
         host.start_installed_extensions(root.path().to_path_buf(), cx)
     });
     assert_eq!(
         wait_for_extension_report(&host, cx).report.entries[0].result,
-        crate::app::extension_load::LoadResult::Loaded
+        crate::app::extensions::load::LoadResult::Loaded
     );
     let (shell, window) = empty_product_window(&documents, cx);
 

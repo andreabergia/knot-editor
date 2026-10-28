@@ -14,7 +14,7 @@ use gpui::{BackgroundExecutor, Task};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use serde_json::Value;
 
-use super::extension_package::{validate_bundled_name, validate_name};
+use crate::app::extensions::package::{validate_bundled_name, validate_name};
 
 const APPLICATION_ID: i64 = 0x4b4e4f54;
 const SCHEMA: &str = "CREATE TABLE records (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL CHECK(json_valid(value))) STRICT";
@@ -677,7 +677,7 @@ mod tests {
             command
                 .args([
                     "--exact",
-                    "app::extension_storage::tests::storage_process_writer",
+                    "app::extensions::storage::tests::storage_process_writer",
                     "--nocapture",
                 ])
                 .env("KNOT_STORAGE_TEST_ROOT", root.path())

@@ -2,7 +2,7 @@
 
 use super::operations::{empty_product_window, install_operation_fixture};
 use super::*;
-use crate::app::extension_host;
+use crate::app::extensions;
 
 #[gpui::test]
 fn public_workspace_operations_validate_before_commit_and_preserve_documents(
@@ -11,7 +11,7 @@ fn public_workspace_operations_validate_before_commit_and_preserve_documents(
     let documents = install_globals(cx);
     let (filesystems, _) = memory_filesystems_with_provider();
     cx.set_global(ApplicationFileSystems(filesystems));
-    let host = cx.update(extension_host::install);
+    let host = cx.update(extensions::host::install);
     let key = install_operation_fixture(
         &host,
         r#"
@@ -123,7 +123,7 @@ fn workspace_validation_retains_window_and_rejects_superseded_or_unloaded_work(
         let mut filesystems = FileSystemProviderRegistry::new();
         filesystems.register("mem", provider.clone()).unwrap();
         cx.set_global(ApplicationFileSystems(Arc::new(filesystems)));
-        let host = cx.update(extension_host::install);
+        let host = cx.update(extensions::host::install);
         let (first, window) = empty_product_window(&documents, cx);
         let (second, second_window) = empty_product_window(&documents, cx);
         let key = install_operation_fixture(
@@ -227,7 +227,7 @@ fn explicit_workspace_operations_work_in_an_empty_product_workbench(cx: &mut Tes
             root.downcast::<ProductShell>().unwrap()
         })
         .unwrap();
-    let host = cx.update(extension_host::install);
+    let host = cx.update(extensions::host::install);
     let key = install_operation_fixture(
         &host,
         r#"
@@ -391,7 +391,7 @@ fn opening_a_window_applies_its_roots_or_closes_it_again(cx: &mut TestAppContext
     let (filesystems, _) = memory_filesystems_with_provider();
     cx.set_global(ApplicationFileSystems(filesystems));
     let (_shell, _window) = empty_product_window(&documents, cx);
-    let host = cx.update(extension_host::install);
+    let host = cx.update(extensions::host::install);
     let key = install_operation_fixture(
         &host,
         r#"

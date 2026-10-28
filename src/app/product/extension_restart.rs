@@ -6,7 +6,7 @@
 //! Knot is its recovery path.
 
 use super::*;
-use crate::app::extension_load::LoadResult;
+use crate::app::extensions::load::LoadResult;
 use crate::host::protocol::PickerItem;
 
 pub(super) const RESTART_TITLE: &str = "Restart Extension";
@@ -19,7 +19,7 @@ impl ProductShell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(report) = super::super::extension_host::startup_report(cx) else {
+        let Some(report) = super::super::extensions::host::startup_report(cx) else {
             self.status = "extensions are unavailable".into();
             cx.notify();
             return;
@@ -60,7 +60,7 @@ impl ProductShell {
                 return;
             };
             let Ok(restart) = cx.update(|cx| {
-                super::super::extension_host::entity(cx)
+                super::super::extensions::host::entity(cx)
                     .map(|host| host.update(cx, |host, cx| host.restart_package(name.clone(), cx)))
             }) else {
                 return;

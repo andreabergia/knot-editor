@@ -8,7 +8,7 @@ impl ProductShell {
     /// defaults once; later host notifications never override a window-local
     /// programmatic hide.
     pub(super) fn sync_contributed_views(&mut self, cx: &mut Context<Self>) {
-        let definitions = crate::app::extension_host::view_definitions(cx);
+        let definitions = crate::app::extensions::host::view_definitions(cx);
         let live = definitions
             .iter()
             .map(|definition| definition.id.as_str())
@@ -31,7 +31,7 @@ impl ProductShell {
 
     pub(super) fn attach_contributed_view(
         &mut self,
-        definition: crate::app::extension_semantics::ViewDefinition,
+        definition: crate::app::extensions::semantics::ViewDefinition,
         cx: &mut Context<Self>,
     ) {
         let Some(window) = self.window else {
@@ -49,7 +49,7 @@ impl ProductShell {
                 });
                 let event = cx.subscribe(&view, |_, _, event, cx| {
                     let event = event.clone();
-                    cx.defer(move |cx| crate::app::extension_host::route_tree_event(&event, cx));
+                    cx.defer(move |cx| crate::app::extensions::host::route_tree_event(&event, cx));
                     cx.notify();
                 });
                 let observer = cx.observe(&view, |_, _, cx| cx.notify());
@@ -75,7 +75,7 @@ impl ProductShell {
                 )
             }
         };
-        if !crate::app::extension_host::attach_view_instance(
+        if !crate::app::extensions::host::attach_view_instance(
             definition.id.clone(),
             window_id,
             content.clone(),
@@ -136,7 +136,7 @@ impl ProductShell {
                 workbench.unregister_tool(frame);
             }
         });
-        crate::app::extension_host::detach_view_instance(view_id, cx);
+        crate::app::extensions::host::detach_view_instance(view_id, cx);
     }
 
     /// Show or hide a contributed frame without publishing a fresh-window
@@ -342,7 +342,7 @@ impl ProductShell {
         }
         let defaults = crate::app::tool_layout::ToolLayoutSnapshot::product_default();
         self.restore_tool_layout(&defaults, cx);
-        let definitions = crate::app::extension_host::view_definitions(cx);
+        let definitions = crate::app::extensions::host::view_definitions(cx);
         self.workbench.update(cx, |workbench, _| {
             for definition in definitions {
                 let Some(id) = workbench.tool_by_stable_id(&definition.id) else {

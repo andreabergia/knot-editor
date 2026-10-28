@@ -8,7 +8,7 @@ use std::{
 
 fn host(root: &Path, cx: &mut TestAppContext) -> Entity<ProductExtensionHost> {
     cx.update(|cx| {
-        let commands = cx.new(super::super::product_commands::ProductCommandDispatcher::new);
+        let commands = cx.new(crate::app::product_commands::ProductCommandDispatcher::new);
         cx.set_global(ApplicationProductCommands(commands));
         let host = install(cx);
         host.update(cx, |host, cx| {

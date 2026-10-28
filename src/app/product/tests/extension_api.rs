@@ -71,7 +71,7 @@ await commands.register("api.cross", async (context) => {
 });
 "#;
     let documents = install_globals(cx);
-    let host = cx.update(super::super::super::extension_host::install);
+    let host = cx.update(super::super::super::extensions::host::install);
     let first_document = cx.update(|cx| create_untitled_document(&documents, cx));
     let first_model = cx.read(|cx| {
         documents
@@ -224,7 +224,7 @@ await commands.register("api.nontext", async (context) => {
 });
 "#;
     let documents = install_globals(cx);
-    let host = cx.update(super::super::super::extension_host::install);
+    let host = cx.update(super::super::super::extensions::host::install);
     host.update(cx, |host, cx| {
         let execution = host
             .load_test_source(
@@ -377,7 +377,7 @@ throw new Error("closed buffer accepted operation");
 });
 "#;
     let documents = install_globals(cx);
-    let host = cx.update(super::super::super::extension_host::install);
+    let host = cx.update(super::super::super::extensions::host::install);
     let model = cx.new(|_| BufferModel::from_text("owned"));
     let document = documents.update(cx, |documents, cx| {
         documents.create_untitled("Clean", model.clone(), cx)
@@ -469,7 +469,7 @@ await commands.register("api.owned-cleanup", async () => {
 "#;
     let documents = install_globals(cx);
     cx.update(super::super::bind_product_keys);
-    let host = cx.update(super::super::super::extension_host::install);
+    let host = cx.update(super::super::super::extensions::host::install);
     let document = cx.update(|cx| create_untitled_document(&documents, cx));
     let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
     model.update(cx, |model, _| model.replace(0..0, "owned").unwrap());
@@ -584,7 +584,7 @@ await commands.register("api.owned-cleanup", async () => {
     assert_eq!(wait_for_command(setup, cx), CommandOutcome::Completed);
     cx.read(|cx| assert_eq!(model.read(cx).resolved_contributions().len(), 1));
     cx.update(|cx| {
-        drop(cx.remove_global::<super::super::super::extension_host::ApplicationExtensionHost>())
+        drop(cx.remove_global::<super::super::super::extensions::host::ApplicationExtensionHost>())
     });
     cx.update(move |_| drop(host));
     cx.run_until_parked();
@@ -620,7 +620,7 @@ getChildren() { return [{ id: "root", label: "Deferred", collapsibleState: "none
 "#;
 
     let documents = install_globals(cx);
-    let host = cx.update(super::super::super::extension_host::install);
+    let host = cx.update(super::super::super::extensions::host::install);
     let key = ExtensionKey::new(ExtensionId::new(90), ExtensionLifecycleId::new(1));
     host.update(cx, |host, cx| {
         let execution = host.load_test_source(key, SOURCE).unwrap();
@@ -630,7 +630,7 @@ getChildren() { return [{ id: "root", label: "Deferred", collapsibleState: "none
         .detach();
     });
     wait_for_api_condition(cx, |cx| {
-        super::super::super::extension_host::view_definitions(cx)
+        super::super::super::extensions::host::view_definitions(cx)
             .iter()
             .any(|definition| definition.id == "example.deferred")
     });
@@ -689,7 +689,7 @@ await commands.register("test.dispose-view-copy", async () => viewCopy.dispose()
 
     let documents = install_globals(cx);
     cx.update(super::super::bind_product_keys);
-    let host = cx.update(super::super::super::extension_host::install);
+    let host = cx.update(super::super::super::extensions::host::install);
     let document = cx.update(|cx| create_untitled_document(&documents, cx));
     let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
     let (shell, window) = product_window(document, model.clone(), cx);
@@ -946,7 +946,7 @@ fn startup_script_command_cannot_borrow_the_focused_product_window(cx: &mut Test
     use crate::host::lifecycle::ExtensionKey;
 
     let documents = install_globals(cx);
-    let host = cx.update(super::super::super::extension_host::install);
+    let host = cx.update(super::super::super::extensions::host::install);
     let document = cx.update(|cx| create_untitled_document(&documents, cx));
     let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
     let (shell, window) = product_window(document, model, cx);
@@ -1013,7 +1013,7 @@ fn extension_command_with_editor_prefix_keeps_its_arguments(cx: &mut TestAppCont
     use crate::host::lifecycle::ExtensionKey;
 
     let documents = install_globals(cx);
-    let host = cx.update(super::super::super::extension_host::install);
+    let host = cx.update(super::super::super::extensions::host::install);
     let document = cx.update(|cx| create_untitled_document(&documents, cx));
     let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
     let (shell, window) = product_window(document, model, cx);
@@ -1088,7 +1088,7 @@ fn nested_script_waits_for_a_pending_native_command(cx: &mut TestAppContext) {
     cx.set_global(ApplicationOpenDialog(Arc::new(FixedOpenDialog(
         OpenDialogOutcome::Cancelled,
     ))));
-    let host = cx.update(super::super::super::extension_host::install);
+    let host = cx.update(super::super::super::extensions::host::install);
     let document = cx.update(|cx| create_untitled_document(&documents, cx));
     let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
     let (shell, window) = product_window(document, model, cx);
@@ -1160,7 +1160,7 @@ await commands.registerForView("example.outline", "copy", async () => {
 "#;
 
     let documents = install_globals(cx);
-    let host = cx.update(super::super::super::extension_host::install);
+    let host = cx.update(super::super::super::extensions::host::install);
     let document = cx.update(|cx| create_untitled_document(&documents, cx));
     let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
     let (shell, window) = product_window(document, model.clone(), cx);

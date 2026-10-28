@@ -1,6 +1,6 @@
 //! Compiles the TypeScript extension packages with the lockfile-pinned compiler
 //! in `scripts/extensions`. Bundled packages under `extensions/@knot` are
-//! embedded through a generated table that `src/app/bundled.rs` includes;
+//! embedded through a generated table that `src/app/extensions/bundled.rs` includes;
 //! examples under `examples/extensions/@example` are compiled to
 //! `$OUT_DIR/examples/<name>/dist` for the product tests that install them.
 

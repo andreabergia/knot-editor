@@ -74,7 +74,7 @@ impl ProductShell {
                 Settled::Unchanged => {}
                 Settled::Roots => crate::app::window_sessions::record(cx),
                 Settled::Layout(target) => {
-                    crate::app::extension_host::view_state_changed(target, cx);
+                    crate::app::extensions::host::view_state_changed(target, cx);
                     crate::app::window_sessions::record(cx);
                 }
             });

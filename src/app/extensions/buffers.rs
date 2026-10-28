@@ -9,10 +9,10 @@ use crate::host::protocol::{
     RequestContext, TextSnapshot,
 };
 
-use super::extension_host::handlers::AccessError;
+use crate::app::extensions::host::handlers::AccessError;
 use crate::host::declarations::HostError;
 
-use super::model::{
+use crate::app::model::{
     BufferAccessError, BufferClosed, BufferModel, BufferRegistry, BufferSubscriptionRegistry,
     ContributionError, ContributionSource,
 };
@@ -41,7 +41,7 @@ impl From<AccessError> for BufferError {
     }
 }
 
-use super::extension_host::handlers::{
+use crate::app::extensions::host::handlers::{
     BufferArguments, ContributionArguments, EditArguments, SnapshotArguments, SubscriptionArguments,
 };
 

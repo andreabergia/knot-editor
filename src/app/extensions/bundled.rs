@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use super::extension_package::{DiscoveryReport, PackageDiagnostic, bundled_package};
+use crate::app::extensions::package::{DiscoveryReport, PackageDiagnostic, bundled_package};
 
 struct BundledSource {
     manifest: &'static str,

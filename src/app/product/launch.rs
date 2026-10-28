@@ -369,7 +369,7 @@ fn open_launch_windows(
         let _ = cx.update_window(last, |_, window, _| window.activate_window());
     }
     crate::app::window_sessions::start_recording(cx);
-    crate::app::extension_host::launched(cx);
+    crate::app::extensions::host::launched(cx);
     cx.activate(true);
 }
 
@@ -429,7 +429,7 @@ pub(crate) fn run(initial_request: Option<OpenRequest>) {
         cx.set_global(ApplicationFileSystems(product_filesystems()));
         let commands = cx.new(ProductCommandDispatcher::new);
         cx.set_global(ApplicationProductCommands(commands));
-        let extension_host = crate::app::extension_host::install(cx);
+        let extension_host = crate::app::extensions::host::install(cx);
         bind_product_keys(cx);
         cx.set_menus(vec![
             Menu {
@@ -512,7 +512,7 @@ pub(crate) fn run(initial_request: Option<OpenRequest>) {
             }
         })
         .detach();
-        let extensions_root = crate::app::extension_package::user_extensions_root();
+        let extensions_root = crate::app::extensions::package::user_extensions_root();
         extension_host.update(cx, |host, cx| {
             host.start_product_startup(None, extensions_root, cx)
         });
