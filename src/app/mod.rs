@@ -37,15 +37,7 @@ mod product_commands;
 mod record_store;
 mod recovery;
 mod resource;
-mod terminal_colors;
-mod terminal_input;
-mod terminal_layout;
-mod terminal_links;
-mod terminal_mouse;
-mod terminal_session;
-#[cfg(all(test, unix))]
-mod terminal_session_tests;
-mod terminal_view;
+mod terminal;
 mod text_input;
 mod text_view;
 pub(crate) mod tool_layout;

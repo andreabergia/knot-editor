@@ -8,17 +8,17 @@ use alacritty_terminal::{
 use gpui::*;
 use std::rc::Rc;
 
-use super::{
+use crate::app::{
     TERMINAL_KEY_CONTEXT,
-    terminal_colors::{BACKGROUND, FOREGROUND, dim, resolve_color},
-    terminal_input::terminal_key_bytes,
-    terminal_layout::TerminalLayout,
-    terminal_links::{LinkGrid, LinkTarget},
-    terminal_mouse::{
+    terminal::colors::{BACKGROUND, FOREGROUND, dim, resolve_color},
+    terminal::input::terminal_key_bytes,
+    terminal::layout::TerminalLayout,
+    terminal::links::{LinkGrid, LinkTarget},
+    terminal::mouse::{
         PointerOwner, PointerState, WheelRoute, button_code, interaction_modes, modifier_code,
         mouse_bytes, wheel_route,
     },
-    terminal_session::{TerminalAttachment, TerminalSession, TerminalSize, TerminalStatus},
+    terminal::session::{TerminalAttachment, TerminalSession, TerminalSize, TerminalStatus},
     typography::{TEXT_SIZE, text_font},
 };
 
@@ -74,8 +74,8 @@ impl TerminalView {
         &mut self,
         command: TerminalCommand,
         cx: &mut Context<Self>,
-    ) -> super::product_commands::CommandClaim {
-        use super::product_commands::CommandClaim;
+    ) -> crate::app::product_commands::CommandClaim {
+        use crate::app::product_commands::CommandClaim;
         if self.attachment.is_none() {
             return CommandClaim::Declined;
         }
@@ -1178,7 +1178,7 @@ impl Element for TerminalElement {
 }
 
 #[cfg(all(test, unix))]
-#[path = "terminal_mouse_tests.rs"]
+#[path = "mouse_tests.rs"]
 mod mouse_tests;
 
 use crate::app::command_declarations::{CommandContext, command};

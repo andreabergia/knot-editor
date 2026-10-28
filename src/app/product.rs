@@ -64,8 +64,8 @@ use super::{
         UNDO_COMMAND, dispatch_close_to_captured_target, dispatch_open_to_captured_target,
         dispatch_save_to_captured_target,
     },
-    terminal_session::TerminalSession,
-    terminal_view::TerminalView,
+    terminal::session::TerminalSession,
+    terminal::view::TerminalView,
     transient::{
         InputEvent, InputView, PickerEvent, PickerView, PromptText, TransientOutcome,
         TransientOwner, TransientSurface,

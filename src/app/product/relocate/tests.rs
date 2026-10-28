@@ -452,7 +452,7 @@ fn terminal_moves_within_window_then_hands_off_into_existing_window(cx: &mut Tes
         assert!(moved_view.read(cx).is_attached_to(&session));
         assert_eq!(
             session.read(cx).status(),
-            crate::app::terminal_session::TerminalStatus::Running
+            crate::app::terminal::session::TerminalStatus::Running
         );
         assert!(Arc::ptr_eq(session.read(cx).terminal().unwrap(), &grid));
         assert_eq!(
@@ -479,14 +479,14 @@ fn terminal_moves_within_window_then_hands_off_into_existing_window(cx: &mut Tes
             1
         );
     });
-    let size = crate::app::terminal_session::TerminalSize {
+    let size = crate::app::terminal::session::TerminalSize {
         columns: 80,
         lines: 20,
         cell_width: 9,
         cell_height: 18,
     };
     moved_view.update(cx, |view, cx| view.resize(size, cx));
-    let stale_size = crate::app::terminal_session::TerminalSize {
+    let stale_size = crate::app::terminal::session::TerminalSize {
         columns: 40,
         lines: 10,
         cell_width: 9,

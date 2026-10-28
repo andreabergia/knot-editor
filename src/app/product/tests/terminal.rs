@@ -7,8 +7,8 @@ async fn terminal_mouse_reporting_toggle_routes_to_the_focused_session_and_plain
     cx: &mut TestAppContext,
 ) {
     use crate::app::{
-        terminal_session::TerminalSession, terminal_view::TOGGLE_TERMINAL_MOUSE_REPORTING_COMMAND,
-        terminal_view::TerminalView,
+        terminal::session::TerminalSession,
+        terminal::view::TOGGLE_TERMINAL_MOUSE_REPORTING_COMMAND, terminal::view::TerminalView,
     };
     use alacritty_terminal::{tty, vte::ansi::Processor};
     let documents = install_globals(cx);
@@ -315,7 +315,7 @@ async fn mixed_window_and_quit_cancellation_preserve_every_surface(cx: &mut Test
             let registry = cx.global::<ApplicationTerminalSessions>().0.borrow();
             assert_ne!(
                 registry.sessions[&id].read(cx).status(),
-                crate::app::terminal_session::TerminalStatus::Closed
+                crate::app::terminal::session::TerminalStatus::Closed
             );
             assert!(documents.read(cx).get(document).unwrap().is_dirty(cx));
         });
@@ -467,7 +467,7 @@ async fn terminal_close_and_reopen_settle_the_exact_session(cx: &mut TestAppCont
     cx.read(|cx| {
         assert_eq!(
             first_session.read(cx).status(),
-            crate::app::terminal_session::TerminalStatus::Closed
+            crate::app::terminal::session::TerminalStatus::Closed
         );
         assert!(
             !cx.global::<ApplicationTerminalSessions>()
@@ -570,7 +570,7 @@ async fn closing_the_final_terminal_tab_installs_an_untitled_workbench(cx: &mut 
         assert!(matches!(tabs[0].surface, TabSurfaceId::Document(_)));
         assert_eq!(
             session.read(cx).status(),
-            crate::app::terminal_session::TerminalStatus::Closed
+            crate::app::terminal::session::TerminalStatus::Closed
         );
         assert!(
             cx.global::<ApplicationTerminalSessions>()
@@ -624,7 +624,7 @@ async fn window_close_shuts_down_terminal_after_protected_decisions(cx: &mut Tes
         assert!(!cx.windows().contains(&window));
         assert_eq!(
             session.read(cx).status(),
-            crate::app::terminal_session::TerminalStatus::Closed
+            crate::app::terminal::session::TerminalStatus::Closed
         );
         assert!(
             cx.global::<ApplicationTerminalSessions>()
@@ -695,7 +695,7 @@ async fn mixed_window_save_failure_keeps_terminal_running(cx: &mut TestAppContex
         );
         assert_ne!(
             session.read(cx).status(),
-            crate::app::terminal_session::TerminalStatus::Closed
+            crate::app::terminal::session::TerminalStatus::Closed
         );
         assert!(documents.read(cx).get(document).unwrap().is_dirty(cx));
     });
@@ -747,7 +747,7 @@ async fn quit_shuts_down_terminal_sessions_in_every_window(cx: &mut TestAppConte
         for session in &sessions {
             assert_eq!(
                 session.read(cx).status(),
-                crate::app::terminal_session::TerminalStatus::Closed
+                crate::app::terminal::session::TerminalStatus::Closed
             );
         }
     });
@@ -831,7 +831,7 @@ async fn moving_terminal_keeps_its_session_and_source_window_close_does_not_stop
         );
     })
     .unwrap();
-    let destination_size = crate::app::terminal_session::TerminalSize {
+    let destination_size = crate::app::terminal::session::TerminalSize {
         columns: 80,
         lines: 20,
         cell_width: 9,
@@ -839,7 +839,7 @@ async fn moving_terminal_keeps_its_session_and_source_window_close_does_not_stop
     };
     destination_view.update(cx, |view, cx| view.resize(destination_size, cx));
     cx.read(|cx| assert_eq!(session.read(cx).size(), destination_size));
-    let stale_size = crate::app::terminal_session::TerminalSize {
+    let stale_size = crate::app::terminal::session::TerminalSize {
         columns: 40,
         lines: 10,
         cell_width: 9,
@@ -888,7 +888,7 @@ async fn moving_terminal_keeps_its_session_and_source_window_close_does_not_stop
     cx.read(|cx| {
         assert_eq!(
             session.read(cx).status(),
-            crate::app::terminal_session::TerminalStatus::Running
+            crate::app::terminal::session::TerminalStatus::Running
         );
         assert!(cx.windows().contains(&destination_window));
     });
@@ -902,7 +902,7 @@ async fn moving_terminal_keeps_its_session_and_source_window_close_does_not_stop
     cx.read(|cx| {
         assert_eq!(
             session.read(cx).status(),
-            crate::app::terminal_session::TerminalStatus::Closed
+            crate::app::terminal::session::TerminalStatus::Closed
         );
         assert!(
             !cx.global::<ApplicationTerminalSessions>()
@@ -1089,7 +1089,7 @@ async fn process_exit_during_terminal_handoff_keeps_final_grid(cx: &mut TestAppC
     let (source, source_window) = product_window(document, model, cx);
     let session = cx.update(|cx| {
         cx.new(|cx| {
-            crate::app::terminal_session::TerminalSession::new_with_options(
+            crate::app::terminal::session::TerminalSession::new_with_options(
                 Options {
                     shell: Some(shell),
                     drain_on_exit: true,
@@ -1110,7 +1110,7 @@ async fn process_exit_during_terminal_handoff_keeps_final_grid(cx: &mut TestAppC
             .borrow_mut()
             .sessions
             .insert(id, session.clone());
-        let view = cx.new(|cx| crate::app::terminal_view::TerminalView::new(session.clone(), cx));
+        let view = cx.new(|cx| crate::app::terminal::view::TerminalView::new(session.clone(), cx));
         let pane = shell.workbench.read(cx).focused_pane_id().unwrap();
         shell.workbench.update(cx, |workbench, _| {
             workbench.open_terminal_tab(pane, id, view).unwrap()
@@ -1136,7 +1136,7 @@ async fn process_exit_during_terminal_handoff_keeps_final_grid(cx: &mut TestAppC
         if cx.read(|cx| {
             matches!(
                 session.read(cx).status(),
-                crate::app::terminal_session::TerminalStatus::Exited(_)
+                crate::app::terminal::session::TerminalStatus::Exited(_)
             )
         }) {
             break;
@@ -1150,7 +1150,7 @@ async fn process_exit_during_terminal_handoff_keeps_final_grid(cx: &mut TestAppC
     cx.read(|cx| {
         assert!(matches!(
             session.read(cx).status(),
-            crate::app::terminal_session::TerminalStatus::Exited(_)
+            crate::app::terminal::session::TerminalStatus::Exited(_)
         ));
         let terminal = session.read(cx).terminal().unwrap().lock();
         let output: String = terminal

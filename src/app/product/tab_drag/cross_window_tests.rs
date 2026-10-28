@@ -560,7 +560,7 @@ fn live_terminal_cross_window_and_desktop_drops_keep_session_and_sole_attachment
         assert!(view.read(cx).is_attached_to(&session));
         assert_eq!(
             session.read(cx).status(),
-            crate::app::terminal_session::TerminalStatus::Running
+            crate::app::terminal::session::TerminalStatus::Running
         );
         assert!(std::sync::Arc::ptr_eq(
             session.read(cx).terminal().unwrap(),
@@ -609,7 +609,7 @@ fn live_terminal_cross_window_and_desktop_drops_keep_session_and_sole_attachment
             );
             assert_eq!(
                 session.read(cx).status(),
-                crate::app::terminal_session::TerminalStatus::Running
+                crate::app::terminal::session::TerminalStatus::Running
             );
             assert!(std::sync::Arc::ptr_eq(
                 session.read(cx).terminal().unwrap(),

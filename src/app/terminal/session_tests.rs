@@ -11,9 +11,9 @@ use std::{
 use alacritty_terminal::{grid::Dimensions, tty};
 use gpui::{AppContext, Entity, TestAppContext};
 
-use super::{
-    terminal_session::{TerminalSession, TerminalSize, TerminalStatus},
-    terminal_view::TerminalView,
+use crate::app::{
+    terminal::session::{TerminalSession, TerminalSize, TerminalStatus},
+    terminal::view::TerminalView,
 };
 
 fn shell(script: &str) -> tty::Options {
@@ -290,7 +290,7 @@ fn sustained_output_keeps_foreground_updates_responsive(cx: &mut TestAppContext)
 
 #[gpui::test]
 fn paste_command_delivers_plain_and_bracketed_clipboard_bytes(cx: &mut TestAppContext) {
-    use super::product_commands::CommandClaim;
+    use crate::app::product_commands::CommandClaim;
     use crate::host::protocol::CommandOutcome;
     for bracketed in [false, true] {
         let temp = tempfile::tempdir().unwrap();
@@ -324,7 +324,7 @@ fn paste_command_delivers_plain_and_bracketed_clipboard_bytes(cx: &mut TestAppCo
         });
         cx.update(|cx| cx.write_to_clipboard(gpui::ClipboardItem::new_string(clipboard.into())));
         let claim = view.update(cx, |view, cx| {
-            view.execute_terminal_command(super::terminal_view::TerminalCommand::Paste, cx)
+            view.execute_terminal_command(super::view::TerminalCommand::Paste, cx)
         });
         assert!(matches!(
             claim,
@@ -581,7 +581,7 @@ fn gpui_commands_precede_mode_aware_keyboard_delivery(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn stopped_terminal_keeps_copy_and_declines_paste_and_detached_commands(cx: &mut TestAppContext) {
-    use super::product_commands::CommandClaim;
+    use crate::app::product_commands::CommandClaim;
     use crate::host::protocol::CommandOutcome;
     use alacritty_terminal::{
         index::{Column, Line, Point, Side},
@@ -603,10 +603,8 @@ fn stopped_terminal_keeps_copy_and_declines_paste_and_detached_commands(cx: &mut
         terminal.selection = Some(selection);
     });
     assert!(matches!(
-        view.update(cx, |view, cx| view.execute_terminal_command(
-            super::terminal_view::TerminalCommand::Copy,
-            cx
-        )),
+        view.update(cx, |view, cx| view
+            .execute_terminal_command(super::view::TerminalCommand::Copy, cx)),
         CommandClaim::Finished(CommandOutcome::Completed)
     ));
     cx.update(|cx| {
@@ -616,18 +614,14 @@ fn stopped_terminal_keeps_copy_and_declines_paste_and_detached_commands(cx: &mut
         )
     });
     assert!(matches!(
-        view.update(cx, |view, cx| view.execute_terminal_command(
-            super::terminal_view::TerminalCommand::Paste,
-            cx
-        )),
+        view.update(cx, |view, cx| view
+            .execute_terminal_command(super::view::TerminalCommand::Paste, cx)),
         CommandClaim::Declined
     ));
     view.update(cx, |view, cx| view.detach(cx));
     assert!(matches!(
-        view.update(cx, |view, cx| view.execute_terminal_command(
-            super::terminal_view::TerminalCommand::Copy,
-            cx
-        )),
+        view.update(cx, |view, cx| view
+            .execute_terminal_command(super::view::TerminalCommand::Copy, cx)),
         CommandClaim::Declined
     ));
     session.update(cx, |session, cx| session.close(cx));

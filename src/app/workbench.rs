@@ -13,7 +13,7 @@ use gpui::{App, AppContext, Context, Entity, FocusHandle, Focusable, WeakFocusHa
 #[cfg(test)]
 use super::documents::Document;
 use super::{
-    documents::DocumentId, editor::EditorView, terminal_view::TerminalView, text_view::TextView,
+    documents::DocumentId, editor::EditorView, terminal::view::TerminalView, text_view::TextView,
     tree_view::TreeView,
 };
 

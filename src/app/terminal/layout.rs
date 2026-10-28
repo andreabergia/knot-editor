@@ -2,8 +2,8 @@
 
 use gpui::{Bounds, Pixels, Point, Window, point, px};
 
-use super::{
-    terminal_session::TerminalSize,
+use crate::app::{
+    terminal::session::TerminalSize,
     typography::{TEXT_SIZE, text_font},
 };
 

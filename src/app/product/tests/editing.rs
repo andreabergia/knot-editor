@@ -182,7 +182,7 @@ async fn copy_requires_focused_selection_and_declines_on_terminal(cx: &mut TestA
 
     let terminal_session = cx.update(|cx| {
         cx.new(|cx| {
-            crate::app::terminal_session::TerminalSession::new_with_options(
+            crate::app::terminal::session::TerminalSession::new_with_options(
                 Options {
                     shell: Some(quiet_shell),
                     drain_on_exit: true,
@@ -206,7 +206,7 @@ async fn copy_requires_focused_selection_and_declines_on_terminal(cx: &mut TestA
                     .sessions
                     .insert(session, terminal_session.clone());
                 let view = cx.new(|cx| {
-                    crate::app::terminal_view::TerminalView::new(terminal_session.clone(), cx)
+                    crate::app::terminal::view::TerminalView::new(terminal_session.clone(), cx)
                 });
                 let pane = shell.workbench.read(cx).focused_pane_id().unwrap();
                 let tab = shell.workbench.update(cx, |workbench, _| {

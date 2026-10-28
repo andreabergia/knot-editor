@@ -310,9 +310,9 @@ size, and PTY pixel dimensions at the destination window's scale. Fallback glyph
 stay within emulator cell allocations. Selection uses scrollback grid coordinates;
 application mouse reports use viewport cells. Geometry is remeasured after resize
 or attachment handoff. Typography, bootstrap metrics, and encoding rules live in
-[terminal layout](../../src/app/terminal_layout.rs),
-[session](../../src/app/terminal_session.rs), and
-[keyboard input](../../src/app/terminal_input.rs).
+[terminal layout](../../src/app/terminal/layout.rs),
+[session](../../src/app/terminal/session.rs), and
+[keyboard input](../../src/app/terminal/input.rs).
 
 Keyboard input follows command/keymap precedence and current emulator modes.
 Focus reports require both exact view focus and native window activation. Detach
@@ -329,7 +329,7 @@ and handoff without changing application-requested modes. Disabling it balances
 active reports before local selection takes over. Focus, geometry, detach, restart,
 and mode changes invalidate gestures without sending old-process releases to a
 replacement. Wire formats and coordinate limits live in
-[terminal_mouse.rs](../../src/app/terminal_mouse.rs); the
+[terminal/mouse.rs](../../src/app/terminal/mouse.rs); the
 [mouse fixture](../../scripts/terminal-mouse-fixture.py) supports native acceptance.
 
 Link lookup uses displayed emulator cells, soft wraps, and OSC 8 identity.
@@ -337,7 +337,7 @@ Explicit destinations take precedence; unsupported explicit schemes suppress tex
 detection. Only complete HTTP(S) destinations are actionable. Modifier-click owns
 the gesture ahead of mouse reporting; release revalidates grid, scrollback,
 process, destination, and geometry. Output or lifecycle changes invalidate armed
-links. Link recognition lives in [terminal_links.rs](../../src/app/terminal_links.rs).
+links. Link recognition lives in [terminal/links.rs](../../src/app/terminal/links.rs).
 
 ## Observing product state
 

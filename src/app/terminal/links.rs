@@ -204,7 +204,7 @@ impl LinkGrid {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::terminal_session::TerminalSize;
+    use crate::app::terminal::session::TerminalSize;
     use alacritty_terminal::{event::VoidListener, term::Config, vte::ansi::Processor};
 
     fn grid(columns: usize, rows: usize, bytes: &[u8]) -> LinkGrid {

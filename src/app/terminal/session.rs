@@ -273,8 +273,7 @@ impl TerminalSession {
                 Event::PtyWrite(text) => self.send(text.into_bytes()),
                 Event::ColorRequest(index, format) => {
                     if let Some(terminal) = self.terminal() {
-                        let color =
-                            super::terminal_colors::query_color(index, terminal.lock().colors());
+                        let color = super::colors::query_color(index, terminal.lock().colors());
                         self.send(format(color).into_bytes());
                     }
                 }
@@ -500,9 +499,9 @@ mod compatibility_tests {
             .unwrap()
             .iter()
             .map(|event| match event {
-                Event::ColorRequest(index, format) => format(
-                    super::super::terminal_colors::query_color(*index, terminal.colors()),
-                ),
+                Event::ColorRequest(index, format) => {
+                    format(super::super::colors::query_color(*index, terminal.colors()))
+                }
                 _ => panic!("unexpected event: {event:?}"),
             })
             .collect();
