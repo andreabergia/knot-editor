@@ -43,18 +43,28 @@
 //!
 //! ## Backing store
 //!
-//! Two immutable backing buffers back the piece chain:
+//! Immutable backing text backs the piece chain:
 //!
-//! - `Original`: the buffer's load-time text. Pieces referencing it never
-//!   move; the buffer holds it for the lifetime of the `TextBuffer`.
-//! - `Add`: an append-only byte sink. Every inserted span is pushed here and
-//!   referenced by a freshly-issued piece, or by extending the piece that
-//!   already ends at the sink's end (see coalescing below). Appending lets
-//!   old pieces keep their `(Add, start, len)` references stable forever.
+//! - `Original`: the buffer's load-time text, shared as an `Arc<str>`. Pieces
+//!   referencing it never move; the buffer holds it for its whole lifetime.
+//! - `Add`: an append-only sink, stored as sealed `Arc<str>` chunks plus one
+//!   mutable tail. Every inserted span is appended to the tail and referenced
+//!   by a freshly-issued piece, or by extending the piece that already ends at
+//!   the tail's end (see coalescing below). Once the tail reaches
+//!   `ADD_CHUNK_SIZE` it is sealed and a new tail starts, so a span never
+//!   straddles chunks and old pieces keep their `(Add(chunk), start, len)`
+//!   references stable forever.
 //!
 //! A `Piece` is a reference `(backing, start)` fixed at creation, plus a
 //! monotonically-increasing `PieceId` issued from a global counter. Only
 //! `len` ever changes: the split rule shortens it, and coalescing extends it.
+//!
+//! ## Snapshots
+//!
+//! `snapshot` returns an immutable, `Send` [`TextSnapshot`] for readers off
+//! the foreground. It shares the original text and sealed chunks, and copies
+//! only the tail and the piece list, so its cost is bounded by the chunk size
+//! plus O(pieces) rather than by the document length.
 //!
 //! ## Split rule
 //!
@@ -66,11 +76,12 @@
 //! ## Coalescing
 //!
 //! An insert at the end of an `Add` piece whose span ends at the end of the
-//! sink extends that piece instead of creating one, so typing grows one piece
+//! tail extends that piece instead of creating one, so typing grows one piece
 //! rather than one per keystroke. Existing positions in the piece keep their
 //! offsets, and a sticky-left position at its old end still resolves before
 //! the inserted text. A split-shortened piece never qualifies, because its
-//! right half still references later bytes of the sink.
+//! right half still references later bytes of the tail, and neither does a
+//! piece in a sealed chunk.
 //!
 //! ## UTF-8 boundary policy
 //!
@@ -78,8 +89,23 @@
 //! boundaries. Grapheme-aware caret movement and deletion remain presentation
 //! policy above the byte-native core.
 
+use std::mem;
 use std::ops::Range;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+
+// No product reader takes snapshots yet.
+#[allow(unused_imports)]
+pub use snapshot::TextSnapshot;
+
+#[allow(dead_code)]
+mod snapshot;
+
+/// Length at which the add sink's tail is sealed into an immutable chunk.
+///
+/// Snapshots copy the tail, so this bounds their per-call copy; a single
+/// larger insert seals as soon as it is appended.
+const ADD_CHUNK_SIZE: usize = 16 * 1024;
 
 /// Monotonically-issued identity for each `TextBuffer` instance.
 ///
@@ -248,8 +274,10 @@ const BUFFER_START: LineStart = LineStart { byte: 0, utf16: 0 };
 enum Backing {
     /// The load-time text. Held immutably for the `TextBuffer`'s lifetime.
     Original,
-    /// The append-only edit sink. Appended spans never move.
-    Add,
+    /// One chunk of the append-only edit sink: a sealed chunk, or the tail
+    /// when the index equals the number of sealed chunks. Appended spans
+    /// never move.
+    Add(u32),
 }
 
 /// A reference to a contiguous span of one backing buffer.
@@ -278,11 +306,14 @@ pub struct TextBuffer {
     /// `EditTransaction` must bind its recorded byte offsets to one buffer.
     instance_id: u64,
     /// Immutable load-time text backing the `Original` pieces.
-    original: Box<str>,
-    /// Append-only sink for inserted spans. Appended spans are never
-    /// overwritten or moved; only new bytes go at the end.
-    add: String,
-    /// The piece chain. Ownership is exclusive (no sharing across threads). Operations splice and shorten in place.
+    original: Arc<str>,
+    /// Sealed chunks of the append-only add sink, shared with snapshots.
+    sealed: Vec<Arc<str>>,
+    /// Unsealed end of the add sink. Appended spans are never overwritten or
+    /// moved; only new bytes go at the end.
+    tail: String,
+    /// The piece chain. Operations splice and shorten in place; snapshots
+    /// take a copy.
     pieces: Vec<Piece>,
     /// Global monotonic piece-id counter. Never reused.
     next_id: PieceId,
@@ -307,7 +338,7 @@ impl TextBuffer {
     /// The text becomes the `Original` backing; an initial single piece
     /// references the whole span. The `Add` sink starts empty. No `\r`
     /// normalization is performed — the bytes are stored verbatim.
-    pub fn from_text(text: impl Into<Box<str>>) -> Self {
+    pub fn from_text(text: impl Into<Arc<str>>) -> Self {
         let original = text.into();
         let len = original.len();
         let mut line_starts = vec![BUFFER_START];
@@ -315,7 +346,8 @@ impl TextBuffer {
         let mut buf = TextBuffer {
             instance_id: NEXT_BUFFER_ID.fetch_add(1, Ordering::Relaxed),
             original,
-            add: String::new(),
+            sealed: Vec::new(),
+            tail: String::new(),
             pieces: Vec::new(),
             next_id: 1,
             len,
@@ -339,8 +371,9 @@ impl TextBuffer {
     pub fn new() -> Self {
         TextBuffer {
             instance_id: NEXT_BUFFER_ID.fetch_add(1, Ordering::Relaxed),
-            original: Box::from(""),
-            add: String::new(),
+            original: Arc::from(""),
+            sealed: Vec::new(),
+            tail: String::new(),
             pieces: Vec::new(),
             next_id: 1,
             len: 0,
@@ -414,9 +447,10 @@ impl TextBuffer {
             return;
         }
 
-        // Append the span to the Add buffer and record its placement.
-        let add_start = self.add.len();
-        self.add.push_str(text);
+        // Append the span to the add tail and record its placement.
+        let tail_chunk = self.sealed.len() as u32;
+        let add_start = self.tail.len();
+        self.tail.push_str(text);
 
         // Locate the insertion point in the piece chain. Splits are
         // recorded so they can be attached to the BufferEdit event.
@@ -444,7 +478,8 @@ impl TextBuffer {
             && split.insert_at > 0
             && matches!(
                 self.pieces[split.insert_at - 1],
-                Piece { backing: Backing::Add, start, len, .. } if start + len == add_start
+                Piece { backing: Backing::Add(chunk), start, len, .. }
+                    if chunk == tail_chunk && start + len == add_start
             );
         let inserted_end = if coalesce {
             let piece = &mut self.pieces[split.insert_at - 1];
@@ -457,7 +492,7 @@ impl TextBuffer {
                 split.insert_at,
                 Piece {
                     id,
-                    backing: Backing::Add,
+                    backing: Backing::Add(tail_chunk),
                     start: add_start,
                     len: text.len(),
                 },
@@ -465,6 +500,9 @@ impl TextBuffer {
             Position::new(id, text.len() as u32)
         };
         self.len += text.len();
+        if self.tail.len() >= ADD_CHUNK_SIZE {
+            self.sealed.push(Arc::from(mem::take(&mut self.tail)));
+        }
 
         // Keep the line index valid for the edited span.
         self.update_line_starts(at..at, text, 0);
@@ -760,8 +798,11 @@ impl TextBuffer {
     /// Backing slice for a piece. Lifetime ties to `self`.
     fn backing_slice(&self, p: Piece) -> &str {
         let buf = match p.backing {
-            Backing::Original => self.original.as_ref(),
-            Backing::Add => self.add.as_str(),
+            Backing::Original => &self.original,
+            Backing::Add(chunk) => self
+                .sealed
+                .get(chunk as usize)
+                .map_or(self.tail.as_str(), |sealed| sealed),
         };
         &buf[p.start..p.start + p.len]
     }

@@ -168,8 +168,8 @@ and later for Find (D031) and language-server document sync (D067):
   tail; a snapshot shares sealed chunks and copies only the tail;
 - a snapshot copies the piece list, which is O(pieces) and stays small while
   contiguous typing coalesces (D013 tracks compaction);
-- a chunk cursor serves tree-sitter's sequential `parse_with` reads without
-  rescanning pieces.
+- precomputed piece end offsets let `chunk_at` serve tree-sitter's
+  sequential `parse_with` reads by binary search without rescanning pieces.
 
 ### Parsing
 
@@ -193,10 +193,14 @@ fresh.
 
 ## Checkpoints
 
-1. 📝 **Text snapshots.** `TextSnapshot` and the chunk cursor in `core`, with
-   tests that a snapshot is unchanged by later edits and reads equal
-   `read_range`. Measure snapshot cost on the 29 MiB fixture after a long
-   editing session.
+1. ✅ **Text snapshots.** `TextSnapshot` and `chunk_at` in `core`
+   (`src/core/buffer/snapshot.rs`), with tests that a snapshot is unchanged by
+   later edits and reads equal `read_range`. The add sink seals 16 KiB chunks.
+   On Apple M1 Pro/macOS release builds, a 29 MiB, 932k-line buffer after
+   5,000 typing bursts with deletes and pastes (9,988 pieces) measured
+   snapshot p50 19 µs, p99 33 µs, and a full streamed `chunk_at` read 0.39 ms
+   (`snapshot_cost_on_large_buffer`, ignored). The snapshot module carries
+   `dead_code` allowances until checkpoint 3 takes snapshots.
 2. 📝 **Theme and layered runs.** `Theme` global, the highlight vocabulary, and
    the layer merge feeding `runs_for`; decorations move onto the layer path.
    View tests cover run composition with a fixture layer, tabs, and RTL lines.

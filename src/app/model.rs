@@ -143,11 +143,11 @@ pub(crate) struct CommittedBufferChange {
 }
 
 impl BufferModel {
-    pub fn from_text(text: impl Into<Box<str>>) -> Self {
+    pub fn from_text(text: impl Into<Arc<str>>) -> Self {
         Self::with_access_policy(text, BufferAccessPolicy::Editable)
     }
 
-    pub(crate) fn from_read_only_text(text: impl Into<Box<str>>) -> Self {
+    pub(crate) fn from_read_only_text(text: impl Into<Arc<str>>) -> Self {
         Self::with_access_policy(text, BufferAccessPolicy::ReadOnly)
     }
 
@@ -155,7 +155,7 @@ impl BufferModel {
     /// `text`, committed as one edit with an empty undo history. Dirty state
     /// then derives from comparing against the baseline revision, so text equal
     /// to its baseline is clean.
-    pub(crate) fn from_recovered_text(baseline: impl Into<Box<str>>, text: &str) -> Self {
+    pub(crate) fn from_recovered_text(baseline: impl Into<Arc<str>>, text: &str) -> Self {
         let mut model = Self::from_text(baseline);
         if model.text() != text {
             let len = model.buffer.len();
@@ -166,7 +166,7 @@ impl BufferModel {
         model
     }
 
-    fn with_access_policy(text: impl Into<Box<str>>, access_policy: BufferAccessPolicy) -> Self {
+    fn with_access_policy(text: impl Into<Arc<str>>, access_policy: BufferAccessPolicy) -> Self {
         Self {
             buffer: TextBuffer::from_text(text),
             access_policy,

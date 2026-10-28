@@ -67,6 +67,9 @@ by stale views. Disposal, cancellation, and host release follow the shared
 - Inserted backing storage is append-only. Contiguous typing extends the piece
   at the end of the add buffer instead of adding one per keystroke; other
   edits still add pieces, and compaction remains deferred.
+- The original text and sealed add-buffer chunks are shared `Arc<str>`s, so an
+  immutable `Send` `TextSnapshot` copies only the unsealed tail and the piece
+  list. Readers off the foreground use snapshots instead of the live buffer.
 - Edit-log sequence numbers are monotonic. `BufferModel` discards entries once
   its anchored-range store has consumed them, so the retained log holds at most
   one commit.

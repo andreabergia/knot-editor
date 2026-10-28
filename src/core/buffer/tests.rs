@@ -975,3 +975,24 @@ fn remap_walks_multiple_splits_in_order() {
         "remapped token must point at 'j'"
     );
 }
+
+#[test]
+fn full_add_tail_seals_and_stops_coalescing() {
+    let mut b = TextBuffer::new();
+    b.insert(0, &"a".repeat(ADD_CHUNK_SIZE - 1));
+    assert!(b.sealed.is_empty());
+    b.insert(b.len(), "b");
+    assert_eq!(b.sealed.len(), 1, "a full tail seals");
+    assert!(b.tail.is_empty());
+    assert_eq!(b.pieces.len(), 1, "the sealing insert still coalesced");
+
+    b.insert(b.len(), "c");
+    b.insert(b.len(), "d");
+    assert_eq!(b.pieces.len(), 2, "typing starts a piece in the new tail");
+    assert_eq!(b.read_range(ADD_CHUNK_SIZE - 1..b.len()), "bcd");
+
+    b.insert(1, &"z".repeat(3 * ADD_CHUNK_SIZE));
+    assert_eq!(b.sealed.len(), 2, "an oversized insert seals at once");
+    assert_eq!(b.len(), 4 * ADD_CHUNK_SIZE + 2);
+    assert_eq!(b.read_range(0..3), "azz");
+}
