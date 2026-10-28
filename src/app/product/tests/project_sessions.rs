@@ -303,22 +303,13 @@ fn a_switch_racing_an_edit_retries_with_fresh_captures(cx: &mut TestAppContext) 
     let a_id = project_id(&listed, "A");
 
     // Hold the destination's file read so an edit lands between retain and commit.
-    let runtime = Arc::new(
-        tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(1)
-            .enable_all()
-            .build()
-            .unwrap(),
-    );
     let (release, gate) = tokio::sync::oneshot::channel();
     let mut providers = FileSystemProviderRegistry::new();
     providers
         .register(
             "file",
             Arc::new(GatedFileSystemProvider {
-                inner: Arc::new(
-                    crate::app::filesystem::LocalFileSystemProvider::unrestricted(runtime),
-                ),
+                inner: Arc::new(crate::app::filesystem::LocalFileSystemProvider::unrestricted()),
                 read_release: Mutex::new(Some(gate)),
                 replace_release: Mutex::new(None),
             }),

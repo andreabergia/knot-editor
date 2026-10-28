@@ -465,13 +465,7 @@ mod tests {
         let temporary = tempfile::tempdir().unwrap();
         fs::create_dir(temporary.path().join("directory")).unwrap();
         fs::write(temporary.path().join("directory/file.txt"), b"before").unwrap();
-        let runtime = Arc::new(
-            tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()
-                .unwrap(),
-        );
-        let provider = LocalFileSystemProvider::new(temporary.path(), runtime).unwrap();
+        let provider = LocalFileSystemProvider::new(temporary.path()).unwrap();
         let root = provider.root().clone();
         let directory = child_uri(&root, "directory").unwrap();
         let file = child_uri(&directory, "file.txt").unwrap();
@@ -492,13 +486,7 @@ mod tests {
         ));
 
         let temporary = tempfile::tempdir().unwrap();
-        let runtime = Arc::new(
-            tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()
-                .unwrap(),
-        );
-        let local = LocalFileSystemProvider::new(temporary.path(), runtime).unwrap();
+        let local = LocalFileSystemProvider::new(temporary.path()).unwrap();
         let local_escape = ResourceUri::parse(&format!("{}/../outside.txt", local.root())).unwrap();
         assert!(matches!(
             run(local.normalize(local_escape)),
@@ -518,13 +506,7 @@ mod tests {
         );
 
         let temporary = tempfile::tempdir().unwrap();
-        let runtime = Arc::new(
-            tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()
-                .unwrap(),
-        );
-        let local = LocalFileSystemProvider::new(temporary.path(), runtime).unwrap();
+        let local = LocalFileSystemProvider::new(temporary.path()).unwrap();
         let encoded =
             ResourceUri::parse(&format!("{}/%64irectory/%66ile%2Etxt", local.root())).unwrap();
         assert_eq!(

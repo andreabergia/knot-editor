@@ -1,7 +1,7 @@
 use std::{
     io::Write,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, Mutex},
 };
 
 use url::Url;
@@ -15,19 +15,16 @@ use crate::app::resource::ResourceUri;
 /// A provider for one trusted local folder.
 ///
 /// Containment is lexical. Filesystem operations follow symlinks, including
-/// symlinks whose targets are outside the selected folder.
+/// symlinks whose targets are outside the selected folder. Each operation runs
+/// blocking `std::fs` calls on its own short-lived thread.
 pub(crate) struct LocalFileSystemProvider {
     root: Option<ResourceUri>,
-    runtime: Arc<tokio::runtime::Runtime>,
-    mutation_lock: Arc<tokio::sync::Mutex<()>>,
+    mutation_lock: Arc<Mutex<()>>,
 }
 
 impl LocalFileSystemProvider {
     #[cfg(test)]
-    pub(crate) fn new(
-        root_path: impl AsRef<Path>,
-        runtime: Arc<tokio::runtime::Runtime>,
-    ) -> Result<Self, ResourceError> {
+    pub(crate) fn new(root_path: impl AsRef<Path>) -> Result<Self, ResourceError> {
         let root_path = root_path.as_ref().to_path_buf();
         if !root_path.is_absolute() {
             return Err(ResourceError::InvalidUri {
@@ -42,18 +39,16 @@ impl LocalFileSystemProvider {
         let root = normalize_file_uri(ResourceUri::from_url(root_url))?;
         Ok(Self {
             root: Some(root),
-            runtime,
-            mutation_lock: Arc::new(tokio::sync::Mutex::new(())),
+            mutation_lock: Arc::default(),
         })
     }
 
     /// Creates the application-wide provider for user-selected local resources.
     /// Workspace containment remains a workspace consumer concern.
-    pub(crate) fn unrestricted(runtime: Arc<tokio::runtime::Runtime>) -> Self {
+    pub(crate) fn unrestricted() -> Self {
         Self {
             root: None,
-            runtime,
-            mutation_lock: Arc::new(tokio::sync::Mutex::new(())),
+            mutation_lock: Arc::default(),
         }
     }
 
@@ -92,11 +87,18 @@ impl LocalFileSystemProvider {
     fn spawn<T: Send + 'static>(
         &self,
         operation: &'static str,
-        future: impl std::future::Future<Output = Result<T, ResourceError>> + Send + 'static,
+        work: impl FnOnce() -> Result<T, ResourceError> + Send + 'static,
     ) -> ProviderFuture<'_, T> {
-        let task = self.runtime.spawn(future);
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        let thread = std::thread::Builder::new()
+            .name("knot-filesystem".into())
+            .spawn(move || {
+                let _ = sender.send(work());
+            });
         Box::pin(async move {
-            task.await
+            thread.map_err(|error| ResourceError::io(operation, error))?;
+            receiver
+                .await
                 .map_err(|error| ResourceError::io(operation, error))?
         })
     }
@@ -140,8 +142,8 @@ impl FileSystemProvider for LocalFileSystemProvider {
             Err(error) => return Box::pin(async move { Err(error) }),
         };
         let root = self.root.clone();
-        self.spawn("enumerate task", async move {
-            let directory_metadata = metadata(&path, &uri, "stat directory").await?;
+        self.spawn("enumerate task", move || {
+            let directory_metadata = metadata(&path, &uri, "stat directory")?;
             if !directory_metadata.is_dir() {
                 return Err(ResourceError::WrongKind {
                     uri,
@@ -149,15 +151,12 @@ impl FileSystemProvider for LocalFileSystemProvider {
                     actual: ResourceKind::File,
                 });
             }
-            let mut directory = tokio::fs::read_dir(&path)
-                .await
+            let directory = std::fs::read_dir(&path)
                 .map_err(|error| map_io("enumerate directory", &uri, error))?;
             let mut entries = Vec::new();
-            while let Some(entry) = directory
-                .next_entry()
-                .await
-                .map_err(|error| ResourceError::io("enumerate directory", error))?
-            {
+            for entry in directory {
+                let entry =
+                    entry.map_err(|error| ResourceError::io("enumerate directory", error))?;
                 let name =
                     entry
                         .file_name()
@@ -170,7 +169,7 @@ impl FileSystemProvider for LocalFileSystemProvider {
                     Some(root) => path_to_uri(root, &entry.path())?,
                     None => path_to_unrestricted_uri(&entry.path())?,
                 };
-                let child_metadata = metadata(&entry.path(), &child_uri, "stat child").await?;
+                let child_metadata = metadata(&entry.path(), &child_uri, "stat child")?;
                 let kind = if child_metadata.is_dir() {
                     ResourceKind::Directory
                 } else if child_metadata.is_file() {
@@ -200,8 +199,8 @@ impl FileSystemProvider for LocalFileSystemProvider {
             Ok(path) => path,
             Err(error) => return Box::pin(async move { Err(error) }),
         };
-        self.spawn("read task", async move {
-            let initial_metadata = metadata(&path, &uri, "stat file").await?;
+        self.spawn("read task", move || {
+            let initial_metadata = metadata(&path, &uri, "stat file")?;
             if !initial_metadata.is_file() {
                 return Err(ResourceError::WrongKind {
                     uri,
@@ -210,10 +209,8 @@ impl FileSystemProvider for LocalFileSystemProvider {
                 });
             }
             let before = resource_version(&initial_metadata)?;
-            let bytes = tokio::fs::read(&path)
-                .await
-                .map_err(|error| map_io("read", &uri, error))?;
-            let after = resource_version(&metadata(&path, &uri, "stat file").await?)?;
+            let bytes = std::fs::read(&path).map_err(|error| map_io("read", &uri, error))?;
+            let after = resource_version(&metadata(&path, &uri, "stat file")?)?;
             if before != after {
                 return Err(ResourceError::Conflict { uri });
             }
@@ -234,10 +231,12 @@ impl FileSystemProvider for LocalFileSystemProvider {
             Err(error) => return Box::pin(async move { Err(error) }),
         };
         let mutation_lock = self.mutation_lock.clone();
-        self.spawn("create task", async move {
-            let _guard = mutation_lock.lock().await;
+        self.spawn("create task", move || {
+            let _guard = mutation_lock
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
             atomic_create(&path, &uri, bytes)?;
-            resource_version(&metadata(&path, &uri, "stat created file").await?)
+            resource_version(&metadata(&path, &uri, "stat created file")?)
         })
     }
 
@@ -256,9 +255,11 @@ impl FileSystemProvider for LocalFileSystemProvider {
             Err(error) => return Box::pin(async move { Err(error) }),
         };
         let mutation_lock = self.mutation_lock.clone();
-        self.spawn("replace task", async move {
-            let _guard = mutation_lock.lock().await;
-            let current = metadata(&path, &uri, "stat file").await?;
+        self.spawn("replace task", move || {
+            let _guard = mutation_lock
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            let current = metadata(&path, &uri, "stat file")?;
             if !current.is_file() {
                 return Err(ResourceError::WrongKind {
                     uri,
@@ -270,7 +271,7 @@ impl FileSystemProvider for LocalFileSystemProvider {
                 return Err(ResourceError::Conflict { uri });
             }
             atomic_replace(&path, &uri, &expected, &current, bytes)?;
-            resource_version(&metadata(&path, &uri, "stat replaced file").await?)
+            resource_version(&metadata(&path, &uri, "stat replaced file")?)
         })
     }
 
@@ -283,19 +284,15 @@ impl FileSystemProvider for LocalFileSystemProvider {
             Ok(path) => path,
             Err(error) => return Box::pin(async move { Err(error) }),
         };
-        self.spawn("stat task", async move {
-            match tokio::fs::metadata(path).await {
-                Ok(metadata) if metadata.is_file() => Ok(ResourceStat::File),
-                Ok(metadata) if metadata.is_dir() => Ok(ResourceStat::Directory),
-                Ok(_) => Err(ResourceError::Io {
-                    operation: "stat",
-                    message: format!("unsupported resource kind at {uri}"),
-                }),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                    Ok(ResourceStat::Missing)
-                }
-                Err(error) => Err(ResourceError::io("stat", error)),
-            }
+        self.spawn("stat task", move || match std::fs::metadata(path) {
+            Ok(metadata) if metadata.is_file() => Ok(ResourceStat::File),
+            Ok(metadata) if metadata.is_dir() => Ok(ResourceStat::Directory),
+            Ok(_) => Err(ResourceError::Io {
+                operation: "stat",
+                message: format!("unsupported resource kind at {uri}"),
+            }),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(ResourceStat::Missing),
+            Err(error) => Err(ResourceError::io("stat", error)),
         })
     }
 }
@@ -405,14 +402,12 @@ pub(crate) fn normalize_file_uri(uri: ResourceUri) -> Result<ResourceUri, Resour
     validate_and_normalize_uri(uri, "file")
 }
 
-async fn metadata(
+fn metadata(
     path: &Path,
     uri: &ResourceUri,
     operation: &'static str,
 ) -> Result<std::fs::Metadata, ResourceError> {
-    tokio::fs::metadata(path)
-        .await
-        .map_err(|error| map_io(operation, uri, error))
+    std::fs::metadata(path).map_err(|error| map_io(operation, uri, error))
 }
 
 fn map_io(operation: &'static str, uri: &ResourceUri, error: std::io::Error) -> ResourceError {
@@ -433,21 +428,12 @@ mod tests {
         pollster::block_on(future)
     }
 
-    fn io_runtime() -> Arc<tokio::runtime::Runtime> {
-        Arc::new(
-            tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()
-                .unwrap(),
-        )
-    }
-
     #[test]
     fn local_folder_supports_normalize_enumerate_read_replace_and_stat() {
         let temporary = tempfile::tempdir().unwrap();
         fs::create_dir(temporary.path().join("src")).unwrap();
         fs::write(temporary.path().join("src/lib.rs"), b"old").unwrap();
-        let provider = LocalFileSystemProvider::new(temporary.path(), io_runtime()).unwrap();
+        let provider = LocalFileSystemProvider::new(temporary.path()).unwrap();
         let directory = provider.path_to_uri(&temporary.path().join("src")).unwrap();
         let file = provider
             .path_to_uri(&temporary.path().join("src/lib.rs"))
@@ -479,7 +465,7 @@ mod tests {
         let temporary = tempfile::tempdir().unwrap();
         let path = temporary.path().join("existing.txt");
         fs::write(&path, b"existing").unwrap();
-        let provider = LocalFileSystemProvider::new(temporary.path(), io_runtime()).unwrap();
+        let provider = LocalFileSystemProvider::new(temporary.path()).unwrap();
         let file = provider.path_to_uri(&path).unwrap();
 
         assert!(matches!(
@@ -505,7 +491,7 @@ mod tests {
         let path = temporary.path().join("executable.sh");
         fs::write(&path, b"old").unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o751)).unwrap();
-        let provider = LocalFileSystemProvider::new(temporary.path(), io_runtime()).unwrap();
+        let provider = LocalFileSystemProvider::new(temporary.path()).unwrap();
         let file = provider.path_to_uri(&path).unwrap();
         let before = run(provider.read(file.clone())).unwrap();
 
@@ -520,7 +506,7 @@ mod tests {
         let temporary = tempfile::tempdir().unwrap();
         let path = temporary.path().join("document.txt");
         fs::write(&path, b"external").unwrap();
-        let provider = LocalFileSystemProvider::new(temporary.path(), io_runtime()).unwrap();
+        let provider = LocalFileSystemProvider::new(temporary.path()).unwrap();
         let file = provider.path_to_uri(&path).unwrap();
         let metadata = fs::metadata(&path).unwrap();
 
@@ -547,7 +533,7 @@ mod tests {
     #[test]
     fn rejects_outside_and_wrong_kind_operations() {
         let temporary = tempfile::tempdir().unwrap();
-        let provider = LocalFileSystemProvider::new(temporary.path(), io_runtime()).unwrap();
+        let provider = LocalFileSystemProvider::new(temporary.path()).unwrap();
         assert!(matches!(
             run(provider.read(provider.root().clone())),
             Err(ResourceError::WrongKind { .. })
@@ -567,7 +553,7 @@ mod tests {
         let outside = tempfile::tempdir().unwrap();
         fs::write(outside.path().join("target"), b"outside").unwrap();
         symlink(outside.path().join("target"), root.path().join("link")).unwrap();
-        let provider = LocalFileSystemProvider::new(root.path(), io_runtime()).unwrap();
+        let provider = LocalFileSystemProvider::new(root.path()).unwrap();
         let link = provider.path_to_uri(&root.path().join("link")).unwrap();
         assert_eq!(run(provider.read(link)).unwrap().bytes, b"outside");
     }
@@ -583,7 +569,7 @@ mod tests {
         let link = links.path().join(".dotfile");
         fs::write(&target, b"old").unwrap();
         symlink(&target, &link).unwrap();
-        let provider = LocalFileSystemProvider::unrestricted(io_runtime());
+        let provider = LocalFileSystemProvider::unrestricted();
         let uri = path_to_unrestricted_uri(&link).unwrap();
         let before = run(provider.read(uri.clone())).unwrap();
 

@@ -62,7 +62,8 @@ providers implement the same typed results/errors. Local writes flush a temporar
 sibling, install atomically, and sync the parent directory before reporting
 success. Replacement resolves symlinks first, so it rewrites the link's target
 and the link survives; it preserves permissions and rejects version mismatch.
-Native filesystem I/O uses a background Tokio runtime.
+Local filesystem I/O runs blocking `std::fs` calls on a short-lived thread per
+operation, off the foreground.
 
 Product documents use unscoped providers so user-selected resources need not lie
 inside workspace roots. Scoped local providers remain trusted application

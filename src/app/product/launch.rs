@@ -6,20 +6,9 @@ pub(super) fn product_filesystems() -> Arc<FileSystemProviderRegistry> {
     static FILESYSTEMS: OnceLock<Arc<FileSystemProviderRegistry>> = OnceLock::new();
     FILESYSTEMS
         .get_or_init(|| {
-            let runtime = Arc::new(
-                tokio::runtime::Builder::new_multi_thread()
-                    .worker_threads(1)
-                    .enable_all()
-                    .thread_name("knot-product-filesystem")
-                    .build()
-                    .expect("product filesystem runtime starts"),
-            );
             let mut providers = FileSystemProviderRegistry::new();
             providers
-                .register(
-                    "file",
-                    Arc::new(LocalFileSystemProvider::unrestricted(runtime)),
-                )
+                .register("file", Arc::new(LocalFileSystemProvider::unrestricted()))
                 .expect("the product file provider is unique");
             Arc::new(providers)
         })
