@@ -520,5 +520,5 @@ pub(crate) fn run(initial_request: Option<OpenRequest>) {
 }
 
 pub(in crate::app) fn bind_product_keys(cx: &mut App) {
-    crate::app::keymaps::install(cx);
+    crate::app::commands::keymaps::install(cx);
 }

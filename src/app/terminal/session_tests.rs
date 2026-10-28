@@ -290,7 +290,7 @@ fn sustained_output_keeps_foreground_updates_responsive(cx: &mut TestAppContext)
 
 #[gpui::test]
 fn paste_command_delivers_plain_and_bracketed_clipboard_bytes(cx: &mut TestAppContext) {
-    use crate::app::product_commands::CommandClaim;
+    use crate::app::commands::dispatch::CommandClaim;
     use crate::host::protocol::CommandOutcome;
     for bracketed in [false, true] {
         let temp = tempfile::tempdir().unwrap();
@@ -581,7 +581,7 @@ fn gpui_commands_precede_mode_aware_keyboard_delivery(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn stopped_terminal_keeps_copy_and_declines_paste_and_detached_commands(cx: &mut TestAppContext) {
-    use crate::app::product_commands::CommandClaim;
+    use crate::app::commands::dispatch::CommandClaim;
     use crate::host::protocol::CommandOutcome;
     use alacritty_terminal::{
         index::{Column, Line, Point, Side},

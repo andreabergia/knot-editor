@@ -72,8 +72,8 @@ impl TextView {
         &self,
         command: &crate::host::protocol::Command,
         cx: &mut Context<Self>,
-    ) -> super::product_commands::CommandClaim {
-        use super::product_commands::{COPY_COMMAND, CommandClaim};
+    ) -> super::commands::dispatch::CommandClaim {
+        use super::commands::dispatch::{COPY_COMMAND, CommandClaim};
 
         if command.name.as_ref() == COPY_COMMAND
             && let Some(text) = self.selected_text(cx)

@@ -410,7 +410,7 @@ pub(crate) fn close_presentation(
         focus: focus.downgrade(),
         view: None,
     };
-    super::super::product_commands::break_captured_history_group(&origin, cx);
+    super::super::commands::dispatch::break_captured_history_group(&origin, cx);
     ProductShell::begin_protected_operation(
         ProtectedCloseKind::Tab,
         origin,

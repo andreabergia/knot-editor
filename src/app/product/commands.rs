@@ -1,13 +1,13 @@
 //! Workbench and application command declarations.
 use super::*;
-use crate::app::command_declarations::{CommandContext, command};
+use crate::app::commands::declarations::{CommandContext, command};
 use crate::host::protocol::CommandOutcome;
 
 #[command("file.new", title = "New Document", id = NEW_COMMAND, participant = Workbench)]
 pub(crate) async fn new(context: CommandContext, (): ()) -> Result<(), CommandOutcome> {
     context
         .foreground(move |target, _, cx| {
-            super::super::product_commands::break_captured_history_group(target, cx);
+            super::super::commands::dispatch::break_captured_history_group(target, cx);
             Ok(())
         })
         .await?;
@@ -25,7 +25,7 @@ pub(crate) async fn new(context: CommandContext, (): ()) -> Result<(), CommandOu
 pub(crate) async fn new_terminal(context: CommandContext, (): ()) -> Result<(), CommandOutcome> {
     context
         .foreground(move |target, _, cx| {
-            super::super::product_commands::break_captured_history_group(target, cx);
+            super::super::commands::dispatch::break_captured_history_group(target, cx);
             Ok(())
         })
         .await?;
@@ -47,7 +47,7 @@ pub(crate) async fn move_terminal_to_new_window(
 ) -> Result<CommandOutcome, CommandOutcome> {
     context
         .foreground(move |target, _, cx| {
-            super::super::product_commands::break_captured_history_group(target, cx);
+            super::super::commands::dispatch::break_captured_history_group(target, cx);
             Ok(())
         })
         .await?;
@@ -72,7 +72,7 @@ pub(crate) async fn close_tab(
 ) -> Result<CommandOutcome, CommandOutcome> {
     context
         .foreground(move |target, _, cx| {
-            super::super::product_commands::break_captured_history_group(target, cx);
+            super::super::commands::dispatch::break_captured_history_group(target, cx);
             Ok(())
         })
         .await?;
@@ -86,7 +86,7 @@ pub(crate) async fn split_horizontal(
 ) -> Result<(), CommandOutcome> {
     context
         .foreground(move |target, _, cx| {
-            super::super::product_commands::break_captured_history_group(target, cx);
+            super::super::commands::dispatch::break_captured_history_group(target, cx);
             Ok(())
         })
         .await?;
@@ -97,7 +97,7 @@ pub(crate) async fn split_horizontal(
 pub(crate) async fn split_vertical(context: CommandContext, (): ()) -> Result<(), CommandOutcome> {
     context
         .foreground(move |target, _, cx| {
-            super::super::product_commands::break_captured_history_group(target, cx);
+            super::super::commands::dispatch::break_captured_history_group(target, cx);
             Ok(())
         })
         .await?;
@@ -111,7 +111,7 @@ pub(crate) async fn open(
 ) -> Result<CommandOutcome, CommandOutcome> {
     context
         .foreground(move |target, _, cx| {
-            super::super::product_commands::break_captured_history_group(target, cx);
+            super::super::commands::dispatch::break_captured_history_group(target, cx);
             Ok(())
         })
         .await?;
@@ -125,7 +125,7 @@ pub(crate) async fn save(
 ) -> Result<CommandOutcome, CommandOutcome> {
     context
         .foreground(move |target, _, cx| {
-            super::super::product_commands::break_captured_history_group(target, cx);
+            super::super::commands::dispatch::break_captured_history_group(target, cx);
             Ok(())
         })
         .await?;
@@ -139,7 +139,7 @@ pub(crate) async fn save_as(
 ) -> Result<CommandOutcome, CommandOutcome> {
     context
         .foreground(move |target, _, cx| {
-            super::super::product_commands::break_captured_history_group(target, cx);
+            super::super::commands::dispatch::break_captured_history_group(target, cx);
             Ok(())
         })
         .await?;
@@ -150,7 +150,7 @@ pub(crate) async fn save_as(
 pub(crate) async fn recover(context: CommandContext, (): ()) -> Result<(), CommandOutcome> {
     context
         .foreground(move |target, _, cx| {
-            super::super::product_commands::break_captured_history_group(target, cx);
+            super::super::commands::dispatch::break_captured_history_group(target, cx);
             Ok(())
         })
         .await?;
@@ -182,7 +182,7 @@ pub(crate) async fn show_completions(
 ) -> Result<CommandOutcome, CommandOutcome> {
     context
         .foreground(move |target, _, cx| {
-            super::super::product_commands::break_captured_history_group(target, cx);
+            super::super::commands::dispatch::break_captured_history_group(target, cx);
             Ok(())
         })
         .await?;
@@ -203,7 +203,7 @@ pub(crate) async fn show_command_palette(
 ) -> Result<(), CommandOutcome> {
     context
         .foreground(move |target, _, cx| {
-            super::super::product_commands::break_captured_history_group(target, cx);
+            super::super::commands::dispatch::break_captured_history_group(target, cx);
             Ok(())
         })
         .await?;
@@ -222,7 +222,7 @@ pub(crate) async fn show_extension_report(
 ) -> Result<(), CommandOutcome> {
     context
         .foreground(move |target, _, cx| {
-            super::super::product_commands::break_captured_history_group(target, cx);
+            super::super::commands::dispatch::break_captured_history_group(target, cx);
             Ok(())
         })
         .await?;
@@ -238,7 +238,7 @@ pub(crate) async fn show_extension_report(
 pub(crate) async fn new_window(context: CommandContext, (): ()) -> Result<(), CommandOutcome> {
     context
         .foreground(move |target, _, cx| {
-            super::super::product_commands::break_captured_history_group(target, cx);
+            super::super::commands::dispatch::break_captured_history_group(target, cx);
             Ok(())
         })
         .await?;
@@ -257,7 +257,7 @@ pub(crate) async fn close_window(
 ) -> Result<CommandOutcome, CommandOutcome> {
     context
         .foreground(move |target, _, cx| {
-            super::super::product_commands::break_captured_history_group(target, cx);
+            super::super::commands::dispatch::break_captured_history_group(target, cx);
             Ok(())
         })
         .await?;
@@ -271,7 +271,7 @@ pub(crate) async fn quit(
 ) -> Result<CommandOutcome, CommandOutcome> {
     context
         .foreground(move |target, _, cx| {
-            super::super::product_commands::break_captured_history_group(target, cx);
+            super::super::commands::dispatch::break_captured_history_group(target, cx);
             Ok(())
         })
         .await?;

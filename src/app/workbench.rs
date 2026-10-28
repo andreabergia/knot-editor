@@ -203,7 +203,7 @@ impl ExtensionView {
         &self,
         command: &crate::host::protocol::Command,
         cx: &mut App,
-    ) -> super::product_commands::CommandClaim {
+    ) -> super::commands::dispatch::CommandClaim {
         match self {
             Self::Tree(view) => view.update(cx, |view, cx| view.handle_command(command, cx)),
             Self::Text(view) => view.update(cx, |view, cx| view.handle_command(command, cx)),

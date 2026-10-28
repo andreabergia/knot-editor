@@ -14,7 +14,7 @@ adapters assemble catalog entries and generated name constants. Distinct routing
 participants may share a name/title. Assembly rejects duplicate participant
 entries or conflicting titles. Dynamic extension ownership remains in the
 application catalog. Declaration contracts live in
-[command_declarations.rs](../../src/app/command_declarations.rs).
+[commands/declarations.rs](../../src/app/commands/declarations.rs).
 
 An invocation captures window, focus, workbench, tab, surface, and exact presentation.
 Routing offers it to the captured focused view, then workbench, then application.

@@ -809,7 +809,7 @@ await commands.register("test.dispose-view-copy", async () => viewCopy.dispose()
                 )
                 .unwrap()
         );
-        super::super::super::keymaps::rebuild(cx);
+        super::super::super::commands::keymaps::rebuild(cx);
         cx.write_to_clipboard(gpui::ClipboardItem::new_string("untouched".into()));
     });
     cx.refresh().unwrap();

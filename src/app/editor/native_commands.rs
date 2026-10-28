@@ -1,7 +1,7 @@
 //! Native editor command declarations.
 use super::*;
-use crate::app::command_declarations::{CommandContext, command};
-use crate::app::product_commands::ProductCommandTarget;
+use crate::app::commands::declarations::{CommandContext, command};
+use crate::app::commands::dispatch::ProductCommandTarget;
 use crate::host::protocol::{Command, CommandArgumentValue, CommandOutcome};
 
 fn claim_editor(command: &Command, target: &ProductCommandTarget, cx: &App) -> bool {

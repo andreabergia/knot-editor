@@ -228,7 +228,7 @@ impl ProductShell {
         // Protected closure updates this shell, so it starts outside the
         // current update.
         cx.defer(move |cx| {
-            super::super::product_commands::break_captured_history_group(&target, cx);
+            super::super::commands::dispatch::break_captured_history_group(&target, cx);
             Self::begin_protected_close(ProtectedCloseKind::Tab, target, None, cx);
         });
     }

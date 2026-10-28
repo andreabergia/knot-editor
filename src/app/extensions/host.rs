@@ -29,7 +29,10 @@ use crate::host::{
 };
 
 use crate::app::{
-    extension_commands::{ExtensionCommandBridge, ExtensionCommandEvent, RoutedCommandTarget},
+    commands::dispatch::{
+        ApplicationProductCommands, CommandClaim, ProductCommandTarget, dispatch_to_captured_target,
+    },
+    commands::extension::{ExtensionCommandBridge, ExtensionCommandEvent, RoutedCommandTarget},
     extensions::buffers::ExtensionBufferBridge,
     extensions::load::{DependencyPlan, LoadEntry, LoadReport, LoadResult, StartupAttempt},
     extensions::package::InstalledPackage,
@@ -37,9 +40,6 @@ use crate::app::{
     model::{CommandTarget, CommandTargetKind},
     personal_config::{self, ConfigDiagnostic, ConfigPhase},
     product::{self, ProductShell},
-    product_commands::{
-        ApplicationProductCommands, CommandClaim, ProductCommandTarget, dispatch_to_captured_target,
-    },
     transient::TransientOwner,
     tree_view::TreeViewEvent,
     workbench::ExtensionView,
@@ -343,7 +343,7 @@ fn complete_nested_command(
 fn route_nested_command(
     request: crate::host::protocol::RequestContext,
     command: crate::host::protocol::Command,
-    sender: crate::app::extension_commands::CommandReply,
+    sender: crate::app::commands::extension::CommandReply,
     cx: &mut App,
 ) {
     use crate::host::protocol::{CommandInvokeDispatch, CommandOutcome};
@@ -1946,9 +1946,9 @@ impl ProductExtensionHost {
             .semantics
             .register_tree_provider(request, arguments, cx)?;
         self.commands.catalog().borrow_mut().declare_view_kind(&id);
-        if cx.has_global::<crate::app::keymaps::ApplicationKeymaps>() {
+        if cx.has_global::<crate::app::commands::keymaps::ApplicationKeymaps>() {
             let _ = cx
-                .global_mut::<crate::app::keymaps::ApplicationKeymaps>()
+                .global_mut::<crate::app::commands::keymaps::ApplicationKeymaps>()
                 .0
                 .declare_extension_kind(&id);
         }
@@ -1972,13 +1972,13 @@ impl ProductExtensionHost {
 
     fn remove_view_kind(&mut self, id: &str, cx: &mut App) {
         self.commands.catalog().borrow_mut().remove_view_kind(id);
-        if cx.has_global::<crate::app::keymaps::ApplicationKeymaps>()
+        if cx.has_global::<crate::app::commands::keymaps::ApplicationKeymaps>()
             && cx
-                .global_mut::<crate::app::keymaps::ApplicationKeymaps>()
+                .global_mut::<crate::app::commands::keymaps::ApplicationKeymaps>()
                 .0
                 .remove_extension_kind(id)
         {
-            crate::app::keymaps::rebuild(cx);
+            crate::app::commands::keymaps::rebuild(cx);
         }
     }
 
@@ -2139,18 +2139,18 @@ impl ProductExtensionHost {
         self.storage_owners.remove(&key);
         self.application_observation.remove_lifecycle(key);
         let personal = self.personal_config_key == Some(key);
-        if cx.has_global::<crate::app::keymaps::ApplicationKeymaps>() {
+        if cx.has_global::<crate::app::commands::keymaps::ApplicationKeymaps>() {
             let owner = if personal {
-                crate::app::keymaps::BindingOwner::Personal(key.extension, key.lifecycle)
+                crate::app::commands::keymaps::BindingOwner::Personal(key.extension, key.lifecycle)
             } else {
-                crate::app::keymaps::BindingOwner::Extension(key.extension, key.lifecycle)
+                crate::app::commands::keymaps::BindingOwner::Extension(key.extension, key.lifecycle)
             };
             if cx
-                .global_mut::<crate::app::keymaps::ApplicationKeymaps>()
+                .global_mut::<crate::app::commands::keymaps::ApplicationKeymaps>()
                 .0
                 .remove_owner(owner)
             {
-                crate::app::keymaps::rebuild(cx);
+                crate::app::commands::keymaps::rebuild(cx);
             }
         }
         if self.personal_config_key == Some(key) {
@@ -2227,7 +2227,7 @@ mod tests {
     fn application_context_failures_have_distinct_results(cx: &mut TestAppContext) {
         use crate::host::protocol::{RequestContext, RequestId};
         cx.update(|cx| {
-            let commands = cx.new(crate::app::product_commands::ProductCommandDispatcher::new);
+            let commands = cx.new(crate::app::commands::dispatch::ProductCommandDispatcher::new);
             cx.set_global(ApplicationProductCommands(commands));
             let host = install(cx);
             let key = ExtensionKey::new(ExtensionId::new(701), ExtensionLifecycleId::new(1));
@@ -2286,7 +2286,7 @@ mod tests {
         use crate::host::protocol::{CommandOutcome, CommandRegistrationId};
 
         cx.update(|cx| {
-            let commands = cx.new(crate::app::product_commands::ProductCommandDispatcher::new);
+            let commands = cx.new(crate::app::commands::dispatch::ProductCommandDispatcher::new);
             cx.set_global(ApplicationProductCommands(commands));
             let host = install(cx);
             let root = CommandInvocationId::new(1);
@@ -2314,7 +2314,7 @@ mod tests {
     #[gpui::test]
     fn product_owns_one_bounded_pool(cx: &mut TestAppContext) {
         let pool = cx.update(|cx| {
-            let commands = cx.new(crate::app::product_commands::ProductCommandDispatcher::new);
+            let commands = cx.new(crate::app::commands::dispatch::ProductCommandDispatcher::new);
             cx.set_global(ApplicationProductCommands(commands));
             install(cx);
 
@@ -2337,7 +2337,7 @@ mod tests {
         use crate::host::protocol::{ExtensionId, ExtensionLifecycleId};
 
         cx.update(|cx| {
-            let commands = cx.new(crate::app::product_commands::ProductCommandDispatcher::new);
+            let commands = cx.new(crate::app::commands::dispatch::ProductCommandDispatcher::new);
             cx.set_global(ApplicationProductCommands(commands));
             install(cx);
 
@@ -2373,7 +2373,7 @@ mod tests {
         cx: &mut TestAppContext,
     ) {
         let host = cx.update(|cx| {
-            let commands = cx.new(crate::app::product_commands::ProductCommandDispatcher::new);
+            let commands = cx.new(crate::app::commands::dispatch::ProductCommandDispatcher::new);
             cx.set_global(ApplicationProductCommands(commands));
             let host = install(cx);
             host.update(cx, |host, cx| host.start_test_fixture("integration", cx));
@@ -2443,7 +2443,7 @@ mod tests {
 
         let root = tempfile::tempdir().unwrap();
         let host = cx.update(|cx| {
-            let commands = cx.new(crate::app::product_commands::ProductCommandDispatcher::new);
+            let commands = cx.new(crate::app::commands::dispatch::ProductCommandDispatcher::new);
             cx.set_global(ApplicationProductCommands(commands));
             let host = install(cx);
             host.update(cx, |host, cx| {

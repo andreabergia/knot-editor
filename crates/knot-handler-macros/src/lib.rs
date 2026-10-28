@@ -165,14 +165,14 @@ fn expand_handler(
         let claim = if let Some(claim) = options.claim {
             quote! { #claim }
         } else {
-            quote! { crate::app::command_declarations::always_claim }
+            quote! { crate::app::commands::declarations::always_claim }
         };
         (
             marker.clone(),
             quote! { #(#conditions)* #visibility const #id: &str = #name; },
             quote! {
-                crate::app::command_declarations::CommandDescriptor::new::<#marker>(
-                    #title, crate::app::command_declarations::Participant::#participant, #claim)
+                crate::app::commands::declarations::CommandDescriptor::new::<#marker>(
+                    #title, crate::app::commands::declarations::Participant::#participant, #claim)
             },
             quote! { #id },
         )

@@ -147,8 +147,8 @@ impl TreeView {
         &self,
         command: &Command,
         cx: &mut Context<Self>,
-    ) -> super::product_commands::CommandClaim {
-        use super::product_commands::{ApplicationProductCommands, COPY_COMMAND, CommandClaim};
+    ) -> super::commands::dispatch::CommandClaim {
+        use super::commands::dispatch::{ApplicationProductCommands, COPY_COMMAND, CommandClaim};
 
         if command.name.as_ref() == COPY_COMMAND && self.selected_text().is_none() {
             return CommandClaim::Declined;
@@ -731,7 +731,7 @@ impl Render for TreeView {
         let entity = cx.entity();
         let mut key_context = KeyContext::default();
         key_context.add(TREE_KEY_CONTEXT);
-        key_context.add(super::keymaps::view_context(&self.view_id));
+        key_context.add(super::commands::keymaps::view_context(&self.view_id));
 
         let toolbar = if frame_actions.is_empty() {
             None

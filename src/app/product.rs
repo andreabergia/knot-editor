@@ -32,7 +32,7 @@ mod tools;
 mod view_state;
 
 #[cfg(test)]
-use super::product_commands::SHOW_COMPLETIONS_COMMAND;
+use super::commands::dispatch::SHOW_COMPLETIONS_COMMAND;
 use closure::install_protected_window_close;
 #[cfg(test)]
 pub(super) use launch::bind_product_keys;
@@ -44,17 +44,7 @@ use launch::{open_tab_tear_out_window, open_tab_transfer_window};
 
 use super::{
     CommandCompletion, CommandPalette, CommandPaletteEntry, CommandPaletteEvent,
-    documents::{ApplicationDocuments, DocumentCollection, DocumentId, DocumentState},
-    entry::OpenRequest,
-    extensions::host::handlers::TransientError,
-    filesystem::{
-        FileSystemProviderRegistry, LocalFileSystemProvider, ResourceError, ResourceKind,
-        ResourceStat, ResourceVersion,
-    },
-    keymaps::{ApplicationKeymaps, BindingResolution, KeymapAction},
-    model::BufferModel,
-    open::{OpenResource, enumerate_directory, load_resource},
-    product_commands::{
+    commands::dispatch::{
         ApplicationProductCommands, CLOSE_TAB_COMMAND, CLOSE_WINDOW_COMMAND, COPY_COMMAND,
         CUT_COMMAND, MOVE_TERMINAL_TO_NEW_WINDOW_COMMAND, NEW_COMMAND, NEW_TERMINAL_COMMAND,
         NEW_WINDOW_COMMAND, OPEN_COMMAND, PASTE_COMMAND, ProductCommandDispatcher,
@@ -64,6 +54,16 @@ use super::{
         UNDO_COMMAND, dispatch_close_to_captured_target, dispatch_open_to_captured_target,
         dispatch_save_to_captured_target,
     },
+    commands::keymaps::{ApplicationKeymaps, BindingResolution, KeymapAction},
+    documents::{ApplicationDocuments, DocumentCollection, DocumentId, DocumentState},
+    entry::OpenRequest,
+    extensions::host::handlers::TransientError,
+    filesystem::{
+        FileSystemProviderRegistry, LocalFileSystemProvider, ResourceError, ResourceKind,
+        ResourceStat, ResourceVersion,
+    },
+    model::BufferModel,
+    open::{OpenResource, enumerate_directory, load_resource},
     terminal::session::TerminalSession,
     terminal::view::TerminalView,
     transient::{

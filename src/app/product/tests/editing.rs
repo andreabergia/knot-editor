@@ -606,9 +606,9 @@ async fn every_editor_motion_command_reaches_the_focused_view(cx: &mut TestAppCo
         })
         .unwrap();
     let dispatcher = cx.read(|cx| cx.global::<ApplicationProductCommands>().0.clone());
-    for name in super::super::super::product_commands::product_command_names().filter(|name| {
-        name.starts_with(super::super::super::product_commands::EDITOR_MOVE_PREFIX)
-            || name.starts_with(super::super::super::product_commands::EDITOR_SELECT_PREFIX)
+    for name in super::super::super::commands::dispatch::product_command_names().filter(|name| {
+        name.starts_with(super::super::super::commands::dispatch::EDITOR_MOVE_PREFIX)
+            || name.starts_with(super::super::super::commands::dispatch::EDITOR_SELECT_PREFIX)
     }) {
         let execution = dispatcher.update(cx, |dispatcher, cx| {
             dispatcher.dispatch(

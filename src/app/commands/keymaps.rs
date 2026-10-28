@@ -8,7 +8,7 @@ use crate::host::protocol::{
     Command, CommandArgumentValue, ExtensionId, ExtensionLifecycleId, KeybindingMutation,
 };
 
-use super::product_commands::{
+use crate::app::commands::dispatch::{
     CLOSE_TAB_COMMAND, CLOSE_WINDOW_COMMAND, COPY_COMMAND, CUT_COMMAND, DELETE_BACKWARD_COMMAND,
     DELETE_FORWARD_COMMAND, INSERT_NEWLINE_COMMAND, INSERT_TAB_COMMAND, MOVE_DOCUMENT_END_COMMAND,
     MOVE_DOCUMENT_START_COMMAND, MOVE_DOWN_COMMAND, MOVE_LEFT_COMMAND, MOVE_LINE_END_COMMAND,
@@ -431,7 +431,7 @@ pub(crate) fn rebuild(cx: &mut App) {
     }));
     cx.bind_keys([KeyBinding::new(
         if cfg!(windows) { "ctrl-q" } else { "cmd-q" },
-        super::product_commands::ProductCommandSource::new(QUIT_COMMAND),
+        crate::app::commands::dispatch::ProductCommandSource::new(QUIT_COMMAND),
         Some("config-error"),
     )]);
 }
@@ -912,7 +912,7 @@ mod tests {
                 bindings[0]
                     .action()
                     .as_any()
-                    .is::<super::super::product_commands::ProductCommandSource>()
+                    .is::<crate::app::commands::dispatch::ProductCommandSource>()
             );
         });
     }

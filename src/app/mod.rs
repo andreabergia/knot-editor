@@ -9,25 +9,22 @@ use crate::host::protocol::CommandOutcome;
 use gpui::*;
 
 mod application_observation;
-mod command_declarations;
 mod command_palette;
+mod commands;
 mod completion;
 mod documents;
 mod editor;
 mod entry;
-mod extension_commands;
 #[cfg(test)]
 pub(crate) use extensions::host::handlers as declared_host;
 mod extensions;
 mod filesystem;
 mod history;
-mod keymaps;
 pub mod model;
 mod open;
 mod personal_config;
 mod personal_config_error;
 mod product;
-mod product_commands;
 mod record_store;
 mod recovery;
 mod resource;

@@ -882,9 +882,9 @@ mod tests {
     }
 }
 
-#[crate::app::command_declarations::command("copy", title = "Copy", id = WORKSPACE_COPY_COMMAND, participant = WorkspaceTree)]
+#[crate::app::commands::declarations::command("copy", title = "Copy", id = WORKSPACE_COPY_COMMAND, participant = WorkspaceTree)]
 pub(crate) async fn copy_selected_uri(
-    context: crate::app::command_declarations::CommandContext,
+    context: crate::app::commands::declarations::CommandContext,
     (): (),
 ) -> Result<(), crate::host::protocol::CommandOutcome> {
     use crate::host::protocol::CommandOutcome;

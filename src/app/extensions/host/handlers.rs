@@ -1258,7 +1258,7 @@ pub(crate) async fn unregister_completion_provider(
     })?
 }
 
-use crate::app::extension_commands::CommandError;
+use crate::app::commands::extension::CommandError;
 use crate::host::protocol::{
     Command, CommandInvokeDispatch, CommandName, CommandOutcome, CommandRegistrationId,
 };
@@ -1457,22 +1457,22 @@ pub(crate) async fn mutate_keybindings(
 ) -> Result<(), KeymapError> {
     let key = ExtensionKey::new(context.request.extension, context.request.lifecycle);
     context.foreground(|host, cx| {
-        if !cx.has_global::<crate::app::keymaps::ApplicationKeymaps>() {
+        if !cx.has_global::<crate::app::commands::keymaps::ApplicationKeymaps>() {
             return Err(KeymapError::invalid(
                 "application keymap is unavailable".into(),
             ));
         }
         let owner = if host.personal_config_key == Some(key) {
-            crate::app::keymaps::BindingOwner::Personal(key.extension, key.lifecycle)
+            crate::app::commands::keymaps::BindingOwner::Personal(key.extension, key.lifecycle)
         } else {
-            crate::app::keymaps::BindingOwner::Extension(key.extension, key.lifecycle)
+            crate::app::commands::keymaps::BindingOwner::Extension(key.extension, key.lifecycle)
         };
         let result = cx
-            .global_mut::<crate::app::keymaps::ApplicationKeymaps>()
+            .global_mut::<crate::app::commands::keymaps::ApplicationKeymaps>()
             .0
             .apply_batch(owner, &arguments.mutations);
         if matches!(result, Ok(true)) {
-            crate::app::keymaps::rebuild(cx);
+            crate::app::commands::keymaps::rebuild(cx);
         }
         result.map(|_| ()).map_err(KeymapError::invalid)
     })?
@@ -1977,7 +1977,7 @@ mod tests {
     async fn immediate_handler_commits_and_rejects_a_disposed_context(cx: &mut TestAppContext) {
         let key = ExtensionKey::new(ExtensionId::new(702), ExtensionLifecycleId::new(1));
         let (host, context) = cx.update(|cx| {
-            let commands = cx.new(crate::app::product_commands::ProductCommandDispatcher::new);
+            let commands = cx.new(crate::app::commands::dispatch::ProductCommandDispatcher::new);
             cx.set_global(ApplicationProductCommands(commands));
             let host = install(cx);
             let context = host.update(cx, |host, cx| {
@@ -2030,7 +2030,7 @@ mod tests {
     ) -> (Entity<ProductExtensionHost>, HostContext, ExtensionKey) {
         let key = ExtensionKey::new(ExtensionId::new(703), ExtensionLifecycleId::new(1));
         cx.update(|cx| {
-            let commands = cx.new(crate::app::product_commands::ProductCommandDispatcher::new);
+            let commands = cx.new(crate::app::commands::dispatch::ProductCommandDispatcher::new);
             cx.set_global(ApplicationProductCommands(commands));
             let host = install(cx);
             let context = host.update(cx, |host, cx| {

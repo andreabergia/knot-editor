@@ -214,7 +214,7 @@ fn all_motion_legacy_reports_use_viewport_cells_and_deduplicate(cx: &mut TestApp
 
 #[gpui::test]
 fn shift_selection_and_scrolling_stay_local_in_tracking_scrollback(cx: &mut TestAppContext) {
-    use crate::app::product_commands::CommandClaim;
+    use crate::app::commands::dispatch::CommandClaim;
     use crate::host::protocol::CommandOutcome;
     let expected = b"\x1b[<0;2;1M\x1b[<0;2;1m\x1b[<65;2;1M";
     let fixture = fixture(cx, "\\033[?1002h\\033[?1006h", expected.len());
@@ -659,7 +659,7 @@ fn legacy_wire_limit_ignores_unrepresentable_presses_and_balances_owned_releases
 fn mouse_reporting_toggle_balances_drag_then_supports_ordinary_selection_and_copy(
     cx: &mut TestAppContext,
 ) {
-    use crate::app::product_commands::CommandClaim;
+    use crate::app::commands::dispatch::CommandClaim;
     use crate::host::protocol::CommandOutcome;
     let expected = b"\x1b[<0;2;1M\x1b[<0;2;1m\x1b[<2;2;1M\x1b[<2;2;1m";
     let fixture = fixture(cx, "\\033[?1002h\\033[?1006h", expected.len());
@@ -706,7 +706,7 @@ fn mouse_reporting_toggle_balances_drag_then_supports_ordinary_selection_and_cop
 fn mouse_reporting_preference_survives_view_handoff_and_restart_and_rejects_detached_toggle(
     cx: &mut TestAppContext,
 ) {
-    use crate::app::product_commands::CommandClaim;
+    use crate::app::commands::dispatch::CommandClaim;
     let fixture = fixture(cx, "\\033[?1002h\\033[?1006h", 0);
     let view = cx.new(|cx| TerminalView::new(fixture.session.clone(), cx));
     let toggle = super::TerminalCommand::ToggleMouseReporting;

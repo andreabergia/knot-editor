@@ -74,8 +74,8 @@ impl TerminalView {
         &mut self,
         command: TerminalCommand,
         cx: &mut Context<Self>,
-    ) -> crate::app::product_commands::CommandClaim {
-        use crate::app::product_commands::CommandClaim;
+    ) -> crate::app::commands::dispatch::CommandClaim {
+        use crate::app::commands::dispatch::CommandClaim;
         if self.attachment.is_none() {
             return CommandClaim::Declined;
         }
@@ -1181,8 +1181,8 @@ impl Element for TerminalElement {
 #[path = "mouse_tests.rs"]
 mod mouse_tests;
 
-use crate::app::command_declarations::{CommandContext, command};
-use crate::app::product_commands::ProductCommandTarget;
+use crate::app::commands::declarations::{CommandContext, command};
+use crate::app::commands::dispatch::ProductCommandTarget;
 use crate::host::protocol::{Command, CommandArgumentValue, CommandOutcome};
 
 fn claim_terminal(command: &Command, target: &ProductCommandTarget, cx: &App) -> bool {
@@ -1196,10 +1196,10 @@ fn claim_terminal(command: &Command, target: &ProductCommandTarget, cx: &App) ->
     if command.arguments != CommandArgumentValue::Null {
         return true;
     }
-    if command.name.as_ref() == crate::app::product_commands::PASTE_COMMAND {
+    if command.name.as_ref() == crate::app::commands::dispatch::PASTE_COMMAND {
         return view.session.read(cx).status() == TerminalStatus::Running;
     }
-    if command.name.as_ref() == crate::app::product_commands::COPY_COMMAND {
+    if command.name.as_ref() == crate::app::commands::dispatch::COPY_COMMAND {
         return view
             .session
             .read(cx)
@@ -1233,10 +1233,10 @@ async fn execute_terminal(
                 return Err(CommandOutcome::InvalidTarget);
             };
             match view.update(cx, |view, cx| view.execute_terminal_command(command, cx)) {
-                crate::app::product_commands::CommandClaim::Finished(CommandOutcome::Completed) => {
-                    Ok(())
-                }
-                crate::app::product_commands::CommandClaim::Declined => {
+                crate::app::commands::dispatch::CommandClaim::Finished(
+                    CommandOutcome::Completed,
+                ) => Ok(()),
+                crate::app::commands::dispatch::CommandClaim::Declined => {
                     Err(CommandOutcome::Unavailable)
                 }
                 _ => unreachable!("terminal commands complete immediately"),

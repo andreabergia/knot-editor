@@ -7,8 +7,8 @@ use gpui::{
     div, px, rgb, size,
 };
 
+use super::commands::dispatch::{ProductCommandSource, QUIT_COMMAND};
 use super::personal_config::ConfigDiagnostic;
-use super::product_commands::{ProductCommandSource, QUIT_COMMAND};
 
 pub(crate) struct PersonalConfigErrorView {
     diagnostic: ConfigDiagnostic,

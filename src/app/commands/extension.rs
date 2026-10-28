@@ -12,14 +12,14 @@ use crate::host::protocol::{
     RequestContext,
 };
 
-use super::extensions::host::handlers::AccessError;
+use crate::app::extensions::host::handlers::AccessError;
 #[cfg(test)]
-use super::model::CommandCatalog;
+use crate::app::model::CommandCatalog;
 #[cfg(test)]
-use super::model::CommandDefinition;
+use crate::app::model::CommandDefinition;
 use crate::host::declarations::HostError;
 
-use super::{
+use crate::app::{
     CommandCompletion, CommandExecution,
     model::{CommandCatalogError, CommandTarget, SharedCommandCatalog},
 };

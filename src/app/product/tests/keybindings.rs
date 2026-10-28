@@ -633,13 +633,13 @@ fn personal_global_binding_overrides_editor_default_in_every_window(cx: &mut Tes
                 "Enter",
                 None,
                 Some(Command {
-                    name: super::super::super::product_commands::INSERT_TAB_COMMAND.into(),
+                    name: super::super::super::commands::dispatch::INSERT_TAB_COMMAND.into(),
                     arguments: CommandArgumentValue::Null,
                 }),
             )
             .unwrap();
         assert!(changed);
-        super::super::super::keymaps::rebuild(cx);
+        super::super::super::commands::keymaps::rebuild(cx);
     });
     cx.refresh().unwrap();
     for (window, _) in &windows {
@@ -672,7 +672,7 @@ fn unbinding_an_unmapped_letter_preserves_editor_input(cx: &mut TestAppContext) 
                 .set(owner, "a", Some("editor"), None)
                 .unwrap()
         );
-        super::super::super::keymaps::rebuild(cx);
+        super::super::super::commands::keymaps::rebuild(cx);
     });
     cx.refresh().unwrap();
     cx.simulate_keystrokes(window, "a");
@@ -703,7 +703,7 @@ async fn editor_unbind_leaves_global_binding_available_in_terminal(cx: &mut Test
                 )
                 .unwrap()
         );
-        super::super::super::keymaps::rebuild(cx);
+        super::super::super::commands::keymaps::rebuild(cx);
     });
     cx.refresh().unwrap();
     cx.simulate_keystrokes(window, if cfg!(windows) { "ctrl-n" } else { "cmd-n" });
@@ -771,7 +771,7 @@ fn unavailable_high_priority_binding_does_not_invoke_native_default(cx: &mut Tes
                 )
                 .unwrap()
         );
-        super::super::super::keymaps::rebuild(cx);
+        super::super::super::commands::keymaps::rebuild(cx);
     });
     cx.refresh().unwrap();
     cx.simulate_keystrokes(window, if cfg!(windows) { "ctrl-n" } else { "cmd-n" });

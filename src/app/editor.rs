@@ -21,7 +21,7 @@ use crate::host::protocol::{
     CompletionResponse, DecorationToken, GutterToken, TextEdit,
 };
 
-use super::product_commands as commands;
+use super::commands::dispatch as commands;
 use super::typography::{TEXT_SIZE as FONT_SIZE, text_font as make_font};
 
 use super::{

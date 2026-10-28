@@ -25,8 +25,10 @@ use std::{
     task::{Context as TaskContext, Poll, Waker},
 };
 
-use super::product::ProductShell;
-use super::product_commands::{ApplicationProductCommands, CommandClaim, ProductCommandTarget};
+use crate::app::commands::dispatch::{
+    ApplicationProductCommands, CommandClaim, ProductCommandTarget,
+};
+use crate::app::product::ProductShell;
 use crate::host::declarations::{AsyncHandler, HandlerFuture};
 use crate::host::protocol::{Command, CommandArgumentValue, CommandOutcome};
 use gpui::{App, AppContext, Context, Window};
@@ -154,12 +156,12 @@ impl CommandContext {
         &self,
         start: impl FnOnce(
             &ProductCommandTarget,
-            super::CommandCompletion,
+            crate::app::CommandCompletion,
             &mut App,
         ) -> Result<(), CommandOutcome>
         + 'static,
     ) -> Result<CommandOutcome, CommandOutcome> {
-        let (completion, receiver) = super::CommandCompletion::new();
+        let (completion, receiver) = crate::app::CommandCompletion::new();
         let target = self.target.clone();
         self.application(move |cx| start(&target, completion, cx))
             .await??;
@@ -195,7 +197,7 @@ fn poll_command<T>(
     }
 }
 
-fn complete(completion: &super::CommandCompletion, outcome: CommandOutcome, cx: &mut App) {
+fn complete(completion: &crate::app::CommandCompletion, outcome: CommandOutcome, cx: &mut App) {
     completion.complete(outcome.clone());
     if let Some(commands) = cx.try_global::<ApplicationProductCommands>() {
         let commands = commands.0.clone();
@@ -252,7 +254,7 @@ impl CommandDescriptor {
         &'static self,
         command: &Command,
         target: &ProductCommandTarget,
-        completion: super::CommandCompletion,
+        completion: crate::app::CommandCompletion,
         cx: &App,
     ) -> CommandClaim {
         if !(self.claim)(command, target, cx) {
@@ -341,7 +343,7 @@ impl CommandRegistry {
         participant: Participant,
         command: &Command,
         target: &ProductCommandTarget,
-        completion: super::CommandCompletion,
+        completion: crate::app::CommandCompletion,
         cx: &App,
     ) -> CommandClaim {
         let Some(descriptor) = self.entries.get(&(command.name.as_ref(), participant)) else {
@@ -415,8 +417,8 @@ mod tests {
     fn linked_declarations_share_copy_and_paste_metadata_without_duplicate_definitions() {
         let registry = registry();
         for name in [
-            super::super::product_commands::COPY_COMMAND,
-            super::super::product_commands::PASTE_COMMAND,
+            crate::app::commands::dispatch::COPY_COMMAND,
+            crate::app::commands::dispatch::PASTE_COMMAND,
         ] {
             assert!(registry.entries.contains_key(&(name, Participant::Editor)));
             assert!(

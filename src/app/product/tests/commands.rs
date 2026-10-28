@@ -10,7 +10,7 @@ fn product_catalog_registers_every_slice_command(cx: &mut TestAppContext) {
             .definitions()
             .map(|definition| definition.name.to_string())
             .collect::<Vec<_>>();
-        let mut expected = super::super::super::product_commands::product_command_names()
+        let mut expected = super::super::super::commands::dispatch::product_command_names()
             .map(str::to_owned)
             .collect::<Vec<_>>();
         actual.sort();
@@ -70,7 +70,7 @@ fn pooled_fixture_commands_and_completions_use_the_product_target(cx: &mut TestA
     let mut completion = dispatch_product_command(
         &shell,
         window,
-        super::super::super::product_commands::SHOW_COMPLETIONS_COMMAND,
+        super::super::super::commands::dispatch::SHOW_COMPLETIONS_COMMAND,
         cx,
     );
     cx.run_until_parked();

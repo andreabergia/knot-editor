@@ -29,7 +29,7 @@ use gpui::{
     AppContext, Focusable, Modifiers, MouseButton, TestAppContext, VisualTestContext, point, px,
 };
 
-use super::super::keymaps::{ApplicationKeymaps, BindingOwner, BindingResolution};
+use super::super::commands::keymaps::{ApplicationKeymaps, BindingOwner, BindingResolution};
 use crate::host::protocol::{
     Command, CommandArgumentValue, CommandOutcome, ExtensionId, ExtensionLifecycleId,
 };

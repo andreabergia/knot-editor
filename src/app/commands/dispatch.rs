@@ -2,14 +2,14 @@
 
 use gpui::*;
 
-use super::model::{CommandCatalog, CommandDefinition, SharedCommandCatalog};
-use super::product::ProductShell;
-use super::workbench::CommandView;
-use super::{CommandCompletion, CommandExecution};
+use crate::app::model::{CommandCatalog, CommandDefinition, SharedCommandCatalog};
+use crate::app::product::ProductShell;
+use crate::app::workbench::CommandView;
+use crate::app::{CommandCompletion, CommandExecution};
 use crate::host::protocol::{Command, CommandArgumentValue, CommandOutcome, ViewId};
 
-pub(crate) use super::editor::native_commands::*;
-pub(crate) use super::product::commands::*;
+pub(crate) use crate::app::editor::native_commands::*;
+pub(crate) use crate::app::product::commands::*;
 pub(crate) const EDITOR_MOVE_PREFIX: &str = "editor.move-";
 pub(crate) const EDITOR_SELECT_PREFIX: &str = "editor.select-";
 
@@ -36,10 +36,10 @@ impl ProductCommandSource {
 pub(crate) struct ProductCommandTarget {
     pub(crate) window: AnyWindowHandle,
     pub(crate) shell: WeakEntity<ProductShell>,
-    pub(crate) workbench: WeakEntity<super::workbench::Workbench>,
-    pub(crate) pane: super::workbench::PaneId,
-    pub(crate) tab: super::workbench::TabId,
-    pub(crate) surface: super::workbench::TabSurfaceId,
+    pub(crate) workbench: WeakEntity<crate::app::workbench::Workbench>,
+    pub(crate) pane: crate::app::workbench::PaneId,
+    pub(crate) tab: crate::app::workbench::TabId,
+    pub(crate) surface: crate::app::workbench::TabSurfaceId,
     pub(crate) presentation: Option<EntityId>,
     pub(crate) focus: WeakFocusHandle,
     pub(crate) view: Option<ViewId>,
@@ -52,7 +52,7 @@ impl ProductCommandTarget {
             .workbench
             .upgrade()
             .ok_or(CommandOutcome::InvalidTarget)?;
-        if super::product::workbench_is_live(self.window, &workbench, cx)
+        if crate::app::product::workbench_is_live(self.window, &workbench, cx)
             && workbench
                 .read(cx)
                 .capture_tab_move(self.pane, self.tab)
@@ -72,27 +72,27 @@ impl ProductCommandTarget {
         let workbench = self.workbench.upgrade()?;
         let workbench = workbench.read(cx);
         match self.surface {
-            super::workbench::TabSurfaceId::Tool(id) => {
+            crate::app::workbench::TabSurfaceId::Tool(id) => {
                 workbench.tool(id).map(|tool| tool.stable_id.clone())
             }
-            super::workbench::TabSurfaceId::Document(_)
-            | super::workbench::TabSurfaceId::Terminal(_) => None,
+            crate::app::workbench::TabSurfaceId::Document(_)
+            | crate::app::workbench::TabSurfaceId::Terminal(_) => None,
         }
     }
 
     pub(crate) fn document_id(
         &self,
         cx: &App,
-    ) -> Result<super::documents::DocumentId, CommandOutcome> {
+    ) -> Result<crate::app::documents::DocumentId, CommandOutcome> {
         self.validate_tab(cx)?;
         match self.surface {
-            super::workbench::TabSurfaceId::Document(document) => Ok(document),
-            super::workbench::TabSurfaceId::Terminal(_)
-            | super::workbench::TabSurfaceId::Tool(_) => Err(CommandOutcome::Unavailable),
+            crate::app::workbench::TabSurfaceId::Document(document) => Ok(document),
+            crate::app::workbench::TabSurfaceId::Terminal(_)
+            | crate::app::workbench::TabSurfaceId::Tool(_) => Err(CommandOutcome::Unavailable),
         }
     }
 
-    pub(crate) fn command_view(&self, cx: &App) -> Option<super::workbench::CommandView> {
+    pub(crate) fn command_view(&self, cx: &App) -> Option<crate::app::workbench::CommandView> {
         self.validate_tab(cx).ok()?;
         self.workbench
             .upgrade()?
@@ -117,7 +117,7 @@ impl ProductCommandTarget {
         if self.view.is_some_and(|view_id| {
             !matches!(
                 view,
-                super::workbench::CommandView::Extension(ref extension)
+                crate::app::workbench::CommandView::Extension(ref extension)
                     if extension.instance_id(cx) == view_id
             )
         }) {
@@ -144,7 +144,7 @@ pub(crate) enum CommandClaim {
     Finished(CommandOutcome),
     Pending(PendingCommandStart),
     Extension {
-        handler: super::model::CommandTarget,
+        handler: crate::app::model::CommandTarget,
         view: Option<ViewId>,
     },
 }
@@ -152,7 +152,7 @@ pub(crate) enum CommandClaim {
 impl ProductCommandDispatcher {
     pub(crate) fn new(_cx: &mut Context<Self>) -> Self {
         let mut catalog = CommandCatalog::new();
-        for (name, title) in super::command_declarations::registry().definitions() {
+        for (name, title) in crate::app::commands::declarations::registry().definitions() {
             catalog
                 .register_native(name.into(), title.into())
                 .expect("product command names are unique");
@@ -213,7 +213,7 @@ impl ProductCommandDispatcher {
                 },
                 CommandClaim::Extension { handler, view } => {
                     let result = if view.is_some() {
-                        super::extensions::host::start_view_command(
+                        crate::app::extensions::host::start_view_command(
                             command.clone(),
                             target.clone(),
                             handler,
@@ -221,7 +221,7 @@ impl ProductCommandDispatcher {
                             cx,
                         )
                     } else {
-                        super::extensions::host::start_global_command(
+                        crate::app::extensions::host::start_global_command(
                             command.clone(),
                             target.clone(),
                             handler,
@@ -336,7 +336,7 @@ pub(crate) fn dispatch_save_to_captured_target(
 
 pub(crate) fn dispatch_close_to_captured_target(
     target: &ProductCommandTarget,
-    kind: super::product::ProtectedCloseKind,
+    kind: crate::app::product::ProtectedCloseKind,
     completion: CommandCompletion,
     cx: &mut App,
 ) -> Result<(), CommandOutcome> {
@@ -397,35 +397,37 @@ pub(crate) fn dispatch_to_captured_target(
             && view.matches_focus(&target.focus, cx)
         {
             let result = match view {
-                CommandView::Workspace(_) => super::command_declarations::registry().dispatch(
-                    super::command_declarations::Participant::WorkspaceTree,
-                    command,
-                    &target,
-                    completion.clone(),
-                    cx,
-                ),
+                CommandView::Workspace(_) => crate::app::commands::declarations::registry()
+                    .dispatch(
+                        crate::app::commands::declarations::Participant::WorkspaceTree,
+                        command,
+                        &target,
+                        completion.clone(),
+                        cx,
+                    ),
                 CommandView::Extension(view) => view.handle_command(command, cx),
-                CommandView::Editor(_) => super::command_declarations::registry().dispatch(
-                    super::command_declarations::Participant::Editor,
+                CommandView::Editor(_) => crate::app::commands::declarations::registry().dispatch(
+                    crate::app::commands::declarations::Participant::Editor,
                     command,
                     &target,
                     completion.clone(),
                     cx,
                 ),
-                CommandView::Terminal(_) => super::command_declarations::registry().dispatch(
-                    super::command_declarations::Participant::Terminal,
-                    command,
-                    &target,
-                    completion.clone(),
-                    cx,
-                ),
+                CommandView::Terminal(_) => crate::app::commands::declarations::registry()
+                    .dispatch(
+                        crate::app::commands::declarations::Participant::Terminal,
+                        command,
+                        &target,
+                        completion.clone(),
+                        cx,
+                    ),
             };
             if !matches!(result, CommandClaim::Declined) {
                 return result;
             }
         }
-        let result = super::command_declarations::registry().dispatch(
-            super::command_declarations::Participant::Workbench,
+        let result = crate::app::commands::declarations::registry().dispatch(
+            crate::app::commands::declarations::Participant::Workbench,
             command,
             &target,
             completion.clone(),
@@ -434,8 +436,8 @@ pub(crate) fn dispatch_to_captured_target(
         if !matches!(result, CommandClaim::Declined) {
             return result;
         }
-        let result = super::command_declarations::registry().dispatch(
-            super::command_declarations::Participant::Application,
+        let result = crate::app::commands::declarations::registry().dispatch(
+            crate::app::commands::declarations::Participant::Application,
             command,
             &target,
             completion,
@@ -450,7 +452,7 @@ pub(crate) fn dispatch_to_captured_target(
             .read(cx)
             .catalog();
         let handler = match catalog.borrow().resolve(command.name.as_ref()) {
-            Ok(super::model::CommandTargetKind::Extension(handler)) => handler,
+            Ok(crate::app::model::CommandTargetKind::Extension(handler)) => handler,
             _ => return CommandClaim::Declined,
         };
         CommandClaim::Extension {
@@ -463,7 +465,7 @@ pub(crate) fn dispatch_to_captured_target(
 
 #[cfg(test)]
 pub(crate) fn product_command_names() -> impl Iterator<Item = &'static str> {
-    super::command_declarations::registry()
+    crate::app::commands::declarations::registry()
         .definitions()
         .map(|(name, _)| name)
 }
