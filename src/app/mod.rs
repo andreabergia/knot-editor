@@ -29,6 +29,7 @@ mod resource;
 mod terminal;
 mod text_input;
 mod text_view;
+mod theme;
 pub(crate) mod tool_layout;
 mod transient;
 mod tree_view;

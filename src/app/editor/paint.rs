@@ -18,11 +18,11 @@ impl Render for EditorView {
         let completion = self
             .completion_surface
             .as_ref()
-            .map(|surface| surface.render(self.completion_anchor(self.model.read(cx), window)));
+            .map(|surface| surface.render(self.completion_anchor(self.model.read(cx), window, cx)));
         div()
             .id(("editor", self.element_id))
             .size_full()
-            .bg(rgb(0x1e1e1e))
+            .bg(cx.global::<Theme>().background)
             // Track focus so clicking the pane focuses this view (gpui
             // auto-focuses a tracked element on mouse-down) and so on_key_down
             // listeners below actually receive keystrokes.
@@ -130,7 +130,7 @@ impl Element for EditorElement {
             view.viewport_h = f32::from(bounds.size.height);
             if view.reveal_caret || (resized && !view.preserve_scroll_on_layout) {
                 view.ensure_cursor_visible(view.viewport_h);
-                let x = f32::from(view.caret_x(view.model.read(cx), window));
+                let x = f32::from(view.caret_x(view.model.read(cx), window, cx));
                 let width = f32::from(bounds.size.width);
                 if x < view.scroll_x {
                     view.scroll_x = x.max(0.);
@@ -159,10 +159,11 @@ impl Element for EditorElement {
         });
         let scroll_x = self.entity.read(cx).scroll_x;
         // Read the view state, compute the visible range, then read just the
-        // visible lines out of the model before painting: `ShapedLine::paint`
-        // takes `cx: &mut App`, but `entity.read(cx)` borrows `cx: &App` for
-        // as long as the borrow lives. We also pull the caret + focus handle
-        // so we can paint the caret after the lines without re-borrowing.
+        // visible lines and their runs out of the model before painting:
+        // `ShapedLine::paint` takes `cx: &mut App`, but `entity.read(cx)`
+        // borrows `cx: &App` for as long as the borrow lives. We also pull the
+        // caret, focus handle, and theme colors so we can paint without
+        // re-borrowing.
         let (
             scroll,
             scroll_max,
@@ -170,18 +171,25 @@ impl Element for EditorElement {
             caret,
             selection,
             marked,
-            decorations,
             gutter_markers,
+            colors,
             focus_handle,
             entity,
         ): EditorPaintState = {
             let view = self.entity.read(cx);
             let model = view.model.read(cx);
+            let theme = cx.global::<Theme>();
             let max = (view.line_count as f32) * LINE_HEIGHT;
             let first = (view.scroll / LINE_HEIGHT).floor() as usize;
             let visible_rows = (f32::from(bounds.size.height) / LINE_HEIGHT).ceil() as usize + 1;
             let last = (first + visible_rows).min(view.line_count);
-            let vis = (first..last).map(|ix| (ix, line_text(model, ix))).collect();
+            let vis = (first..last)
+                .map(|ix| {
+                    let text = line_text(model, ix);
+                    let runs = view.line_runs(ix, &text, cx);
+                    (ix, text, runs)
+                })
+                .collect();
             // Only paint the caret when it's on a visible line; otherwise it
             // is clipped anyway, so skip the shaping cost.
             let caret = if view.cursor_line >= first && view.cursor_line < last {
@@ -196,18 +204,11 @@ impl Element for EditorElement {
                 let e = flat_utf16_to_position(model, mr.end);
                 (s, e)
             });
-            // Only copy decorations that fall on visible lines.
-            let decorations = view
-                .decorations
-                .iter()
-                .filter(|a| a.line >= first && a.line < last)
-                .copied()
-                .collect();
             let gutter_markers = if view.rendering.show_gutter_markers {
                 view.gutter_markers
                     .iter()
                     .filter(|marker| marker.line >= first && marker.line < last)
-                    .copied()
+                    .map(|marker| (marker.line, theme.underline_color(marker.highlight)))
                     .collect()
             } else {
                 Vec::new()
@@ -219,8 +220,13 @@ impl Element for EditorElement {
                 caret,
                 view.selection_range(),
                 marked,
-                decorations,
                 gutter_markers,
+                PaintColors {
+                    selection: theme.selection,
+                    caret: theme.caret,
+                    marked_text: theme.marked_text,
+                    scrollbar: theme.scrollbar,
+                },
                 view.focus.clone(),
                 self.entity.clone(),
             )
@@ -267,7 +273,7 @@ impl Element for EditorElement {
             // `x_for_index_dir` for per-character direction detection.
             let shaped: Vec<(usize, ShapedLine, Pixels, &str)> = vis
                 .iter()
-                .filter_map(|(ix, line)| {
+                .filter_map(|(ix, line, runs)| {
                     if line.is_empty() {
                         return None;
                     }
@@ -275,7 +281,7 @@ impl Element for EditorElement {
                         window,
                         SharedString::from(line.clone()),
                         font_size,
-                        &runs_for(line),
+                        runs,
                     );
                     let x_off = if is_rtl_line(line) {
                         (pane_w - s.width).max(px(0.))
@@ -293,7 +299,7 @@ impl Element for EditorElement {
             // selection reads as contiguous), and partial spans for the start
             // and end lines. Empty boundary lines paint nothing (zero-width).
             if let Some((start, end)) = selection {
-                let sel_color = hsla(0.6, 0.7, 0.55, 0.35);
+                let sel_color = colors.selection;
                 let pane_w = bounds.size.width;
                 for (ix, s, x_off, line_str) in &shaped {
                     if *ix < start.0 || *ix > end.0 {
@@ -332,7 +338,7 @@ impl Element for EditorElement {
                 // Empty interior lines: no shaped line above, so paint a
                 // full-width highlight here so the selection looks unbroken
                 // across blank lines.
-                for (ix, line) in &vis {
+                for (ix, line, _) in &vis {
                     if line.is_empty() && *ix > start.0 && *ix < end.0 {
                         let top = bounds.origin.y + px(*ix as f32 * LINE_HEIGHT) - px(scroll);
                         let rect = Bounds {
@@ -359,7 +365,7 @@ impl Element for EditorElement {
             // for interior lines, partial for start/end (same partition as
             // selection but with underline styling instead of fill).
             if let Some((start, end)) = marked {
-                let mark_color = hsla(0.0, 0.0, 0.7, 0.8);
+                let mark_color = colors.marked_text;
                 let underline_h = px(1.5);
                 let pane_w = bounds.size.width;
                 for (ix, s, x_off, line_str) in &shaped {
@@ -419,64 +425,16 @@ impl Element for EditorElement {
                     origin: point(bounds.origin.x + x_off + caret_x, top),
                     size: size(px(2.), line_height),
                 };
-                window.paint_quad(fill(caret_bounds, hsla(0., 0., 0.9, 1.0)));
+                window.paint_quad(fill(caret_bounds, colors.caret));
             }
 
-            // Decoration overlay: wavy underlines beneath contributed byte
-            // spans, painted AFTER text + caret so they sit on top. Each
-            // decoration is a (line, start_byte_col, end_byte_col, color)
-            // tuple; we reuse the already-shaped lines to get the x
-            // coordinates via `x_for_index`, then call `paint_underline`
-            // with `wavy: true`. The underline y follows the same formula
-            // the line painter uses internally:
-            //   padding_top + ascent + descent * 0.618
-            // below the line's top edge, so the squiggle sits just below the
-            // text baseline. Decorations on empty lines (no shaped line) are
-            // skipped — a zero-width wavy line would be invisible anyway.
-            if !decorations.is_empty() {
-                for ann in &decorations {
-                    let (shaped_line, x_off, line_str) =
-                        match shaped.iter().find(|(ix, _, _, _)| *ix == ann.line) {
-                            Some((_, s, x_off, line_str)) => (s, *x_off, *line_str),
-                            None => continue,
-                        };
-                    let x0 = x_for_index_dir(shaped_line, ann.start, line_str);
-                    let x1 = x_for_index_dir(shaped_line, ann.end, line_str);
-                    let (origin_x, width) = if x0 <= x1 {
-                        (x0, (x1 - x0).max(px(0.)))
-                    } else {
-                        (x1, (x0 - x1).max(px(0.)))
-                    };
-                    if width <= px(0.) {
-                        continue;
-                    }
-                    let ascent = shaped_line.ascent;
-                    let descent = shaped_line.descent;
-                    let padding_top = (line_height - ascent - descent) / 2.;
-                    let underline_y = bounds.origin.y + px(ann.line as f32 * LINE_HEIGHT)
-                        - px(scroll)
-                        + padding_top
-                        + ascent
-                        + descent * 0.618;
-                    window.paint_underline(
-                        point(bounds.origin.x + x_off + origin_x, underline_y),
-                        width,
-                        &UnderlineStyle {
-                            thickness: px(1.5),
-                            color: Some(rgb(ann.color).into()),
-                            wavy: true,
-                        },
-                    );
-                }
-            }
-
-            for marker in &gutter_markers {
-                let top = bounds.origin.y + px(marker.line as f32 * LINE_HEIGHT) - px(scroll);
+            for (line, color) in &gutter_markers {
+                let top = bounds.origin.y + px(*line as f32 * LINE_HEIGHT) - px(scroll);
                 let marker_bounds = Bounds {
                     origin: point(bounds.origin.x + px(3.), top + px(6.)),
                     size: size(px(7.), px(7.)),
                 };
-                window.paint_quad(fill(marker_bounds, rgb(marker.color)));
+                window.paint_quad(fill(marker_bounds, *color));
             }
             shaped
                 .iter()
@@ -503,19 +461,27 @@ impl Element for EditorElement {
                 origin: point(bounds.origin.x + bounds.size.width - px(track), px(thumb_y)),
                 size: size(px(track), px(thumb_h)),
             };
-            window.paint_quad(fill(thumb_bounds, hsla(0., 0., 0.6, 0.4)));
+            window.paint_quad(fill(thumb_bounds, colors.scrollbar));
         }
     }
 }
 pub(super) type EditorPaintState = (
     f32,
     f32,
-    Vec<(usize, String)>,
+    Vec<(usize, String, Vec<TextRun>)>,
     Option<(usize, usize)>,
     Option<((usize, usize), (usize, usize))>,
     Option<((usize, usize), (usize, usize))>,
-    Vec<RenderedDecoration>,
-    Vec<RenderedGutterMarker>,
+    Vec<(usize, Hsla)>,
+    PaintColors,
     FocusHandle,
     Entity<EditorView>,
 );
+
+/// Theme colors copied out for one paint.
+pub(super) struct PaintColors {
+    selection: Hsla,
+    caret: Hsla,
+    marked_text: Hsla,
+    scrollbar: Hsla,
+}

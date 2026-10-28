@@ -38,26 +38,25 @@ use super::{
     completion::{CompletionController, CompletionProviderRegistration, CompletionSurface},
     history::{EditGroupKind, EditGrouping, HistoryViewChange, HistoryViewState},
     model::{BufferModel, ContributionSource, ResolvedEditorContribution},
+    theme::{Highlight, Theme},
 };
 
 static NEXT_HISTORY_CONTEXT: AtomicU64 = AtomicU64::new(1);
 
-/// One diagnostic decoration to render as a wavy underline overlay. `start`
-/// and `end` are byte columns within `line`; `color` is an RGB u32. This is
-/// the minimal model needed by the current paint path. Provider metadata such
-/// as severity, message, and source is not represented yet.
+/// One contributed decoration segment, styled through the decoration
+/// highlight layers. `start` and `end` are byte columns within `line`.
 #[derive(Clone, Copy)]
 struct RenderedDecoration {
     line: usize,
     start: usize,
     end: usize,
-    color: u32,
+    token: DecorationToken,
 }
 
 #[derive(Clone, Copy)]
 struct RenderedGutterMarker {
     line: usize,
-    color: u32,
+    highlight: Highlight,
 }
 
 #[derive(Clone)]
@@ -104,11 +103,6 @@ pub(crate) struct EditorViewState {
     pub(crate) top: usize,
     pub(crate) scroll_x: f32,
 }
-
-const DEFAULT_COLOR: u32 = 0xC0C0C0;
-const ERROR_COLOR: u32 = 0xF48771;
-const WARNING_COLOR: u32 = 0xE2C08D;
-const INFO_COLOR: u32 = 0x6CB6FF;
 
 pub struct EditorView {
     element_id: usize,
@@ -298,6 +292,7 @@ impl EditorView {
         rendering: EditorRenderingOptions,
         cx: &mut Context<Self>,
     ) -> Self {
+        cx.default_global::<Theme>();
         let (line_count, seen_revision, (decorations, gutter_markers, contribution_actions)) = {
             let model = model.read(cx);
             (
@@ -628,7 +623,7 @@ fn project_contributions(
         if let Some(token) = contribution.gutter {
             gutter_markers.push(RenderedGutterMarker {
                 line: first_line,
-                color: gutter_color(token),
+                highlight: gutter_highlight(token),
             });
         }
 
@@ -651,7 +646,7 @@ fn project_contributions(
                     line,
                     start: segment_start - line_start,
                     end: segment_end - line_start,
-                    color: decoration_color(token),
+                    token,
                 });
             }
 
@@ -675,20 +670,20 @@ fn project_contributions(
     (decorations, gutter_markers, actions)
 }
 
-fn decoration_color(token: DecorationToken) -> u32 {
-    match token {
-        DecorationToken::Info => INFO_COLOR,
-        DecorationToken::Warning => WARNING_COLOR,
-        DecorationToken::Error => ERROR_COLOR,
-    }
+fn decoration_highlight(token: DecorationToken) -> Highlight {
+    Highlight::named(match token {
+        DecorationToken::Info => "diagnostic.info",
+        DecorationToken::Warning => "diagnostic.warning",
+        DecorationToken::Error => "diagnostic.error",
+    })
 }
 
-fn gutter_color(token: GutterToken) -> u32 {
-    match token {
-        GutterToken::Info => INFO_COLOR,
-        GutterToken::Warning => WARNING_COLOR,
-        GutterToken::Error => ERROR_COLOR,
-    }
+fn gutter_highlight(token: GutterToken) -> Highlight {
+    Highlight::named(match token {
+        GutterToken::Info => "diagnostic.info",
+        GutterToken::Warning => "diagnostic.warning",
+        GutterToken::Error => "diagnostic.error",
+    })
 }
 
 impl Focusable for EditorView {

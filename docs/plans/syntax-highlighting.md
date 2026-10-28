@@ -201,9 +201,16 @@ fresh.
    snapshot p50 19 µs, p99 33 µs, and a full streamed `chunk_at` read 0.39 ms
    (`snapshot_cost_on_large_buffer`, ignored). The snapshot module carries
    `dead_code` allowances until checkpoint 3 takes snapshots.
-2. 📝 **Theme and layered runs.** `Theme` global, the highlight vocabulary, and
+2. ✅ **Theme and layered runs.** `Theme` global, the highlight vocabulary, and
    the layer merge feeding `runs_for`; decorations move onto the layer path.
    View tests cover run composition with a fixture layer, tabs, and RTL lines.
+   `src/app/theme.rs` holds the vocabulary (plus `diagnostic.*` for
+   decorations) and the dark palette; `runs_for` in `src/app/editor/layout.rs`
+   merges layers, and `EditorView::line_runs` is where checkpoint 3 adds the
+   syntax layer beneath the decoration layers. Every shaping path (paint,
+   caret, hit testing, IME bounds, completion anchor) uses the same runs, so
+   bold and italic highlights keep geometry consistent. Decoration underlines
+   are now text-run underlines rather than a separate overlay.
 3. 📝 **Native syntax engine.** Grammar table, `SyntaxState`, incremental edits,
    budgeted foreground parse with background continuation, visible-range
    highlight queries. Tests: after random edit sequences, incremental spans equal

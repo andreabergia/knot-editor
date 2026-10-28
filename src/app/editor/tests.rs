@@ -5,11 +5,15 @@ use gpui::{
 
 use super::{
     BufferModel, ContributionSource, EditorRenderingOptions, EditorView, EditorViewState,
-    LINE_HEIGHT, ResolvedEditorContribution, flat_utf16_to_position, project_contributions,
-    to_flat_utf16,
+    LINE_HEIGHT, ResolvedEditorContribution, flat_utf16_to_position,
+    layout::{HighlightSpan, runs_for, shape_editor_line, x_for_index_dir},
+    project_contributions, to_flat_utf16,
 };
 use crate::{
-    app::completion::CompletionProviderRegistry,
+    app::{
+        completion::CompletionProviderRegistry,
+        theme::{Highlight, Theme},
+    },
     host::protocol::{
         BufferHandle, ByteRange, CompletionResponse, CompletionResultItem, DecorationToken,
         EditorContribution, ExtensionId, ExtensionLifecycleId, GutterToken,
@@ -235,13 +239,14 @@ fn tabs_hit_testing_and_horizontal_reveal_share_geometry(cx: &mut TestAppContext
         editor.update(cx, |view, cx| {
             view.cursor_col = 1;
             let model = view.model.read(cx);
-            let tab_x = view.caret_x(model, window);
+            let tab_x = view.caret_x(model, window, cx);
             assert!(f32::from(tab_x) > 20.);
             assert_eq!(
                 view.hit_test(
                     model,
                     point(view.bounds.origin.x + tab_x, view.bounds.origin.y + px(5.)),
-                    window
+                    window,
+                    cx
                 ),
                 (0, 1)
             );
@@ -271,7 +276,7 @@ fn mouse_selection_keeps_press_anchor_across_reversal_and_ignores_foreign_drags(
             let position = |view: &mut EditorView, col, cx: &gpui::App| {
                 view.cursor_col = col;
                 point(
-                    view.bounds.origin.x + view.caret_x(view.model.read(cx), window),
+                    view.bounds.origin.x + view.caret_x(view.model.read(cx), window, cx),
                     view.bounds.origin.y + px(5.),
                 )
             };
@@ -907,5 +912,157 @@ fn selection_tracks_a_deletion_from_another_view(cx: &mut TestAppContext) {
         assert_eq!((second.anchor_line, second.anchor_col), (0, 3));
         assert_eq!((second.cursor_line, second.cursor_col), (0, 6));
         assert!(second.has_selection);
+    });
+}
+
+fn span(range: std::ops::Range<usize>, name: &str) -> HighlightSpan {
+    HighlightSpan {
+        range,
+        highlight: Highlight::named(name),
+    }
+}
+
+/// Each run as `(len, color, underline color)`.
+fn run_styles(runs: &[gpui::TextRun]) -> Vec<(usize, gpui::Hsla, Option<gpui::Hsla>)> {
+    runs.iter()
+        .map(|run| {
+            let underline = run.underline.and_then(|underline| underline.color);
+            (run.len, run.color, underline)
+        })
+        .collect()
+}
+
+#[test]
+fn layered_runs_apply_layers_in_order_and_fill_gaps() {
+    let theme = Theme::dark();
+    let color = |name| theme.style(Highlight::named(name)).color.unwrap();
+    let error = Some(theme.underline_color(Highlight::named("diagnostic.error")));
+    let fg = theme.foreground;
+    let text = "let x = \"é\";";
+    let syntax = [
+        span(0..3, "keyword"),
+        span(4..5, "variable"),
+        span(8..12, "string"),
+    ];
+    let semantic = [span(0..3, "type")];
+    let decorations = [span(6..11, "diagnostic.error")];
+
+    let runs = runs_for(text, &[&syntax, &semantic, &decorations], &theme);
+    assert_eq!(
+        run_styles(&runs),
+        [
+            (3, color("type"), None),
+            (1, fg, None),
+            (1, color("variable"), None),
+            (1, fg, None),
+            (2, fg, error),
+            (3, color("string"), error),
+            (1, color("string"), None),
+            (1, fg, None),
+        ]
+    );
+    assert_eq!(runs.iter().map(|run| run.len).sum::<usize>(), text.len());
+}
+
+#[test]
+fn layered_runs_merge_equal_styles_and_clip_to_the_line() {
+    let theme = Theme::dark();
+    let keyword = theme.style(Highlight::named("keyword")).color.unwrap();
+    let layer = [
+        span(0..2, "keyword"),
+        span(2..4, "keyword"),
+        span(5..99, "keyword"),
+    ];
+    assert_eq!(
+        run_styles(&runs_for("abcd e", &[&layer], &theme)),
+        [
+            (4, keyword, None),
+            (1, theme.foreground, None),
+            (1, keyword, None)
+        ]
+    );
+    assert!(runs_for("", &[&layer], &theme).is_empty());
+    assert_eq!(
+        run_styles(&runs_for("plain", &[], &theme)),
+        [(5, theme.foreground, None)]
+    );
+
+    let comment = [span(0..5, "comment")];
+    let runs = runs_for("plain", &[&comment], &theme);
+    assert_eq!(runs[0].font.style, gpui::FontStyle::Italic);
+}
+
+#[gpui::test]
+fn layered_runs_keep_tab_and_rtl_geometry(cx: &mut TestAppContext) {
+    let model = cx.new(|_| BufferModel::from_text(""));
+    let (_, cx) = cx.add_window_view(|_, cx| EditorView::new(model, cx));
+    let theme = Theme::dark();
+    cx.update(|window, _| {
+        for text in ["\tfoo\tbar(baz)\t", "مرحبا بالعالم", "\tשלום world"] {
+            let layer: Vec<HighlightSpan> = text
+                .char_indices()
+                .map(|(start, ch)| span(start..start + ch.len_utf8(), "string"))
+                .collect();
+            let plain =
+                shape_editor_line(window, text.into(), px(14.), &runs_for(text, &[], &theme));
+            let layered = shape_editor_line(
+                window,
+                text.into(),
+                px(14.),
+                &runs_for(text, &[&layer], &theme),
+            );
+            assert_eq!(layered.width, plain.width, "{text:?}");
+            for (index, _) in text.char_indices() {
+                assert_eq!(
+                    x_for_index_dir(&layered, index, text),
+                    x_for_index_dir(&plain, index, text),
+                    "{text:?} at {index}"
+                );
+            }
+        }
+    });
+}
+
+#[gpui::test]
+fn overlapping_decorations_underline_with_the_most_severe(cx: &mut TestAppContext) {
+    let model = cx.new(|_| BufferModel::from_text("abcdefgh"));
+    let editor = cx.new(|cx| EditorView::new(model.clone(), cx));
+    let decoration = |range: std::ops::Range<usize>, token| EditorContribution {
+        range: ByteRange {
+            start_byte_offset: range.start,
+            end_byte_offset: range.end,
+        },
+        decoration: Some(token),
+        gutter: None,
+        command: None,
+    };
+    model.update(cx, |model, cx| {
+        model
+            .replace_contributions(
+                ContributionSource::fixture(),
+                &[
+                    decoration(0..4, DecorationToken::Warning),
+                    decoration(1..3, DecorationToken::Warning),
+                    decoration(2..6, DecorationToken::Error),
+                ],
+                model.revision(),
+            )
+            .unwrap();
+        cx.notify();
+    });
+    cx.run_until_parked();
+
+    cx.read(|cx| {
+        let theme = cx.global::<Theme>();
+        let underline = |name| Some(theme.underline_color(Highlight::named(name)));
+        let fg = theme.foreground;
+        assert_eq!(
+            run_styles(&editor.read(cx).line_runs(0, "abcdefgh", cx)),
+            [
+                (2, fg, underline("diagnostic.warning")),
+                (4, fg, underline("diagnostic.error")),
+                (2, fg, None),
+            ]
+        );
     });
 }

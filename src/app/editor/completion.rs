@@ -111,18 +111,14 @@ impl EditorView {
         &self,
         model: &BufferModel,
         window: &mut Window,
+        cx: &App,
     ) -> Point<Pixels> {
         let line = self.cursor_line;
         let text = line_text(model, line);
         let x = if text.is_empty() {
             px(0.)
         } else {
-            let shaped = shape_editor_line(
-                window,
-                SharedString::from(text.clone()),
-                px(FONT_SIZE),
-                &runs_for(&text),
-            );
+            let shaped = self.shape_line(line, &text, window, cx);
             self.line_x_offset(&text, shaped.width, self.bounds.size.width)
                 + x_for_index_dir(&shaped, self.cursor_col, &text)
         };

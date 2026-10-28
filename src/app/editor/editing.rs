@@ -173,9 +173,9 @@ impl EditorView {
                 };
                 let x = self
                     .preferred_x
-                    .unwrap_or_else(|| self.caret_x(model, window));
+                    .unwrap_or_else(|| self.caret_x(model, window, cx));
                 self.preferred_x = Some(x);
-                (line, self.column_for_x(model, line, x, window))
+                (line, self.column_for_x(model, line, x, window, cx))
             }
             _ => return false,
         };

@@ -4,10 +4,60 @@
 use super::*;
 
 impl EditorView {
-    pub(super) fn caret_x(&self, model: &BufferModel, window: &Window) -> Pixels {
+    /// Text runs for `line`, whose content is `text`, from the view's
+    /// highlight layers.
+    pub(super) fn line_runs(&self, line: usize, text: &str, cx: &App) -> Vec<TextRun> {
+        let decorations = self.decoration_layers(line);
+        let layers = decorations.each_ref().map(Vec::as_slice);
+        runs_for(text, &layers, cx.global::<Theme>())
+    }
+
+    /// Shape `line`, whose content is `text`, with its highlight runs.
+    pub(super) fn shape_line(
+        &self,
+        line: usize,
+        text: &str,
+        window: &Window,
+        cx: &App,
+    ) -> ShapedLine {
+        let runs = self.line_runs(line, text, cx);
+        shape_editor_line(window, text.to_owned().into(), px(FONT_SIZE), &runs)
+    }
+
+    /// The decorations on `line`, one layer per severity in increasing
+    /// order so the most severe underline wins where they overlap.
+    fn decoration_layers(&self, line: usize) -> [Vec<HighlightSpan>; 3] {
+        let severities = [
+            DecorationToken::Info,
+            DecorationToken::Warning,
+            DecorationToken::Error,
+        ];
+        severities.map(|token| {
+            let mut ranges: Vec<Range<usize>> = self
+                .decorations
+                .iter()
+                .filter(|decoration| decoration.line == line && decoration.token == token)
+                .map(|decoration| decoration.start..decoration.end)
+                .collect();
+            ranges.sort_unstable_by_key(|range| range.start);
+            let mut merged: Vec<Range<usize>> = Vec::new();
+            for range in ranges {
+                match merged.last_mut() {
+                    Some(last) if range.start <= last.end => last.end = last.end.max(range.end),
+                    _ => merged.push(range),
+                }
+            }
+            let highlight = decoration_highlight(token);
+            merged
+                .into_iter()
+                .map(|range| HighlightSpan { range, highlight })
+                .collect()
+        })
+    }
+
+    pub(super) fn caret_x(&self, model: &BufferModel, window: &Window, cx: &App) -> Pixels {
         let text = line_text(model, self.cursor_line);
-        let shaped =
-            shape_editor_line(window, text.clone().into(), px(FONT_SIZE), &runs_for(&text));
+        let shaped = self.shape_line(self.cursor_line, &text, window, cx);
         x_for_index_dir(&shaped, self.cursor_col, &text)
             + self.line_x_offset(&text, shaped.width, self.bounds.size.width)
             + px(self.scroll_x)
@@ -19,10 +69,10 @@ impl EditorView {
         line: usize,
         x: Pixels,
         window: &Window,
+        cx: &App,
     ) -> usize {
         let text = line_text(model, line);
-        let shaped =
-            shape_editor_line(window, text.clone().into(), px(FONT_SIZE), &runs_for(&text));
+        let shaped = self.shape_line(line, &text, window, cx);
         let offset =
             self.line_x_offset(&text, shaped.width, self.bounds.size.width) + px(self.scroll_x);
         text.grapheme_indices(true)
@@ -92,19 +142,71 @@ pub(super) fn shape_editor_line(
         .shape_line(expand_tabs(&text).into(), font_size, &projected_runs, None)
 }
 
-/// One default-styled run covering the whole line.
-pub(super) fn runs_for(line: &str) -> Vec<TextRun> {
+/// A highlight over a line-relative byte range.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct HighlightSpan {
+    pub(super) range: Range<usize>,
+    pub(super) highlight: Highlight,
+}
+
+/// Compose `line`'s text runs from ordered highlight layers.
+///
+/// Each layer's spans are sorted and non-overlapping, on char boundaries, and
+/// may extend past the line, which clips them. Layers apply in order, so a
+/// later layer's color and font override an earlier one's and its underline
+/// joins them. Bytes no span covers use the theme's foreground.
+pub(super) fn runs_for(line: &str, layers: &[&[HighlightSpan]], theme: &Theme) -> Vec<TextRun> {
     if line.is_empty() {
         return Vec::new();
     }
-    vec![TextRun {
-        len: line.len(),
-        font: make_font(false, false),
-        color: rgb(DEFAULT_COLOR).into(),
-        background_color: None,
-        underline: None,
-        strikethrough: None,
-    }]
+    let mut boundaries = vec![0, line.len()];
+    for span in layers.iter().flat_map(|layer| layer.iter()) {
+        boundaries.extend([
+            span.range.start.min(line.len()),
+            span.range.end.min(line.len()),
+        ]);
+    }
+    boundaries.sort_unstable();
+    boundaries.dedup();
+
+    let mut cursors = vec![0; layers.len()];
+    let mut runs: Vec<(usize, HighlightStyle)> = Vec::new();
+    for segment in boundaries.windows(2) {
+        let (start, end) = (segment[0], segment[1]);
+        let mut style = HighlightStyle::default();
+        for (layer, cursor) in layers.iter().zip(&mut cursors) {
+            while layer
+                .get(*cursor)
+                .is_some_and(|span| span.range.end <= start)
+            {
+                *cursor += 1;
+            }
+            if let Some(span) = layer.get(*cursor)
+                && span.range.start <= start
+            {
+                style = style.highlight(theme.style(span.highlight));
+            }
+        }
+        match runs.last_mut() {
+            Some((len, last)) if *last == style => *len += end - start,
+            _ => runs.push((end - start, style)),
+        }
+    }
+    runs.into_iter()
+        .map(|(len, style)| {
+            let mut font = make_font(false, false);
+            font.weight = style.font_weight.unwrap_or(font.weight);
+            font.style = style.font_style.unwrap_or(font.style);
+            TextRun {
+                len,
+                font,
+                color: style.color.unwrap_or(theme.foreground),
+                background_color: None,
+                underline: style.underline,
+                strikethrough: style.strikethrough,
+            }
+        })
+        .collect()
 }
 
 /// Heuristic: is this line's base direction right-to-left? Scans for the

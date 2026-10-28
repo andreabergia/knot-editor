@@ -19,7 +19,7 @@ impl EditorView {
         self.break_history_group(cx);
         self.drag_anchor = None;
         self.marked_range_utf16 = None;
-        let (line, col) = self.hit_test(self.model.read(cx), ev.position, window);
+        let (line, col) = self.hit_test(self.model.read(cx), ev.position, window, cx);
         let gutter = ev.position.x <= self.bounds.origin.x + px(14.);
         if let Some(action) = self.contribution_actions.iter().rev().find(|action| {
             action.line == line
@@ -120,7 +120,7 @@ impl EditorView {
         let Some(anchor) = self.drag_anchor else {
             return;
         };
-        let (line, col) = self.hit_test(self.model.read(cx), ev.position, window);
+        let (line, col) = self.hit_test(self.model.read(cx), ev.position, window, cx);
         (self.anchor_line, self.anchor_col) = anchor;
         self.cursor_line = line;
         self.cursor_col = col;
@@ -140,6 +140,7 @@ impl EditorView {
         model: &BufferModel,
         p: Point<Pixels>,
         window: &Window,
+        cx: &App,
     ) -> (usize, usize) {
         let origin = self.bounds.origin;
         let line = ((f32::from(p.y - origin.y) + self.scroll) / LINE_HEIGHT).floor() as usize;
@@ -148,12 +149,7 @@ impl EditorView {
         if text.is_empty() {
             return (line, 0);
         }
-        let shaped = shape_editor_line(
-            window,
-            SharedString::from(text.clone()),
-            px(FONT_SIZE),
-            &runs_for(&text),
-        );
+        let shaped = self.shape_line(line, &text, window, cx);
         let x = p.x - origin.x - self.line_x_offset(&text, shaped.width, self.bounds.size.width);
         let col = text
             .grapheme_indices(true)
@@ -334,12 +330,7 @@ impl EntityInputHandler for EditorView {
             });
         }
 
-        let shaped = shape_editor_line(
-            window,
-            SharedString::from(line_str.clone()),
-            px(FONT_SIZE),
-            &runs_for(&line_str),
-        );
+        let shaped = self.shape_line(line, &line_str, window, cx);
         let x0 = x_for_index_dir(&shaped, start_col, &line_str);
         let x1 = if start_line == end_line {
             x_for_index_dir(&shaped, end_col, &line_str)
@@ -366,7 +357,7 @@ impl EntityInputHandler for EditorView {
         cx: &mut Context<Self>,
     ) -> Option<usize> {
         let model = self.model.read(cx);
-        let (line, col) = self.hit_test(model, point, window);
+        let (line, col) = self.hit_test(model, point, window, cx);
         Some(to_flat_utf16(model, line, col))
     }
 }
