@@ -27,12 +27,11 @@ instead of a private text copy, typing coalesces in the piece table, the
 consumed edit log is discarded, and inserted newlines follow the buffer's line
 ending. D002 and D031 can build on the view's line model.
 
-The remaining [health review](plans/codebase-health-review.md) findings
-(P1-6, P2-1–P2-4) come next as pure-move maintenance between slices: the
-`engine.rs` split and marshaling unification, command module regrouping,
-`app/terminal` and `app/extensions` directories, an `editor.rs` split into
-input, movement, and painting, inline test extraction, and tokio runtime
-removal. This work takes priority over the deferred register.
+The codebase health review is complete. The V8 engine and the editor view are
+split by concern, terminal, extension, and command modules live in their own
+directories, large test modules sit beside their code, and local filesystem I/O
+no longer needs a tokio runtime. No slice is selected next; choose from the
+deferred register.
 
 ## Deferred register
 

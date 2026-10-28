@@ -130,6 +130,15 @@ requests run in the dispatch turn to preserve key-command/text-input ordering;
 suspended work holds no gpui borrow. Synchronous participant selection preserves
 focus precedence and inline extension composition.
 
+V8 values that are not host-operation arguments keep hand-written decoders and
+encoders in the engine's marshaling module: provider results, command outcomes
+returned by extension handlers, and events and buffer changes delivered to
+listeners. They cross in the other direction, where Rust invokes JavaScript, so
+no handler descriptor exists to drive them, and each type has exactly one
+decoder rather than a parallel registration. The declaration reader delegates
+to the same decoders for ranges, edits, contributions, command arguments, and
+destinations, so both directions share one conversion per type.
+
 References: [extension host](architecture/extension-host.md) and
 [commands](architecture/commands.md).
 
