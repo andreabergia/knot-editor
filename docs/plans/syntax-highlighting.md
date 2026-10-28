@@ -64,9 +64,9 @@ grammar ID. The first set:
 | Group | Grammars |
 | --- | --- |
 | Web | `html`, `css`, `javascript` (includes JSX), `typescript`, `tsx` |
-| Systems | `rust`, `c`, `cpp`, `go` |
+| Systems | `rust`, `c`, `cpp`, `go`, `java` |
 | Scripting | `python`, `bash` |
-| Data and docs | `json` (also serves JSONC), `toml`, `yaml`, `markdown`, `markdown_inline` |
+| Data and docs | `json` (also serves JSONC), `toml`, `yaml`, `sql`, `markdown`, `markdown_inline` |
 | Tooling | `query` (tree-sitter queries, which `@knot/languages` itself is written in) |
 
 Crates link through `tree-sitter-language` so grammar ABI versions are checked
@@ -222,9 +222,9 @@ fresh.
    documents), decisions with measured parse and snapshot costs, extension
    guide; remove this plan.
 
+Queries travel as strings rather than `.scm` package assets: packages stay
+JavaScript-only and installed packages need no new capture path.
+
 ## Open questions for review
 
-- Whether queries should instead be `.scm` package assets captured with the
-  module graph. Strings through the API keep packages JavaScript-only and work
-  for installed packages unchanged; assets would need a new capture path.
 - The foreground budget value, to be set from checkpoint 3 measurements.
