@@ -30,8 +30,13 @@ ending. D002 and D031 can build on the view's line model.
 The codebase health review is complete. The V8 engine and the editor view are
 split by concern, terminal, extension, and command modules live in their own
 directories, large test modules sit beside their code, and local filesystem I/O
-no longer needs a tokio runtime. No slice is selected next; choose from the
-deferred register.
+no longer needs a tokio runtime.
+
+Syntax highlighting (D002) is selected next: native incremental tree-sitter
+parsing with injections, languages registered through a bundled
+`@knot/languages` package, and a layered paint pipeline shaped for later
+language servers. See the [plan](plans/syntax-highlighting.md). Its follow-ups
+are D064–D067; D066 precedes D058.
 
 ## Deferred register
 
@@ -49,12 +54,6 @@ deferred register.
   - Deferred: These modes depend on a selected current-file Find design.
   - Reconsider: Daily use identifies required replacement, regular-expression,
     case, or whole-word behavior.
-
-- **D002 — Syntax highlighting**
-  - Deferred: Plain text is sufficient to validate safe editing and workbench
-    ownership.
-  - Reconsider: The editing loop is trustworthy and source readability becomes
-    the dominant problem.
 
 - **D006 — File drag and drop**
   - Deferred: Open and Save As establish workspace-independent documents first.
@@ -84,6 +83,27 @@ deferred register.
     steps, and which primitives (mode-aware input, reveal/scroll, macro
     recording) must become native or public. Package the result as ordinary
     personal or installed configuration rather than a privileged mode.
+    Sequence after D066, whose syntax-tree text objects and structural motions
+    a complete emulation builds on.
+
+- **D064 — Theming system**
+  - Deferred: D002 ships one built-in dark palette in a `Theme` global that
+    resolves dotted highlight names. There are no user themes, light theme,
+    or theming of non-editor surfaces.
+  - Reconsider: Daily use needs another palette or appearance-following
+    themes. Then define a theme format over the existing highlight vocabulary,
+    UI color roles for every surface, how personal config and packages
+    contribute themes, and selection and persistence with D045.
+
+- **D066 — Syntax-tree editing features and public syntax-tree API**
+  - Deferred: D002 uses tree-sitter trees only for highlighting. Folding,
+    indentation, structural selection expansion, text objects, and
+    tree-based motions are not built, and extensions cannot query the tree.
+  - Reconsider: Daily editing needs folding or language-aware indentation,
+    or D058 is selected. Then add per-language `folds`, `indents`, and
+    `textobjects` queries to language registration and expose node queries
+    through the extension API without exposing tree-sitter objects. Precedes
+    D058.
 
 - **D059 — Professional typography: ligatures and configurable font features**
   - Deferred: Surfaces use shared fixed typography defaults. Ligatures and
@@ -158,6 +178,26 @@ deferred register.
   - Reconsider: Knot opens untrusted workspaces under a security boundary.
 
 ## Extensions and automation
+
+- **D065 — Runtime grammar loading**
+  - Deferred: D002 compiles a fixed tree-sitter grammar set into the binary;
+    languages register by native grammar name, so an installed package cannot
+    add a grammar Knot does not ship.
+  - Reconsider: A user needs a language outside the bundled set. Then choose
+    WASM grammars (tree-sitter's wasm store) or native libraries, weighing
+    wasmtime's size against signing and loading native code (D035), and let
+    a registration ship its grammar.
+
+- **D067 — Language servers and semantic tokens**
+  - Deferred: No language client exists. D002 prepares for one: LSP language
+    IDs, `Send` text snapshots, a highlight vocabulary that semantic token
+    types and modifiers map onto, and a semantic-token paint layer above
+    syntax.
+  - Reconsider: Daily editing needs diagnostics, navigation, hover, or
+    semantic highlighting. Then decide whether the client is native or an
+    extension, define a whole-range semantic-token contribution that scales
+    to file-sized token counts unlike per-item anchored contributions, and
+    connect diagnostics to decorations and completion to D022.
 
 - **D032 — Extension source maps**
   - Deferred: D018 can load built JavaScript and report generated source
