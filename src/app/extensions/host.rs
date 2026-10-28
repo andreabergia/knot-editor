@@ -29,6 +29,7 @@ use crate::host::{
 };
 
 use crate::app::{
+    commands::catalog::{CommandTarget, CommandTargetKind},
     commands::dispatch::{
         ApplicationProductCommands, CommandClaim, ProductCommandTarget, dispatch_to_captured_target,
     },
@@ -37,7 +38,6 @@ use crate::app::{
     extensions::load::{DependencyPlan, LoadEntry, LoadReport, LoadResult, StartupAttempt},
     extensions::package::InstalledPackage,
     extensions::semantics::ExtensionSemanticBridge,
-    model::{CommandTarget, CommandTargetKind},
     personal_config::{self, ConfigDiagnostic, ConfigPhase},
     product::{self, ProductShell},
     transient::TransientOwner,

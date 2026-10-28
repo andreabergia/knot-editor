@@ -4,7 +4,7 @@ use crate::host::protocol::{Command, CommandArgumentValue};
 
 use super::{
     PALETTE_KEY_CONTEXT,
-    model::CommandDefinition,
+    commands::catalog::CommandDefinition,
     text_input::{TextInput, TextInputEvent},
 };
 
@@ -252,7 +252,7 @@ mod tests {
 
     use super::{CommandPalette, CommandPaletteEntry, CommandPaletteEvent};
     use crate::app::CommandOrigin;
-    use crate::app::model::{CommandDefinition, CommandOwner};
+    use crate::app::commands::catalog::{CommandDefinition, CommandOwner};
     use crate::host::protocol::{Command, CommandArgumentValue};
 
     #[gpui::test]

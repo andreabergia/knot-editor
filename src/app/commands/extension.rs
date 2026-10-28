@@ -12,16 +12,16 @@ use crate::host::protocol::{
     RequestContext,
 };
 
+#[cfg(test)]
+use super::catalog::CommandCatalog;
+#[cfg(test)]
+use super::catalog::CommandDefinition;
 use crate::app::extensions::host::handlers::AccessError;
-#[cfg(test)]
-use crate::app::model::CommandCatalog;
-#[cfg(test)]
-use crate::app::model::CommandDefinition;
 use crate::host::declarations::HostError;
 
 use crate::app::{
     CommandCompletion, CommandExecution,
-    model::{CommandCatalogError, CommandTarget, SharedCommandCatalog},
+    commands::catalog::{CommandCatalogError, CommandTarget, SharedCommandCatalog},
 };
 
 type Lifecycle = (ExtensionId, ExtensionLifecycleId);

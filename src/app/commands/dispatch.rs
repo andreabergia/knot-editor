@@ -2,7 +2,7 @@
 
 use gpui::*;
 
-use crate::app::model::{CommandCatalog, CommandDefinition, SharedCommandCatalog};
+use super::catalog::{CommandCatalog, CommandDefinition, SharedCommandCatalog};
 use crate::app::product::ProductShell;
 use crate::app::workbench::CommandView;
 use crate::app::{CommandCompletion, CommandExecution};
@@ -144,7 +144,7 @@ pub(crate) enum CommandClaim {
     Finished(CommandOutcome),
     Pending(PendingCommandStart),
     Extension {
-        handler: crate::app::model::CommandTarget,
+        handler: super::catalog::CommandTarget,
         view: Option<ViewId>,
     },
 }
@@ -452,7 +452,7 @@ pub(crate) fn dispatch_to_captured_target(
             .read(cx)
             .catalog();
         let handler = match catalog.borrow().resolve(command.name.as_ref()) {
-            Ok(crate::app::model::CommandTargetKind::Extension(handler)) => handler,
+            Ok(super::catalog::CommandTargetKind::Extension(handler)) => handler,
             _ => return CommandClaim::Declined,
         };
         CommandClaim::Extension {
