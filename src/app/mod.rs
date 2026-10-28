@@ -2,8 +2,6 @@
 
 use std::sync::{Arc, Mutex};
 
-#[cfg(test)]
-use crate::host::protocol::BufferHandle;
 use crate::host::protocol::CommandOutcome;
 
 use gpui::*;
@@ -59,14 +57,6 @@ const TERMINAL_KEY_CONTEXT: &str = "terminal";
 const PALETTE_KEY_CONTEXT: &str = "palette";
 const TEXT_INPUT_KEY_CONTEXT: &str = "text_input";
 const TRANSIENT_KEY_CONTEXT: &str = "transient";
-
-#[cfg(test)]
-#[derive(Clone, Eq, PartialEq)]
-struct CommandOrigin {
-    window: AnyWindowHandle,
-    focus: WeakFocusHandle,
-    buffer: Option<BufferHandle>,
-}
 
 struct CommandCompletionState {
     sender: Option<tokio::sync::oneshot::Sender<CommandOutcome>>,

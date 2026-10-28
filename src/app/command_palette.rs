@@ -248,12 +248,18 @@ where
 mod tests {
     use std::{cell::RefCell, rc::Rc};
 
-    use gpui::TestAppContext;
+    use gpui::{AnyWindowHandle, TestAppContext, WeakFocusHandle};
 
     use super::{CommandPalette, CommandPaletteEntry, CommandPaletteEvent};
-    use crate::app::CommandOrigin;
     use crate::app::commands::catalog::{CommandDefinition, CommandOwner};
-    use crate::host::protocol::{Command, CommandArgumentValue};
+    use crate::host::protocol::{BufferHandle, Command, CommandArgumentValue};
+
+    #[derive(Clone, Eq, PartialEq)]
+    struct CommandOrigin {
+        window: AnyWindowHandle,
+        focus: WeakFocusHandle,
+        buffer: Option<BufferHandle>,
+    }
 
     #[gpui::test]
     fn filters_by_name_and_title_and_confirms_the_selection(cx: &mut TestAppContext) {
