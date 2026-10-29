@@ -2084,9 +2084,10 @@ async fn unregister_language(
     arguments: LanguageRegistrationArguments,
 ) -> Result<(), LanguageError> {
     let request = context.request;
-    context.foreground(|host, cx| {
+    context.foreground(|_, cx| {
         if crate::app::languages::unregister(
-            host.language_owner(&request),
+            request.extension,
+            request.lifecycle,
             arguments.registration,
             cx,
         ) {

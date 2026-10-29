@@ -132,9 +132,19 @@ impl LanguageRegistry {
         Ok(self.next_id)
     }
 
-    /// Remove `owner`'s registration `id`. Returns false when it owns none.
-    pub(crate) fn unregister(&mut self, owner: LanguageOwner, id: u64) -> bool {
-        self.remove(|registration| registration.id == id && registration.owner == owner)
+    /// Remove registration `id` of one extension lifecycle. Returns false when
+    /// it owns none.
+    pub(crate) fn unregister(
+        &mut self,
+        extension: ExtensionId,
+        lifecycle: ExtensionLifecycleId,
+        id: u64,
+    ) -> bool {
+        self.remove(|registration| {
+            registration.id == id
+                && registration.owner.extension == extension
+                && registration.owner.lifecycle == lifecycle
+        })
     }
 
     /// Remove every registration of one extension lifecycle.
@@ -326,11 +336,16 @@ pub(crate) fn register(
     Ok(id)
 }
 
-pub(crate) fn unregister(owner: LanguageOwner, id: u64, cx: &mut App) -> bool {
+pub(crate) fn unregister(
+    extension: ExtensionId,
+    lifecycle: ExtensionLifecycleId,
+    id: u64,
+    cx: &mut App,
+) -> bool {
     let removed = cx
         .default_global::<ApplicationLanguages>()
         .registry
-        .unregister(owner, id);
+        .unregister(extension, lifecycle, id);
     if removed {
         refresh(cx);
     }

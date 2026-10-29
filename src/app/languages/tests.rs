@@ -92,10 +92,10 @@ fn higher_owners_define_a_language_and_removal_reveals_the_next() {
     assert_eq!(names(&registry)[1].1, "Installed");
     assert!(!Arc::ptr_eq(&personal, &registry.resolve("rust").unwrap()));
     // Only the owner can remove a registration.
-    assert!(!registry.unregister(owner(BUNDLED, 1), installed));
-    assert!(registry.unregister(owner(INSTALLED, 2), installed));
+    assert!(!registry.unregister(ExtensionId::new(1), ExtensionLifecycleId::new(1), installed));
+    assert!(registry.unregister(ExtensionId::new(2), ExtensionLifecycleId::new(1), installed));
     assert_eq!(names(&registry)[1].1, "Bundled");
-    assert!(!registry.unregister(owner(INSTALLED, 2), installed));
+    assert!(!registry.unregister(ExtensionId::new(2), ExtensionLifecycleId::new(1), installed));
 
     // A later registration wins within one owner kind.
     registry
@@ -263,7 +263,14 @@ fn documents_detect_on_open_and_follow_registration_changes(cx: &mut TestAppCont
 
     // Removal reveals the bundled claim and drops syntax for the now
     // unregistered explicit language.
-    cx.update(|cx| assert!(super::unregister(owner(INSTALLED, 2), other, cx)));
+    cx.update(|cx| {
+        assert!(super::unregister(
+            ExtensionId::new(2),
+            ExtensionLifecycleId::new(1),
+            other,
+            cx
+        ))
+    });
     assert_eq!(state(&before, cx), (Some("other".into()), true, false));
     assert_eq!(state(&after, cx), (Some("rust".into()), false, true));
 
