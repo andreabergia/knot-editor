@@ -164,6 +164,18 @@ fn detection_prefers_names_then_longest_extensions_then_interpreters() {
     );
     assert_eq!(detect(None, "# not a shebang"), None);
     assert_eq!(detect(Some("notes.txt"), ""), None);
+
+    // Precedence beats a longer extension of a lower owner.
+    registry
+        .register(
+            owner(PERSONAL, 3),
+            claiming("personal-ts", &["ts"], &[], &[]),
+        )
+        .unwrap();
+    assert_eq!(
+        registry.detect(Some("index.d.ts"), ""),
+        Some("personal-ts".into())
+    );
 }
 
 #[test]

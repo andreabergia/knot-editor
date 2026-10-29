@@ -240,9 +240,10 @@ impl LanguageRegistry {
     }
 
     /// The language a file called `file_name` whose text starts with
-    /// `first_line` should use: a registered file name, then the longest
-    /// registered extension, then the shebang interpreter. The highest
-    /// registration claiming a pattern wins it.
+    /// `first_line` should use: a registered file name, then a registered
+    /// extension, then the shebang interpreter. The highest registration
+    /// claiming a pattern wins it; among equal owners, the longest extension
+    /// or an exact interpreter wins.
     pub(crate) fn detect(&self, file_name: Option<&str>, first_line: &str) -> Option<String> {
         let best = |claim: &dyn Fn(&LanguageInfo) -> Option<usize>| {
             self.registrations

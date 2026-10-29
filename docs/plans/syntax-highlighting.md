@@ -318,8 +318,9 @@ fresh.
      within a rank; the same ranking picks the language of an ID and the
      claimant of a file name, extension, or interpreter, so removal reveals
      the next.
-   - Detection tries exact file names, then the longest case-insensitive
-     extension (so `d.ts` is possible), then the shebang program, looking
+   - Detection tries exact file names, then case-insensitive extensions
+     (so `d.ts` is possible; owner precedence first, then the longest
+     match), then the shebang program, looking
      through `env` and its options; `python3.12` also matches `python`.
      `DocumentCollection` detects on every insert (Open, untitled, restore)
      and when persistence moves a document to a new resource (Save As, a

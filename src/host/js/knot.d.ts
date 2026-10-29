@@ -128,7 +128,9 @@ declare module "knot" {
     /** Compiled-in grammar ID; see languages.grammars. */
     readonly grammar: string;
     /** Extensions without the leading dot, matched case-insensitively against
-     * the end of a file name, so "d.ts" is possible; the longest match wins. */
+     * the end of a file name, so "d.ts" is possible. The highest-precedence
+     * registration with a matching extension wins, and the longest match
+     * breaks ties within one registration owner kind. */
     readonly fileExtensions: readonly string[];
     /** Exact file names, such as "Makefile"; they win over extensions. */
     readonly fileNames: readonly string[];
