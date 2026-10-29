@@ -816,9 +816,12 @@ declare module "knot" {
     scrollX: number;
   }>;
   /** Each tab kind records only what recreates it in the same position. A
-   * terminal tab restores as a fresh shell; no process or content survives. */
+   * terminal tab restores as a fresh shell; no process or content survives.
+   * A document tab records its document's explicit language, if any;
+   * restoration applies it unless the live document already has an explicit
+   * language. */
   export type LayoutTab =
-    | Readonly<{ kind: "document"; document: DocumentId | null; uri: string | null; view: EditorViewState }>
+    | Readonly<{ kind: "document"; document: DocumentId | null; uri: string | null; view: EditorViewState; language?: string }>
     | Readonly<{ kind: "tool"; tool: string }>
     | Readonly<{ kind: "terminal" }>;
   export type LayoutNode =

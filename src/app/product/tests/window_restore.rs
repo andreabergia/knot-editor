@@ -675,3 +675,42 @@ await languages.register({
         created.borrow()
     );
 }
+
+#[gpui::test]
+fn an_explicit_language_survives_hot_exit(cx: &mut TestAppContext) {
+    let launch = Launch::new(cx);
+    launch.start(Vec::new(), cx);
+    let (_, shell) = shells(cx).remove(0);
+    let document = launch.open_file(&shell, "a/one.txt", cx);
+    let model = cx.read(|cx| {
+        documents(cx)
+            .read(cx)
+            .get(document)
+            .unwrap()
+            .model()
+            .clone()
+    });
+    // An unregistered ID is kept, so restoration needs no registration.
+    cx.update(|cx| {
+        crate::app::languages::set_document_language(
+            &model,
+            Some(&uri("a/one.txt")),
+            Some("cobol".into()),
+            cx,
+        )
+    });
+    launch.restart(Vec::new(), cx);
+
+    let (_, shell) = shells(cx).remove(0);
+    let document = first_document(&shell, cx);
+    cx.read(|cx| {
+        let model = documents(cx)
+            .read(cx)
+            .get(document)
+            .unwrap()
+            .model()
+            .read(cx);
+        assert_eq!(model.language(), Some("cobol"));
+        assert!(model.language_is_explicit());
+    });
+}

@@ -744,8 +744,9 @@ impl ProductShell {
 
     /// Arrange this fresh window from a layout. Document tabs resolve to the
     /// window's entry with the same document identity, else the same URI;
-    /// each tab kind is then recreated by its own step. Never publishes the
-    /// tool-only default.
+    /// each tab kind is then recreated by its own step. A recorded explicit
+    /// language applies unless the live document already has one. Never
+    /// publishes the tool-only default.
     fn apply_layout(
         &mut self,
         layout: &WindowLayout,
@@ -781,18 +782,38 @@ impl ProductShell {
             layout.plan(resolve, |tool| workbench.tool_by_stable_id(tool).is_some())
         };
         let documents = Self::documents(cx);
+        let mut languages_changed = false;
         let root = plan.map(|plan| {
             plan.map(&mut |tab| match tab {
-                PlannedTab::Document { document, view } => ArrangedTab::Document {
+                PlannedTab::Document {
                     document,
-                    model: documents
-                        .read(cx)
-                        .get(document)
-                        .expect("resolved documents are live")
-                        .model()
-                        .clone(),
                     view,
-                },
+                    language,
+                } => {
+                    let (model, uri) = {
+                        let live = documents
+                            .read(cx)
+                            .get(document)
+                            .expect("resolved documents are live");
+                        (live.model().clone(), live.resource_uri().cloned())
+                    };
+                    if let Some(language) = language
+                        && !model.read(cx).language_is_explicit()
+                    {
+                        crate::app::languages::set_document_language(
+                            &model,
+                            uri.as_ref(),
+                            Some(language),
+                            cx,
+                        );
+                        languages_changed = true;
+                    }
+                    ArrangedTab::Document {
+                        document,
+                        model,
+                        view,
+                    }
+                }
                 PlannedTab::Tool(tool) => ArrangedTab::Tool(
                     self.workbench
                         .read(cx)
@@ -808,6 +829,9 @@ impl ProductShell {
         let sizes = layout.dock_sizes.to_array();
         self.workbench
             .update(cx, |workbench, cx| workbench.arrange(root, sizes, cx));
+        if languages_changed {
+            crate::app::application_observation::changed(cx);
+        }
     }
 
     /// Present a document in this window's normal document group, reusing an

@@ -5,8 +5,9 @@
 //! tabs and the selected tab per pane, the focused pane, dock sizes, and each
 //! editor tab's view state. It never contains pane, tab, view, or window
 //! handles. Every tab records only what its kind needs to recreate a
-//! presentation in the same position: a document tab its document identity and
-//! resource URI, a tool tab its stable tool ID, and a terminal tab nothing.
+//! presentation in the same position: a document tab its document identity,
+//! resource URI, and explicit language, a tool tab its stable tool ID, and a
+//! terminal tab nothing.
 //!
 //! Restoring plans a pruned arrangement in one place for both restorers:
 //! unresolved documents, unregistered or repeated tools, and repeated documents
@@ -80,6 +81,10 @@ pub(crate) enum LayoutTab {
         document: Option<String>,
         uri: Option<String>,
         view: EditorViewState,
+        /// The document's explicit language; detected languages are not
+        /// recorded, so restoration detects them again.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        language: Option<String>,
     },
     Tool {
         tool: String,
@@ -183,6 +188,7 @@ impl WindowLayout {
                         .map(|tab| match tab.surface_id() {
                             TabSurfaceId::Document(id) => {
                                 let document = documents.get(id);
+                                let model = document.map(|document| document.model().read(cx));
                                 LayoutTab::Document {
                                     document: document
                                         .map(|document| document.identity().to_string()),
@@ -193,6 +199,10 @@ impl WindowLayout {
                                         .editor()
                                         .map(|editor| editor.read(cx).view_state(cx))
                                         .unwrap_or_default(),
+                                    language: model
+                                        .filter(|model| model.language_is_explicit())
+                                        .and_then(|model| model.language())
+                                        .map(ToString::to_string),
                                 }
                             }
                             TabSurfaceId::Tool(id) => LayoutTab::Tool {
@@ -327,6 +337,7 @@ impl WindowLayout {
                                 document,
                                 uri,
                                 view,
+                                language,
                             } => (state.resolve)(document.as_deref(), uri.as_deref())
                                 .filter(|resolved| {
                                     !planned.iter().any(|tab| {
@@ -336,6 +347,7 @@ impl WindowLayout {
                                 .map(|document| PlannedTab::Document {
                                     document,
                                     view: *view,
+                                    language: language.clone(),
                                 }),
                             LayoutTab::Tool { tool } => ((state.has_tool)(tool)
                                 && !state.tools.contains(tool))
@@ -440,7 +452,11 @@ impl<T> PlanNode<T> {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum PlannedTab<D> {
-    Document { document: D, view: EditorViewState },
+    Document {
+        document: D,
+        view: EditorViewState,
+        language: Option<String>,
+    },
     Tool(String),
     Terminal,
 }
@@ -577,7 +593,10 @@ mod tests {
                     "first": { "kind": "pane", "dock": "left", "selected": 0,
                                "tabs": [{ "kind": "tool", "tool": "knot.explorer" }] },
                     "second": { "kind": "pane", "dock": null, "selected": 1,
-                                "tabs": [document("a"), { "kind": "terminal" }] } }),
+                                "tabs": [document("a"), { "kind": "terminal" },
+                                         { "kind": "document", "document": "b", "uri": null,
+                                           "language": "rust",
+                                           "view": { "anchor": 0, "caret": 0, "top": 0, "scrollX": 0 } }] } }),
             Some(1),
         );
         let encoded = serde_json::to_value(&original).unwrap();
@@ -587,6 +606,8 @@ mod tests {
             serde_json::from_str(&encoded.to_string().replace(":1,", ":1.0,")).unwrap();
         assert_eq!(WindowLayout::decode(&doubles).unwrap(), original);
         let payload = encoded.to_string();
+        // Only an explicit language is recorded.
+        assert_eq!(payload.matches("\"language\"").count(), 1);
         for forbidden in ["pane\":", "tab\":", "window\":", "presentation"] {
             assert!(!payload.contains(forbidden), "layout leaks {forbidden}");
         }
@@ -622,6 +643,7 @@ mod tests {
                     "second": { "kind": "pane", "dock": "left", "selected": 3, "tabs": [
                         document("a"), document("missing"), document("a"),
                         { "kind": "document", "document": null, "uri": "mem://c",
+                          "language": "rust",
                           "view": { "anchor": 0, "caret": 0, "top": 0, "scrollX": 0 } },
                         { "kind": "terminal" },
                     ] } }),
@@ -655,10 +677,12 @@ mod tests {
                                 top: 0,
                                 scroll_x: 0.
                             },
+                            language: None,
                         },
                         PlannedTab::Document {
                             document: 3,
-                            view: view(0)
+                            view: view(0),
+                            language: Some("rust".into()),
                         },
                         PlannedTab::Terminal,
                     ],
@@ -697,6 +721,7 @@ mod tests {
                         top: 0,
                         scroll_x: 0.
                     },
+                    language: None,
                 }],
             })
         );
