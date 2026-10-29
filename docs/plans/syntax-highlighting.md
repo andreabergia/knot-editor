@@ -69,9 +69,19 @@ grammar ID. The first set:
 | Data and docs | `json` (also serves JSONC), `toml`, `yaml`, `sql`, `markdown`, `markdown_inline` |
 | Tooling | `query` (tree-sitter queries, which `@knot/languages` itself is written in) |
 
-Crates link through `tree-sitter-language` so grammar ABI versions are checked
-against the core `tree-sitter` crate at build time. Binary size and build time
-are measured when the set lands; each grammar costs C compile time once.
+Grammars come from upstream crates over the `tree-sitter` crate directly rather
+than through [arborium](https://docs.rs/arborium), which bundles grammars and
+queries behind a whole-string `Grammar::parse(&str)` highlighter: it has no
+`Tree::edit`, old-tree reuse, chunked input, progress callback, or byte-range
+query, and it ships its own queries and tag vocabulary, so the engine below
+could only use it as a grammar source tied to its `arborium-tree-sitter` fork.
+
+Every grammar crate depends on `tree-sitter-language ^0.1`, so they link
+against one `tree-sitter` 0.27; the runtime checks each ABI in `set_language`,
+and a test loads and parses a sample with every grammar. The query grammar is
+`tree-sitter-tsquery` (tree-sitter-grammars/tree-sitter-query), because the
+`tree-sitter-query` crate still targets tree-sitter 0.20. `tree-sitter-sequel`
+pins `cc ~1.2.1`, which holds the whole build's `cc` at 1.2.x.
 
 ### Language identity
 
@@ -181,12 +191,13 @@ and later for Find (D031) and language-server document sync (D067):
 
 ### Parsing
 
-The application owns one `SyntaxState` per buffer with a language, keyed by
-buffer and released at buffer closure. It subscribes to committed edit batches
-like any other edit-stream consumer:
+Each `BufferModel` with a language owns one `SyntaxState`, released at buffer
+closure. It reads committed primitive edits from the buffer's edit log, which
+records each edit's line and byte-column points because a later primitive in
+the same commit makes them unrecoverable:
 
 - each commit edits the tree (`Tree::edit`) and then reparses on the foreground
-  within a ~1 ms budget using tree-sitter's progress callback;
+  within a 1 ms budget using tree-sitter's progress callback;
 - when the budget runs out (initial parse, large paste, huge files) the parse
   continues on the background executor from a snapshot. The foreground keeps
   painting the previous tree's spans shifted by the edits since, and the result
@@ -221,10 +232,38 @@ fresh.
    are now text-run underlines rather than a separate overlay.
    `Highlight::resolve` carries a `dead_code` allowance until checkpoint 3
    resolves captures.
-3. 📝 **Native syntax engine.** Grammar table, `SyntaxState`, incremental edits,
-   budgeted foreground parse with background continuation, visible-range
-   highlight queries. Tests: after random edit sequences, incremental spans equal
-   a fresh parse; stale background results are rejected or rebased.
+3. ✅ **Native syntax engine.** Grammar table (`src/app/syntax/grammars.rs`),
+   `SyntaxState` (`src/app/syntax.rs`), incremental edits, budgeted foreground
+   parse with background continuation, and visible-range highlight queries.
+   Tests cover random edit sequences whose incremental highlights equal a fresh
+   parse, and background results that are rebased over later edits or rejected
+   for a replaced state.
+   - `BufferEdit` carries `TextPoint`s for `InputEdit`. The model feeds the
+     syntax state in the same commit step that stabilizes anchors, and an
+     `observe_self` subscription starts background parses after any notify
+     that leaves the tree behind, so commit paths need no gpui context.
+     `BufferModel::set_syntax` attaches a language; it and the syntax module
+     carry `dead_code` allowances until checkpoint 5 registers languages.
+   - Captures paint with nvim-treesitter precedence: cursor order, so a later
+     pattern beats an earlier one on the same node and inner nodes beat outer
+     ones, with `(#set! priority N)` (default 100) ordering patterns. General
+     predicates the Rust binding does not evaluate (`#lua-match?`, …) are
+     ignored; checkpoint 6 normalizes queries away from them.
+   - Views query the visible lines once per syntax generation, which is
+     globally unique so a replaced state never reuses a cached one, and
+     compose the syntax layer beneath the decoration layers.
+   - On Apple M1 Pro/macOS release builds (`syntax_costs_on_large_rust_files`,
+     ignored): a 3,500-line, 96 KiB Rust file parses initially in 10.5 ms and
+     reparses after valid typing at p50 220 µs, p99 475 µs; a 70,000-line,
+     1.9 MiB file parses in 206 ms and reparses at p50 5.4 ms, p99 13.4 ms.
+     Typing that leaves an unclosed `(` forces error recovery over the rest of
+     the file: p50 21 ms and 444 ms respectively. A 60-line highlight query
+     costs p50 about 220 µs at both sizes. This sets the 1 ms foreground
+     budget: ordinary files reparse inline and huge files or broken syntax
+     continue in the background.
+   - The grammar set grows the release binary from about 74 MB to 88.5 MB and
+     adds about 28 s of grammar C compilation, spread across parallel build
+     scripts (typescript, sql, bash, cpp, and markdown are the largest).
 4. 📝 **Injections.** Layered trees for Markdown inline and fenced code and for
    HTML `<script>`/`<style>`; tests over edits that create and remove injected
    regions.
@@ -249,4 +288,4 @@ JavaScript-only and installed packages need no new capture path.
 
 ## Open questions for review
 
-- The foreground budget value, to be set from checkpoint 3 measurements.
+None open; checkpoint 3 measurements set the foreground budget.
