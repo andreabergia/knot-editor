@@ -38,40 +38,25 @@ parsing with injections, languages registered through the bundled
 sessions, and a layered paint pipeline shaped for later language servers. Its
 follow-ups are D064–D067; D066 precedes D058.
 
-No further work is selected.
+The [daily-driver editor](plans/daily-driver.md) initiative is selected: it
+removes demo surfaces and adds workbench and editing commands, a richer
+palette, themes, Find, navigation, file watching, and bundled explorer,
+project-selector, and search extensions. It promotes D007, D008, D010, D031,
+D034, D053, D064, and D068 and adds D069–D085.
 
 ## Deferred register
 
 ## Editing and workbench
 
-- **D031 — Current-file Find**
-  - Deferred: Safe ordinary editing and workbench behavior can be dogfooded
-    without a search UI. No Find command, menu item, or default binding ships
-    until the slice is selected, so ⌘F/Ctrl-F stay free.
-  - Reconsider: Daily editing identifies literal in-file search as a recurring
-    need; define focused query, live matching, edit-following navigation, and
-    macOS bindings together in a selected slice.
-
 - **D001 — Replace and advanced Find modes**
-  - Deferred: These modes depend on a selected current-file Find design.
+  - Deferred: These modes depend on current-file Find (D031, in the
+    [daily-driver plan](plans/daily-driver.md)).
   - Reconsider: Daily use identifies required replacement, regular-expression,
     case, or whole-word behavior.
 
 - **D006 — File drag and drop**
   - Deferred: Open and Save As establish workspace-independent documents first.
   - Reconsider: Platform interaction becomes a selected product slice.
-
-- **D007 — Generated-search refresh and stale-target recovery**
-  - Deferred: Cross-file search is a bundled extension that has not been
-    built; refresh and stale-target policy belong to its result surface.
-  - Reconsider: Bundled cross-file search demonstrates that refresh or recovery
-    is required.
-
-- **D034 — File explorer**
-  - Deferred: The existing workspace tree supports basic directory browsing
-    and file opening; a fuller explorer workflow has not been selected.
-  - Reconsider: Daily editing needs navigation beyond the current tree, such as
-    revealing the active file, refreshing directories, or filtering entries.
 
 - **D058 — Complete Vim mode in JavaScript**
   - Deferred: No modal editing contract has been selected. The native core owns
@@ -88,24 +73,6 @@ No further work is selected.
     Sequence after D066, whose syntax-tree text objects and structural motions
     a complete emulation builds on.
 
-- **D064 — Theming system**
-  - Deferred: D002 ships one built-in dark palette in a `Theme` global that
-    resolves dotted highlight names. There are no user themes, light theme,
-    or theming of non-editor surfaces.
-  - Reconsider: Daily use needs another palette or appearance-following
-    themes. Then themes become extension contributions, like languages: a
-    public registration API, with the bundled palettes moving into an
-    ordinary bundled package and native code keeping only a minimal fallback
-    for a failed package. Startup already awaits package entries before
-    restoring windows, so a theme registered in `start()` styles the first
-    frame. Follow Zed's theme layout for the contributed data rather than
-    designing a format: a theme family with per-theme appearance, flat dotted
-    UI color keys (`editor.background`, `error`, …) for every surface, and a
-    `syntax` map from capture names to color, font style, and weight. Zed's
-    VS Code importer, which maps TextMate scopes onto capture names, shows how
-    VS Code themes could be imported later. Define selection, persistence
-    with D045, and how a theme change repaints open windows.
-
 - **D066 — Syntax-tree editing features and public syntax-tree API**
   - Deferred: D002 uses tree-sitter trees only for highlighting. Folding,
     indentation, structural selection expansion, text objects, and
@@ -115,19 +82,6 @@ No further work is selected.
     `textobjects` queries to language registration and expose node queries
     through the extension API without exposing tree-sitter objects. Precedes
     D058.
-
-- **D068 — Editor gutter**
-  - Deferred: Editors reserve a fixed 16px column, only while they render
-    gutter markers, holding one severity marker per line. There are no line
-    numbers, fold controls, or per-line change indicators, and contributed
-    text frames reserve the column without using it.
-  - Reconsider: Daily editing needs line numbers, or D066 folding or a
-    source-control extension needs per-line controls. Then define the gutter
-    as ordered native lanes (line numbers, extension markers, folds) with
-    widths derived from content such as the line-number digit count, which
-    lanes extensions can contribute to through `EditorContribution.gutter`,
-    per-surface enablement so read-only frames can omit it, and click and
-    hover behavior per lane.
 
 - **D059 — Professional typography: ligatures and configurable font features**
   - Deferred: Surfaces use shared fixed typography defaults. Ligatures and
@@ -159,20 +113,10 @@ No further work is selected.
 
 ## Documents, storage, and history
 
-- **D008 — Live filesystem watching and automatic reload**
-  - Deferred: Save-time conflict detection is sufficient for initial safe use.
-  - Reconsider: External edits are frequent enough that discovery only at Save
-    is disruptive.
-
 - **D009 — Binary buffers and encoding detection**
   - Deferred: The first slice explicitly targets UTF-8 text.
   - Reconsider: A concrete file workflow requires non-UTF-8 or binary
     inspection.
-
-- **D010 — Filesystem mutation beyond create and replace**
-  - Deferred: Rename, delete, and directory creation are not needed for text
-    editing.
-  - Reconsider: Workspace file management becomes a vertical slice.
 
 - **D011 — Remote filesystem providers**
   - Deferred: The URI boundary is validated with local and memory providers.
@@ -274,20 +218,6 @@ No further work is selected.
 - **D023 — Standardized AI integration**
   - Deferred: No concrete user workflow or provider boundary has been selected.
   - Reconsider: An AI-assisted editing slice is defined.
-
-- **D053 — Native explorer as a packaged extension**
-  - Deferred: The explorer remains a shell-owned native tool while the extension
-    view API is validated; converting it now would mix provider migration with
-    the native frame work. Migration is sequenced after the project registry
-    establishes bundled extension loading and after multi-root workspace
-    semantics settle, so the workspace provider and file-action APIs are shaped
-    by real project and root behavior rather than designed speculatively.
-  - Reconsider: The extension view API can express workspace providers and
-    explorer actions end to end, or maintaining the native explorer duplicates
-    behavior that extensions already provide. Revisit as a focused slice once the
-    earlier sequencing completes; pulling the migration forward requires
-    explicitly re-scoping the native multi-root resource tree to the packaged
-    extension.
 
 - **D057 — Extension and product localization (i18n)**
   - Deferred: Contributed view titles, tree labels, status text, native prompt

@@ -1,0 +1,262 @@
+# Daily-driver editor
+
+Status: 🚧 approved, not started. Promotes D007, D008, D010, D031, D034, D053,
+D064, and D068 from the [roadmap](../roadmap.md) and adds D069–D085.
+
+## Goal
+
+Make Knot an editor its author can use every day: no demo or test surfaces,
+complete workbench and editing commands, a discoverable palette, in-file and
+cross-file navigation, themes, and a workspace explorer and project selector
+built as ordinary bundled extensions.
+
+## How this plan is executed
+
+This plan is an index. Each item below is a brief, not a design. Before
+implementing an item, analyze it in its own session. Small items can be
+designed inline in this file. Larger ones get their own plan in `docs/plans/`,
+linked from here. Mark progress here with ✅ and 🚧, and remove the plan once
+every item's durable behavior lives in the architecture references and
+decisions.
+
+Each item lists what it depends on. Items in the same phase are independent
+unless their dependencies say otherwise.
+
+## Ordering rationale
+
+The order puts shared foundations ahead of their consumers, so no surface has
+to be rebuilt later:
+
+- **Settings before themes, zoom, soft wrap, and save hygiene.** Each of these
+  needs somewhere to keep a value and a way for personal config to set it.
+- **Themes before any new surface.** The palette, status bar, find bar, gutter,
+  and occurrence highlights all take their colors from theme keys, not from
+  constants that would need migrating later.
+- **The palette and shared picker before every picker consumer.** Go to File,
+  Go to Line, recent files, and the project selector all rely on one fuzzy
+  matcher and one picker presentation.
+- **Language editing configuration before editing commands and brackets.**
+  Toggle comment, auto-indent, and auto-closing all read per-language data
+  from the same registration.
+- **File watching, filesystem mutation, and file enumeration before the
+  explorer, Go to File, and search.** The extensions consume these public
+  primitives and need no private bypass.
+
+## Phase 1 — Clean slate
+
+- **D069 — Remove demo and test-only commands**
+  - Remove Move Terminal to New Window and the four Move Explorer to … commands
+    (D072 replaces these with generic tool placement). Also confirm that
+    `fixture.*`, `knot.fixture.*`, and `@example` commands can never reach a
+    product run.
+  - Decide what stays as developer tooling (Show Extension Startup Report,
+    Restart Extension…, Toggle Terminal Mouse Reporting). Give those commands a
+    consistent title prefix.
+  - Tests that relied on removed commands drive the same behavior through the
+    operation directly.
+
+## Phase 2 — Foundations
+
+- **D070 — Application settings**
+  - A small typed settings model for editor preferences: font family and size,
+    tab size, insert spaces, soft wrap, trim trailing whitespace, final
+    newline, and theme. Personal config sets values through a public API.
+  - Decide which values are personal config only and which are toggled from the
+    UI and persisted (for example, zoom and the selected theme). Also decide
+    whether languages can override values, and how a change repaints open
+    views.
+  - Terminal typography (D045, D059) stays deferred but must fit this model
+    later.
+
+- **D064 — Theming system** (depends on D070)
+  - Themes become extension contributions, like languages. A public
+    registration API is added, the built-in palette moves into a bundled
+    package with at least one light and one dark theme, and native code keeps
+    only a minimal fallback for a failed package.
+  - Follow Zed's theme layout: a theme family with an appearance per theme,
+    flat dotted UI color keys (`editor.background`, `error`, …) for every
+    surface, and a `syntax` map from capture names to color, font style, and
+    weight.
+  - Every existing surface (editor, tabs, docks, trees, palette, terminal ANSI
+    colors) reads theme keys. Add a Select Theme picker, and optionally follow
+    the system appearance.
+  - Startup already awaits package entries, so a theme registered in `start()`
+    styles the first frame.
+
+- **D071 — Command palette and shared picker**
+  - Commands gain an optional `description`, for native commands and in
+    extension registration.
+  - Each row shows the title, the description, and the effective binding,
+    resolved through the keymap's personal > extension > native precedence.
+    Chorded bindings render readably.
+  - One fuzzy matcher with match highlighting, shared by the palette and
+    `workbench.showPicker`. Recently used commands rank first.
+  - Picker items gain optional detail and right-aligned hint text. Every later
+    picker uses these additions.
+
+- **D072 — Workbench navigation commands**
+  - Default bindings:
+    - next and previous tab (⌘⇧] / ⌘⇧[ and ctrl-tab)
+    - go to tab 1–9
+    - focus pane left/right/up/down
+    - move tab to the adjacent pane
+    - close other tabs
+    - close pane
+    - reopen closed tab
+  - New Terminal moves off ⌘⇧T so reopen closed tab can use it.
+  - Generic Move Tool to Dock… replaces the explorer-specific placement
+    commands and works for any tool.
+  - Reopen closed tab keeps a bounded per-window stack of what each closed tab
+    needs to be recreated, reusing the window layout's tab records.
+
+## Phase 3 — Editing
+
+- **D073 — Language editing configuration**
+  - Language registration gains line and block comment tokens, bracket pairs,
+    auto-closing pairs, and indentation rules (increase and decrease
+    patterns). `@knot/languages` supplies them for every bundled language.
+  - Data only. D074 and D075 consume it.
+
+- **D074 — Editing commands** (depends on D073)
+  - Auto-indent on Enter: keep the current indentation, and adjust it with
+    the indentation rules.
+  - Tab and Shift-Tab indent and outdent a multi-line selection.
+  - Toggle line comment (⌘/) and block comment.
+  - Duplicate, delete, and move lines up/down.
+  - Join lines.
+  - Smart Home.
+  - Double-click selects a word, triple-click selects a line, and dragging
+    after either extends by that unit.
+  - Each command is one undo step.
+
+- **D075 — Bracket matching and auto-closing** (depends on D073, D064)
+  - Highlight the bracket matching the one at the cursor, and add a jump to
+    matching bracket command.
+  - Typing an opening pair inserts its closer. Typing the closer steps over
+    it. Backspace inside an empty pair deletes both characters. Wrapping a
+    selection surrounds it.
+  - Decide whether matching uses the syntax tree or a text scan. The tree
+    avoids false matches inside strings and comments.
+
+- **D068 — Editor gutter and line numbers** (depends on D064)
+  - The gutter becomes ordered native lanes: line numbers, extension markers,
+    and folds later. Lane widths come from content, such as the number of
+    digits in the line count.
+  - Extensions contribute markers through `EditorContribution.gutter`.
+    Enablement is per surface, so read-only text frames can omit the gutter.
+  - Each lane defines its own click and hover behavior. Highlight the current
+    line's number.
+
+- **D076 — Go to Line** (depends on D071)
+  - Bound to ctrl-G. Accepts `line` and `line:column`, and previews the target
+    while typing.
+
+- **D077 — Status bar** (depends on D064)
+  - A native per-window bar showing line:column, the selection size, the
+    language (click to open Set Language Mode), line ending, indentation, and
+    the dirty state.
+  - Decide whether extensions can contribute items now (useful for Git later)
+    or only after a concrete extension needs it. Shape the layout so adding
+    contributions later doesn't require rebuilding it.
+
+- **D078 — Zoom, font size, and soft wrap** (depends on D070)
+  - ⌘+ / ⌘- / ⌘0 zoom the current view or every view (decide which). The base
+    font size comes from settings.
+  - Toggle Soft Wrap, plus a setting for its default. Wrapping changes vertical
+    movement, scroll geometry, IME positioning, and gutter numbering, so define
+    visual lines in the view's line model.
+
+- **D079 — Save hygiene** (depends on D070)
+  - Trim trailing whitespace and ensure a final newline on save, both
+    configurable. The cleanup is one undoable edit applied before the content
+    snapshot is captured.
+  - Whether a formatter hook belongs here is decided in its session; language
+    servers (D067) remain out of scope.
+
+- **D031 — Current-file Find** (depends on D064)
+  - Bound to ⌘F. The query field takes focus. Matching is live and highlights
+    every match. Enter and ⇧Enter (and ⌘G / ⌘⇧G) move between matches, and the
+    current match follows edits. Esc closes the bar.
+  - Use selection as the find string (⌘E).
+  - Match highlighting uses a layer that D080 can reuse.
+  - Replace and the advanced modes (D001) stay deferred. Revisit D001 in this
+    item's session, because case and whole-word options are cheap once
+    matching exists.
+
+- **D080 — Word occurrence highlighting extension** (depends on D064, D031)
+  - When the cursor rests on a word, a bundled JavaScript extension highlights
+    every other occurrence in the buffer. It uses the syntax tree or word
+    boundaries, debounced after cursor movement.
+  - Requires a new public observation API for cursor and selection changes.
+    Today only the debounced `viewStateChanged` window event exists. Size
+    the API for other cursor-driven extensions and keep it off the painting
+    path.
+  - Highlights are anchored contributions using a theme decoration token, so
+    they follow edits without help from the extension.
+
+## Phase 4 — Files and workspace
+
+- **D008 — File watching and automatic reload**
+  - Native watching per workspace root and per open document, in the resource
+    provider layer.
+  - A clean document reloads in place and keeps its view state. A dirty
+    document is marked as changed on disk and offers Reload or Keep. Save
+    already reaches the conflict prompt.
+  - A public event lets extensions refresh trees. Events are coalesced, and
+    Knot's own saves are ignored.
+
+- **D010 — Filesystem mutation API**
+  - Create file, create directory, rename or move, and delete (to the trash
+    where the platform supports it), through providers and a public API.
+  - Open documents follow renames, and deletion of their file is reported to
+    them.
+
+- **D081 — Workspace file enumeration**
+  - A native, ignore-aware walk of every root (`.gitignore`, hidden files,
+    configurable excludes), exposed as a public API that streams or pages
+    results.
+  - Shared by the explorer filter, Go to File, and cross-file search, so no
+    extension walks directories one listing at a time.
+
+- **D034 / D053 — Explorer as a bundled extension** (depends on D008, D010,
+  D081, D072)
+  - A bundled `@knot/explorer` package replaces the native explorer tool and
+    its commands, using the contributed tree API.
+  - It provides:
+    - multi-root browsing
+    - new, rename, and delete actions
+    - reveal the active file
+    - refresh on watch events
+    - filtering
+  - Removing the native explorer also removes its private workspace-tree path.
+    Any gap this exposes in the public tree API (such as context menus,
+    keyboard actions on rows, or inline rename) is closed here.
+  - Its tool ID and default placement keep tool-layout memory working.
+
+- **D082 — Go to File** (depends on D071, D081)
+  - A bundled extension bound to ⌘P that fuzzy-matches workspace paths.
+  - Multi-root paths are labeled by root, and open and recent files rank
+    first.
+  - Decide whether the picker's complete-item-list contract holds up on large
+    repositories, or whether the picker needs incremental items.
+
+- **D083 — Recent files** (depends on D071)
+  - A bundled extension that records opened documents in extension storage
+    and offers Open Recent….
+  - Reopen closed tab (D072) is unrelated: it is native per-window state.
+
+- **D084 — Project selector modal** (depends on D071)
+  - `@knot/projects` replaces its Projects tool with a picker modal: recent
+    projects first, then switch, new, rename, and delete as picker actions or
+    companion commands.
+  - Remove the Projects tool registration and its tree code.
+
+- **D085 — Cross-file search** (depends on D081, D071; promotes D007)
+  - A bundled extension with a query input, a results tree grouped by file
+    (contributed tree groups and row actions already exist), opening a result
+    at its range, and refresh.
+  - Decide whether matching runs in JavaScript over the enumeration API or
+    through a native search primitive that the extension configures (engine,
+    case, regex, globs). The design principle is that the extension owns the
+    policy and native code owns the I/O.
+  - Stale-target recovery after edits (D007) is decided here.
