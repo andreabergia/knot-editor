@@ -18,7 +18,7 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use gpui::{App, Entity, Global, WeakEntity};
+use gpui::{App, Entity, EntityId, Global, WeakEntity};
 
 use crate::host::protocol::{ExtensionId, ExtensionLifecycleId, LanguageInfo};
 
@@ -316,9 +316,9 @@ fn interpreter(first_line: &str) -> Option<&str> {
 #[derive(Default)]
 pub(crate) struct ApplicationLanguages {
     registry: LanguageRegistry,
-    /// Every buffer whose language has been resolved, so a registration
+    /// Every live buffer whose language has been resolved, so a registration
     /// change can reattach its syntax.
-    models: Vec<WeakEntity<BufferModel>>,
+    models: HashMap<EntityId, WeakEntity<BufferModel>>,
 }
 
 impl Global for ApplicationLanguages {}
@@ -448,9 +448,13 @@ fn shebang_line(model: &BufferModel) -> String {
 /// that injects reparses too, since its injections may resolve differently.
 fn attach(model: &Entity<BufferModel>, registration_changed: bool, cx: &mut App) {
     let languages = cx.default_global::<ApplicationLanguages>();
-    let weak = model.downgrade();
-    if !languages.models.contains(&weak) {
-        languages.models.push(weak);
+    if !languages.models.contains_key(&model.entity_id()) {
+        languages
+            .models
+            .retain(|_, model| model.upgrade().is_some());
+        languages
+            .models
+            .insert(model.entity_id(), model.downgrade());
     }
     let resolved = model
         .read(cx)
@@ -497,11 +501,10 @@ fn refresh(cx: &mut App) {
     for (model, uri) in &documents {
         redetect(model, uri.as_ref(), cx);
     }
-    let languages = cx.default_global::<ApplicationLanguages>();
-    languages.models.retain(|model| model.upgrade().is_some());
-    let models: Vec<_> = languages
+    let models: Vec<_> = cx
+        .default_global::<ApplicationLanguages>()
         .models
-        .iter()
+        .values()
         .filter_map(WeakEntity::upgrade)
         .collect();
     for model in models {
