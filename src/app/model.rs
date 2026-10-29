@@ -486,7 +486,7 @@ impl BufferModel {
 
     /// Parse this buffer as `language`, discarding any previous tree, or stop
     /// parsing with `None`.
-    // No language registration attaches syntax yet.
+    // Only tests attach syntax.
     #[allow(dead_code)]
     pub(crate) fn set_syntax(
         &mut self,

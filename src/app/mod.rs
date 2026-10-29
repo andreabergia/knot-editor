@@ -26,7 +26,7 @@ mod product;
 mod record_store;
 mod recovery;
 mod resource;
-// No language registration creates a `SyntaxLanguage` yet.
+// Only tests create a `SyntaxLanguage`.
 #[allow(dead_code)]
 mod syntax;
 mod terminal;
