@@ -91,13 +91,18 @@ are D064–D067; D066 precedes D058.
     resolves dotted highlight names. There are no user themes, light theme,
     or theming of non-editor surfaces.
   - Reconsider: Daily use needs another palette or appearance-following
-    themes. Then follow Zed's theme layout rather than designing a format: a
-    JSON theme family with per-theme appearance, flat dotted UI color keys
-    (`editor.background`, `error`, …) for every surface, and a `syntax` map
-    from capture names to color, font style, and weight. Zed's VS Code
-    importer, which maps TextMate scopes onto capture names, shows how VS Code
-    themes could be imported later. Define how personal config and packages
-    contribute themes, and selection and persistence with D045.
+    themes. Then themes become extension contributions, like languages: a
+    public registration API, with the bundled palettes moving into an
+    ordinary bundled package and native code keeping only a minimal fallback
+    for a failed package. Startup already awaits package entries before
+    restoring windows, so a theme registered in `start()` styles the first
+    frame. Follow Zed's theme layout for the contributed data rather than
+    designing a format: a theme family with per-theme appearance, flat dotted
+    UI color keys (`editor.background`, `error`, …) for every surface, and a
+    `syntax` map from capture names to color, font style, and weight. Zed's
+    VS Code importer, which maps TextMate scopes onto capture names, shows how
+    VS Code themes could be imported later. Define selection, persistence
+    with D045, and how a theme change repaints open windows.
 
 - **D066 — Syntax-tree editing features and public syntax-tree API**
   - Deferred: D002 uses tree-sitter trees only for highlighting. Folding,

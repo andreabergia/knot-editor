@@ -87,9 +87,11 @@ language client passes them through unchanged.
 - Registration owners follow keymap precedence: personal config, then installed
   packages, then bundled. A conflicting pattern resolves to the
   highest-priority owner; removal reveals the next.
-- A registration or teardown re-resolves every open detected document. Windows
-  restore before extensions start, so restored documents show plain text until
-  `@knot/languages` registers; this is one startup frame, not a lost state.
+- A registration or teardown re-resolves every open detected document.
+  Startup awaits every package entry, and bundled entries `await start()`,
+  before restoring windows, so `@knot/languages` must await its registrations
+  in `start()`; restored documents then paint highlighted from their first
+  frame. Only a failed package leaves documents as plain text.
 - `DocumentInfo.language` exposes it; changes publish `documentChanged` through
   the existing metadata comparison, so no new event type is needed.
 - `documents.setLanguage(id, language | null)` makes it explicit, or returns to
@@ -230,7 +232,8 @@ fresh.
    detection, `DocumentInfo.language`, `documents.setLanguage`, text-frame
    `language`, error codes, declarations, schema, and the fake host. Product
    tests for detection on Open, Save As, restore, and re-resolution on
-   registration and teardown.
+   registration and teardown, including that a restored window's documents
+   have their languages before the window first paints.
 6. 📝 **`@knot/languages`.** Registrations and normalized queries for every
    bundled grammar, with `node:test` coverage that each query compiles against
    its grammar name and uses only names in `CAPTURE_NAMES`.
