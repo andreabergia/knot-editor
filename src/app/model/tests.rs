@@ -831,7 +831,10 @@ fn syntax_follows_every_commit_path(cx: &mut gpui::TestAppContext) {
 #[gpui::test]
 fn an_over_budget_parse_continues_in_the_background(cx: &mut gpui::TestAppContext) {
     let model = cx.new(|_| BufferModel::from_text("fn a() { let x = 1; }\n".repeat(20_000)));
-    model.update(cx, |model, cx| model.set_syntax(rust_syntax(), cx));
+    model.update(cx, |model, cx| {
+        model.set_syntax_budget(Duration::ZERO);
+        model.set_syntax(rust_syntax(), cx);
+    });
     let generation = model.read_with(cx, |model, _| {
         assert!(model.syntax_highlights(0..2).is_empty());
         model.syntax_generation()

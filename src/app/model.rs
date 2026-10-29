@@ -5,7 +5,7 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     ops::Range,
     sync::Arc,
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use gpui::{AppContext, Context, Entity, Subscription, WeakEntity};
@@ -129,6 +129,8 @@ pub struct BufferModel {
     /// Starts a background parse after any notify that leaves the tree
     /// behind the text, so commit paths need no gpui context.
     syntax_driver: Option<Subscription>,
+    /// How long a commit may reparse on the foreground.
+    syntax_budget: Duration,
     /// Whole-document reads, so tests can assert that views never make them.
     #[cfg(test)]
     whole_text_reads: std::cell::Cell<usize>,
@@ -200,6 +202,7 @@ impl BufferModel {
             history_view_restore: None,
             syntax: None,
             syntax_driver: None,
+            syntax_budget: FOREGROUND_BUDGET,
             #[cfg(test)]
             whole_text_reads: Default::default(),
             #[cfg(test)]
@@ -228,6 +231,11 @@ impl BufferModel {
     #[cfg(test)]
     pub(crate) fn syntax_queries(&self) -> usize {
         self.syntax_queries.get()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_syntax_budget(&mut self, budget: Duration) {
+        self.syntax_budget = budget;
     }
 
     pub(crate) fn len(&self) -> usize {
@@ -423,7 +431,7 @@ impl BufferModel {
         if let Some(syntax) = &mut self.syntax {
             syntax.edit(self.buffer.edits_since(seq));
             if syntax.needs_parse() {
-                syntax.parse_in_foreground(&self.buffer.snapshot(), FOREGROUND_BUDGET);
+                syntax.parse_in_foreground(&self.buffer.snapshot(), self.syntax_budget);
             }
         }
         let consumed = self.anchored_ranges.stabilize(&self.buffer).consumed;
@@ -487,7 +495,7 @@ impl BufferModel {
     ) {
         self.syntax = language.map(|language| {
             let mut syntax = SyntaxState::new(language);
-            syntax.parse_in_foreground(&self.buffer.snapshot(), FOREGROUND_BUDGET);
+            syntax.parse_in_foreground(&self.buffer.snapshot(), self.syntax_budget);
             syntax
         });
         if self.syntax.is_some() && self.syntax_driver.is_none() {
@@ -516,7 +524,7 @@ impl BufferModel {
         };
         if syntax.finish_background_parse(parsed) {
             if syntax.needs_parse() {
-                syntax.parse_in_foreground(&self.buffer.snapshot(), FOREGROUND_BUDGET);
+                syntax.parse_in_foreground(&self.buffer.snapshot(), self.syntax_budget);
             }
             cx.notify();
         }
