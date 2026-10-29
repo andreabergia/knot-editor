@@ -412,7 +412,9 @@ impl BufferModel {
     fn observe_committed_edits(&mut self, seq: usize) {
         if let Some(syntax) = &mut self.syntax {
             syntax.edit(self.buffer.edits_since(seq));
-            syntax.parse_in_foreground(&self.buffer.snapshot(), FOREGROUND_BUDGET);
+            if syntax.needs_parse() {
+                syntax.parse_in_foreground(&self.buffer.snapshot(), FOREGROUND_BUDGET);
+            }
         }
         let consumed = self.anchored_ranges.stabilize(&self.buffer).consumed;
         self.buffer.discard_edits_before(self.buffer.edit_seq());
@@ -485,11 +487,7 @@ impl BufferModel {
     }
 
     fn continue_syntax_parse(&mut self, cx: &mut Context<Self>) {
-        let Some(syntax) = self
-            .syntax
-            .as_mut()
-            .filter(|syntax| syntax.needs_background_parse())
-        else {
+        let Some(syntax) = self.syntax.as_mut().filter(|syntax| syntax.needs_parse()) else {
             return;
         };
         let parse = syntax.start_background_parse(self.buffer.snapshot());
@@ -505,7 +503,9 @@ impl BufferModel {
             return;
         };
         if syntax.finish_background_parse(parsed) {
-            syntax.parse_in_foreground(&self.buffer.snapshot(), FOREGROUND_BUDGET);
+            if syntax.needs_parse() {
+                syntax.parse_in_foreground(&self.buffer.snapshot(), FOREGROUND_BUDGET);
+            }
             cx.notify();
         }
     }

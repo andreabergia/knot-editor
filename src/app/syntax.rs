@@ -163,8 +163,9 @@ impl SyntaxState {
         self.generation
     }
 
-    /// Whether the tree lags the text and no background parse is running.
-    pub(crate) fn needs_background_parse(&self) -> bool {
+    /// Whether the tree lags the text and no background parse is running,
+    /// so a parse would make progress.
+    pub(crate) fn needs_parse(&self) -> bool {
         !self.current && self.background.is_none()
     }
 

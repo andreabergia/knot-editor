@@ -238,7 +238,7 @@ fn a_background_result_is_rebased_over_edits_committed_while_it_ran() {
             .state
             .parse_in_foreground(&fixture.buffer.snapshot(), UNBOUNDED)
     );
-    assert!(!fixture.state.needs_background_parse());
+    assert!(!fixture.state.needs_parse());
 
     fixture.replace(0..0, "// note\n");
     let end = fixture.buffer.len();
@@ -247,7 +247,7 @@ fn a_background_result_is_rebased_over_edits_committed_while_it_ran() {
     assert!(fixture.state.finish_background_parse(parsed));
 
     // Rebased onto the current text but not yet a parse of it.
-    assert!(fixture.state.needs_background_parse());
+    assert!(fixture.state.needs_parse());
     let shifted = fixture.highlights();
     assert!(shifted.contains(&("b".into(), "function")));
     assert!(shifted.contains(&("a".into(), "function")));
@@ -266,7 +266,7 @@ fn a_background_result_without_later_edits_is_current() {
             .is_empty()
     );
     assert!(state.finish_background_parse(job.run()));
-    assert!(!state.needs_background_parse());
+    assert!(!state.needs_parse());
     assert!(state.parse_in_foreground(&buffer.snapshot(), Duration::ZERO));
     assert!(
         !state
@@ -307,7 +307,7 @@ fn a_parse_over_budget_is_cancelled_and_can_restart() {
     let buffer = TextBuffer::from_text(source);
     let mut state = SyntaxState::new(language(RUST_HIGHLIGHTS));
     assert!(!state.parse_in_foreground(&buffer.snapshot(), Duration::ZERO));
-    assert!(state.needs_background_parse());
+    assert!(state.needs_parse());
     assert!(state.parse_in_foreground(&buffer.snapshot(), UNBOUNDED));
     assert_eq!(
         state.highlights(&buffer.snapshot(), 0..2),
