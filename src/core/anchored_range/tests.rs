@@ -1,4 +1,5 @@
 use super::*;
+use crate::core::buffer::TextPoint;
 
 // Expected byte-offset transform for the randomized correctness oracle.
 fn transform_offset(off: usize, edit: &BufferEdit) -> usize {
@@ -299,6 +300,8 @@ fn edit_insert(at: usize, len: usize) -> BufferEdit {
     BufferEdit::Insert {
         at,
         inserted_len: len,
+        at_point: TextPoint::default(),
+        end_point: TextPoint::default(),
         inserted_end: Position::new(0, len as u32),
         left_piece: None,
         pre_first_piece: None,
@@ -308,6 +311,8 @@ fn edit_insert(at: usize, len: usize) -> BufferEdit {
 fn edit_delete(s: usize, e: usize) -> BufferEdit {
     BufferEdit::Delete {
         range: s..e,
+        start_point: TextPoint::default(),
+        end_point: TextPoint::default(),
         deleted_pieces: vec![],
         deleted_piece_lens: vec![],
         left_survivor: None,

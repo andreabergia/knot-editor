@@ -876,6 +876,65 @@ fn replace_emits_delete_then_insert_pair() {
     assert_eq!(s(&b), "goodbye world");
 }
 
+#[test]
+fn edit_points_describe_the_text_each_edit_saw() {
+    fn point(text: &str, offset: usize) -> TextPoint {
+        let before = &text[..offset];
+        let line_start = before.rfind('\n').map_or(0, |newline| newline + 1);
+        TextPoint {
+            line: before.matches('\n').count(),
+            column: offset - line_start,
+        }
+    }
+
+    let mut b = TextBuffer::from_text("one\ntwo\nthree\n");
+    let mut text = s(&b);
+    let mut rng_state: u64 = 0x5eed_1234;
+    let mut next_rand = || {
+        rng_state ^= rng_state << 13;
+        rng_state ^= rng_state >> 7;
+        rng_state ^= rng_state << 17;
+        rng_state
+    };
+    for _ in 0..300 {
+        let seq = b.edit_seq();
+        let len = b.len() as u64 + 1;
+        let (start, end) = {
+            let (a, b) = ((next_rand() % len) as usize, (next_rand() % len) as usize);
+            (a.min(b), a.max(b))
+        };
+        let insert = ["", "x", "\n", "ab\ncd\n"][(next_rand() % 4) as usize];
+        b.replace(start..end, insert);
+
+        for edit in b.edits_since(seq) {
+            match edit {
+                BufferEdit::Delete {
+                    range,
+                    start_point,
+                    end_point,
+                    ..
+                } => {
+                    assert_eq!(*start_point, point(&text, range.start));
+                    assert_eq!(*end_point, point(&text, range.end));
+                    text.replace_range(range.clone(), "");
+                }
+                BufferEdit::Insert {
+                    at,
+                    inserted_len,
+                    at_point,
+                    end_point,
+                    ..
+                } => {
+                    assert_eq!(*at_point, point(&text, *at));
+                    text.insert_str(*at, insert);
+                    assert_eq!(*end_point, point(&text, at + inserted_len));
+                }
+            }
+        }
+        assert_eq!(text, s(&b));
+    }
+}
+
 // ---- End-to-end remap-by-log (the design payoff of the edit log) -----------
 
 /// Simulate the anchored-range store: hold a position token across an interior

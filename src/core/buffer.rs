@@ -37,7 +37,9 @@
 //! delete-then-insert pair) pushes one `BufferEdit` event onto the log.
 //! Fields are byte offsets into the *pre-edit* logical text, so an observer
 //! replaying stale `Position`s can reason about each edit against the buffer
-//! state *in which the position was issued*. Sequence numbers are monotonic
+//! state *in which the position was issued*. Each event also records the
+//! line and byte column of its edges, which observers such as incremental
+//! parsers need and cannot recover once later edits have moved the lines. Sequence numbers are monotonic
 //! for the buffer's lifetime; the owner discards entries once every observer
 //! has consumed them, so the retained log stays bounded.
 //!
@@ -159,6 +161,13 @@ impl Position {
     }
 }
 
+/// A line and a byte column within it, both 0-indexed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TextPoint {
+    pub line: usize,
+    pub column: usize,
+}
+
 /// One half of an interior split.
 ///
 /// A `Position` whose `piece` is `old_piece` and whose offset is
@@ -199,6 +208,10 @@ pub enum BufferEdit {
     Insert {
         at: usize,
         inserted_len: usize,
+        /// Point of `at`.
+        at_point: TextPoint,
+        /// Point of the end of the inserted span, after the insert.
+        end_point: TextPoint,
         /// Position at the end of the inserted span: `(new_piece,
         /// inserted_len)` for a fresh piece, or the extended piece's new
         /// end when the insert coalesced. Sticky-`After` anchors sitting on
@@ -233,6 +246,10 @@ pub enum BufferEdit {
     /// `range.end`).
     Delete {
         range: Range<usize>,
+        /// Point of `range.start`.
+        start_point: TextPoint,
+        /// Point of `range.end`, before the delete.
+        end_point: TextPoint,
         /// Piece ids drained by this delete (the contents of
         /// `[left.insert_at, right.insert_at)` post-both-splits,
         /// pre-drain). Anchors whose token.piece is in this set were
@@ -452,6 +469,8 @@ impl TextBuffer {
         let add_start = self.tail.len();
         self.tail.push_str(text);
 
+        let at_point = self.point_of_offset(at);
+
         // Locate the insertion point in the piece chain. Splits are
         // recorded so they can be attached to the BufferEdit event.
         let pre_first_piece = self.pieces.first().map(|p| p.id);
@@ -506,12 +525,15 @@ impl TextBuffer {
 
         // Keep the line index valid for the edited span.
         self.update_line_starts(at..at, text, 0);
+        let end_point = self.point_of_offset(at + text.len());
 
         // Record the edit event. `at` and `inserted_len` are byte
         // offsets into the pre-edit logical text.
         self.edits.push(BufferEdit::Insert {
             at,
             inserted_len: text.len(),
+            at_point,
+            end_point,
             inserted_end,
             left_piece,
             pre_first_piece,
@@ -533,6 +555,8 @@ impl TextBuffer {
             return;
         }
         let removed_utf16 = self.chunks(range.clone()).map(utf16_len).sum();
+        let start_point = self.point_of_offset(range.start);
+        let end_point = self.point_of_offset(range.end);
 
         // Split the chain at both ends, then drop the pieces in between.
         // Both calls share one `splits` vec so the ordering in the
@@ -586,6 +610,8 @@ impl TextBuffer {
         // Record the edit event. `range` is the pre-edit byte span.
         self.edits.push(BufferEdit::Delete {
             range,
+            start_point,
+            end_point,
             deleted_pieces,
             deleted_piece_lens,
             left_survivor,
@@ -640,6 +666,16 @@ impl TextBuffer {
         // First index where `starts[i] > offset`; the line containing
         // `offset` is the one before it. Entry 0 is always 0.
         self.line_starts.partition_point(|s| s.byte <= offset) - 1
+    }
+
+    /// Line and byte column of `offset`, which must satisfy
+    /// `0 <= offset <= len()`.
+    pub fn point_of_offset(&self, offset: usize) -> TextPoint {
+        let line = self.line_of_offset(offset);
+        TextPoint {
+            line,
+            column: offset - self.line_starts[line].byte,
+        }
     }
 
     /// UTF-16 code-unit offset of byte offset `offset`, which must be a char

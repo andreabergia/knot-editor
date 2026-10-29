@@ -374,6 +374,7 @@ impl AnchoredRangeStore {
                 left_survivor,
                 right_survivor,
                 splits,
+                ..
             } => {
                 for split in splits {
                     self.remap_split_right_half(
