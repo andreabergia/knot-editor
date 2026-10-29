@@ -124,6 +124,24 @@ fn captures_paint_in_cursor_order_by_priority() {
 }
 
 #[test]
+fn an_inner_node_beats_an_outer_one_starting_at_the_same_byte() {
+    // The cursor yields an ancestor's capture before its descendant's when
+    // both start at the same byte, even when the descendant's pattern comes
+    // first.
+    let fixture = Fixture::with_query(
+        "fn main() {}",
+        r#"
+        "fn" @keyword
+        (function_item) @function
+        "#,
+    );
+    assert_eq!(
+        fixture.highlights(),
+        named(&[("fn", "keyword"), (" main() {}", "function")])
+    );
+}
+
+#[test]
 fn predicates_and_unknown_captures_filter_highlights() {
     let fixture = Fixture::with_query(
         "let MAX = lower;",
