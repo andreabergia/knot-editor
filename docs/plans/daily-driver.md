@@ -22,6 +22,11 @@ decisions.
 Each item lists what it depends on. Items in the same phase are independent
 unless their dependencies say otherwise.
 
+Nothing that exists today is a constraint. Knot has no users, so every
+current command, binding, setting, surface, API, and stored format may be
+redesigned or removed, with no migration or compatibility path. These briefs
+name current behavior only as a starting point for analysis.
+
 ## Ordering rationale
 
 The order puts shared foundations ahead of their consumers, so no surface has
@@ -104,9 +109,9 @@ to be rebuilt later:
   - A preset is a named set of default bindings occupying the native keymap
     slot, so extension and personal bindings still override it. The selected
     preset is a setting, and switching presets rebinds every open window.
-  - The current defaults become the Knot preset, with its macOS, Windows,
-    and Linux variants audited against system and terminal or TUI keys
-    (D060).
+  - Design the Knot preset from scratch rather than carrying over the
+    prototype's bindings. Give it macOS, Windows, and Linux variants, checked
+    against system and terminal or TUI keys (D060).
   - Decide whether presets are native data or contributions from bundled
     packages (a contributed preset would make user-written presets free).
     Also decide how chords and conflicts are reported. D088 fills in the
@@ -121,8 +126,8 @@ to be rebuilt later:
     - close other tabs
     - close pane
     - reopen closed tab
-  - Bindings go into the Knot preset. New Terminal moves off ⌘⇧T so reopen
-    closed tab can use it.
+  - Bindings go into the Knot preset. Reopen closed tab takes ⌘⇧T, so New
+    Terminal needs another key.
   - Generic Move Tool to Dock… replaces the explorer-specific placement
     commands and works for any tool.
   - Reopen closed tab keeps a bounded per-window stack of what each closed tab
@@ -285,7 +290,8 @@ to be rebuilt later:
   - Removing the native explorer also removes its private workspace-tree path.
     Any gap this exposes in the public tree API (such as context menus,
     keyboard actions on rows, or inline rename) is closed here.
-  - Its tool ID and default placement keep tool-layout memory working.
+  - It is an ordinary tool for tool-layout memory: it has a stable tool ID
+    and a default placement.
 
 - **D082 — Go to File** (depends on D071, D081)
   - A bundled extension bound to ⌘P that fuzzy-matches workspace paths.
