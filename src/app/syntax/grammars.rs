@@ -5,8 +5,11 @@
 
 use tree_sitter::Language;
 
-/// Grammar IDs and their constructors, sorted by ID.
-const GRAMMARS: &[(&str, fn() -> Language)] = &[
+/// A grammar ID and its constructor.
+type Grammar = (&'static str, fn() -> Language);
+
+/// Sorted by ID.
+const GRAMMARS: &[Grammar] = &[
     ("bash", || tree_sitter_bash::LANGUAGE.into()),
     ("c", || tree_sitter_c::LANGUAGE.into()),
     ("cpp", || tree_sitter_cpp::LANGUAGE.into()),

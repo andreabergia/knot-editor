@@ -436,8 +436,9 @@ impl TextBuffer {
         out
     }
 
-    /// The logical text in `range` as borrowed piece slices, in order.
-    fn chunks(&self, range: Range<usize>) -> impl Iterator<Item = &str> {
+    /// The logical text in `range` as borrowed piece slices, in order, with
+    /// the same requirements as `read_range`.
+    pub fn chunks(&self, range: Range<usize>) -> impl Iterator<Item = &str> {
         let mut offset = 0usize;
         self.pieces.iter().map_while(move |p| {
             let p_start = offset;
