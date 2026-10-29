@@ -386,9 +386,19 @@ fresh.
      parallel. Unoptimized, the query compiler took about 2 s and pushed
      product startup tests past their deadline, so the dev profile optimizes
      the `tree-sitter` crate.
-7. 📝 **Set Language Mode and persistence.** Palette command backed by a picker,
+7. ✅ **Set Language Mode and persistence.** Palette command backed by a picker,
    explicit language in the window layout, restoration through hot exit and
    project sessions.
+   - `editor.set-language-mode` ("Set Language Mode…",
+     `src/app/product/language_mode.rs`) is a native command: an extension
+     command's palette title is its name. The picker in the window's
+     transient slot lists Auto Detect, which returns the document to
+     detection, then every registered language by name.
+   - A layout document tab records the document's language only when it is
+     explicit (`language`, optional, so layout version 1 is unchanged).
+     `apply_layout`, shared by hot exit and `replaceWindows`, applies it
+     unless the live document already has an explicit language, so a live
+     choice wins over a stored one.
 8. 📝 **Documentation.** Architecture references (core and buffers, semantic UI,
    documents), decisions with measured parse and snapshot costs, extension
    guide; remove this plan.

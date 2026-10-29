@@ -18,6 +18,7 @@ use gpui::{prelude::FluentBuilder, *};
 mod closure;
 pub(super) mod commands;
 mod extension_restart;
+mod language_mode;
 mod launch;
 mod open;
 pub(super) mod operations;

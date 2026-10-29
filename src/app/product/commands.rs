@@ -162,6 +162,16 @@ pub(crate) async fn recover(context: CommandContext, (): ()) -> Result<(), Comma
         .await
 }
 
+#[command("editor.set-language-mode", title = "Set Language Mode…", id = SET_LANGUAGE_MODE_COMMAND, participant = Workbench)]
+pub(crate) async fn set_language_mode(
+    context: CommandContext,
+    (): (),
+) -> Result<(), CommandOutcome> {
+    context
+        .shell(|shell, target, window, cx| shell.start_language_mode(target, window, cx))
+        .await
+}
+
 #[command("extensions.restart", title = "Restart Extension…", id = RESTART_EXTENSION_COMMAND, participant = Workbench)]
 pub(crate) async fn restart_extension(
     context: CommandContext,

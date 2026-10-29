@@ -172,3 +172,45 @@ fn registered_languages_detect_on_open_and_save_as_and_follow_teardown(cx: &mut 
         assert_eq!(reported(model, cx), "plaintext");
     }
 }
+
+#[gpui::test]
+fn set_language_mode_picks_an_explicit_language_or_returns_to_detection(cx: &mut TestAppContext) {
+    let documents = install_globals(cx);
+    let host = cx.update(super::super::super::extensions::host::install);
+    let document = cx.update(|cx| create_untitled_document(&documents, cx));
+    let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+    model.update(cx, |model, _| model.replace(0..0, "x = 1\n").unwrap());
+    let (shell, window) = product_window(document, model.clone(), cx);
+    let key = ExtensionKey::new(ExtensionId::new(951), ExtensionLifecycleId::new(1));
+    let loaded = Arc::new(Mutex::new(None));
+    let result = loaded.clone();
+    host.update(cx, |host, cx| {
+        let execution = host.load_test_source(key, SOURCE).unwrap();
+        cx.spawn(async move |_, _| {
+            *result.lock().unwrap() = Some(execution.await.map(|_| ()));
+        })
+        .detach();
+    });
+    wait_for_api_condition(cx, |_| loaded.lock().unwrap().is_some());
+    loaded.lock().unwrap().take().unwrap().unwrap();
+
+    let mut pick = |label: &str, cx: &mut TestAppContext| {
+        let execution = dispatch_product_command(
+            &shell,
+            window,
+            super::super::commands::SET_LANGUAGE_MODE_COMMAND,
+            cx,
+        );
+        assert_eq!(wait_for_command(execution, cx), CommandOutcome::Completed);
+        wait_for_api_condition(cx, |cx| shell.read(cx).transient.is_some());
+        cx.simulate_input(window, label);
+        cx.simulate_keystrokes(window, "enter");
+        cx.run_until_parked();
+    };
+    pick("Python", cx);
+    assert_eq!(language(&model, cx), (Some("python".into()), true));
+    assert!(model.read_with(cx, |model, _| model.language_is_explicit()));
+    pick("Auto Detect", cx);
+    assert_eq!(language(&model, cx), (None, false));
+    assert!(!model.read_with(cx, |model, _| model.language_is_explicit()));
+}
