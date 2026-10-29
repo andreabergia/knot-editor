@@ -26,6 +26,7 @@ mod product;
 mod record_store;
 mod recovery;
 mod resource;
+mod syntax;
 mod terminal;
 mod text_input;
 mod text_view;
