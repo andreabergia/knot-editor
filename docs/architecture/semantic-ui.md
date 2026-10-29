@@ -36,8 +36,9 @@ Views paint styled text by composing each line's runs from ordered highlight
 layers of line-relative `(byte range, highlight name)` spans; a later layer
 overrides an earlier one's color and font and adds its underline. Decorations
 form one layer per severity, so the most severe underline wins where they
-overlap. Highlight names are one dotted vocabulary that every source resolves
-into by longest prefix, and the `Theme` global maps each name to a style.
+overlap. Sources resolve into nvim-treesitter's standard capture names by
+longest dotted prefix; decoration names are separate so no capture can resolve
+to one. The `Theme` global maps each name to a style.
 
 Tree providers use the reverse path:
 

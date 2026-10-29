@@ -1,83 +1,150 @@
 //! Editor colors and the highlight-name vocabulary.
 //!
-//! One vocabulary of dotted highlight names serves every styled-text source:
-//! syntax captures, contribution decorations, and later semantic tokens. A
-//! source name resolves to the vocabulary entry with the longest dotted prefix
-//! (`function.method.call` → `function.method`), and names with no such prefix
-//! are ignored. The `Theme` resolves each vocabulary entry to a style the same
-//! way, so a theme may style `function` alone and have `function.method`
-//! follow it.
+//! Capture names follow nvim-treesitter's standard captures, which upstream
+//! grammar queries also use, so adapted queries keep their names. A source
+//! name resolves to the capture name with the longest dotted prefix
+//! (`function.method.call.deep` → `function.method.call`), and names with no
+//! such prefix are ignored. Decoration names are separate: only native
+//! decorations produce them, so a query can never draw a diagnostic. The
+//! `Theme` resolves every name to a style the same way, so a theme may style
+//! `function` alone and have `function.method` follow it.
 
 use gpui::{
     FontStyle, FontWeight, Global, HighlightStyle, Hsla, StrikethroughStyle, UnderlineStyle, hsla,
     px, rgb,
 };
 
-/// Every highlight name a styled-text source can produce.
-pub(crate) const HIGHLIGHT_NAMES: &[&str] = &[
+/// Every name a syntax capture or semantic token can resolve to.
+pub(crate) const CAPTURE_NAMES: &[&str] = &[
     "attribute",
+    "attribute.builtin",
+    "boolean",
+    "character",
+    "character.special",
     "comment",
-    "comment.doc",
+    "comment.documentation",
+    "comment.error",
+    "comment.note",
+    "comment.todo",
+    "comment.warning",
     "constant",
     "constant.builtin",
-    "diagnostic.error",
-    "diagnostic.info",
-    "diagnostic.warning",
+    "constant.macro",
+    "constructor",
+    "diff.delta",
+    "diff.minus",
+    "diff.plus",
     "function",
+    "function.builtin",
+    "function.call",
     "function.macro",
     "function.method",
+    "function.method.call",
     "keyword",
+    "keyword.conditional",
+    "keyword.conditional.ternary",
+    "keyword.coroutine",
+    "keyword.debug",
+    "keyword.directive",
+    "keyword.directive.define",
+    "keyword.exception",
+    "keyword.function",
+    "keyword.import",
+    "keyword.modifier",
+    "keyword.operator",
+    "keyword.repeat",
+    "keyword.return",
+    "keyword.type",
     "label",
     "markup.heading",
+    "markup.heading.1",
+    "markup.heading.2",
+    "markup.heading.3",
+    "markup.heading.4",
+    "markup.heading.5",
+    "markup.heading.6",
     "markup.italic",
     "markup.link",
-    "markup.link.text",
+    "markup.link.label",
     "markup.link.url",
     "markup.list",
+    "markup.list.checked",
+    "markup.list.unchecked",
+    "markup.math",
     "markup.quote",
     "markup.raw",
+    "markup.raw.block",
     "markup.strikethrough",
     "markup.strong",
-    "namespace",
+    "markup.underline",
+    "module",
+    "module.builtin",
     "number",
+    "number.float",
     "operator",
     "property",
     "punctuation.bracket",
     "punctuation.delimiter",
+    "punctuation.special",
     "string",
+    "string.documentation",
     "string.escape",
+    "string.regexp",
+    "string.special",
+    "string.special.path",
+    "string.special.symbol",
+    "string.special.url",
     "tag",
+    "tag.attribute",
+    "tag.builtin",
+    "tag.delimiter",
     "type",
     "type.builtin",
+    "type.definition",
     "variable",
     "variable.builtin",
+    "variable.member",
     "variable.parameter",
+    "variable.parameter.builtin",
 ];
 
-/// One entry of [`HIGHLIGHT_NAMES`].
+/// Names only native decorations produce.
+const DECORATION_NAMES: &[&str] = &["diagnostic.error", "diagnostic.info", "diagnostic.warning"];
+
+/// One capture or decoration name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct Highlight(u16);
 
 impl Highlight {
-    /// The vocabulary entry with the longest dotted prefix of `name`.
+    /// The capture name with the longest dotted prefix of `name`.
+    // No syntax source resolves captures yet.
+    #[allow(dead_code)]
     pub(crate) fn resolve(name: &str) -> Option<Self> {
         dotted_prefixes(name).find_map(|prefix| {
-            HIGHLIGHT_NAMES
+            CAPTURE_NAMES
                 .iter()
                 .position(|known| *known == prefix)
                 .map(|index| Self(index as u16))
         })
     }
 
-    /// The vocabulary entry named exactly `name`, which must exist.
+    /// The capture or decoration name `name`, which must exist exactly.
     pub(crate) fn named(name: &str) -> Self {
-        let highlight = Self::resolve(name).filter(|highlight| highlight.name() == name);
-        highlight.unwrap_or_else(|| panic!("{name} is not a highlight name"))
+        all_names()
+            .position(|known| known == name)
+            .map(|index| Self(index as u16))
+            .unwrap_or_else(|| panic!("{name} is not a highlight name"))
     }
 
+    #[cfg(test)]
     pub(crate) fn name(self) -> &'static str {
-        HIGHLIGHT_NAMES[self.0 as usize]
+        all_names().nth(self.0 as usize).unwrap()
     }
+}
+
+/// Capture names followed by decoration names, in `Highlight` index order.
+fn all_names() -> impl Iterator<Item = &'static str> {
+    CAPTURE_NAMES.iter().chain(DECORATION_NAMES).copied()
 }
 
 /// `name`, then each shorter prefix ending before a `.`.
@@ -139,15 +206,32 @@ impl Theme {
             },
             &[
                 ("attribute", color(0x9cdcfe)),
+                ("boolean", color(0x569cd6)),
+                ("character", color(0xce9178)),
+                ("character.special", color(0xd7ba7d)),
                 ("comment", italic(0x6a9955)),
+                ("comment.error", bold(0xf48771)),
+                ("comment.note", bold(0x6cb6ff)),
+                ("comment.todo", bold(0xe2c08d)),
+                ("comment.warning", bold(0xe2c08d)),
                 ("constant", color(0x4fc1ff)),
                 ("constant.builtin", color(0x569cd6)),
+                ("constructor", color(0x4ec9b0)),
                 ("diagnostic.error", wavy(0xf48771)),
                 ("diagnostic.info", wavy(0x6cb6ff)),
                 ("diagnostic.warning", wavy(0xe2c08d)),
+                ("diff.delta", color(0xe2c08d)),
+                ("diff.minus", color(0xf48771)),
+                ("diff.plus", color(0x81b88b)),
                 ("function", color(0xdcdcaa)),
                 ("function.macro", color(0x569cd6)),
                 ("keyword", color(0x569cd6)),
+                ("keyword.conditional", color(0xc586c0)),
+                ("keyword.coroutine", color(0xc586c0)),
+                ("keyword.exception", color(0xc586c0)),
+                ("keyword.import", color(0xc586c0)),
+                ("keyword.repeat", color(0xc586c0)),
+                ("keyword.return", color(0xc586c0)),
                 ("label", color(0xc8c8c8)),
                 ("markup.heading", bold(0x569cd6)),
                 (
@@ -179,12 +263,28 @@ impl Theme {
                         ..Default::default()
                     },
                 ),
-                ("namespace", color(0x4ec9b0)),
+                (
+                    "markup.underline",
+                    HighlightStyle {
+                        underline: Some(UnderlineStyle {
+                            thickness: px(1.),
+                            color: None,
+                            wavy: false,
+                        }),
+                        ..Default::default()
+                    },
+                ),
+                ("module", color(0x4ec9b0)),
                 ("number", color(0xb5cea8)),
                 ("property", color(0x9cdcfe)),
+                ("punctuation.special", color(0x569cd6)),
                 ("string", color(0xce9178)),
                 ("string.escape", color(0xd7ba7d)),
+                ("string.regexp", color(0xd16969)),
+                ("string.special", color(0xd7ba7d)),
                 ("tag", color(0x569cd6)),
+                ("tag.attribute", color(0x9cdcfe)),
+                ("tag.delimiter", color(0x808080)),
                 ("type", color(0x4ec9b0)),
                 ("variable", color(0x9cdcfe)),
                 ("variable.builtin", color(0x569cd6)),
@@ -192,11 +292,10 @@ impl Theme {
         )
     }
 
-    /// Resolve every vocabulary entry against `styles` by longest dotted
-    /// prefix; entries with no styled prefix keep the default style.
+    /// Resolve every capture and decoration name against `styles` by longest
+    /// dotted prefix; names with no styled prefix keep the default style.
     fn with_styles(mut theme: Self, styles: &[(&str, HighlightStyle)]) -> Self {
-        theme.highlights = HIGHLIGHT_NAMES
-            .iter()
+        theme.highlights = all_names()
             .map(|name| {
                 dotted_prefixes(name)
                     .find_map(|prefix| {
@@ -230,20 +329,33 @@ mod tests {
     use super::*;
 
     #[test]
-    fn names_resolve_to_the_longest_vocabulary_prefix() {
+    fn names_resolve_to_the_longest_capture_prefix() {
         let name = |name| Highlight::resolve(name).map(Highlight::name);
-        assert_eq!(name("function.method.call"), Some("function.method"));
+        assert_eq!(
+            name("function.method.call.deep"),
+            Some("function.method.call")
+        );
         assert_eq!(name("function.method"), Some("function.method"));
-        assert_eq!(name("function.builtin"), Some("function"));
+        assert_eq!(name("tag.attribute"), Some("tag.attribute"));
         assert_eq!(name("keyword.control.flow"), Some("keyword"));
-        assert_eq!(name("punctuation.special"), None);
-        assert_eq!(name("embedded"), None);
+        assert_eq!(name("spell"), None);
         assert_eq!(name(""), None);
     }
 
     #[test]
-    fn vocabulary_is_sorted_and_unique() {
-        assert!(HIGHLIGHT_NAMES.windows(2).all(|pair| pair[0] < pair[1]));
+    fn captures_never_resolve_to_decorations() {
+        assert_eq!(Highlight::resolve("diagnostic.error"), None);
+        assert_eq!(
+            Highlight::named("diagnostic.error").name(),
+            "diagnostic.error"
+        );
+    }
+
+    #[test]
+    fn names_are_sorted_and_unique() {
+        for names in [CAPTURE_NAMES, DECORATION_NAMES] {
+            assert!(names.windows(2).all(|pair| pair[0] < pair[1]));
+        }
     }
 
     #[test]
@@ -265,8 +377,8 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "function.call is not a highlight name")]
+    #[should_panic(expected = "function.calls is not a highlight name")]
     fn named_requires_an_exact_vocabulary_entry() {
-        Highlight::named("function.call");
+        Highlight::named("function.calls");
     }
 }

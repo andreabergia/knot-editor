@@ -91,8 +91,12 @@ are D064–D067; D066 precedes D058.
     resolves dotted highlight names. There are no user themes, light theme,
     or theming of non-editor surfaces.
   - Reconsider: Daily use needs another palette or appearance-following
-    themes. Then define a theme format over the existing highlight vocabulary,
-    UI color roles for every surface, how personal config and packages
+    themes. Then follow Zed's theme layout rather than designing a format: a
+    JSON theme family with per-theme appearance, flat dotted UI color keys
+    (`editor.background`, `error`, …) for every surface, and a `syntax` map
+    from capture names to color, font style, and weight. Zed's VS Code
+    importer, which maps TextMate scopes onto capture names, shows how VS Code
+    themes could be imported later. Define how personal config and packages
     contribute themes, and selection and persistence with D045.
 
 - **D066 — Syntax-tree editing features and public syntax-tree API**

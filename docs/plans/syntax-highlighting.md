@@ -122,25 +122,31 @@ compile at registration; an unknown grammar rejects `UnknownGrammar` and an
 invalid query rejects `InvalidQuery` with the query error's location, so a bad
 package fails visibly instead of painting nothing. `@knot/languages` keeps each
 query in its own TypeScript module exporting the query text; queries are
-adapted from the upstream grammar repositories (MIT) and normalized to Knot's
-highlight names, with attribution in the package.
+adapted from the upstream grammar repositories (MIT) and nvim-treesitter
+(Apache-2.0), using nvim-treesitter's capture names, with attribution in the package.
 
 ### Highlight names and theme
 
-One vocabulary of dotted highlight names serves tree-sitter captures now and
-LSP semantic tokens later: `keyword`, `string`, `string.escape`, `comment`,
-`comment.doc`, `number`, `constant`, `constant.builtin`, `type`,
-`type.builtin`, `function`, `function.method`, `function.macro`,
-`variable`, `variable.parameter`, `variable.builtin`, `property`,
-`namespace`, `operator`, `punctuation.bracket`, `punctuation.delimiter`,
-`tag`, `attribute`, `label`, and `markup.*` for Markdown. LSP token types and
-modifiers map onto the same names (`parameter` → `variable.parameter`,
-`defaultLibrary` → `.builtin`). Captures outside the vocabulary are ignored.
+Capture names are nvim-treesitter's standard captures (`keyword.return`,
+`function.method.call`, `variable.member`, `tag.attribute`, `markup.heading.1`,
+…), listed in `src/app/theme.rs`. Zed, Helix, and Neovim all style dotted
+capture names with longest-prefix fallback; adopting Neovim's published list
+rather than a Knot-specific one lets adapted upstream queries keep their names,
+and prevents a missing leaf from falling back to the wrong parent
+(`tag.attribute` styled as `tag`). LSP token types and modifiers map onto the
+same names (`parameter` → `variable.parameter`, `defaultLibrary` →
+`.builtin`), as VS Code maps semantic tokens onto TextMate scopes. A capture
+resolves to the capture name with the longest dotted prefix; captures with
+none, such as Neovim's `@spell`, are ignored.
 
-A `Theme` gpui `Global` replaces the editor color constants and resolves a name
-by longest dotted prefix (`function.method.call` → `function.method` →
-`function`) to a color plus bold/italic. One built-in dark palette ships; user
-themes are D064.
+Decoration names (`diagnostic.*`) live beside the captures but are never a
+capture's resolution, so a query cannot draw a diagnostic. VS Code and Zed keep
+diagnostic colors among UI colors; Helix keeps them among highlight names, as
+Knot does, so decorations reuse the layer path.
+
+A `Theme` gpui `Global` replaces the editor color constants and resolves every
+name by longest dotted prefix (`function.method.call` → `function.method` →
+`function`) to a style. One built-in dark palette ships; user themes are D064.
 
 ### Layered painting
 
@@ -204,13 +210,15 @@ fresh.
 2. ✅ **Theme and layered runs.** `Theme` global, the highlight vocabulary, and
    the layer merge feeding `runs_for`; decorations move onto the layer path.
    View tests cover run composition with a fixture layer, tabs, and RTL lines.
-   `src/app/theme.rs` holds the vocabulary (plus `diagnostic.*` for
-   decorations) and the dark palette; `runs_for` in `src/app/editor/layout.rs`
+   `src/app/theme.rs` holds the nvim-treesitter capture names, the separate
+   `diagnostic.*` decoration names, and the dark palette; `runs_for` in `src/app/editor/layout.rs`
    merges layers, and `EditorView::line_runs` is where checkpoint 3 adds the
    syntax layer beneath the decoration layers. Every shaping path (paint,
    caret, hit testing, IME bounds, completion anchor) uses the same runs, so
    bold and italic highlights keep geometry consistent. Decoration underlines
    are now text-run underlines rather than a separate overlay.
+   `Highlight::resolve` carries a `dead_code` allowance until checkpoint 3
+   resolves captures.
 3. 📝 **Native syntax engine.** Grammar table, `SyntaxState`, incremental edits,
    budgeted foreground parse with background continuation, visible-range
    highlight queries. Tests: after random edit sequences, incremental spans equal
@@ -225,7 +233,7 @@ fresh.
    registration and teardown.
 6. 📝 **`@knot/languages`.** Registrations and normalized queries for every
    bundled grammar, with `node:test` coverage that each query compiles against
-   its grammar name and captures only vocabulary names.
+   its grammar name and uses only names in `CAPTURE_NAMES`.
 7. 📝 **Set Language Mode and persistence.** Palette command backed by a picker,
    explicit language in the window layout, restoration through hot exit and
    project sessions.
