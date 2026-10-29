@@ -5,23 +5,92 @@ use super::*;
 
 impl EditorView {
     /// Text runs for `line`, whose content is `text`, from the view's
-    /// highlight layers.
-    pub(super) fn line_runs(&self, line: usize, text: &str, cx: &App) -> Vec<TextRun> {
+    /// highlight layers: syntax, then decorations.
+    pub(super) fn line_runs(
+        &self,
+        model: &BufferModel,
+        line: usize,
+        text: &str,
+        cx: &App,
+    ) -> Vec<TextRun> {
+        let syntax = self.syntax_layer(model, line);
         let decorations = self.decoration_layers(line);
-        let layers = decorations.each_ref().map(Vec::as_slice);
+        let mut layers = vec![syntax.as_slice()];
+        layers.extend(decorations.iter().map(Vec::as_slice));
         runs_for(text, &layers, cx.global::<Theme>())
     }
 
     /// Shape `line`, whose content is `text`, with its highlight runs.
     pub(super) fn shape_line(
         &self,
+        model: &BufferModel,
         line: usize,
         text: &str,
         window: &Window,
         cx: &App,
     ) -> ShapedLine {
-        let runs = self.line_runs(line, text, cx);
+        let runs = self.line_runs(model, line, text, cx);
         shape_editor_line(window, text.to_owned().into(), px(FONT_SIZE), &runs)
+    }
+
+    /// Query the syntax highlights of `lines` at once, so painting and the
+    /// geometry of those lines share one query per syntax generation.
+    pub(super) fn cache_syntax(&self, model: &BufferModel, lines: Range<usize>) {
+        let Some(generation) = model.syntax_generation() else {
+            return;
+        };
+        if lines.is_empty() {
+            return;
+        }
+        let range = model.line_range(lines.start).start..model.line_range(lines.end - 1).end;
+        let mut cache = self.syntax_cache.borrow_mut();
+        if cache
+            .as_ref()
+            .is_some_and(|cache| cache.covers(generation, &range))
+        {
+            return;
+        }
+        *cache = Some(SyntaxCache {
+            generation,
+            spans: model.syntax_highlights(range.clone()),
+            range,
+        });
+    }
+
+    /// The syntax highlights on `line`, relative to its start.
+    fn syntax_layer(&self, model: &BufferModel, line: usize) -> Vec<HighlightSpan> {
+        let Some(generation) = model.syntax_generation() else {
+            return Vec::new();
+        };
+        let range = model.line_range(line);
+        if range.is_empty() {
+            return Vec::new();
+        }
+        let cache = self.syntax_cache.borrow();
+        let queried;
+        let spans = match cache
+            .as_ref()
+            .filter(|cache| cache.covers(generation, &range))
+        {
+            Some(cache) => {
+                let first = cache
+                    .spans
+                    .partition_point(|(span, _)| span.end <= range.start);
+                &cache.spans[first..]
+            }
+            None => {
+                queried = model.syntax_highlights(range.clone());
+                &queried[..]
+            }
+        };
+        spans
+            .iter()
+            .take_while(|(span, _)| span.start < range.end)
+            .map(|(span, highlight)| HighlightSpan {
+                range: span.start.saturating_sub(range.start)..span.end - range.start,
+                highlight: *highlight,
+            })
+            .collect()
     }
 
     /// The decorations on `line`, one layer per severity in increasing
@@ -57,7 +126,7 @@ impl EditorView {
 
     pub(super) fn caret_x(&self, model: &BufferModel, window: &Window, cx: &App) -> Pixels {
         let text = line_text(model, self.cursor_line);
-        let shaped = self.shape_line(self.cursor_line, &text, window, cx);
+        let shaped = self.shape_line(model, self.cursor_line, &text, window, cx);
         x_for_index_dir(&shaped, self.cursor_col, &text)
             + self.line_x_offset(&text, shaped.width, self.text_bounds().size.width)
             + px(self.scroll_x)
@@ -72,7 +141,7 @@ impl EditorView {
         cx: &App,
     ) -> usize {
         let text = line_text(model, line);
-        let shaped = self.shape_line(line, &text, window, cx);
+        let shaped = self.shape_line(model, line, &text, window, cx);
         let offset = self.line_x_offset(&text, shaped.width, self.text_bounds().size.width)
             + px(self.scroll_x);
         text.grapheme_indices(true)

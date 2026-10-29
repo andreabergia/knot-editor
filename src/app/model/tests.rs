@@ -765,3 +765,114 @@ fn buffer_subscriptions_are_scoped_by_buffer_and_lifecycle() {
     registry.remove_buffer(second_buffer);
     assert_eq!(registry.for_buffer(second_buffer).count(), 0);
 }
+
+fn rust_syntax() -> Option<Arc<SyntaxLanguage>> {
+    let highlights = "\"fn\" @keyword\n(identifier) @variable\n(line_comment) @comment\n";
+    Some(Arc::new(SyntaxLanguage::new("rust", highlights).unwrap()))
+}
+
+fn syntax_names(model: &BufferModel) -> Vec<(String, &'static str)> {
+    model
+        .syntax_highlights(0..model.len())
+        .into_iter()
+        .map(|(range, highlight)| (model.read(range), highlight.name()))
+        .collect()
+}
+
+#[gpui::test]
+fn syntax_follows_every_commit_path(cx: &mut gpui::TestAppContext) {
+    let model = cx.new(|_| BufferModel::from_text("fn a() {}"));
+    let fresh = |text: &str, cx: &mut gpui::TestAppContext| {
+        let model = cx.new(|_| BufferModel::from_text(text));
+        model.update(cx, |model, cx| model.set_syntax(rust_syntax(), cx));
+        model.read_with(cx, |model, _| syntax_names(model))
+    };
+    model.update(cx, |model, cx| model.set_syntax(rust_syntax(), cx));
+    assert_eq!(
+        model.read_with(cx, |model, _| syntax_names(model)),
+        [("fn".into(), "keyword"), ("a".into(), "variable")]
+    );
+
+    model.update(cx, |model, _| model.replace(0..0, "// x\n").unwrap());
+    let expected = fresh("// x\nfn a() {}", cx);
+    assert_eq!(expected[0], ("// x".into(), "comment"));
+    assert_eq!(
+        model.read_with(cx, |model, _| syntax_names(model)),
+        expected
+    );
+
+    model.update(cx, |model, _| {
+        let edits = [TextEdit {
+            range: ByteRange {
+                start_byte_offset: 8,
+                end_byte_offset: 9,
+            },
+            text: "bc".into(),
+        }];
+        assert!(model.apply_edits(&edits, model.revision()).unwrap());
+    });
+    assert_eq!(
+        model.read_with(cx, |model, _| syntax_names(model)),
+        fresh("// x\nfn bc() {}", cx)
+    );
+
+    model.update(cx, |model, _| assert!(model.undo().unwrap()));
+    assert_eq!(
+        model.read_with(cx, |model, _| syntax_names(model)),
+        expected
+    );
+    model.update(cx, |model, _| assert!(model.redo().unwrap()));
+    assert_eq!(
+        model.read_with(cx, |model, _| syntax_names(model)),
+        fresh("// x\nfn bc() {}", cx)
+    );
+}
+
+#[gpui::test]
+fn an_over_budget_parse_continues_in_the_background(cx: &mut gpui::TestAppContext) {
+    let model = cx.new(|_| BufferModel::from_text("fn a() { let x = 1; }\n".repeat(20_000)));
+    model.update(cx, |model, cx| model.set_syntax(rust_syntax(), cx));
+    let generation = model.read_with(cx, |model, _| {
+        assert!(model.syntax_highlights(0..2).is_empty());
+        model.syntax_generation()
+    });
+
+    // A commit while the parse runs is rebased into its result.
+    model.update(cx, |model, cx| {
+        model.replace(0..0, "// c\n").unwrap();
+        cx.notify();
+    });
+    cx.run_until_parked();
+    model.read_with(cx, |model, _| {
+        assert_ne!(model.syntax_generation(), generation);
+        let names: Vec<_> = model
+            .syntax_highlights(0..12)
+            .into_iter()
+            .map(|(range, highlight)| (model.read(range), highlight.name()))
+            .collect();
+        assert_eq!(
+            names,
+            [
+                ("// c".into(), "comment"),
+                ("fn".into(), "keyword"),
+                ("a".into(), "variable")
+            ]
+        );
+    });
+}
+
+#[gpui::test]
+fn closing_or_clearing_syntax_releases_it(cx: &mut gpui::TestAppContext) {
+    let model = cx.new(|_| BufferModel::from_text("fn a() {}"));
+    model.update(cx, |model, cx| {
+        model.set_syntax(rust_syntax(), cx);
+        let parsed = model.syntax_generation();
+        model.set_syntax(rust_syntax(), cx);
+        assert_ne!(model.syntax_generation(), parsed);
+        model.set_syntax(None, cx);
+        assert_eq!(model.syntax_generation(), None);
+        model.set_syntax(rust_syntax(), cx);
+        model.close();
+        assert_eq!(model.syntax_generation(), None);
+    });
+}

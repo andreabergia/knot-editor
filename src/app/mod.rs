@@ -26,7 +26,7 @@ mod product;
 mod record_store;
 mod recovery;
 mod resource;
-// No buffer parses syntax yet.
+// No language registration creates a `SyntaxLanguage` yet.
 #[allow(dead_code)]
 mod syntax;
 mod terminal;

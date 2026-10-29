@@ -183,10 +183,11 @@ impl Element for EditorElement {
             let first = (view.scroll / LINE_HEIGHT).floor() as usize;
             let visible_rows = (f32::from(bounds.size.height) / LINE_HEIGHT).ceil() as usize + 1;
             let last = (first + visible_rows).min(view.line_count);
+            view.cache_syntax(model, first..last);
             let vis = (first..last)
                 .map(|ix| {
                     let text = line_text(model, ix);
-                    let runs = view.line_runs(ix, &text, cx);
+                    let runs = view.line_runs(model, ix, &text, cx);
                     (ix, text, runs)
                 })
                 .collect();

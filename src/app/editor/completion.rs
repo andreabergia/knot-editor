@@ -118,7 +118,7 @@ impl EditorView {
         let x = if text.is_empty() {
             px(0.)
         } else {
-            let shaped = self.shape_line(line, &text, window, cx);
+            let shaped = self.shape_line(model, line, &text, window, cx);
             let text_bounds = self.text_bounds();
             text_bounds.origin.x - self.bounds.origin.x
                 + self.line_x_offset(&text, shaped.width, text_bounds.size.width)

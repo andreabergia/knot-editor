@@ -150,7 +150,7 @@ impl EditorView {
         if text.is_empty() {
             return (line, 0);
         }
-        let shaped = self.shape_line(line, &text, window, cx);
+        let shaped = self.shape_line(model, line, &text, window, cx);
         let x = p.x - origin.x - self.line_x_offset(&text, shaped.width, text_bounds.size.width);
         let col = text
             .grapheme_indices(true)
@@ -331,7 +331,7 @@ impl EntityInputHandler for EditorView {
             });
         }
 
-        let shaped = self.shape_line(line, &line_str, window, cx);
+        let shaped = self.shape_line(model, line, &line_str, window, cx);
         let x0 = x_for_index_dir(&shaped, start_col, &line_str);
         let x1 = if start_line == end_line {
             x_for_index_dir(&shaped, end_col, &line_str)

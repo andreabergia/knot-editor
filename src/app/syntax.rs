@@ -48,6 +48,12 @@ const DEFAULT_PRIORITY: u32 = 100;
 /// started it.
 static NEXT_PARSE: AtomicU64 = AtomicU64::new(1);
 
+static NEXT_GENERATION: AtomicU64 = AtomicU64::new(1);
+
+fn next_generation() -> u64 {
+    NEXT_GENERATION.fetch_add(1, Ordering::Relaxed)
+}
+
 /// A grammar and the queries that highlight it.
 pub(crate) struct SyntaxLanguage {
     grammar: Language,
@@ -113,7 +119,8 @@ pub(crate) struct SyntaxState {
     /// Whether `tree` is a parse of the current text rather than an edited
     /// parse of older text.
     current: bool,
-    /// Changes whenever the highlights may have changed.
+    /// Changes whenever the highlights may have changed, and is never shared
+    /// with another state, so a view's cache cannot outlive a replacement.
     generation: u64,
     /// The running background parse and the edits committed since it took
     /// its snapshot.
@@ -147,7 +154,7 @@ impl SyntaxState {
             parser,
             tree: None,
             current: false,
-            generation: 0,
+            generation: next_generation(),
             background: None,
         }
     }
@@ -175,7 +182,7 @@ impl SyntaxState {
         }
         if !edits.is_empty() {
             self.current = false;
-            self.generation += 1;
+            self.generation = next_generation();
         }
     }
 
@@ -246,7 +253,7 @@ impl SyntaxState {
     fn accept(&mut self, tree: Tree, current: bool) {
         self.tree = Some(tree);
         self.current = current;
-        self.generation += 1;
+        self.generation = next_generation();
     }
 
     /// Sorted, non-overlapping highlights of `text`, the current text, within

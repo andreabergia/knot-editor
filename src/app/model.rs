@@ -8,7 +8,7 @@ use std::{
     time::Instant,
 };
 
-use gpui::{AppContext, Entity, WeakEntity};
+use gpui::{AppContext, Context, Entity, Subscription, WeakEntity};
 
 use crate::{
     core::{
@@ -21,7 +21,11 @@ use crate::{
     },
 };
 
-use super::history::{EditGrouping, EditHistory, HistoryViewChange, HistoryViewState};
+use super::{
+    history::{EditGrouping, EditHistory, HistoryViewChange, HistoryViewState},
+    syntax::{FOREGROUND_BUDGET, ParsedTree, SyntaxLanguage, SyntaxState},
+    theme::Highlight,
+};
 
 /// The extension lifecycle whose complete contribution set is stored in this buffer.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -116,6 +120,11 @@ pub struct BufferModel {
     history: EditHistory,
     history_replay_generation: u64,
     history_view_restore: Option<HistoryViewRestore>,
+    /// Derived syntax tree, kept current with every commit.
+    syntax: Option<SyntaxState>,
+    /// Starts a background parse after any notify that leaves the tree
+    /// behind the text, so commit paths need no gpui context.
+    syntax_driver: Option<Subscription>,
     /// Whole-document reads, so tests can assert that views never make them.
     #[cfg(test)]
     whole_text_reads: std::cell::Cell<usize>,
@@ -182,6 +191,8 @@ impl BufferModel {
             history: EditHistory::default(),
             history_replay_generation: 0,
             history_view_restore: None,
+            syntax: None,
+            syntax_driver: None,
             #[cfg(test)]
             whole_text_reads: Default::default(),
         }
@@ -392,9 +403,14 @@ impl BufferModel {
         }
     }
 
-    fn stabilize_anchored_ranges(&mut self) {
+    /// Feed a commit's primitive edits to every edit-log observer, then
+    /// discard them.
+    fn observe_committed_edits(&mut self, seq: usize) {
+        if let Some(syntax) = &mut self.syntax {
+            syntax.edit(self.buffer.edits_since(seq));
+            syntax.parse_in_foreground(&self.buffer.snapshot(), FOREGROUND_BUDGET);
+        }
         let consumed = self.anchored_ranges.stabilize(&self.buffer).consumed;
-        // The store is the log's only observer.
         self.buffer.discard_edits_before(self.buffer.edit_seq());
         if consumed.is_empty() {
             return;
@@ -442,6 +458,64 @@ impl BufferModel {
                 command: metadata.command.clone(),
             })
             .collect()
+    }
+
+    /// Parse this buffer as `language`, discarding any previous tree, or stop
+    /// parsing with `None`.
+    // No language registration attaches syntax yet.
+    #[allow(dead_code)]
+    pub(crate) fn set_syntax(
+        &mut self,
+        language: Option<Arc<SyntaxLanguage>>,
+        cx: &mut Context<Self>,
+    ) {
+        self.syntax = language.map(|language| {
+            let mut syntax = SyntaxState::new(language);
+            syntax.parse_in_foreground(&self.buffer.snapshot(), FOREGROUND_BUDGET);
+            syntax
+        });
+        if self.syntax.is_some() && self.syntax_driver.is_none() {
+            self.syntax_driver = Some(cx.observe_self(Self::continue_syntax_parse));
+        }
+        cx.notify();
+    }
+
+    fn continue_syntax_parse(&mut self, cx: &mut Context<Self>) {
+        let Some(syntax) = self
+            .syntax
+            .as_mut()
+            .filter(|syntax| syntax.needs_background_parse())
+        else {
+            return;
+        };
+        let parse = syntax.start_background_parse(self.buffer.snapshot());
+        cx.spawn(async move |this, cx| {
+            let parsed = cx.background_spawn(async move { parse.run() }).await;
+            this.update(cx, |model, cx| model.finish_syntax_parse(parsed, cx))
+        })
+        .detach();
+    }
+
+    fn finish_syntax_parse(&mut self, parsed: ParsedTree, cx: &mut Context<Self>) {
+        let Some(syntax) = &mut self.syntax else {
+            return;
+        };
+        if syntax.finish_background_parse(parsed) {
+            syntax.parse_in_foreground(&self.buffer.snapshot(), FOREGROUND_BUDGET);
+            cx.notify();
+        }
+    }
+
+    /// Identifies the current syntax highlights; `None` without syntax.
+    pub(crate) fn syntax_generation(&self) -> Option<u64> {
+        self.syntax.as_ref().map(SyntaxState::generation)
+    }
+
+    /// Sorted, non-overlapping syntax highlights within `range`.
+    pub(crate) fn syntax_highlights(&self, range: Range<usize>) -> Vec<(Range<usize>, Highlight)> {
+        self.syntax
+            .as_ref()
+            .map_or_else(Vec::new, |syntax| syntax.highlights(&self.buffer, range))
     }
 
     pub(crate) fn add_view_position(&mut self, range: Range<usize>) -> Option<AnchoredRangeId> {
@@ -585,6 +659,7 @@ impl BufferModel {
         }
         let before_state = self.content_state;
         let after_state = self.allocate_content_state();
+        let seq = self.buffer.edit_seq();
         self.history.apply_batch(
             &mut self.buffer,
             validated.into_iter(),
@@ -592,7 +667,7 @@ impl BufferModel {
             after_state,
         );
         self.content_state = after_state;
-        self.stabilize_anchored_ranges();
+        self.observe_committed_edits(seq);
         let before_revision = self.revision;
         self.advance_revision();
         self.pending_changes.push_back(CommittedBufferChange {
@@ -672,6 +747,7 @@ impl BufferModel {
         };
         let before_state = self.content_state;
         let after_state = self.allocate_content_state();
+        let seq = self.buffer.edit_seq();
         self.history.apply_replace(
             &mut self.buffer,
             (range, text),
@@ -681,7 +757,7 @@ impl BufferModel {
             view,
         );
         self.content_state = after_state;
-        self.stabilize_anchored_ranges();
+        self.observe_committed_edits(seq);
         let before_revision = self.revision;
         self.advance_revision();
         self.pending_changes.push_back(CommittedBufferChange {
@@ -741,7 +817,7 @@ impl BufferModel {
         self.content_state = state.content_state;
         let view_state = state.view_state;
         let edit = self.covering_edit(seq);
-        self.stabilize_anchored_ranges();
+        self.observe_committed_edits(seq);
         let before_revision = self.revision;
         self.advance_revision();
         if let Some(view_state) = view_state {
@@ -796,6 +872,8 @@ impl BufferModel {
         self.anchored_ranges = AnchoredRangeStore::new();
         self.contributions = ContributionRegistry::new();
         self.pending_changes.clear();
+        self.syntax = None;
+        self.syntax_driver = None;
         self.open = false;
     }
 

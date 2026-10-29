@@ -9,9 +9,12 @@ use super::{
     layout::{HighlightSpan, runs_for, shape_editor_line, x_for_index_dir},
     project_contributions, to_flat_utf16,
 };
+use std::sync::Arc;
+
 use crate::{
     app::{
         completion::CompletionProviderRegistry,
+        syntax::SyntaxLanguage,
         theme::{Highlight, Theme},
     },
     host::protocol::{
@@ -1060,7 +1063,7 @@ fn overlapping_decorations_underline_with_the_most_severe(cx: &mut TestAppContex
         let underline = |name| Some(theme.underline_color(Highlight::named(name)));
         let fg = theme.foreground;
         assert_eq!(
-            run_styles(&editor.read(cx).line_runs(0, "abcdefgh", cx)),
+            run_styles(&editor.read(cx).line_runs(model.read(cx), 0, "abcdefgh", cx)),
             [
                 (2, fg, underline("diagnostic.warning")),
                 (4, fg, underline("diagnostic.error")),
@@ -1106,4 +1109,74 @@ fn gutter_markers_reserve_a_column_beside_the_text(cx: &mut TestAppContext) {
             })
         });
     }
+}
+
+#[gpui::test]
+fn syntax_highlights_paint_beneath_decorations(cx: &mut TestAppContext) {
+    let model = cx.new(|_| BufferModel::from_text("fn ab() {}\nlet c;"));
+    let editor = cx.new(|cx| EditorView::new(model.clone(), cx));
+    model.update(cx, |model, cx| {
+        let highlights = "\"fn\" @keyword\n(function_item name: (identifier) @function)\n";
+        let language = SyntaxLanguage::new("rust", highlights).unwrap();
+        model.set_syntax(Some(Arc::new(language)), cx);
+        let warning = EditorContribution {
+            range: ByteRange {
+                start_byte_offset: 0,
+                end_byte_offset: 5,
+            },
+            decoration: Some(DecorationToken::Warning),
+            gutter: None,
+            command: None,
+        };
+        model
+            .replace_contributions(ContributionSource::fixture(), &[warning], model.revision())
+            .unwrap();
+        cx.notify();
+    });
+    cx.run_until_parked();
+
+    let runs = |cx: &mut TestAppContext| {
+        cx.read(|cx| {
+            let view = editor.read(cx);
+            let model = model.read(cx);
+            view.cache_syntax(model, 0..model.line_count());
+            run_styles(&view.line_runs(model, 0, &model.read(model.line_range(0)), cx))
+        })
+    };
+    let (keyword, function, warning, fg) = cx.read(|cx| {
+        let theme = cx.global::<Theme>();
+        let color = |name| theme.style(Highlight::named(name)).color.unwrap();
+        (
+            color("keyword"),
+            color("function"),
+            Some(theme.underline_color(Highlight::named("diagnostic.warning"))),
+            theme.foreground,
+        )
+    });
+    assert_eq!(
+        runs(cx),
+        [
+            (2, keyword, warning),
+            (1, fg, warning),
+            (2, function, warning),
+            (5, fg, None),
+        ]
+    );
+
+    // An edit changes the syntax generation, so the cached visible range is
+    // not reused for the new text. The anchored warning grows with it.
+    model.update(cx, |model, cx| {
+        model.replace(3..5, "abcd").unwrap();
+        cx.notify();
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        runs(cx),
+        [
+            (2, keyword, warning),
+            (1, fg, warning),
+            (4, function, warning),
+            (5, fg, None),
+        ]
+    );
 }

@@ -96,10 +96,9 @@ use std::ops::Range;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-// No product reader takes snapshots yet.
-#[allow(unused_imports)]
 pub use snapshot::TextSnapshot;
 
+// Product readers stream snapshots through `chunk_at` alone.
 #[allow(dead_code)]
 mod snapshot;
 

@@ -19,6 +19,7 @@ use text::*;
 
 use gpui::{prelude::*, *};
 use std::{
+    cell::RefCell,
     ops::Range,
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -51,6 +52,21 @@ struct RenderedDecoration {
     start: usize,
     end: usize,
     token: DecorationToken,
+}
+
+/// Syntax highlights queried for a range of whole lines.
+struct SyntaxCache {
+    generation: u64,
+    range: Range<usize>,
+    spans: Vec<(Range<usize>, Highlight)>,
+}
+
+impl SyntaxCache {
+    fn covers(&self, generation: u64, range: &Range<usize>) -> bool {
+        self.generation == generation
+            && self.range.start <= range.start
+            && range.end <= self.range.end
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -121,6 +137,9 @@ pub struct EditorView {
     decorations: Vec<RenderedDecoration>,
     gutter_markers: Vec<RenderedGutterMarker>,
     contribution_actions: Vec<RenderedContributionAction>,
+    /// The visible lines' syntax highlights, filled during paint and reused
+    /// by caret, hit-testing, and IME geometry on those lines.
+    syntax_cache: RefCell<Option<SyntaxCache>>,
     /// Vertical scroll offset in pixels (0 = top of buffer).
     scroll: f32,
     /// Caret position: (line index, byte offset within that line).
@@ -354,6 +373,7 @@ impl EditorView {
             decorations,
             gutter_markers,
             contribution_actions,
+            syntax_cache: RefCell::default(),
             scroll: 0.,
             cursor_line: 0,
             cursor_col: 0,
