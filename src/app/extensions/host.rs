@@ -2503,10 +2503,35 @@ mod tests {
         }
         cx.read(|cx| {
             let report = host.read(cx).startup_report.as_ref().unwrap();
-            assert!(report.report.entries.iter().any(|entry| {
-                entry.name.as_deref() == Some("@knot/projects")
-                    && entry.result == LoadResult::Loaded
-            }));
+            for name in ["@knot/projects", "@knot/languages"] {
+                let entry = report
+                    .report
+                    .entries
+                    .iter()
+                    .find(|entry| entry.name.as_deref() == Some(name))
+                    .unwrap_or_else(|| panic!("{name} was not discovered"));
+                // A query that fails to compile rejects its registration and
+                // so fails the package's start.
+                assert_eq!(entry.result, LoadResult::Loaded, "{name}");
+            }
+            // Every compiled-in grammar has a language, so every bundled
+            // query compiled against its grammar.
+            let languages = crate::app::languages::list(cx);
+            let mut grammars: Vec<_> = languages
+                .iter()
+                .map(|language| language.grammar.as_str())
+                .collect();
+            grammars.sort();
+            grammars.dedup();
+            assert_eq!(
+                grammars,
+                crate::app::syntax::grammars::grammar_ids().collect::<Vec<_>>()
+            );
+            assert!(
+                languages
+                    .iter()
+                    .any(|language| language.id == "typescriptreact")
+            );
         });
     }
 }

@@ -340,6 +340,23 @@ mod tests {
         assert_eq!(name(""), None);
     }
 
+    /// The in-memory extension test host checks queries against the same names.
+    #[test]
+    fn fake_host_lists_every_capture_name() {
+        let fake = include_str!("../../scripts/extensions/testing/host.ts")
+            .split("export const CAPTURE_NAMES: readonly string[] = [")
+            .nth(1)
+            .unwrap()
+            .split("];")
+            .next()
+            .unwrap()
+            .split('"')
+            .skip(1)
+            .step_by(2)
+            .collect::<Vec<_>>();
+        assert_eq!(fake, CAPTURE_NAMES);
+    }
+
     #[test]
     fn captures_never_resolve_to_decorations() {
         assert_eq!(Highlight::resolve("diagnostic.error"), None);

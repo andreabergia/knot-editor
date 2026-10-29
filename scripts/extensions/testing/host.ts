@@ -460,6 +460,30 @@ const GRAMMARS = [
   "markdown_inline", "python", "query", "rust", "toml", "tsx", "typescript", "yaml",
 ];
 
+/** The names a highlight capture resolves to, as `src/app/theme.rs` lists
+ * them; queries should use these exactly so no capture is silently ignored. */
+export const CAPTURE_NAMES: readonly string[] = [
+  "attribute", "attribute.builtin", "boolean", "character", "character.special", "comment",
+  "comment.documentation", "comment.error", "comment.note", "comment.todo", "comment.warning",
+  "constant", "constant.builtin", "constant.macro", "constructor", "diff.delta", "diff.minus",
+  "diff.plus", "function", "function.builtin", "function.call", "function.macro",
+  "function.method", "function.method.call", "keyword", "keyword.conditional",
+  "keyword.conditional.ternary", "keyword.coroutine", "keyword.debug", "keyword.directive",
+  "keyword.directive.define", "keyword.exception", "keyword.function", "keyword.import",
+  "keyword.modifier", "keyword.operator", "keyword.repeat", "keyword.return", "keyword.type",
+  "label", "markup.heading", "markup.heading.1", "markup.heading.2", "markup.heading.3",
+  "markup.heading.4", "markup.heading.5", "markup.heading.6", "markup.italic", "markup.link",
+  "markup.link.label", "markup.link.url", "markup.list", "markup.list.checked",
+  "markup.list.unchecked", "markup.math", "markup.quote", "markup.raw", "markup.raw.block",
+  "markup.strikethrough", "markup.strong", "markup.underline", "module", "module.builtin",
+  "number", "number.float", "operator", "property", "punctuation.bracket",
+  "punctuation.delimiter", "punctuation.special", "string", "string.documentation",
+  "string.escape", "string.regexp", "string.special", "string.special.path",
+  "string.special.symbol", "string.special.url", "tag", "tag.attribute", "tag.builtin",
+  "tag.delimiter", "type", "type.builtin", "type.definition", "variable", "variable.builtin",
+  "variable.member", "variable.parameter", "variable.parameter.builtin",
+];
+
 /** Every live language registration, queries included, in registration order. */
 export function languageDefinitions(): readonly Knot.LanguageDefinition[] {
   return state.languages;

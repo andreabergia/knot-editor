@@ -58,3 +58,8 @@ path = "src/lib.rs"
 [[bin]]
 name = "knot"
 path = "src/main.rs"
+
+# Startup compiles every bundled highlight query; unoptimized, the query
+# compiler takes seconds, so debug builds and tests optimize the runtime.
+[profile.dev.package.tree-sitter]
+opt-level = 3

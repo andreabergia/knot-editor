@@ -358,9 +358,10 @@ fn bundled_packages_merge_with_installed_discovery() {
     let bundled = report
         .packages
         .iter()
-        .find(|package| package.origin == PackageOrigin::Bundled)
+        .find(|package| {
+            package.origin == PackageOrigin::Bundled && package.manifest.name == "@knot/projects"
+        })
         .expect("bundled package is discovered");
-    assert_eq!(bundled.manifest.name, "@knot/projects");
     assert!(bundled.sources.contains_key("dist/main.js"));
     assert!(bundled.sources.contains_key("dist/switch.js"));
     assert!(

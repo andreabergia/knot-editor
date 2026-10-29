@@ -343,9 +343,39 @@ fresh.
    - The manifest schema needed no change, since languages are registered
      through the API. The fake host lists the native grammars, checked by a
      Rust test, and does not compile queries.
-6. 📝 **`@knot/languages`.** Registrations and normalized queries for every
+6. ✅ **`@knot/languages`.** Registrations and normalized queries for every
    bundled grammar, with `node:test` coverage that each query compiles against
    its grammar name and uses only names in `CAPTURE_NAMES`.
+   - `extensions/@knot/languages` registers 20 LSP language IDs over the 18
+     grammars (`javascriptreact` shares `javascript`, `jsonc` shares `json`,
+     and `markdown_inline` is registered without file patterns so Markdown can
+     inject it). `src/languages.ts` holds the definitions; each grammar's
+     highlight query is a module under `src/queries/`, composed the way
+     nvim-treesitter's `; inherits:` does (C under C++, `ecma` under
+     JavaScript and TypeScript, JSX under both React languages). The package
+     carries nvim-treesitter's Apache-2.0 license.
+   - Queries are nvim-treesitter's, normalized for the native engine:
+     `#lua-match?` became `#match?` with Rust regex syntax, `#has-ancestor?`
+     and `#has-parent?` patterns were rewritten structurally, and conceal,
+     `@spell`, `@nospell`, `@none`, and URL metadata were dropped. Injections are
+     hand-picked in `src/queries/injections.ts`: only those that target a
+     bundled language and need no `#offset!` or `injection.combined`
+     (Markdown fences, inline, HTML blocks, YAML front matter; HTML script,
+     style, and event attributes; Rust macros; C++ raw strings).
+   - `node:test` checks that every highlight capture is in `CAPTURE_NAMES`
+     (mirrored in the fake host and checked against `theme.rs` by a Rust test),
+     injections capture only injection names, queries use only predicates the
+     native engine evaluates, fixed injection languages are registered, and no
+     two languages claim one pattern. Native compilation is covered by the
+     bundled-discovery product test, which requires the package to load and a
+     language for every grammar.
+   - Compiling every query took about 420 ms on the foreground (C++ alone
+     130 ms, from many nested patterns at about 10 ms each). `registerLanguage`
+     now compiles on the background executor and only inserts the compiled
+     language on the foreground, so a package's registrations compile in
+     parallel. Unoptimized, the query compiler took about 2 s and pushed
+     product startup tests past their deadline, so the dev profile optimizes
+     the `tree-sitter` crate.
 7. 📝 **Set Language Mode and persistence.** Palette command backed by a picker,
    explicit language in the window layout, restoration through hot exit and
    project sessions.
