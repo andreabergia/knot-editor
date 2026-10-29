@@ -66,18 +66,19 @@ fn names(registry: &LanguageRegistry) -> Vec<(String, String)> {
 #[test]
 fn higher_owners_define_a_language_and_removal_reveals_the_next() {
     let mut registry = LanguageRegistry::default();
-    registry
-        .register(owner(PERSONAL, 3), definition("rust", "Personal"))
-        .unwrap();
-    registry
-        .register(owner(BUNDLED, 1), definition("rust", "Bundled"))
-        .unwrap();
-    let installed = registry
-        .register(owner(INSTALLED, 2), definition("rust", "Installed"))
-        .unwrap();
-    registry
-        .register(owner(BUNDLED, 1), definition("go", "Go"))
-        .unwrap();
+    registry.register(
+        owner(PERSONAL, 3),
+        definition("rust", "Personal").compile().unwrap(),
+    );
+    registry.register(
+        owner(BUNDLED, 1),
+        definition("rust", "Bundled").compile().unwrap(),
+    );
+    let installed = registry.register(
+        owner(INSTALLED, 2),
+        definition("rust", "Installed").compile().unwrap(),
+    );
+    registry.register(owner(BUNDLED, 1), definition("go", "Go").compile().unwrap());
     assert_eq!(
         names(&registry),
         [
@@ -98,32 +99,31 @@ fn higher_owners_define_a_language_and_removal_reveals_the_next() {
     assert!(!registry.unregister(ExtensionId::new(2), ExtensionLifecycleId::new(1), installed));
 
     // A later registration wins within one owner kind.
-    registry
-        .register(owner(BUNDLED, 4), definition("rust", "Later"))
-        .unwrap();
+    registry.register(
+        owner(BUNDLED, 4),
+        definition("rust", "Later").compile().unwrap(),
+    );
     assert_eq!(names(&registry)[1].1, "Later");
 }
 
 #[test]
-fn registration_errors_name_the_grammar_or_query() {
-    let mut registry = LanguageRegistry::default();
+fn compile_errors_name_the_grammar_or_query() {
     let mut unknown = definition("cobol", "COBOL");
     unknown.info.grammar = "cobol".into();
-    assert_eq!(
-        registry.register(owner(BUNDLED, 1), unknown),
+    assert!(matches!(
+        unknown.compile(),
         Err(SyntaxLanguageError::UnknownGrammar)
-    );
+    ));
     let mut invalid = definition("rust", "Rust");
     invalid.injections = "(not_a_node) @injection.content".into();
     assert!(matches!(
-        registry.register(owner(BUNDLED, 1), invalid),
+        invalid.compile(),
         Err(SyntaxLanguageError::InvalidQuery {
             query: SyntaxQuery::Injections,
             row: 0,
             ..
         })
     ));
-    assert!(registry.list().is_empty());
 }
 
 #[test]
@@ -136,7 +136,7 @@ fn detection_prefers_names_then_longest_extensions_then_interpreters() {
         claiming("python", &["py"], &[], &["python"]),
         claiming("shellscript", &["sh", "bashrc"], &[], &["bash", "sh"]),
     ] {
-        registry.register(owner(BUNDLED, 1), definition).unwrap();
+        registry.register(owner(BUNDLED, 1), definition.compile().unwrap());
     }
     let detect = |name: Option<&str>, first_line: &str| registry.detect(name, first_line);
     assert_eq!(detect(Some("main.TS"), ""), Some("typescript".into()));
@@ -166,12 +166,12 @@ fn detection_prefers_names_then_longest_extensions_then_interpreters() {
     assert_eq!(detect(Some("notes.txt"), ""), None);
 
     // Precedence beats a longer extension of a lower owner.
-    registry
-        .register(
-            owner(PERSONAL, 3),
-            claiming("personal-ts", &["ts"], &[], &[]),
-        )
-        .unwrap();
+    registry.register(
+        owner(PERSONAL, 3),
+        claiming("personal-ts", &["ts"], &[], &[])
+            .compile()
+            .unwrap(),
+    );
     assert_eq!(
         registry.detect(Some("index.d.ts"), ""),
         Some("personal-ts".into())
@@ -181,12 +181,14 @@ fn detection_prefers_names_then_longest_extensions_then_interpreters() {
 #[test]
 fn the_highest_registration_claiming_a_pattern_decides_detection() {
     let mut registry = LanguageRegistry::default();
-    registry
-        .register(owner(INSTALLED, 2), claiming("c", &["h"], &[], &[]))
-        .unwrap();
-    registry
-        .register(owner(BUNDLED, 1), claiming("cpp", &["h", "hpp"], &[], &[]))
-        .unwrap();
+    registry.register(
+        owner(INSTALLED, 2),
+        claiming("c", &["h"], &[], &[]).compile().unwrap(),
+    );
+    registry.register(
+        owner(BUNDLED, 1),
+        claiming("cpp", &["h", "hpp"], &[], &[]).compile().unwrap(),
+    );
     assert_eq!(registry.detect(Some("a.h"), ""), Some("c".into()));
     assert_eq!(registry.detect(Some("a.hpp"), ""), Some("cpp".into()));
     registry.remove_lifecycle(ExtensionId::new(2), ExtensionLifecycleId::new(1));
@@ -196,9 +198,10 @@ fn the_highest_registration_claiming_a_pattern_decides_detection() {
 #[test]
 fn injections_resolve_by_id_case_insensitively_or_by_extension() {
     let mut registry = LanguageRegistry::default();
-    registry
-        .register(owner(BUNDLED, 1), claiming("rust", &["rs"], &[], &[]))
-        .unwrap();
+    registry.register(
+        owner(BUNDLED, 1),
+        claiming("rust", &["rs"], &[], &[]).compile().unwrap(),
+    );
     let resolver = registry.resolver();
     let rust = registry.resolve("rust").unwrap();
     for name in ["rust", "Rust", "rs", "RS"] {
@@ -214,7 +217,8 @@ fn install(cx: &mut TestAppContext) -> Entity<DocumentCollection> {
 }
 
 fn register(cx: &mut TestAppContext, owner: LanguageOwner, definition: LanguageDefinition) -> u64 {
-    cx.update(|cx| super::register(owner, definition, cx).unwrap())
+    let language = definition.compile().unwrap();
+    cx.update(|cx| super::register(owner, language, cx))
 }
 
 fn persisted(

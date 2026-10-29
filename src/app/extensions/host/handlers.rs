@@ -2058,11 +2058,20 @@ async fn register_language(
     arguments: LanguageDefinition,
 ) -> Result<u64, LanguageError> {
     let request = context.request;
-    context.foreground(|host, cx| {
-        let grammar = arguments.info.grammar.clone();
-        crate::app::languages::register(host.language_owner(&request), arguments, cx)
-            .map_err(|error| LanguageError::from_syntax(error, grammar))
-    })?
+    // Large queries take tens of milliseconds to compile, and a package
+    // registers many languages, so they compile in parallel off the foreground.
+    let grammar = arguments.info.grammar.clone();
+    let language = context
+        .application
+        .background_executor()
+        .spawn(async move { arguments.compile() })
+        .await
+        .map_err(|error| LanguageError::from_syntax(error, grammar))?;
+    context
+        .foreground(|host, cx| {
+            crate::app::languages::register(host.language_owner(&request), language, cx)
+        })
+        .map_err(LanguageError::from)
 }
 
 #[derive(Clone, Debug, PartialEq)]

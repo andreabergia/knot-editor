@@ -60,6 +60,25 @@ pub(crate) struct LanguageDefinition {
     pub(crate) injections: String,
 }
 
+impl LanguageDefinition {
+    /// Compile the queries against the grammar. This is the expensive part
+    /// of registering a language, and needs no application state, so callers
+    /// run it off the foreground.
+    pub(crate) fn compile(self) -> Result<CompiledLanguage, SyntaxLanguageError> {
+        let language = SyntaxLanguage::new(&self.info.grammar, &self.highlights, &self.injections)?;
+        Ok(CompiledLanguage {
+            info: self.info,
+            language: Arc::new(language),
+        })
+    }
+}
+
+/// A language definition whose queries compiled.
+pub(crate) struct CompiledLanguage {
+    info: LanguageInfo,
+    language: Arc<SyntaxLanguage>,
+}
+
 struct Registration {
     id: u64,
     owner: LanguageOwner,
@@ -110,26 +129,17 @@ pub(crate) struct LanguageRegistry {
 }
 
 impl LanguageRegistry {
-    /// Compile and add a registration, returning its ID.
-    pub(crate) fn register(
-        &mut self,
-        owner: LanguageOwner,
-        definition: LanguageDefinition,
-    ) -> Result<u64, SyntaxLanguageError> {
-        let language = SyntaxLanguage::new(
-            &definition.info.grammar,
-            &definition.highlights,
-            &definition.injections,
-        )?;
+    /// Add a registration, returning its ID.
+    pub(crate) fn register(&mut self, owner: LanguageOwner, language: CompiledLanguage) -> u64 {
         self.next_id += 1;
         self.registrations.push(Registration {
             id: self.next_id,
             owner,
-            info: definition.info,
-            language: Arc::new(language),
+            info: language.info,
+            language: language.language,
         });
         self.rebuild();
-        Ok(self.next_id)
+        self.next_id
     }
 
     /// Remove registration `id` of one extension lifecycle. Returns false when
@@ -324,17 +334,13 @@ pub(crate) struct ApplicationLanguages {
 
 impl Global for ApplicationLanguages {}
 
-pub(crate) fn register(
-    owner: LanguageOwner,
-    definition: LanguageDefinition,
-    cx: &mut App,
-) -> Result<u64, SyntaxLanguageError> {
+pub(crate) fn register(owner: LanguageOwner, language: CompiledLanguage, cx: &mut App) -> u64 {
     let id = cx
         .default_global::<ApplicationLanguages>()
         .registry
-        .register(owner, definition)?;
+        .register(owner, language);
     refresh(cx);
-    Ok(id)
+    id
 }
 
 pub(crate) fn unregister(
