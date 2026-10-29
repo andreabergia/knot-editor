@@ -54,6 +54,10 @@ declare module "knot" {
     readonly dirty: boolean;
     readonly revision: number;
     readonly buffer: Buffer;
+    /** Language ID, set explicitly or detected from the file name and first
+     * line; null when nothing matched. It may name no registered language,
+     * which paints as plain text. Changes publish documentChanged. */
+    readonly language: string | null;
   }
   export interface PresentationInfo {
     readonly target: ViewTarget;
@@ -105,6 +109,65 @@ declare module "knot" {
     /** Presents a shared live document, reusing its tab in the destination window.
      * Rejects DocumentNotFound after final closure. */
     present(id: DocumentId, options?: DocumentDestinationOptions): Promise<DocumentPresentation>;
+    /** Makes a language ID the document's explicit language, or returns it to
+     * detection with null. An unregistered ID is accepted and paints plain text
+     * until a registration provides it. Open, Save As, and restore re-detect
+     * only a document whose language is not explicit.
+     * @throws TypeError for a non-text language; HostError with
+     * DocumentNotFound or Cancelled. */
+    setLanguage(id: DocumentId, language: string | null): Promise<void>;
+  }>;
+
+  /** A language as registered: its ID and the patterns detection matches. */
+  export interface LanguageInfo {
+    /** LSP languageId, such as "rust", "typescriptreact", or "shellscript". */
+    readonly id: string;
+    /** Display name, such as "TypeScript JSX". */
+    readonly name: string;
+    /** Compiled-in grammar ID; see languages.grammars. */
+    readonly grammar: string;
+    /** Extensions without the leading dot, matched case-insensitively against
+     * the end of a file name, so "d.ts" is possible; the longest match wins. */
+    readonly fileExtensions: readonly string[];
+    /** Exact file names, such as "Makefile"; they win over extensions. */
+    readonly fileNames: readonly string[];
+    /** Shebang programs, such as "python3"; "#!/usr/bin/env" is looked
+     * through, and a versioned program also matches its unversioned name. */
+    readonly interpreters: readonly string[];
+  }
+  export interface LanguageDefinition {
+    readonly id: string;
+    readonly name: string;
+    readonly grammar: string;
+    readonly fileExtensions?: readonly string[];
+    readonly fileNames?: readonly string[];
+    readonly interpreters?: readonly string[];
+    /** Tree-sitter queries using nvim-treesitter capture names. Injections
+     * name languages by ID, or by a registered file extension such as "py". */
+    readonly queries: Readonly<{ highlights: string; injections?: string }>;
+  }
+  /**
+   * Syntax highlighting languages. Registrations follow keybinding owner
+   * precedence: personal config, then installed packages, then bundled
+   * packages, with later registrations winning within one owner kind. The
+   * highest registration of an ID defines the language, and the highest
+   * registration claiming a pattern decides detection; disposal or teardown
+   * reveals the next. Every change re-detects open documents whose language is
+   * not explicit. Register in activation, before startup restores windows, so
+   * restored documents highlight from their first frame.
+   */
+  export const languages: Readonly<{
+    /**
+     * Register a lifecycle-owned language. Queries compile against the grammar
+     * before resolution.
+     * @throws TypeError for invalid fields; HostError with UnknownGrammar,
+     * InvalidQuery (details: query "highlights" or "injections", message, and
+     * the 0-indexed row and column), or Cancelled. */
+    register(definition: LanguageDefinition): Promise<Disposable>;
+    /** The language each registered ID resolves to, sorted by ID. */
+    list(): Promise<readonly LanguageInfo[]>;
+    /** Every compiled-in grammar ID, sorted. */
+    grammars(): Promise<readonly string[]>;
   }>;
   /** Only product windows; diagnostic and startup-error windows are excluded.
    * get returns null after closure; fabricated/command targets reject InvalidTarget. */
@@ -292,7 +355,8 @@ declare module "knot" {
     | "ViewRegistrationNotFound" | "ContentKindMismatch"
     | "CompletionProviderNotFound" | "CommandNameInUse" | "CommandNotFound"
     | "InvalidUri" | "DocumentNotFound" | "OperationInProgress" | "PersistenceFailed" | "ResourceNotFound" | "ResourceWrongKind" | "InvalidUtf8" | "ProviderFailure" | "StorageUnavailable"
-    | "CaptureNotFound" | "RecoveryUnavailable" | "SessionConflict";
+    | "CaptureNotFound" | "RecoveryUnavailable" | "SessionConflict"
+    | "UnknownGrammar" | "InvalidQuery" | "LanguageRegistrationNotFound";
   /**
    * Native operation failure. Narrow a caught Error by name === "KnotHostError"
    * and its string code property, then dispatch on code. No error constructor
@@ -323,8 +387,8 @@ declare module "knot" {
      * or be cancelled under its own callback contract.
      *
      * @throws HostError for cancellation or stale native ownership. Command,
-     * tree and completion registrations use their resource-specific not-found
-     * codes; stale subscriptions use OwnershipDisposed. Contribution cleanup
+     * tree, completion and language registrations use their resource-specific
+     * not-found codes; stale subscriptions use OwnershipDisposed. Contribution cleanup
      * can fail with BufferClosed; an absent contribution set is already released.
      */
     dispose(): Promise<void>;
@@ -570,6 +634,8 @@ declare module "knot" {
     /** Actions shown in the frame toolbar; only meaningful for tree frames. */
     readonly actions?: readonly TreeAction[];
     readonly placement?: ViewPlacement;
+    /** Language ID a text frame's content is highlighted as; text frames only. */
+    readonly language?: string;
   }
   /** Registration owns one contributed view across every live product window. */
   export interface ViewRegistration extends Disposable {

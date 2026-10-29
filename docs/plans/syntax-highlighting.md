@@ -306,12 +306,38 @@ fresh.
      19–24 ms, of which the Markdown root reparse is about 7 ms and editing
      every later layer's tree about 4 ms; it continues in the background. A
      60-line highlight query costs p50 about 85 µs at both sizes.
-5. 📝 **Language registry and API.** `languages` namespace, owner precedence,
+5. ✅ **Language registry and API.** `languages` namespace, owner precedence,
    detection, `DocumentInfo.language`, `documents.setLanguage`, text-frame
-   `language`, error codes, declarations, schema, and the fake host. Product
+   `language`, error codes, declarations, and the fake host. Product
    tests for detection on Open, Save As, restore, and re-resolution on
    registration and teardown, including that a restored window's documents
    have their languages before the window first paints.
+   - `src/app/languages.rs` holds the `LanguageRegistry` in an
+     `ApplicationLanguages` global. Owners rank personal config, installed,
+     then bundled (`@knot/` storage owners), later registrations winning
+     within a rank; the same ranking picks the language of an ID and the
+     claimant of a file name, extension, or interpreter, so removal reveals
+     the next.
+   - Detection tries exact file names, then the longest case-insensitive
+     extension (so `d.ts` is possible), then the shebang program, looking
+     through `env` and its options; `python3.12` also matches `python`.
+     `DocumentCollection` detects on every insert (Open, untitled, restore)
+     and after every persistence (Save, Save As), skipping explicit
+     languages. Untitled documents are not re-detected while typing.
+   - `BufferModel` records the ID and whether it is explicit; the registry
+     attaches a `SyntaxState` only when the resolved `SyntaxLanguage` changes.
+     A registration change re-detects documents and reattaches every tracked
+     buffer, and also reparses languages that can inject, since their
+     injections may now resolve. Injections resolve by language ID, its
+     lowercase, or a registered file extension (fence `py`, `rs`).
+   - Host operations `registerLanguage`, `unregisterLanguage`,
+     `listLanguages`, `listGrammars`, and `setDocumentLanguage`; new codes
+     `UnknownGrammar`, `InvalidQuery` (details: `query`, `message`, `row`,
+     `column`), and `LanguageRegistrationNotFound`. A text frame's
+     `language` is applied as each window instance attaches.
+   - The manifest schema needed no change, since languages are registered
+     through the API. The fake host lists the native grammars, checked by a
+     Rust test, and does not compile queries.
 6. 📝 **`@knot/languages`.** Registrations and normalized queries for every
    bundled grammar, with `node:test` coverage that each query compiles against
    its grammar name and uses only names in `CAPTURE_NAMES`.

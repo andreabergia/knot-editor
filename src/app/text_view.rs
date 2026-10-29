@@ -49,6 +49,10 @@ impl TextView {
         self.instance_id
     }
 
+    pub(crate) fn model(&self) -> &Entity<BufferModel> {
+        &self.model
+    }
+
     /// Replace the complete frame text and keep the existing view state where
     /// the editor can preserve it.
     pub(crate) fn replace_text(&mut self, text: &str, cx: &mut Context<Self>) {

@@ -524,6 +524,20 @@ pub struct DocumentInfo {
     pub dirty: bool,
     pub revision: u64,
     pub buffer: BufferHandle,
+    /// The document's language ID, explicit or detected.
+    pub language: Option<String>,
+}
+
+/// A registered language as extensions see it.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LanguageInfo {
+    pub id: String,
+    pub name: String,
+    pub grammar: String,
+    pub file_extensions: Vec<String>,
+    pub file_names: Vec<String>,
+    pub interpreters: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]

@@ -599,3 +599,79 @@ fn native_windows_and_recovery_restore_when_an_extension_fails_at_startup(cx: &m
     assert_eq!(windows.len(), 1);
     assert_eq!(texts(&windows[0].1, cx), ["one unsaved"]);
 }
+
+#[gpui::test]
+fn restored_documents_have_their_languages_before_their_window_exists(cx: &mut TestAppContext) {
+    let launch = Launch::new(cx);
+    launch
+        .provider
+        .seed_file(uri("a/main.rs"), b"fn main() {}\n")
+        .unwrap();
+    launch.start(Vec::new(), cx);
+    let (_, shell) = shells(cx).remove(0);
+    launch.open_file(&shell, "a/main.rs", cx);
+    let recorded = cx.update(window_sessions::record_for_quit).unwrap();
+    wait(recorded, cx).unwrap();
+
+    launch.reset(cx);
+    let extensions = tempfile::tempdir().unwrap();
+    install_extension(
+        extensions.path(),
+        "@example/rust",
+        &[],
+        &[(
+            "main.js",
+            r#"import { languages } from "knot";
+await languages.register({
+  id: "rust", name: "Rust", grammar: "rust", fileExtensions: ["rs"],
+  queries: { highlights: "(identifier) @variable" },
+});"#,
+        )],
+    );
+    // Each restored window records its documents' languages as it is
+    // created, before it can paint.
+    let created = Rc::new(RefCell::new(Vec::new()));
+    let sink = created.clone();
+    let _observer = cx.update(|cx| {
+        cx.observe_new(move |shell: &mut ProductShell, _, cx| {
+            let documents = cx.global::<ApplicationDocuments>().0.read(cx);
+            sink.borrow_mut().extend(
+                shell
+                    .workbench
+                    .read(cx)
+                    .tab_snapshots()
+                    .into_iter()
+                    .filter_map(|tab| match tab.surface {
+                        TabSurfaceId::Document(document) => documents.get(document),
+                        _ => None,
+                    })
+                    .map(|document| {
+                        let model = document.model().read(cx);
+                        (
+                            document.title().to_string(),
+                            model.language().map(str::to_owned),
+                            model.syntax_generation().is_some(),
+                        )
+                    }),
+            );
+        })
+    });
+    install_launch_gate(cx);
+    let config = tempfile::tempdir().unwrap();
+    let host = cx.update(super::super::super::extensions::host::install);
+    host.update(cx, |host, cx| {
+        host.start_product_startup(
+            Some(config.path().to_path_buf()),
+            Ok(extensions.path().to_path_buf()),
+            cx,
+        )
+    });
+    assert!(wait_for_product_startup(cx));
+    assert!(
+        created
+            .borrow()
+            .contains(&("main.rs".into(), Some("rust".into()), true)),
+        "{:?}",
+        created.borrow()
+    );
+}

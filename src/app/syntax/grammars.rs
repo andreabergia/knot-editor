@@ -57,6 +57,23 @@ mod tests {
         assert_eq!(grammar("nope").map(|_| ()), None);
     }
 
+    /// The in-memory extension test host lists the same grammars.
+    #[test]
+    fn fake_host_lists_every_grammar() {
+        let fake = include_str!("../../../scripts/extensions/testing/host.ts")
+            .split("const GRAMMARS = [")
+            .nth(1)
+            .unwrap()
+            .split("];")
+            .next()
+            .unwrap()
+            .split('"')
+            .skip(1)
+            .step_by(2)
+            .collect::<Vec<_>>();
+        assert_eq!(fake, grammar_ids().collect::<Vec<_>>());
+    }
+
     /// Every grammar's ABI is accepted by the linked tree-sitter runtime and
     /// parses a representative sample without errors.
     #[test]

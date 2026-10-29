@@ -184,6 +184,7 @@ mod tests {
             dirty,
             revision,
             buffer: BufferHandle::new(1),
+            language: None,
         }
     }
 

@@ -117,8 +117,6 @@ pub(crate) struct Highlight(u16);
 
 impl Highlight {
     /// The capture name with the longest dotted prefix of `name`.
-    // Only `SyntaxLanguage`, which only tests create, resolves captures.
-    #[allow(dead_code)]
     pub(crate) fn resolve(name: &str) -> Option<Self> {
         dotted_prefixes(name).find_map(|prefix| {
             CAPTURE_NAMES

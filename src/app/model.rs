@@ -23,7 +23,7 @@ use crate::{
 
 use super::{
     history::{EditGrouping, EditHistory, HistoryViewChange, HistoryViewState},
-    syntax::{FOREGROUND_BUDGET, ParsedTree, SyntaxState},
+    syntax::{FOREGROUND_BUDGET, ParsedTree, SyntaxLanguage, SyntaxState},
     theme::Highlight,
 };
 
@@ -124,6 +124,10 @@ pub struct BufferModel {
     history: EditHistory,
     history_replay_generation: u64,
     history_view_restore: Option<HistoryViewRestore>,
+    /// The language ID, which may name no registered language.
+    language: Option<String>,
+    /// Whether `language` was chosen rather than detected.
+    language_explicit: bool,
     /// Derived syntax tree, kept current with every commit.
     syntax: Option<SyntaxState>,
     /// Starts a background parse after any notify that leaves the tree
@@ -200,6 +204,8 @@ impl BufferModel {
             history: EditHistory::default(),
             history_replay_generation: 0,
             history_view_restore: None,
+            language: None,
+            language_explicit: false,
             syntax: None,
             syntax_driver: None,
             syntax_budget: FOREGROUND_BUDGET,
@@ -484,10 +490,28 @@ impl BufferModel {
             .collect()
     }
 
+    pub(crate) fn language(&self) -> Option<&str> {
+        self.language.as_deref()
+    }
+
+    pub(crate) fn language_is_explicit(&self) -> bool {
+        self.language_explicit
+    }
+
+    /// Record the buffer's language ID. Syntax follows separately, since
+    /// resolving the ID needs the application's language registry.
+    pub(crate) fn set_language(&mut self, language: Option<String>, explicit: bool) {
+        self.language = language;
+        self.language_explicit = explicit;
+    }
+
+    /// The language the current syntax state parses, if any.
+    pub(crate) fn syntax_language(&self) -> Option<&Arc<SyntaxLanguage>> {
+        self.syntax.as_ref().map(SyntaxState::language)
+    }
+
     /// Parse this buffer with a fresh `syntax`, discarding any previous
     /// tree, or stop parsing with `None`.
-    // Only tests attach syntax.
-    #[allow(dead_code)]
     pub(crate) fn set_syntax(&mut self, syntax: Option<SyntaxState>, cx: &mut Context<Self>) {
         self.syntax = syntax.map(|mut syntax| {
             syntax.parse_in_foreground(&self.buffer.snapshot(), self.syntax_budget);

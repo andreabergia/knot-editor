@@ -83,6 +83,8 @@ struct TreeRegistration {
     /// Last text pushed for a text frame, retained so windows created later
     /// still present current content without another JavaScript turn.
     text: Option<String>,
+    /// The language a text frame's content is highlighted as.
+    language: Option<String>,
 }
 
 /// Foreground registries and native view surfaces exposed to extension requests.
@@ -144,7 +146,8 @@ impl ExtensionSemanticBridge {
         Ok(())
     }
 
-    /// Attach a native text instance, seeding it with the last pushed content.
+    /// Attach a native text instance, seeding it with the last pushed content
+    /// and the registration's language.
     pub(crate) fn add_text_view(
         &mut self,
         kind: impl Into<String>,
@@ -153,13 +156,18 @@ impl ExtensionSemanticBridge {
         cx: &mut App,
     ) {
         let kind = kind.into();
-        if let Some(text) = self
+        if let Some(registration) = self
             .tree_registrations
             .values()
             .find(|entry| entry.definition.id == kind)
-            .and_then(|entry| entry.text.clone())
         {
-            view.update(cx, |view, cx| view.replace_text(&text, cx));
+            if let Some(text) = registration.text.clone() {
+                view.update(cx, |view, cx| view.replace_text(&text, cx));
+            }
+            if let Some(language) = registration.language.clone() {
+                let model = view.read(cx).model().clone();
+                crate::app::languages::set_language(&model, language, cx);
+            }
         }
         self.text_views
             .entry(kind)
@@ -210,6 +218,7 @@ impl ExtensionSemanticBridge {
             location,
             order,
             visible,
+            language,
         } = arguments;
 
         if id.is_empty() || id.starts_with("knot.") {
@@ -263,6 +272,7 @@ impl ExtensionSemanticBridge {
                 definition,
                 identity,
                 text: None,
+                language,
             },
         );
         Ok(registration)
@@ -543,6 +553,7 @@ mod tests {
             location: StoredLocation::Left,
             order: None,
             visible: true,
+            language: None,
         }
     }
 
@@ -555,6 +566,7 @@ mod tests {
             location: StoredLocation::Bottom,
             order: None,
             visible: true,
+            language: None,
         }
     }
 

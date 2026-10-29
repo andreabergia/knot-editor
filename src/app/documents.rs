@@ -306,6 +306,7 @@ impl DocumentCollection {
             persisted_revision: revision,
             version,
         };
+        super::languages::detect_document(&document.model, document.resource_uri(), cx);
         self.resources.insert(uri, id);
         // A successful persistence changes the saved baseline while edits racing
         // the I/O remain dirty; re-publish so the automatic record matches the
@@ -357,6 +358,7 @@ impl DocumentCollection {
             .next_id
             .checked_add(1)
             .expect("document identity space exhausted");
+        super::languages::detect_document(&model, state.resource_uri(), cx);
         let observed_model = model.clone();
         self.documents.push(Document {
             id,

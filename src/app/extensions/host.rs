@@ -1970,6 +1970,32 @@ impl ProductExtensionHost {
         Ok(())
     }
 
+    /// Language registrations follow keymap precedence, with bundled packages
+    /// beneath installed ones so an installed package can replace them.
+    fn language_owner(
+        &self,
+        request: &crate::host::protocol::RequestContext,
+    ) -> crate::app::languages::LanguageOwner {
+        use crate::app::languages::{LanguageOwner, LanguagePriority};
+        let key = ExtensionKey::new(request.extension, request.lifecycle);
+        let priority = if self.personal_config_key == Some(key) {
+            LanguagePriority::Personal
+        } else if self
+            .storage_owners
+            .get(&key)
+            .is_some_and(|owner| owner.identity().starts_with("@knot/"))
+        {
+            LanguagePriority::Bundled
+        } else {
+            LanguagePriority::Installed
+        };
+        LanguageOwner {
+            priority,
+            extension: request.extension,
+            lifecycle: request.lifecycle,
+        }
+    }
+
     fn remove_view_kind(&mut self, id: &str, cx: &mut App) {
         self.commands.catalog().borrow_mut().remove_view_kind(id);
         if cx.has_global::<crate::app::commands::keymaps::ApplicationKeymaps>()
@@ -2157,6 +2183,7 @@ impl ProductExtensionHost {
             self.personal_config_key = None;
         }
         self.commands.remove_lifecycle(key.extension, key.lifecycle);
+        crate::app::languages::remove_lifecycle(key.extension, key.lifecycle, cx);
         self.command_targets
             .retain(|root, _| self.commands.contains_invocation(*root));
         self.view_command_handlers
@@ -2196,6 +2223,7 @@ fn application_document_info(
         dirty: document.is_dirty(cx),
         revision: document.model().read(cx).revision(),
         buffer,
+        language: document.model().read(cx).language().map(str::to_owned),
     }
 }
 

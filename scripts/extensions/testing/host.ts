@@ -23,6 +23,7 @@ export type FakeDocument = {
   dirty: boolean;
   revision: number;
   text: string;
+  language: string | null;
 };
 
 type FakeTab = { target: Knot.ViewTarget; document: Knot.DocumentId };
@@ -76,6 +77,7 @@ function emptyState() {
     selectedText: null as string | null,
     failures: new Map<string, HostErrorCode[]>(),
     replaced: [] as Knot.ReplaceWindowsOptions[],
+    languages: [] as Knot.LanguageDefinition[],
   };
 }
 
@@ -148,7 +150,13 @@ function documentInfo(document: FakeDocument): Knot.DocumentInfo {
 
 /** Adds a live document. A URI makes it persisted unless a kind is given. */
 export function addDocument(
-  options: { uri?: string; kind?: FakeDocument["kind"]; dirty?: boolean; text?: string } = {},
+  options: {
+    uri?: string;
+    kind?: FakeDocument["kind"];
+    dirty?: boolean;
+    text?: string;
+    language?: string | null;
+  } = {},
 ): Knot.DocumentId {
   const id = nextId("doc") as Knot.DocumentId;
   const resourceUri = options.uri ?? null;
@@ -160,6 +168,7 @@ export function addDocument(
     dirty: options.dirty ?? false,
     revision: 0,
     text: options.text ?? "",
+    language: options.language ?? null,
   });
   return id;
 }
@@ -443,6 +452,30 @@ function replaceWindows(options: Knot.ReplaceWindowsOptions): Knot.ReplaceWindow
   return { windows: opened, protected: true };
 }
 
+// Languages ----------------------------------------------------------------
+
+/** The grammars compiled into Knot, as `languages.grammars()` lists them. */
+const GRAMMARS = [
+  "bash", "c", "cpp", "css", "go", "html", "java", "javascript", "json", "markdown",
+  "markdown_inline", "python", "query", "rust", "toml", "tsx", "typescript", "yaml",
+];
+
+/** Every live language registration, queries included, in registration order. */
+export function languageDefinitions(): readonly Knot.LanguageDefinition[] {
+  return state.languages;
+}
+
+function languageInfo(definition: Knot.LanguageDefinition): Knot.LanguageInfo {
+  return {
+    id: definition.id,
+    name: definition.name,
+    grammar: definition.grammar,
+    fileExtensions: definition.fileExtensions ?? [],
+    fileNames: definition.fileNames ?? [],
+    interpreters: definition.interpreters ?? [],
+  };
+}
+
 // The "knot" module --------------------------------------------------------
 
 const LAYOUT: Knot.WindowLayout = {
@@ -463,6 +496,29 @@ export const api: KnotApi = {
     open: notFaked("documents.open"),
     createUntitled: notFaked("documents.createUntitled"),
     present: notFaked("documents.present"),
+    setLanguage: async (id, language) => {
+      const document = state.documents.get(id);
+      if (document === undefined) throw hostError("DocumentNotFound");
+      document.language = language;
+    },
+  },
+  languages: {
+    // Queries are not compiled; product tests cover InvalidQuery.
+    register: async (definition) => {
+      if (!GRAMMARS.includes(definition.grammar)) throw hostError("UnknownGrammar");
+      state.languages.push(definition);
+      return {
+        dispose: async () => {
+          state.languages = state.languages.filter((candidate) => candidate !== definition);
+        },
+      };
+    },
+    // Later registrations win; the fake has no owner precedence.
+    list: async () => {
+      const byId = new Map(state.languages.map((definition) => [definition.id, definition]));
+      return [...byId.values()].map(languageInfo).sort((a, b) => a.id.localeCompare(b.id));
+    },
+    grammars: async () => GRAMMARS,
   },
   windows: {
     list: async () => state.windows.map(windowInfo),

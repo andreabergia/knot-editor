@@ -18,6 +18,7 @@ pub(crate) use extensions::host::handlers as declared_host;
 mod extensions;
 mod filesystem;
 mod history;
+mod languages;
 pub mod model;
 mod open;
 mod personal_config;
@@ -26,8 +27,6 @@ mod product;
 mod record_store;
 mod recovery;
 mod resource;
-// Only tests create a `SyntaxLanguage`.
-#[allow(dead_code)]
 mod syntax;
 mod terminal;
 mod text_input;

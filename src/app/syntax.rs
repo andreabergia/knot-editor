@@ -172,6 +172,12 @@ impl SyntaxLanguage {
             injection_patterns,
         })
     }
+
+    /// Whether the injection query can hand regions to other languages, so
+    /// its highlights depend on which languages are registered.
+    pub(crate) fn can_inject(&self) -> bool {
+        self.injections.pattern_count() > 0
+    }
 }
 
 /// One buffer's parse layers and the parse that keeps them current.
@@ -277,6 +283,11 @@ impl SyntaxState {
 
     pub(crate) fn generation(&self) -> u64 {
         self.generation
+    }
+
+    /// The buffer's own language.
+    pub(crate) fn language(&self) -> &Arc<SyntaxLanguage> {
+        &self.root.language
     }
 
     /// Whether the tree lags the text and no background parse is running,
@@ -482,7 +493,7 @@ impl Layer {
         let old = self.tree.replace(tree);
         // Comparing trees costs as much as a small reparse, so only a layer
         // that can inject does it.
-        if self.language.injections.pattern_count() == 0 || depth == MAX_INJECTION_DEPTH {
+        if !self.language.can_inject() || depth == MAX_INJECTION_DEPTH {
             return Some(());
         }
         let changed = match old {

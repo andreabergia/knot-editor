@@ -7,6 +7,7 @@ export const {
   documents,
   editor,
   keybinding,
+  languages,
   recovery,
   removeKeybinding,
   storage,

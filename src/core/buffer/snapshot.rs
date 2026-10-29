@@ -56,7 +56,7 @@ impl TextSnapshot {
     }
 
     /// Whether the text is empty.
-    // Only tests read these; product readers stream chunks.
+    // Only tests read this; product readers stream chunks.
     #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
@@ -100,7 +100,6 @@ impl TextSnapshot {
 
     /// Read a byte range of the text into a `String`, with the same
     /// requirements as `chunks`.
-    #[allow(dead_code)]
     pub fn read_range(&self, range: Range<usize>) -> String {
         let mut out = String::with_capacity(range.len());
         for chunk in self.chunks(range) {

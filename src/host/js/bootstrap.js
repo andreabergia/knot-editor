@@ -561,6 +561,10 @@ export async function registerView(contribution) {
     throw new TypeError("view content kind must be \"tree\" or \"text\"");
   }
   const actions = treeActions(value.actions);
+  const language = optionalText(value.language);
+  if (language !== null && content.kind !== "text") {
+    throw new TypeError("view language applies only to text content");
+  }
   let location = "left";
   let order = null;
   let visible = true;
@@ -591,6 +595,7 @@ export async function registerView(contribution) {
     visible ? 1 : 0,
     content.kind,
     actions,
+    language,
   );
   if (provider !== null) treeProviders.set(registration, provider);
   const owned = ownership(() => treeProviders.delete(registration),
@@ -784,6 +789,50 @@ export async function presentDocument(id, options) {
 export async function openDocument(uri, options) {
   const value = await request("openDocument", string(uri, "resource URI must be text"), destinationAuthority(options));
   return documentPresentationFromNative(value);
+}
+
+export async function setDocumentLanguage(id, language) {
+  await request("setDocumentLanguage", string(id, "document identity must be text"),
+    optionalText(language));
+}
+
+function textList(value, message) {
+  return value === undefined ? [] : arrayItems(value, (item) => string(item, message));
+}
+export async function registerLanguage(definition) {
+  const value = record(definition, "languages.register requires a language object");
+  const id = string(value.id, "language id must be text");
+  if (id.length === 0 || /\s/.test(id)) {
+    throw new TypeError("language id must be nonempty and contain no whitespace");
+  }
+  const name = string(value.name, "language name must be text");
+  const grammar = string(value.grammar, "language grammar must be text");
+  const fileExtensions = textList(value.fileExtensions, "file extensions must be text");
+  if (fileExtensions.some((extension) => extension.length === 0 || extension.startsWith("."))) {
+    throw new TypeError("file extensions must be nonempty and omit the leading dot");
+  }
+  const fileNames = textList(value.fileNames, "file names must be text");
+  const interpreters = textList(value.interpreters, "interpreters must be text");
+  const queries = record(value.queries, "language queries must be an object");
+  const highlights = string(queries.highlights, "highlights query must be text");
+  const injections = queries.injections === undefined
+    ? ""
+    : string(queries.injections, "injections query must be text");
+  const registration = await request("registerLanguage", id, name, grammar, fileExtensions,
+    fileNames, interpreters, highlights, injections);
+  const owned = ownership(() => {}, () => request("unregisterLanguage", registration));
+  return Object.freeze({ dispose: () => owned.dispose() });
+}
+export async function listLanguages() {
+  return Object.freeze((await request("listLanguages")).map((language) => Object.freeze({
+    ...language,
+    fileExtensions: Object.freeze(language.fileExtensions),
+    fileNames: Object.freeze(language.fileNames),
+    interpreters: Object.freeze(language.interpreters),
+  })));
+}
+export async function listGrammars() {
+  return Object.freeze(await request("listGrammars"));
 }
 
 export async function listDocuments() {

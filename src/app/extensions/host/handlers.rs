@@ -764,6 +764,7 @@ pub(crate) struct TreeArguments {
     pub location: crate::app::tool_layout::StoredLocation,
     pub order: Option<u64>,
     pub visible: bool,
+    pub language: Option<String>,
 }
 impl HostArguments for TreeArguments {
     fn decode(reader: &mut dyn ArgumentReader) -> Result<Self, DecodeError> {
@@ -791,6 +792,7 @@ impl HostArguments for TreeArguments {
             location,
             order: reader.optional_integer(5)?,
             visible: reader.integer(6)? != 0,
+            language: reader.optional_text(9, "view language must be text or null")?,
         })
     }
 }
@@ -1965,6 +1967,188 @@ async fn capture_layout(
 #[host_operation("focusWindow")]
 async fn focus_window(context: HostContext, arguments: WindowLookup) -> Result<(), AccessError> {
     context.foreground(|_, cx| product::sessions::focus_window(&arguments.target, cx))?
+}
+
+use crate::app::languages::LanguageDefinition;
+use crate::app::syntax::{SyntaxLanguageError, SyntaxQuery};
+use crate::host::protocol::LanguageInfo;
+
+/// Failures of a language registration.
+#[derive(Debug, HostError)]
+pub(crate) enum LanguageError {
+    #[error(transparent)]
+    Access(AccessError),
+    #[error(
+        code = "UnknownGrammar",
+        message = "no compiled-in grammar is named {grammar}"
+    )]
+    UnknownGrammar { grammar: String },
+    #[error(
+        code = "InvalidQuery",
+        message = "invalid {query} query at {row}:{column}: {message}"
+    )]
+    InvalidQuery {
+        query: String,
+        message: String,
+        row: usize,
+        column: usize,
+    },
+    #[error(
+        code = "LanguageRegistrationNotFound",
+        message = "LanguageRegistrationNotFound"
+    )]
+    RegistrationNotFound,
+}
+
+impl From<AccessError> for LanguageError {
+    fn from(error: AccessError) -> Self {
+        Self::Access(error)
+    }
+}
+
+impl LanguageError {
+    fn from_syntax(error: SyntaxLanguageError, grammar: String) -> Self {
+        match error {
+            SyntaxLanguageError::UnknownGrammar => Self::UnknownGrammar { grammar },
+            SyntaxLanguageError::InvalidQuery {
+                query,
+                message,
+                row,
+                column,
+            } => Self::InvalidQuery {
+                query: match query {
+                    SyntaxQuery::Highlights => "highlights",
+                    SyntaxQuery::Injections => "injections",
+                }
+                .into(),
+                message,
+                row,
+                column,
+            },
+        }
+    }
+}
+
+impl HostArguments for LanguageDefinition {
+    fn decode(reader: &mut dyn ArgumentReader) -> Result<Self, DecodeError> {
+        Ok(Self {
+            info: LanguageInfo {
+                id: reader.text(2, "language id must be text")?,
+                name: reader.text(3, "language name must be text")?,
+                grammar: reader.text(4, "language grammar must be text")?,
+                file_extensions: reader.text_list(5)?,
+                file_names: reader.text_list(6)?,
+                interpreters: reader.text_list(7)?,
+            },
+            highlights: reader.text(8, "highlights query must be text")?,
+            injections: reader.text(9, "injections query must be text")?,
+        })
+    }
+}
+
+impl HostSuccess for LanguageInfo {
+    fn encode(self) -> Result<EncodedValue, DecodeError> {
+        encode_json(self)
+    }
+}
+
+#[host_operation("registerLanguage")]
+async fn register_language(
+    context: HostContext,
+    arguments: LanguageDefinition,
+) -> Result<u64, LanguageError> {
+    let request = context.request;
+    context.foreground(|host, cx| {
+        let grammar = arguments.info.grammar.clone();
+        crate::app::languages::register(host.language_owner(&request), arguments, cx)
+            .map_err(|error| LanguageError::from_syntax(error, grammar))
+    })?
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct LanguageRegistrationArguments {
+    registration: u64,
+}
+
+impl HostArguments for LanguageRegistrationArguments {
+    fn decode(reader: &mut dyn ArgumentReader) -> Result<Self, DecodeError> {
+        Ok(Self {
+            registration: reader.integer(2)?,
+        })
+    }
+}
+
+#[host_operation("unregisterLanguage")]
+async fn unregister_language(
+    context: HostContext,
+    arguments: LanguageRegistrationArguments,
+) -> Result<(), LanguageError> {
+    let request = context.request;
+    context.foreground(|host, cx| {
+        if crate::app::languages::unregister(
+            host.language_owner(&request),
+            arguments.registration,
+            cx,
+        ) {
+            Ok(())
+        } else {
+            Err(LanguageError::RegistrationNotFound)
+        }
+    })?
+}
+
+#[host_operation("listLanguages")]
+async fn list_languages(context: HostContext, _: ()) -> Result<Vec<LanguageInfo>, AccessError> {
+    context.foreground(|_, cx| crate::app::languages::list(cx))
+}
+
+#[host_operation("listGrammars")]
+async fn list_grammars(context: HostContext, _: ()) -> Result<Vec<String>, AccessError> {
+    context.foreground(|_, _| {
+        crate::app::syntax::grammars::grammar_ids()
+            .map(str::to_owned)
+            .collect()
+    })
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct DocumentLanguageArguments {
+    id: String,
+    language: Option<String>,
+}
+
+impl HostArguments for DocumentLanguageArguments {
+    fn decode(reader: &mut dyn ArgumentReader) -> Result<Self, DecodeError> {
+        Ok(Self {
+            id: reader.text(2, "document identity must be text")?,
+            language: reader.optional_text(3, "language must be text or null")?,
+        })
+    }
+}
+
+#[host_operation("setDocumentLanguage")]
+async fn set_document_language(
+    context: HostContext,
+    arguments: DocumentLanguageArguments,
+) -> Result<(), OpenError> {
+    context.foreground(|_, cx| {
+        let documents = cx
+            .try_global::<crate::app::documents::ApplicationDocuments>()
+            .ok_or(OpenError::DocumentNotFound)?
+            .0
+            .clone();
+        let (model, uri) = uuid::Uuid::parse_str(&arguments.id)
+            .ok()
+            .and_then(|identity| {
+                let documents = documents.read(cx);
+                let document = documents.document_by_identity(identity)?;
+                Some((document.model().clone(), document.resource_uri().cloned()))
+            })
+            .ok_or(OpenError::DocumentNotFound)?;
+        crate::app::languages::set_document_language(&model, uri.as_ref(), arguments.language, cx);
+        crate::app::application_observation::changed(cx);
+        Ok(())
+    })?
 }
 
 #[cfg(test)]

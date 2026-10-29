@@ -3,7 +3,7 @@ import {
   storageRead, storageWrite, storageDelete, storageList,
   recoveryList, recoveryRetain, recoveryRelease, recoveryRestore,
   observeWorkbench, closePresentation, replaceWindows, captureLayout,
-  openDocument, createUntitled, presentDocument, listDocuments, getDocument, listWindows, getWindow, openWindow, focusWindow, getWorkspace, openFolder, replaceWorkspaceRoots, pickFolder,
+  openDocument, createUntitled, presentDocument, listDocuments, getDocument, setDocumentLanguage, listWindows, getWindow, openWindow, focusWindow, getWorkspace, openFolder, replaceWorkspaceRoots, pickFolder,
   invalidCommandArguments,
   keybinding,
   removeKeybinding,
@@ -18,6 +18,9 @@ import {
   showMessage,
   registerCompletionProvider,
   registerView,
+  registerLanguage,
+  listLanguages,
+  listGrammars,
 } from "knot:bootstrap";
 
 export { keybinding, removeKeybinding };
@@ -48,7 +51,8 @@ export const workbench = Object.freeze({
   showMessage,
 });
 
-export const documents = Object.freeze({ list: listDocuments, get: getDocument, open: openDocument, createUntitled, present: presentDocument });
+export const documents = Object.freeze({ list: listDocuments, get: getDocument, open: openDocument, createUntitled, present: presentDocument, setLanguage: setDocumentLanguage });
+export const languages = Object.freeze({ register: registerLanguage, list: listLanguages, grammars: listGrammars });
 export const windows = Object.freeze({ list: listWindows, get: getWindow, open: openWindow, focus: focusWindow });
 export const workspaces = Object.freeze({ get: getWorkspace, openFolder, replaceRoots: replaceWorkspaceRoots, pickFolder });
 

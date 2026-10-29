@@ -124,7 +124,29 @@ for (const document of await documents.list()) {
   const id: DocumentId = document.id;
   const current = await documents.get(id);
   if (current) await current.buffer.snapshot();
+  const language: string | null = document.language;
+  await documents.setLanguage(id, language === null ? "rust" : null);
+  // @ts-expect-error returning to detection is an explicit null
+  await documents.setLanguage(id);
 }
+
+import { languages } from "knot";
+import type { LanguageInfo } from "knot";
+const grammarIds: readonly string[] = await languages.grammars();
+const rust = await languages.register({
+  id: "rust",
+  name: "Rust",
+  grammar: grammarIds[0] ?? "rust",
+  fileExtensions: ["rs"],
+  interpreters: ["rust-script"],
+  queries: { highlights: "(identifier) @variable", injections: "" },
+});
+const registered: readonly LanguageInfo[] = await languages.list();
+void registered;
+await rust.dispose();
+// @ts-expect-error a highlights query is required
+await languages.register({ id: "bad", name: "Bad", grammar: "rust", queries: {} });
+await workbench.registerView({ id: "check.rust-log", title: "Log", content: { kind: "text" }, language: "rust" });
 for (const window of await windows.list()) {
   const target: WindowTarget = window.target;
   await windows.get(target);
