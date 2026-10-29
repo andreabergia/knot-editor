@@ -51,7 +51,9 @@ await commands.register("lang.set", async ({ buffer, arguments: language }) => {
   const document = (await documents.list()).find((candidate) => candidate.buffer === buffer);
   await documents.setLanguage(document.id, language);
   const updated = await documents.get(document.id);
-  if (language !== null && updated.language !== language) {
+  // An unregistered explicit language reports plain text.
+  const registered = (await languages.list()).some((candidate) => candidate.id === language);
+  if (language !== null && updated.language !== (registered ? language : "plaintext")) {
     throw new Error(`language ${updated.language}`);
   }
 });
@@ -64,6 +66,10 @@ fn language(model: &Entity<BufferModel>, cx: &TestAppContext) -> (Option<String>
             model.syntax_generation().is_some(),
         )
     })
+}
+
+fn reported(model: &Entity<BufferModel>, cx: &TestAppContext) -> String {
+    cx.read(|cx| crate::app::languages::effective_language(model.read(cx), cx))
 }
 
 fn active_model(shell: &Entity<ProductShell>, cx: &TestAppContext) -> Entity<BufferModel> {
@@ -124,17 +130,18 @@ fn registered_languages_detect_on_open_and_save_as_and_follow_teardown(cx: &mut 
     );
 
     // An explicit language publishes documentChanged and holds until the
-    // document returns to detection.
+    // document returns to detection; an unregistered one reports plain text.
     host.update(cx, |host, _| host.take_test_application_events());
     let execution = dispatch_product_command_with(
         &shell,
         window,
         "lang.set",
-        CommandArgumentValue::String("plaintext".into()),
+        CommandArgumentValue::String("cobol".into()),
         cx,
     );
     assert_eq!(wait_for_command(execution, cx), CommandOutcome::Completed);
-    assert_eq!(language(&opened, cx), (Some("plaintext".into()), false));
+    assert_eq!(language(&opened, cx), (Some("cobol".into()), false));
+    assert_eq!(reported(&opened, cx), "plaintext");
     cx.run_until_parked();
     let events = host.update(cx, |host, _| host.take_test_application_events());
     assert!(events.iter().any(|event| {
@@ -161,4 +168,7 @@ fn registered_languages_detect_on_open_and_save_as_and_follow_teardown(cx: &mut 
     assert_eq!(language(&opened, cx), (None, false));
     assert_eq!(language(&untitled, cx), (None, false));
     assert_eq!(language(&log, cx), (Some("rust".into()), false));
+    for model in [&opened, &untitled, &log] {
+        assert_eq!(reported(model, cx), "plaintext");
+    }
 }

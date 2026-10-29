@@ -524,8 +524,9 @@ pub struct DocumentInfo {
     pub dirty: bool,
     pub revision: u64,
     pub buffer: BufferHandle,
-    /// The document's language ID, explicit or detected.
-    pub language: Option<String>,
+    /// The document's registered language ID, explicit or detected, or
+    /// `plaintext`.
+    pub language: String,
 }
 
 /// A registered language as extensions see it.

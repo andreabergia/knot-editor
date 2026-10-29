@@ -124,8 +124,8 @@ for (const document of await documents.list()) {
   const id: DocumentId = document.id;
   const current = await documents.get(id);
   if (current) await current.buffer.snapshot();
-  const language: string | null = document.language;
-  await documents.setLanguage(id, language === null ? "rust" : null);
+  const language: string = document.language;
+  await documents.setLanguage(id, language === "plaintext" ? "rust" : null);
   // @ts-expect-error returning to detection is an explicit null
   await documents.setLanguage(id);
 }

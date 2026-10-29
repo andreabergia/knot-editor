@@ -2223,7 +2223,7 @@ fn application_document_info(
         dirty: document.is_dirty(cx),
         revision: document.model().read(cx).revision(),
         buffer,
-        language: document.model().read(cx).language().map(str::to_owned),
+        language: crate::app::languages::effective_language(document.model().read(cx), cx),
     }
 }
 

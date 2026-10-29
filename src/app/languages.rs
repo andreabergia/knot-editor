@@ -11,8 +11,8 @@
 //! a registration reveals the next.
 //!
 //! A buffer records a language ID, explicit or detected, independently of
-//! registration: an unregistered ID paints plain text until something
-//! registers it. Every registration change re-detects open documents whose
+//! registration: an unregistered ID paints and reports as `plaintext` until
+//! something registers it. Every registration change re-detects open documents whose
 //! language is not explicit and reattaches syntax wherever the resolved
 //! language changed.
 
@@ -28,6 +28,10 @@ use super::{
     resource::ResourceUri,
     syntax::{LanguageResolver, SyntaxLanguage, SyntaxLanguageError, SyntaxState},
 };
+
+/// The language a buffer reports when its ID is missing or unregistered,
+/// as LSP names it.
+pub(crate) const PLAIN_TEXT: &str = "plaintext";
 
 /// How far detection reads into a first line for a shebang.
 const SHEBANG_LIMIT: usize = 256;
@@ -346,6 +350,18 @@ pub(crate) fn remove_lifecycle(
     {
         refresh(cx);
     }
+}
+
+/// The language a buffer reports: its ID while registered, else plain text.
+pub(crate) fn effective_language(model: &BufferModel, cx: &App) -> String {
+    model
+        .language()
+        .filter(|id| {
+            cx.try_global::<ApplicationLanguages>()
+                .is_some_and(|languages| languages.registry.resolve(id).is_some())
+        })
+        .unwrap_or(PLAIN_TEXT)
+        .to_owned()
 }
 
 pub(crate) fn list(cx: &App) -> Vec<LanguageInfo> {

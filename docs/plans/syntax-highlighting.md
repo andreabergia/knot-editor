@@ -324,6 +324,9 @@ fresh.
      `DocumentCollection` detects on every insert (Open, untitled, restore)
      and after every persistence (Save, Save As), skipping explicit
      languages. Untitled documents are not re-detected while typing.
+   - `DocumentInfo.language` is never null: it reports the stored ID while
+     registered, else `plaintext` (LSP's ID). The stored ID is kept, so an
+     explicit language reappears once something registers it.
    - `BufferModel` records the ID and whether it is explicit; the registry
      attaches a `SyntaxState` only when the resolved `SyntaxLanguage` changes.
      A registration change re-detects documents and reattaches every tracked

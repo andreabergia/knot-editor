@@ -55,9 +55,10 @@ declare module "knot" {
     readonly revision: number;
     readonly buffer: Buffer;
     /** Language ID, set explicitly or detected from the file name and first
-     * line; null when nothing matched. It may name no registered language,
-     * which paints as plain text. Changes publish documentChanged. */
-    readonly language: string | null;
+     * line. "plaintext" when nothing matched or the ID is not registered; a
+     * kept explicit ID reappears once something registers it. Changes
+     * publish documentChanged. */
+    readonly language: string;
   }
   export interface PresentationInfo {
     readonly target: ViewTarget;
@@ -110,8 +111,8 @@ declare module "knot" {
      * Rejects DocumentNotFound after final closure. */
     present(id: DocumentId, options?: DocumentDestinationOptions): Promise<DocumentPresentation>;
     /** Makes a language ID the document's explicit language, or returns it to
-     * detection with null. An unregistered ID is accepted and paints plain text
-     * until a registration provides it. Open, Save As, and restore re-detect
+     * detection with null. An unregistered ID is accepted and kept, reporting
+     * and painting as "plaintext" until a registration provides it. Open, Save As, and restore re-detect
      * only a document whose language is not explicit.
      * @throws TypeError for a non-text language; HostError with
      * DocumentNotFound or Cancelled. */

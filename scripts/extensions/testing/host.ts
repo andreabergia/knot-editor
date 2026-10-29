@@ -23,7 +23,7 @@ export type FakeDocument = {
   dirty: boolean;
   revision: number;
   text: string;
-  language: string | null;
+  language: string;
 };
 
 type FakeTab = { target: Knot.ViewTarget; document: Knot.DocumentId };
@@ -155,7 +155,7 @@ export function addDocument(
     kind?: FakeDocument["kind"];
     dirty?: boolean;
     text?: string;
-    language?: string | null;
+    language?: string;
   } = {},
 ): Knot.DocumentId {
   const id = nextId("doc") as Knot.DocumentId;
@@ -168,7 +168,7 @@ export function addDocument(
     dirty: options.dirty ?? false,
     revision: 0,
     text: options.text ?? "",
-    language: options.language ?? null,
+    language: options.language ?? "plaintext",
   });
   return id;
 }
@@ -499,7 +499,8 @@ export const api: KnotApi = {
     setLanguage: async (id, language) => {
       const document = state.documents.get(id);
       if (document === undefined) throw hostError("DocumentNotFound");
-      document.language = language;
+      // The fake neither detects nor checks registration.
+      document.language = language ?? "plaintext";
     },
   },
   languages: {
