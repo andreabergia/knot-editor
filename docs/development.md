@@ -44,6 +44,9 @@ declarations, every TypeScript package and its tests, authoring samples, and
 positive/negative type fixtures, then runs the package tests under `node:test`
 with an in-memory host (see the [extension guide](extension-api.md#write-and-test-in-typescript)).
 It does not use a global `tsc`. Runtime contracts still require Rust/V8 tests.
+Files under a package's `test/fixtures` are test inputs and are not compiled;
+`@knot/languages` keeps highlight fixtures there, checked by a Rust test that
+highlights them with the bundled queries (see `src/app/extensions/host/highlight_tests.rs`).
 
 ## Website
 

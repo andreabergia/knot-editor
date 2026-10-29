@@ -369,6 +369,16 @@ fresh.
      two languages claim one pattern. Native compilation is covered by the
      bundled-discovery product test, which requires the package to load and a
      language for every grammar.
+   - ✅ Highlight fixtures in `test/fixtures` (Rust, TypeScript, TSX, Python,
+     shell, Markdown with fenced and inline injections) carry tree-sitter-style
+     `^` / `<-` assertion comments. `host/highlight_tests.rs` starts the
+     bundled packages, detects each fixture's language from its name, and
+     checks every assertion against the painted highlights, so a query
+     regression in the shipped package fails with file, line, column, and the
+     painted name. Writing them confirmed several nvim conventions the queries
+     keep: Rust method calls are `function.call`, JS properties
+     `variable.member`, `new X` a `constructor`, lowercase JSX elements
+     `tag.builtin`, and shell flags `variable.parameter`.
    - Compiling every query took about 420 ms on the foreground (C++ alone
      130 ms, from many nested patterns at about 10 ms each). `registerLanguage`
      now compiles on the background executor and only inserts the compiled

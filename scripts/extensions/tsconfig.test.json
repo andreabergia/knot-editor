@@ -14,5 +14,7 @@
     "../../extensions/*/*/test",
     "../../examples/extensions/*/*/src",
     "../../examples/extensions/*/*/test"
-  ]
+  ],
+  // Fixtures are inputs to tests, such as source files in other languages.
+  "exclude": ["../../extensions/*/*/test/fixtures", "../../examples/extensions/*/*/test/fixtures"]
 }

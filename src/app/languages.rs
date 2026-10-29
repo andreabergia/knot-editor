@@ -386,6 +386,11 @@ pub(crate) fn effective_language(model: &BufferModel, cx: &App) -> String {
         .to_owned()
 }
 
+#[cfg(test)]
+pub(crate) fn registry(cx: &App) -> &LanguageRegistry {
+    &cx.global::<ApplicationLanguages>().registry
+}
+
 pub(crate) fn list(cx: &App) -> Vec<LanguageInfo> {
     cx.try_global::<ApplicationLanguages>()
         .map(|languages| languages.registry.list())

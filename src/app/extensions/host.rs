@@ -2467,6 +2467,47 @@ mod tests {
 
     #[gpui::test]
     fn bundled_packages_load_with_product_discovery(cx: &mut TestAppContext) {
+        let (host, _root) = start_bundled_packages(cx);
+        cx.read(|cx| {
+            let report = host.read(cx).startup_report.as_ref().unwrap();
+            for name in ["@knot/projects", "@knot/languages"] {
+                let entry = report
+                    .report
+                    .entries
+                    .iter()
+                    .find(|entry| entry.name.as_deref() == Some(name))
+                    .unwrap_or_else(|| panic!("{name} was not discovered"));
+                // A query that fails to compile rejects its registration and
+                // so fails the package's start.
+                assert_eq!(entry.result, LoadResult::Loaded, "{name}");
+            }
+            // Every compiled-in grammar has a language, so every bundled
+            // query compiled against its grammar.
+            let languages = crate::app::languages::list(cx);
+            let mut grammars: Vec<_> = languages
+                .iter()
+                .map(|language| language.grammar.as_str())
+                .collect();
+            grammars.sort();
+            grammars.dedup();
+            assert_eq!(
+                grammars,
+                crate::app::syntax::grammars::grammar_ids().collect::<Vec<_>>()
+            );
+            assert!(
+                languages
+                    .iter()
+                    .any(|language| language.id == "typescriptreact")
+            );
+        });
+    }
+
+    /// Starts the bundled packages under product discovery, with no installed
+    /// packages, and waits for startup to finish. The returned directory holds
+    /// their storage.
+    pub(super) fn start_bundled_packages(
+        cx: &mut TestAppContext,
+    ) -> (Entity<ProductExtensionHost>, tempfile::TempDir) {
         use std::time::{Duration, Instant};
 
         let root = tempfile::tempdir().unwrap();
@@ -2501,40 +2542,11 @@ mod tests {
             assert!(Instant::now() < deadline, "bundled startup did not finish");
             std::thread::yield_now();
         }
-        cx.read(|cx| {
-            let report = host.read(cx).startup_report.as_ref().unwrap();
-            for name in ["@knot/projects", "@knot/languages"] {
-                let entry = report
-                    .report
-                    .entries
-                    .iter()
-                    .find(|entry| entry.name.as_deref() == Some(name))
-                    .unwrap_or_else(|| panic!("{name} was not discovered"));
-                // A query that fails to compile rejects its registration and
-                // so fails the package's start.
-                assert_eq!(entry.result, LoadResult::Loaded, "{name}");
-            }
-            // Every compiled-in grammar has a language, so every bundled
-            // query compiled against its grammar.
-            let languages = crate::app::languages::list(cx);
-            let mut grammars: Vec<_> = languages
-                .iter()
-                .map(|language| language.grammar.as_str())
-                .collect();
-            grammars.sort();
-            grammars.dedup();
-            assert_eq!(
-                grammars,
-                crate::app::syntax::grammars::grammar_ids().collect::<Vec<_>>()
-            );
-            assert!(
-                languages
-                    .iter()
-                    .any(|language| language.id == "typescriptreact")
-            );
-        });
+        (host, root)
     }
 }
 
+#[cfg(test)]
+mod highlight_tests;
 #[cfg(test)]
 mod storage_tests;
