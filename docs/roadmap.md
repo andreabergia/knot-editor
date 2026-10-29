@@ -205,10 +205,15 @@ are D064–D067; D066 precedes D058.
   - Deferred: D002 compiles a fixed tree-sitter grammar set into the binary;
     languages register by native grammar name, so an installed package cannot
     add a grammar Knot does not ship.
-  - Reconsider: A user needs a language outside the bundled set. Then choose
-    WASM grammars (tree-sitter's wasm store) or native libraries, weighing
-    wasmtime's size against signing and loading native code (D035), and let
-    a registration ship its grammar.
+  - Reconsider: A user needs a language outside the bundled set. Then load
+    WASM grammars on the V8 that already hosts extensions, and let a
+    registration ship its grammar. Tree-sitter's own wasm store is built on
+    wasmtime, which would add a second engine, and native grammar libraries
+    are ruled out, so this needs a Knot-owned store backend over V8's WASM
+    API: it provides the grammar's lex functions and external scanner, which
+    the native parser calls on every lex step, so start with a spike that
+    measures per-token call overhead and isolate ownership on background
+    parse threads.
 
 - **D067 — Language servers and semantic tokens**
   - Deferred: No language client exists. D002 prepares for one: LSP language
