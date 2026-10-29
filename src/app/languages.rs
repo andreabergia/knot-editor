@@ -447,6 +447,10 @@ fn attach(model: &Entity<BufferModel>, registration_changed: bool, cx: &mut App)
 
 /// Follow a registration change: re-detect every open document whose
 /// language is not explicit, then reattach every tracked buffer's syntax.
+///
+/// This reads `ApplicationDocuments`, so a registration change must never
+/// happen while the document collection is being updated; the collection
+/// itself only calls `detect_document`, which does not refresh.
 fn refresh(cx: &mut App) {
     let documents = cx
         .try_global::<ApplicationDocuments>()
