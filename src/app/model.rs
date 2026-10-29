@@ -105,6 +105,10 @@ impl ContributionRegistry {
 }
 
 /// The authoritative document owned by gpui's foreground thread.
+///
+/// Commit methods take no gpui context, so a caller that changes the text
+/// notifies the model. Views, recovery capture, and background syntax parses
+/// all start from that notification.
 pub struct BufferModel {
     buffer: TextBuffer,
     access_policy: BufferAccessPolicy,

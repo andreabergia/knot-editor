@@ -419,9 +419,13 @@ impl ProductShell {
                             if this.target_is_live(&target, cx)
                                 && model.read(cx).revision() == revision =>
                         {
-                            let replaced = model.update(cx, |model, _| {
+                            let replaced = model.update(cx, |model, cx| {
                                 let len = model.text().len();
-                                model.replace(0..len, &text)
+                                let replaced = model.replace(0..len, &text);
+                                if matches!(replaced, Ok(true)) {
+                                    cx.notify();
+                                }
+                                replaced
                             });
                             match replaced {
                                 Ok(_) => {

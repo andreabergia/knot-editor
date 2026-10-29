@@ -444,12 +444,18 @@ async fn external_save_conflict_offers_reload_and_installs_the_external_version(
     });
     cx.run_until_parked();
     assert!(cx.has_pending_prompt());
+    let notified = std::rc::Rc::new(std::cell::Cell::new(false));
+    let _observer = cx.update(|cx| {
+        let notified = notified.clone();
+        cx.observe(&model, move |_, _| notified.set(true))
+    });
     cx.simulate_prompt_answer("Reload");
 
     assert_eq!(
         execution.completion.await.unwrap(),
         CommandOutcome::Completed
     );
+    assert!(notified.get(), "views and recovery observe the reload");
     cx.read(|cx| {
         assert_eq!(model.read(cx).text(), "external text");
         assert!(!documents.read(cx).get(document).unwrap().is_dirty(cx));
