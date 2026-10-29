@@ -33,7 +33,7 @@ use tree_sitter::{
     Tree,
 };
 
-use crate::core::buffer::{BufferEdit, TextBuffer, TextPoint, TextSnapshot};
+use crate::core::buffer::{BufferEdit, TextPoint, TextSnapshot};
 
 use super::theme::Highlight;
 
@@ -260,7 +260,7 @@ impl SyntaxState {
     /// `range`.
     pub(crate) fn highlights(
         &self,
-        text: &TextBuffer,
+        text: &TextSnapshot,
         range: Range<usize>,
     ) -> Vec<(Range<usize>, Highlight)> {
         let Some(tree) = &self.tree else {

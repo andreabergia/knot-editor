@@ -1,4 +1,5 @@
 use super::*;
+use crate::core::buffer::TextBuffer;
 
 const RUST_HIGHLIGHTS: &str = r#"
 (identifier) @variable
@@ -66,7 +67,7 @@ impl Fixture {
 
     fn highlights_in(&self, range: Range<usize>) -> Vec<(String, &'static str)> {
         self.state
-            .highlights(&self.buffer, range)
+            .highlights(&self.buffer.snapshot(), range)
             .into_iter()
             .map(|(range, highlight)| (self.buffer.read_range(range), highlight.name()))
             .collect()
@@ -153,7 +154,7 @@ fn an_edited_tree_paints_shifted_highlights_before_reparsing() {
     assert_eq!(
         fixture
             .state
-            .highlights(&fixture.buffer, 0..fixture.buffer.len())[0]
+            .highlights(&fixture.buffer.snapshot(), 0..fixture.buffer.len())[0]
             .0,
         2..4
     );
@@ -241,11 +242,19 @@ fn a_background_result_without_later_edits_is_current() {
     let buffer = TextBuffer::from_text("fn a() {}\n");
     let mut state = SyntaxState::new(language(RUST_HIGHLIGHTS));
     let job = state.start_background_parse(buffer.snapshot());
-    assert!(state.highlights(&buffer, 0..buffer.len()).is_empty());
+    assert!(
+        state
+            .highlights(&buffer.snapshot(), 0..buffer.len())
+            .is_empty()
+    );
     assert!(state.finish_background_parse(job.run()));
     assert!(!state.needs_background_parse());
     assert!(state.parse_in_foreground(&buffer.snapshot(), Duration::ZERO));
-    assert!(!state.highlights(&buffer, 0..buffer.len()).is_empty());
+    assert!(
+        !state
+            .highlights(&buffer.snapshot(), 0..buffer.len())
+            .is_empty()
+    );
 }
 
 #[test]
@@ -259,7 +268,11 @@ fn a_result_for_another_state_is_rejected() {
     let generation = state.generation();
     assert!(!state.finish_background_parse(job.run()));
     assert_eq!(state.generation(), generation);
-    assert!(state.highlights(&buffer, 0..buffer.len()).is_empty());
+    assert!(
+        state
+            .highlights(&buffer.snapshot(), 0..buffer.len())
+            .is_empty()
+    );
 
     let parsed = pending.run();
     let duplicate = ParsedTree {
@@ -279,7 +292,7 @@ fn a_parse_over_budget_is_cancelled_and_can_restart() {
     assert!(state.needs_background_parse());
     assert!(state.parse_in_foreground(&buffer.snapshot(), UNBOUNDED));
     assert_eq!(
-        state.highlights(&buffer, 0..2),
+        state.highlights(&buffer.snapshot(), 0..2),
         vec![(0..2, Highlight::named("keyword"))]
     );
 }
@@ -336,7 +349,11 @@ fn syntax_costs_on_large_rust_files() {
             let start = fixture.buffer.line_start(lines / 2);
             let end = fixture.buffer.line_start(lines / 2 + 60);
             let started = Instant::now();
-            std::hint::black_box(fixture.state.highlights(&fixture.buffer, start..end));
+            std::hint::black_box(
+                fixture
+                    .state
+                    .highlights(&fixture.buffer.snapshot(), start..end),
+            );
             queries.push(started.elapsed());
         }
         println!(

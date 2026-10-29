@@ -513,9 +513,9 @@ impl BufferModel {
 
     /// Sorted, non-overlapping syntax highlights within `range`.
     pub(crate) fn syntax_highlights(&self, range: Range<usize>) -> Vec<(Range<usize>, Highlight)> {
-        self.syntax
-            .as_ref()
-            .map_or_else(Vec::new, |syntax| syntax.highlights(&self.buffer, range))
+        self.syntax.as_ref().map_or_else(Vec::new, |syntax| {
+            syntax.highlights(&self.buffer.snapshot(), range)
+        })
     }
 
     pub(crate) fn add_view_position(&mut self, range: Range<usize>) -> Option<AnchoredRangeId> {

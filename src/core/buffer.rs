@@ -98,8 +98,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 pub use snapshot::TextSnapshot;
 
-// Product readers stream snapshots through `chunk_at` alone.
-#[allow(dead_code)]
 mod snapshot;
 
 /// Length at which the add sink's tail is sealed into an immutable chunk.
@@ -435,9 +433,8 @@ impl TextBuffer {
         out
     }
 
-    /// The logical text in `range` as borrowed piece slices, in order, with
-    /// the same requirements as `read_range`.
-    pub fn chunks(&self, range: Range<usize>) -> impl Iterator<Item = &str> {
+    /// The logical text in `range` as borrowed piece slices, in order.
+    fn chunks(&self, range: Range<usize>) -> impl Iterator<Item = &str> {
         let mut offset = 0usize;
         self.pieces.iter().map_while(move |p| {
             let p_start = offset;
