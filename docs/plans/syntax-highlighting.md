@@ -66,7 +66,7 @@ grammar ID. The first set:
 | Web | `html`, `css`, `javascript` (includes JSX), `typescript`, `tsx` |
 | Systems | `rust`, `c`, `cpp`, `go`, `java` |
 | Scripting | `python`, `bash` |
-| Data and docs | `json` (also serves JSONC), `toml`, `yaml`, `sql`, `markdown`, `markdown_inline` |
+| Data and docs | `json` (also serves JSONC), `toml`, `yaml`, `markdown`, `markdown_inline` |
 | Tooling | `query` (tree-sitter queries, which `@knot/languages` itself is written in) |
 
 Grammars come from upstream crates over the `tree-sitter` crate directly rather
@@ -80,8 +80,10 @@ Every grammar crate depends on `tree-sitter-language ^0.1`, so they link
 against one `tree-sitter` 0.27; the runtime checks each ABI in `set_language`,
 and a test loads and parses a sample with every grammar. The query grammar is
 `tree-sitter-tsquery` (tree-sitter-grammars/tree-sitter-query), because the
-`tree-sitter-query` crate still targets tree-sitter 0.20. `tree-sitter-sequel`
-pins `cc ~1.2.1`, which holds the whole build's `cc` at 1.2.x.
+`tree-sitter-query` crate still targets tree-sitter 0.20. SQL is left out:
+`tree-sitter-sequel` pins `cc ~1.2.1`, which would hold the whole build's `cc`
+at 1.2.x; it can return when the pin relaxes or through runtime grammar
+loading (D065).
 
 ### Language identity
 
@@ -263,7 +265,8 @@ fresh.
      continue in the background.
    - The grammar set grows the release binary from about 74 MB to 88.5 MB and
      adds about 28 s of grammar C compilation, spread across parallel build
-     scripts (typescript, sql, bash, cpp, and markdown are the largest).
+     scripts (typescript, sql, bash, cpp, and markdown are the largest), measured
+     with SQL, which has since been dropped.
 4. 📝 **Injections.** Layered trees for Markdown inline and fenced code and for
    HTML `<script>`/`<style>`; tests over edits that create and remove injected
    regions.

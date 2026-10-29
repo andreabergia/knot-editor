@@ -24,7 +24,6 @@ const GRAMMARS: &[Grammar] = &[
     ("python", || tree_sitter_python::LANGUAGE.into()),
     ("query", || tree_sitter_tsquery::LANGUAGE.into()),
     ("rust", || tree_sitter_rust::LANGUAGE.into()),
-    ("sql", || tree_sitter_sequel::LANGUAGE.into()),
     ("toml", || tree_sitter_toml_ng::LANGUAGE.into()),
     ("tsx", || tree_sitter_typescript::LANGUAGE_TSX.into()),
     ("typescript", || {
@@ -77,7 +76,6 @@ mod tests {
             ("python", "def f(x):\n    return x\n"),
             ("query", "(identifier) @variable\n"),
             ("rust", "fn main() { let x = 1; }\n"),
-            ("sql", "SELECT a FROM t WHERE b = 1;\n"),
             ("toml", "[table]\nkey = \"value\"\n"),
             ("tsx", "const x = <A b={1} />;\n"),
             ("typescript", "let x: number = 1;\n"),
