@@ -243,7 +243,9 @@ fn a_background_result_is_rebased_over_edits_committed_while_it_ran() {
     fixture.replace(0..0, "// note\n");
     let end = fixture.buffer.len();
     fixture.replace(end..end, "fn c() {}\n");
-    let parsed = std::thread::spawn(move || job.run()).join().unwrap();
+    let parsed = std::thread::spawn(move || job.run().unwrap())
+        .join()
+        .unwrap();
     assert!(fixture.state.finish_background_parse(parsed));
 
     // Rebased onto the current text but not yet a parse of it.
@@ -265,7 +267,7 @@ fn a_background_result_without_later_edits_is_current() {
             .highlights(&buffer.snapshot(), 0..buffer.len())
             .is_empty()
     );
-    assert!(state.finish_background_parse(job.run()));
+    assert!(state.finish_background_parse(job.run().unwrap()));
     assert!(!state.needs_parse());
     assert!(state.parse_in_foreground(&buffer.snapshot(), Duration::ZERO));
     assert!(
@@ -284,7 +286,7 @@ fn a_result_for_another_state_is_rejected() {
     let mut state = SyntaxState::new(language(RUST_HIGHLIGHTS));
     let pending = state.start_background_parse(buffer.snapshot());
     let generation = state.generation();
-    assert!(!state.finish_background_parse(job.run()));
+    assert!(!state.finish_background_parse(job.run().unwrap()));
     assert_eq!(state.generation(), generation);
     assert!(
         state
@@ -292,13 +294,22 @@ fn a_result_for_another_state_is_rejected() {
             .is_empty()
     );
 
-    let parsed = pending.run();
+    let parsed = pending.run().unwrap();
     let duplicate = ParsedTree {
         id: parsed.id,
         tree: parsed.tree.clone(),
     };
     assert!(state.finish_background_parse(parsed));
     assert!(!state.finish_background_parse(duplicate));
+}
+
+#[test]
+fn dropping_a_state_cancels_its_background_parse() {
+    let buffer = TextBuffer::from_text("fn f() { let x = call(1, \"s\"); }\n".repeat(20_000));
+    let mut state = SyntaxState::new(language(RUST_HIGHLIGHTS));
+    let job = state.start_background_parse(buffer.snapshot());
+    drop(state);
+    assert!(job.run().is_none());
 }
 
 #[test]

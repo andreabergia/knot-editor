@@ -244,6 +244,7 @@ fresh.
      syntax state in the same commit step that stabilizes anchors, and an
      `observe_self` subscription starts background parses after any notify
      that leaves the tree behind, so commit paths need no gpui context.
+     Replacing or closing a buffer's syntax state cancels its background parse.
      `BufferModel::set_syntax` attaches a language; it and the syntax module
      carry `dead_code` allowances until checkpoint 5 registers languages.
    - Captures paint with nvim-treesitter precedence: cursor order, so a later

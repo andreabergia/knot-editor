@@ -502,7 +502,9 @@ impl BufferModel {
         };
         let parse = syntax.start_background_parse(self.buffer.snapshot());
         cx.spawn(async move |this, cx| {
-            let parsed = cx.background_spawn(async move { parse.run() }).await;
+            let Some(parsed) = cx.background_spawn(async move { parse.run() }).await else {
+                return Ok(());
+            };
             this.update(cx, |model, cx| model.finish_syntax_parse(parsed, cx))
         })
         .detach();

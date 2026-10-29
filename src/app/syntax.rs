@@ -9,7 +9,8 @@
 //! over a `TextSnapshot` while highlights keep coming from the edited
 //! previous tree. A background result is rebased over the edits committed
 //! while it ran, and a result for a replaced state is rejected, so a tree is
-//! never applied to text it did not see.
+//! never applied to text it did not see. Dropping a state cancels its running
+//! parse.
 //!
 //! Highlights follow nvim-treesitter's precedence, since its queries are the
 //! ones Knot adapts: captures paint in query-cursor order, so a later pattern
@@ -23,7 +24,7 @@ use std::{
     ops::{ControlFlow, Range},
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -122,18 +123,25 @@ pub(crate) struct SyntaxState {
     /// Changes whenever the highlights may have changed, and is never shared
     /// with another state, so a view's cache cannot outlive a replacement.
     generation: u64,
-    /// The running background parse and the edits committed since it took
-    /// its snapshot.
-    background: Option<(u64, Vec<InputEdit>)>,
+    background: Option<RunningParse>,
+}
+
+/// A started `BackgroundParse`, as its state tracks it.
+struct RunningParse {
+    id: u64,
+    cancelled: Arc<AtomicBool>,
+    /// The edits committed since the parse took its snapshot.
+    pending: Vec<InputEdit>,
 }
 
 /// A parse to run off the foreground. `Send`, and independent of the state
-/// that started it.
+/// that started it except for cancellation when that state is dropped.
 pub(crate) struct BackgroundParse {
     id: u64,
     language: Arc<SyntaxLanguage>,
     tree: Option<Tree>,
     text: TextSnapshot,
+    cancelled: Arc<AtomicBool>,
 }
 
 /// The result of a `BackgroundParse`.
@@ -177,8 +185,8 @@ impl SyntaxState {
             if let Some(tree) = &mut self.tree {
                 tree.edit(&edit);
             }
-            if let Some((_, pending)) = &mut self.background {
-                pending.push(edit);
+            if let Some(running) = &mut self.background {
+                running.pending.push(edit);
             }
         }
         if !edits.is_empty() {
@@ -227,12 +235,18 @@ impl SyntaxState {
     pub(crate) fn start_background_parse(&mut self, text: TextSnapshot) -> BackgroundParse {
         debug_assert!(self.background.is_none(), "one background parse at a time");
         let id = NEXT_PARSE.fetch_add(1, Ordering::Relaxed);
-        self.background = Some((id, Vec::new()));
+        let cancelled = Arc::new(AtomicBool::new(false));
+        self.background = Some(RunningParse {
+            id,
+            cancelled: Arc::clone(&cancelled),
+            pending: Vec::new(),
+        });
         BackgroundParse {
             id,
             language: Arc::clone(&self.language),
             tree: self.tree.clone(),
             text,
+            cancelled,
         }
     }
 
@@ -240,14 +254,14 @@ impl SyntaxState {
     /// snapshot. Returns false, changing nothing, for a result this state did
     /// not start.
     pub(crate) fn finish_background_parse(&mut self, parsed: ParsedTree) -> bool {
-        let Some((_, edits)) = self.background.take_if(|(id, _)| *id == parsed.id) else {
+        let Some(running) = self.background.take_if(|running| running.id == parsed.id) else {
             return false;
         };
         let mut tree = parsed.tree;
-        for edit in &edits {
+        for edit in &running.pending {
             tree.edit(edit);
         }
-        self.accept(tree, edits.is_empty());
+        self.accept(tree, running.pending.is_empty());
         true
     }
 
@@ -299,20 +313,35 @@ impl SyntaxState {
     }
 }
 
+impl Drop for SyntaxState {
+    fn drop(&mut self) {
+        if let Some(running) = &self.background {
+            running.cancelled.store(true, Ordering::Relaxed);
+        }
+    }
+}
+
 impl BackgroundParse {
-    pub(crate) fn run(self) -> ParsedTree {
+    /// Parse to completion, or `None` once the state that started this parse
+    /// has been dropped.
+    pub(crate) fn run(self) -> Option<ParsedTree> {
         let mut parser = Parser::new();
         parser
             .set_language(&self.language.grammar)
             .expect("compiled-in grammars match the tree-sitter ABI");
-        let tree = parser
-            .parse_with_options(
-                &mut |offset, _| self.text.chunk_at(offset),
-                self.tree.as_ref(),
-                None,
-            )
-            .expect("an uncancellable parse with a language completes");
-        ParsedTree { id: self.id, tree }
+        let mut progress = |_: &_| {
+            if self.cancelled.load(Ordering::Relaxed) {
+                ControlFlow::Break(())
+            } else {
+                ControlFlow::Continue(())
+            }
+        };
+        let tree = parser.parse_with_options(
+            &mut |offset, _| self.text.chunk_at(offset),
+            self.tree.as_ref(),
+            Some(ParseOptions::new().progress_callback(&mut progress)),
+        )?;
+        Some(ParsedTree { id: self.id, tree })
     }
 }
 
