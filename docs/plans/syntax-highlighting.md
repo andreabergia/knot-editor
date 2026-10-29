@@ -1,6 +1,6 @@
 # D002 — Syntax highlighting
 
-Status: 📝 proposed, awaiting review. Promotes D002 from the
+Status: 🚧 approved, in progress. Promotes D002 from the
 [roadmap](../roadmap.md); follow-up work is registered there as D064–D067.
 
 ## Problem
