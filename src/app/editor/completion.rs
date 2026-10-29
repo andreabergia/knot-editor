@@ -119,7 +119,9 @@ impl EditorView {
             px(0.)
         } else {
             let shaped = self.shape_line(line, &text, window, cx);
-            self.line_x_offset(&text, shaped.width, self.bounds.size.width)
+            let text_bounds = self.text_bounds();
+            text_bounds.origin.x - self.bounds.origin.x
+                + self.line_x_offset(&text, shaped.width, text_bounds.size.width)
                 + x_for_index_dir(&shaped, self.cursor_col, &text)
         };
         let y = px((line + 1) as f32 * LINE_HEIGHT - self.scroll);

@@ -59,7 +59,7 @@ impl EditorView {
         let text = line_text(model, self.cursor_line);
         let shaped = self.shape_line(self.cursor_line, &text, window, cx);
         x_for_index_dir(&shaped, self.cursor_col, &text)
-            + self.line_x_offset(&text, shaped.width, self.bounds.size.width)
+            + self.line_x_offset(&text, shaped.width, self.text_bounds().size.width)
             + px(self.scroll_x)
     }
 
@@ -73,8 +73,8 @@ impl EditorView {
     ) -> usize {
         let text = line_text(model, line);
         let shaped = self.shape_line(line, &text, window, cx);
-        let offset =
-            self.line_x_offset(&text, shaped.width, self.bounds.size.width) + px(self.scroll_x);
+        let offset = self.line_x_offset(&text, shaped.width, self.text_bounds().size.width)
+            + px(self.scroll_x);
         text.grapheme_indices(true)
             .map(|(i, _)| i)
             .chain(std::iter::once(text.len()))

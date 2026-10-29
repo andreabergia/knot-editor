@@ -244,7 +244,10 @@ fn tabs_hit_testing_and_horizontal_reveal_share_geometry(cx: &mut TestAppContext
             assert_eq!(
                 view.hit_test(
                     model,
-                    point(view.bounds.origin.x + tab_x, view.bounds.origin.y + px(5.)),
+                    point(
+                        view.text_bounds().origin.x + tab_x,
+                        view.bounds.origin.y + px(5.)
+                    ),
                     window,
                     cx
                 ),
@@ -276,7 +279,7 @@ fn mouse_selection_keeps_press_anchor_across_reversal_and_ignores_foreign_drags(
             let position = |view: &mut EditorView, col, cx: &gpui::App| {
                 view.cursor_col = col;
                 point(
-                    view.bounds.origin.x + view.caret_x(view.model.read(cx), window, cx),
+                    view.text_bounds().origin.x + view.caret_x(view.model.read(cx), window, cx),
                     view.bounds.origin.y + px(5.),
                 )
             };
@@ -495,7 +498,7 @@ fn horizontal_scroll_is_bounded_by_the_widest_shaped_line(cx: &mut TestAppContex
     });
     let long_width = cx.read(|cx| {
         let view = editor.read(cx);
-        let limit = view.max_line_width + 2. - f32::from(view.bounds.size.width);
+        let limit = view.max_line_width + 2. - f32::from(view.text_bounds().size.width);
         assert!(limit > 0.);
         assert_eq!(view.scroll_x, limit);
         view.max_line_width
@@ -1065,4 +1068,42 @@ fn overlapping_decorations_underline_with_the_most_severe(cx: &mut TestAppContex
             ]
         );
     });
+}
+
+#[gpui::test]
+fn gutter_markers_reserve_a_column_beside_the_text(cx: &mut TestAppContext) {
+    for (show_gutter_markers, gutter) in [(true, 16.), (false, 0.)] {
+        let model = cx.new(|_| BufferModel::from_text("abc"));
+        let (editor, cx) = cx.add_window_view(|_, cx| {
+            EditorView::new_with_options(
+                model,
+                0,
+                EditorRenderingOptions {
+                    show_gutter_markers,
+                },
+                cx,
+            )
+        });
+        cx.refresh().unwrap();
+        cx.update(|window, cx| {
+            editor.update(cx, |view, cx| {
+                let bounds = view.interaction_bounds();
+                let text = view.text_bounds();
+                assert_eq!(text.origin.x - bounds.origin.x, px(gutter));
+                assert_eq!(text.size.width, bounds.size.width - px(gutter));
+                view.cursor_col = 1;
+                let x = view.caret_x(view.model.read(cx), window, cx);
+                let y = bounds.origin.y + px(5.);
+                let model = view.model.read(cx);
+                assert_eq!(
+                    view.hit_test(model, point(text.origin.x + x, y), window, cx),
+                    (0, 1)
+                );
+                assert_eq!(
+                    view.hit_test(model, point(bounds.origin.x, y), window, cx),
+                    (0, 0)
+                );
+            })
+        });
+    }
 }

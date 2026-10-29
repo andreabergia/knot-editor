@@ -51,7 +51,7 @@ impl Render for EditorView {
                 this.scroll -= dy;
                 this.scroll_x = (this.scroll_x - dx).clamp(
                     0.,
-                    (this.max_line_width + 2. - f32::from(this.bounds.size.width)).max(0.),
+                    (this.max_line_width + 2. - f32::from(this.text_bounds().size.width)).max(0.),
                 );
                 this.reveal_caret = false;
                 this.clamp_scroll();
@@ -131,7 +131,7 @@ impl Element for EditorElement {
             if view.reveal_caret || (resized && !view.preserve_scroll_on_layout) {
                 view.ensure_cursor_visible(view.viewport_h);
                 let x = f32::from(view.caret_x(view.model.read(cx), window, cx));
-                let width = f32::from(bounds.size.width);
+                let width = f32::from(view.text_bounds().size.width);
                 if x < view.scroll_x {
                     view.scroll_x = x.max(0.);
                 }
@@ -236,13 +236,15 @@ impl Element for EditorElement {
         // and scroll handlers can clamp against the real viewport. No
         // notify: this must not trigger a re-render.
         let viewport_h = f32::from(bounds.size.height);
-        self.entity.update(cx, |view, _cx| {
+        let gutter = bounds;
+        let bounds = self.entity.update(cx, |view, _cx| {
             view.viewport_h = viewport_h;
-            view.bounds = bounds;
+            view.bounds = gutter;
             #[cfg(test)]
             {
                 view.paint_count += 1;
             }
+            view.text_bounds()
         });
 
         // Register the IME input handler. `handle_input` self-gates on
@@ -428,18 +430,22 @@ impl Element for EditorElement {
                 window.paint_quad(fill(caret_bounds, colors.caret));
             }
 
-            for (line, color) in &gutter_markers {
-                let top = bounds.origin.y + px(*line as f32 * LINE_HEIGHT) - px(scroll);
-                let marker_bounds = Bounds {
-                    origin: point(bounds.origin.x + px(3.), top + px(6.)),
-                    size: size(px(7.), px(7.)),
-                };
-                window.paint_quad(fill(marker_bounds, *color));
-            }
             shaped
                 .iter()
                 .map(|(_, s, _, _)| f32::from(s.width))
                 .fold(0., f32::max)
+        });
+
+        // Gutter markers, beside the text area rather than over it.
+        window.with_content_mask(Some(ContentMask { bounds: gutter }), |window| {
+            for (line, color) in &gutter_markers {
+                let top = gutter.origin.y + px(*line as f32 * LINE_HEIGHT) - px(scroll);
+                let marker_bounds = Bounds {
+                    origin: point(gutter.origin.x + px(4.), top + px(6.)),
+                    size: size(px(7.), px(7.)),
+                };
+                window.paint_quad(fill(marker_bounds, *color));
+            }
         });
         self.entity.update(cx, |view, _| {
             view.max_line_width = view.max_line_width.max(widest);

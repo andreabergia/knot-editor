@@ -183,6 +183,20 @@ impl EditorView {
         self.bounds
     }
 
+    /// The part of `bounds` that shows text: everything right of the gutter,
+    /// which exists only while the view renders gutter markers.
+    pub(super) fn text_bounds(&self) -> Bounds<Pixels> {
+        let gutter = if self.rendering.show_gutter_markers {
+            px(GUTTER_WIDTH).min(self.bounds.size.width)
+        } else {
+            px(0.)
+        };
+        Bounds {
+            origin: point(self.bounds.origin.x + gutter, self.bounds.origin.y),
+            size: size(self.bounds.size.width - gutter, self.bounds.size.height),
+        }
+    }
+
     #[cfg(test)]
     fn text(&self, cx: &App) -> String {
         self.model.read(cx).text()
@@ -695,6 +709,7 @@ impl Focusable for EditorView {
 impl EventEmitter<EditorContributionAction> for EditorView {}
 
 const LINE_HEIGHT: f32 = 20.0;
+const GUTTER_WIDTH: f32 = 16.0;
 
 #[cfg(test)]
 mod tests;

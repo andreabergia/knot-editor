@@ -20,7 +20,7 @@ impl EditorView {
         self.drag_anchor = None;
         self.marked_range_utf16 = None;
         let (line, col) = self.hit_test(self.model.read(cx), ev.position, window, cx);
-        let gutter = ev.position.x <= self.bounds.origin.x + px(14.);
+        let gutter = ev.position.x < self.text_bounds().origin.x;
         if let Some(action) = self.contribution_actions.iter().rev().find(|action| {
             action.line == line
                 && if gutter {
@@ -142,7 +142,8 @@ impl EditorView {
         window: &Window,
         cx: &App,
     ) -> (usize, usize) {
-        let origin = self.bounds.origin;
+        let text_bounds = self.text_bounds();
+        let origin = text_bounds.origin;
         let line = ((f32::from(p.y - origin.y) + self.scroll) / LINE_HEIGHT).floor() as usize;
         let line = line.min(self.line_count - 1);
         let text = line_text(model, line);
@@ -150,7 +151,7 @@ impl EditorView {
             return (line, 0);
         }
         let shaped = self.shape_line(line, &text, window, cx);
-        let x = p.x - origin.x - self.line_x_offset(&text, shaped.width, self.bounds.size.width);
+        let x = p.x - origin.x - self.line_x_offset(&text, shaped.width, text_bounds.size.width);
         let col = text
             .grapheme_indices(true)
             .map(|(start, _)| start)
