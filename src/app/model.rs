@@ -132,6 +132,9 @@ pub struct BufferModel {
     /// Whole-document reads, so tests can assert that views never make them.
     #[cfg(test)]
     whole_text_reads: std::cell::Cell<usize>,
+    /// Syntax highlight queries, so tests can assert that views share them.
+    #[cfg(test)]
+    syntax_queries: std::cell::Cell<usize>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -199,6 +202,8 @@ impl BufferModel {
             syntax_driver: None,
             #[cfg(test)]
             whole_text_reads: Default::default(),
+            #[cfg(test)]
+            syntax_queries: Default::default(),
         }
     }
 
@@ -218,6 +223,11 @@ impl BufferModel {
     #[cfg(test)]
     pub(crate) fn whole_text_reads(&self) -> usize {
         self.whole_text_reads.get()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn syntax_queries(&self) -> usize {
+        self.syntax_queries.get()
     }
 
     pub(crate) fn len(&self) -> usize {
@@ -517,6 +527,8 @@ impl BufferModel {
 
     /// Sorted, non-overlapping syntax highlights within `range`.
     pub(crate) fn syntax_highlights(&self, range: Range<usize>) -> Vec<(Range<usize>, Highlight)> {
+        #[cfg(test)]
+        self.syntax_queries.set(self.syntax_queries.get() + 1);
         self.syntax.as_ref().map_or_else(Vec::new, |syntax| {
             syntax.highlights(&self.buffer.snapshot(), range)
         })

@@ -137,8 +137,8 @@ pub struct EditorView {
     decorations: Vec<RenderedDecoration>,
     gutter_markers: Vec<RenderedGutterMarker>,
     contribution_actions: Vec<RenderedContributionAction>,
-    /// The visible lines' syntax highlights, filled during paint and reused
-    /// by caret, hit-testing, and IME geometry on those lines.
+    /// Syntax highlights of the visible lines and some overscan, shared by
+    /// painting and the caret, hit-testing, and IME geometry on those lines.
     syntax_cache: RefCell<Option<SyntaxCache>>,
     /// Vertical scroll offset in pixels (0 = top of buffer).
     scroll: f32,
@@ -504,6 +504,14 @@ impl EditorView {
         self.clamp_scroll();
     }
 
+    /// The lines the last measured viewport shows at the current scroll,
+    /// including a partly visible last line.
+    pub(super) fn visible_lines(&self) -> Range<usize> {
+        let first = ((self.scroll / LINE_HEIGHT).floor() as usize).min(self.line_count);
+        let rows = (self.viewport_h / LINE_HEIGHT).ceil() as usize + 1;
+        first..(first + rows).min(self.line_count)
+    }
+
     fn clamp_scroll(&mut self) {
         if self.scroll < 0. {
             self.scroll = 0.;
@@ -729,6 +737,9 @@ impl Focusable for EditorView {
 impl EventEmitter<EditorContributionAction> for EditorView {}
 
 const LINE_HEIGHT: f32 = 20.0;
+/// Lines a syntax highlight query covers beyond the requested ones on each
+/// side.
+const SYNTAX_OVERSCAN: usize = 16;
 const GUTTER_WIDTH: f32 = 16.0;
 
 #[cfg(test)]

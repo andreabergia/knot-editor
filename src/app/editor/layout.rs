@@ -34,22 +34,31 @@ impl EditorView {
     }
 
     /// Query the syntax highlights of `lines` at once, so painting and the
-    /// geometry of those lines share one query per syntax generation.
+    /// geometry of those lines share one query per syntax generation. A new
+    /// query also covers `SYNTAX_OVERSCAN` lines on each side, so small
+    /// scrolls reuse it.
     pub(super) fn cache_syntax(&self, model: &BufferModel, lines: Range<usize>) {
         let Some(generation) = model.syntax_generation() else {
             return;
         };
+        let lines = lines.start..lines.end.min(model.line_count());
         if lines.is_empty() {
             return;
         }
-        let range = model.line_range(lines.start).start..model.line_range(lines.end - 1).end;
+        let byte_range = |lines: Range<usize>| {
+            model.line_range(lines.start).start..model.line_range(lines.end - 1).end
+        };
         let mut cache = self.syntax_cache.borrow_mut();
         if cache
             .as_ref()
-            .is_some_and(|cache| cache.covers(generation, &range))
+            .is_some_and(|cache| cache.covers(generation, &byte_range(lines.clone())))
         {
             return;
         }
+        let range = byte_range(
+            lines.start.saturating_sub(SYNTAX_OVERSCAN)
+                ..(lines.end + SYNTAX_OVERSCAN).min(model.line_count()),
+        );
         *cache = Some(SyntaxCache {
             generation,
             spans: model.syntax_highlights(range.clone()),
@@ -66,24 +75,28 @@ impl EditorView {
         if range.is_empty() {
             return Vec::new();
         }
+        // Geometry runs between commits and paints; filling the visible
+        // lines lets the next paint reuse its query.
+        let visible = self.visible_lines();
+        self.cache_syntax(
+            model,
+            if visible.contains(&line) {
+                visible
+            } else {
+                line..line + 1
+            },
+        );
         let cache = self.syntax_cache.borrow();
-        let queried;
-        let spans = match cache
+        let Some(cache) = cache
             .as_ref()
             .filter(|cache| cache.covers(generation, &range))
-        {
-            Some(cache) => {
-                let first = cache
-                    .spans
-                    .partition_point(|(span, _)| span.end <= range.start);
-                &cache.spans[first..]
-            }
-            None => {
-                queried = model.syntax_highlights(range.clone());
-                &queried[..]
-            }
+        else {
+            return Vec::new();
         };
-        spans
+        let first = cache
+            .spans
+            .partition_point(|(span, _)| span.end <= range.start);
+        cache.spans[first..]
             .iter()
             .take_while(|(span, _)| span.start < range.end)
             .map(|(span, highlight)| HighlightSpan {

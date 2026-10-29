@@ -251,9 +251,11 @@ fresh.
      ones, with `(#set! priority N)` (default 100) ordering patterns. General
      predicates the Rust binding does not evaluate (`#lua-match?`, …) are
      ignored; checkpoint 6 normalizes queries away from them.
-   - Views query the visible lines once per syntax generation, which is
-     globally unique so a replaced state never reuses a cached one, and
-     compose the syntax layer beneath the decoration layers.
+   - Views query the visible lines with some overscan once per syntax
+     generation, which is globally unique so a replaced state never reuses a
+     cached one. Painting and caret, hit-test, and IME geometry share that
+     query, small scrolls reuse it, and the syntax layer composes beneath the
+     decoration layers.
    - On Apple M1 Pro/macOS release builds (`syntax_costs_on_large_rust_files`,
      ignored): a 3,500-line, 96 KiB Rust file parses initially in 10.5 ms and
      reparses after valid typing at p50 220 µs, p99 475 µs; a 70,000-line,

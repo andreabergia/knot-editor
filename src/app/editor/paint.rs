@@ -180,9 +180,10 @@ impl Element for EditorElement {
             let model = view.model.read(cx);
             let theme = cx.global::<Theme>();
             let max = (view.line_count as f32) * LINE_HEIGHT;
-            let first = (view.scroll / LINE_HEIGHT).floor() as usize;
-            let visible_rows = (f32::from(bounds.size.height) / LINE_HEIGHT).ceil() as usize + 1;
-            let last = (first + visible_rows).min(view.line_count);
+            let Range {
+                start: first,
+                end: last,
+            } = view.visible_lines();
             view.cache_syntax(model, first..last);
             let vis = (first..last)
                 .map(|ix| {
