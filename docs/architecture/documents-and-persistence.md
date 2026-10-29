@@ -26,6 +26,15 @@ associated-but-uncreated documents remain dirty until saved; persisted documents
 compare against their saved content identity. Undo can return to clean content
 without making public revisions non-monotonic. Resource identity and provider state never enter `BufferModel` or `core`.
 
+A document's language is a buffer fact shared by every view. The collection
+detects it from the resource name and first line when a document enters it
+(Open, untitled creation, restore) and when persistence moves it to a new
+resource (Save As, a first save), unless the language is explicit; a plain Save
+or typing never re-detects. An explicit language is recorded in
+[window layouts](workbench-and-lifecycle.md#window-layouts), so it survives hot
+exit and project sessions without another store. Detection and registration
+are described in [semantic UI](semantic-ui.md#syntax-highlighting-and-languages).
+
 ## Opening resources
 
 CLI paths, native Open, and macOS events converge on normalized resource requests.

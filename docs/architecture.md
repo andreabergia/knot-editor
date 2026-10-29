@@ -21,7 +21,8 @@ gpui application and native views
 
 - `core` owns UI-, platform-, and scripting-independent text and edit primitives.
 - `app` owns the gpui shell, foreground editor state, native views, resource
-  providers, commands, package discovery, startup, and extension storage.
+  providers, commands, package discovery, startup, extension storage, the
+  language registry, and native syntax parsing over compiled-in grammars.
 - `host` owns V8, bounded scheduling, immutable module-graph validation, and
   Knot-owned typed transport. Its public control surface and protocol expose no
   V8 or gpui objects.
@@ -38,7 +39,10 @@ The application owns documents, resource providers, the command catalog and
 keymap registry, terminal sessions, and one extension pool.
 
 A document owns persistence identity and a shared `BufferModel`. The model owns
-text, session-local history, anchored geometry, and semantic contributions.
+text, session-local history, anchored geometry, semantic contributions, and
+its language and syntax state. Extensions contribute language definitions;
+native code owns grammars and parsing, and the theme maps highlight names to
+styles.
 Each window owns a workbench whose split panes contain typed document, terminal, or native tool tabs.
 The workbench retains native tool definitions independently of visible tab
 attachments, including dock placement and hide/reopen state. The application
@@ -79,11 +83,14 @@ extensions supply asynchronous content rather than rendering callbacks.
 - Generic resource state uses normalized URIs. Platform paths and native I/O
   errors stay in providers or explicit diagnostic code.
 - Native painting and raw input never synchronously call JavaScript.
+- Syntax trees follow every commit synchronously; parsing that exceeds a small
+  foreground budget continues off the foreground from an immutable text
+  snapshot, and its result is rebased or rejected against the current state.
 
 ## Subsystem references
 
 - [Core and buffers](architecture/core-and-buffers.md): text storage, stable
-  positions, anchored ranges, model commits, and reversible edits.
+  positions, anchored ranges, model commits, syntax state, and reversible edits.
 - [Documents and persistence](architecture/documents-and-persistence.md):
   identity, dirty state, resource providers, workspaces, Open, and Save.
 - [Workbench and lifecycle](architecture/workbench-and-lifecycle.md): startup,
@@ -92,5 +99,5 @@ extensions supply asynchronous content rather than rendering callbacks.
   composition, cancellation, and keymaps.
 - [Extension host](architecture/extension-host.md): runtime isolation, transport,
   scheduling, lifecycle, observation, and extension storage.
-- [Semantic UI](architecture/semantic-ui.md): contributions, trees, completion
-  aggregation, and generated text surfaces.
+- [Semantic UI](architecture/semantic-ui.md): contributions, highlight layers,
+  languages, trees, completion aggregation, and generated text surfaces.

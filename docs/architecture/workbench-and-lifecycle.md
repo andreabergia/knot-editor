@@ -106,9 +106,9 @@ window bounds, windowed, maximized, or fullscreen state, and the display UUID;
 the split tree with dock groups; ordered tabs and the selected tab per pane; the
 focused pane; dock sizes; and each editor tab's view state. Every tab kind is
 restored by position and records only what recreates it: a document tab its
-document identity and resource URI, a tool tab its stable tool ID, and a
-terminal tab nothing, so a restored terminal starts a fresh shell. The value
-never contains pane, tab, view, or window handles.
+document identity, resource URI, and explicit language, a tool tab its stable
+tool ID, and a terminal tab nothing, so a restored terminal starts a fresh
+shell. The value never contains pane, tab, view, or window handles.
 
 Restoring plans a pruned arrangement in one place for both restorers. Document
 tabs resolve to the window's entry with the same document identity, else the
@@ -118,7 +118,9 @@ splits collapse; a second pane claiming a taken dock becomes ordinary, and an
 out-of-range selection or focus falls back to the first tab or the normal group.
 Each surviving tab is then recreated by its kind's step (a fresh editor view of
 the shared model, the registered tool frame, a new terminal session), so a
-split of one document restores as independent views of one model. Tools the
+split of one document restores as independent views of one model. A recorded
+language becomes the document's explicit language unless the live document
+already has one. Tools the
 layout does not name are hidden and keep their remembered placement; entries
 it does not place open in the normal group. Restoration never publishes the
 [tool-only default](#automatic-tool-layout-memory). An unsupported version or

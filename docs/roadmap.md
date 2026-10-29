@@ -32,11 +32,13 @@ split by concern, terminal, extension, and command modules live in their own
 directories, large test modules sit beside their code, and local filesystem I/O
 no longer needs a tokio runtime.
 
-Syntax highlighting (D002) is selected next: native incremental tree-sitter
-parsing with injections, languages registered through a bundled
-`@knot/languages` package, and a layered paint pipeline shaped for later
-language servers. See the [plan](plans/syntax-highlighting.md). Its follow-ups
-are D064–D067; D066 precedes D058.
+Syntax highlighting (D002) is complete: native incremental tree-sitter
+parsing with injections, languages registered through the bundled
+`@knot/languages` package, explicit languages that survive restarts and project
+sessions, and a layered paint pipeline shaped for later language servers. Its
+follow-ups are D064–D067; D066 precedes D058.
+
+No further work is selected.
 
 ## Deferred register
 

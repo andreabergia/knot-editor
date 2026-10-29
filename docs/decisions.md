@@ -57,6 +57,62 @@ a whole-document scan for a rare mixed-ending case.
 
 Reference: [core and buffers](architecture/core-and-buffers.md).
 
+## Syntax highlighting
+
+Parse natively with tree-sitter over grammars compiled into the binary, and
+let extensions contribute language definitions: an LSP language ID, the grammar,
+detection patterns, and queries. Running a grammar is a mechanic like shaping:
+the tree must follow every commit synchronously and painting never calls
+JavaScript, while the definition is data that personal config and packages
+replace through the same API the bundled `@knot/languages` package uses.
+Grammars come from upstream crates over the `tree-sitter` crate rather than
+arborium, whose whole-string highlighter has no tree editing, old-tree reuse,
+chunked input, progress callback, or byte-range query. SQL is left out because
+its crate pins `cc ~1.2.1` for the whole build; runtime grammar loading is D065.
+
+LSP language IDs and nvim-treesitter's capture names make the pieces a
+language client needs already exist: IDs pass through unchanged and semantic
+token types map onto the same names. Adopting Neovim's published capture list
+lets adapted upstream queries keep their names and stops a missing leaf from
+falling back to the wrong parent; Zed, Helix, and Neovim all resolve dotted
+names by longest prefix. Decoration names stay outside the capture vocabulary
+so a query cannot draw a diagnostic. Queries ship as TypeScript string modules,
+normalized to predicates the Rust binding evaluates, so packages stay
+JavaScript-only.
+
+Every edit applies to the tree in the commit, then the foreground reparses
+within 1 ms and continues in the background from a `TextSnapshot`, painting the
+edited previous tree meanwhile. On Apple M1 Pro/macOS release builds, a
+3,500-line, 96 KiB Rust file parsed initially in 10.5 ms and reparsed after valid
+typing at p50 220 µs, p99 475 µs; a 70,000-line, 1.9 MiB file parsed in 206 ms
+and reparsed at p50 5.4 ms, p99 13.4 ms. Typing that leaves an unclosed `(`
+forces error recovery over the rest of the file: p50 21 ms and 444 ms. A
+60-line highlight query over the visible range cost about 220 µs. The budget
+therefore keeps ordinary files inline and moves huge files and broken syntax
+off the foreground. Injections are nested layers rather than one combined tree;
+a 1,400-line, 21 KiB Markdown file reparsed after typing at p50 115–150 µs,
+while a 28,000-line file with 10,000 layers reparsed at p50 6–9 ms, mostly the
+Markdown root and editing later layers' trees, and continues in the background.
+
+Snapshots share the original text and sealed 16 KiB add-buffer chunks as
+`Arc<str>` and copy the piece list. On a 29 MiB, 932k-line buffer with 9,988
+pieces after 5,000 typing bursts, a snapshot cost p50 19 µs, p99 33 µs, and
+streaming the whole text 0.39 ms, so a snapshot per budget overrun is cheap.
+
+Queries compile off the foreground at registration: compiling every bundled
+query took about 420 ms, C++ alone 130 ms. The grammars grew the release
+binary from about 74 MB to 88.5 MB and add about 28 s of parallel C
+compilation.
+
+A document's language is buffer state, explicit or detected. An unregistered
+explicit ID is kept and paints as plain text, so restoration and personal config
+need no ordering against package startup, and the window layout records only
+explicit languages, so restores detect again. Set Language Mode is native
+because an extension command's palette title is its name.
+
+References: [core and buffers](architecture/core-and-buffers.md#syntax-state)
+and [semantic UI](architecture/semantic-ui.md#syntax-highlighting-and-languages).
+
 ## Anchored ranges and contributions
 
 Keep stable geometry in core and feature, source, lifecycle, and presentation

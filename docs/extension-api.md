@@ -192,7 +192,53 @@ await log.setText("replacement text\n");
 
 `invalidate` applies to tree frames and `setText` to text frames; the wrong kind
 rejects with `ContentKindMismatch`. Selection and copy work through the normal
-editor surface, but edits are rejected.
+editor surface, but edits are rejected. Pass `language` with the registration to
+highlight the frame's text as a registered language.
+
+## Register a language
+
+Knot parses with tree-sitter grammars compiled into the binary;
+`languages.grammars()` lists their IDs. A language registration names one of
+them, claims file patterns for detection, and supplies the highlight and
+optional injection queries:
+
+```js
+import { languages } from "knot";
+
+await languages.register({
+  id: "rust",
+  name: "Rust",
+  grammar: "rust",
+  fileExtensions: ["rs"],
+  queries: {
+    highlights: `(line_comment) @comment
+"fn" @keyword.function`,
+  },
+});
+```
+
+Use LSP `languageId` values for IDs (`typescriptreact`, `shellscript`) and
+[nvim-treesitter's capture names](https://github.com/nvim-treesitter/nvim-treesitter/blob/main/CONTRIBUTING.md#highlights)
+in queries; the theme resolves a capture by its longest known dotted prefix and
+ignores names it does not know. Predicates are the ones the Rust tree-sitter
+binding evaluates (`#eq?`, `#match?` with Rust regex syntax, `#any-of?`, and
+their negations), plus `(#set! priority N)`. Injections use
+`@injection.content` with `@injection.language` or
+`(#set! injection.language "…")`, and may name a language by a registered file
+extension, as Markdown fences do.
+
+Queries compile before `register` resolves: an unknown grammar rejects
+`UnknownGrammar` and a bad query `InvalidQuery`, with the query, message, row,
+and column in `details`. Register in activation so restored documents highlight
+from their first frame. A registration with the same ID as a bundled one
+replaces it, and personal config outranks installed packages, which outrank
+bundled ones, for both IDs and file patterns. The bundled `@knot/languages`
+package is a complete example.
+
+`DocumentInfo.language` reports a document's language, or `plaintext`.
+`documents.setLanguage(id, "python")` makes a language explicit, which is
+recorded in window layouts and survives restarts and project switches; `null`
+returns the document to detection. Users do the same with Set Language Mode.
 
 ## Ask the user transiently
 

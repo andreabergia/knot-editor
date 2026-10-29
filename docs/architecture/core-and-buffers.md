@@ -37,6 +37,8 @@ Each `BufferModel` owns:
 - one shared `AnchoredRangeStore`;
 - one session-local linear undo and redo history;
 - source-owned semantic editor contributions;
+- an optional language ID, explicit or detected, and the `SyntaxState` it
+  resolves to;
 - open/closed lifecycle and public revision;
 - at most one immutable UTF-16 snapshot cache entry.
 
@@ -70,9 +72,12 @@ by stale views. Disposal, cancellation, and host release follow the shared
 - The original text and sealed add-buffer chunks are shared `Arc<str>`s, so an
   immutable `Send` `TextSnapshot` copies only the unsealed tail and the piece
   list. Readers off the foreground use snapshots instead of the live buffer.
+- Each primitive edit records its start and old and new end as line and
+  byte-column points as well as byte offsets, because a later primitive in
+  the same commit makes them unrecoverable; syntax trees are edited with them.
 - Edit-log sequence numbers are monotonic. `BufferModel` discards entries once
-  its anchored-range store has consumed them, so the retained log holds at most
-  one commit.
+  its anchored-range store and syntax state have consumed them, so the
+  retained log holds at most one commit.
 
 ## Anchored ranges
 
@@ -84,6 +89,45 @@ by stale views. Disposal, cancellation, and host release follow the shared
   affected endpoints; untouched ranges retain stable tokens.
 - A fully consumed anchored range is removed. Undoing text does not revive it;
   provider-derived state may be republished under a new ID.
+
+## Syntax state
+
+Parsing is a native buffer mechanic, like shaping, so it follows every commit
+synchronously and painting never calls JavaScript. A buffer with a resolved
+language owns one `SyntaxState`: a tree of tree-sitter parse layers, with the
+buffer's language at the root and every injected region (a Markdown fence, an
+HTML `<script>`) nested beneath its host, up to a fixed depth.
+
+```text
+BufferModel commit
+        |
+BufferEdit log ---> AnchoredRangeStore::stabilize
+        |
+        +---------> SyntaxState: edit every affected tree, reparse within
+                    a 1 ms foreground budget
+                            |
+                    out of budget: BackgroundParse over a TextSnapshot
+                            |
+                    foreground: rebase over later edits, or reject for a
+                    replaced state
+```
+
+- The model feeds the syntax state in the same step that stabilizes anchors,
+  so node positions describe the current text even before a reparse. Commit
+  paths need no gpui context; the model observes its own notifications and
+  starts a background parse whenever a commit leaves the tree behind.
+- While a background parse runs, highlights come from the edited previous
+  trees. A result whose revision no longer matches is edited forward and
+  reparsed; one for a replaced or closed state is dropped, and replacing or
+  dropping a state cancels its parse.
+- A reparse reruns a layer's injection query only over its changed and edited
+  ranges, and an injection found again where a stale one of the same
+  language was reuses its tree, so typing inside a fence stays incremental.
+- Each state has a globally unique generation that advances when its trees
+  change; views cache visible-range highlight queries by it.
+- Which language a buffer parses is application policy: the
+  [language registry](semantic-ui.md#syntax-highlighting-and-languages)
+  replaces the state whenever the resolved language changes.
 
 ## Reversible edits
 

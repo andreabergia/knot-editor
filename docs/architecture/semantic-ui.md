@@ -40,6 +40,59 @@ overlap. Sources resolve into nvim-treesitter's standard capture names by
 longest dotted prefix; decoration names are separate so no capture can resolve
 to one. The `Theme` global maps each name to a style.
 
+## Syntax highlighting and languages
+
+Highlight layers compose in a fixed order: syntax, then contribution
+decorations, then selection painted as before. Semantic tokens from a future
+language client (D067) slot in above syntax. Syntax highlights are derived and
+never stored as anchored ranges: each view queries its visible lines, with some
+overscan, once per [syntax generation](core-and-buffers.md#syntax-state), and
+painting, caret, hit testing, and IME geometry share that query, so bold and
+italic captures keep geometry consistent. An injected layer paints over its
+host, clipped to its included ranges.
+
+Grammars are compiled in and named by stable native grammar IDs. Language
+definitions are contributed data: extensions and personal config register an
+LSP language ID, the grammar it parses with, the file names, extensions, and
+shebang interpreters it claims, and its highlight and injection queries, through
+the same `languages` API the bundled `@knot/languages` package uses.
+
+```text
+languages.register --> background query compilation --> LanguageRegistry
+                                                            |
+Open / Save As / restore / registration change --> detection
+                                                            |
+documents.setLanguage / Set Language Mode --> explicit ID   |
+                                                            v
+                                      BufferModel language --> SyntaxState
+```
+
+- `ApplicationLanguages` owns the registry and tracks every buffer with a
+  language. Registrations are lifecycle-owned and ranked like keymaps:
+  personal config, then installed, then bundled packages, later registrations
+  winning within a rank. One ranking decides both an ID's definition and the
+  claimant of a file name, extension, or interpreter, so removal reveals the
+  next.
+- Queries compile on the background executor at registration, so a bad query
+  rejects with its location and a package's registrations compile in
+  parallel; only the insertion runs on the foreground.
+- Detection tries exact file names, then extensions, then the shebang
+  interpreter. It runs when a document enters the collection and when
+  persistence moves it to a new resource, never while typing, and never for a
+  document whose language is explicit.
+- A buffer keeps its ID even while nothing registers it and reports
+  `plaintext` meanwhile, so personal config and restoration need no ordering
+  against package startup. A registration change re-detects open documents and
+  reattaches syntax wherever the resolved language changed; a language that
+  injects reparses too, since its injections may resolve differently.
+  Injections resolve by language ID, its lowercase, or a registered extension.
+- Startup awaits every package entry before restoring windows, and the bundled
+  package awaits its registrations in `start()`, so restored documents paint
+  highlighted from their first frame.
+- The native Set Language Mode command offers the registered languages, or Auto
+  Detect, in the window's transient picker. Contributed text frames take a
+  fixed language at registration.
+
 Tree providers use the reverse path:
 
 ```text
