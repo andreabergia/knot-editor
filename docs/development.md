@@ -18,9 +18,12 @@ to `main`:
 - The handler-platforms job runs on macOS and Windows. It tests handler
   declarations, linked inventory discovery, and doc tests, then builds the
   product binary. It does not run the full suite on those platforms.
-- The audit job scans `Cargo.lock` with `cargo-audit` for known RustSec
-  advisories. It also runs weekly so newly published advisories can be found
-  without a dependency change.
+
+The [audit workflow](../.github/workflows/audit.yml) scans `Cargo.lock` with
+`cargo-audit` for known RustSec advisories. It runs on pull requests and pushes
+to `main` only when `Cargo.lock` or a `Cargo.toml` changes, so a newly
+published advisory never fails an unrelated change. It also runs weekly and on
+demand to find new advisories against existing dependencies.
 
 Every job selects the pinned toolchain before restoring its Rust cache. The
 Rust jobs cache downloaded crates and compiled dependencies; the audit job

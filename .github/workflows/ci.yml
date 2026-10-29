@@ -4,8 +4,6 @@ on:
   push:
     branches: [main]
   pull_request:
-  schedule:
-    - cron: '17 6 * * 1'
 
 permissions:
   contents: read
@@ -16,7 +14,6 @@ concurrency:
 
 jobs:
   rust:
-    if: github.event_name != 'schedule'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -51,7 +48,6 @@ jobs:
           cargo test --locked --doc
 
   handler-platforms:
-    if: github.event_name != 'schedule'
     strategy:
       matrix:
         os: [macos-latest, windows-latest]
@@ -78,21 +74,3 @@ jobs:
           cargo test --locked --doc
       - name: Build product
         run: cargo build --locked --bin knot
-
-  audit:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Select Rust toolchain
-        run: rustc --version
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
-        with:
-          cache-targets: false
-          save-if: ${{ github.event_name != 'pull_request' }}
-      - name: Install cargo-audit
-        run: cargo install --locked cargo-audit
-      - name: Audit dependencies
-        run: cargo audit --file Cargo.lock
