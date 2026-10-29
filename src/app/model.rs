@@ -23,7 +23,7 @@ use crate::{
 
 use super::{
     history::{EditGrouping, EditHistory, HistoryViewChange, HistoryViewState},
-    syntax::{FOREGROUND_BUDGET, ParsedTree, SyntaxLanguage, SyntaxState},
+    syntax::{FOREGROUND_BUDGET, ParsedTree, SyntaxState},
     theme::Highlight,
 };
 
@@ -484,17 +484,12 @@ impl BufferModel {
             .collect()
     }
 
-    /// Parse this buffer as `language`, discarding any previous tree, or stop
-    /// parsing with `None`.
+    /// Parse this buffer with a fresh `syntax`, discarding any previous
+    /// tree, or stop parsing with `None`.
     // Only tests attach syntax.
     #[allow(dead_code)]
-    pub(crate) fn set_syntax(
-        &mut self,
-        language: Option<Arc<SyntaxLanguage>>,
-        cx: &mut Context<Self>,
-    ) {
-        self.syntax = language.map(|language| {
-            let mut syntax = SyntaxState::new(language);
+    pub(crate) fn set_syntax(&mut self, syntax: Option<SyntaxState>, cx: &mut Context<Self>) {
+        self.syntax = syntax.map(|mut syntax| {
             syntax.parse_in_foreground(&self.buffer.snapshot(), self.syntax_budget);
             syntax
         });

@@ -766,9 +766,11 @@ fn buffer_subscriptions_are_scoped_by_buffer_and_lifecycle() {
     assert_eq!(registry.for_buffer(second_buffer).count(), 0);
 }
 
-fn rust_syntax() -> Option<Arc<SyntaxLanguage>> {
+fn rust_syntax() -> Option<SyntaxState> {
+    use crate::app::syntax::SyntaxLanguage;
     let highlights = "\"fn\" @keyword\n(identifier) @variable\n(line_comment) @comment\n";
-    Some(Arc::new(SyntaxLanguage::new("rust", highlights).unwrap()))
+    let language = Arc::new(SyntaxLanguage::new("rust", highlights, "").unwrap());
+    Some(SyntaxState::new(language, Arc::new(|_| None)))
 }
 
 fn syntax_names(model: &BufferModel) -> Vec<(String, &'static str)> {

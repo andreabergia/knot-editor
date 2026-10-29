@@ -207,7 +207,8 @@ the same commit makes them unrecoverable:
   and reparsed again;
 - injection layers are separate trees over the ranges matched by the injection
   query, reparsed when their host ranges change. Nested injections are allowed
-  to the depth the queries produce.
+  to the depth the queries produce, capped at eight so a self-injecting query
+  terminates.
 
 A language change or registration replacement discards the state and parses
 fresh.
@@ -270,9 +271,41 @@ fresh.
      adds about 28 s of grammar C compilation, spread across parallel build
      scripts (typescript, sql, bash, cpp, and markdown are the largest), measured
      with SQL, which has since been dropped.
-4. 📝 **Injections.** Layered trees for Markdown inline and fenced code and for
+4. ✅ **Injections.** Layered trees for Markdown inline and fenced code and for
    HTML `<script>`/`<style>`; tests over edits that create and remove injected
    regions.
+   - `SyntaxState` holds a tree of `Layer`s: the buffer's language at the
+     root and each injection beneath its host, with the host's span edited
+     forward. A reparse runs a layer's injection query only over the tree's
+     `changed_ranges` and the edited ranges; injections touching them are
+     found again and reuse the edited tree of a stale injection of the same
+     language there, so typing in a fence reparses incrementally. Layers that
+     cannot inject skip the tree comparison. Injected highlights paint over
+     their host, clipped to the injection's included ranges.
+   - Queries follow nvim-treesitter: `@injection.content`,
+     `@injection.language` or `(#set! injection.language "…")`, and
+     `injection.include-children`; otherwise named children of the content
+     node are excluded, as Markdown block continuations must be.
+     `injection.combined` is not supported, so each match is its own layer;
+     checkpoint 6 normalizes queries that rely on it or on `#offset!`.
+   - `SyntaxLanguage::new` takes the injection query, and invalid-query errors
+     name which query failed. `SyntaxState::new` takes a `LanguageResolver`
+     from injection names to languages, which checkpoint 5's registry
+     provides; it should return the same `Arc` for a name so injections
+     reuse their trees.
+   - Tests cover fences, inline syntax across block continuations, HTML
+     script and style, nesting through Markdown HTML blocks, unresolved
+     languages, the depth cap, scripted edits that open, close, retarget, and
+     remove injections, random Markdown and HTML edits against a fresh parse,
+     and a background parse rebased over typing in a fence.
+   - On Apple M1 Pro/macOS release builds
+     (`injection_costs_on_a_large_markdown_file`, ignored): a 1,400-line,
+     21 KiB Markdown file parses initially in 12.6 ms and reparses after
+     typing at p50 115–150 µs, p99 0.4–0.9 ms. A 28,000-line, 427 KiB file
+     with 10,000 layers parses in 286 ms and reparses at p50 6–9 ms, p99
+     19–24 ms, of which the Markdown root reparse is about 7 ms and editing
+     every later layer's tree about 4 ms; it continues in the background. A
+     60-line highlight query costs p50 about 85 µs at both sizes.
 5. 📝 **Language registry and API.** `languages` namespace, owner precedence,
    detection, `DocumentInfo.language`, `documents.setLanguage`, text-frame
    `language`, error codes, declarations, schema, and the fake host. Product

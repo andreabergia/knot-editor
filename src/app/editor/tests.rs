@@ -14,7 +14,7 @@ use std::sync::Arc;
 use crate::{
     app::{
         completion::CompletionProviderRegistry,
-        syntax::SyntaxLanguage,
+        syntax::{SyntaxLanguage, SyntaxState},
         theme::{Highlight, Theme},
     },
     host::protocol::{
@@ -1117,8 +1117,11 @@ fn syntax_highlights_paint_beneath_decorations(cx: &mut TestAppContext) {
     let editor = cx.new(|cx| EditorView::new(model.clone(), cx));
     model.update(cx, |model, cx| {
         let highlights = "\"fn\" @keyword\n(function_item name: (identifier) @function)\n";
-        let language = SyntaxLanguage::new("rust", highlights).unwrap();
-        model.set_syntax(Some(Arc::new(language)), cx);
+        let language = SyntaxLanguage::new("rust", highlights, "").unwrap();
+        model.set_syntax(
+            Some(SyntaxState::new(Arc::new(language), Arc::new(|_| None))),
+            cx,
+        );
         let warning = EditorContribution {
             range: ByteRange {
                 start_byte_offset: 0,
@@ -1186,8 +1189,11 @@ fn caret_geometry_and_painting_share_one_syntax_query(cx: &mut TestAppContext) {
     let model = cx.new(|_| BufferModel::from_text("fn f() {}\n".repeat(200)));
     let (editor, cx) = cx.add_window_view(|_, cx| EditorView::new(model.clone(), cx));
     model.update(cx, |model, cx| {
-        let language = SyntaxLanguage::new("rust", "\"fn\" @keyword\n").unwrap();
-        model.set_syntax(Some(Arc::new(language)), cx);
+        let language = SyntaxLanguage::new("rust", "\"fn\" @keyword\n", "").unwrap();
+        model.set_syntax(
+            Some(SyntaxState::new(Arc::new(language), Arc::new(|_| None))),
+            cx,
+        );
     });
     cx.run_until_parked();
     let queries = |cx: &mut gpui::VisualTestContext| cx.read(|cx| model.read(cx).syntax_queries());
