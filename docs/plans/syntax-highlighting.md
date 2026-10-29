@@ -322,8 +322,9 @@ fresh.
      extension (so `d.ts` is possible), then the shebang program, looking
      through `env` and its options; `python3.12` also matches `python`.
      `DocumentCollection` detects on every insert (Open, untitled, restore)
-     and after every persistence (Save, Save As), skipping explicit
-     languages. Untitled documents are not re-detected while typing.
+     and when persistence moves a document to a new resource (Save As, a
+     first save), skipping explicit languages. Neither typing nor a plain
+     Save re-detects, so editing a shebang takes effect on reopen.
    - `DocumentInfo.language` is never null: it reports the stored ID while
      registered, else `plaintext` (LSP's ID). The stored ID is kept, so an
      explicit language reappears once something registers it.

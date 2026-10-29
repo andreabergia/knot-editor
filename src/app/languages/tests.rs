@@ -320,6 +320,46 @@ fn save_as_redetects_unless_the_language_is_explicit(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn plain_save_keeps_the_detected_language(cx: &mut TestAppContext) {
+    let documents = install(cx);
+    register(
+        cx,
+        owner(BUNDLED, 1),
+        claiming("python", &[], &[], &["python3"]),
+    );
+    let model = cx.new(|_| BufferModel::from_text("#!/usr/bin/env python3\n"));
+    let uri = ResourceUri::parse("mem://workspace/run").unwrap();
+    let id = documents.update(cx, |documents, cx| {
+        documents.create_persisted(
+            "run",
+            model.clone(),
+            uri.clone(),
+            0,
+            ResourceVersion::new([1]),
+            cx,
+        )
+    });
+    assert_eq!(state(&model, cx).0, Some("python".into()));
+
+    model.update(cx, |model, _| {
+        model.replace(0..model.len(), "#!/bin/sh\n").unwrap()
+    });
+    let revision = model.read_with(cx, |model, _| model.revision());
+    documents.update(cx, |documents, cx| {
+        let capture = documents.begin_persistence(id, &model).unwrap();
+        assert!(documents.finish_persistence(
+            id,
+            &model,
+            &capture,
+            ("run", uri),
+            (ResourceVersion::new([2]), revision),
+            cx,
+        ));
+    });
+    assert_eq!(state(&model, cx).0, Some("python".into()));
+}
+
+#[gpui::test]
 fn injecting_languages_reparse_when_registrations_change(cx: &mut TestAppContext) {
     let documents = install(cx);
     let mut markdown = claiming("markdown", &["md"], &[], &[]);

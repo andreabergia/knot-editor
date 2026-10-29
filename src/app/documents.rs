@@ -297,6 +297,9 @@ impl DocumentCollection {
         {
             return false;
         }
+        // Only Save As, or a first save, moves the document to a new resource;
+        // a plain Save keeps its language even after its shebang changed.
+        let moved = document.resource_uri() != Some(&uri);
         if let Some(old_uri) = document.resource_uri() {
             self.resources.remove(old_uri);
         }
@@ -306,7 +309,9 @@ impl DocumentCollection {
             persisted_revision: revision,
             version,
         };
-        super::languages::detect_document(&document.model, document.resource_uri(), cx);
+        if moved {
+            super::languages::detect_document(&document.model, document.resource_uri(), cx);
+        }
         self.resources.insert(uri, id);
         // A successful persistence changes the saved baseline while edits racing
         // the I/O remain dirty; re-publish so the automatic record matches the
