@@ -41,8 +41,9 @@ follow-ups are D064–D067; D066 precedes D058.
 The [daily-driver editor](plans/daily-driver.md) initiative is selected: it
 removes demo surfaces and adds workbench and editing commands, a richer
 palette, themes, Find, navigation, file watching, and bundled explorer,
-project-selector, and search extensions. It promotes D007, D008, D010, D031,
-D034, D053, D064, and D068 and adds D069–D085.
+project-selector, and search extensions, keymap presets, and extension
+entitlements. It promotes D007, D008, D010, D031, D034, D053, D060, D064, and
+D068 and adds D069–D088.
 
 ## Deferred register
 
@@ -311,16 +312,6 @@ D034, D053, D064, and D068 and adds D069–D085.
     a dedicated read-only presentation over the same buffer layer.
 
 ## Platforms and accessibility
-
-- **D060 — Audited default shortcuts for macOS, Windows, and Linux**
-  - Deferred: Native defaults already follow platform modifiers and macOS is
-    the only dogfooded platform. Windows and Linux have no audited, discoverable
-    set across the whole command catalog.
-  - Reconsider: Knot targets daily use on Windows or Linux. Then audit every
-    command for a platform-conventional binding, resolve conflicts with system
-    and TUI/terminal keys, keep palette discovery consistent, and treat the
-    resulting defaults as the native slot that extensions and personal
-    keymaps override.
 
 - **D062 — Positioning existing windows**
   - Deferred: gpui 0.2.2 sets a window's bounds only at creation and can

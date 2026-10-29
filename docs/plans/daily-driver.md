@@ -1,7 +1,7 @@
 # Daily-driver editor
 
 Status: 🚧 approved, not started. Promotes D007, D008, D010, D031, D034, D053,
-D064, and D068 from the [roadmap](../roadmap.md) and adds D069–D085.
+D060, D064, and D068 from the [roadmap](../roadmap.md) and adds D069–D088.
 
 ## Goal
 
@@ -38,9 +38,15 @@ to be rebuilt later:
 - **Language editing configuration before editing commands and brackets.**
   Toggle comment, auto-indent, and auto-closing all read per-language data
   from the same registration.
-- **File watching, filesystem mutation, and file enumeration before the
-  explorer, Go to File, and search.** The extensions consume these public
-  primitives and need no private bypass.
+- **The keymap preset mechanism before new commands; extra presets last.**
+  New commands bind into a single Knot preset as they land. The VS Code, Zed,
+  IntelliJ, and Sublime presets are filled in once the command set is stable.
+- **Entitlements before anything that spawns processes or uses the network.**
+  Cross-file search wraps ripgrep and is the first consumer. Git, language
+  servers, formatters, and AI integrations follow later.
+- **Ignore rules, file watching, filesystem mutation, and file enumeration
+  before the explorer, Go to File, and search.** The extensions consume these
+  public primitives and need no private bypass.
 
 ## Phase 1 — Clean slate
 
@@ -94,7 +100,19 @@ to be rebuilt later:
   - Picker items gain optional detail and right-aligned hint text. Every later
     picker uses these additions.
 
-- **D072 — Workbench navigation commands**
+- **D086 — Keymap presets** (depends on D070, D071; promotes D060)
+  - A preset is a named set of default bindings occupying the native keymap
+    slot, so extension and personal bindings still override it. The selected
+    preset is a setting, and switching presets rebinds every open window.
+  - The current defaults become the Knot preset, with its macOS, Windows,
+    and Linux variants audited against system and terminal or TUI keys
+    (D060).
+  - Decide whether presets are native data or contributions from bundled
+    packages (a contributed preset would make user-written presets free).
+    Also decide how chords and conflicts are reported. D088 fills in the
+    other presets.
+
+- **D072 — Workbench navigation commands** (depends on D086)
   - Default bindings:
     - next and previous tab (⌘⇧] / ⌘⇧[ and ctrl-tab)
     - go to tab 1–9
@@ -103,7 +121,8 @@ to be rebuilt later:
     - close other tabs
     - close pane
     - reopen closed tab
-  - New Terminal moves off ⌘⇧T so reopen closed tab can use it.
+  - Bindings go into the Knot preset. New Terminal moves off ⌘⇧T so reopen
+    closed tab can use it.
   - Generic Move Tool to Dock… replaces the explorer-specific placement
     commands and works for any tool.
   - Reopen closed tab keeps a bounded per-window stack of what each closed tab
@@ -211,12 +230,47 @@ to be rebuilt later:
   - Open documents follow renames, and deletion of their file is reported to
     them.
 
-- **D081 — Workspace file enumeration**
-  - A native, ignore-aware walk of every root (`.gitignore`, hidden files,
-    configurable excludes), exposed as a public API that streams or pages
-    results.
-  - Shared by the explorer filter, Go to File, and cross-file search, so no
-    extension walks directories one listing at a time.
+- **D087 — Extension entitlements**
+  - Packages declare entitlements in `knot.jsonc`. Start with process
+    spawning and outbound HTTP.
+  - Who grants them:
+    - An installed package prompts once, on its first load, and again when an
+      update adds an entitlement. The grant is stored by canonical package
+      identity.
+    - Bundled packages declare entitlements through the same path but are
+      granted by shipping with the binary.
+    - Personal config is implicitly granted.
+  - A missing or denied entitlement makes the API reject with a typed error
+    instead of failing the package. Provide a way to review and revoke grants.
+  - The APIs:
+    - spawning a process with arguments, working directory, and environment,
+      streaming stdout and stderr, writing stdin, observing exit, and killing
+      the process (processes are cleaned up when the lifecycle tears down)
+    - a `fetch`-shaped HTTP client
+  - This provides consent and visibility, not a sandbox. Runtime isolation is
+    not a security boundary, and the decision record must say so.
+  - Decide how bundled consumers locate tools: bundle `rg` with Knot, or
+    require it on PATH.
+
+- **D081 — Workspace ignore rules and file enumeration**
+  - Ignore policy is contributed and evaluated natively. Rules come from
+    `.gitignore` (and possibly `.ignore`) plus configured patterns, at two
+    levels:
+    - *hidden*: never shown (`.git`, `.DS_Store`)
+    - *ignored*: dimmed in the explorer, and skipped by Go to File, search,
+      and watching
+  - Native code evaluates the rules with the `ignore` crate, which gives the
+    same semantics as ripgrep. Hot native paths (watching, enumeration,
+    listings) therefore never call into JavaScript.
+  - Extensions contribute extra rules through an owner-precedence
+    registration, like languages. They can query whether a path is ignored,
+    and read the effective rules to pass to external tools (`rg --glob`).
+    Decide whether the defaults live in a tiny bundled package or in D070
+    settings.
+  - Enumeration is an ignore-aware walk of every root, exposed as a public
+    API that streams or pages results. Decide whether a native walk is
+    still needed once `rg --files` is available through D087, or whether Go
+    to File uses ripgrep too.
 
 - **D034 / D053 — Explorer as a bundled extension** (depends on D008, D010,
   D081, D072)
@@ -251,12 +305,25 @@ to be rebuilt later:
     companion commands.
   - Remove the Projects tool registration and its tree code.
 
-- **D085 — Cross-file search** (depends on D081, D071; promotes D007)
-  - A bundled extension with a query input, a results tree grouped by file
-    (contributed tree groups and row actions already exist), opening a result
-    at its range, and refresh.
-  - Decide whether matching runs in JavaScript over the enumeration API or
-    through a native search primitive that the extension configures (engine,
-    case, regex, globs). The design principle is that the extension owns the
-    policy and native code owns the I/O.
+- **D085 — Cross-file search** (depends on D087, D081, D071; promotes D007)
+  - A bundled extension that wraps ripgrep through process spawning (D087)
+    and parses its `--json` output. It passes the effective ignore rules
+    (D081).
+  - It provides:
+    - a query input with case, regex, whole-word, and glob options
+    - streamed results in a tree grouped by file (contributed tree groups
+      and row actions already exist)
+    - opening a result at its range
+    - cancelling a superseded search
+    - refresh
   - Stale-target recovery after edits (D007) is decided here.
+
+## Phase 5 — Keymap presets
+
+- **D088 — VS Code, Zed, IntelliJ, and Sublime presets** (depends on D086 and
+  the command set from earlier phases)
+  - Map each editor's default bindings onto Knot's commands, per platform.
+    Commands with no equivalent stay unbound. Add a test that every preset
+    binding names a registered command.
+  - Add a Select Keymap Preset picker. Decide whether first launch asks for a
+    preset.
