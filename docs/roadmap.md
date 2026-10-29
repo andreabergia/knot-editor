@@ -114,6 +114,19 @@ are D064–D067; D066 precedes D058.
     through the extension API without exposing tree-sitter objects. Precedes
     D058.
 
+- **D068 — Editor gutter**
+  - Deferred: Editors reserve a fixed 16px column, only while they render
+    gutter markers, holding one severity marker per line. There are no line
+    numbers, fold controls, or per-line change indicators, and contributed
+    text frames reserve the column without using it.
+  - Reconsider: Daily editing needs line numbers, or D066 folding or a
+    source-control extension needs per-line controls. Then define the gutter
+    as ordered native lanes (line numbers, extension markers, folds) with
+    widths derived from content such as the line-number digit count, which
+    lanes extensions can contribute to through `EditorContribution.gutter`,
+    per-surface enablement so read-only frames can omit it, and click and
+    hover behavior per lane.
+
 - **D059 — Professional typography: ligatures and configurable font features**
   - Deferred: Surfaces use shared fixed typography defaults. Ligatures and
     font features need shaping options per surface, and the terminal assumes
