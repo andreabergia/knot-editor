@@ -293,6 +293,11 @@ impl RuntimeCapsule {
                 "knot:application-change",
                 "application-change listener",
             ),
+            ListenerNotification::Setting(_) => (
+                RuntimeCallback::SettingChange,
+                "knot:setting-change",
+                "setting-change listener",
+            ),
         };
         if subscription > MAX_JS_INTEGER
             || matches!(&notification, ListenerNotification::Buffer(change) if change.buffer.value() > MAX_JS_INTEGER)
@@ -323,6 +328,9 @@ impl RuntimeCapsule {
                 ListenerNotification::Application(event) => {
                     application_event_to_v8(try_catch, &event)
                 }
+                ListenerNotification::Setting(key) => v8::String::new(try_catch, &key)
+                    .map(Into::into)
+                    .ok_or("UnsupportedOperation"),
             }
             .ok()?;
             function.call(
@@ -1563,6 +1571,12 @@ pub(super) fn execute_engine_turn(
             root,
             subscription.value(),
             ListenerNotification::Application(event),
+            Instant::now(),
+        ),
+        EngineWork::SettingChange { subscription, key } => capsule.start_notification_turn(
+            root,
+            subscription.value(),
+            ListenerNotification::Setting(key),
             Instant::now(),
         ),
         EngineWork::CommandInvocation {

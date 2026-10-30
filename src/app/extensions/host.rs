@@ -166,6 +166,13 @@ pub(crate) fn reset_launched_for_test(cx: &mut App) {
     }
 }
 
+/// Setting values dropped by a definition, in the order they were reported.
+pub(crate) fn setting_warnings(cx: &App) -> Vec<String> {
+    entity(cx)
+        .map(|host| host.read(cx).setting_warnings.clone())
+        .unwrap_or_default()
+}
+
 pub(crate) fn startup_report(cx: &App) -> Option<StartupReportSnapshot> {
     let host = entity(cx)?;
     host.read(cx).startup_report.clone()
@@ -473,6 +480,12 @@ pub(crate) struct ProductExtensionHost {
     )>,
     buffers: ExtensionBufferBridge,
     application_observation: crate::app::application_observation::ApplicationObservation,
+    /// Lifecycle-owned observers of one setting key each.
+    setting_observers:
+        HashMap<crate::host::protocol::SettingsSubscriptionId, (String, ExtensionKey)>,
+    next_setting_observer: u64,
+    /// Values dropped because a later definition gave their key another type.
+    setting_warnings: Vec<String>,
     #[cfg(test)]
     application_events: Vec<crate::host::protocol::ApplicationEvent>,
     _application_window_closed: Subscription,
@@ -539,6 +552,9 @@ impl ProductExtensionHost {
             storage_callers: Vec::new(),
             buffers: ExtensionBufferBridge::new(),
             application_observation: Default::default(),
+            setting_observers: HashMap::new(),
+            next_setting_observer: 0,
+            setting_warnings: Vec::new(),
             #[cfg(test)]
             application_events: Vec::new(),
             _application_window_closed: cx.on_window_closed(application_changed),
@@ -1841,6 +1857,51 @@ impl ProductExtensionHost {
         }
     }
 
+    pub(crate) fn observe_setting(
+        &mut self,
+        setting: String,
+        key: ExtensionKey,
+    ) -> crate::host::protocol::SettingsSubscriptionId {
+        self.next_setting_observer += 1;
+        let subscription =
+            crate::host::protocol::SettingsSubscriptionId::new(self.next_setting_observer);
+        self.setting_observers.insert(subscription, (setting, key));
+        subscription
+    }
+
+    pub(crate) fn unobserve_setting(
+        &mut self,
+        subscription: crate::host::protocol::SettingsSubscriptionId,
+        key: ExtensionKey,
+    ) -> bool {
+        if self
+            .setting_observers
+            .get(&subscription)
+            .is_none_or(|(_, owner)| *owner != key)
+        {
+            return false;
+        }
+        self.setting_observers.remove(&subscription);
+        true
+    }
+
+    /// Queue every observer of `setting` after a committed write or reset.
+    pub(crate) fn setting_changed(&self, setting: &str) {
+        for (subscription, (observed, key)) in &self.setting_observers {
+            if observed == setting {
+                let _ = self
+                    .pool
+                    .dispatch_setting_change(*key, *subscription, setting.to_owned());
+            }
+        }
+    }
+
+    pub(crate) fn report_setting_warning(&mut self, warning: String, cx: &mut Context<Self>) {
+        eprintln!("[knot] {warning}");
+        self.setting_warnings.push(warning);
+        cx.notify();
+    }
+
     pub(crate) fn operation_is_live(
         &self,
         key: ExtensionKey,
@@ -2138,6 +2199,7 @@ impl ProductExtensionHost {
         self.refresh_storage_callers();
         self.storage_owners.remove(&key);
         self.application_observation.remove_lifecycle(key);
+        self.setting_observers.retain(|_, (_, owner)| *owner != key);
         if cx.has_global::<crate::app::commands::keymaps::ApplicationKeymaps>() {
             let owner = crate::app::commands::keymaps::BindingOwner::Extension(
                 key.extension,

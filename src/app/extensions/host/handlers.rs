@@ -2161,11 +2161,295 @@ async fn set_document_language(
     })?
 }
 
+use crate::app::settings::{
+    ApplicationSettings, SettingDefinition, SettingOwner, SettingType, SettingsError, SettingsScope,
+};
+use crate::host::protocol::SettingsSubscriptionId;
+
+/// Failures of a settings operation.
+#[derive(Debug, HostError)]
+pub(crate) enum SettingError {
+    #[error(transparent)]
+    Access(AccessError),
+    #[error(code = "DuplicateSetting", message = "{key} is already defined")]
+    Duplicate { key: String },
+    #[error(
+        code = "SettingTypeMismatch",
+        message = "{key} requires a value of type {expected}"
+    )]
+    TypeMismatch { key: String, expected: String },
+}
+
+impl From<AccessError> for SettingError {
+    fn from(error: AccessError) -> Self {
+        Self::Access(error)
+    }
+}
+
+impl SettingError {
+    fn from_settings(error: SettingsError, key: &str) -> Self {
+        match error {
+            SettingsError::DuplicateSetting => Self::Duplicate { key: key.into() },
+            SettingsError::TypeMismatch { expected } => Self::TypeMismatch {
+                key: key.into(),
+                expected: expected.name().into(),
+            },
+        }
+    }
+}
+
+/// A JSON value from JavaScript, whose numbers all arrive as doubles, with
+/// integral numbers restored as integers so they satisfy `integer`.
+fn setting_value(value: crate::host::protocol::CommandArgumentValue) -> serde_json::Value {
+    fn integral(value: serde_json::Value) -> serde_json::Value {
+        match value {
+            serde_json::Value::Number(number) => match number.as_f64() {
+                Some(float) if float.fract() == 0.0 && float.abs() <= 9_007_199_254_740_991.0 => {
+                    (float as i64).into()
+                }
+                _ => serde_json::Value::Number(number),
+            },
+            serde_json::Value::Array(items) => items.into_iter().map(integral).collect(),
+            serde_json::Value::Object(fields) => fields
+                .into_iter()
+                .map(|(key, value)| (key, integral(value)))
+                .collect(),
+            other => other,
+        }
+    }
+    integral(serde_json::to_value(value).expect("validated JSON"))
+}
+
+fn settings_scope(
+    reader: &mut dyn ArgumentReader,
+    index: usize,
+) -> Result<SettingsScope, DecodeError> {
+    Ok(SettingsScope {
+        language: reader.optional_text(index, "scope language must be text")?,
+        view: reader.optional_text(index + 1, "scope view must be text")?,
+    })
+}
+
+impl HostArguments for SettingDefinition {
+    fn decode(reader: &mut dyn ArgumentReader) -> Result<Self, DecodeError> {
+        Ok(Self {
+            key: reader.text(2, "setting key must be text")?,
+            value_type: SettingType::parse(&reader.text(3, "setting type must be text")?).ok_or(
+                DecodeError::Type("setting type must be boolean, integer, number, or string"),
+            )?,
+            default: setting_value(reader.command_arguments(4)?),
+            description: reader.text(5, "setting description must be text")?,
+        })
+    }
+}
+
+#[host_operation("defineSetting")]
+async fn define_setting(
+    context: HostContext,
+    arguments: SettingDefinition,
+) -> Result<(), SettingError> {
+    let request = context.request;
+    context.foreground(|host, cx| {
+        let key = arguments.key.clone();
+        let owner = SettingOwner::Extension {
+            extension: request.extension,
+            lifecycle: request.lifecycle,
+        };
+        let value_type = arguments.value_type;
+        let dropped = cx
+            .default_global::<ApplicationSettings>()
+            .0
+            .define(owner, arguments)
+            .map_err(|error| SettingError::from_settings(error, &key))?;
+        for scope in dropped {
+            host.report_setting_warning(
+                format!(
+                    "Setting {key}: dropped the value for {} because it is not of type {}",
+                    describe_scope(&scope),
+                    value_type.name()
+                ),
+                cx,
+            );
+        }
+        Ok(())
+    })?
+}
+
+fn describe_scope(scope: &SettingsScope) -> String {
+    let facts = [("language", &scope.language), ("view", &scope.view)]
+        .into_iter()
+        .filter_map(|(name, value)| value.as_ref().map(|value| format!("{name} {value}")))
+        .collect::<Vec<_>>();
+    if facts.is_empty() {
+        "every context".into()
+    } else {
+        facts.join(", ")
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct SettingWrites {
+    values: Vec<(String, serde_json::Value)>,
+    scope: SettingsScope,
+}
+
+impl HostArguments for SettingWrites {
+    fn decode(reader: &mut dyn ArgumentReader) -> Result<Self, DecodeError> {
+        let serde_json::Value::Object(values) = setting_value(reader.command_arguments(2)?) else {
+            return Err(DecodeError::Type("setting values must be an object"));
+        };
+        Ok(Self {
+            values: values.into_iter().collect(),
+            scope: settings_scope(reader, 3)?,
+        })
+    }
+}
+
+/// Write every value or none: a mismatching value rejects the whole call.
+#[host_operation("setSettings")]
+async fn set_settings(context: HostContext, arguments: SettingWrites) -> Result<(), SettingError> {
+    context.foreground(|host, cx| {
+        let settings = &mut cx.default_global::<ApplicationSettings>().0;
+        for (key, value) in &arguments.values {
+            settings
+                .check(key, value)
+                .map_err(|error| SettingError::from_settings(error, key))?;
+        }
+        for (key, value) in arguments.values {
+            settings
+                .set(&key, value, arguments.scope.clone())
+                .expect("checked setting value");
+            host.setting_changed(&key);
+        }
+        Ok(())
+    })?
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct SettingLookup {
+    key: String,
+    scope: SettingsScope,
+}
+
+impl HostArguments for SettingLookup {
+    fn decode(reader: &mut dyn ArgumentReader) -> Result<Self, DecodeError> {
+        Ok(Self {
+            key: reader.text(2, "setting key must be text")?,
+            scope: settings_scope(reader, 3)?,
+        })
+    }
+}
+
+pub(crate) struct SettingValue(Option<serde_json::Value>);
+
+impl HostSuccess for SettingValue {
+    fn encode(self) -> Result<EncodedValue, DecodeError> {
+        encode_json(self.0.unwrap_or(serde_json::Value::Null))
+    }
+}
+
+#[host_operation("getSetting")]
+async fn get_setting(
+    context: HostContext,
+    arguments: SettingLookup,
+) -> Result<SettingValue, AccessError> {
+    context.foreground(|_, cx| {
+        SettingValue(
+            cx.try_global::<ApplicationSettings>()
+                .and_then(|settings| settings.0.get(&arguments.key, &arguments.scope))
+                .cloned(),
+        )
+    })
+}
+
+#[host_operation("resetSetting")]
+async fn reset_setting(context: HostContext, arguments: SettingLookup) -> Result<(), AccessError> {
+    context.foreground(|host, cx| {
+        if cx.has_global::<ApplicationSettings>()
+            && cx
+                .global_mut::<ApplicationSettings>()
+                .0
+                .reset(&arguments.key, &arguments.scope)
+        {
+            host.setting_changed(&arguments.key);
+        }
+    })
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct SettingKey {
+    key: String,
+}
+
+impl HostArguments for SettingKey {
+    fn decode(reader: &mut dyn ArgumentReader) -> Result<Self, DecodeError> {
+        Ok(Self {
+            key: reader.text(2, "setting key must be text")?,
+        })
+    }
+}
+
+#[host_operation("observeSetting")]
+async fn observe_setting(
+    context: HostContext,
+    arguments: SettingKey,
+) -> Result<SettingsSubscriptionId, AccessError> {
+    let key = ExtensionKey::new(context.request.extension, context.request.lifecycle);
+    context.foreground(|host, _| host.observe_setting(arguments.key, key))
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct SettingSubscription {
+    subscription: SettingsSubscriptionId,
+}
+
+impl HostArguments for SettingSubscription {
+    fn decode(reader: &mut dyn ArgumentReader) -> Result<Self, DecodeError> {
+        Ok(Self {
+            subscription: SettingsSubscriptionId::new(reader.integer(2)?),
+        })
+    }
+}
+
+#[host_operation("unobserveSetting")]
+async fn unobserve_setting(
+    context: HostContext,
+    arguments: SettingSubscription,
+) -> Result<(), AccessError> {
+    let key = ExtensionKey::new(context.request.extension, context.request.lifecycle);
+    context.foreground(|host, _| {
+        if host.unobserve_setting(arguments.subscription, key) {
+            Ok(())
+        } else {
+            Err(AccessError::OwnershipDisposed)
+        }
+    })?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::host::protocol::RequestId;
     use gpui::TestAppContext;
+
+    #[test]
+    fn setting_values_restore_integers_from_javascript_doubles() {
+        use crate::host::protocol::CommandArgumentValue as Js;
+        let value = Js::Object(
+            [
+                ("integer".into(), Js::Number(4.0)),
+                ("fraction".into(), Js::Number(4.5)),
+                ("unsafe".into(), Js::Number(1e17)),
+                ("list".into(), Js::Array(vec![Js::Number(-2.0)])),
+            ]
+            .into(),
+        );
+        let value = setting_value(value);
+        assert!(value["integer"].is_i64());
+        assert!(value["list"][0].is_i64());
+        assert!(value["fraction"].is_f64());
+        assert!(value["unsafe"].is_f64());
+    }
 
     #[gpui::test]
     async fn immediate_handler_commits_and_rejects_a_disposed_context(cx: &mut TestAppContext) {

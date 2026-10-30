@@ -593,6 +593,26 @@ impl RuntimePool {
         Ok(())
     }
 
+    pub(crate) fn dispatch_setting_change(
+        &self,
+        key: ExtensionKey,
+        subscription: SettingsSubscriptionId,
+        setting: String,
+    ) -> Result<(), RuntimePoolError> {
+        let capsule = self.capsule(key)?;
+        self.scheduler_handle.enqueue_root(
+            key,
+            EngineTurn {
+                capsule,
+                work: EngineWork::SettingChange {
+                    subscription,
+                    key: setting,
+                },
+            },
+        )?;
+        Ok(())
+    }
+
     pub(crate) fn dispatch_buffer_change(
         &self,
         key: ExtensionKey,
@@ -762,6 +782,10 @@ pub(super) fn initialize_extension_context(
         (
             RuntimeCallback::ApplicationChange,
             "__knotDispatchApplicationChange",
+        ),
+        (
+            RuntimeCallback::SettingChange,
+            "__knotDispatchSettingChange",
         ),
         (RuntimeCallback::Command, "__knotInvokeCommand"),
         (RuntimeCallback::CancelCommand, "__knotCancelCommand"),

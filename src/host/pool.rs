@@ -201,6 +201,16 @@ impl ExtensionPool {
             .dispatch_application_change(key, subscription, event)
     }
 
+    pub(crate) fn dispatch_setting_change(
+        &self,
+        key: ExtensionKey,
+        subscription: super::protocol::SettingsSubscriptionId,
+        setting: String,
+    ) -> Result<(), ExtensionPoolError> {
+        self.engine
+            .dispatch_setting_change(key, subscription, setting)
+    }
+
     pub(crate) fn dispatch_buffer_change(
         &self,
         key: ExtensionKey,

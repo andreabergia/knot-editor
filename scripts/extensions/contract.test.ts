@@ -411,3 +411,28 @@ function handleError(error: HostError) {
   void [code, message, details, unsupported];
 }
 void handleError;
+
+import { settings } from "knot";
+import type { SettingKey, SettingsScope } from "knot";
+declare module "knot" {
+  interface Settings {
+    "check.timeout": number;
+  }
+}
+await settings.define({ key: "check.timeout", type: "integer", default: 52, description: "Timeout" });
+await settings.set("editor.tabSize", 2, { language: "rust" });
+await settings.set({ "editor.tabSize": 4, "check.timeout": 10 }, { view: "editor", language: "rust" });
+const facts: SettingsScope = { language: "rust", view: "editor" };
+const tabSize: number | undefined = await settings.get("editor.tabSize", facts);
+void tabSize;
+await settings.reset("editor.tabSize", { language: "rust" });
+const watch: Disposable = await settings.observe("check.timeout", (key: SettingKey) => {
+  void key;
+});
+await watch.dispose();
+// @ts-expect-error values follow the declared key type
+await settings.set("editor.tabSize", "2");
+// @ts-expect-error undeclared keys are not settings
+await settings.get("check.missing");
+// @ts-expect-error the default follows the declared key type
+await settings.define({ key: "check.timeout", type: "integer", default: "52", description: "Timeout" });

@@ -15,6 +15,7 @@ mod project_sessions;
 mod projects;
 mod recovery;
 mod sessions;
+mod settings;
 mod startup;
 mod terminal;
 mod tool_layout;

@@ -10,6 +10,7 @@ export const {
   languages,
   recovery,
   removeKeybinding,
+  settings,
   storage,
   windows,
   workbench,

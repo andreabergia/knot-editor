@@ -239,6 +239,50 @@ bundled `@knot/languages` package is a complete example.
 recorded in window layouts and survives restarts and project switches; `null`
 returns the document to detection. Users do the same with Set Language Mode.
 
+## Read and write settings
+
+Settings are one application-wide store that personal config and every package
+share. Define your own keys with a type, a default, and a description, and
+declare their types by merging into the `Settings` interface so `set` and `get`
+stay typed:
+
+```ts
+import { settings } from "knot";
+
+declare module "knot" {
+  interface Settings {
+    "lsp.timeout.launch": number;
+  }
+}
+
+await settings.define({
+  key: "lsp.timeout.launch",
+  type: "integer",
+  default: 52,
+  description: "Timeout in seconds for launching the LSP process",
+});
+const timeout = await settings.get("lsp.timeout.launch");
+await settings.observe("lsp.timeout.launch", async () => {
+  /* read the new value with get */
+});
+```
+
+A write applies everywhere, or only where every fact of its scope matches:
+`language` is a document's language ID and `view` a surface kind such as
+`editor` or a contributed view ID. A read picks the matching value with the
+most facts, so `settings.set("editor.tabSize", 8, { language: "rust" })` beats
+an unscoped value however late that one was written. Among equally specific
+values the latest write wins, whoever made it, so personal overrides belong in
+`post-init`.
+
+Values may be written before their key is defined, which lets `pre-init`
+configure a package that starts later. Definition drops a value of the wrong
+type and notes it in the extension report; after definition, a mismatching
+write rejects `SettingTypeMismatch`. Values live in memory and are written
+again on every launch: teardown and Restart Extension remove only your
+definitions and observers. To remember a choice, such as one a command makes,
+keep it in [storage](#durable-storage) and set it again in `start()`.
+
 ## Ask the user transiently
 
 `workbench` exposes window-local pickers, text input, and native confirmation or

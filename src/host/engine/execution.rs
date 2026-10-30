@@ -58,12 +58,18 @@ pub(super) struct EngineTurn {
 pub(super) enum ListenerNotification {
     Buffer(BufferChange),
     Application(ApplicationEvent),
+    /// The key of a setting written or reset in any scope.
+    Setting(String),
 }
 
 pub(super) enum EngineWork {
     ApplicationChange {
         subscription: WorkbenchSubscriptionId,
         event: ApplicationEvent,
+    },
+    SettingChange {
+        subscription: SettingsSubscriptionId,
+        key: String,
     },
     #[cfg(test)]
     Script {

@@ -14,14 +14,6 @@
 //! kept as raw JSON and validated when the definition arrives. An undefined key
 //! is inert: its values are kept but resolve to nothing.
 
-#![cfg_attr(
-    not(test),
-    allow(
-        dead_code,
-        reason = "only native definitions and reads have product callers"
-    )
-)]
-
 use std::collections::HashMap;
 
 use gpui::{App, Global};
@@ -42,6 +34,25 @@ pub(crate) enum SettingType {
 }
 
 impl SettingType {
+    pub(crate) fn parse(name: &str) -> Option<Self> {
+        Some(match name {
+            "boolean" => Self::Boolean,
+            "integer" => Self::Integer,
+            "number" => Self::Number,
+            "string" => Self::String,
+            _ => return None,
+        })
+    }
+
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Boolean => "boolean",
+            Self::Integer => "integer",
+            Self::Number => "number",
+            Self::String => "string",
+        }
+    }
+
     fn accepts(self, value: &Value) -> bool {
         match self {
             Self::Boolean => value.is_boolean(),
@@ -191,10 +202,23 @@ impl SettingsStore {
         self.definitions.len() != before
     }
 
+    #[cfg(test)]
     pub(crate) fn definition(&self, key: &str) -> Option<&SettingDefinition> {
         self.definitions
             .get(key)
             .map(|definition| &definition.definition)
+    }
+
+    /// Check that `value` fits `key`'s definition, if it has one.
+    pub(crate) fn check(&self, key: &str, value: &Value) -> Result<(), SettingsError> {
+        match self.definitions.get(key) {
+            Some(definition) if !definition.definition.value_type.accepts(value) => {
+                Err(SettingsError::TypeMismatch {
+                    expected: definition.definition.value_type,
+                })
+            }
+            _ => Ok(()),
+        }
     }
 
     /// Write the value for exactly `key` and `scope`, as the latest write.
@@ -204,13 +228,7 @@ impl SettingsStore {
         value: Value,
         scope: SettingsScope,
     ) -> Result<(), SettingsError> {
-        if let Some(definition) = self.definitions.get(key)
-            && !definition.definition.value_type.accepts(&value)
-        {
-            return Err(SettingsError::TypeMismatch {
-                expected: definition.definition.value_type,
-            });
-        }
+        self.check(key, &value)?;
         self.next_sequence += 1;
         let entries = self.entries.entry(key.to_owned()).or_default();
         entries.retain(|entry| entry.scope != scope);

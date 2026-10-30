@@ -78,8 +78,21 @@ function emptyState() {
     failures: new Map<string, HostErrorCode[]>(),
     replaced: [] as Knot.ReplaceWindowsOptions[],
     languages: [] as Knot.LanguageDefinition[],
+    settingDefinitions: new Map<string, Knot.SettingDefinition>([[
+      "editor.tabSize",
+      { key: "editor.tabSize", type: "integer", default: 4, description: "Columns per tab stop in editor views" },
+    ]]),
+    settingValues: [] as FakeSettingValue[],
+    settingListeners: [] as { key: string; listener: (key: Knot.SettingKey) => void | Promise<void> }[],
   };
 }
+
+type FakeSettingValue = {
+  key: string;
+  language: string | null;
+  view: string | null;
+  value: Knot.JsonValue;
+};
 
 let state = emptyState();
 
@@ -500,6 +513,34 @@ function languageInfo(definition: Knot.LanguageDefinition): Knot.LanguageInfo {
   };
 }
 
+// Settings -----------------------------------------------------------------
+
+const settingTypes: Record<Knot.SettingType, (value: unknown) => boolean> = {
+  boolean: (value) => typeof value === "boolean",
+  integer: (value) => Number.isSafeInteger(value),
+  number: (value) => Number.isFinite(value),
+  string: (value) => typeof value === "string",
+};
+
+function settingScope(scope: Knot.SettingsScope | undefined) {
+  return { language: scope?.language ?? null, view: scope?.view ?? null };
+}
+
+function sameScope(entry: FakeSettingValue, scope: ReturnType<typeof settingScope>) {
+  return entry.language === scope.language && entry.view === scope.view;
+}
+
+async function notifySetting(key: string) {
+  for (const entry of [...state.settingListeners]) {
+    if (entry.key === key) await entry.listener(key as Knot.SettingKey);
+  }
+}
+
+/** The definitions packages made, keyed by setting key. */
+export function settingDefinitions(): ReadonlyMap<string, Knot.SettingDefinition> {
+  return state.settingDefinitions;
+}
+
 // The "knot" module --------------------------------------------------------
 
 const LAYOUT: Knot.WindowLayout = {
@@ -547,6 +588,68 @@ export const api: KnotApi = {
         .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
     },
     grammars: async () => GRAMMARS,
+  },
+  // Values are kept in write order, so the latest entry wins a tie. The fake
+  // keeps mismatching pending values rather than reporting them.
+  settings: {
+    define: async (definition) => {
+      if (state.settingDefinitions.has(definition.key)) throw hostError("DuplicateSetting");
+      state.settingDefinitions.set(definition.key, definition);
+      const accepts = settingTypes[definition.type];
+      state.settingValues = state.settingValues.filter(
+        (entry) => entry.key !== definition.key || accepts(entry.value),
+      );
+    },
+    set: async (keyOrValues: string | Partial<Knot.Settings>, valueOrScope?: unknown, scope?: Knot.SettingsScope) => {
+      const values = (typeof keyOrValues === "string"
+        ? { [keyOrValues]: valueOrScope }
+        : keyOrValues) as Record<string, Knot.JsonValue>;
+      const facts = settingScope(typeof keyOrValues === "string" ? scope : (valueOrScope as Knot.SettingsScope));
+      for (const [key, value] of Object.entries(values)) {
+        const definition = state.settingDefinitions.get(key);
+        if (definition !== undefined && !settingTypes[definition.type](value)) {
+          throw hostError("SettingTypeMismatch");
+        }
+      }
+      for (const [key, value] of Object.entries(values)) {
+        state.settingValues = state.settingValues.filter((entry) => entry.key !== key || !sameScope(entry, facts));
+        state.settingValues.push({ key, ...facts, value: json(value) });
+        await notifySetting(key);
+      }
+    },
+    get: async (key, facts) => {
+      const definition = state.settingDefinitions.get(key);
+      if (definition === undefined) return undefined;
+      const context = settingScope(facts);
+      let best: FakeSettingValue | undefined;
+      let bestFacts = -1;
+      for (const entry of state.settingValues) {
+        if (entry.key !== key) continue;
+        if (entry.language !== null && entry.language !== context.language) continue;
+        if (entry.view !== null && entry.view !== context.view) continue;
+        const count = Number(entry.language !== null) + Number(entry.view !== null);
+        if (count >= bestFacts) {
+          best = entry;
+          bestFacts = count;
+        }
+      }
+      return (best === undefined ? definition.default : best.value) as never;
+    },
+    reset: async (key, scope) => {
+      const facts = settingScope(scope);
+      const before = state.settingValues.length;
+      state.settingValues = state.settingValues.filter((entry) => entry.key !== key || !sameScope(entry, facts));
+      if (state.settingValues.length !== before) await notifySetting(key);
+    },
+    observe: async (key, listener) => {
+      const entry = { key, listener };
+      state.settingListeners.push(entry);
+      return {
+        dispose: async () => {
+          state.settingListeners = state.settingListeners.filter((candidate) => candidate !== entry);
+        },
+      };
+    },
   },
   windows: {
     list: async () => state.windows.map(windowInfo),

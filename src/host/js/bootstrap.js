@@ -823,6 +823,69 @@ export async function registerLanguage(definition) {
   const owned = ownership(() => {}, () => request("unregisterLanguage", registration));
   return Object.freeze({ dispose: () => owned.dispose() });
 }
+const settingTypes = {
+  boolean: (value) => typeof value === "boolean",
+  integer: Number.isSafeInteger,
+  number: Number.isFinite,
+  string: (value) => typeof value === "string",
+};
+const settingListeners = new Map();
+function settingKey(value) {
+  if (typeof value !== "string" || value.length === 0) throw new TypeError("setting key must be nonempty text");
+  return value;
+}
+function settingsScope(value) {
+  if (value == null) return [null, null];
+  record(value, "settings scope must be an object");
+  return [optionalText(value.language), optionalText(value.view)];
+}
+export async function defineSetting(definition) {
+  const value = record(definition, "settings.define requires a definition object");
+  const key = settingKey(value.key);
+  const type = string(value.type, "setting type must be text");
+  if (!Object.hasOwn(settingTypes, type)) {
+    throw new TypeError("setting type must be boolean, integer, number, or string");
+  }
+  if (!settingTypes[type](value.default)) throw new TypeError(`setting default must be of type ${type}`);
+  const description = string(value.description, "setting description must be text");
+  await request("defineSetting", key, type, value.default, description);
+}
+export async function setSettings(keyOrValues, valueOrScope, scope) {
+  let values;
+  if (typeof keyOrValues === "string") {
+    values = { [settingKey(keyOrValues)]: valueOrScope };
+  } else {
+    values = record(keyOrValues, "settings.set requires a key or an object of values");
+    scope = valueOrScope;
+    Object.keys(values).forEach(settingKey);
+  }
+  const converted = Object.create(null);
+  for (const key of Object.keys(values)) {
+    if (values[key] === undefined) throw new TypeError("setting values must be JSON values");
+    converted[key] = validateJsonValue(values[key]);
+  }
+  await request("setSettings", converted, ...settingsScope(scope));
+}
+export async function getSetting(key, facts) {
+  const value = await request("getSetting", settingKey(key), ...settingsScope(facts));
+  return value === null ? undefined : validateJsonValue(value);
+}
+export async function resetSetting(key, scope) {
+  await request("resetSetting", settingKey(key), ...settingsScope(scope));
+}
+export async function observeSetting(key, listener) {
+  settingKey(key);
+  if (typeof listener !== "function") throw new TypeError("settings.observe requires a listener");
+  const subscription = await request("observeSetting", key);
+  settingListeners.set(subscription, listener);
+  const owned = ownership(() => settingListeners.delete(subscription),
+    () => request("unobserveSetting", subscription));
+  return Object.freeze({ dispose: () => owned.dispose() });
+}
+globalThis.__knotDispatchSettingChange = async (subscription, key) => {
+  const listener = settingListeners.get(subscription);
+  if (listener) await listener(key);
+};
 export async function listLanguages() {
   return Object.freeze((await request("listLanguages")).map((language) => Object.freeze({
     ...language,

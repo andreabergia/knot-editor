@@ -637,6 +637,18 @@ impl WorkbenchSubscriptionId {
     }
 }
 
+/// One lifecycle-owned observer of a setting key.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, serde::Serialize)]
+pub struct SettingsSubscriptionId(u64);
+impl SettingsSubscriptionId {
+    pub(crate) fn new(value: u64) -> Self {
+        Self(value)
+    }
+    pub(crate) fn value(self) -> u64 {
+        self.0
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ApplicationEvent {

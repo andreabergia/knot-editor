@@ -1,6 +1,6 @@
 # D070 — Application settings
 
-Status: 🚧 checkpoints 1–2 done; checkpoint 3 next. Item of the
+Status: 🚧 checkpoints 1–2 done; checkpoint 3 implemented, awaiting review. Item of the
 [daily-driver plan](daily-driver.md#phase-2--foundations).
 
 ## Outcome
@@ -144,7 +144,28 @@ columns, and an `integer` is a JSON integer that fits `i64`. The store's write
 and definition paths carry a `dead_code` allowance outside tests until
 checkpoint 3 gives them product callers.
 
-### 3. Public `settings` API
+### 3. Public `settings` API 🔍
+
+Implemented ✅, review gate pending. Scope decisions:
+
+- A write of the wrong type for a defined key rejects with the host error
+  `SettingTypeMismatch` (details: key, expected), not `TypeError`: only the
+  native store knows the definition, and `TypeError` stays for shape errors
+  JavaScript detects itself, such as a non-text scope fact or a `define`
+  default of the wrong type.
+- `set` with an object of values is atomic: one mismatching value rejects the
+  call and writes nothing.
+- `get` resolves `undefined` for a key that is not defined.
+- Observers fire for the caller's own writes too, and `define` notifies
+  nobody, even when it drops a pending value.
+- Values dropped at definition appear as warnings below the package entries in
+  the extension report, and on stderr.
+- JavaScript numbers arrive as doubles; integral ones within the safe range
+  become JSON integers so they satisfy `integer`.
+- The fake host's own `node:test` tests live in `scripts/extensions/testing`,
+  which the test task now discovers.
+- The product test checks each editor's resolved tab size; the checkpoint 2
+  gpui test already proves that geometry follows it.
 
 - Deliverable: `settings.define(definition)`, `settings.set(key, value,
   scope?)`, `settings.set(values, scope?)`, `settings.get(key, facts?)`,

@@ -38,10 +38,10 @@ use super::{
         ByteRange, Command, CommandArgumentValue, CommandInvocation, CommandInvocationId,
         CommandOutcome, CompletionProviderError, CompletionRequest, CompletionResponse,
         CompletionResultItem, DecorationToken, EditorContribution, ExtensionId, GutterToken,
-        HostRequest, HostResponse, KeybindingMutation, ProviderIdentity, RequestId, SnapshotText,
-        TextEdit, TextSnapshot, TreeAction, TreeBadge, TreeChildrenRequest, TreeChildrenResponse,
-        TreeCollapsibleState, TreeIcon, TreeItem, TreeItemKind, TreeProviderError,
-        WorkbenchSubscriptionId,
+        HostRequest, HostResponse, KeybindingMutation, ProviderIdentity, RequestId,
+        SettingsSubscriptionId, SnapshotText, TextEdit, TextSnapshot, TreeAction, TreeBadge,
+        TreeChildrenRequest, TreeChildrenResponse, TreeCollapsibleState, TreeIcon, TreeItem,
+        TreeItemKind, TreeProviderError, WorkbenchSubscriptionId,
     },
     scheduler::{
         CompletionOutcome, CompletionReceiver, PoolConfig, RootId, SchedulerError, SchedulerHandle,
@@ -237,6 +237,7 @@ pub(crate) struct ExecutionReport {
 enum RuntimeCallback {
     ApplicationChange,
     BufferChange,
+    SettingChange,
     Command,
     CancelCommand,
     Tree,

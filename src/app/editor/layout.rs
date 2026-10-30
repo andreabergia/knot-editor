@@ -40,7 +40,7 @@ impl EditorView {
     }
 
     /// Columns per tab stop for this view's kind and its buffer's language.
-    pub(super) fn tab_size(&self, model: &BufferModel, cx: &App) -> usize {
+    pub(crate) fn tab_size(&self, model: &BufferModel, cx: &App) -> usize {
         settings::editor_tab_size(
             &SettingsScope {
                 language: Some(languages::effective_language(model, cx)),

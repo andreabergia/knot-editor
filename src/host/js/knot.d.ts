@@ -170,6 +170,77 @@ declare module "knot" {
     /** Every compiled-in grammar ID, sorted. */
     grammars(): Promise<readonly string[]>;
   }>;
+
+  /**
+   * The value type of every defined setting key. Native keys are declared
+   * here; a package declares its own keys by merging into this interface:
+   * `declare module "knot" { interface Settings { "lsp.timeout.launch": number } }`.
+   */
+  export interface Settings {
+    /** Columns per tab stop in editor views. Native default 4; editors use
+     * at least 1 and at most 32. */
+    "editor.tabSize": number;
+  }
+  export type SettingKey = keyof Settings & string;
+  /** "integer" accepts safe integers; "number" accepts any finite number. */
+  export type SettingType = "boolean" | "integer" | "number" | "string";
+  export interface SettingDefinition<K extends SettingKey = SettingKey> {
+    /** Flat dotted name saying what the key sets, such as "lsp.timeout.launch". */
+    readonly key: K;
+    readonly type: SettingType;
+    /** Applies when no value matches a context; must be of `type`. */
+    readonly default: Settings[K];
+    /** Shown by a future settings UI. */
+    readonly description: string;
+  }
+  /**
+   * Facts that must all match where a value applies, or that describe the
+   * context of a read. `language` is a document's effective language ID;
+   * `view` is a native surface kind ("editor", "terminal") or a contributed
+   * view ID, as for keybindings.
+   */
+  export interface SettingsScope {
+    readonly language?: string | null;
+    readonly view?: string | null;
+  }
+  /**
+   * One application-wide store of settings shared by personal config and every
+   * package. A write replaces the value for exactly its key and scope, and a
+   * later write replaces an earlier one whoever made it, so personal overrides
+   * belong in post-init. Values live in memory only: config and packages write
+   * them again on every launch, and teardown and Restart Extension remove none.
+   *
+   * A read resolves the matching value with the most scope facts, ties going
+   * to the latest write; with none, the definition's default applies. A value
+   * may be written before its key is defined: define validates it, drops a
+   * value of the wrong type with a note in the extension report, and keys never
+   * defined stay inert. Writes resolve after the store commits.
+   * @throws TypeError for invalid keys, values, scopes or definitions.
+   */
+  export const settings: Readonly<{
+    /** Define a lifecycle-owned key. Teardown removes the definition and keeps
+     * its values, so a restarted package defines it again.
+     * @throws HostError with DuplicateSetting when native code or a live
+     * lifecycle defined the key, or Cancelled. */
+    define<K extends SettingKey>(definition: SettingDefinition<K>): Promise<void>;
+    /** Write one value, or several at once; a value of the wrong type for a
+     * defined key rejects the whole call and writes nothing.
+     * @throws HostError with SettingTypeMismatch (details: key, expected) or
+     * Cancelled. */
+    set<K extends SettingKey>(key: K, value: Settings[K], scope?: SettingsScope): Promise<void>;
+    set(values: Partial<Settings>, scope?: SettingsScope): Promise<void>;
+    /** The value for a context, or the default when none matches; undefined
+     * for a key that is not defined. */
+    get<K extends SettingKey>(key: K, facts?: SettingsScope): Promise<Settings[K] | undefined>;
+    /** Remove the value for exactly this key and scope, revealing the next
+     * match. Resetting a missing value succeeds. */
+    reset(key: SettingKey, scope?: SettingsScope): Promise<void>;
+    /** Call `listener` with the key after every write or reset of it, in any
+     * scope, including this caller's own. Call get for the contexts that
+     * matter. Listeners run serially with other listeners and stop with
+     * their lifecycle. */
+    observe(key: SettingKey, listener: (key: SettingKey) => void | Promise<void>): Promise<Disposable>;
+  }>;
   /** Only product windows; diagnostic and startup-error windows are excluded.
    * get returns null after closure; fabricated/command targets reject InvalidTarget. */
   export const windows: Readonly<{
@@ -357,7 +428,8 @@ declare module "knot" {
     | "CompletionProviderNotFound" | "CommandNameInUse" | "CommandNotFound"
     | "InvalidUri" | "DocumentNotFound" | "OperationInProgress" | "PersistenceFailed" | "ResourceNotFound" | "ResourceWrongKind" | "InvalidUtf8" | "ProviderFailure" | "StorageUnavailable"
     | "CaptureNotFound" | "RecoveryUnavailable" | "SessionConflict"
-    | "UnknownGrammar" | "InvalidQuery" | "LanguageRegistrationNotFound";
+    | "UnknownGrammar" | "InvalidQuery" | "LanguageRegistrationNotFound"
+    | "DuplicateSetting" | "SettingTypeMismatch";
   /**
    * Native operation failure. Narrow a caught Error by name === "KnotHostError"
    * and its string code property, then dispatch on code. No error constructor

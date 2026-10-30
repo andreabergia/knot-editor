@@ -295,7 +295,12 @@ impl Render for ProductShell {
                 this.finish_transient(TransientOutcome::Dismissed, cx);
             });
         let startup_report = crate::app::extensions::host::startup_report(cx);
-        let extension_report = self.extension_report_open.then_some(startup_report);
+        let extension_report = self.extension_report_open.then(|| {
+            (
+                startup_report,
+                crate::app::extensions::host::setting_warnings(cx),
+            )
+        });
         window.set_window_title("Knot");
 
         div()
@@ -356,8 +361,8 @@ impl Render for ProductShell {
                         .child(palette),
                 )
             })
-            .when_some(extension_report, |root, report| {
-                root.child(render_extension_report(report, &entity))
+            .when_some(extension_report, |root, (report, setting_warnings)| {
+                root.child(render_extension_report(report, setting_warnings, &entity))
             })
             .into_any_element()
     }
@@ -365,6 +370,7 @@ impl Render for ProductShell {
 
 pub(super) fn render_extension_report(
     snapshot: Option<crate::app::extensions::host::StartupReportSnapshot>,
+    setting_warnings: Vec<String>,
     shell: &Entity<ProductShell>,
 ) -> AnyElement {
     use crate::app::extensions::host::StartupState;
@@ -417,6 +423,14 @@ pub(super) fn render_extension_report(
                     row.child(div().text_color(rgb(0xf19a8e)).child(cause))
                 })
         })
+        .chain(setting_warnings.into_iter().map(|warning| {
+            div()
+                .py_2()
+                .border_b_1()
+                .border_color(rgb(0x454545))
+                .text_color(rgb(0xe5c07b))
+                .child(warning)
+        }))
         .collect::<Vec<_>>();
     div()
         .absolute()

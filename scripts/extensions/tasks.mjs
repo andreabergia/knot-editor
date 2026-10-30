@@ -2,7 +2,7 @@
 // extensions/@knot or examples/extensions is a TypeScript package.
 //
 //   node tasks.mjs check          type-check the contract fixtures, every package, and the tests
-//   node tasks.mjs test           compile packages and tests with the fake host, then run node:test
+//   node tasks.mjs test           compile packages, their tests, and the fake host's own tests, then run node:test
 //   node tasks.mjs build <dir>    emit one package's dist/ in place
 import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, rmSync } from "node:fs";
@@ -51,7 +51,7 @@ if (task === "check") {
   const build = join(tools, ".test-build");
   rmSync(build, { recursive: true, force: true });
   compile("-p", join(tools, "tsconfig.test.json"));
-  const files = ["extensions", "examples"].flatMap((base) =>
+  const files = ["extensions", "examples", "scripts/extensions/testing"].flatMap((base) =>
     existsSync(join(build, base)) ? testFiles(join(build, base)) : [],
   );
   node("--import", join(tools, "testing/register.mjs"), "--test", ...files);

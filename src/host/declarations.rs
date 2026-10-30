@@ -184,6 +184,11 @@ impl HostSuccess for super::protocol::BufferSubscriptionId {
         encode_json(self)
     }
 }
+impl HostSuccess for super::protocol::SettingsSubscriptionId {
+    fn encode(self) -> Result<EncodedValue, DecodeError> {
+        encode_json(self)
+    }
+}
 impl HostSuccess for super::protocol::TextSnapshot {
     fn encode(self) -> Result<EncodedValue, DecodeError> {
         Ok(EncodedValue::Snapshot(self))
