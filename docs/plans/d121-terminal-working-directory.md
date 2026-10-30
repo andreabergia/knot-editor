@@ -1,6 +1,6 @@
 # D121 — Terminals start in the workspace root
 
-Status: 🚧 checkpoint 1 implemented, awaiting review. Item of the
+Status: 🚧 checkpoint 1 complete; checkpoint 2 next. Item of the
 [daily-driver plan](daily-driver.md); no dependencies. D127 builds on it.
 
 ## Goal
@@ -59,43 +59,16 @@ Finder. Extensions can open a terminal in a directory of their choosing.
 
 ## Checkpoints
 
-### 1. Native default directory ✅ (review gate pending)
+### 1. Native default directory ✅
 
-- Deliverables:
-  - `TerminalSession::new` takes the working directory.
-  - The shell tracks the most recently focused document and resolves the
-    default directory for New Terminal, split, and restore.
-  - The process-directory default is removed.
-- Validation:
-  - Unit tests of the resolver over roots, a document URI, nested roots,
-    non-`file` and missing roots, and no roots (home).
-  - gpui product tests:
-    - New Terminal in a multi-root window follows the focused document's
-      root, including after focus moves to a terminal.
-    - It falls back to the first root, and to home without roots.
-    - A restored terminal tab starts in its window's root.
-  - The tests read the directory from the session's options rather than
-    spawning a shell to ask it.
-- **Implementation context:**
-  - `TerminalSession::new` in `src/app/terminal/session.rs` (the hardcoded
-    `std::env::current_dir()` in `Options`). Add a test-only accessor for the
-    working directory.
-  - `ProductShell::create_terminal` in `src/app/product.rs` resolves the
-    directory from `self.workspace.roots()` (`src/app/workspace.rs`) and the
-    remembered document's `resource_uri()`.
-  - Record the focused document where focus is already observed: the
-    `on_focus` subscriptions in `observe_application_focus`, plus a view that
-    is already focused when its subscription is installed, since gpui sends
-    it no event.
-  - Convert URIs with `ResourceUri::as_url().to_file_path()` and use
-    `ResourceUri::is_within` for containment.
-  - Home comes from `directories::BaseDirs`, already used in
-    `src/app/personal_config.rs`.
-  - Callers: `new_terminal_in_pane`, `split_pane`, and `apply_layout`'s
-    `PlannedTab::Terminal` arm in `src/app/product/sessions.rs`.
-  - Product tests live beside `src/app/product/tests/terminal.rs`.
-- Review gate: the terminal lands where expected in daily use with one root,
-  several roots, and none.
+- Approved. `ProductShell::create_terminal` resolves the directory through
+  `terminal::directory::working_directory` for New Terminal, split, and
+  restore. The last focused document is recorded from the shell's `on_focus`
+  subscriptions, and also when a subscription is installed on a view that
+  already has focus, because gpui sends that view no focus event.
+- Covered by the resolver's unit tests and product tests in
+  `src/app/product/tests/terminal.rs`. Those tests read the session's options
+  rather than asking the spawned shell for its directory.
 
 ### 2. `terminals.open` extension API
 
