@@ -1,6 +1,6 @@
 # D070 — Application settings
 
-Status: 🚧 checkpoints 1–3 done; checkpoint 4 implemented, awaiting review. Item of the
+Status: 🚧 checkpoints 1–4 done; checkpoint 5 next. Item of the
 [daily-driver plan](daily-driver.md#phase-2--foundations).
 
 ## Outcome
@@ -159,9 +159,9 @@ satisfy `integer`. Product tests cover the pre-init, package, and post-init
 flow, Restart Extension, painted tab stops in open windows, and observer
 teardown; the fake host's own tests live in `scripts/extensions/testing`.
 
-### 4. Language file associations 🔍
+### 4. Language file associations ✅
 
-Implemented ✅, review gate pending. Personal config redirects detection with
+Personal config redirects detection with
 `languages.associate(id, { fileExtensions, fileNames, interpreters })`
 rather than a setting. A single `files.associations` map setting was built
 first and reverted: a map is one value, so any writer's `set` replaced every
