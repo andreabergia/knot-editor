@@ -12,12 +12,13 @@ built as ordinary bundled extensions.
 
 ## How this plan is executed
 
-This plan is an index. Each item below is a brief, not a design. Before
-implementing an item, analyze it in its own session. Small items can be
-designed inline in this file. Larger ones get their own plan in `docs/plans/`,
-linked from here. Mark progress here with ✅ and 🚧, and remove the plan once
-every item's durable behavior lives in the architecture references and
-decisions.
+This plan is an index. Each item below is a brief, not a design, and this
+file stays high level. Before implementing an item, analyze it in its own
+session and write its design in a separate plan, `docs/plans/d0xx-<slug>.md`,
+however small the item is. Link that plan from the item here, and never
+add design detail to this file. Mark progress here with ✅ and 🚧. Remove
+each item's plan once it is complete, and remove this plan once every item's
+durable behavior lives in the architecture references and decisions.
 
 Each item lists what it depends on. Items in the same phase are independent
 unless their dependencies say otherwise.
@@ -65,6 +66,7 @@ to be rebuilt later:
     consistent title prefix.
   - Tests that relied on removed commands drive the same behavior through the
     operation directly.
+  - 🚧 Planned in [d069-clean-slate.md](d069-clean-slate.md).
 
 ## Phase 2 — Foundations
 
