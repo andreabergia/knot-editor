@@ -2511,7 +2511,7 @@ mod tests {
         let (host, _root) = start_bundled_packages(cx);
         cx.read(|cx| {
             let report = host.read(cx).startup_report.as_ref().unwrap();
-            for name in ["@knot/projects", "@knot/languages"] {
+            for name in ["@knot/projects", "@knot/languages", "@knot/themes"] {
                 let entry = report
                     .report
                     .entries
@@ -2539,6 +2539,19 @@ mod tests {
                 languages
                     .iter()
                     .any(|language| language.id == "typescriptreact")
+            );
+        });
+
+        // The bundled themes include the native selection's defaults, so
+        // startup resolves One Dark rather than the native fallback colors.
+        cx.update(crate::app::themes::apply_at_startup);
+        cx.read(|cx| {
+            use crate::app::theme::{Appearance, color, parse_color, theme};
+            let theme = theme(cx);
+            assert_eq!(theme.appearance, Appearance::Dark);
+            assert_eq!(
+                Some(theme.color(color::EDITOR_BACKGROUND)),
+                parse_color("#282c34")
             );
         });
     }

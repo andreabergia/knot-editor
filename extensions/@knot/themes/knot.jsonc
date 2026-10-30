@@ -1,0 +1,11 @@
+{
+  // Bundled color themes and the Select Theme command.
+  "name": "@knot/themes",
+  "apiVersion": 1,
+  "version": "0.1.0",
+  "main": "dist/main.js",
+  "displayName": "Themes",
+  "description": "Color themes ported from popular editor themes, and theme selection.",
+  "author": "Knot",
+  "license": "MIT",
+}

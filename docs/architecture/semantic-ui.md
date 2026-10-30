@@ -62,6 +62,11 @@ startup completes and again when the selection settings or, in `system` mode,
 the system appearance change; registering or removing a theme later takes
 effect at the next selection change rather than repainting mid-session.
 
+The bundled `@knot/themes` package registers the themes the native selection
+defaults name and owns Select Theme. It keeps the settings it wrote in its own
+storage and writes them again at start, as any settings UI does, so personal
+`post-init` still overrides the choice.
+
 ## Syntax highlighting and languages
 
 Highlight layers compose in a fixed order: syntax, then contribution

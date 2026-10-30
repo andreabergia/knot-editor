@@ -12,6 +12,7 @@ export const {
   removeKeybinding,
   settings,
   storage,
+  themes,
   windows,
   workbench,
   workspaces,

@@ -332,6 +332,13 @@ resolves it when startup completes and again whenever the selection changes,
 so register themes in activation; a theme registered or disposed later shows
 at the next selection change. The latest registration of a name wins.
 
+The bundled [`@knot/themes`](../extensions/@knot/themes/) package registers
+the default themes and the `themes.select` command, which remembers its choice
+and sets it again when the package starts. Customize themes in `post-init`:
+it runs after the package, so its settings win over the remembered choice, and
+`themes.get` can see the bundled themes to derive from them, which `pre-init`
+cannot.
+
 Define the color keys your package paints with, giving each a default per
 appearance, either a color or another key to follow. Themes may then set it,
 and keys stay open, so a theme can style a package that loads after it:
