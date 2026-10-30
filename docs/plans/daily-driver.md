@@ -1,7 +1,8 @@
 # Daily-driver editor
 
 Status: 🚧 approved, not started. Promotes D007, D008, D010, D031, D034, D053,
-D060, D064, and D068 from the [roadmap](../roadmap.md) and adds D069–D088.
+D060, D064, D068, and D089 from the [roadmap](../roadmap.md) and adds
+D069–D088 and D120–D123.
 
 ## Goal
 
@@ -76,6 +77,22 @@ to be rebuilt later:
     views.
   - Terminal typography (D045, D059) stays deferred but must fit this model
     later.
+
+- **D121 — Terminals start in the workspace root**
+  - A new terminal starts in its window's workspace root instead of the
+    process's working directory. Decide which root a multi-root window uses
+    (the first, or the active document's), what a window without roots uses
+    (the home directory), and whether terminals restored in place follow the
+    same rule.
+
+- **D089 — Project-local settings** (depends on D070, D122)
+  - Settings read from a file in the repository, attached to folders rather
+    than to projects, because a folder may belong to several projects. Add
+    D070's `path` scope fact with its glob syntax and path normalization.
+  - Decide the file's location and format (declarative data or code), and
+    whether settings for one particular root set live in the
+    `@knot/projects` record. Workspace trust (D124) stays deferred, so
+    project settings must not run code until it exists.
 
 - **D064 — Theming system** (depends on D070)
   - Themes become extension contributions, like languages. A public
@@ -272,6 +289,13 @@ to be rebuilt later:
   - Decide how bundled consumers locate tools: bundle `rg` with Knot, or
     require it on PATH.
 
+- **D122 — Extension file read, list, and stat API**
+  - A public API to read a file's bytes or text, list a directory, and stat
+    a URI through the registered resource providers, as VS Code's
+    `workspace.fs` does. The explorer, project-local settings (D089),
+    EditorConfig (D090), and project inference (D123) need it, and D010 and
+    D081 cover only mutation and enumeration.
+
 - **D081 — Workspace ignore rules and file enumeration**
   - Ignore policy is contributed and evaluated natively. Rules come from
     `.gitignore` (and possibly `.ignore`) plus configured patterns, at two
@@ -292,7 +316,7 @@ to be rebuilt later:
     still needed once `rg --files` is available through D087, or whether Go
     to File uses ripgrep too.
 
-- **D034 / D053 — Explorer as a bundled extension** (depends on D008, D010,
+- **D034 / D053 — Explorer as a bundled extension** (depends on D008, D010, D122,
   D081, D072)
   - A bundled `@knot/explorer` package replaces the native explorer tool and
     its commands, using the contributed tree API.
@@ -326,6 +350,19 @@ to be rebuilt later:
     projects first, then switch, new, rename, and delete as picker actions or
     companion commands.
   - Remove the Projects tool registration and its tree code.
+
+- **D120 — Remembered projects** (depends on D070, D084)
+  - Every opened root set is remembered as a project with an inferred name,
+    opening a suspended project's folder restores it, and Open Folder opens
+    a new window unless the current one has no roots.
+  - 🚧 [Plan](d120-remembered-projects.md)
+
+- **D123 — Project inference extension** (depends on D122)
+  - A bundled extension that finds the version-control root above an opened
+    document outside the window's roots and offers to open it as a project,
+    as Emacs's project.el infers projects. Decide which markers count
+    (`.git` first), whether a window without roots switches without asking,
+    and how often the offer may repeat for the same folder.
 
 - **D085 — Cross-file search** (depends on D087, D081, D071, D072; promotes
   D007)

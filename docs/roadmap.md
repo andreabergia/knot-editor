@@ -50,8 +50,8 @@ The [daily-driver editor](plans/daily-driver.md) initiative is selected: it
 removes demo surfaces and adds workbench and editing commands, a richer
 palette, themes, Find, navigation, file watching, and bundled explorer,
 project-selector, and search extensions, keymap presets, and extension
-entitlements. It promotes D007, D008, D010, D031, D034, D053, D060, D064, and
-D068 and adds D069–D088.
+entitlements. It promotes D007, D008, D010, D031, D034, D053, D060, D064, D068,
+and D089 and adds D069–D088 and D120–D123.
 
 The [package manager](plans/package-manager.md) initiative is selected: extension
 installation becomes an inspectable application-owned lifecycle with a lockfile,
@@ -89,7 +89,10 @@ complete list for that item.
 - **Find:** D031 → D001, with or after D092.
 - **Package manager:** D087 → D101 → D102 → D103 → D104 → D106;
   D064, D071, D103 → D105 → D106; D106 → D107, D108; D103 → D116.
-- **Settings:** D070 → D089 → D090; D008 → D090; D070 → D091, D045, D059.
+- **Settings:** D070 → D089 → D090; D008, D122 → D090; D122 → D089;
+  D070 → D091, D045, D059; D089 → D124.
+- **Projects and workspaces:** D070, D084 → D120; D122 → D123; D087 → D125,
+  D126; D089 → D125.
 - **Start surface:** D083, D084 → D061.
 - **Terminal:** D063 with or before D041.
 
@@ -205,27 +208,16 @@ complete list for that item.
   - Deferred: The first slice handles identity within one application process.
   - Reconsider: Multi-process editing or document handoff is introduced.
 
-- **D089 — Project-local settings**
-  - Deferred: Settings (D070) come only from personal config and packages.
-    Emacs, Neovim, VS Code, and Zed all read per-project settings from the
-    repository (`dir-locals.el`, `exrc`, `.vscode/settings.json`,
-    `.zed/settings.json`).
-  - Reconsider: Daily use needs settings that differ per repository. Then add
-    the `path` scope fact with its glob syntax and path normalization, decide
-    where project settings live (a file in the repository or a
-    `@knot/projects` record) and whether they are declarative data or code,
-    and decide what trust an untrusted repository's settings require.
-  - Order: after D070; before D090 and per-project package sets in D116.
-
 - **D090 — EditorConfig support**
   - Deferred: `.editorconfig` files need file watching (D008), reading
-    arbitrary files through the public API, and the `path` scope fact (D089).
+    arbitrary files through the public API (D122), and the `path` scope fact
+    (D089).
   - Reconsider: D008 and D089 are complete, or daily use hits a project that
     relies on `.editorconfig`. Then a bundled package finds the files above
     each opened document, turns each section into a `path`-glob scope, and
     writes them from the root down to the nearest file, so last-write-wins
     reproduces EditorConfig's rule that the nearest file takes precedence.
-  - Order: after D008 and D089.
+  - Order: after D008, D089, and D122.
 
 - **D091 — Settings UI**
   - Deferred: Settings (D070) are set from code. Definitions carry a type,
@@ -238,6 +230,16 @@ complete list for that item.
     overrides a choice. Also decide whether it lists undefined keys that hold
     values, to help spot typos.
   - Order: after D070.
+
+- **D124 — Workspace trust**
+  - Deferred: Project-local settings (D089) start as data that runs no code,
+    and nothing else executes on behalf of a repository.
+  - Reconsider: Project settings, tasks (D125), or language servers would run
+    code or commands from an opened repository. Then decide, as VS Code's
+    workspace trust and Neovim's `exrc` trust database do, how a folder becomes
+    trusted, what an untrusted folder disables, and where grants are stored,
+    reusing D087's grant storage if it fits.
+  - Order: after D089; before D125 runs repository-defined commands.
 
 - **D016 — Sandboxed workspace roots**
   - Deferred: Local roots are trusted and intentionally follow symlinks.
@@ -294,6 +296,26 @@ complete list for that item.
   - Deferred: Surface-specific semantic UI remains sufficient.
   - Reconsider: A selected extension requires genuinely arbitrary UI.
   - Order: after D114; reconsider only if its surfaces fall short.
+
+- **D125 — Tasks and run configurations**
+  - Deferred: No investigation yet. VS Code and Zed read `tasks.json`, Emacs
+    has `compile` and `project-compile`, and Neovim has `:make` and plugins.
+  - Reconsider: Running builds, tests, or scripts from a terminal becomes
+    friction in daily use. Then investigate what a task is (a command line, a
+    working directory, environment, and output handling), where definitions
+    live (project-local settings or a separate file), whether output goes to a
+    terminal or a generated text view with clickable locations (D027), and
+    whether it ships as a bundled extension over process spawning (D087).
+  - Order: after D087 and D089; with or after D124.
+
+- **D126 — Git status per root**
+  - Deferred: No Git integration exists. Every compared editor shows at least
+    the branch and file status, built in or through a near-universal plugin.
+  - Reconsider: The explorer (D034) is in daily use. Then show each root's
+    branch and file status in the explorer and the status bar (D077) from a
+    bundled extension over process spawning (D087) or a native library, and
+    decide how status refreshes with file watching (D008).
+  - Order: after D087, D034, and D077.
 
 - **D107 — Package signing and verified publishers**
   - Deferred: The package manager (D101–D106) installs unsigned archives and git
