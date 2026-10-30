@@ -106,6 +106,7 @@ pub(super) fn open_product_window_with(
     .into()
 }
 
+#[cfg(test)]
 pub(super) fn open_tab_transfer_window(cx: &mut App) -> anyhow::Result<WindowHandle<ProductShell>> {
     let bounds = Bounds::centered(None, size(px(1000.), px(720.)), cx);
     open_tab_transfer_window_with_bounds(bounds, cx)
@@ -435,10 +436,6 @@ pub(crate) fn run(initial_request: Option<OpenRequest>) {
                     MenuItem::action(
                         "New Terminal",
                         ProductCommandSource::new(NEW_TERMINAL_COMMAND),
-                    ),
-                    MenuItem::action(
-                        "Move Terminal to New Window",
-                        ProductCommandSource::new(MOVE_TERMINAL_TO_NEW_WINDOW_COMMAND),
                     ),
                     MenuItem::action(
                         "New Blank Window",

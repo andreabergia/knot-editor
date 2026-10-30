@@ -1,5 +1,31 @@
 //! Terminal tabs, sessions, closure, and cross-window transfer.
 use super::*;
+use crate::app::product::relocate::TabRelocationSource;
+
+fn capture_active_tab(shell: &Entity<ProductShell>, cx: &TestAppContext) -> TabRelocationSource {
+    cx.read(|cx| {
+        let shell = shell.read(cx);
+        let pane = shell.workbench.read(cx).focused_pane().unwrap();
+        shell
+            .capture_tab_relocation(pane.id(), pane.active_tab().id(), cx)
+            .unwrap()
+    })
+}
+
+fn relocate_to_new_window(
+    shell: &Entity<ProductShell>,
+    window: gpui::AnyWindowHandle,
+    source: &TabRelocationSource,
+    cx: &mut TestAppContext,
+    create_destination: impl FnOnce(&mut gpui::App) -> anyhow::Result<gpui::WindowHandle<ProductShell>>,
+) -> CommandOutcome {
+    cx.update_window(window, |_, window, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.relocate_tab_to_new_window_with(source, window, cx, create_destination)
+        })
+    })
+    .unwrap()
+}
 
 #[cfg(unix)]
 #[gpui::test]
@@ -788,16 +814,15 @@ async fn moving_terminal_keeps_its_session_and_source_window_close_does_not_stop
         let grid = session.read(cx).terminal().unwrap().clone();
         (id, session, grid, tab.terminal_view().unwrap().clone())
     });
+    let relocation = capture_active_tab(&source, cx);
     assert_eq!(
-        dispatch_product_command(
+        relocate_to_new_window(
             &source,
             source_window,
-            MOVE_TERMINAL_TO_NEW_WINDOW_COMMAND,
-            cx
-        )
-        .completion
-        .await
-        .unwrap(),
+            &relocation,
+            cx,
+            open_tab_transfer_window
+        ),
         CommandOutcome::Completed
     );
     let destination_window = cx.read(|cx| {
@@ -927,16 +952,10 @@ async fn failed_terminal_destination_leaves_source_attached(cx: &mut TestAppCont
             .unwrap(),
         CommandOutcome::Completed
     );
-    let outcome = cx
-        .update_window(window, |_, window, cx| {
-            shell.update(cx, |shell, cx| {
-                let target = shell.capture_command_target(window, cx).unwrap();
-                shell.move_terminal_to_new_window_with(&target, window, cx, |_| {
-                    anyhow::bail!("simulated window creation failure")
-                })
-            })
-        })
-        .unwrap();
+    let relocation = capture_active_tab(&shell, cx);
+    let outcome = relocate_to_new_window(&shell, window, &relocation, cx, |_| {
+        anyhow::bail!("simulated window creation failure")
+    });
     assert!(matches!(outcome, CommandOutcome::HandlerFailure { .. }));
     cx.read(|cx| {
         let shell = shell.read(cx);
@@ -968,31 +987,18 @@ async fn vanished_terminal_destination_leaves_source_attached(cx: &mut TestAppCo
     let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
     let (shell, window) = product_window(document, model, cx);
     assert_eq!(
-        dispatch_product_command(&shell, window, MOVE_TERMINAL_TO_NEW_WINDOW_COMMAND, cx)
-            .completion
-            .await
-            .unwrap(),
-        CommandOutcome::Unavailable
-    );
-    assert_eq!(
         dispatch_product_command(&shell, window, NEW_TERMINAL_COMMAND, cx)
             .completion
             .await
             .unwrap(),
         CommandOutcome::Completed
     );
-    let outcome = cx
-        .update_window(window, |_, window, cx| {
-            shell.update(cx, |shell, cx| {
-                let target = shell.capture_command_target(window, cx).unwrap();
-                shell.move_terminal_to_new_window_with(&target, window, cx, |cx| {
-                    let destination = open_tab_transfer_window(cx)?;
-                    cx.update_window(destination.into(), |_, window, _| window.remove_window())?;
-                    Ok(destination)
-                })
-            })
-        })
-        .unwrap();
+    let relocation = capture_active_tab(&shell, cx);
+    let outcome = relocate_to_new_window(&shell, window, &relocation, cx, |cx| {
+        let destination = open_tab_transfer_window(cx)?;
+        cx.update_window(destination.into(), |_, window, _| window.remove_window())?;
+        Ok(destination)
+    });
     assert_eq!(outcome, CommandOutcome::InvalidTarget);
     cx.read(|cx| {
         let shell = shell.read(cx);
@@ -1018,7 +1024,7 @@ async fn vanished_terminal_destination_leaves_source_attached(cx: &mut TestAppCo
 }
 
 #[gpui::test]
-async fn stale_terminal_move_target_is_rejected(cx: &mut TestAppContext) {
+async fn stale_terminal_relocation_is_rejected(cx: &mut TestAppContext) {
     let documents = install_globals(cx);
     let document = cx.update(|cx| create_untitled_document(&documents, cx));
     let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
@@ -1030,13 +1036,7 @@ async fn stale_terminal_move_target_is_rejected(cx: &mut TestAppContext) {
             .unwrap(),
         CommandOutcome::Completed
     );
-    let target = cx
-        .update_window(window, |_, window, cx| {
-            shell.update(cx, |shell, cx| {
-                shell.capture_command_target(window, cx).unwrap()
-            })
-        })
-        .unwrap();
+    let relocation = capture_active_tab(&shell, cx);
     assert_eq!(
         dispatch_product_command(&shell, window, CLOSE_TAB_COMMAND, cx)
             .completion
@@ -1044,18 +1044,8 @@ async fn stale_terminal_move_target_is_rejected(cx: &mut TestAppContext) {
             .unwrap(),
         CommandOutcome::Completed
     );
-    let command = crate::host::protocol::Command {
-        name: MOVE_TERMINAL_TO_NEW_WINDOW_COMMAND.into(),
-        arguments: crate::host::protocol::CommandArgumentValue::Null,
-    };
-    let execution = cx.update(|cx| {
-        let dispatcher = cx.global::<ApplicationProductCommands>().0.clone();
-        dispatcher.update(cx, |dispatcher, cx| {
-            dispatcher.dispatch(command, target, cx)
-        })
-    });
     assert_eq!(
-        execution.completion.await.unwrap(),
+        relocate_to_new_window(&shell, window, &relocation, cx, open_tab_transfer_window),
         CommandOutcome::InvalidTarget
     );
     cx.read(|cx| assert_eq!(cx.windows().len(), 1));
@@ -1117,18 +1107,15 @@ async fn process_exit_during_terminal_handoff_keeps_final_grid(cx: &mut TestAppC
         });
         id
     });
-    let outcome = cx
-        .update_window(source_window, |_, window, cx| {
-            source.update(cx, |shell, cx| {
-                shell.focus_active_surface(window, cx);
-                let target = shell.capture_command_target(window, cx).unwrap();
-                shell.move_terminal_to_new_window_with(&target, window, cx, |cx| {
-                    thread::sleep(Duration::from_millis(100));
-                    open_tab_transfer_window(cx)
-                })
-            })
-        })
-        .unwrap();
+    cx.update_window(source_window, |_, window, cx| {
+        source.update(cx, |shell, cx| shell.focus_active_surface(window, cx))
+    })
+    .unwrap();
+    let relocation = capture_active_tab(&source, cx);
+    let outcome = relocate_to_new_window(&source, source_window, &relocation, cx, |cx| {
+        thread::sleep(Duration::from_millis(100));
+        open_tab_transfer_window(cx)
+    });
     assert_eq!(outcome, CommandOutcome::Completed);
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {

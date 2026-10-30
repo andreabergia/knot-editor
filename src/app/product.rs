@@ -38,22 +38,21 @@ use closure::install_protected_window_close;
 #[cfg(test)]
 pub(super) use launch::bind_product_keys;
 pub(super) use launch::finish_product_startup;
+use launch::open_tab_tear_out_window;
 #[cfg(test)]
-use launch::{dispatch_launch_request, product_filesystems};
+use launch::{dispatch_launch_request, open_tab_transfer_window, product_filesystems};
 pub(crate) use launch::{open_product_window, run};
-use launch::{open_tab_tear_out_window, open_tab_transfer_window};
 
 use super::{
     CommandCompletion, CommandPalette, CommandPaletteEntry, CommandPaletteEvent,
     commands::dispatch::{
         ApplicationProductCommands, CLOSE_TAB_COMMAND, CLOSE_WINDOW_COMMAND, COPY_COMMAND,
-        CUT_COMMAND, MOVE_TERMINAL_TO_NEW_WINDOW_COMMAND, NEW_COMMAND, NEW_TERMINAL_COMMAND,
-        NEW_WINDOW_COMMAND, OPEN_COMMAND, PASTE_COMMAND, ProductCommandDispatcher,
-        ProductCommandSource, ProductCommandTarget, QUIT_COMMAND, REDO_COMMAND, SAVE_AS_COMMAND,
-        SAVE_COMMAND, SELECT_ALL_COMMAND, SHOW_COMMAND_PALETTE_COMMAND,
-        SHOW_EXTENSION_REPORT_COMMAND, SPLIT_HORIZONTAL_COMMAND, SPLIT_VERTICAL_COMMAND,
-        UNDO_COMMAND, dispatch_close_to_captured_target, dispatch_open_to_captured_target,
-        dispatch_save_to_captured_target,
+        CUT_COMMAND, NEW_COMMAND, NEW_TERMINAL_COMMAND, NEW_WINDOW_COMMAND, OPEN_COMMAND,
+        PASTE_COMMAND, ProductCommandDispatcher, ProductCommandSource, ProductCommandTarget,
+        QUIT_COMMAND, REDO_COMMAND, SAVE_AS_COMMAND, SAVE_COMMAND, SELECT_ALL_COMMAND,
+        SHOW_COMMAND_PALETTE_COMMAND, SHOW_EXTENSION_REPORT_COMMAND, SPLIT_HORIZONTAL_COMMAND,
+        SPLIT_VERTICAL_COMMAND, UNDO_COMMAND, dispatch_close_to_captured_target,
+        dispatch_open_to_captured_target, dispatch_save_to_captured_target,
     },
     commands::keymaps::{ApplicationKeymaps, BindingResolution, KeymapAction},
     documents::{ApplicationDocuments, DocumentCollection, DocumentId, DocumentState},
@@ -1405,26 +1404,6 @@ impl ProductShell {
             .register(&workbench, window);
         self.workbench = workbench;
         self.status = "created replacement untitled document".into();
-    }
-
-    fn move_terminal_to_new_window_with(
-        &mut self,
-        target: &ProductCommandTarget,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-        create_destination: impl FnOnce(&mut App) -> anyhow::Result<WindowHandle<ProductShell>>,
-    ) -> crate::host::protocol::CommandOutcome {
-        use crate::host::protocol::CommandOutcome;
-        if !matches!(target.surface, TabSurfaceId::Terminal(_)) {
-            return CommandOutcome::Unavailable;
-        }
-        if !self.target_is_live(target, cx) {
-            return CommandOutcome::InvalidTarget;
-        }
-        let Some(source) = self.capture_tab_relocation(target.pane, target.tab, cx) else {
-            return CommandOutcome::InvalidTarget;
-        };
-        self.relocate_tab_to_new_window_with(&source, window, cx, create_destination)
     }
 
     pub(crate) fn toggle_extension_report(&mut self, cx: &mut Context<Self>) {

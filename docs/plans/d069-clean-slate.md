@@ -1,6 +1,6 @@
 # D069 — Remove demo and test-only commands
 
-Status: 🚧 approved, not started. Part of the
+Status: 🚧 in progress (checkpoint 1 ✅). Part of the
 [daily-driver plan](daily-driver.md), phase 1.
 
 ## Outcome
@@ -63,7 +63,7 @@ prompt.
 Commit each checkpoint separately. The validation for every checkpoint is
 `cargo test` plus a palette, menu, and keymap check in a running product.
 
-### 1. Remove Move Terminal to New Window
+### 1. ✅ Remove Move Terminal to New Window
 
 Deliverable: the command, its keymap entries on every platform, its File menu
 item, and its toolbar button are removed. The terminal relocation tests drive
@@ -85,6 +85,11 @@ Implementation context:
   `Unavailable` result for a non-terminal target.
 
 Review gate: terminal relocation coverage is no weaker than before.
+
+Completion: the session-survival, failed and vanished destination, stale
+source, and process-exit-during-handoff tests in
+`src/app/product/tests/terminal.rs` now call `relocate_tab_to_new_window_with`
+with a captured relocation. `open_tab_transfer_window` is test-only.
 
 ### 2. Remove the explorer placement commands
 

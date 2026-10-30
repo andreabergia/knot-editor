@@ -350,12 +350,6 @@ impl Render for ProductShell {
                         NEW_TERMINAL_COMMAND,
                     ))
                     .child(command_button(
-                        "move terminal",
-                        "move-terminal",
-                        &entity,
-                        MOVE_TERMINAL_TO_NEW_WINDOW_COMMAND,
-                    ))
-                    .child(command_button(
                         "split →",
                         "split-horizontal",
                         &entity,

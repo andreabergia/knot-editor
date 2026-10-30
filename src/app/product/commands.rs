@@ -40,31 +40,6 @@ pub(crate) async fn new_terminal(context: CommandContext, (): ()) -> Result<(), 
         .await
 }
 
-#[command("terminal.move-to-new-window", title = "Move Terminal to New Window", id = MOVE_TERMINAL_TO_NEW_WINDOW_COMMAND, participant = Workbench)]
-pub(crate) async fn move_terminal_to_new_window(
-    context: CommandContext,
-    (): (),
-) -> Result<CommandOutcome, CommandOutcome> {
-    context
-        .foreground(move |target, _, cx| {
-            super::super::commands::dispatch::break_captured_history_group(target, cx);
-            Ok(())
-        })
-        .await?;
-    context
-        .shell(move |shell, target, window, cx| {
-            Ok(
-                shell.move_terminal_to_new_window_with(
-                    target,
-                    window,
-                    cx,
-                    open_tab_transfer_window,
-                ),
-            )
-        })
-        .await
-}
-
 #[command("workbench.close-tab", title = "Close Tab", id = CLOSE_TAB_COMMAND, participant = Workbench)]
 pub(crate) async fn close_tab(
     context: CommandContext,
