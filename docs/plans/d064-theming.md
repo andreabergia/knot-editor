@@ -1,6 +1,6 @@
 # D064 — Theming system
 
-Status: 🚧 approved, not started. Item of the
+Status: 🚧 in progress. Item of the
 [daily-driver plan](daily-driver.md); depends on D070 (settings).
 
 ## Goal
@@ -56,7 +56,7 @@ theme by changing a few keys.
   later, and typos are silent as with settings. Syntax keys stay the closed
   capture vocabulary (resolved by longest dotted prefix as today), because
   capture names are the contract with grammar queries; unknown captures
-  reject with `TypeError`.
+  reject with `UnknownCapture`.
 - **Resolution.** A key's color is the active theme's value, else the
   definition's default for the theme's appearance, following references.
   With no registered theme (before packages start, or when the selection is
@@ -74,9 +74,10 @@ theme by changing a few keys.
   `"system"`; default `"dark"`), `theme.dark` (default `"One Dark"`), and
   `theme.light` (default `"One Light"`). `system` follows the window
   appearance gpui reports. A name that is not registered falls back as
-  above, so values never depend on package load order. Any change to the
-  settings or the registry replaces the `Theme` global and repaints every
-  window.
+  above, so values never depend on package load order. The theme resolves
+  when startup completes and on every selection change, replacing the
+  `Theme` global and repainting every window; registry changes wait for the
+  next selection change.
 - **Select Theme lives in `@knot/themes`.** Settings are not persisted
   natively, so the package owns the picker and remembers the choice in its
   storage, writing it again in `start()` (the D091 rule: `post-init` still
@@ -116,58 +117,17 @@ Every native surface paints from color keys defined in one native table in
 out of `src/app` outside `theme.rs`. The fallback syntax palette is
 deliberately small until bundled themes land.
 
-### 2. Theme registration API and selection settings 🚧 awaiting review
+### 2. Theme registration API and selection settings ✅
 
-Deliverables:
-- ✅ A native theme registry mirroring `LanguageRegistry`: lifecycle-owned
-  registrations, latest name wins, teardown reveals the previous one.
-- ✅ Host operations `registerTheme`, `unregisterTheme`, `listThemes`,
-  `getTheme`, and `defineColor`, with typed decoding and `TypeError` for
-  invalid colors, captures, and styles. Extension color definitions join the
-  native table, are removed at teardown, and re-resolve the active theme.
-- ✅ Native settings `theme.mode`, `theme.dark`, `theme.light`; the theme
-  resolves when startup completes and again when the selection settings or,
-  in `system` mode, the window appearance change, resolving missing keys from
-  the definition defaults of the theme's appearance. Registering or removing
-  a theme later takes effect at the next selection change, by decision during
-  review: themes rarely change mid-session.
-- ✅ `knot.d.ts` declarations, with native color keys as an interface packages
-  extend by declaration merging like `Settings`; the fake host's `themes`
-  implementation; and the extension guide section.
-
-Notes: invalid colors, font weights, and fields reject with `TypeError`
-naming the key; an unknown capture rejects with a `UnknownCapture` host error
-carrying the capture, like `UnknownGrammar`, because only native code knows
-the capture vocabulary. Theme values for keys nobody defines are kept and
-inert. Gpui's test platform cannot change the system appearance, so `system`
-mode is tested only against the reported appearance.
-
-Validation: registry unit tests (override, teardown reveal, missing-key
-defaults, unknown name falls back, extension definitions and references);
-product tests in
-`src/app/product/tests/themes.rs` for registration through the host,
-validation errors, duplicate definitions, settings-driven switching,
-teardown during use, and `system` mode following a changed appearance where gpui's test platform
-allows it; a fake-host test that the fake's key list matches the native one,
-like `fake_host_lists_every_capture_name`.
-
-Review gate: the public API shape and selection semantics.
-
-**Implementation context:** mirror `src/app/languages.rs`
-(`LanguageRegistry`, `ApplicationLanguages` global, `register`/`unregister`/
-`remove_lifecycle`) in a new `src/app/themes.rs`, or fold the registry into
-`theme.rs` if it stays small; declare it in `src/app/mod.rs`. Handlers sit
-beside `register_language` in `src/app/extensions/host/handlers.rs`; teardown
-is wired next to `languages::remove_lifecycle` in
-`src/app/extensions/host.rs` (~line 2225). JS glue mirrors `registerLanguage`
-in `src/host/js/bootstrap.js` and the `languages` export in
-`src/host/js/knot.js`. Native settings are defined in `src/app/settings.rs`
-next to `EDITOR_TAB_SIZE`; observe writes there to recompute. Window
-appearance comes from gpui's `Window::appearance` and
-`observe_window_appearance`. Fake host: `scripts/extensions/testing/host.ts`.
-Docs: `docs/architecture/semantic-ui.md#syntax-highlighting-and-languages`
-(theme ownership), `docs/extension-api.md`, `docs/schemas/knot.schema.json` if
-it lists API namespaces.
+`themes.register`/`get`/`list` and `themes.defineColor` live in
+`src/app/themes.rs`, with the contract in `src/host/js/knot.d.ts` and the
+guide's "Register a theme and define colors" section. The theme resolves
+after both config phases and every package start, then again when the
+`theme.*` settings or, in `system` mode, the window appearance change;
+registering a theme later waits for the next selection change. An unknown
+capture rejects with the `UnknownCapture` host error, because only native
+code knows the vocabulary. gpui's test platform cannot change the system
+appearance, so `system` mode is tested only against the reported one.
 
 ### 3. Contributions name color keys
 
@@ -200,6 +160,9 @@ Deliverables:
 - A Select Theme command: a picker over `themes.list()`, the setting writes
   described above, and the choice persisted in package storage and applied
   again in `start()`.
+- The extension guide recommends theme customization in `post-init`: it
+  beats the package's remembered choice and can derive from bundled themes,
+  which `pre-init` cannot see yet.
 
 Validation: package tests under `node:test` that every bundled theme sets
 every native color key and only known captures, and that selecting a theme writes the
