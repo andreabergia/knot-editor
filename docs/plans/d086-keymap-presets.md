@@ -110,40 +110,14 @@ Validated on macOS only; other platforms are covered by table tests.
 
 ### 2. ✅ Contributed presets, selection, and `knot.platform`
 
-- Add a preset registry (lifecycle-owned registrations, latest name wins,
-  `"knot"` reserved and native) and the `keymap.preset` setting. Resolution
-  installs the selected preset into the preset slot at startup completion and
-  on setting changes, then calls `rebuild`. Teardown removes the lifecycle's
-  registrations.
-- Public API: `keymaps.registerPreset`, `getPreset`, `listPresets`, `bind`, and
-  `unbind` (replacing `keybinding` / `removeKeybinding`), plus `knot.platform`.
-  Update the declarations, the JSON schema if it applies, the fake host, the
-  examples, and every bundled caller.
-- Validation: registry unit tests (shadowing, teardown reveal, fallback to
-  Knot, the reserved name); product tests that selecting a contributed preset
-  rebinds an open window, that extension and personal bindings still win over
-  it, and that switching back restores Knot; fake-host contract test; a
-  `knot.platform` test.
-- Review gate: API shape and resolution timing.
-- ✅ Done: `src/app/commands/keymaps/presets.rs` owns the Knot tables, the
-  preset registry, and selection. A binding whose view kind is not declared
-  is skipped when the preset is installed. `bindings` without `command`
-  is a TypeError rather than an implied unbind. The fake host implements the
-  preset registry but not `bind`/`unbind` or the native Knot bindings, and
-  its `platform` is always `"macos"`.
-- **Implementation context:** mirror `src/app/themes.rs` (registry with owner
-  and lifecycle, `apply_at_startup` observing `ApplicationSettings`,
-  `remove_lifecycle`) and its handlers in
-  `src/app/extensions/host/handlers.rs` (`register_theme`, `get_theme`,
-  `list_themes`). Call startup resolution beside the theme calls in
-  `src/app/product/launch.rs` and `src/app/extensions/host.rs`. Define the
-  setting with the others in `src/app/settings.rs`. On the JS side, update
-  `src/host/js/knot.js`, `src/host/js/bootstrap.js` (mirror `themes`), and
-  `src/host/js/knot.d.ts`; update the fake host in `scripts/extensions/testing/`
-  and the contract test in `scripts/extensions/contract.test.ts`. Existing
-  `keybinding` batch handling stays in `BindingRegistry::apply_batch`. Teardown
-  goes through the shared foreground cleanup that already calls
-  `themes::remove_lifecycle`.
+Approved. `src/app/commands/keymaps/presets.rs` owns the Knot tables, the
+lifecycle-owned preset registry, and selection by `keymap.preset`, resolved at
+startup completion and on setting changes like themes. The public API is
+`keymaps.bind`/`unbind`/`registerPreset`/`getPreset`/`listPresets` and
+`knot.platform` (`src/host/js/knot.d.ts`). Bindings for undeclared view kinds
+are skipped at install; a binding without `command` is a TypeError. The fake
+host implements the registry but not `bind`/`unbind` or the native Knot
+bindings, and its `platform` is always `"macos"`.
 
 ### 3. Show Keybindings
 
