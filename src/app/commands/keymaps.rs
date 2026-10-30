@@ -39,6 +39,17 @@ struct Slot {
     order: u64,
 }
 
+/// One slot of the keymap, as Show Keybindings lists it.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ListedBinding {
+    pub(crate) key: String,
+    pub(crate) view: Option<String>,
+    pub(crate) owner: BindingOwner,
+    pub(crate) command: Option<Command>,
+    /// The owner of the slot that wins where this one applies.
+    pub(crate) shadowed_by: Option<BindingOwner>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum BindingResolution {
     Command(Command),
@@ -334,24 +345,58 @@ impl BindingRegistry {
         }
     }
 
-    fn refresh_key(&mut self, key: &str) {
-        let candidates = self
+    /// Every slot with its owner and, when another slot wins where it
+    /// applies, the owner of that slot. A global slot applies outside every
+    /// view and a scoped slot inside its view. Sorted by key, then view.
+    pub(crate) fn listing(&self) -> Vec<ListedBinding> {
+        let mut listing = self
             .slots
             .iter()
-            .filter(|(slot_key, _)| slot_key.key == key)
+            .map(|(slot_key, slot)| {
+                let winner = self.winning_slot(&slot_key.key, slot_key.view.as_deref());
+                ListedBinding {
+                    key: slot_key.key.clone(),
+                    view: slot_key.view.clone(),
+                    owner: slot_key.owner,
+                    command: slot.command.clone(),
+                    shadowed_by: winner
+                        .filter(|winner| *winner != slot_key)
+                        .map(|winner| winner.owner),
+                }
+            })
             .collect::<Vec<_>>();
+        listing.sort_by(|a, b| {
+            (&a.key, &a.view, a.shadowed_by.is_some()).cmp(&(
+                &b.key,
+                &b.view,
+                b.shadowed_by.is_some(),
+            ))
+        });
+        listing
+    }
+
+    /// The slot that decides `key` in `view`: extension slots beat preset
+    /// ones, then a view-scoped slot beats a global one, then the latest write.
+    fn winning_slot(&self, key: &str, view: Option<&str>) -> Option<&SlotKey> {
+        self.slots
+            .iter()
+            .filter(|(slot_key, _)| {
+                slot_key.key == key && (slot_key.view.is_none() || slot_key.view.as_deref() == view)
+            })
+            .max_by_key(|(slot_key, slot)| {
+                (
+                    !slot_key.owner.is_default(),
+                    slot_key.view.is_some(),
+                    slot.order,
+                )
+            })
+            .map(|(slot_key, _)| slot_key)
+    }
+
+    fn refresh_key(&mut self, key: &str) {
         let winner = |view: Option<&str>| {
-            candidates
-                .iter()
-                .filter(|(slot_key, _)| slot_key.view.is_none() || slot_key.view.as_deref() == view)
-                .max_by_key(|(slot_key, slot)| {
-                    (
-                        !slot_key.owner.is_default(),
-                        slot_key.view.is_some(),
-                        slot.order,
-                    )
-                })
-                .map(|(_, slot)| match &slot.command {
+            self.winning_slot(key, view)
+                .map(|slot_key| match &self.slots[slot_key].command {
                     Some(command) => BindingResolution::Command(command.clone()),
                     None => BindingResolution::Unbound,
                 })

@@ -181,6 +181,16 @@ impl PresetRegistry {
             .collect()
     }
 
+    /// The title of the installed preset.
+    pub(crate) fn applied_title(&self) -> String {
+        self.applied
+            .as_deref()
+            .and_then(|name| self.get(name))
+            .or_else(|| self.get(KNOT_PRESET))
+            .map(|preset| preset.title)
+            .unwrap_or_default()
+    }
+
     /// The bindings `selection` names, falling back to Knot.
     pub(super) fn bindings(&self, selection: &str) -> Vec<PresetBinding> {
         self.get(selection)

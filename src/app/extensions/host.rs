@@ -183,6 +183,23 @@ pub(crate) fn startup_report(cx: &App) -> Option<StartupReportSnapshot> {
     host.read(cx).startup_report.clone()
 }
 
+/// The package name of a live lifecycle, or "personal config".
+pub(crate) fn lifecycle_label(
+    extension: ExtensionId,
+    lifecycle: ExtensionLifecycleId,
+    cx: &App,
+) -> Option<String> {
+    let host = entity(cx)?.read(cx);
+    let key = ExtensionKey::new(extension, lifecycle);
+    if host.personal_config_key == Some(key) {
+        return Some("personal config".into());
+    }
+    host.package_keys
+        .iter()
+        .find(|(_, package)| **package == key)
+        .map(|(name, _)| name.clone())
+}
+
 #[cfg(test)]
 pub(crate) fn completion_provider_count(cx: &App) -> usize {
     entity(cx)

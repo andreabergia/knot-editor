@@ -28,6 +28,7 @@ mod render;
 mod roots;
 mod save;
 pub(super) mod sessions;
+mod show_keybindings;
 mod tab_drag;
 mod tools;
 mod view_state;

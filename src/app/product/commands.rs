@@ -160,6 +160,19 @@ pub(crate) async fn restart_extension(
         .await
 }
 
+#[command("keymaps.show", title = "Show Keybindings", description = "List every key binding, who made it, and what it overrides.", id = SHOW_KEYBINDINGS_COMMAND, participant = Workbench)]
+pub(crate) async fn show_keybindings(
+    context: CommandContext,
+    (): (),
+) -> Result<(), CommandOutcome> {
+    context
+        .shell(|shell, target, window, cx| {
+            shell.start_show_keybindings(target.clone(), window, cx);
+            Ok(())
+        })
+        .await
+}
+
 #[command("editor.show-completions", title = "Show Completions", description = "Show completions at the cursor.", id = SHOW_COMPLETIONS_COMMAND, participant = Workbench)]
 pub(crate) async fn show_completions(
     context: CommandContext,

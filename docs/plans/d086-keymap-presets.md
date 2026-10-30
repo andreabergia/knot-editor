@@ -1,6 +1,6 @@
 # D086 — Keymap presets
 
-Status: 🚧 in progress (checkpoints 1–2 ✅). Item of the
+Status: 🚧 in progress (checkpoints 1–3 ✅). Item of the
 [daily-driver plan](daily-driver.md); depends on D070 (settings) and D071
 (palette); promotes D060 (audited platform defaults). D088 fills in the other
 presets.
@@ -119,7 +119,7 @@ are skipped at install; a binding without `command` is a TypeError. The fake
 host implements the registry but not `bind`/`unbind` or the native Knot
 bindings, and its `platform` is always `"macos"`.
 
-### 3. Show Keybindings
+### 3. ✅ Show Keybindings
 
 - A native command lists the effective and shadowed bindings in the shared
   picker, with owner and scope detail, and runs the accepted command.
@@ -129,6 +129,13 @@ bindings, and its `platform` is always `"macos"`.
   owner labels); a product test that the picker opens with the expected rows.
 - Review gate: try the listing with a contributed preset and a personal
   override.
+- ✅ Done: `keymaps.show` ("Show Keybindings") lists one row per keymap slot:
+  the command title as the label, the display key as the hint, and
+  `<key> · <owner>[ · in <view>]` as the description, so typing a canonical
+  key such as `cmd-s` finds it. Shadowed slots carry "Overridden by
+  <owner>" as detail. The owner is the selected preset's title, the package
+  name, or "personal config" (`extensions::host::lifecycle_label`).
+  `BindingRegistry::listing` shares its winner rule with key resolution.
 - **Implementation context:** `BindingRegistry` in
   `src/app/commands/keymaps.rs` (`shown_bindings` shows the ranking style).
   Picker usage is in the native pickers under `src/app/product/`

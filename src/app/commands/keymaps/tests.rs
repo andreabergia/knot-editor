@@ -728,3 +728,73 @@ fn replacing_the_preset_keeps_extension_bindings_on_top_and_skips_unknown_views(
         )
     );
 }
+
+#[test]
+fn listing_names_each_slot_and_the_owner_that_overrides_it() {
+    let mut registry = BindingRegistry::new();
+    let package = BindingOwner::Extension(ExtensionId::new(1), ExtensionLifecycleId::new(1));
+    registry.replace_preset(
+        &preset(
+            "p",
+            &[
+                ("cmd-s", Some("save"), None),
+                ("cmd-c", Some("copy"), None),
+                ("cmd-k", Some("kill"), Some("editor")),
+            ],
+        )
+        .bindings,
+    );
+    registry
+        .set(package, "cmd-s", None, Some(command("package.save")))
+        .unwrap();
+    registry
+        .set(package, "cmd-c", Some("terminal"), None)
+        .unwrap();
+    let rows = registry
+        .listing()
+        .into_iter()
+        .map(|row| {
+            (
+                row.key,
+                row.view,
+                row.owner,
+                row.command.map(|command| command.name.to_string()),
+                row.shadowed_by,
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        rows,
+        [
+            (
+                "cmd-c".into(),
+                None,
+                BindingOwner::Preset,
+                Some("copy".into()),
+                None
+            ),
+            ("cmd-c".into(), Some("terminal".into()), package, None, None),
+            (
+                "cmd-k".into(),
+                Some("editor".into()),
+                BindingOwner::Preset,
+                Some("kill".into()),
+                None
+            ),
+            (
+                "cmd-s".into(),
+                None,
+                package,
+                Some("package.save".into()),
+                None
+            ),
+            (
+                "cmd-s".into(),
+                None,
+                BindingOwner::Preset,
+                Some("save".into()),
+                Some(package)
+            ),
+        ]
+    );
+}

@@ -980,3 +980,85 @@ fn selected_contributed_preset_replaces_knot_beneath_extension_bindings(cx: &mut
         );
     });
 }
+
+#[gpui::test]
+fn show_keybindings_lists_owners_and_overrides_and_runs_the_accepted_command(
+    cx: &mut TestAppContext,
+) {
+    let documents = install_globals(cx);
+    cx.update(super::super::bind_product_keys);
+    let document = cx.update(|cx| create_untitled_document(&documents, cx));
+    let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+    let (shell, window) = product_window(document, model, cx);
+    cx.update_window(window, |_, window, cx| {
+        shell.read(cx).focus_active_editor(window, cx)
+    })
+    .unwrap();
+    let save = gpui::Keystroke::parse("secondary-s").unwrap().unparse();
+    cx.update(|cx| {
+        cx.global_mut::<ApplicationKeymaps>()
+            .0
+            .set(
+                BindingOwner::Extension(ExtensionId::new(0), ExtensionLifecycleId::new(1)),
+                &save,
+                None,
+                Some(Command {
+                    name: NEW_COMMAND.into(),
+                    arguments: CommandArgumentValue::Null,
+                }),
+            )
+            .unwrap();
+    });
+    let execution = dispatch_product_command(
+        &shell,
+        window,
+        super::super::commands::SHOW_KEYBINDINGS_COMMAND,
+        cx,
+    );
+    assert_eq!(wait_for_command(execution, cx), CommandOutcome::Completed);
+    cx.run_until_parked();
+    cx.read(|cx| {
+        let picker = match shell.read(cx).transient.as_ref().unwrap().surface.as_ref() {
+            Some(crate::app::transient::TransientSurface::Picker(picker)) => picker.read(cx),
+            _ => panic!("the transient is not a picker"),
+        };
+        let rows = picker
+            .visible_entries()
+            .into_iter()
+            .map(|entry| picker.entry(entry).clone())
+            .collect::<Vec<_>>();
+        let row = |label: &str, owner: &str| {
+            rows.iter()
+                .find(|row| {
+                    row.label == label
+                        && row.description.as_deref() == Some(&format!("{save} · {owner}"))
+                })
+                .unwrap_or_else(|| panic!("no {label} row from {owner}"))
+        };
+        let overriding = row("New Document", "extension");
+        assert_eq!(overriding.detail, None);
+        assert_eq!(
+            overriding.hint,
+            Some(crate::app::commands::keymaps::display_key(&save))
+        );
+        assert_eq!(
+            row("Save", "Knot preset").detail.as_deref(),
+            Some("Overridden by extension")
+        );
+        assert!(rows.iter().any(|row| {
+            row.label == "Move to line start"
+                && row
+                    .description
+                    .as_deref()
+                    .is_some_and(|description| description.ends_with(" · in editor"))
+        }));
+    });
+    let tabs = |cx: &mut TestAppContext| {
+        cx.read(|cx| shell.read(cx).workbench.read(cx).panes()[0].tabs().len())
+    };
+    let before = tabs(cx);
+    cx.simulate_input(window, "New Document");
+    cx.simulate_keystrokes(window, "enter");
+    cx.run_until_parked();
+    assert_eq!(tabs(cx), before + 1);
+}
