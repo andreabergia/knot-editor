@@ -222,6 +222,13 @@ impl EditorView {
         }
     }
 
+    /// The caret's x position with the caret moved to `col` on the first line.
+    #[cfg(test)]
+    pub(crate) fn caret_x_at(&mut self, col: usize, window: &Window, cx: &App) -> Pixels {
+        (self.cursor_line, self.cursor_col) = (0, col);
+        self.caret_x(self.model.read(cx), window, cx)
+    }
+
     #[cfg(test)]
     fn text(&self, cx: &App) -> String {
         self.model.read(cx).text()

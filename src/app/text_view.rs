@@ -130,4 +130,31 @@ mod tests {
         view.update(cx, |view, cx| view.replace_text("second\n", cx));
         assert_eq!(cx.read(|cx| view.read(cx).text(cx)), "second\n");
     }
+
+    #[gpui::test]
+    fn the_frame_editor_resolves_settings_for_its_view_id(cx: &mut TestAppContext) {
+        use crate::app::{
+            editor::EditorView,
+            model::BufferModel,
+            settings::{ApplicationSettings, EDITOR_TAB_SIZE, SettingsScope},
+        };
+        cx.update(|cx| {
+            let mut settings = ApplicationSettings::default();
+            let scope = SettingsScope {
+                language: None,
+                view: Some("example.log".into()),
+            };
+            settings.0.set(EDITOR_TAB_SIZE, 2.into(), scope).unwrap();
+            cx.set_global(settings);
+        });
+        let frame = cx.new(|cx| TextView::new("example.log", "1", cx));
+        let document = cx.new(|_| BufferModel::from_text(""));
+        let document = cx.new(|cx| EditorView::new(document, cx));
+        cx.read(|cx| {
+            let frame = frame.read(cx);
+            assert_eq!(frame.editor.read(cx).tab_size(frame.model.read(cx), cx), 2);
+            let document = document.read(cx);
+            assert_eq!(document.tab_size(document.model().read(cx), cx), 4);
+        });
+    }
 }

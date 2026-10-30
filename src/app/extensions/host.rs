@@ -166,6 +166,11 @@ pub(crate) fn reset_launched_for_test(cx: &mut App) {
     }
 }
 
+#[cfg(test)]
+pub(crate) fn setting_observer_count(cx: &App) -> usize {
+    entity(cx).map_or(0, |host| host.read(cx).setting_observers.len())
+}
+
 /// Setting values dropped by a definition, in the order they were reported.
 pub(crate) fn setting_warnings(cx: &App) -> Vec<String> {
     entity(cx)

@@ -132,6 +132,47 @@ fn config_and_packages_share_settings_across_phases_and_restart(cx: &mut TestApp
     };
     assert_eq!(tab_sizes(cx), [8, 3]);
 
+    // Open product windows paint tab stops at those widths: the caret after
+    // the leading tab sits that many character widths in.
+    let painted_tab = |model: Entity<BufferModel>, cx: &mut TestAppContext| {
+        model.update(cx, |model, _| model.replace(0..0, "\tab").unwrap());
+        let document = cx.update(|cx| {
+            documents.update(cx, |documents, cx| {
+                documents.create_untitled("Untitled", model.clone(), cx)
+            })
+        });
+        let (shell, window) = product_window(document, model, cx);
+        cx.update_window(window, |_, window, cx| {
+            let editor = shell
+                .read(cx)
+                .workbench
+                .read(cx)
+                .focused_pane()
+                .unwrap()
+                .active_tab()
+                .editor()
+                .unwrap()
+                .clone();
+            editor.update(cx, |editor, cx| {
+                let tab = editor.caret_x_at(1, window, cx);
+                let letter = editor.caret_x_at(2, window, cx) - tab;
+                (f32::from(tab) / f32::from(letter)).round() as usize
+            })
+        })
+        .unwrap()
+    };
+    let rust = cx.new(|_| {
+        let mut model = BufferModel::from_text("");
+        model.set_language(Some("rust".into()), true);
+        model
+    });
+    assert_eq!(painted_tab(rust, cx), 8);
+    assert_eq!(painted_tab(cx.new(|_| BufferModel::from_text("")), cx), 3);
+    assert_eq!(
+        cx.read(crate::app::extensions::host::setting_observer_count),
+        1
+    );
+
     // Restart keeps every value: the fresh lifecycle defines its keys again
     // and starts from post-init's value.
     let restarted = Arc::new(Mutex::new(None));
@@ -156,6 +197,11 @@ fn config_and_packages_share_settings_across_phases_and_restart(cx: &mut TestApp
     assert_eq!(
         cx.read(crate::app::extensions::host::setting_warnings)
             .len(),
+        1
+    );
+    // Teardown removed the old lifecycle's observer; the new one replaced it.
+    assert_eq!(
+        cx.read(crate::app::extensions::host::setting_observer_count),
         1
     );
 }

@@ -164,8 +164,9 @@ Implemented ✅, review gate pending. Scope decisions:
   become JSON integers so they satisfy `integer`.
 - The fake host's own `node:test` tests live in `scripts/extensions/testing`,
   which the test task now discovers.
-- The product test checks each editor's resolved tab size; the checkpoint 2
-  gpui test already proves that geometry follows it.
+- The product test checks painted tab stops in open product windows,
+  contributed text frames resolve the `view` fact by their view ID, and
+  teardown removes a lifecycle's setting observers.
 
 - Deliverable: `settings.define(definition)`, `settings.set(key, value,
   scope?)`, `settings.set(values, scope?)`, `settings.get(key, facts?)`,
