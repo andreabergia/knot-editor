@@ -93,6 +93,7 @@ to be rebuilt later:
     or reported by the shell through OSC 7, which needs shell setup (D039).
     Also decide what happens when the directory no longer exists. Processes
     and scrollback stay deferred (D043).
+  - 🚧 [Plan](d127-terminal-working-directory.md)
 
 - **D089 — Project-local settings** (depends on D070, D122)
   - Settings read from a file in the repository, attached to folders rather

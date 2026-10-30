@@ -94,7 +94,8 @@ complete list for that item.
 - **Projects and workspaces:** D070, D084 → D120; D122 → D123; D087 → D125,
   D126; D089 → D125.
 - **Start surface:** D083, D084 → D061.
-- **Terminal:** D063 with or before D041; D121 → D127 → D043.
+- **Terminal:** D063 with or before D041; D121 → D127 → D043; D127, D063 →
+  D128.
 
 ## Deferred register
 
@@ -561,7 +562,18 @@ Keep each primitive generic, so a Helix or Kakoune mode could use it too. The
     as D041 protocols). Then replace the emulator behind the existing
     application-owned session without changing its PTY ownership or
     single-attachment contract.
-  - Order: with or before D041 if libghostty covers its protocols.
+  - Order: with or before D041 if libghostty covers its protocols; before
+    D128.
+
+- **D128 — Terminal working directory from libghostty**
+  - Deferred: D127 reads a terminal's working directory by querying the
+    shell process (`proc_pidinfo` on macOS, `/proc/<pid>/cwd` on Linux),
+    because `alacritty_terminal` does not parse OSC 7. Windows records only
+    the start directory.
+  - Reconsider: When D063 moves the terminal engine to libghostty. Then read
+    the directory from the emulator's OSC 7 state instead of the process,
+    which may also cover Windows and remote shells.
+  - Order: after D127 and D063.
 
 - **D038 — Remote PTYs**
   - Deferred: Local interactive sessions cover current terminal workflows.
