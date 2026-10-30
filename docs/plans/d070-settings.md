@@ -1,6 +1,6 @@
 # D070 — Application settings
 
-Status: 🚧 checkpoints 1–2 done; checkpoint 3 implemented, awaiting review. Item of the
+Status: 🚧 checkpoints 1–3 done; checkpoint 4 next. Item of the
 [daily-driver plan](daily-driver.md#phase-2--foundations).
 
 ## Outcome
@@ -144,62 +144,20 @@ columns, and an `integer` is a JSON integer that fits `i64`. The store's write
 and definition paths carry a `dead_code` allowance outside tests until
 checkpoint 3 gives them product callers.
 
-### 3. Public `settings` API 🔍
+### 3. Public `settings` API ✅
 
-Implemented ✅, review gate pending. Scope decisions:
-
-- A write of the wrong type for a defined key rejects with the host error
-  `SettingTypeMismatch` (details: key, expected), not `TypeError`: only the
-  native store knows the definition, and `TypeError` stays for shape errors
-  JavaScript detects itself, such as a non-text scope fact or a `define`
-  default of the wrong type.
-- `set` with an object of values is atomic: one mismatching value rejects the
-  call and writes nothing.
-- `get` resolves `undefined` for a key that is not defined.
-- Observers fire for the caller's own writes too, and `define` notifies
-  nobody, even when it drops a pending value.
-- Values dropped at definition appear as warnings below the package entries in
-  the extension report, and on stderr.
-- JavaScript numbers arrive as doubles; integral ones within the safe range
-  become JSON integers so they satisfy `integer`.
-- The fake host's own `node:test` tests live in `scripts/extensions/testing`,
-  which the test task now discovers.
-- The product test checks painted tab stops in open product windows,
-  contributed text frames resolve the `view` fact by their view ID, and
-  teardown removes a lifecycle's setting observers.
-
-- Deliverable: `settings.define(definition)`, `settings.set(key, value,
-  scope?)`, `settings.set(values, scope?)`, `settings.get(key, facts?)`,
-  `settings.reset(key, scope?)`, and `settings.observe(key, listener)` in
-  `knot.d.ts`, with mergeable `Settings`, `SettingDefinition`, and
-  `SettingsScope` types and contract doc comments. Matching host operations,
-  the `knot.js` export, bootstrap validation, the in-memory fake host, and a
-  short section in the extension guide. `define`, `set`, and `reset` resolve
-  after the foreground commit. Mismatching pending values appear in the
-  extension report.
-- Validation: handler tests for invalid values, invalid scopes, and
-  `DuplicateSetting`. A product test in which personal config sets an
-  extension key in `pre-init`, a package defines it and reads the value,
-  `post-init` changes it, and the package's observer sees the change. A product test in which personal config sets a global value and a Rust
-  value, and an open Rust editor and a plain-text editor render their tabs
-  accordingly. A product test showing that a package's later write beats an
-  earlier pre-init write, and that Restart Extension leaves values in place. A
-  fake-host test that runs through `node:test`. The extension contract test
-  passes.
-- Review gate: the public API shape and its documentation.
-
-**Implementation context:** host operations are annotated with
-`#[host_operation("...")]` in `src/app/extensions/host/handlers.rs`. Mirror
-`listLanguages` and the language registration handlers near line 2060, and
-`host::declarations` checks the context types at startup. The JavaScript side
-is `src/host/js/knot.js` (exports, mirroring `languages`) and
-`src/host/js/bootstrap.js` (argument validation, mirroring
-`languages.register`). `settings.observe` mirrors the listener registration
-and lifecycle cleanup of buffer-change subscriptions
-(`subscribe_buffer_changes` in `handlers.rs`). Update `docs/schemas/knot.schema.json` if it covers the
-API surface. The fake host is `scripts/extensions/testing/host.ts` and
-`knot.ts`, and `scripts/extensions/contract.test.ts` checks it against the
-declarations. Document in `docs/extension-api.md`.
+`settings.define`, `set`, `get`, `reset`, and `observe` are public; contracts
+live in `knot.d.ts` and the
+[extension guide](../extension-api.md#read-and-write-settings). A write of the
+wrong type for a defined key rejects with the host error `SettingTypeMismatch`
+rather than `TypeError`, because only the native store knows the definition.
+Writing several values is atomic, `get` of an undefined key is `undefined`,
+observers also see their own lifecycle's writes, and `define` notifies nobody.
+Values dropped at definition appear as warnings in the extension report.
+Integral JavaScript numbers within the safe range become JSON integers so they
+satisfy `integer`. Product tests cover the pre-init, package, and post-init
+flow, Restart Extension, painted tab stops in open windows, and observer
+teardown; the fake host's own tests live in `scripts/extensions/testing`.
 
 ### 4. Language file associations setting
 
