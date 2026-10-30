@@ -12,6 +12,8 @@ Current sources of truth:
 - [roadmap.md](roadmap.md) records the prioritized work and the unordered
   register of deferred work.
 - [plans/](plans/) contains active executable slice plans.
+- [reports/](reports/) contains analyses that support deferred roadmap items;
+  remove a report once its item is completed or dropped.
 - [extension-api.md](extension-api.md) is the extension-author guide for setup and common
   workflows; precise API contracts live beside the TypeScript declarations.
 - [development.md](development.md) covers local checks, CI, and the Rust

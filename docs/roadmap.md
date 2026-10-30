@@ -128,15 +128,21 @@ D068 and adds D069–D088.
   - Reconsider: Users need edit history across restarts or branching history.
     Byte-offset view state already survives restarts and project switches.
 
-- **D013 — Piece-table compaction**
-  - Deferred: The add buffer is append-only, and edits other than contiguous
-    typing still add pieces. No real workload has shown unacceptable growth.
-  - Reconsider: Long editing sessions produce measured memory or stabilization
-    problems.
-
-- **D014 — Replaceable line-start index**
-  - Deferred: Linear suffix updates passed prototype workloads.
-  - Reconsider: Real files demonstrate unacceptable edit latency.
+- **D092 — Piece tree text buffer**
+  - Deferred: `TextBuffer` keeps its pieces in a flat `Vec` searched linearly,
+    shifts a flat line-start index on every edit, and copies the piece list
+    for each snapshot. Coalesced typing keeps the piece count low, so
+    measured typing latency is acceptable. Absorbs the former piece-table
+    compaction (D013) and line-start index (D014) items.
+  - Reconsider: Before or together with the first bulk-edit feature, such as
+    Replace (D001), multi-cursor editing, formatting, or language-server edit
+    lists (D067), or when long sessions show measured latency, memory, or
+    stabilization problems. Then follow the
+    [text buffer analysis](reports/text-buffer-structure.md): benchmark the
+    current buffer, store the pieces in a copy-on-write B-tree that summarizes
+    bytes, line breaks, and UTF-16 length, resolve positions through ordered
+    piece locators, and keep the piece semantics, edit log, and `TextBuffer`
+    API unchanged.
 
 - **D015 — URI deduplication across processes**
   - Deferred: The first slice handles identity within one application process.
