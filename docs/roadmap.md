@@ -82,6 +82,10 @@ complete list for that item.
   - D087 → D067, D023
   - D079 → D115 → format on save with D067
   - D114 before D021, which is reconsidered only if D114 falls short.
+  - D064, D068 → D114 → D027; D080 → D109 → D027
+  - D077 → D117 → D067
+  - D071 → D118 → D067, D082
+  - D053 → D119
 - **Find:** D031 → D001, with or after D092.
 - **Package manager:** D087 → D101 → D102 → D103 → D104 → D106;
   D064, D071, D103 → D105 → D106; D106 → D107, D108; D103 → D116.
@@ -354,6 +358,37 @@ complete list for that item.
   - Reconsider: An AI-assisted editing slice is defined.
   - Order: after D087, which gates network access.
 
+- **D117 — Non-modal notifications and progress**
+  - Deferred: Extension messages use the native modal prompt, and native
+    success and progress notices were dropped because their effect is
+    visible. A long-running extension task, such as starting a language
+    server or indexing, has no non-blocking way to report progress or a
+    passing notice.
+  - Reconsider: D067, D085, or another bundled extension runs work that
+    takes seconds. Then add a transient notice and a progress handle with
+    a title, optional percentage, and cancellation, shown through the D077
+    status bar rather than a new surface.
+  - Order: after D077; before D067.
+
+- **D118 — Query-driven picker**
+  - Deferred: `workbench.showPicker` takes a complete item list and filters
+    it locally, which deliberately avoids streaming providers.
+  - Reconsider: A picker's items depend on the query or are too many to
+    send up front, such as workspace symbols, live grep, or Go to File on a
+    large tree. Then add a provider that receives each query with
+    cancellation and returns items, keeping the static list as the common
+    case. A preview of the selected item waits for D109's reveal.
+  - Order: after D071, which settles the shared picker; before D067's
+    workspace symbols and D082 on large trees.
+
+- **D119 — Extension menu and context-menu items**
+  - Deferred: Extension commands reach the palette and keymaps but not the
+    application menus or the context menus of the editor and tabs.
+  - Reconsider: A bundled or installed extension needs a command where users
+    look for it by pointer. Then let a registration place a command in a
+    named menu location, reusing the tree context menus D053 adds.
+  - Order: after D053.
+
 - **D057 — Extension and product localization (i18n)**
   - Deferred: Contributed view titles, tree labels, status text, native prompt
     text, and the bundled registry's own strings are literal English. Extensions
@@ -525,7 +560,7 @@ Keep each primitive generic, so a Helix or Kakoune mode could use it too. The
     define how an extension creates and refreshes the view, attaches per-range
     actions, and how such views behave in closure, recovery, and restoration.
   - Order: after D109, whose cursor and selection access per-range actions
-    need.
+    need, and D114, whose theme decoration keys style its ranges.
 
 - **D054 — Dedicated read-only generated text surface**
   - Deferred: Contributed text frames embed the ordinary editor view over a

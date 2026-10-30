@@ -177,9 +177,9 @@ to be rebuilt later:
   - A native per-window bar showing line:column, the selection size, the
     language (click to open Set Language Mode), line ending, indentation, and
     the dirty state.
-  - Decide whether extensions can contribute items now (useful for Git later)
-    or only after a concrete extension needs it. Shape the layout so adding
-    contributions later doesn't require rebuilding it.
+  - Extensions contribute items: short text with an optional command, ordered
+    within a left or right side. D058's mode indicator and D117's progress
+    need them, and Git will later.
 
 - **D078 — Zoom, font size, and soft wrap** (depends on D070)
   - ⌘+ / ⌘- / ⌘0 zoom the current view or every view (decide which). The base
