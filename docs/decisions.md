@@ -113,6 +113,43 @@ because an extension command's palette title is its name.
 References: [core and buffers](architecture/core-and-buffers.md#syntax-state)
 and [semantic UI](architecture/semantic-ui.md#syntax-highlighting-and-languages).
 
+## Themes
+
+Themes are extension contributions registered like languages: the latest
+registration of a name wins and teardown reveals the previous one, so personal
+config and packages replace themes through the API the bundled `@knot/themes`
+package uses. There is no `extends`: themes are code, so a derived theme
+spreads `themes.get` and changes a few keys, and theme families are just
+several registrations.
+
+Color keys are definitions, like settings: a description and a default per
+appearance, each a color or another key, as VS Code's contributed colors are.
+Native keys live in one Rust table rather than a package, because native
+surfaces paint before packages start and when they fail; the defaults are
+therefore also the fallback for an unregistered selection, so there are no
+separate fallback themes. Extensions define their own keys. Theme maps stay
+open, so a theme can style a package that loads later and a key nobody
+defines is inert, as an undefined setting is. Contributions name color keys
+rather than severity tokens, so an extension can paint a decoration or badge
+in its own key and still follow every theme; `error`, `warning`, and `info`
+decorations paint above other keys so a diagnostic is never hidden.
+
+Selection is the `theme.mode`, `theme.dark`, and `theme.light` settings, so
+it follows the settings rule that later writes win. The theme resolves when
+startup completes and when the selection changes, not on every registration:
+themes rarely change mid-session, and resolving once keeps package load order
+out of what the first frame shows. Select Theme lives in `@knot/themes` and
+replays its choice at start, as any settings UI must (D091), so `post-init`
+still overrides it.
+
+Bundled themes ship in one package rather than one per family: they are small
+palettes over one shared capture mapping, and Select Theme needs one owner.
+They are ports of MIT-licensed themes; Tokyo Night's light variant is enkia's
+Tokyo Night Light rather than tokyonight.nvim's Day, which is Apache-2.0.
+
+References: [semantic UI](architecture/semantic-ui.md#themes-and-color-keys)
+and [extension guide](extension-api.md#register-a-theme-and-define-colors).
+
 ## Anchored ranges and contributions
 
 Keep stable geometry in core and feature, source, lifecycle, and presentation

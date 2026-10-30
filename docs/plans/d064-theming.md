@@ -150,15 +150,19 @@ approved by manual review. `themes.select` persists its setting writes in
 package storage and replays them in `start()`. The command's palette title is
 its name, as for every extension command.
 
-### 5. Remaining bundled themes and documentation
+### 5. Remaining bundled themes and documentation 🚧 awaiting review
 
 Deliverables:
-- Catppuccin Mocha and Latte, Tokyo Night and Tokyo Night Day, Solarized Dark
-  and Light, with their license notices.
-- Durable behavior moved into the architecture references and rationale
-  into `docs/decisions.md` (theme ownership, color definitions and native
-  defaults, open theme maps, selection settings, no `extends`); D055's roadmap entry updated
-  to point at themes; this plan removed and the index item marked ✅.
+- ✅ Catppuccin Mocha and Latte, Tokyo Night and Tokyo Night Light, Solarized
+  Dark and Light, with their license notices in the package `LICENSE`.
+  Tokyo Night's light variant is enkia's MIT Tokyo Night Light rather than
+  tokyonight.nvim's Day, which is Apache-2.0. Solarized keeps its canonical
+  sixteen terminal colors, whose bright colors are the base tones.
+- ✅ Rationale in [decisions](../decisions.md#themes); behavior already in the
+  [semantic UI](../architecture/semantic-ui.md#themes-and-color-keys) reference
+  and the extension guide; D055's roadmap entry points at themes.
+- After approval: this plan removed and the index item marked ✅ in a
+  separate commit.
 
 Validation: the package completeness tests cover the new themes; manual
 review of each theme.
