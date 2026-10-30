@@ -121,28 +121,11 @@ bindings, and its `platform` is always `"macos"`.
 
 ### 3. ✅ Show Keybindings
 
-- A native command lists the effective and shadowed bindings in the shared
-  picker, with owner and scope detail, and runs the accepted command.
-- `BindingRegistry` gains a listing query that returns every slot with its
-  owner, view, and whether it is effective.
-- Validation: registry tests for the listing (effective versus shadowed,
-  owner labels); a product test that the picker opens with the expected rows.
-- Review gate: try the listing with a contributed preset and a personal
-  override.
-- ✅ Done: `keymaps.show` ("Show Keybindings") lists one row per keymap slot:
-  the command title as the label, the display key as the hint, and
-  `<key> · <owner>[ · in <view>]` as the description, so typing a canonical
-  key such as `cmd-s` finds it. Shadowed slots carry "Overridden by
-  <owner>" as detail. The owner is the selected preset's title, the package
-  name, or "personal config" (`extensions::host::lifecycle_label`).
-  `BindingRegistry::listing` shares its winner rule with key resolution.
-- **Implementation context:** `BindingRegistry` in
-  `src/app/commands/keymaps.rs` (`shown_bindings` shows the ranking style).
-  Picker usage is in the native pickers under `src/app/product/`
-  (`language_mode.rs` and `recovery_listing.rs` are small examples). Owner
-  labels come from the extension identity behind
-  `BindingOwner::Extension`. Register the command beside other native product
-  commands in `src/app/product/commands.rs`.
+Approved. `keymaps.show` lists one picker row per keymap slot
+(`src/app/product/show_keybindings.rs`): command title, display key, and
+`<key> · <owner>[ · in <view>]`, with "Overridden by <owner>" on shadowed
+slots; accepting runs the command on the captured target.
+`BindingRegistry::listing` shares its winner rule with key resolution.
 
 ### 4. Menu shortcuts
 
