@@ -168,6 +168,7 @@ impl Element for EditorElement {
             scroll,
             scroll_max,
             vis,
+            tab_size,
             caret,
             selection,
             marked,
@@ -219,6 +220,7 @@ impl Element for EditorElement {
                 view.scroll,
                 max,
                 vis,
+                view.tab_size(model, cx),
                 caret,
                 view.selection_range(),
                 marked,
@@ -286,6 +288,7 @@ impl Element for EditorElement {
                         SharedString::from(line.clone()),
                         font_size,
                         runs,
+                        tab_size,
                     );
                     let x_off = if is_rtl_line(line) {
                         (pane_w - s.width).max(px(0.))
@@ -311,19 +314,19 @@ impl Element for EditorElement {
                     }
                     let rtl_base = is_rtl_line(line_str);
                     let (rx, rw) = if start.0 == end.0 {
-                        let x0 = x_for_index_dir(s, start.1, line_str);
-                        let x1 = x_for_index_dir(s, end.1, line_str);
+                        let x0 = x_for_index_dir(s, start.1, line_str, tab_size);
+                        let x1 = x_for_index_dir(s, end.1, line_str, tab_size);
                         let (lo, hi) = if x0 <= x1 { (x0, x1) } else { (x1, x0) };
                         (lo, hi - lo)
                     } else if *ix == start.0 {
-                        let x0 = x_for_index_dir(s, start.1, line_str);
+                        let x0 = x_for_index_dir(s, start.1, line_str, tab_size);
                         if rtl_base {
                             (px(0.), x0.max(px(0.)))
                         } else {
                             (x0, pane_w - x0)
                         }
                     } else if *ix == end.0 {
-                        let x1 = x_for_index_dir(s, end.1, line_str);
+                        let x1 = x_for_index_dir(s, end.1, line_str, tab_size);
                         if rtl_base {
                             (x1, (pane_w - x1).max(px(0.)))
                         } else {
@@ -378,19 +381,19 @@ impl Element for EditorElement {
                     }
                     let rtl_base = is_rtl_line(line_str);
                     let (rx, rw) = if start.0 == end.0 {
-                        let x0 = x_for_index_dir(s, start.1, line_str);
-                        let x1 = x_for_index_dir(s, end.1, line_str);
+                        let x0 = x_for_index_dir(s, start.1, line_str, tab_size);
+                        let x1 = x_for_index_dir(s, end.1, line_str, tab_size);
                         let (lo, hi) = if x0 <= x1 { (x0, x1) } else { (x1, x0) };
                         (lo, (hi - lo).max(px(2.)))
                     } else if *ix == start.0 {
-                        let x0 = x_for_index_dir(s, start.1, line_str);
+                        let x0 = x_for_index_dir(s, start.1, line_str, tab_size);
                         if rtl_base {
                             (px(0.), x0.max(px(2.)))
                         } else {
                             (x0, pane_w - x0)
                         }
                     } else if *ix == end.0 {
-                        let x1 = x_for_index_dir(s, end.1, line_str);
+                        let x1 = x_for_index_dir(s, end.1, line_str, tab_size);
                         if rtl_base {
                             (x1, (pane_w - x1).max(px(2.)))
                         } else {
@@ -422,7 +425,9 @@ impl Element for EditorElement {
                 let (caret_x, x_off) = shaped
                     .iter()
                     .find(|(ix, _, _, _)| *ix == line_ix)
-                    .map(|(_, s, x_off, line_str)| (x_for_index_dir(s, col, line_str), *x_off))
+                    .map(|(_, s, x_off, line_str)| {
+                        (x_for_index_dir(s, col, line_str, tab_size), *x_off)
+                    })
                     .unwrap_or((px(0.), px(0.)));
                 let top = bounds.origin.y + px(line_ix as f32 * LINE_HEIGHT) - px(scroll);
                 let caret_bounds = Bounds {
@@ -477,6 +482,7 @@ pub(super) type EditorPaintState = (
     f32,
     f32,
     Vec<(usize, String, Vec<TextRun>)>,
+    usize,
     Option<(usize, usize)>,
     Option<((usize, usize), (usize, usize))>,
     Option<((usize, usize), (usize, usize))>,

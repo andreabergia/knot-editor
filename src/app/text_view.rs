@@ -31,10 +31,12 @@ impl TextView {
         cx: &mut Context<Self>,
     ) -> Self {
         let _ = window;
+        let view_id = view_id.into();
         let model = cx.new(|_| BufferModel::from_read_only_text(""));
-        let editor = cx.new(|cx| EditorView::new(model.clone(), cx));
+        let editor =
+            cx.new(|cx| EditorView::for_contributed_view(model.clone(), view_id.clone(), cx));
         Self {
-            view_id: view_id.into(),
+            view_id,
             instance_id: ViewId::new(NEXT_VIEW_ID.fetch_add(1, Ordering::Relaxed)),
             model,
             editor,

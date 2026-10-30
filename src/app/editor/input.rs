@@ -151,15 +151,16 @@ impl EditorView {
             return (line, 0);
         }
         let shaped = self.shape_line(model, line, &text, window, cx);
+        let tab_size = self.tab_size(model, cx);
         let x = p.x - origin.x - self.line_x_offset(&text, shaped.width, text_bounds.size.width);
         let col = text
             .grapheme_indices(true)
             .map(|(start, _)| start)
             .chain(std::iter::once(text.len()))
             .min_by(|a, b| {
-                let a_distance = f32::from((x_for_index_dir(&shaped, *a, &text) - x).abs());
-                let b_distance = f32::from((x_for_index_dir(&shaped, *b, &text) - x).abs());
-                a_distance.total_cmp(&b_distance)
+                let distance =
+                    |index| f32::from((x_for_index_dir(&shaped, index, &text, tab_size) - x).abs());
+                distance(*a).total_cmp(&distance(*b))
             })
             .unwrap_or(0);
         (line, col)
@@ -332,9 +333,10 @@ impl EntityInputHandler for EditorView {
         }
 
         let shaped = self.shape_line(model, line, &line_str, window, cx);
-        let x0 = x_for_index_dir(&shaped, start_col, &line_str);
+        let tab_size = self.tab_size(model, cx);
+        let x0 = x_for_index_dir(&shaped, start_col, &line_str, tab_size);
         let x1 = if start_line == end_line {
-            x_for_index_dir(&shaped, end_col, &line_str)
+            x_for_index_dir(&shaped, end_col, &line_str, tab_size)
         } else {
             element_bounds.size.width
         };

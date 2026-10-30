@@ -14,12 +14,14 @@ use std::sync::Arc;
 use crate::{
     app::{
         completion::CompletionProviderRegistry,
+        languages::{self, LanguageDefinition, LanguageOwner},
+        settings::{ApplicationSettings, EDITOR_TAB_SIZE, SettingsScope},
         syntax::{SyntaxLanguage, SyntaxState},
         theme::{Highlight, Theme},
     },
     host::protocol::{
         BufferHandle, ByteRange, CompletionResponse, CompletionResultItem, DecorationToken,
-        EditorContribution, ExtensionId, ExtensionLifecycleId, GutterToken,
+        EditorContribution, ExtensionId, ExtensionLifecycleId, GutterToken, LanguageInfo,
     },
 };
 
@@ -268,6 +270,102 @@ fn tabs_hit_testing_and_horizontal_reveal_share_geometry(cx: &mut TestAppContext
     });
     cx.refresh().unwrap();
     cx.read(|cx| assert_eq!(editor.read(cx).scroll_x, 0.));
+}
+
+#[gpui::test]
+fn tab_stops_follow_the_settings_for_each_open_view(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        cx.set_global(ApplicationSettings::default());
+        let rust = LanguageDefinition {
+            info: LanguageInfo {
+                id: "rust".into(),
+                name: "Rust".into(),
+                grammar: "rust".into(),
+                file_extensions: Vec::new(),
+                file_names: Vec::new(),
+                interpreters: Vec::new(),
+            },
+            highlights: "(identifier) @variable".into(),
+            injections: String::new(),
+        };
+        let owner = LanguageOwner {
+            extension: ExtensionId::new(1),
+            lifecycle: ExtensionLifecycleId::new(1),
+        };
+        languages::register(owner, rust.compile().unwrap(), cx);
+    });
+    let text = "\tab\tc";
+    let rust_model = cx.new(|_| {
+        let mut model = BufferModel::from_text(text);
+        model.set_language(Some("rust".into()), true);
+        model
+    });
+    let plain_model = cx.new(|_| BufferModel::from_text(text));
+    let plain = cx.new(|cx| EditorView::new(plain_model, cx));
+    let (rust, cx) = cx.add_window_view(|_, cx| EditorView::new(rust_model, cx));
+    cx.refresh().unwrap();
+
+    // The caret after the leading tab, in widths of one column, and the
+    // shaped width of the line.
+    let geometry = |cx: &mut gpui::VisualTestContext, editor: &gpui::Entity<EditorView>| {
+        cx.update(|window, cx| {
+            let view = editor.read(cx);
+            let model = view.model.read(cx);
+            let column = |col| {
+                f32::from(super::layout::x_for_index_dir(
+                    &view.shape_line(model, 0, text, window, cx),
+                    col,
+                    text,
+                    view.tab_size(model, cx),
+                ))
+            };
+            let width = column(2) - column(1);
+            let shaped = view.shape_line(model, 0, text, window, cx).width;
+            (
+                (column(1) / width).round() as usize,
+                (f32::from(shaped) / width).round() as usize,
+            )
+        })
+    };
+    let caret_columns = |cx: &mut gpui::VisualTestContext, editor: &gpui::Entity<EditorView>| {
+        cx.update(|window, cx| {
+            editor.update(cx, |view, cx| {
+                view.cursor_col = 1;
+                let model = view.model.read(cx);
+                let a = view.caret_x(model, window, cx);
+                view.cursor_col = 2;
+                let b = view.caret_x(model, window, cx);
+                (f32::from(a) / f32::from(b - a)).round() as usize
+            })
+        })
+    };
+    assert_eq!(geometry(cx, &rust), (4, 9));
+    assert_eq!(geometry(cx, &plain), (4, 9));
+
+    let set = |cx: &mut gpui::VisualTestContext, value: i64, language: Option<&str>| {
+        cx.update(|_, cx| {
+            cx.global_mut::<ApplicationSettings>()
+                .0
+                .set(
+                    EDITOR_TAB_SIZE,
+                    value.into(),
+                    SettingsScope {
+                        language: language.map(Into::into),
+                        view: None,
+                    },
+                )
+                .unwrap();
+        });
+        cx.run_until_parked();
+    };
+    let painted = cx.read(|cx| rust.read(cx).paint_count);
+    set(cx, 8, None);
+    set(cx, 2, Some("rust"));
+    assert!(cx.read(|cx| rust.read(cx).paint_count) > painted);
+    assert_eq!(geometry(cx, &rust), (2, 7));
+    assert_eq!(caret_columns(cx, &rust), 2);
+    assert_eq!(geometry(cx, &plain), (8, 17));
+    assert_eq!(caret_columns(cx, &plain), 8);
 }
 
 #[gpui::test]
@@ -1009,19 +1107,25 @@ fn layered_runs_keep_tab_and_rtl_geometry(cx: &mut TestAppContext) {
                 .char_indices()
                 .map(|(start, ch)| span(start..start + ch.len_utf8(), "string"))
                 .collect();
-            let plain =
-                shape_editor_line(window, text.into(), px(14.), &runs_for(text, &[], &theme));
+            let plain = shape_editor_line(
+                window,
+                text.into(),
+                px(14.),
+                &runs_for(text, &[], &theme),
+                4,
+            );
             let layered = shape_editor_line(
                 window,
                 text.into(),
                 px(14.),
                 &runs_for(text, &[&layer], &theme),
+                4,
             );
             assert_eq!(layered.width, plain.width, "{text:?}");
             for (index, _) in text.char_indices() {
                 assert_eq!(
-                    x_for_index_dir(&layered, index, text),
-                    x_for_index_dir(&plain, index, text),
+                    x_for_index_dir(&layered, index, text, 4),
+                    x_for_index_dir(&plain, index, text, 4),
                     "{text:?} at {index}"
                 );
             }

@@ -38,7 +38,9 @@ use super::{
     CompletionAccept, CompletionDismiss, CompletionNext, CompletionPrevious, EDITOR_KEY_CONTEXT,
     completion::{CompletionController, CompletionProviderRegistration, CompletionSurface},
     history::{EditGroupKind, EditGrouping, HistoryViewChange, HistoryViewState},
+    languages,
     model::{BufferModel, ContributionSource, ResolvedEditorContribution},
+    settings::{self, ApplicationSettings, SettingsScope},
     theme::{Highlight, Theme},
 };
 
@@ -123,6 +125,9 @@ pub(crate) struct EditorViewState {
 pub struct EditorView {
     element_id: usize,
     rendering: EditorRenderingOptions,
+    /// The `view` fact settings resolve for: `editor` for documents, or the
+    /// contributed view ID of the frame that embeds this view.
+    view_kind: SharedString,
     /// Authoritative document state. Everything below is presentation state
     /// or derived from the model's current revision.
     model: Entity<BufferModel>,
@@ -190,6 +195,7 @@ pub struct EditorView {
     paint_count: u64,
     _model_subscription: Subscription,
     _release_subscription: Subscription,
+    _settings_subscription: Subscription,
 }
 
 impl EditorView {
@@ -309,6 +315,18 @@ impl EditorView {
         Self::with_rendering(model, 0, EditorRenderingOptions::default(), cx)
     }
 
+    /// Build an editor presenting `model` inside the contributed view `kind`.
+    pub(crate) fn for_contributed_view(
+        model: Entity<BufferModel>,
+        kind: impl Into<SharedString>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self {
+            view_kind: kind.into(),
+            ..Self::new(model, cx)
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn new_with_options(
         model: Entity<BufferModel>,
@@ -357,6 +375,11 @@ impl EditorView {
             this.sync_view_position(cx);
             cx.notify();
         });
+        // Settings resolve during layout, so any change only needs a repaint.
+        let settings_subscription = cx.observe_global::<ApplicationSettings>(|this, cx| {
+            this.max_line_width = 0.;
+            cx.notify();
+        });
         let release_subscription = cx.on_release(|this, cx| {
             this.model.update(cx, |model, _| {
                 model.remove_view_position(this.position_range);
@@ -366,6 +389,7 @@ impl EditorView {
         Self {
             element_id,
             rendering,
+            view_kind: EDITOR_KEY_CONTEXT.into(),
             model,
             line_count,
             seen_revision,
@@ -403,6 +427,7 @@ impl EditorView {
             paint_count: 0,
             _model_subscription: model_subscription,
             _release_subscription: release_subscription,
+            _settings_subscription: settings_subscription,
         }
     }
 

@@ -30,7 +30,24 @@ impl EditorView {
         cx: &App,
     ) -> ShapedLine {
         let runs = self.line_runs(model, line, text, cx);
-        shape_editor_line(window, text.to_owned().into(), px(FONT_SIZE), &runs)
+        shape_editor_line(
+            window,
+            text.to_owned().into(),
+            px(FONT_SIZE),
+            &runs,
+            self.tab_size(model, cx),
+        )
+    }
+
+    /// Columns per tab stop for this view's kind and its buffer's language.
+    pub(super) fn tab_size(&self, model: &BufferModel, cx: &App) -> usize {
+        settings::editor_tab_size(
+            &SettingsScope {
+                language: Some(languages::effective_language(model, cx)),
+                view: Some(self.view_kind.to_string()),
+            },
+            cx,
+        )
     }
 
     /// Query the syntax highlights of `lines` at once, so painting and the
@@ -140,7 +157,7 @@ impl EditorView {
     pub(super) fn caret_x(&self, model: &BufferModel, window: &Window, cx: &App) -> Pixels {
         let text = line_text(model, self.cursor_line);
         let shaped = self.shape_line(model, self.cursor_line, &text, window, cx);
-        x_for_index_dir(&shaped, self.cursor_col, &text)
+        x_for_index_dir(&shaped, self.cursor_col, &text, self.tab_size(model, cx))
             + self.line_x_offset(&text, shaped.width, self.text_bounds().size.width)
             + px(self.scroll_x)
     }
@@ -155,15 +172,17 @@ impl EditorView {
     ) -> usize {
         let text = line_text(model, line);
         let shaped = self.shape_line(model, line, &text, window, cx);
+        let tab_size = self.tab_size(model, cx);
         let offset = self.line_x_offset(&text, shaped.width, self.text_bounds().size.width)
             + px(self.scroll_x);
         text.grapheme_indices(true)
             .map(|(i, _)| i)
             .chain(std::iter::once(text.len()))
             .min_by(|a, b| {
-                f32::from((x_for_index_dir(&shaped, *a, &text) + offset - x).abs()).total_cmp(
-                    &f32::from((x_for_index_dir(&shaped, *b, &text) + offset - x).abs()),
-                )
+                let distance = |index| {
+                    f32::from((x_for_index_dir(&shaped, index, &text, tab_size) + offset - x).abs())
+                };
+                distance(*a).total_cmp(&distance(*b))
             })
             .unwrap_or(0)
     }
@@ -182,13 +201,14 @@ impl EditorView {
         }) - px(self.scroll_x)
     }
 }
-/// Four-column tab stops are a rendering projection; source byte offsets stay intact.
-pub(super) fn expand_tabs(text: &str) -> String {
+/// Tab stops every `tab_size` columns are a rendering projection; source byte
+/// offsets stay intact.
+pub(super) fn expand_tabs(text: &str, tab_size: usize) -> String {
     let mut out = String::new();
     let mut column = 0;
     for grapheme in text.graphemes(true) {
         if grapheme == "\t" {
-            let count = 4 - column % 4;
+            let count = tab_size - column % tab_size;
             out.extend(std::iter::repeat_n(' ', count));
             column += count;
         } else {
@@ -204,6 +224,7 @@ pub(super) fn shape_editor_line(
     text: SharedString,
     font_size: Pixels,
     runs: &[TextRun],
+    tab_size: usize,
 ) -> ShapedLine {
     if !text.contains('\t') {
         return window.text_system().shape_line(text, font_size, runs, None);
@@ -214,14 +235,18 @@ pub(super) fn shape_editor_line(
         .map(|run| {
             let end = offset + run.len;
             let mut projected = run.clone();
-            projected.len = expand_tabs(&text[..end]).len() - expand_tabs(&text[..offset]).len();
+            projected.len = expand_tabs(&text[..end], tab_size).len()
+                - expand_tabs(&text[..offset], tab_size).len();
             offset = end;
             projected
         })
         .collect::<Vec<_>>();
-    window
-        .text_system()
-        .shape_line(expand_tabs(&text).into(), font_size, &projected_runs, None)
+    window.text_system().shape_line(
+        expand_tabs(&text, tab_size).into(),
+        font_size,
+        &projected_runs,
+        None,
+    )
 }
 
 /// A highlight over a line-relative byte range.
@@ -342,11 +367,16 @@ pub(super) fn char_is_strong_rtl(ch: char) -> bool {
 /// Uses only public fields: `LineLayout.runs`, `ShapedRun.glyphs`,
 /// `ShapedGlyph.index`, `ShapedGlyph.position`, `LineLayout.width`,
 /// `LineLayout.len`.
-pub(super) fn x_for_index_dir(s: &ShapedLine, index: usize, line_str: &str) -> Pixels {
+pub(super) fn x_for_index_dir(
+    s: &ShapedLine,
+    index: usize,
+    line_str: &str,
+    tab_size: usize,
+) -> Pixels {
     let expanded;
     let (index, line_str) = if line_str.contains('\t') {
-        let mapped = expand_tabs(&line_str[..index]).len();
-        expanded = expand_tabs(line_str);
+        let mapped = expand_tabs(&line_str[..index], tab_size).len();
+        expanded = expand_tabs(line_str, tab_size);
         (mapped, expanded.as_str())
     } else {
         (index, line_str)

@@ -1,6 +1,6 @@
 # D070 — Application settings
 
-Status: 🚧 checkpoint 1 done; checkpoint 2 next. Item of the
+Status: 🚧 checkpoint 1 done; checkpoint 2 implemented, awaiting review. Item of the
 [daily-driver plan](daily-driver.md#phase-2--foundations).
 
 ## Outcome
@@ -132,7 +132,19 @@ language detection move to a setting (checkpoint 4). Rationale is in
 [decisions](../decisions.md#commands-and-keymaps); the keymap rule is in
 [commands](../architecture/commands.md#keymaps).
 
-### 2. Native settings store and `editor.tabSize`
+### 2. Native settings store and `editor.tabSize` 🔍
+
+Implemented ✅, review gate pending. Scope decisions:
+
+- No generation counter: gpui notifies global observers on every mutable
+  access, so editor views observe `ApplicationSettings` directly, drop their
+  cached widest-line width, and repaint.
+- `editor.tabSize` resolves to at least 1 and at most 32 columns, so a stray
+  value cannot divide by zero or expand a tab into megabytes of spaces.
+- An `integer` accepts only JSON integers that fit `i64`; a `number`
+  accepts any JSON number. Checkpoint 3 decides how JavaScript numbers map.
+- Native code alone writes today, so the store's write and definition paths
+  carry a `dead_code` allowance outside tests until the public API lands.
 
 - Deliverable: `src/app/settings.rs` with the definition registry (native
   definitions installed at startup, lifecycle-owned extension definitions),

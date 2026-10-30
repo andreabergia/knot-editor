@@ -122,7 +122,7 @@ impl EditorView {
             let text_bounds = self.text_bounds();
             text_bounds.origin.x - self.bounds.origin.x
                 + self.line_x_offset(&text, shaped.width, text_bounds.size.width)
-                + x_for_index_dir(&shaped, self.cursor_col, &text)
+                + x_for_index_dir(&shaped, self.cursor_col, &text, self.tab_size(model, cx))
         };
         let y = px((line + 1) as f32 * LINE_HEIGHT - self.scroll);
         point(

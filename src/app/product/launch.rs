@@ -411,6 +411,7 @@ pub(crate) fn run(initial_request: Option<OpenRequest>) {
                 cx.background_executor().clone(),
             )),
         ));
+        cx.set_global(crate::app::settings::ApplicationSettings::default());
         cx.set_global(ApplicationWorkbenches(RefCell::new(Vec::new())));
         cx.set_global(ApplicationProtectedClosure(RefCell::new(false)));
         cx.set_global(ApplicationTerminalSessions(RefCell::new(
