@@ -1,6 +1,6 @@
 # D071 — Command palette and shared picker
 
-Status: 🚧 approved, not started. Item of the
+Status: 🚧 in progress. Item of the
 [daily-driver plan](daily-driver.md); depends on D064 (themes, complete).
 
 ## Goal
@@ -92,7 +92,7 @@ Select Theme previews themes live.
 
 ## Checkpoints
 
-### 1. Application state database
+### 1. ✅ Application state database
 
 Deliverables:
 
