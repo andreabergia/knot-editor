@@ -23,6 +23,8 @@ use crate::host::protocol::{ExtensionId, ExtensionLifecycleId};
 
 /// Columns per tab stop in editor views.
 pub(crate) const EDITOR_TAB_SIZE: &str = "editor.tabSize";
+/// Language IDs by file name or `*.extension` pattern, ahead of registrations.
+pub(crate) const FILES_ASSOCIATIONS: &str = "files.associations";
 
 /// The value type a definition accepts.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -31,6 +33,8 @@ pub(crate) enum SettingType {
     Integer,
     Number,
     String,
+    /// A JSON object whose values are strings.
+    StringMap,
 }
 
 impl SettingType {
@@ -40,6 +44,7 @@ impl SettingType {
             "integer" => Self::Integer,
             "number" => Self::Number,
             "string" => Self::String,
+            "stringMap" => Self::StringMap,
             _ => return None,
         })
     }
@@ -50,6 +55,7 @@ impl SettingType {
             Self::Integer => "integer",
             Self::Number => "number",
             Self::String => "string",
+            Self::StringMap => "stringMap",
         }
     }
 
@@ -59,6 +65,9 @@ impl SettingType {
             Self::Integer => value.is_i64(),
             Self::Number => value.is_number(),
             Self::String => value.is_string(),
+            Self::StringMap => value
+                .as_object()
+                .is_some_and(|map| map.values().all(Value::is_string)),
         }
     }
 }
@@ -146,12 +155,22 @@ impl Default for SettingsStore {
 }
 
 fn native_definitions() -> Vec<SettingDefinition> {
-    vec![SettingDefinition {
-        key: EDITOR_TAB_SIZE.into(),
-        value_type: SettingType::Integer,
-        default: 4.into(),
-        description: "Columns per tab stop in editor views".into(),
-    }]
+    vec![
+        SettingDefinition {
+            key: EDITOR_TAB_SIZE.into(),
+            value_type: SettingType::Integer,
+            default: 4.into(),
+            description: "Columns per tab stop in editor views".into(),
+        },
+        SettingDefinition {
+            key: FILES_ASSOCIATIONS.into(),
+            value_type: SettingType::StringMap,
+            default: Value::Object(Default::default()),
+            description: "Language IDs by file name, such as \"Jenkinsfile\", or by \
+                          extension pattern, such as \"*.mdx\", ahead of language registrations"
+                .into(),
+        },
+    ]
 }
 
 impl SettingsStore {
@@ -295,6 +314,20 @@ pub(crate) fn remove_lifecycle(
             .0
             .remove_lifecycle(extension, lifecycle);
     }
+}
+
+/// The unscoped file associations: detection runs per document, before it has
+/// a language or a view, so scoped values never apply.
+pub(crate) fn file_associations(cx: &App) -> serde_json::Map<String, Value> {
+    cx.try_global::<ApplicationSettings>()
+        .and_then(|settings| {
+            settings
+                .0
+                .get(FILES_ASSOCIATIONS, &SettingsScope::default())
+        })
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default()
 }
 
 /// Columns per tab stop for an editor in `context`, within a sane range.

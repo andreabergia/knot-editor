@@ -7,6 +7,10 @@
 //! defines that language, and the latest registration claiming a pattern
 //! decides detection, so removing a registration reveals the previous one.
 //!
+//! The `files.associations` setting maps file names and extension patterns to
+//! language IDs ahead of every registration, so personal config can redirect
+//! detection without replacing a package's language.
+//!
 //! A buffer records a language ID, explicit or detected, independently of
 //! registration: an unregistered ID paints and reports as `plaintext` until
 //! something registers it. Every registration change re-detects open documents whose
@@ -23,6 +27,7 @@ use super::{
     documents::ApplicationDocuments,
     model::BufferModel,
     resource::ResourceUri,
+    settings,
     syntax::{LanguageResolver, SyntaxLanguage, SyntaxLanguageError, SyntaxState},
 };
 
@@ -395,12 +400,59 @@ fn redetect(model: &Entity<BufferModel>, uri: Option<&ResourceUri>, cx: &mut App
         return;
     }
     let file_name = uri.and_then(|uri| uri.as_url().path_segments()?.next_back());
-    let first_line = shebang_line(model.read(cx));
-    let detected = cx
-        .default_global::<ApplicationLanguages>()
-        .registry
-        .detect(file_name, &first_line);
+    let associated = file_name.and_then(|name| associated(&settings::file_associations(cx), name));
+    let detected = associated.or_else(|| {
+        let first_line = shebang_line(model.read(cx));
+        cx.default_global::<ApplicationLanguages>()
+            .registry
+            .detect(file_name, &first_line)
+    });
     model.update(cx, |model, _| model.set_language(detected, false));
+}
+
+/// The language `associations` gives a file called `name`: an exact file
+/// name, then the longest matching `*.extension` pattern, compared
+/// case-insensitively like registered extensions.
+fn associated(
+    associations: &serde_json::Map<String, serde_json::Value>,
+    name: &str,
+) -> Option<String> {
+    let language = |value: &serde_json::Value| value.as_str().map(str::to_owned);
+    if let Some(value) = associations.get(name) {
+        return language(value);
+    }
+    let lowercase = name.to_lowercase();
+    associations
+        .iter()
+        .filter_map(|(pattern, value)| {
+            let extension = pattern.strip_prefix("*.")?.to_lowercase();
+            let stem = lowercase.strip_suffix(&extension)?.strip_suffix('.')?;
+            (!stem.is_empty()).then_some((extension.len(), value))
+        })
+        .max_by_key(|(length, _)| *length)
+        .and_then(|(_, value)| language(value))
+}
+
+/// Follow a change to the file associations setting: re-detect every open
+/// document whose language is not explicit.
+pub(crate) fn associations_changed(cx: &mut App) {
+    for (model, uri) in open_documents(cx) {
+        detect_document(&model, uri.as_ref(), cx);
+    }
+    super::application_observation::changed(cx);
+}
+
+fn open_documents(cx: &App) -> Vec<(Entity<BufferModel>, Option<ResourceUri>)> {
+    cx.try_global::<ApplicationDocuments>()
+        .map(|documents| {
+            documents
+                .0
+                .read(cx)
+                .documents()
+                .map(|document| (document.model().clone(), document.resource_uri().cloned()))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// The first line when it is a shebang, read no further than the limit.
@@ -459,18 +511,7 @@ fn attach(model: &Entity<BufferModel>, registration_changed: bool, cx: &mut App)
 /// happen while the document collection is being updated; the collection
 /// itself only calls `detect_document`, which does not refresh.
 fn refresh(cx: &mut App) {
-    let documents = cx
-        .try_global::<ApplicationDocuments>()
-        .map(|documents| {
-            documents
-                .0
-                .read(cx)
-                .documents()
-                .map(|document| (document.model().clone(), document.resource_uri().cloned()))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    for (model, uri) in &documents {
+    for (model, uri) in &open_documents(cx) {
         redetect(model, uri.as_ref(), cx);
     }
     let models: Vec<_> = cx

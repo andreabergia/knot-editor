@@ -78,10 +78,10 @@ function emptyState() {
     failures: new Map<string, HostErrorCode[]>(),
     replaced: [] as Knot.ReplaceWindowsOptions[],
     languages: [] as Knot.LanguageDefinition[],
-    settingDefinitions: new Map<string, Knot.SettingDefinition>([[
-      "editor.tabSize",
-      { key: "editor.tabSize", type: "integer", default: 4, description: "Columns per tab stop in editor views" },
-    ]]),
+    settingDefinitions: new Map<string, Knot.SettingDefinition>([
+      ["editor.tabSize", { key: "editor.tabSize", type: "integer", default: 4, description: "Columns per tab stop" }],
+      ["files.associations", { key: "files.associations", type: "stringMap", default: {}, description: "Languages by file pattern" }],
+    ]),
     settingValues: [] as FakeSettingValue[],
     settingListeners: [] as { key: string; listener: (key: Knot.SettingKey) => void | Promise<void> }[],
   };
@@ -520,6 +520,8 @@ const settingTypes: Record<Knot.SettingType, (value: unknown) => boolean> = {
   integer: (value) => Number.isSafeInteger(value),
   number: (value) => Number.isFinite(value),
   string: (value) => typeof value === "string",
+  stringMap: (value) => value !== null && typeof value === "object" && !Array.isArray(value)
+    && Object.values(value).every((entry) => typeof entry === "string"),
 };
 
 function settingScope(scope: Knot.SettingsScope | undefined) {

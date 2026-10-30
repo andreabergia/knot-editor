@@ -2235,7 +2235,9 @@ impl HostArguments for SettingDefinition {
         Ok(Self {
             key: reader.text(2, "setting key must be text")?,
             value_type: SettingType::parse(&reader.text(3, "setting type must be text")?).ok_or(
-                DecodeError::Type("setting type must be boolean, integer, number, or string"),
+                DecodeError::Type(
+                    "setting type must be boolean, integer, number, string, or stringMap",
+                ),
             )?,
             default: setting_value(reader.command_arguments(4)?),
             description: reader.text(5, "setting description must be text")?,
@@ -2315,11 +2317,18 @@ async fn set_settings(context: HostContext, arguments: SettingWrites) -> Result<
                 .check(key, value)
                 .map_err(|error| SettingError::from_settings(error, key))?;
         }
+        let keys = arguments
+            .values
+            .iter()
+            .map(|(key, _)| key.clone())
+            .collect::<Vec<_>>();
         for (key, value) in arguments.values {
             settings
                 .set(&key, value, arguments.scope.clone())
                 .expect("checked setting value");
-            host.setting_changed(&key);
+        }
+        for key in keys {
+            host.setting_changed(&key, cx);
         }
         Ok(())
     })?
@@ -2371,7 +2380,7 @@ async fn reset_setting(context: HostContext, arguments: SettingLookup) -> Result
                 .0
                 .reset(&arguments.key, &arguments.scope)
         {
-            host.setting_changed(&arguments.key);
+            host.setting_changed(&arguments.key, cx);
         }
     })
 }
