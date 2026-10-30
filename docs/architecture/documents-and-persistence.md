@@ -156,8 +156,10 @@ URI, after config and extension startup and before it restores the
 [recorded windows](workbench-and-lifecycle.md#native-window-hot-exit) and opens
 queued requests. Restored windows present restored documents by identity, and
 queued launch requests deduplicate against both; restored documents that no
-window presents open in the first window. Older duplicates and unreadable baselines remain in the store, and the
-first window's status points at File › Recover Unsaved Documents…. Retained
+window presents open in the first window. Older duplicates and unreadable
+baselines remain in the store, and the first window shows a notice pointing at
+File › Recover Unsaved Documents…; an unavailable store is reported the same
+way. Retained
 captures are left to their owners and not counted. That native command lists
 every leftover automatic snapshot and every retained capture, labelled with its
 owner, in the window's transient slot and restores or discards the selection.

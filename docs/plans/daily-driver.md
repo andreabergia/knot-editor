@@ -56,17 +56,13 @@ to be rebuilt later:
 
 ## Phase 1 — Clean slate
 
-- **D069 — Remove demo and test-only commands**
-  - Remove Move Terminal to New Window and the four Move Explorer to … commands
-    (D072 replaces these with generic tool placement). Also confirm that
-    `fixture.*`, `knot.fixture.*`, and `@example` commands can never reach a
-    product run.
-  - Decide what stays as developer tooling (Show Extension Startup Report,
-    Restart Extension…, Toggle Terminal Mouse Reporting). Give those commands a
-    consistent title prefix.
-  - Tests that relied on removed commands drive the same behavior through the
-    operation directly.
-  - 🚧 Planned in [d069-clean-slate.md](d069-clean-slate.md).
+- ✅ **D069 — Remove demo and test-only commands**
+  - Move Terminal to New Window and the explorer placement commands are gone;
+    tab drag moves terminals, and `ProductShell::place_tool` is the seam for
+    D072's Move Tool to Dock…. Developer tooling carries a `Developer:` title
+    prefix. The window toolbar and status string are gone: failures use a
+    warning prompt, and a failed package startup opens the extension report
+    ([workbench and lifecycle](../architecture/workbench-and-lifecycle.md#product-application-launch)).
 
 ## Phase 2 — Foundations
 

@@ -15,12 +15,20 @@ queued request in its own window. Recovered documents that no restored window
 presents go to the first opened window, so text is never hidden. With nothing
 restored or requested one empty window opens. The last request window is
 focused, else the previously active restored window, and the app activates.
+When a package failed to start, each launch window opens the extension startup
+report once; windows opened later do not.
 `ApplicationSnapshot.launched` and a one-time `launched` event then tell
 extensions that startup windows exist; extensions activate before any window
 does. A reopen after launch opens an empty window and restores nothing. Fatal
 config failure discards the queue and opens a focused diagnostic window with
 Copy and Quit; product windows remain unavailable for that launch, and nothing
 is recorded.
+
+A product window has no status line. A native operation whose failure leaves no
+other visible effect, such as Save, Open, Add Folder, recovery, or creating a
+transfer window, reports it through a native warning prompt that needs no
+answer. Successful and in-progress operations show only their effect.
+Extension calls receive the failure as their result instead of a prompt.
 
 ## Editor views
 

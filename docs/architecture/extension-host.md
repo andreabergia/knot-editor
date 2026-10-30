@@ -50,7 +50,9 @@ may require bundled ones. A bundled package failure is reported and fails its
 dependents like any other package, without stopping product startup.
 
 The application retains an ordered startup report, publishing outcomes as they
-become known so one pending entry does not hide earlier failures. Failed or
+become known so one pending entry does not hide earlier failures. The
+Developer: Show Extension Startup Report command presents it, and launch opens
+it when a package failed. Failed or
 cancelled entry rolls back its runtime and foreground registrations before the
 next package starts; independent packages remain eligible.
 
@@ -76,7 +78,7 @@ Window admission and fatal diagnostics belong to
 
 ### Restarting a package
 
-The native Restart Extension command lists every bundled and installed package in
+The native Developer: Restart Extension… command lists every bundled and installed package in
 the startup report, including failed ones, in the window's transient picker. A
 restart performs a terminating unload of the package's current lifecycle, so a
 stuck turn stops and its queued commands cancel, and runs the shared foreground

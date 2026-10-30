@@ -573,6 +573,20 @@ path; the field owns only ordinary movement, selection, and pointer handling.
 
 Reference: [semantic UI](architecture/semantic-ui.md).
 
+## Product window chrome and failure notices
+
+A product window shows only product surfaces. The prototype toolbar duplicated
+commands, menus, and keys, and its free-form status string was the only place
+some failures appeared. Native failures with no other visible effect now use the
+native message prompt, at warning level, that extension messages already use.
+Success and progress notices were dropped because their effect is visible.
+Extension calls get the failure as their result, so a package decides whether
+to tell the user. A failed package startup opens the startup report in each
+launch window, because nothing else passively shows that a package failed.
+Developer tooling shares a `Developer:` title prefix and stays out of the menus.
+
+Reference: [workbench and lifecycle](architecture/workbench-and-lifecycle.md#product-application-launch).
+
 ## Generated text surfaces
 
 Use ordinary buffers and views when generated output benefits from text
