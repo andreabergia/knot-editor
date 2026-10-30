@@ -193,7 +193,7 @@ declarations live in `src/app/product/commands.rs`, `src/app/editor/`, and
 
 Review gate: palette content and descriptions reviewed in the running app.
 
-### 4. Recently used commands
+### 4. ✅ Recently used commands
 
 Deliverables:
 

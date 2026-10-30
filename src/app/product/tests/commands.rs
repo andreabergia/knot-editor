@@ -448,3 +448,47 @@ keybinding("ctrl-alt-f", "fixture.described");
         assert!(save.hint.is_some());
     });
 }
+
+#[gpui::test]
+fn confirming_a_palette_command_ranks_it_first_next_time(cx: &mut TestAppContext) {
+    let documents = install_globals(cx);
+    let state_dir = tempfile::tempdir().unwrap();
+    let database = crate::app::record_store::StateDatabase::open(
+        state_dir.path().join("state.sqlite3"),
+        cx.background_executor.clone(),
+    );
+    cx.update(|cx| {
+        cx.set_global(crate::app::command_history::ApplicationCommandHistory(
+            crate::app::command_history::CommandHistory::open(&database),
+        ))
+    });
+    let document = cx.update(|cx| create_untitled_document(&documents, cx));
+    let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+    let (shell, window) = product_window(document, model, cx);
+    let first_command = |cx: &mut TestAppContext| {
+        cx.update_window(window, |_, window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.focus_active_surface(window, cx);
+                shell.open_command_palette(window, cx);
+                let palette = shell.command_palette.as_ref().unwrap();
+                let entry = palette.picker().read(cx).selected_entry().unwrap();
+                palette.command(entry).name.to_string()
+            })
+        })
+        .unwrap()
+    };
+    assert_ne!(first_command(cx), "workbench.split-horizontal");
+    cx.refresh().unwrap();
+    cx.simulate_keystrokes(window, "s p l i t r i g h t enter");
+    cx.run_until_parked();
+    cx.read(|cx| assert!(shell.read(cx).command_palette.is_none()));
+    assert_eq!(first_command(cx), "workbench.split-horizontal");
+    cx.read(|cx| {
+        assert_eq!(
+            cx.global::<crate::app::command_history::ApplicationCommandHistory>()
+                .0
+                .recent(),
+            ["workbench.split-horizontal"]
+        );
+    });
+}

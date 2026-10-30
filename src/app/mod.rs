@@ -7,6 +7,7 @@ use crate::host::protocol::CommandOutcome;
 use gpui::*;
 
 mod application_observation;
+mod command_history;
 mod command_palette;
 mod commands;
 mod completion;

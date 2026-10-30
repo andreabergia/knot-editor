@@ -45,6 +45,7 @@ pub(crate) use launch::{open_product_window, run};
 
 use super::{
     CommandCompletion, CommandPalette,
+    command_history::ApplicationCommandHistory,
     commands::dispatch::{
         ApplicationProductCommands, CLOSE_TAB_COMMAND, CLOSE_WINDOW_COMMAND, COPY_COMMAND,
         CUT_COMMAND, NEW_COMMAND, NEW_TERMINAL_COMMAND, NEW_WINDOW_COMMAND, OPEN_COMMAND,
@@ -947,6 +948,17 @@ impl ProductShell {
         self.open_command_palette_from(origin, window, cx);
     }
 
+    fn record_palette_command(name: &str, cx: &App) {
+        let Some(history) = cx.try_global::<ApplicationCommandHistory>() else {
+            return;
+        };
+        let catalog = Self::command_dispatcher(cx).read(cx).catalog();
+        let catalog = catalog.borrow();
+        history
+            .0
+            .record(name, |recent| catalog.resolve(recent).is_ok());
+    }
+
     /// The keymap view kind of a captured target's focused tab; contributed
     /// frames and native tools share this path instead of a shell-level
     /// special case.
@@ -979,13 +991,19 @@ impl ProductShell {
                     .shown_bindings(Self::target_view_kind(&origin, cx).as_deref())
             })
             .unwrap_or_default();
-        let palette = CommandPalette::new(definitions, &bindings, origin, cx);
+        let recent = cx
+            .try_global::<ApplicationCommandHistory>()
+            .map(|history| history.0.recent())
+            .unwrap_or_default();
+        let palette = CommandPalette::new(definitions, &bindings, &recent, origin, cx);
         let picker = palette.picker().clone();
         let subscription = cx.subscribe(&picker, |this, _picker, event: &PickerEvent, cx| {
             let palette = this.command_palette.take();
             this.command_palette_subscription = None;
             if let (PickerEvent::Confirmed(entry), Some(palette)) = (event, palette) {
-                this.dispatch_command(palette.command(*entry), palette.origin(), cx);
+                let command = palette.command(*entry);
+                Self::record_palette_command(command.name.as_ref(), cx);
+                this.dispatch_command(command, palette.origin(), cx);
             }
             this.refocus_active_transient(cx);
             cx.notify();
