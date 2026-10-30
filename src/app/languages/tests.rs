@@ -14,17 +14,12 @@ const MARKDOWN_INJECTIONS: &str = r#"
   (code_fence_content) @injection.content)
 "#;
 
-fn owner(priority: LanguagePriority, extension: u64) -> LanguageOwner {
+fn owner(extension: u64) -> LanguageOwner {
     LanguageOwner {
-        priority,
         extension: ExtensionId::new(extension),
         lifecycle: ExtensionLifecycleId::new(1),
     }
 }
-
-const BUNDLED: LanguagePriority = LanguagePriority::Bundled;
-const INSTALLED: LanguagePriority = LanguagePriority::Installed;
-const PERSONAL: LanguagePriority = LanguagePriority::Personal;
 
 fn definition(id: &str, name: &str) -> LanguageDefinition {
     LanguageDefinition {
@@ -64,45 +59,30 @@ fn names(registry: &LanguageRegistry) -> Vec<(String, String)> {
 }
 
 #[test]
-fn higher_owners_define_a_language_and_removal_reveals_the_next() {
+fn the_latest_registration_defines_a_language_and_removal_reveals_the_previous() {
     let mut registry = LanguageRegistry::default();
-    registry.register(
-        owner(PERSONAL, 3),
-        definition("rust", "Personal").compile().unwrap(),
-    );
-    registry.register(
-        owner(BUNDLED, 1),
-        definition("rust", "Bundled").compile().unwrap(),
-    );
-    let installed = registry.register(
-        owner(INSTALLED, 2),
-        definition("rust", "Installed").compile().unwrap(),
-    );
-    registry.register(owner(BUNDLED, 1), definition("go", "Go").compile().unwrap());
+    registry.register(owner(1), definition("rust", "First").compile().unwrap());
+    let second = registry.register(owner(2), definition("rust", "Second").compile().unwrap());
+    registry.register(owner(3), definition("rust", "Third").compile().unwrap());
+    registry.register(owner(1), definition("go", "Go").compile().unwrap());
     assert_eq!(
         names(&registry),
-        [
-            ("go".into(), "Go".into()),
-            ("rust".into(), "Personal".into())
-        ]
+        [("go".into(), "Go".into()), ("rust".into(), "Third".into())]
     );
-    let personal = registry.resolve("rust").unwrap();
-    assert!(Arc::ptr_eq(&personal, &registry.resolve("rust").unwrap()));
+    let third = registry.resolve("rust").unwrap();
+    assert!(Arc::ptr_eq(&third, &registry.resolve("rust").unwrap()));
 
     assert!(registry.remove_lifecycle(ExtensionId::new(3), ExtensionLifecycleId::new(1)));
-    assert_eq!(names(&registry)[1].1, "Installed");
-    assert!(!Arc::ptr_eq(&personal, &registry.resolve("rust").unwrap()));
+    assert_eq!(names(&registry)[1].1, "Second");
+    assert!(!Arc::ptr_eq(&third, &registry.resolve("rust").unwrap()));
     // Only the owner can remove a registration.
-    assert!(!registry.unregister(ExtensionId::new(1), ExtensionLifecycleId::new(1), installed));
-    assert!(registry.unregister(ExtensionId::new(2), ExtensionLifecycleId::new(1), installed));
-    assert_eq!(names(&registry)[1].1, "Bundled");
-    assert!(!registry.unregister(ExtensionId::new(2), ExtensionLifecycleId::new(1), installed));
+    assert!(!registry.unregister(ExtensionId::new(1), ExtensionLifecycleId::new(1), second));
+    assert!(registry.unregister(ExtensionId::new(2), ExtensionLifecycleId::new(1), second));
+    assert_eq!(names(&registry)[1].1, "First");
+    assert!(!registry.unregister(ExtensionId::new(2), ExtensionLifecycleId::new(1), second));
 
-    // A later registration wins within one owner kind.
-    registry.register(
-        owner(BUNDLED, 4),
-        definition("rust", "Later").compile().unwrap(),
-    );
+    // A restarted owner registers again and wins.
+    registry.register(owner(4), definition("rust", "Later").compile().unwrap());
     assert_eq!(names(&registry)[1].1, "Later");
 }
 
@@ -136,7 +116,7 @@ fn detection_prefers_names_then_longest_extensions_then_interpreters() {
         claiming("python", &["py"], &[], &["python"]),
         claiming("shellscript", &["sh", "bashrc"], &[], &["bash", "sh"]),
     ] {
-        registry.register(owner(BUNDLED, 1), definition.compile().unwrap());
+        registry.register(owner(1), definition.compile().unwrap());
     }
     let detect = |name: Option<&str>, first_line: &str| registry.detect(name, first_line);
     assert_eq!(detect(Some("main.TS"), ""), Some("typescript".into()));
@@ -165,30 +145,29 @@ fn detection_prefers_names_then_longest_extensions_then_interpreters() {
     assert_eq!(detect(None, "# not a shebang"), None);
     assert_eq!(detect(Some("notes.txt"), ""), None);
 
-    // Precedence beats a longer extension of a lower owner.
+    // A longer extension beats a later registration of a shorter one.
     registry.register(
-        owner(PERSONAL, 3),
-        claiming("personal-ts", &["ts"], &[], &[])
-            .compile()
-            .unwrap(),
+        owner(3),
+        claiming("later-ts", &["ts"], &[], &[]).compile().unwrap(),
     );
     assert_eq!(
         registry.detect(Some("index.d.ts"), ""),
-        Some("personal-ts".into())
+        Some("typescript-declarations".into())
+    );
+    assert_eq!(
+        registry.detect(Some("index.ts"), ""),
+        Some("later-ts".into())
     );
 }
 
 #[test]
-fn the_highest_registration_claiming_a_pattern_decides_detection() {
+fn the_latest_registration_claiming_a_pattern_decides_detection() {
     let mut registry = LanguageRegistry::default();
     registry.register(
-        owner(INSTALLED, 2),
-        claiming("c", &["h"], &[], &[]).compile().unwrap(),
-    );
-    registry.register(
-        owner(BUNDLED, 1),
+        owner(1),
         claiming("cpp", &["h", "hpp"], &[], &[]).compile().unwrap(),
     );
+    registry.register(owner(2), claiming("c", &["h"], &[], &[]).compile().unwrap());
     assert_eq!(registry.detect(Some("a.h"), ""), Some("c".into()));
     assert_eq!(registry.detect(Some("a.hpp"), ""), Some("cpp".into()));
     registry.remove_lifecycle(ExtensionId::new(2), ExtensionLifecycleId::new(1));
@@ -199,7 +178,7 @@ fn the_highest_registration_claiming_a_pattern_decides_detection() {
 fn injections_resolve_by_id_case_insensitively_or_by_extension() {
     let mut registry = LanguageRegistry::default();
     registry.register(
-        owner(BUNDLED, 1),
+        owner(1),
         claiming("rust", &["rs"], &[], &[]).compile().unwrap(),
     );
     let resolver = registry.resolver();
@@ -251,7 +230,7 @@ fn documents_detect_on_open_and_follow_registration_changes(cx: &mut TestAppCont
     let before = persisted(&documents, "mem://workspace/main.rs", "fn main() {}", cx);
     assert_eq!(state(&before, cx), (None, false, false));
 
-    let rust = register(cx, owner(BUNDLED, 1), claiming("rust", &["rs"], &[], &[]));
+    let rust = register(cx, owner(1), claiming("rust", &["rs"], &[], &[]));
     assert_eq!(state(&before, cx), (Some("rust".into()), false, true));
     let after = persisted(&documents, "mem://workspace/lib.rs", "", cx);
     assert_eq!(state(&after, cx), (Some("rust".into()), false, true));
@@ -269,15 +248,11 @@ fn documents_detect_on_open_and_follow_registration_changes(cx: &mut TestAppCont
         super::set_document_language(&before, None, Some("other".into()), cx);
     });
     assert_eq!(state(&before, cx), (Some("other".into()), true, false));
-    let other = register(
-        cx,
-        owner(INSTALLED, 2),
-        claiming("other", &["rs"], &[], &[]),
-    );
+    let other = register(cx, owner(2), claiming("other", &["rs"], &[], &[]));
     assert_eq!(state(&before, cx), (Some("other".into()), true, true));
     assert_eq!(state(&after, cx).0, Some("other".into()));
 
-    // Removal reveals the bundled claim and drops syntax for the now
+    // Removal reveals the earlier claim and drops syntax for the now
     // unregistered explicit language.
     cx.update(|cx| {
         assert!(super::unregister(
@@ -303,8 +278,8 @@ fn documents_detect_on_open_and_follow_registration_changes(cx: &mut TestAppCont
 #[gpui::test]
 fn save_as_redetects_unless_the_language_is_explicit(cx: &mut TestAppContext) {
     let documents = install(cx);
-    register(cx, owner(BUNDLED, 1), claiming("rust", &["rs"], &[], &[]));
-    register(cx, owner(BUNDLED, 1), claiming("python", &["py"], &[], &[]));
+    register(cx, owner(1), claiming("rust", &["rs"], &[], &[]));
+    register(cx, owner(1), claiming("python", &["py"], &[], &[]));
     for explicit in [false, true] {
         let model = cx.new(|_| BufferModel::from_text("x = 1"));
         let id = documents.update(cx, |documents, cx| {
@@ -338,11 +313,7 @@ fn save_as_redetects_unless_the_language_is_explicit(cx: &mut TestAppContext) {
 #[gpui::test]
 fn plain_save_keeps_the_detected_language(cx: &mut TestAppContext) {
     let documents = install(cx);
-    register(
-        cx,
-        owner(BUNDLED, 1),
-        claiming("python", &[], &[], &["python3"]),
-    );
+    register(cx, owner(1), claiming("python", &[], &[], &["python3"]));
     let model = cx.new(|_| BufferModel::from_text("#!/usr/bin/env python3\n"));
     let uri = ResourceUri::parse("mem://workspace/run").unwrap();
     let id = documents.update(cx, |documents, cx| {
@@ -382,7 +353,7 @@ fn injecting_languages_reparse_when_registrations_change(cx: &mut TestAppContext
     markdown.info.grammar = "markdown".into();
     markdown.highlights = "(fenced_code_block) @markup.raw.block".into();
     markdown.injections = MARKDOWN_INJECTIONS.into();
-    register(cx, owner(BUNDLED, 1), markdown);
+    register(cx, owner(1), markdown);
     let text = "```rust\nlet x = 1;\n```\n";
     let model = persisted(&documents, "mem://workspace/README.md", text, cx);
     let unchanged = persisted(&documents, "mem://workspace/main.rs", "", cx);
@@ -396,7 +367,7 @@ fn injecting_languages_reparse_when_registrations_change(cx: &mut TestAppContext
             .all(|(_, highlight)| *highlight == Highlight::resolve("markup.raw.block").unwrap())
     );
 
-    register(cx, owner(BUNDLED, 1), claiming("rust", &["rs"], &[], &[]));
+    register(cx, owner(1), claiming("rust", &["rs"], &[], &[]));
     let rust_generation = unchanged.read_with(cx, |model, _| model.syntax_generation());
     assert!(rust_generation.is_some());
     cx.run_until_parked();
@@ -407,7 +378,7 @@ fn injecting_languages_reparse_when_registrations_change(cx: &mut TestAppContext
             .any(|(range, highlight)| *highlight == variable && &text[range.clone()] == "x")
     );
     // A registration a language cannot inject keeps its parse.
-    register(cx, owner(BUNDLED, 1), claiming("python", &["py"], &[], &[]));
+    register(cx, owner(1), claiming("python", &["py"], &[], &[]));
     assert_eq!(
         unchanged.read_with(cx, |model, _| model.syntax_generation()),
         rust_generation
@@ -420,6 +391,6 @@ fn buffers_outside_documents_keep_a_fixed_language(cx: &mut TestAppContext) {
     let model = cx.new(|_| BufferModel::from_read_only_text("fn main() {}"));
     cx.update(|cx| super::set_language(&model, "rust".into(), cx));
     assert_eq!(state(&model, cx), (Some("rust".into()), true, false));
-    register(cx, owner(BUNDLED, 1), claiming("rust", &["rs"], &[], &[]));
+    register(cx, owner(1), claiming("rust", &["rs"], &[], &[]));
     assert_eq!(state(&model, cx), (Some("rust".into()), true, true));
 }

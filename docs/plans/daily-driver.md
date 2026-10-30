@@ -96,7 +96,7 @@ to be rebuilt later:
   - Commands gain an optional `description`, for native commands and in
     extension registration.
   - Each row shows the title, the description, and the effective binding,
-    resolved through the keymap's personal > extension > native precedence.
+    resolved through the keymap.
     Chorded bindings render readably.
   - One fuzzy matcher with match highlighting, shared by the palette and
     `workbench.showPicker`. Recently used commands rank first.
@@ -265,7 +265,7 @@ to be rebuilt later:
   - Native code evaluates the rules with the `ignore` crate, which gives the
     same semantics as ripgrep. Hot native paths (watching, enumeration,
     listings) therefore never call into JavaScript.
-  - Extensions contribute extra rules through an owner-precedence
+  - Extensions contribute extra rules through a lifecycle-owned
     registration, like languages. They can query whether a path is ignored,
     and read the effective rules to pass to external tools (`rg --glob`).
     Decide whether the defaults live in a tiny bundled package or in D070

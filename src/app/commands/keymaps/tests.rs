@@ -53,9 +53,9 @@ fn resolved(registry: &BindingRegistry, key: &str, view: Option<&str>) -> Option
 }
 
 #[test]
-fn personal_global_beats_editor_default_and_editor_unbind_leaves_terminal_binding() {
+fn extension_global_beats_editor_default_and_editor_unbind_leaves_terminal_binding() {
     let mut registry = BindingRegistry::new();
-    let personal = BindingOwner::Personal(ExtensionId::new(1), ExtensionLifecycleId::new(1));
+    let personal = BindingOwner::Extension(ExtensionId::new(1), ExtensionLifecycleId::new(1));
     registry
         .set(
             BindingOwner::Native,
@@ -94,10 +94,10 @@ fn personal_global_beats_editor_default_and_editor_unbind_leaves_terminal_bindin
 }
 
 #[test]
-fn owner_replacement_removal_and_lifecycle_cleanup_reveal_lower_sources() {
+fn owner_replacement_removal_and_lifecycle_cleanup_reveal_earlier_writes() {
     let mut registry = BindingRegistry::new();
     let extension = BindingOwner::Extension(ExtensionId::new(2), ExtensionLifecycleId::new(1));
-    let personal = BindingOwner::Personal(ExtensionId::new(3), ExtensionLifecycleId::new(1));
+    let personal = BindingOwner::Extension(ExtensionId::new(3), ExtensionLifecycleId::new(1));
     registry
         .set(BindingOwner::Native, "cmd-a", None, Some(command("native")))
         .unwrap();
@@ -130,10 +130,10 @@ fn owner_replacement_removal_and_lifecycle_cleanup_reveal_lower_sources() {
 }
 
 #[test]
-fn shadowed_source_changes_update_the_one_active_map_only_when_visible() {
+fn shadowed_writes_update_the_one_active_map_only_when_visible() {
     let mut registry = BindingRegistry::new();
     let extension = BindingOwner::Extension(ExtensionId::new(2), ExtensionLifecycleId::new(1));
-    let personal = BindingOwner::Personal(ExtensionId::new(3), ExtensionLifecycleId::new(1));
+    let personal = BindingOwner::Extension(ExtensionId::new(3), ExtensionLifecycleId::new(1));
     assert!(
         registry
             .set(extension, "cmd-a", None, Some(command("extension")))
@@ -144,12 +144,25 @@ fn shadowed_source_changes_update_the_one_active_map_only_when_visible() {
             .set(personal, "cmd-a", None, Some(command("personal")))
             .unwrap()
     );
+    // A native default beneath extension bindings leaves the active map
+    // unchanged.
     assert!(
         !registry
-            .set(extension, "cmd-a", None, Some(command("updated")))
+            .set(BindingOwner::Native, "cmd-a", None, Some(command("native")))
             .unwrap()
     );
     assert_eq!(registry.keys(), vec![canonical_key("cmd-a").unwrap()]);
+    // A later write beats an earlier owner's, and removal reveals it again.
+    assert!(
+        registry
+            .set(extension, "cmd-a", None, Some(command("updated")))
+            .unwrap()
+    );
+    assert_eq!(
+        resolved(&registry, "cmd-a", Some("editor")).as_deref(),
+        Some("updated")
+    );
+    assert!(registry.remove_owner(extension));
     assert_eq!(
         resolved(&registry, "cmd-a", Some("editor")).as_deref(),
         Some("personal")
@@ -157,10 +170,8 @@ fn shadowed_source_changes_update_the_one_active_map_only_when_visible() {
     assert!(registry.remove_owner(personal));
     assert_eq!(
         resolved(&registry, "cmd-a", Some("editor")).as_deref(),
-        Some("updated")
+        Some("native")
     );
-    assert!(registry.remove_owner(extension));
-    assert!(registry.keys().is_empty());
 }
 
 #[test]
@@ -291,7 +302,7 @@ fn gpui_contexts_limit_scoped_prefixes_and_exclude_palette_input() {
             ),
         ]
     );
-    let personal = BindingOwner::Personal(ExtensionId::new(0), ExtensionLifecycleId::new(1));
+    let personal = BindingOwner::Extension(ExtensionId::new(0), ExtensionLifecycleId::new(1));
     registry
         .set(personal, "cmd-k right", None, Some(command("global")))
         .unwrap();
@@ -307,7 +318,7 @@ fn gpui_contexts_limit_scoped_prefixes_and_exclude_palette_input() {
 #[test]
 fn unbound_keys_do_not_install_actions_in_their_scope() {
     let mut registry = BindingRegistry::new();
-    let personal = BindingOwner::Personal(ExtensionId::new(0), ExtensionLifecycleId::new(1));
+    let personal = BindingOwner::Extension(ExtensionId::new(0), ExtensionLifecycleId::new(1));
     registry.set(personal, "a", Some("editor"), None).unwrap();
     assert!(registry.gpui_bindings().is_empty());
 
@@ -331,7 +342,7 @@ fn rebuilt_map_retains_fixed_config_error_binding(cx: &mut TestAppContext) {
     cx.update(install);
     let quit_key = if cfg!(windows) { "ctrl-q" } else { "cmd-q" };
     cx.update(|cx| {
-        let owner = BindingOwner::Personal(ExtensionId::new(0), ExtensionLifecycleId::new(1));
+        let owner = BindingOwner::Extension(ExtensionId::new(0), ExtensionLifecycleId::new(1));
         assert!(
             cx.global_mut::<ApplicationKeymaps>()
                 .0
@@ -359,7 +370,7 @@ fn rebuilt_map_retains_fixed_config_error_binding(cx: &mut TestAppContext) {
 #[test]
 fn batch_is_ordered_atomic_and_reports_only_effective_changes() {
     let mut registry = BindingRegistry::new();
-    let owner = BindingOwner::Personal(ExtensionId::new(0), ExtensionLifecycleId::new(1));
+    let owner = BindingOwner::Extension(ExtensionId::new(0), ExtensionLifecycleId::new(1));
     let set = |name: &str| KeybindingMutation::Set {
         key: "cmd-c".into(),
         view: None,

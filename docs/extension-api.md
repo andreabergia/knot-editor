@@ -230,10 +230,9 @@ extension, as Markdown fences do.
 Queries compile before `register` resolves: an unknown grammar rejects
 `UnknownGrammar` and a bad query `InvalidQuery`, with the query, message, row,
 and column in `details`. Register in activation so restored documents highlight
-from their first frame. A registration with the same ID as a bundled one
-replaces it, and personal config outranks installed packages, which outrank
-bundled ones, for both IDs and file patterns. The bundled `@knot/languages`
-package is a complete example.
+from their first frame. The latest registration of an ID or file pattern
+wins, so personal config replaces a package's language from `post-init`. The
+bundled `@knot/languages` package is a complete example.
 
 `DocumentInfo.language` reports a document's language, or `plaintext`.
 `documents.setLanguage(id, "python")` makes a language explicit, which is
@@ -391,7 +390,9 @@ message text. Narrow optional diagnostic `details` before reading fields. On
 snapshot. Cancellation does not roll back a commit that already succeeded.
 
 Keybinding registration is synchronous; mutations from one V8 turn apply as one
-atomic batch. Invalid input fails the batch. The activation example demonstrates
+atomic batch. Invalid input fails the batch. Bindings sit above native defaults
+and the latest write wins, so personal overrides of package bindings belong in
+`post-init`. The activation example demonstrates
 registration and cleanup through the public API.
 
 ## Durable storage

@@ -128,9 +128,8 @@ declare module "knot" {
     /** Compiled-in grammar ID; see languages.grammars. */
     readonly grammar: string;
     /** Extensions without the leading dot, matched case-insensitively against
-     * the end of a file name, so "d.ts" is possible. The highest-precedence
-     * registration with a matching extension wins, and the longest match
-     * breaks ties within one registration owner kind. */
+     * the end of a file name, so "d.ts" is possible. The longest match wins,
+     * then the latest registration claiming it. */
     readonly fileExtensions: readonly string[];
     /** Exact file names, such as "Makefile"; they win over extensions. */
     readonly fileNames: readonly string[];
@@ -150,13 +149,12 @@ declare module "knot" {
     readonly queries: Readonly<{ highlights: string; injections?: string }>;
   }
   /**
-   * Syntax highlighting languages. Registrations follow keybinding owner
-   * precedence: personal config, then installed packages, then bundled
-   * packages, with later registrations winning within one owner kind. The
-   * highest registration of an ID defines the language, and the highest
-   * registration claiming a pattern decides detection; disposal or teardown
-   * reveals the next. Every change re-detects open documents whose language is
-   * not explicit. Register in activation, before startup restores windows, so
+   * Syntax highlighting languages. The latest registration of an ID defines
+   * the language, and the latest registration claiming a pattern decides
+   * detection; disposal or teardown reveals the previous one. Personal config
+   * replaces a package's language from post-init, which runs after packages
+   * start. Every change re-detects open documents whose language is not
+   * explicit. Register in activation, before startup restores windows, so
    * restored documents highlight from their first frame.
    */
   export const languages: Readonly<{
@@ -986,9 +984,11 @@ declare module "knot" {
   export interface KeybindingCommand { readonly name: string; readonly arguments?: JsonValue; }
   /**
    * Bind a gpui key sequence, e.g. "cmd-g", in the caller's lifecycle-owned slot.
-   * Null command masks lower-priority bindings and leaves raw input available.
-   * Personal config outranks extensions, which outrank defaults; view-specific
-   * and later registrations resolve ties within owner priority.
+   * Null command masks earlier bindings and leaves raw input available.
+   * Every binding outranks native defaults. Among the rest, a view-specific
+   * binding beats a global one and then the latest write wins, so personal
+   * config overrides a package's binding from post-init, which runs after
+   * packages start. Teardown reveals the previous write.
    * Synchronous void call: mutations commit atomically at the end of the V8 turn.
    * Invalid input fails the whole batch through its turn/startup/command result,
    * with no partial map. No separate promise or asynchronous HostError is returned.

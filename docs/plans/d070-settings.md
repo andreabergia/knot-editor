@@ -1,6 +1,6 @@
 # D070 — Application settings
 
-Status: 🚧 approved, not started. Item of the
+Status: 🚧 checkpoint 1 in review. Item of the
 [daily-driver plan](daily-driver.md#phase-2--foundations).
 
 ## Outcome
@@ -122,7 +122,23 @@ that only reads a value when it needs it can call `get` instead.
 
 ## Checkpoints
 
-### 1. Review owner layering in keybindings and languages
+### 1. Review owner layering in keybindings and languages 🚧
+
+**Outcome (pending review):** both registries drop owner ranking, matching
+Emacs and Neovim, whose config is code that runs in order. VS Code and Zed
+rank the user's keymap above extensions only because it is a declarative file
+with no place in a load order.
+
+- Keymaps keep native bindings as a base level beneath every extension
+  binding, like a setting's default and Zed's base keymap, so switching a
+  D086 preset never beats extension or personal bindings. Extension and
+  personal bindings form one last-write-wins stack; view-scoped still beats
+  global. Personal overrides belong in `post-init`.
+- Languages are last-write-wins with no base level: nothing switches bundled
+  languages at runtime. User overrides of detection move to a setting
+  (checkpoint 4), as in VS Code's `files.associations` and Zed's `file_types`.
+- Accepted cost: a package that restarts or binds late beats earlier personal
+  writes until Knot restarts. Teardown still reveals the previous write.
 
 Settings drop layering by owner. Before building them, review the
 personal > installed > bundled > native precedence that keybindings and
@@ -215,7 +231,24 @@ API surface. The fake host is `scripts/extensions/testing/host.ts` and
 `knot.ts`, and `scripts/extensions/contract.test.ts` checks it against the
 declarations. Document in `docs/extension-api.md`.
 
-### 4. Documentation
+### 4. Language file associations setting
+
+- Deliverable: a native setting through which personal config maps file names
+  or extensions to a language ID, overriding registration-based detection, as
+  VS Code's `files.associations` and Zed's `file_types` do. Choose its shape
+  here: a richer definition type (a string-to-string map) or one scoped key
+  per pattern. Changing it re-detects open documents whose language is not
+  explicit, like a registration change. An unregistered target ID paints as
+  plain text.
+- Validation: detection tests that the setting beats a registration and that
+  resetting it reveals registration detection, and a product test in which
+  personal config remaps an extension and an open document re-detects.
+- Review gate: the setting's shape and its interaction with detection.
+
+**Implementation context:** detection is `LanguageRegistry::detect` in
+`src/app/languages.rs`; re-detection on registration change is already there.
+
+### 5. Documentation
 
 - Deliverable: the settings store and its owner in `docs/architecture.md`
   (application ownership) and the relevant subsystem reference: extension host

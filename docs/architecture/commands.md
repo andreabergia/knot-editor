@@ -35,11 +35,11 @@ inline children. Dialog and protected-close handlers await semantic completion.
 
 ## Keymaps
 
-One application-owned registry retains native, installed-extension, and personal
-slots, then derives a merged effective map. Personal bindings outrank extensions,
-which outrank native defaults. Within a source, view-specific bindings outrank
-global bindings; later registration breaks remaining ties. Removing ownership
-reveals lower-priority slots. An unavailable command does not select another
+One application-owned registry retains native and lifecycle-owned slots, then
+derives a merged effective map. Native bindings are defaults beneath every
+extension and personal-config binding. Among those, view-specific bindings
+outrank global bindings and the latest write breaks remaining ties. Removing a
+lifecycle's ownership reveals earlier writes. An unavailable command does not select another
 binding. Null unbinds leave raw input available.
 
 GPUI recognizes keys and scoped sequences, then one Knot action consults the map

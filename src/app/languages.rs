@@ -3,12 +3,9 @@
 //!
 //! Extensions and personal config register languages: a language ID, the
 //! compiled-in grammar it parses with, the file names, extensions, and shebang
-//! interpreters it claims, and its queries. Registrations follow keymap owner
-//! precedence: personal config outranks installed packages, which outrank
-//! bundled ones, and a later registration outranks an earlier one of the same
-//! owner kind. The highest registration of an ID defines that language, and
-//! the highest registration claiming a pattern decides detection, so removing
-//! a registration reveals the next.
+//! interpreters it claims, and its queries. The latest registration of an ID
+//! defines that language, and the latest registration claiming a pattern
+//! decides detection, so removing a registration reveals the previous one.
 //!
 //! A buffer records a language ID, explicit or detected, independently of
 //! registration: an unregistered ID paints and reports as `plaintext` until
@@ -36,18 +33,9 @@ pub(crate) const PLAIN_TEXT: &str = "plaintext";
 /// How far detection reads into a first line for a shebang.
 const SHEBANG_LIMIT: usize = 256;
 
-/// Lower precedence first.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub(crate) enum LanguagePriority {
-    Bundled,
-    Installed,
-    Personal,
-}
-
 /// The extension lifecycle that owns a registration.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct LanguageOwner {
-    pub(crate) priority: LanguagePriority,
     pub(crate) extension: ExtensionId,
     pub(crate) lifecycle: ExtensionLifecycleId,
 }
@@ -86,14 +74,6 @@ struct Registration {
     language: Arc<SyntaxLanguage>,
 }
 
-impl Registration {
-    /// Precedence among registrations; later registrations come later in the
-    /// list, so the index breaks ties within a priority.
-    fn rank(&self, index: usize) -> (LanguagePriority, usize) {
-        (self.owner.priority, index)
-    }
-}
-
 /// The languages injections and buffers resolve, rebuilt on every change.
 #[derive(Default)]
 struct LanguageTable {
@@ -122,7 +102,7 @@ impl LanguageTable {
 
 #[derive(Default)]
 pub(crate) struct LanguageRegistry {
-    /// In registration order.
+    /// In registration order, so a later index wins.
     registrations: Vec<Registration>,
     next_id: u64,
     table: Arc<LanguageTable>,
@@ -181,19 +161,11 @@ impl LanguageRegistry {
 
     /// The registration that defines each language ID, sorted by ID.
     fn effective(&self) -> Vec<&Registration> {
-        let mut effective: HashMap<&str, (usize, &Registration)> = HashMap::new();
-        for (index, registration) in self.registrations.iter().enumerate() {
-            let entry = effective
-                .entry(&registration.info.id)
-                .or_insert((index, registration));
-            if registration.rank(index) > entry.1.rank(entry.0) {
-                *entry = (index, registration);
-            }
+        let mut effective: HashMap<&str, &Registration> = HashMap::new();
+        for registration in &self.registrations {
+            effective.insert(&registration.info.id, registration);
         }
-        let mut effective: Vec<_> = effective
-            .into_values()
-            .map(|(_, registration)| registration)
-            .collect();
+        let mut effective: Vec<_> = effective.into_values().collect();
         effective.sort_by(|a, b| a.info.id.cmp(&b.info.id));
         effective
     }
@@ -209,24 +181,15 @@ impl LanguageRegistry {
                 )
             })
             .collect();
-        let mut extensions: HashMap<String, (usize, String)> = HashMap::new();
-        for (index, registration) in self.registrations.iter().enumerate() {
+        let mut extensions = HashMap::new();
+        for registration in &self.registrations {
             for extension in &registration.info.file_extensions {
-                let rank = registration.rank(index);
-                let entry = extensions
-                    .entry(extension.to_lowercase())
-                    .or_insert_with(|| (index, registration.info.id.clone()));
-                if rank > self.registrations[entry.0].rank(entry.0) {
-                    *entry = (index, registration.info.id.clone());
-                }
+                extensions.insert(extension.to_lowercase(), registration.info.id.clone());
             }
         }
         self.table = Arc::new(LanguageTable {
             languages,
-            extensions: extensions
-                .into_iter()
-                .map(|(extension, (_, id))| (extension, id))
-                .collect(),
+            extensions,
         });
     }
 
@@ -251,19 +214,16 @@ impl LanguageRegistry {
 
     /// The language a file called `file_name` whose text starts with
     /// `first_line` should use: a registered file name, then a registered
-    /// extension, then the shebang interpreter. The highest registration
-    /// claiming a pattern wins it; among equal owners, the longest extension
-    /// or an exact interpreter wins.
+    /// extension, then the shebang interpreter. The longest extension or an
+    /// exact interpreter wins, and then the latest registration claiming it.
     pub(crate) fn detect(&self, file_name: Option<&str>, first_line: &str) -> Option<String> {
         let best = |claim: &dyn Fn(&LanguageInfo) -> Option<usize>| {
             self.registrations
                 .iter()
                 .enumerate()
                 .filter_map(|(index, registration)| {
-                    claim(&registration.info).map(|specificity| {
-                        let (priority, order) = registration.rank(index);
-                        ((priority, specificity, order), &registration.info.id)
-                    })
+                    claim(&registration.info)
+                        .map(|specificity| ((specificity, index), &registration.info.id))
                 })
                 .max_by_key(|(rank, _)| *rank)
                 .map(|(_, id)| id.clone())

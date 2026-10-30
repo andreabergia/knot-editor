@@ -1970,32 +1970,6 @@ impl ProductExtensionHost {
         Ok(())
     }
 
-    /// Language registrations follow keymap precedence, with bundled packages
-    /// beneath installed ones so an installed package can replace them.
-    fn language_owner(
-        &self,
-        request: &crate::host::protocol::RequestContext,
-    ) -> crate::app::languages::LanguageOwner {
-        use crate::app::languages::{LanguageOwner, LanguagePriority};
-        let key = ExtensionKey::new(request.extension, request.lifecycle);
-        let priority = if self.personal_config_key == Some(key) {
-            LanguagePriority::Personal
-        } else if self
-            .storage_owners
-            .get(&key)
-            .is_some_and(|owner| owner.identity().starts_with("@knot/"))
-        {
-            LanguagePriority::Bundled
-        } else {
-            LanguagePriority::Installed
-        };
-        LanguageOwner {
-            priority,
-            extension: request.extension,
-            lifecycle: request.lifecycle,
-        }
-    }
-
     fn remove_view_kind(&mut self, id: &str, cx: &mut App) {
         self.commands.catalog().borrow_mut().remove_view_kind(id);
         if cx.has_global::<crate::app::commands::keymaps::ApplicationKeymaps>()
@@ -2164,13 +2138,11 @@ impl ProductExtensionHost {
         self.refresh_storage_callers();
         self.storage_owners.remove(&key);
         self.application_observation.remove_lifecycle(key);
-        let personal = self.personal_config_key == Some(key);
         if cx.has_global::<crate::app::commands::keymaps::ApplicationKeymaps>() {
-            let owner = if personal {
-                crate::app::commands::keymaps::BindingOwner::Personal(key.extension, key.lifecycle)
-            } else {
-                crate::app::commands::keymaps::BindingOwner::Extension(key.extension, key.lifecycle)
-            };
+            let owner = crate::app::commands::keymaps::BindingOwner::Extension(
+                key.extension,
+                key.lifecycle,
+            );
             if cx
                 .global_mut::<crate::app::commands::keymaps::ApplicationKeymaps>()
                 .0

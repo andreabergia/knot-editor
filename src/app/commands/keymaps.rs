@@ -23,20 +23,18 @@ use crate::app::commands::dispatch::{
     SPLIT_HORIZONTAL_COMMAND, SPLIT_VERTICAL_COMMAND, UNDO_COMMAND,
 };
 
+/// Native bindings are the defaults beneath every extension binding.
+/// Extension bindings, including personal config's, form one stack in which
+/// the latest write wins, so removing a lifecycle reveals the previous write.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum BindingOwner {
     Native,
     Extension(ExtensionId, ExtensionLifecycleId),
-    Personal(ExtensionId, ExtensionLifecycleId),
 }
 
 impl BindingOwner {
-    fn priority(self) -> u8 {
-        match self {
-            Self::Native => 0,
-            Self::Extension(..) => 1,
-            Self::Personal(..) => 2,
-        }
+    fn is_default(self) -> bool {
+        self == Self::Native
     }
 }
 
@@ -304,7 +302,7 @@ impl BindingRegistry {
                 .filter(|(slot_key, _)| slot_key.view.is_none() || slot_key.view.as_deref() == view)
                 .max_by_key(|(slot_key, slot)| {
                     (
-                        slot_key.owner.priority(),
+                        !slot_key.owner.is_default(),
                         slot_key.view.is_some(),
                         slot.order,
                     )

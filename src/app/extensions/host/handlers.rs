@@ -1457,18 +1457,16 @@ pub(crate) async fn mutate_keybindings(
     context: HostContext,
     arguments: KeybindingArguments,
 ) -> Result<(), KeymapError> {
-    let key = ExtensionKey::new(context.request.extension, context.request.lifecycle);
-    context.foreground(|host, cx| {
+    let owner = crate::app::commands::keymaps::BindingOwner::Extension(
+        context.request.extension,
+        context.request.lifecycle,
+    );
+    context.foreground(|_, cx| {
         if !cx.has_global::<crate::app::commands::keymaps::ApplicationKeymaps>() {
             return Err(KeymapError::invalid(
                 "application keymap is unavailable".into(),
             ));
         }
-        let owner = if host.personal_config_key == Some(key) {
-            crate::app::commands::keymaps::BindingOwner::Personal(key.extension, key.lifecycle)
-        } else {
-            crate::app::commands::keymaps::BindingOwner::Extension(key.extension, key.lifecycle)
-        };
         let result = cx
             .global_mut::<crate::app::commands::keymaps::ApplicationKeymaps>()
             .0
@@ -2067,10 +2065,12 @@ async fn register_language(
         .spawn(async move { arguments.compile() })
         .await
         .map_err(|error| LanguageError::from_syntax(error, grammar))?;
+    let owner = crate::app::languages::LanguageOwner {
+        extension: request.extension,
+        lifecycle: request.lifecycle,
+    };
     context
-        .foreground(|host, cx| {
-            crate::app::languages::register(host.language_owner(&request), language, cx)
-        })
+        .foreground(|_, cx| crate::app::languages::register(owner, language, cx))
         .map_err(LanguageError::from)
 }
 

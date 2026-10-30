@@ -347,7 +347,6 @@ fn config_global_copy_binding_routes_to_editor_and_extension_view(cx: &mut TestA
                     const text = await knot.workbench.selectedText();
                     await knot.workbench.writeClipboardText(text);
                 });
-                knot.keybinding('cmd-j', 'file.new', { view: 'example.outline' });
             "#,
         )],
     );
@@ -629,7 +628,7 @@ fn personal_global_binding_overrides_editor_default_in_every_window(cx: &mut Tes
             .global_mut::<ApplicationKeymaps>()
             .0
             .set(
-                BindingOwner::Personal(ExtensionId::new(0), ExtensionLifecycleId::new(1)),
+                BindingOwner::Extension(ExtensionId::new(0), ExtensionLifecycleId::new(1)),
                 "Enter",
                 None,
                 Some(Command {
@@ -665,7 +664,7 @@ fn unbinding_an_unmapped_letter_preserves_editor_input(cx: &mut TestAppContext) 
     })
     .unwrap();
     cx.update(|cx| {
-        let owner = BindingOwner::Personal(ExtensionId::new(0), ExtensionLifecycleId::new(1));
+        let owner = BindingOwner::Extension(ExtensionId::new(0), ExtensionLifecycleId::new(1));
         assert!(
             cx.global_mut::<ApplicationKeymaps>()
                 .0
@@ -696,7 +695,7 @@ async fn editor_unbind_leaves_global_binding_available_in_terminal(cx: &mut Test
             cx.global_mut::<ApplicationKeymaps>()
                 .0
                 .set(
-                    BindingOwner::Personal(ExtensionId::new(0), ExtensionLifecycleId::new(1)),
+                    BindingOwner::Extension(ExtensionId::new(0), ExtensionLifecycleId::new(1)),
                     if cfg!(windows) { "ctrl-n" } else { "cmd-n" },
                     Some("editor"),
                     None,
@@ -761,7 +760,7 @@ fn unavailable_high_priority_binding_does_not_invoke_native_default(cx: &mut Tes
             cx.global_mut::<ApplicationKeymaps>()
                 .0
                 .set(
-                    BindingOwner::Personal(ExtensionId::new(0), ExtensionLifecycleId::new(1)),
+                    BindingOwner::Extension(ExtensionId::new(0), ExtensionLifecycleId::new(1)),
                     if cfg!(windows) { "ctrl-n" } else { "cmd-n" },
                     None,
                     Some(Command {

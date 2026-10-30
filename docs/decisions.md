@@ -431,9 +431,22 @@ one-child rules constrain composition. Outcomes describe execution; ordinary
 functions remain preferable when semantic return values are needed.
 
 Resolve keymap precedence in Knot because gpui context depth cannot express
-personal-over-extension-over-native priority. Retain owner slots so removal
-reveals lower-priority bindings. Atomic per-turn JavaScript batches prevent
-partial keymaps and make startup readiness follow foreground state.
+defaults beneath a last-write-wins stack. Retain owner slots so teardown reveals
+earlier bindings. Atomic per-turn JavaScript batches prevent partial keymaps
+and make startup readiness follow foreground state.
+
+Keybindings and languages do not rank writers by owner. Configuration is code
+that runs in order, as in Emacs and Neovim: packages start after `pre-init`
+and `post-init` runs after them, so the latest write wins and personal
+overrides belong in `post-init`. VS Code and Zed rank the user's keymap above
+extensions only because it is a declarative file with no place in a load
+order. View-specific bindings still beat global ones, as Emacs mode maps beat
+the global map and more specific setting scopes win. Native bindings stay a
+base beneath every write, like Zed's base keymap, so switching a keymap preset
+(D086) never overrides extension or personal bindings. Languages need no base:
+nothing switches bundled languages at runtime. The accepted cost is that a
+package restarted or binding late beats earlier personal writes until Knot
+restarts; this is rare, and settings (D070) behave the same way.
 
 Reference: [commands](architecture/commands.md).
 

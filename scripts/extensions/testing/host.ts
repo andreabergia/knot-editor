@@ -538,7 +538,7 @@ export const api: KnotApi = {
         },
       };
     },
-    // Later registrations win; the fake has no owner precedence.
+    // Later registrations win, as in the native registry.
     list: async () => {
       const byId = new Map(state.languages.map((definition) => [definition.id, definition]));
       // Code-unit order, as the native registry sorts IDs, not locale order.
