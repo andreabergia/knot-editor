@@ -91,8 +91,23 @@ fn personal_config_gates_product_windows_and_keeps_extension_failures_independen
     for name in ["config.pre", "extension.good", "config.post"] {
         assert!(names.contains(&name.to_owned()), "missing {name}");
     }
+    let report_open = |window: gpui::AnyWindowHandle, cx: &TestAppContext| {
+        cx.read(|cx| {
+            let shell = window.downcast::<ProductShell>().unwrap();
+            shell.entity(cx).unwrap().read(cx).extension_report_open
+        })
+    };
+    // The failed package opens the report in the launch window only.
+    let launch_window = cx.windows()[0];
+    assert!(report_open(launch_window, cx));
     cx.update(|cx| super::super::dispatch_launch_request(None, cx));
     assert_eq!(cx.windows().len(), 2);
+    let later = *cx
+        .windows()
+        .iter()
+        .find(|window| **window != launch_window)
+        .unwrap();
+    assert!(!report_open(later, cx));
 }
 
 #[gpui::test]
@@ -136,6 +151,11 @@ fn queued_file_open_runs_only_after_configured_startup(cx: &mut TestAppContext) 
         );
         std::thread::yield_now();
     }
+    // A clean startup leaves the report closed.
+    cx.read(|cx| {
+        let shell = cx.windows()[0].downcast::<ProductShell>().unwrap();
+        assert!(!shell.entity(cx).unwrap().read(cx).extension_report_open);
+    });
 }
 
 #[gpui::test]

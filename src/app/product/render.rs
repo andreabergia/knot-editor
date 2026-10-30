@@ -295,30 +295,6 @@ impl Render for ProductShell {
                 this.finish_transient(TransientOutcome::Dismissed, cx);
             });
         let startup_report = crate::app::extensions::host::startup_report(cx);
-        let extension_button_label = match &startup_report {
-            Some(report)
-                if report.state == crate::app::extensions::host::StartupState::Complete =>
-            {
-                let failures = report
-                    .report
-                    .entries
-                    .iter()
-                    .filter(|entry| {
-                        matches!(
-                            entry.result,
-                            crate::app::extensions::load::LoadResult::Failed(_)
-                        )
-                    })
-                    .count();
-                if failures > 0 {
-                    format!("extensions ({failures} failed)")
-                } else {
-                    "extensions".to_owned()
-                }
-            }
-            Some(_) => "extensions (loading)".to_owned(),
-            None => "extensions".to_owned(),
-        };
         let extension_report = self.extension_report_open.then_some(startup_report);
         window.set_window_title("Knot");
 
@@ -333,83 +309,6 @@ impl Render for ProductShell {
             .size_full()
             .bg(rgb(0x1e1e1e))
             .text_color(rgb(0xe0e0e0))
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .gap_3()
-                    .px_3()
-                    .py_1()
-                    .text_xs()
-                    .bg(rgb(0x252526))
-                    .child(command_button("new tab", "new-tab", &entity, NEW_COMMAND))
-                    .child(command_button(
-                        "terminal",
-                        "new-terminal",
-                        &entity,
-                        NEW_TERMINAL_COMMAND,
-                    ))
-                    .child(command_button(
-                        "split →",
-                        "split-horizontal",
-                        &entity,
-                        SPLIT_HORIZONTAL_COMMAND,
-                    ))
-                    .child(command_button(
-                        "split ↓",
-                        "split-vertical",
-                        &entity,
-                        SPLIT_VERTICAL_COMMAND,
-                    ))
-                    .child(command_button(
-                        "close tab",
-                        "close-tab",
-                        &entity,
-                        CLOSE_TAB_COMMAND,
-                    ))
-                    .child(command_button(
-                        "commands",
-                        "product-command-palette",
-                        &entity,
-                        SHOW_COMMAND_PALETTE_COMMAND,
-                    ))
-                    .child(command_button(
-                        extension_button_label,
-                        "extension-startup-report",
-                        &entity,
-                        SHOW_EXTENSION_REPORT_COMMAND,
-                    ))
-                    .child(
-                        div()
-                            .id("explorer-toggle")
-                            .px_2()
-                            .cursor_pointer()
-                            .child("Explorer")
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.toggle_explorer(window, cx);
-                            })),
-                    )
-                    .children(DockLocation::ALL.into_iter().map(|dock| {
-                        div()
-                            .id(("dock-toggle", dock.index()))
-                            .px_2()
-                            .cursor_pointer()
-                            .child(match dock {
-                                DockLocation::Left => "Left",
-                                DockLocation::Right => "Right",
-                                DockLocation::Bottom => "Bottom",
-                            })
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.workbench
-                                    .update(cx, |workbench, _| workbench.toggle_dock(dock));
-                                this.publish_tool_layout(cx);
-                                this.focus_active_surface(window, cx);
-                                cx.notify();
-                            }))
-                    }))
-                    .child(div().flex_1())
-                    .child(self.status.clone()),
-            )
             .child(
                 div()
                     .flex_1()

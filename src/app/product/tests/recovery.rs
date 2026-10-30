@@ -662,8 +662,8 @@ async fn native_listing_restores_and_discards_with_no_extension_host(cx: &mut Te
     cx.read(|cx| {
         let pane = shell.read(cx).workbench.read(cx).focused_pane().unwrap();
         assert_eq!(pane.active_tab().document_id(), Some(document));
-        assert_eq!(shell.read(cx).status.as_ref(), "recovered Restore me");
     });
+    assert!(!cx.has_pending_prompt());
 
     // The remaining snapshot is discarded explicitly.
     open_listing(cx);
@@ -701,14 +701,18 @@ fn open_listing_empty(
     let execution =
         dispatch_product_command(shell, window, super::super::commands::RECOVER_COMMAND, cx);
     assert_eq!(wait_for_command(execution, cx), CommandOutcome::Completed);
-    cx.run_until_parked();
-    cx.read(|cx| {
-        assert!(shell.read(cx).transient.is_none());
-        assert_eq!(
-            shell.read(cx).status.as_ref(),
-            "no unsaved documents to recover"
-        );
-    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while !cx.has_pending_prompt() {
+        assert!(std::time::Instant::now() < deadline, "no notice appeared");
+        cx.run_until_parked();
+        std::thread::yield_now();
+    }
+    cx.read(|cx| assert!(shell.read(cx).transient.is_none()));
+    assert_eq!(
+        cx.pending_prompt().unwrap().0,
+        "No unsaved documents to recover"
+    );
+    cx.simulate_prompt_answer("OK");
 }
 
 #[gpui::test]
@@ -742,9 +746,10 @@ async fn startup_restores_into_the_launch_window_without_any_extension_host(
         // The restored document takes the place of the untitled placeholder.
         assert_eq!(pane.tabs().len(), 1);
         assert_eq!(pane.active_tab().document_id(), Some(document));
-        assert_eq!(shell.status.as_ref(), "recovered 1 unsaved document");
         assert_eq!(documents.read(cx).documents().count(), 1);
     });
+    // Restoring everything needs no notice.
+    assert!(!cx.has_pending_prompt());
 }
 
 #[gpui::test]
@@ -760,16 +765,10 @@ async fn unavailable_recovery_store_never_blocks_startup(cx: &mut TestAppContext
     cx.update(|cx| super::super::finish_product_startup(Ok(()), cx));
     assert!(wait_for_product_startup(cx));
     assert_eq!(cx.windows().len(), 1);
-    let shell = cx.windows()[0].downcast::<ProductShell>().unwrap();
-    let shell = cx.update(|cx| shell.entity(cx).unwrap());
-    cx.read(|cx| {
-        assert!(
-            shell
-                .read(cx)
-                .status
-                .starts_with("recovery unavailable: recovery:")
-        );
-    });
+    cx.run_until_parked();
+    let (title, detail) = cx.pending_prompt().unwrap();
+    assert_eq!(title, "Recovery is unavailable");
+    assert!(detail.starts_with("recovery:"), "{detail}");
     assert_eq!(std::fs::read(&corrupt).unwrap(), b"not a database");
 }
 
@@ -864,25 +863,11 @@ async fn launch_requests_open_alongside_recovery_when_an_extension_fails(cx: &mu
         assert!(restored.is_dirty(cx));
     });
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "on disk");
-    // The recovery pointer replaces the launch open's status once it settles.
-    let expected = "1 unsaved document can be recovered with File › Recover Unsaved Documents…";
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
-    loop {
-        cx.run_until_parked();
-        let statuses = cx.read(|cx| {
-            cx.windows()
-                .iter()
-                .filter_map(|window| window.downcast::<ProductShell>())
-                .filter_map(|window| window.entity(cx).ok())
-                .map(|shell| shell.read(cx).status.to_string())
-                .collect::<Vec<_>>()
-        });
-        if statuses.iter().any(|status| status == expected) {
-            break;
-        }
-        assert!(std::time::Instant::now() < deadline, "{statuses:?}");
-        std::thread::yield_now();
-    }
+    // The snapshot left for the listing is announced.
+    cx.run_until_parked();
+    let (title, detail) = cx.pending_prompt().unwrap();
+    assert_eq!(title, "1 unsaved document can be recovered");
+    assert!(detail.contains("File › Recover Unsaved Documents…"));
 }
 
 #[gpui::test]

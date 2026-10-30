@@ -822,8 +822,11 @@ async fn folder_open_installs_a_workspace_and_failures_preserve_the_document(
                 .unwrap(),
             placeholder
         );
-        assert!(shell.read(cx).status.contains("not valid UTF-8"));
     });
+    let (title, detail) = cx.pending_prompt().unwrap();
+    assert_eq!(title, "Open failed");
+    assert!(detail.contains("not valid UTF-8"));
+    cx.simulate_prompt_answer("OK");
 
     let target = cx.read(|cx| current_open_target(&shell, cx));
     shell.update(cx, |shell, cx| {

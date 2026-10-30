@@ -683,8 +683,6 @@ fn hit_testing_respects_title_bar_occlusion_and_global_content_offsets(cx: &mut 
         assert!(matches!(state.action_at(pointer, &geometry, &document_source), DropAction::Target(destination) if destination.window == destination_window));
         let title = frame.origin + point(px(20.), px(10.));
         assert!(matches!(state.action_at(title, &geometry, &document_source), DropAction::Invalid));
-        let toolbar = content.origin + point(local.x, px(5.));
-        assert!(matches!(state.action_at(toolbar, &geometry, &document_source), DropAction::Invalid));
         // A front window's non-content frame prevents dropping into the pane behind it.
         let mut overlapping = vec![WindowGeometry { window: source_window, frame: Bounds::new(pointer - point(px(5.), px(5.)), size(px(100.), px(100.))), content: Bounds::new(pointer + point(px(0.), px(40.)), size(px(100.), px(60.))) }];
         overlapping.extend(geometry);

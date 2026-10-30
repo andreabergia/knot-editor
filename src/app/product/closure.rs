@@ -698,7 +698,6 @@ impl ProductShell {
         };
         let transition = match outcome {
             CloseRequestOutcome::Pending(_) => {
-                self.status = "this tab needs a save decision before it can close".into();
                 cx.notify();
                 return CommandOutcome::Unavailable;
             }
@@ -717,9 +716,7 @@ impl ProductShell {
             cx.global::<ApplicationWorkbenches>()
                 .register(&workbench, window.window_handle());
             self.workbench = workbench;
-            self.status = "created replacement untitled document".into();
         } else {
-            self.status = "closed tab".into();
         }
         self.focus_active_editor(window, cx);
         cx.notify();
@@ -808,7 +805,6 @@ impl ProductShell {
         if transition.workbench_is_empty() {
             self.replace_empty_workbench(window_handle, cx);
         } else {
-            self.status = "closed tab".into();
         }
         let _ = cx.update_window(window_handle, |_, window, cx| {
             self.focus_active_surface(window, cx)

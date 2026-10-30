@@ -46,7 +46,7 @@ pub(super) fn open_product_window_with(
                 .map(|entry| (document, entry.model().clone()))
         })
         .collect::<Vec<_>>();
-    let status = recovery.as_ref().and_then(recovery_listing::startup_status);
+    let notice = recovery.as_ref().and_then(recovery_listing::startup_notice);
     let bounds = Bounds::centered(None, size(px(1000.), px(720.)), cx);
     cx.open_window(
         WindowOptions {
@@ -82,22 +82,12 @@ pub(super) fn open_product_window_with(
             });
             shell.read(cx).focus_active_surface(window, cx);
             shell.update(cx, |shell, cx| {
-                // The recovery status outlives the launch open's own status.
-                let opened =
-                    request.map(|request| shell.start_open_operation(request, target, true, cx));
-                let Some(status) = status else {
-                    return;
-                };
-                let task = cx.spawn(async move |this, cx| {
-                    if let Some(opened) = opened {
-                        let _ = opened.await;
-                    }
-                    let _ = this.update(cx, |shell, cx| {
-                        shell.status = status.into();
-                        cx.notify();
-                    });
-                });
-                shell.tasks.push(task);
+                if let Some(request) = request {
+                    let _ = shell.start_open_operation(request, target, true, cx);
+                }
+                if let Some((title, detail)) = notice {
+                    shell.show_notice(PromptLevel::Warning, title, detail, cx);
+                }
             });
             shell
         },
@@ -335,15 +325,15 @@ fn open_launch_windows(
             .copied()
             .filter(|document| workbenches.view_count(*document, cx) == 0)
             .collect::<Vec<_>>();
-        let status = recovery_listing::startup_status(&recovery);
+        let notice = recovery_listing::startup_notice(&recovery);
         shell.update(cx, |shell, cx| {
             for document in unpresented {
                 if ProductShell::documents(cx).read(cx).get(document).is_some() {
                     shell.present_session_document(document, cx);
                 }
             }
-            if let Some(status) = status {
-                shell.status = status.into();
+            if let Some((title, detail)) = notice {
+                shell.show_notice(PromptLevel::Warning, title, detail, cx);
             }
             cx.notify();
         });
@@ -358,9 +348,38 @@ fn open_launch_windows(
     if let Some(last) = last {
         let _ = cx.update_window(last, |_, window, _| window.activate_window());
     }
+    open_report_after_failed_startup(cx);
     crate::app::window_sessions::start_recording(cx);
     crate::app::extensions::host::launched(cx);
     cx.activate(true);
+}
+
+/// A package that failed at startup has no other passive sign, so each launch
+/// window opens the startup report once.
+fn open_report_after_failed_startup(cx: &mut App) {
+    let failed = crate::app::extensions::host::startup_report(cx).is_some_and(|report| {
+        report.report.entries.iter().any(|entry| {
+            matches!(
+                entry.result,
+                crate::app::extensions::load::LoadResult::Failed(_)
+            )
+        })
+    });
+    if !failed {
+        return;
+    }
+    for window in cx.windows() {
+        let Some(shell) = window
+            .downcast::<ProductShell>()
+            .and_then(|window| window.entity(cx).ok())
+        else {
+            continue;
+        };
+        shell.update(cx, |shell, cx| {
+            shell.extension_report_open = true;
+            cx.notify();
+        });
+    }
 }
 
 pub(crate) fn run(initial_request: Option<OpenRequest>) {

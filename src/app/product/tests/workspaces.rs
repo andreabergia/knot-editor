@@ -320,17 +320,7 @@ fn native_root_commands_add_reorder_and_remove_roots_without_closing_documents(
 
     // Adding a folder that is already a root changes nothing.
     let generation = cx.read(|cx| shell.read(cx).workspace.snapshot().generation());
-    assert_eq!(
-        wait_for_command(dispatch_product_command(&shell, window, add, cx), cx),
-        CommandOutcome::Completed
-    );
-    wait_for_api_condition(cx, |cx| {
-        shell
-            .read(cx)
-            .status
-            .to_string()
-            .contains("already in the workspace")
-    });
+    shell.update(cx, |shell, cx| shell.add_workspace_root(second.clone(), cx));
     assert_eq!(
         cx.read(|cx| shell.read(cx).workspace.snapshot().generation()),
         generation

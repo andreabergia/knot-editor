@@ -60,7 +60,6 @@ impl ProductShell {
         let Ok(receiver) =
             self.begin_owned_picker(None, LANGUAGE_MODE_TITLE.into(), items, window, cx)
         else {
-            self.status = "another interaction is open in this window".into();
             cx.notify();
             return Ok(());
         };
@@ -75,7 +74,7 @@ impl ProductShell {
             else {
                 return;
             };
-            let _ = this.update(cx, |shell, cx| {
+            let _ = this.update(cx, |_, cx| {
                 let Some(uri) = Self::documents(cx)
                     .read(cx)
                     .get(document)
@@ -86,11 +85,6 @@ impl ProductShell {
                 let model = model.clone();
                 crate::app::languages::set_document_language(&model, uri.as_ref(), choice, cx);
                 crate::app::application_observation::changed(cx);
-                shell.status = format!(
-                    "language: {}",
-                    crate::app::languages::effective_language(model.read(cx), cx)
-                )
-                .into();
                 cx.notify();
             });
         });

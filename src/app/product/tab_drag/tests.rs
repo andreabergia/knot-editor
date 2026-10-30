@@ -176,38 +176,29 @@ fn all_edges_split_then_center_move_collapses_source_and_focuses_editor(cx: &mut
 }
 
 #[gpui::test]
-fn escape_invalid_release_and_stale_source_leave_model_unchanged(cx: &mut TestAppContext) {
+fn escape_and_stale_source_leave_model_unchanged(cx: &mut TestAppContext) {
     let (shell, window) = fixture(cx);
     let before = cx.read(|cx| shell.read(cx).workbench.read(cx).tab_snapshots());
     let mut visual = VisualTestContext::from_window(window, cx);
-    for scenario in 0..2 {
-        let escape = scenario == 0;
-        start_drag(&mut visual, before[0].tab_id.value());
-        let pane = visual.debug_bounds("pane-1").unwrap();
-        visual.simulate_mouse_move(pane.center(), MouseButton::Left, Modifiers::default());
-        if escape {
-            visual.simulate_keystrokes("escape");
-        }
-        let destination = match scenario {
-            0 => pane.center(),
-            _ => point(pane.center().x, pane.top() - px(5.)),
-        };
-        visual.simulate_mouse_up(destination, MouseButton::Left, Modifiers::default());
-        visual.run_until_parked();
-        visual.read(|cx| {
-            let shell = shell.read(cx);
-            assert_eq!(shell.workbench.read(cx).tab_snapshots(), before);
-            assert!(
-                cx.global::<super::ApplicationTabDrag>()
-                    .0
-                    .borrow()
-                    .active
-                    .is_none()
-            );
-            assert!(shell.tab_drag.borrow().preview.is_none());
-            assert!(!cx.has_active_drag());
-        });
-    }
+    start_drag(&mut visual, before[0].tab_id.value());
+    let pane = visual.debug_bounds("pane-1").unwrap();
+    visual.simulate_mouse_move(pane.center(), MouseButton::Left, Modifiers::default());
+    visual.simulate_keystrokes("escape");
+    visual.simulate_mouse_up(pane.center(), MouseButton::Left, Modifiers::default());
+    visual.run_until_parked();
+    visual.read(|cx| {
+        let shell = shell.read(cx);
+        assert_eq!(shell.workbench.read(cx).tab_snapshots(), before);
+        assert!(
+            cx.global::<super::ApplicationTabDrag>()
+                .0
+                .borrow()
+                .active
+                .is_none()
+        );
+        assert!(shell.tab_drag.borrow().preview.is_none());
+        assert!(!cx.has_active_drag());
+    });
     start_drag(&mut visual, before[0].tab_id.value());
     // Replacing the workbench invalidates the captured source despite matching local IDs.
     shell.update(&mut visual, |shell, cx| {

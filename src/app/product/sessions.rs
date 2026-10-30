@@ -578,7 +578,6 @@ fn commit(
             if shell.workbench.read(cx).normal_pane().is_none() {
                 shell.replace_empty_workbench(handle, cx);
             }
-            shell.status = "session opened".into();
             cx.notify();
             outcome
         });

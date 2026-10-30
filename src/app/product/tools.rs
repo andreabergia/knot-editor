@@ -276,12 +276,6 @@ impl ProductShell {
         } else if !workspace.roots().is_empty() {
             self.ensure_explorer(false, cx);
         }
-        self.status = if workspace.roots().is_empty() {
-            "workspace cleared"
-        } else {
-            "workspace opened"
-        }
-        .into();
         cx.notify();
         workspace
     }

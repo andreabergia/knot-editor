@@ -1,6 +1,6 @@
 # D069 — Remove demo and test-only commands
 
-Status: 🚧 in progress (checkpoints 1–3 ✅). Part of the
+Status: 🚧 in progress (checkpoints 1–4 ✅). Part of the
 [daily-driver plan](daily-driver.md), phase 1.
 
 ## Outcome
@@ -126,7 +126,7 @@ button.
 
 Review gate: the palette shows the prefix consistently.
 
-### 4. Remove the toolbar and status string
+### 4. ✅ Remove the toolbar and status string
 
 Deliverable: the toolbar row and `ProductShell::status` are removed.
 Status-only failures show a warning prompt, and a failed startup opens the
@@ -152,6 +152,17 @@ Implementation context:
   the report.
 
 Review gate: every removed failure message has a visible replacement.
+
+Completion: `ProductShell::show_notice` and `show_notice` defer one native
+prompt with an OK button. Save, open, add folder, recovery, discard,
+destination-window, and extensions-unavailable failures use it at warning
+level. Two notices beyond the plan's list keep information that had no other
+surface: startup recovery that is unavailable or leaves snapshots for the
+listing (warning), and an empty recovery listing (info). Native open paths
+prompt on resource failures; extension `open` calls return the error without
+a prompt. The report opens in the windows `open_launch_windows` creates, not
+in windows opened later. The two drag tests that used the toolbar as an
+in-window non-target now cover the title bar and occluding frames only.
 
 ### 5. Documentation
 

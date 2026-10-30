@@ -50,9 +50,9 @@ use super::{
         CUT_COMMAND, NEW_COMMAND, NEW_TERMINAL_COMMAND, NEW_WINDOW_COMMAND, OPEN_COMMAND,
         PASTE_COMMAND, ProductCommandDispatcher, ProductCommandSource, ProductCommandTarget,
         QUIT_COMMAND, REDO_COMMAND, SAVE_AS_COMMAND, SAVE_COMMAND, SELECT_ALL_COMMAND,
-        SHOW_COMMAND_PALETTE_COMMAND, SHOW_EXTENSION_REPORT_COMMAND, SPLIT_HORIZONTAL_COMMAND,
-        SPLIT_VERTICAL_COMMAND, UNDO_COMMAND, dispatch_close_to_captured_target,
-        dispatch_open_to_captured_target, dispatch_save_to_captured_target,
+        SHOW_EXTENSION_REPORT_COMMAND, SPLIT_HORIZONTAL_COMMAND, SPLIT_VERTICAL_COMMAND,
+        UNDO_COMMAND, dispatch_close_to_captured_target, dispatch_open_to_captured_target,
+        dispatch_save_to_captured_target,
     },
     commands::keymaps::{ApplicationKeymaps, BindingResolution, KeymapAction},
     documents::{ApplicationDocuments, DocumentCollection, DocumentId, DocumentState},
@@ -345,7 +345,13 @@ enum OpenCommit {
         document: DocumentId,
         target: OpenTarget,
     },
-    Workspace(super::workspace::WorkspaceSnapshot),
+    Workspace(
+        #[cfg_attr(
+            not(test),
+            allow(dead_code, reason = "tests inspect the installed workspace")
+        )]
+        super::workspace::WorkspaceSnapshot,
+    ),
 }
 
 #[derive(Debug)]
@@ -378,7 +384,6 @@ fn target_document(target: &ProductCommandTarget) -> Option<DocumentId> {
 pub(crate) struct ProductShell {
     workbench: Entity<Workbench>,
     window: Option<AnyWindowHandle>,
-    status: SharedString,
     tab_drag: std::rc::Rc<RefCell<tab_drag::TabDragState>>,
     dock_resize: Option<DockResizeDrag>,
     command_palette: Option<Entity<CommandPalette<ProductCommandTarget>>>,
@@ -463,7 +468,6 @@ impl ProductShell {
         Self {
             workbench,
             window: None,
-            status: "ready".into(),
             tab_drag: Default::default(),
             dock_resize: None,
             command_palette: None,
@@ -811,7 +815,6 @@ impl ProductShell {
         cx: &mut Context<Self>,
     ) {
         let Some(target) = self.capture_command_target(window, cx) else {
-            self.status = "command target is no longer available".into();
             cx.notify();
             return;
         };
@@ -1258,7 +1261,6 @@ impl ProductShell {
             .unwrap()
             .clone();
         editor.focus_handle(cx).focus(window);
-        self.status = "new untitled document".into();
         cx.notify();
         Some((
             document,
@@ -1298,7 +1300,6 @@ impl ProductShell {
             return false;
         }
         self.focus_active_surface(window, cx);
-        self.status = "new terminal".into();
         cx.notify();
         true
     }
@@ -1342,11 +1343,6 @@ impl ProductShell {
             });
         if split.is_some() {
             self.focus_active_surface(window, cx);
-            self.status = match direction {
-                SplitDirection::Horizontal => "split horizontally",
-                SplitDirection::Vertical => "split vertically",
-            }
-            .into();
             cx.notify();
             true
         } else {
@@ -1396,20 +1392,54 @@ impl ProductShell {
             self.workbench.update(cx, |workbench, cx| {
                 workbench.open_document_in_normal_group(replacement, model, cx);
             });
-            self.status = "created replacement untitled document".into();
             return;
         }
         let workbench = cx.new(|cx| Workbench::new_for_document(replacement, model, cx));
         cx.global::<ApplicationWorkbenches>()
             .register(&workbench, window);
         self.workbench = workbench;
-        self.status = "created replacement untitled document".into();
+    }
+
+    /// Report an outcome that has no other visible effect in this window. The
+    /// prompt needs no answer.
+    pub(super) fn show_notice(
+        &self,
+        level: PromptLevel,
+        title: impl Into<String>,
+        detail: Option<String>,
+        cx: &mut App,
+    ) {
+        if let Some(window) = self.window {
+            show_notice(window, level, title.into(), detail, cx);
+        }
     }
 
     pub(crate) fn toggle_extension_report(&mut self, cx: &mut Context<Self>) {
         self.extension_report_open = !self.extension_report_open;
         cx.notify();
     }
+}
+
+/// Present a native prompt after the current update, so callers may hold the
+/// shell or the window.
+pub(super) fn show_notice(
+    window: AnyWindowHandle,
+    level: PromptLevel,
+    title: String,
+    detail: Option<String>,
+    cx: &mut App,
+) {
+    cx.defer(move |cx| {
+        let _ = cx.update_window(window, |_, window, cx| {
+            drop(window.prompt(
+                level,
+                &title,
+                detail.as_deref(),
+                &[PromptButton::new("OK")],
+                cx,
+            ));
+        });
+    });
 }
 
 fn create_untitled_document(documents: &Entity<DocumentCollection>, cx: &mut App) -> DocumentId {

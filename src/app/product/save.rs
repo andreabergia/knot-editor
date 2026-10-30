@@ -92,7 +92,6 @@ impl ProductShell {
                 }
             }) as SaveDialogFuture
         };
-        self.status = "choosing a save destination".into();
         cx.notify();
         let task = cx.spawn(async move |this, cx| {
             let outcome = selection.await;
@@ -103,7 +102,6 @@ impl ProductShell {
                         this.start_save_to_uri(target, uri, true, completion, cx);
                     }
                     SaveDialogOutcome::Cancelled => {
-                        this.status = "save cancelled".into();
                         this.finish_save_command(
                             completion,
                             crate::host::protocol::CommandOutcome::Cancelled,
@@ -112,7 +110,12 @@ impl ProductShell {
                         cx.notify();
                     }
                     SaveDialogOutcome::Failed(message) => {
-                        this.status = format!("save failed: {message}").into();
+                        this.show_notice(
+                            PromptLevel::Warning,
+                            "Save failed",
+                            Some(message.clone()),
+                            cx,
+                        );
                         this.finish_save_command(
                             completion,
                             crate::host::protocol::CommandOutcome::HandlerFailure { message },
@@ -170,7 +173,12 @@ impl ProductShell {
             .is_some_and(|document| Some(document) != target_document(&target))
         {
             let message = format!("another open document already owns {uri}");
-            self.status = format!("save failed: {message}").into();
+            self.show_notice(
+                PromptLevel::Warning,
+                "Save failed",
+                Some(message.clone()),
+                cx,
+            );
             self.finish_save_command(
                 completion,
                 crate::host::protocol::CommandOutcome::HandlerFailure { message },
@@ -193,7 +201,6 @@ impl ProductShell {
             );
             return;
         };
-        self.status = format!("saving {uri}").into();
         cx.notify();
         let providers = Self::filesystems(cx);
         let task = cx.spawn(async move |this, cx| {
@@ -258,10 +265,8 @@ impl ProductShell {
                             )
                         });
                         let outcome = if committed {
-                            this.status = format!("saved {uri}").into();
                             crate::host::protocol::CommandOutcome::Completed
                         } else {
-                            this.status = "save completion became stale".into();
                             crate::host::protocol::CommandOutcome::InvalidTarget
                         };
                         this.finish_save_command(completion, outcome, cx);
@@ -282,7 +287,12 @@ impl ProductShell {
                     }
                     Err(error) => {
                         let message = error.to_string();
-                        this.status = format!("save failed: {message}").into();
+                        this.show_notice(
+                            PromptLevel::Warning,
+                            "Save failed",
+                            Some(message.clone()),
+                            cx,
+                        );
                         this.finish_save_command(
                             completion,
                             crate::host::protocol::CommandOutcome::HandlerFailure { message },
@@ -337,7 +347,6 @@ impl ProductShell {
             );
             return;
         };
-        self.status = format!("save conflict at {uri}").into();
         cx.notify();
         let task = cx.spawn(async move |this, cx| {
             let answer = prompt.await.unwrap_or(2);
@@ -347,7 +356,6 @@ impl ProductShell {
                     0 => this.start_conflict_reload(target, uri, completion, cx),
                     1 => this.start_save_dialog(target, completion, cx),
                     _ => {
-                        this.status = "save conflict cancelled".into();
                         this.finish_save_command(
                             completion,
                             crate::host::protocol::CommandOutcome::Cancelled,
@@ -406,7 +414,6 @@ impl ProductShell {
             );
             return;
         };
-        self.status = format!("reloading {uri}").into();
         cx.notify();
         let providers = Self::filesystems(cx);
         let task = cx.spawn(async move |this, cx| {
@@ -441,7 +448,6 @@ impl ProductShell {
                                             cx,
                                         )
                                     }) {
-                                        this.status = format!("reloaded {uri}").into();
                                         crate::host::protocol::CommandOutcome::Completed
                                     } else {
                                         crate::host::protocol::CommandOutcome::InvalidTarget

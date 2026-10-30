@@ -13,15 +13,9 @@ pub(super) const RESTART_TITLE: &str = "Restart Extension";
 
 impl ProductShell {
     /// List restartable packages in the captured window and restart the selection.
-    pub(crate) fn start_extension_restart(
-        &mut self,
-        target: &ProductCommandTarget,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub(crate) fn start_extension_restart(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(report) = super::super::extensions::host::startup_report(cx) else {
-            self.status = "extensions are unavailable".into();
-            cx.notify();
+            self.show_notice(PromptLevel::Warning, "Extensions are unavailable", None, cx);
             return;
         };
         let items = report
@@ -41,20 +35,13 @@ impl ProductShell {
             })
             .collect::<Vec<_>>();
         if items.is_empty() {
-            self.status = "no extensions to restart".into();
             cx.notify();
             return;
         }
-        let receiver = match self.begin_owned_picker(None, RESTART_TITLE.into(), items, window, cx)
-        {
-            Ok(receiver) => receiver,
-            Err(_) => {
-                self.status = "another interaction is open in this window".into();
-                cx.notify();
-                return;
-            }
+        let Ok(receiver) = self.begin_owned_picker(None, RESTART_TITLE.into(), items, window, cx)
+        else {
+            return;
         };
-        let window = target.window;
         let task = cx.spawn(async move |this, cx| {
             let Ok(TransientOutcome::Picker(name)) = receiver.await else {
                 return;
@@ -71,18 +58,7 @@ impl ProductShell {
                 LoadResult::Loaded => (format!("Restarted {name}"), None),
                 LoadResult::Failed(cause) => (format!("{name} failed to restart"), Some(cause)),
             };
-            Self::in_window(&this, window, cx, |shell, window, cx| {
-                shell.status = title.clone().into();
-                cx.notify();
-                // The report needs no answer; dropping the receiver keeps it open.
-                drop(window.prompt(
-                    PromptLevel::Info,
-                    &title,
-                    message.as_deref(),
-                    &[PromptButton::new("OK")],
-                    cx,
-                ));
-            });
+            Self::notice(&this, PromptLevel::Info, &title, message, cx);
         });
         self.tasks.push(task);
     }

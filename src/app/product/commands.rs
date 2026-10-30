@@ -153,8 +153,8 @@ pub(crate) async fn restart_extension(
     (): (),
 ) -> Result<(), CommandOutcome> {
     context
-        .shell(|shell, target, window, cx| {
-            shell.start_extension_restart(target, window, cx);
+        .shell(|shell, _, window, cx| {
+            shell.start_extension_restart(window, cx);
             Ok(())
         })
         .await

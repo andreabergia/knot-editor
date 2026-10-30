@@ -9,7 +9,7 @@
 
 use super::*;
 use crate::app::recovery::{
-    RestoreError, RestoreOutcome, RestoredResource, SnapshotKind, SnapshotState, StoredSnapshot,
+    RestoreError, RestoreOutcome, SnapshotKind, SnapshotState, StoredSnapshot,
 };
 use crate::host::protocol::PickerItem;
 
@@ -23,8 +23,6 @@ impl ProductShell {
         cx: &mut Context<Self>,
     ) {
         if self.transient.is_some() {
-            self.status = "another interaction is open in this window".into();
-            cx.notify();
             return;
         }
         let window = target.window;
@@ -33,12 +31,24 @@ impl ProductShell {
         let task = cx.spawn(async move |this, cx| {
             let snapshots = match listing.await {
                 Ok(snapshots) if snapshots.is_empty() => {
-                    Self::set_status(&this, "no unsaved documents to recover", cx);
+                    Self::notice(
+                        &this,
+                        PromptLevel::Info,
+                        "No unsaved documents to recover",
+                        None,
+                        cx,
+                    );
                     return;
                 }
                 Ok(snapshots) => snapshots,
                 Err(error) => {
-                    Self::set_status(&this, format!("recovery unavailable: {error}"), cx);
+                    Self::notice(
+                        &this,
+                        PromptLevel::Warning,
+                        "Recovery is unavailable",
+                        Some(error.to_string()),
+                        cx,
+                    );
                     return;
                 }
             };
@@ -99,11 +109,15 @@ impl ProductShell {
                     else {
                         return;
                     };
-                    let status = match discard.await {
-                        Ok(_) => format!("discarded recovered {title}"),
-                        Err(error) => format!("discard failed: {error}"),
-                    };
-                    Self::set_status(&this, status, cx);
+                    if let Err(error) = discard.await {
+                        Self::notice(
+                            &this,
+                            PromptLevel::Warning,
+                            "Discard failed",
+                            Some(error.to_string()),
+                            cx,
+                        );
+                    }
                 }
                 _ => {}
             }
@@ -118,37 +132,24 @@ impl ProductShell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let (document, status) = match outcome {
-            Ok(RestoreOutcome::Restored { document, resource }) => (
-                document,
-                match resource {
-                    RestoredResource::Untitled | RestoredResource::Unchanged => {
-                        format!("recovered {title}")
-                    }
-                    RestoredResource::Missing => {
-                        format!("recovered {title}; the file no longer exists")
-                    }
-                    RestoredResource::Changed => {
-                        format!("recovered {title}; the file changed since it was captured")
-                    }
-                },
-            ),
-            Ok(RestoreOutcome::AlreadyOpen { document }) => {
-                (document, format!("{title} is already open"))
-            }
-            Ok(RestoreOutcome::Preserved { document, .. }) => (
-                document,
-                format!("{title} is already open; the recovered text opened separately"),
-            ),
+        let document = match outcome {
+            Ok(
+                RestoreOutcome::Restored { document, .. }
+                | RestoreOutcome::AlreadyOpen { document }
+                | RestoreOutcome::Preserved { document, .. },
+            ) => document,
             Err(error) => {
-                self.status = format!("recovery failed: {error}").into();
-                cx.notify();
+                self.show_notice(
+                    PromptLevel::Warning,
+                    format!("Recovering {title} failed"),
+                    Some(error.to_string()),
+                    cx,
+                );
                 return;
             }
         };
         self.present_document_in_focused_pane(document, cx);
         self.focus_active_surface(window, cx);
-        self.status = status.into();
         cx.notify();
     }
 
@@ -176,16 +177,14 @@ impl ProductShell {
         self.present_open_document(document, &target, false, cx);
     }
 
-    pub(super) fn set_status(
+    pub(super) fn notice(
         this: &WeakEntity<Self>,
-        status: impl Into<SharedString>,
+        level: PromptLevel,
+        title: &str,
+        detail: Option<String>,
         cx: &mut AsyncApp,
     ) {
-        let status = status.into();
-        let _ = this.update(cx, |shell, cx| {
-            shell.status = status;
-            cx.notify();
-        });
+        let _ = this.update(cx, |shell, cx| shell.show_notice(level, title, detail, cx));
     }
 
     pub(super) fn in_window<R>(
@@ -203,22 +202,25 @@ impl ProductShell {
 }
 
 /// Status line for a window that received startup recovery.
-pub(super) fn startup_status(recovery: &crate::app::recovery::StartupRecovery) -> Option<String> {
+/// The startup notice for recovery that needs the user's attention: an
+/// unavailable store, or snapshots left for the listing.
+pub(super) fn startup_notice(
+    recovery: &crate::app::recovery::StartupRecovery,
+) -> Option<(String, Option<String>)> {
     if let Some(error) = &recovery.error {
-        return Some(format!("recovery unavailable: {error}"));
+        return Some(("Recovery is unavailable".into(), Some(error.to_string())));
     }
-    let restored = recovery.restored.len();
-    match (restored, recovery.remaining) {
-        (0, 0) => None,
-        (_, 0) => Some(format!(
-            "recovered {}",
-            plural(restored, "unsaved document")
-        )),
-        (_, remaining) => Some(format!(
-            "{} can be recovered with File › {LISTING_TITLE}…",
-            plural(remaining, "unsaved document")
-        )),
-    }
+    (recovery.remaining > 0).then(|| {
+        (
+            format!(
+                "{} can be recovered",
+                plural(recovery.remaining, "unsaved document")
+            ),
+            Some(format!(
+                "Use File › {LISTING_TITLE}… to restore or discard them."
+            )),
+        )
+    })
 }
 
 fn plural(count: usize, noun: &str) -> String {

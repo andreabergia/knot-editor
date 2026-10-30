@@ -52,7 +52,6 @@ impl ProductShell {
                 ],
                 cx,
             );
-            self.status = "choosing what to open".into();
             cx.notify();
             let task = cx.spawn(async move |this, cx| {
                 let answer = prompt.await.unwrap_or(2);
@@ -78,7 +77,6 @@ impl ProductShell {
                             cx,
                         ),
                         _ => {
-                            this.status = "open cancelled".into();
                             this.finish_open_command(
                                 completion,
                                 crate::host::protocol::CommandOutcome::Cancelled,
@@ -142,7 +140,6 @@ impl ProductShell {
                     }
                 })
             };
-        self.status = "choosing a file or folder".into();
         cx.notify();
         let task = cx.spawn(async move |this, cx| {
             let path = match selection.await {
@@ -151,7 +148,6 @@ impl ProductShell {
                     let delivered = completion.clone();
                     if this
                         .update(cx, |this, cx| {
-                            this.status = "open cancelled".into();
                             this.finish_open_command(
                                 delivered,
                                 crate::host::protocol::CommandOutcome::Cancelled,
@@ -169,7 +165,12 @@ impl ProductShell {
                     let delivered = completion.clone();
                     if this
                         .update(cx, |this, cx| {
-                            this.status = format!("open failed: {message}").into();
+                            this.show_notice(
+                                PromptLevel::Warning,
+                                "Open failed",
+                                Some(message.clone()),
+                                cx,
+                            );
                             this.finish_open_command(
                                 delivered,
                                 crate::host::protocol::CommandOutcome::HandlerFailure { message },
@@ -190,7 +191,12 @@ impl ProductShell {
                     let delivered = completion.clone();
                     if this
                         .update(cx, |this, cx| {
-                            this.status = format!("open failed: {message}").into();
+                            this.show_notice(
+                                PromptLevel::Warning,
+                                "Open failed",
+                                Some(message.clone()),
+                                cx,
+                            );
                             this.finish_open_command(
                                 delivered,
                                 crate::host::protocol::CommandOutcome::HandlerFailure { message },
@@ -256,6 +262,7 @@ impl ProductShell {
         cx: &mut Context<Self>,
     ) -> tokio::sync::oneshot::Receiver<Result<OpenCommit, OpenFailure>> {
         let (completion, result) = tokio::sync::oneshot::channel();
+        let window = target.window;
         self.start_resource_operation(
             request,
             target,
@@ -263,7 +270,16 @@ impl ProductShell {
                 replace_target,
                 ..Default::default()
             },
-            move |outcome, _| {
+            move |outcome, cx| {
+                if let Err(OpenFailure::Resource(error)) = &outcome {
+                    show_notice(
+                        window,
+                        PromptLevel::Warning,
+                        "Open failed".into(),
+                        Some(error.to_string()),
+                        cx,
+                    );
+                }
                 let _ = completion.send(outcome);
             },
             cx,
@@ -285,7 +301,6 @@ impl ProductShell {
         }
         let generation = self.next_open_generation();
         let uri = request.uri().clone();
-        self.status = format!("opening {uri}").into();
         let providers = Self::filesystems(cx);
         let task = cx.spawn(async move |this, cx| {
             let loaded = crate::app::open::load_resource_kind(providers, uri, options.kind).await;
@@ -361,33 +376,12 @@ impl ProductShell {
                 let target = self.present_open_document(document, target, replace_target, cx);
                 OpenCommit::Document { document, target }
             }
-            Err(error) => {
-                self.status = format!("open failed: {error}").into();
-                cx.notify();
-                return Err(error);
-            }
+            Err(error) => return Err(error),
         };
-        match &committed {
-            OpenCommit::Document { document, target } => {
-                let documents = Self::documents(cx);
-                let document = documents.read(cx).get(*document).unwrap();
-                self.status = format!(
-                    "{} {}",
-                    if matches!(document.state(), DocumentState::Destination { .. }) {
-                        "new file"
-                    } else {
-                        "opened"
-                    },
-                    document.resource_uri().unwrap()
-                )
-                .into();
-                let _ = cx.update_window(target.window, |_, window, cx| {
-                    self.focus_active_surface(window, cx)
-                });
-            }
-            OpenCommit::Workspace(workspace) => {
-                self.status = format!("workspace opened {}", workspace.roots()[0].uri).into();
-            }
+        if let OpenCommit::Document { target, .. } = &committed {
+            let _ = cx.update_window(target.window, |_, window, cx| {
+                self.focus_active_surface(window, cx)
+            });
         }
         cx.notify();
         Ok(committed)

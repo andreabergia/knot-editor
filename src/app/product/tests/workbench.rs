@@ -148,10 +148,6 @@ fn closing_the_final_clean_tab_creates_a_replacement(cx: &mut TestAppContext) {
         assert_ne!(replacement, original);
         assert!(documents.read(cx).get(original).is_none());
         assert!(documents.read(cx).get(replacement).is_some());
-        assert_eq!(
-            shell.read(cx).status,
-            "created replacement untitled document"
-        );
     });
 }
 

@@ -17,20 +17,21 @@ impl ProductShell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let receiver = match self.begin_folder_picker(None, window, cx) {
-            Ok(receiver) => receiver,
-            Err(_) => {
-                self.status = "another interaction is open in this window".into();
-                cx.notify();
-                return;
-            }
+        let Ok(receiver) = self.begin_folder_picker(None, window, cx) else {
+            return;
         };
         let handle = target.window;
         let task = cx.spawn(async move |this, cx| {
             let path = match receiver.await {
                 Ok(TransientOutcome::Folder(path)) => path,
                 Ok(TransientOutcome::Failed(message)) => {
-                    Self::set_status(&this, format!("cannot choose folder: {message}"), cx);
+                    Self::notice(
+                        &this,
+                        PromptLevel::Warning,
+                        "Cannot add folder",
+                        Some(message),
+                        cx,
+                    );
                     return;
                 }
                 _ => return,
@@ -52,8 +53,12 @@ impl ProductShell {
                 Ok(uri) => shell.add_workspace_root(uri, cx),
                 Err(error) => {
                     use crate::host::declarations::HostError;
-                    shell.status = format!("cannot add folder: {}", error.code()).into();
-                    cx.notify();
+                    shell.show_notice(
+                        PromptLevel::Warning,
+                        "Cannot add folder",
+                        Some(error.code().to_string()),
+                        cx,
+                    );
                 }
             });
         });
@@ -63,7 +68,6 @@ impl ProductShell {
     pub(super) fn add_workspace_root(&mut self, uri: ResourceUri, cx: &mut Context<Self>) {
         let mut roots = self.root_uris();
         if roots.contains(&uri) {
-            self.status = format!("{uri} is already in the workspace").into();
             cx.notify();
             return;
         }

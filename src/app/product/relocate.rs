@@ -180,7 +180,6 @@ impl ProductShell {
                 if !matches!(destination.tab, TabMoveDestination::Empty) {
                     destination_window.activate_window();
                 }
-                shell.status = "tab moved here".into();
                 cx.notify();
                 CommandOutcome::Completed
             })
@@ -208,8 +207,12 @@ impl ProductShell {
         }
         let existing = cx.windows();
         let Ok(destination) = create_destination(cx) else {
-            self.status = "could not create destination window".into();
-            cx.notify();
+            self.show_notice(
+                PromptLevel::Warning,
+                "Could not create destination window",
+                None,
+                cx,
+            );
             return CommandOutcome::HandlerFailure {
                 message: "could not create destination window".into(),
             };
