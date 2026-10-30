@@ -39,9 +39,10 @@ Select Theme previews themes live.
   highlighted item changes. Package roots are serial, so a notification root
   could not run while the caller's command is still awaiting the picker.
   Instead, `bootstrap.js` implements `showPicker` as a loop inside the caller's
-  root: it opens the picker, then repeatedly awaits a host request that settles
-  with either the next highlight or the final result, and awaits `onHighlight`
-  before asking again. Native code keeps only the latest unread highlight, so a
+  root: `beginPicker` opens the picker, then `nextPickerEvent` repeatedly
+  settles with either the next highlight or the final result, and
+  `onHighlight` is awaited before asking again. A throwing callback stops
+  previews and is rethrown once the picker settles. Native code keeps only the latest unread highlight, so a
   slow callback naturally coalesces. Without `onHighlight`, the loop asks only
   for the result. Undoing a preview is the caller's job.
 - **Command metadata.** `commands.register(name, handler, options?)` takes
@@ -215,7 +216,7 @@ subscription in `open_command_palette_from` (`src/app/product.rs`).
 Review gate: confirm the ranking feels right after a few days of use, or
 adjust the empty-query rule.
 
-### 5. Picker items and highlight preview for extensions
+### 5. ✅ Picker items and highlight preview for extensions
 
 Deliverables:
 

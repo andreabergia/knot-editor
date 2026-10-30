@@ -361,12 +361,26 @@ pub struct PickerItem {
     pub label: String,
     #[serde(default)]
     pub description: Option<String>,
+    #[serde(default)]
+    pub detail: Option<String>,
+    #[serde(default)]
+    pub hint: Option<String>,
 }
 
 /// Settled outcome of a picker interaction.
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum PickerResult {
+    Selected { id: String },
+    Dismissed,
+}
+
+/// One step of a picker whose caller previews the highlighted item: the
+/// highlight with the session to ask again, or the settled outcome.
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum PickerUpdate {
+    Highlighted { session: u64, id: Option<String> },
     Selected { id: String },
     Dismissed,
 }

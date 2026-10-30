@@ -57,13 +57,15 @@ impl ProductShell {
                 .iter()
                 .enumerate()
                 .map(|(index, snapshot)| PickerItem {
+                    detail: None,
+                    hint: None,
                     id: index.to_string(),
                     label: snapshot.title.clone(),
                     description: Some(describe_snapshot(snapshot, now)),
                 })
                 .collect();
             let Some(Ok(receiver)) = Self::in_window(&this, window, cx, |shell, window, cx| {
-                shell.begin_owned_picker(None, LISTING_TITLE.into(), items, window, cx)
+                shell.begin_owned_picker(None, LISTING_TITLE.into(), items, None, window, cx)
             }) else {
                 return;
             };

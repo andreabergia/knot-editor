@@ -16,11 +16,15 @@ fn owner(invocation: Option<u64>) -> TransientOwner {
 fn picker_items() -> Vec<PickerItem> {
     vec![
         PickerItem {
+            detail: None,
+            hint: None,
             id: "alpha".into(),
             label: "Alpha".into(),
             description: Some("first".into()),
         },
         PickerItem {
+            detail: None,
+            hint: None,
             id: "beta".into(),
             label: "Beta".into(),
             description: Some("second".into()),
@@ -65,7 +69,7 @@ fn picker_filters_accepts_keyboard_selection_and_restores_focus(cx: &mut TestApp
     let mut receiver = cx
         .update_window(window, |_, window, cx| {
             shell.update(cx, |shell, cx| {
-                shell.begin_picker(owner(None), "Pick".into(), picker_items(), window, cx)
+                shell.begin_picker(owner(None), "Pick".into(), picker_items(), None, window, cx)
             })
         })
         .unwrap()
@@ -116,7 +120,7 @@ fn input_and_native_prompts_settle_once(cx: &mut TestAppContext) {
     let mut rejected = cx
         .update_window(window, |_, window, cx| {
             shell.update(cx, |shell, cx| {
-                shell.begin_picker(owner(None), "Pick".into(), picker_items(), window, cx)
+                shell.begin_picker(owner(None), "Pick".into(), picker_items(), None, window, cx)
             })
         })
         .unwrap()
@@ -246,7 +250,14 @@ fn cancellation_matches_the_owner_and_two_windows_stay_independent(cx: &mut Test
     let mut first = cx
         .update_window(first_window, |_, window, cx| {
             first_shell.update(cx, |shell, cx| {
-                shell.begin_picker(owner(None), "First".into(), picker_items(), window, cx)
+                shell.begin_picker(
+                    owner(None),
+                    "First".into(),
+                    picker_items(),
+                    None,
+                    window,
+                    cx,
+                )
             })
         })
         .unwrap()
@@ -254,7 +265,14 @@ fn cancellation_matches_the_owner_and_two_windows_stay_independent(cx: &mut Test
     let mut second = cx
         .update_window(second_window, |_, window, cx| {
             second_shell.update(cx, |shell, cx| {
-                shell.begin_picker(owner(None), "Second".into(), picker_items(), window, cx)
+                shell.begin_picker(
+                    owner(None),
+                    "Second".into(),
+                    picker_items(),
+                    None,
+                    window,
+                    cx,
+                )
             })
         })
         .unwrap()
@@ -289,7 +307,7 @@ fn window_closure_releases_the_pending_interaction(cx: &mut TestAppContext) {
     let mut receiver = cx
         .update_window(window, |_, window, cx| {
             shell.update(cx, |shell, cx| {
-                shell.begin_picker(owner(None), "Pick".into(), picker_items(), window, cx)
+                shell.begin_picker(owner(None), "Pick".into(), picker_items(), None, window, cx)
             })
         })
         .unwrap()
@@ -375,4 +393,154 @@ await commands.register("transient.context-free-ok", () => {});
             .resolve("transient.context-free-ok")
             .is_ok()
     });
+}
+
+fn transient_picker(
+    shell: &Entity<ProductShell>,
+    cx: &mut TestAppContext,
+) -> Entity<crate::app::picker::Picker> {
+    cx.read(
+        |cx| match shell.read(cx).transient.as_ref().unwrap().surface.as_ref() {
+            Some(crate::app::transient::TransientSurface::Picker(picker)) => picker.clone(),
+            _ => panic!("the transient is not a picker"),
+        },
+    )
+}
+
+fn clipboard(cx: &mut TestAppContext) -> Option<String> {
+    cx.read(|cx| cx.read_from_clipboard().and_then(|item| item.text()))
+}
+
+const PREVIEW_SOURCE: &str = r#"
+import { commands, workbench } from "knot";
+await commands.register("transient.preview", async () => {
+  const seen = [];
+  const picked = await workbench.showPicker({
+    title: "Pick",
+    items: [
+      { id: "a", label: "Alpha" },
+      { id: "b", label: "Beta", detail: "second", hint: "B" },
+      { id: "c", label: "Gamma" },
+    ],
+    onHighlight: async (id) => {
+      seen.push(id);
+      await workbench.writeClipboardText(seen.join(","));
+    },
+  });
+  await workbench.writeClipboardText(`${seen.join(",")}|${JSON.stringify(picked)}`);
+});
+"#;
+
+fn start_preview(
+    cx: &mut TestAppContext,
+) -> (
+    Entity<crate::app::extensions::host::ProductExtensionHost>,
+    crate::host::lifecycle::ExtensionKey,
+    Entity<ProductShell>,
+    gpui::AnyWindowHandle,
+    crate::app::CommandExecution,
+) {
+    use crate::host::lifecycle::ExtensionKey;
+
+    let documents = install_globals(cx);
+    let host = cx.update(crate::app::extensions::host::install);
+    let key = ExtensionKey::new(ExtensionId::new(713), ExtensionLifecycleId::new(1));
+    host.update(cx, |host, cx| {
+        let execution = host.load_test_source(key, PREVIEW_SOURCE).unwrap();
+        cx.spawn(async move |_, _| {
+            execution.await.unwrap();
+        })
+        .detach();
+    });
+    wait_for_api_condition(cx, |cx| {
+        cx.global::<ApplicationProductCommands>()
+            .0
+            .read(cx)
+            .catalog()
+            .borrow()
+            .resolve("transient.preview")
+            .is_ok()
+    });
+    let document = cx.update(|cx| create_untitled_document(&documents, cx));
+    let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+    let (shell, window) = product_window(document, model, cx);
+    let pending = dispatch_product_command(&shell, window, "transient.preview", cx);
+    // The initial highlight reaches the callback before anything moves.
+    wait_for_api_condition(cx, |cx| {
+        cx.read_from_clipboard()
+            .and_then(|item| item.text())
+            .as_deref()
+            == Some("a")
+    });
+    (host, key, shell, window, pending)
+}
+
+#[gpui::test]
+fn picker_previews_report_the_latest_highlight_then_the_selection(cx: &mut TestAppContext) {
+    let (_host, _key, shell, _window, completion) = start_preview(cx);
+    let picker = transient_picker(&shell, cx);
+    picker.read_with(cx, |picker, _| {
+        assert_eq!(picker.entry(1).detail.as_deref(), Some("second"));
+        assert_eq!(picker.entry(1).hint.as_deref(), Some("B"));
+    });
+    // Two moves before the extension asks again collapse into the latest.
+    picker.update(cx, |picker, cx| {
+        picker.move_selection(1, cx);
+        picker.move_selection(1, cx);
+    });
+    wait_for_api_condition(cx, |cx| {
+        cx.read_from_clipboard()
+            .and_then(|item| item.text())
+            .as_deref()
+            == Some("a,c")
+    });
+    picker.update(cx, |picker, cx| picker.set_query("zzz", cx));
+    wait_for_api_condition(cx, |cx| {
+        cx.read_from_clipboard()
+            .and_then(|item| item.text())
+            .as_deref()
+            == Some("a,c,")
+    });
+    picker.update(cx, |picker, cx| {
+        picker.set_query("beta", cx);
+        picker.confirm(cx);
+    });
+    wait_for_api_condition(cx, |cx| {
+        cx.read_from_clipboard()
+            .and_then(|item| item.text())
+            .is_some_and(|text| text.contains('|'))
+    });
+    // The confirmation settles the picker; the highlight it raced is dropped.
+    assert_eq!(
+        clipboard(cx).as_deref(),
+        Some(r#"a,c,|{"kind":"selected","id":"b"}"#)
+    );
+    assert_eq!(wait_for_command(completion, cx), CommandOutcome::Completed);
+}
+
+#[gpui::test]
+fn picker_previews_settle_on_dismissal_and_unload(cx: &mut TestAppContext) {
+    let (host, key, shell, window, completion) = start_preview(cx);
+    let picker = transient_picker(&shell, cx);
+    cx.update_window(window, |_, _, cx| {
+        picker.update(cx, |_, cx| {
+            cx.emit(crate::app::picker::PickerEvent::Dismissed)
+        });
+    })
+    .unwrap();
+    wait_for_api_condition(cx, |cx| {
+        cx.read_from_clipboard()
+            .and_then(|item| item.text())
+            .is_some_and(|text| text.contains('|'))
+    });
+    assert_eq!(clipboard(cx).as_deref(), Some(r#"a|{"kind":"dismissed"}"#));
+    assert_eq!(wait_for_command(completion, cx), CommandOutcome::Completed);
+
+    // Unloading while the extension awaits the next highlight settles it.
+    let pending = dispatch_product_command(&shell, window, "transient.preview", cx);
+    wait_for_api_condition(cx, |cx| shell.read(cx).transient.is_some());
+    host.update(cx, |host, cx| host.unload(key, cx).unwrap());
+    cx.run_until_parked();
+    cx.read(|cx| assert!(shell.read(cx).transient.is_none()));
+    assert_ne!(wait_for_command(pending, cx), CommandOutcome::Completed);
 }

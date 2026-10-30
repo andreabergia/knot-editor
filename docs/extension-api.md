@@ -395,8 +395,24 @@ if (sure.kind === "confirmed") await remove();
 await workbench.showMessage({ title: "Saved" });
 ```
 
-Picker items are filtered locally by label and description, so the complete list
-is supplied up front; there is no streaming provider. Inputs are single-line and
+Picker items are fuzzy-matched locally, label first and then description, so
+the complete list is supplied up front; there is no streaming provider. An item
+may add a `detail` line and a right-aligned `hint`. Pass `onHighlight` to
+preview the highlighted item as the user moves through the list:
+
+```js
+const before = await settings.get("theme.dark");
+const picked = await workbench.showPicker({
+  title: "Preview",
+  items,
+  onHighlight: async (id) => { if (id !== null) await settings.set("theme.dark", id); },
+});
+if (picked.kind === "dismissed") await settings.set("theme.dark", before);
+```
+
+The callback runs inside the awaiting command, one call at a time; changes
+made while it runs collapse into the latest highlight. Undoing a preview after
+dismissal is the caller's job. Inputs are single-line and
 support the usual editing, clipboard, IME, and selection behavior. Confirmation
 and message use the native platform prompt.
 

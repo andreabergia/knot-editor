@@ -377,6 +377,8 @@ function pickerItem(value) {
     id: string(value.id, "picker item ID must be text"),
     label: string(value.label, "picker item label must be text"),
     description: optionalText(value.description),
+    detail: optionalText(value.detail),
+    hint: optionalText(value.hint),
   };
 }
 
@@ -389,7 +391,30 @@ export async function showPicker(options) {
   const target = transientTarget(options);
   const title = string(options.title, "picker title must be text");
   const items = arrayItems(options.items, pickerItem);
-  return request("showPicker", title, items, target);
+  const onHighlight = options.onHighlight;
+  if (onHighlight == null) return request("showPicker", title, items, target);
+  if (typeof onHighlight !== "function") {
+    throw new TypeError("picker onHighlight must be a function");
+  }
+  // Highlights are pulled inside this turn: a separate notification could not
+  // run while the caller awaits the picker. A failing callback stops previews
+  // and rethrows once the picker settles, so it never stays open unowned.
+  let failure = null;
+  let update = await request("beginPicker", title, items, target);
+  while (update.kind === "highlighted") {
+    if (failure === null) {
+      try {
+        await onHighlight(update.id);
+      } catch (error) {
+        failure = { error };
+      }
+    }
+    update = await request("nextPickerEvent", update.session);
+  }
+  if (failure !== null) throw failure.error;
+  return update.kind === "selected"
+    ? Object.freeze({ kind: "selected", id: update.id })
+    : Object.freeze({ kind: "dismissed" });
 }
 
 export async function showInput(options) {

@@ -961,11 +961,17 @@ declare module "knot" {
      */
     setText(text: string, window?: WindowTarget): Promise<void>;
   }
-  /** One selectable row offered to a picker; filtered locally by label and description. */
+  /** One selectable row offered to a picker; fuzzy-matched locally by label,
+   * then description. */
   export interface PickerItem {
     readonly id: string;
     readonly label: string;
+    /** Muted text beside the label. */
     readonly description?: string | null;
+    /** A muted second line. */
+    readonly detail?: string | null;
+    /** Right-aligned text, such as a keybinding. */
+    readonly hint?: string | null;
   }
   /** Selection or explicit dismissal; dismissal is not an operational failure. */
   export type PickerResult = Readonly<
@@ -985,6 +991,14 @@ declare module "knot" {
   export interface PickerOptions extends TransientTargetOptions {
     readonly title: string;
     readonly items: readonly PickerItem[];
+    /**
+     * Called with the highlighted item's ID, or null when nothing matches,
+     * first for the initial highlight and then whenever it changes. Calls are
+     * serial; while one runs, later changes collapse into the latest. Undoing
+     * a preview after dismissal is the caller's job. A throw stops further
+     * calls and is rethrown once the picker settles.
+     */
+    readonly onHighlight?: (id: string | null) => void | Promise<void>;
   }
   export interface InputOptions extends TransientTargetOptions {
     readonly title: string;
@@ -1225,7 +1239,7 @@ declare module "knot" {
     registerView(contribution: ViewContribution): Promise<ViewRegistration>;
     /**
      * Present a searchable single-selection picker with a native text field and
-     * local filtering. Resolution is a typed selection or dismissal.
+     * local fuzzy matching. Resolution is a typed selection or dismissal.
      * @throws TypeError for invalid options; HostError with OperationInProgress
      * when another extension interaction owns the window, InvalidTarget for a
      * stale target, ContextUnavailable without a target or command capture, or

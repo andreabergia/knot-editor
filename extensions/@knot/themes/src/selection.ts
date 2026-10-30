@@ -46,14 +46,30 @@ export async function restore(): Promise<Selection> {
   return selection;
 }
 
+/** The settings that make a theme visible: its appearance's theme, and the
+ * mode unless the mode follows the system. */
+function choosing(base: Selection, mode: string | undefined, name: string, appearance: ThemeAppearance) {
+  const selection: Selection = { ...base, [appearance]: name };
+  if (mode !== "system") selection.mode = appearance;
+  return selection;
+}
+
 /** Picks a registered theme and makes it the theme of its appearance, and
- * the active mode unless the mode follows the system. */
+ * the active mode unless the mode follows the system. The highlighted theme
+ * is previewed, and dismissing restores the settings from before. */
 export async function select(stored: Selection): Promise<Selection> {
+  const mode = await settings.get("theme.mode");
   const current: Record<ThemeAppearance, string | undefined> = {
     dark: await settings.get("theme.dark"),
     light: await settings.get("theme.light"),
   };
+  const before: Selection = {};
+  if (mode !== undefined) before.mode = mode;
+  if (current.dark !== undefined) before.dark = current.dark;
+  if (current.light !== undefined) before.light = current.light;
   const registered = await themes.list();
+  const byName = (name: string | null) => registered.find((candidate) => candidate.name === name);
+  let previewed = false;
   const picked = await workbench.showPicker({
     title: "Select theme",
     items: registered.map((theme) => ({
@@ -61,12 +77,19 @@ export async function select(stored: Selection): Promise<Selection> {
       label: theme.name,
       description: current[theme.appearance] === theme.name ? `${theme.appearance}, selected` : theme.appearance,
     })),
+    onHighlight: async (id) => {
+      const theme = byName(id);
+      if (theme === undefined) return;
+      previewed = true;
+      await apply(choosing(before, mode, theme.name, theme.appearance));
+    },
   });
-  if (picked.kind === "dismissed") return stored;
-  const theme = registered.find((candidate) => candidate.name === picked.id);
-  if (theme === undefined) return stored;
-  const selection: Selection = { ...stored, [theme.appearance]: theme.name };
-  if ((await settings.get("theme.mode")) !== "system") selection.mode = theme.appearance;
+  const theme = picked.kind === "selected" ? byName(picked.id) : undefined;
+  if (theme === undefined) {
+    if (previewed) await apply(before);
+    return stored;
+  }
+  const selection = choosing(stored, mode, theme.name, theme.appearance);
   await apply(selection);
   await storage.write(RECORD_KEY, selection);
   return selection;

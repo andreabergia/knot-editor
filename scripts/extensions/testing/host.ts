@@ -73,6 +73,7 @@ function emptyState() {
     launched: false,
     answers: new Map<keyof Answers, unknown[]>(),
     prompts: [] as Prompt[],
+    pickerHighlights: [] as (string | null)[],
     messages: [] as Knot.MessageOptions[],
     clipboard: null as string | null,
     selectedText: null as string | null,
@@ -318,6 +319,12 @@ export function answer<K extends keyof Answers>(kind: K, result: Answers[K]) {
   const queued = state.answers.get(kind) ?? [];
   queued.push(result);
   state.answers.set(kind, queued);
+}
+
+/** Highlights the next picker reports to its `onHighlight`, in order,
+ * before it settles with its scripted answer. */
+export function highlight(...ids: (string | null)[]) {
+  state.pickerHighlights.push(...ids);
 }
 
 function prompt<K extends keyof Answers>(kind: K, options: unknown): Answers[K] {
@@ -860,7 +867,15 @@ export const api: KnotApi = {
         },
       };
     },
-    showPicker: async (options) => prompt("showPicker", options),
+    showPicker: async (options) => {
+      const result = prompt("showPicker", options);
+      const highlights = state.pickerHighlights;
+      state.pickerHighlights = [];
+      if (options.onHighlight !== undefined) {
+        for (const id of highlights) await options.onHighlight(id);
+      }
+      return result;
+    },
     showInput: async (options) => prompt("showInput", options),
     showConfirmation: async (options) => prompt("showConfirmation", options),
     showMessage: async (options) => {

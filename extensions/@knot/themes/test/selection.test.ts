@@ -79,3 +79,29 @@ test("an unreadable record keeps the defaults", async () => {
   await start();
   assert.deepEqual(await selection(), { mode: "dark", dark: "One Dark", light: "One Light" });
 });
+
+test("highlighting previews a theme and dismissing restores the settings", async () => {
+  await start();
+  const seen: unknown[] = [];
+  const unobserve = await settings.observe("theme.light", async () => {
+    seen.push(await settings.get("theme.light"));
+  });
+  host.highlight("Solarized Light", "Solarized Dark", null);
+  host.answer("showPicker", { kind: "dismissed" });
+  await host.run("themes.select");
+  await unobserve.dispose();
+
+  assert.ok(seen.includes("Solarized Light"));
+  assert.deepEqual(await selection(), { mode: "dark", dark: "One Dark", light: "One Light" });
+  assert.equal(host.record(RECORD_KEY), undefined);
+});
+
+test("selecting after previewing keeps the selected theme", async () => {
+  await start();
+  host.highlight("Solarized Dark", "One Light");
+  host.answer("showPicker", { kind: "selected", id: "One Light" });
+  await host.run("themes.select");
+
+  assert.deepEqual(await selection(), { mode: "light", dark: "One Dark", light: "One Light" });
+  assert.deepEqual(host.record(RECORD_KEY), { light: "One Light", mode: "light" });
+});

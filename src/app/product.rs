@@ -998,6 +998,9 @@ impl ProductShell {
         let palette = CommandPalette::new(definitions, &bindings, &recent, origin, cx);
         let picker = palette.picker().clone();
         let subscription = cx.subscribe(&picker, |this, _picker, event: &PickerEvent, cx| {
+            if matches!(event, PickerEvent::Highlighted(_)) {
+                return;
+            }
             let palette = this.command_palette.take();
             this.command_palette_subscription = None;
             if let (PickerEvent::Confirmed(entry), Some(palette)) = (event, palette) {
@@ -1085,17 +1088,22 @@ impl ProductShell {
         owner: TransientOwner,
         title: String,
         items: Vec<crate::host::protocol::PickerItem>,
+        highlights: Option<tokio::sync::watch::Sender<Option<String>>>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<tokio::sync::oneshot::Receiver<TransientOutcome>, TransientError> {
-        self.begin_owned_picker(Some(owner), title, items, window, cx)
+        self.begin_owned_picker(Some(owner), title, items, highlights, window, cx)
     }
 
+    /// Present a picker in the transient slot. With `highlights`, the ID of
+    /// the highlighted item is published as it changes, starting with the
+    /// initial one.
     fn begin_owned_picker(
         &mut self,
         owner: Option<TransientOwner>,
         title: String,
         items: Vec<crate::host::protocol::PickerItem>,
+        highlights: Option<tokio::sync::watch::Sender<Option<String>>>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<tokio::sync::oneshot::Receiver<TransientOutcome>, TransientError> {
@@ -1106,6 +1114,8 @@ impl ProductShell {
             .map(|item| {
                 let entry = PickerEntry {
                     description: item.description,
+                    detail: item.detail,
+                    hint: item.hint,
                     ..PickerEntry::new(item.label)
                 };
                 (item.id, entry)
@@ -1113,18 +1123,26 @@ impl ProductShell {
             .unzip();
         let view = cx.new(|cx| Picker::new(Some(title), entries, super::TRANSIENT_KEY_CONTEXT, cx));
         let focus = view.read(cx).focus_handle(cx);
+        let id_of = move |entry: Option<usize>| entry.map(|entry| ids[entry].clone());
+        if let Some(highlights) = &highlights {
+            highlights.send_replace(id_of(view.read(cx).selected_entry()));
+        }
         let subscription = cx.subscribe(
             &view,
             move |this: &mut Self, _view, event: &PickerEvent, cx| {
-                this.finish_transient(
-                    match event {
-                        PickerEvent::Confirmed(entry) => {
-                            TransientOutcome::Picker(ids[*entry].clone())
+                let outcome = match event {
+                    PickerEvent::Highlighted(entry) => {
+                        if let Some(highlights) = &highlights {
+                            highlights.send_replace(id_of(*entry));
                         }
-                        PickerEvent::Dismissed => TransientOutcome::Dismissed,
-                    },
-                    cx,
-                );
+                        return;
+                    }
+                    PickerEvent::Confirmed(entry) => {
+                        TransientOutcome::Picker(id_of(Some(*entry)).expect("confirmed entry"))
+                    }
+                    PickerEvent::Dismissed => TransientOutcome::Dismissed,
+                };
+                this.finish_transient(outcome, cx);
             },
         );
         let (completion, receiver) = tokio::sync::oneshot::channel();

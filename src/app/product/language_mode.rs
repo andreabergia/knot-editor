@@ -33,6 +33,8 @@ impl ProductShell {
             .then(|| crate::app::languages::effective_language(model.read(cx), cx));
         let mut choices = vec![None];
         let mut items = vec![PickerItem {
+            detail: None,
+            hint: None,
             id: "0".into(),
             label: "Auto Detect".into(),
             description: Some(
@@ -51,6 +53,8 @@ impl ProductShell {
                 language.id.clone()
             };
             items.push(PickerItem {
+                detail: None,
+                hint: None,
                 id: choices.len().to_string(),
                 label: language.name,
                 description: Some(description),
@@ -58,7 +62,7 @@ impl ProductShell {
             choices.push(Some(language.id));
         }
         let Ok(receiver) =
-            self.begin_owned_picker(None, LANGUAGE_MODE_TITLE.into(), items, window, cx)
+            self.begin_owned_picker(None, LANGUAGE_MODE_TITLE.into(), items, None, window, cx)
         else {
             cx.notify();
             return Ok(());

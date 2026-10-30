@@ -489,6 +489,9 @@ pub(crate) struct ProductExtensionHost {
     setting_observers:
         HashMap<crate::host::protocol::SettingsSubscriptionId, (String, ExtensionKey)>,
     next_setting_observer: u64,
+    /// Pickers whose callers preview highlights, between pulls.
+    picker_sessions: HashMap<u64, handlers::PickerSession>,
+    next_picker_session: u64,
     /// Values dropped because a later definition gave their key another type.
     setting_warnings: Vec<String>,
     #[cfg(test)]
@@ -559,6 +562,8 @@ impl ProductExtensionHost {
             application_observation: Default::default(),
             setting_observers: HashMap::new(),
             next_setting_observer: 0,
+            picker_sessions: HashMap::new(),
+            next_picker_session: 0,
             setting_warnings: Vec::new(),
             #[cfg(test)]
             application_events: Vec::new(),
@@ -2086,6 +2091,28 @@ impl ProductExtensionHost {
         .map_err(|_| handlers::TransientError::InvalidTarget)?
     }
 
+    /// Keep a previewing picker between pulls and return the number its
+    /// caller asks again with.
+    pub(crate) fn keep_picker_session(&mut self, session: handlers::PickerSession) -> u64 {
+        self.next_picker_session += 1;
+        self.picker_sessions
+            .insert(self.next_picker_session, session);
+        self.next_picker_session
+    }
+
+    /// Take a previewing picker for its next pull; another lifecycle's
+    /// number finds nothing.
+    pub(crate) fn take_picker_session(
+        &mut self,
+        owner: ExtensionKey,
+        number: u64,
+    ) -> Option<handlers::PickerSession> {
+        if self.picker_sessions.get(&number)?.owner() != owner {
+            return None;
+        }
+        self.picker_sessions.remove(&number)
+    }
+
     /// Settle any live transient interaction owned by the given extension
     /// lifetime, optionally narrowed to one command invocation.
     fn cancel_transients(
@@ -2205,6 +2232,8 @@ impl ProductExtensionHost {
         self.storage_owners.remove(&key);
         self.application_observation.remove_lifecycle(key);
         self.setting_observers.retain(|_, (_, owner)| *owner != key);
+        self.picker_sessions
+            .retain(|_, session| session.owner() != key);
         if cx.has_global::<crate::app::commands::keymaps::ApplicationKeymaps>() {
             let owner = crate::app::commands::keymaps::BindingOwner::Extension(
                 key.extension,

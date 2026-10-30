@@ -806,8 +806,8 @@ pub(crate) async fn dispose_editor_contributions(
 use crate::app::extensions::semantics::{SemanticError, ViewPresentation};
 use crate::host::protocol::{
     CompletionProviderRegistrationId, ConfirmationResult, FolderPickerResult, InputResult,
-    PickerItem, PickerResult, ProviderIdentity, TreeAction, TreeProviderRegistrationId,
-    ViewContentKind,
+    PickerItem, PickerResult, PickerUpdate, ProviderIdentity, TreeAction,
+    TreeProviderRegistrationId, ViewContentKind,
 };
 
 use crate::app::transient::{PromptText, TransientOutcome, TransientOwner};
@@ -1043,7 +1043,7 @@ pub(crate) async fn show_picker(
         host.with_transient_window(
             &request,
             target.as_deref(),
-            move |shell, window, cx| shell.begin_picker(owner, title, items, window, cx),
+            move |shell, window, cx| shell.begin_picker(owner, title, items, None, window, cx),
             cx,
         )
     })??;
@@ -1051,6 +1051,130 @@ pub(crate) async fn show_picker(
         Ok(TransientOutcome::Picker(id)) => Ok(PickerResult::Selected { id }),
         Ok(TransientOutcome::Dismissed) => Ok(PickerResult::Dismissed),
         _ => Err(TransientError::Cancelled),
+    }
+}
+
+/// A picker whose caller previews the highlighted item. The caller pulls each
+/// change within its own turn, because a separate notification root could not
+/// run while the caller awaits the picker.
+pub(crate) struct PickerSession {
+    owner: ExtensionKey,
+    completion: tokio::sync::oneshot::Receiver<TransientOutcome>,
+    highlights: tokio::sync::watch::Receiver<Option<String>>,
+}
+
+impl PickerSession {
+    pub(crate) fn owner(&self) -> ExtensionKey {
+        self.owner
+    }
+}
+
+/// Open a picker and settle with its first highlight or its outcome.
+#[host_operation("beginPicker")]
+pub(crate) async fn begin_picker(
+    context: HostContext,
+    arguments: PickerArguments,
+) -> Result<PickerUpdate, TransientError> {
+    let request = context.request;
+    let owner = transient_owner(&request);
+    let PickerArguments {
+        title,
+        items,
+        target,
+    } = arguments;
+    let (sender, highlights) = tokio::sync::watch::channel(None);
+    let completion = context.foreground(|host, cx| {
+        host.with_transient_window(
+            &request,
+            target.as_deref(),
+            move |shell, window, cx| {
+                shell.begin_picker(owner, title, items, Some(sender), window, cx)
+            },
+            cx,
+        )
+    })??;
+    let session = PickerSession {
+        owner: ExtensionKey::new(request.extension, request.lifecycle),
+        completion,
+        highlights,
+    };
+    next_picker_update(&context, session).await
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct PickerSessionArguments {
+    pub session: u64,
+}
+impl HostArguments for PickerSessionArguments {
+    fn decode(reader: &mut dyn ArgumentReader) -> Result<Self, DecodeError> {
+        Ok(Self {
+            session: reader.integer(2)?,
+        })
+    }
+}
+
+/// Settle with the picker's next highlight, or with its outcome once it
+/// settles. Only the latest unread highlight is kept.
+#[host_operation("nextPickerEvent")]
+pub(crate) async fn next_picker_event(
+    context: HostContext,
+    arguments: PickerSessionArguments,
+) -> Result<PickerUpdate, TransientError> {
+    let owner = ExtensionKey::new(context.request.extension, context.request.lifecycle);
+    let session = context
+        .foreground(|host, _| host.take_picker_session(owner, arguments.session))?
+        .ok_or(TransientError::Cancelled)?;
+    next_picker_update(&context, session).await
+}
+
+async fn next_picker_update(
+    context: &HostContext,
+    mut session: PickerSession,
+) -> Result<PickerUpdate, TransientError> {
+    enum Next {
+        Settled(Result<TransientOutcome, tokio::sync::oneshot::error::RecvError>),
+        Highlighted,
+        Closed,
+    }
+    // A settled picker wins over a highlight that was never read.
+    let next = match session.completion.try_recv() {
+        Ok(outcome) => Next::Settled(Ok(outcome)),
+        Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+            return Err(TransientError::Cancelled);
+        }
+        Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {
+            let completion = &mut session.completion;
+            let mut changed = std::pin::pin!(session.highlights.changed());
+            std::future::poll_fn(|task| {
+                if let std::task::Poll::Ready(outcome) =
+                    std::pin::Pin::new(&mut *completion).poll(task)
+                {
+                    return std::task::Poll::Ready(Next::Settled(outcome));
+                }
+                changed.as_mut().poll(task).map(|changed| match changed {
+                    Ok(()) => Next::Highlighted,
+                    Err(_) => Next::Closed,
+                })
+            })
+            .await
+        }
+    };
+    let next = match next {
+        Next::Closed => Next::Settled((&mut session.completion).await),
+        next => next,
+    };
+    match next {
+        Next::Settled(Ok(TransientOutcome::Picker(id))) => Ok(PickerUpdate::Selected { id }),
+        Next::Settled(Ok(TransientOutcome::Dismissed)) => Ok(PickerUpdate::Dismissed),
+        Next::Settled(_) => Err(TransientError::Cancelled),
+        Next::Highlighted | Next::Closed => {
+            let id = session.highlights.borrow_and_update().clone();
+            let id_number = context.foreground(|host, _| host.keep_picker_session(session))?;
+            Ok(PickerUpdate::Highlighted {
+                session: id_number,
+                id,
+            })
+        }
     }
 }
 

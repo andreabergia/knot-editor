@@ -211,7 +211,10 @@ void closedKind;
 // Transient interactions resolve typed selection, acceptance and dismissal.
 const picked: import("knot").PickerResult = await workbench.showPicker({
   title: "Pick",
-  items: [{ id: "a", label: "A", description: null }],
+  items: [{ id: "a", label: "A", description: null, detail: "second line", hint: "⌘A" }],
+  onHighlight: async (id: string | null) => {
+    void id;
+  },
 });
 if (picked.kind === "selected") {
   const id: string = picked.id;
@@ -242,6 +245,8 @@ await workspaces.pickFolder({ target: "window" });
 await workbench.showMessage({ title: "Notice", message: "body" });
 // @ts-expect-error picker items require an id
 await workbench.showPicker({ title: "Bad", items: [{ label: "missing" }] });
+// @ts-expect-error onHighlight receives an item ID
+await workbench.showPicker({ title: "Bad", items: [], onHighlight: (id: number) => void id });
 // @ts-expect-error input title is required
 await workbench.showInput({ value: "no title" });
 // @ts-expect-error command targets are not live window targets

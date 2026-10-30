@@ -6,7 +6,8 @@
 //! above description matches, which rank above matches in an item's hidden
 //! match text. Within a tier a higher score ranks first, and ties keep the
 //! caller's order, as does an empty query. Events name items by their index in
-//! the list the picker was created with.
+//! the list the picker was created with. The picker reports the highlighted
+//! item whenever it changes, so a consumer can preview it.
 
 use std::ops::Range;
 
@@ -53,6 +54,8 @@ impl PickerEntry {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum PickerEvent {
+    /// The highlighted entry changed; `None` when nothing matches.
+    Highlighted(Option<usize>),
     Confirmed(usize),
     Dismissed,
 }
@@ -70,6 +73,8 @@ pub(crate) struct Picker {
     entries: Vec<PickerEntry>,
     matches: Vec<PickerMatch>,
     selected: usize,
+    /// The highlighted entry last reported.
+    highlighted: Option<usize>,
     input: Entity<TextInput>,
     scroll: UniformListScrollHandle,
     matcher: Matcher,
@@ -90,6 +95,7 @@ impl Picker {
             |this: &mut Self, _input, _event: &TextInputEvent, cx| {
                 let query = this.input.read(cx).text().to_string();
                 this.refilter(&query);
+                this.report_highlight(cx);
                 cx.notify();
             },
         );
@@ -98,6 +104,7 @@ impl Picker {
             entries,
             matches: Vec::new(),
             selected: 0,
+            highlighted: None,
             input,
             scroll: UniformListScrollHandle::new(),
             matcher: Matcher::new(Config::DEFAULT),
@@ -105,6 +112,7 @@ impl Picker {
             _input_subscription: subscription,
         };
         this.refilter("");
+        this.highlighted = this.selected_entry();
         this
     }
 
@@ -132,7 +140,16 @@ impl Picker {
     pub(crate) fn set_query(&mut self, query: &str, cx: &mut Context<Self>) {
         self.input.update(cx, |input, cx| input.set_text(query, cx));
         self.refilter(query);
+        self.report_highlight(cx);
         cx.notify();
+    }
+
+    fn report_highlight(&mut self, cx: &mut Context<Self>) {
+        let highlighted = self.selected_entry();
+        if highlighted != self.highlighted {
+            self.highlighted = highlighted;
+            cx.emit(PickerEvent::Highlighted(highlighted));
+        }
     }
 
     fn refilter(&mut self, query: &str) {
@@ -187,7 +204,7 @@ impl Picker {
         self.matches = scored.into_iter().map(|(_, _, found)| found).collect();
     }
 
-    fn move_selection(&mut self, delta: isize, cx: &mut Context<Self>) {
+    pub(crate) fn move_selection(&mut self, delta: isize, cx: &mut Context<Self>) {
         let count = self.matches.len();
         self.selected = if count == 0 {
             0
@@ -198,10 +215,11 @@ impl Picker {
         };
         self.scroll
             .scroll_to_item(self.selected, ScrollStrategy::Center);
+        self.report_highlight(cx);
         cx.notify();
     }
 
-    fn confirm(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn confirm(&mut self, cx: &mut Context<Self>) {
         if let Some(entry) = self.selected_entry() {
             cx.emit(PickerEvent::Confirmed(entry));
         }
@@ -563,6 +581,13 @@ mod tests {
             picker.move_selection(1, cx);
             assert_eq!(picker.selected, 0);
         });
-        assert_eq!(*events.borrow(), [PickerEvent::Confirmed(1)]);
+        assert_eq!(
+            *events.borrow(),
+            [
+                PickerEvent::Highlighted(Some(1)),
+                PickerEvent::Confirmed(1),
+                PickerEvent::Highlighted(None),
+            ]
+        );
     }
 }

@@ -409,8 +409,12 @@ keybinding("ctrl-alt-f", "fixture.described");
             .borrow()
             .resolve("fixture.plain")
             .is_ok()
+            && cx
+                .global::<crate::app::commands::keymaps::ApplicationKeymaps>()
+                .0
+                .shown_bindings(None)
+                .contains_key("fixture.described")
     });
-    cx.run_until_parked();
     let document = cx.update(|cx| create_untitled_document(&documents, cx));
     let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
     let (shell, window) = product_window(document, model, cx);

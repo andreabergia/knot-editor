@@ -223,6 +223,12 @@ impl HostSuccess for super::protocol::PickerResult {
     }
 }
 
+impl HostSuccess for super::protocol::PickerUpdate {
+    fn encode(self) -> Result<EncodedValue, DecodeError> {
+        encode_json(self)
+    }
+}
+
 impl HostSuccess for super::protocol::InputResult {
     fn encode(self) -> Result<EncodedValue, DecodeError> {
         encode_json(self)

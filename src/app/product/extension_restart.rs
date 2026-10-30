@@ -25,6 +25,8 @@ impl ProductShell {
             .filter_map(|entry| {
                 let name = entry.name.clone()?;
                 Some(PickerItem {
+                    detail: None,
+                    hint: None,
                     id: name.clone(),
                     label: name,
                     description: Some(match &entry.result {
@@ -38,7 +40,8 @@ impl ProductShell {
             cx.notify();
             return;
         }
-        let Ok(receiver) = self.begin_owned_picker(None, RESTART_TITLE.into(), items, window, cx)
+        let Ok(receiver) =
+            self.begin_owned_picker(None, RESTART_TITLE.into(), items, None, window, cx)
         else {
             return;
         };
