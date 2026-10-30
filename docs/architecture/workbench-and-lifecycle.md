@@ -313,6 +313,15 @@ Repaint wakeups coalesce; protocol requests, replies, and child exit retain orde
 in a process-generation-scoped queue. Restart replaces the process/grid and
 rejects old events. Shutdown and child reaping run off the foreground.
 
+A new session's working directory is chosen when it is created and kept across
+restart. The window's shell picks the innermost root containing the window's
+most recently focused document, otherwise the first root, otherwise the home
+directory, skipping roots that are not existing local directories. New
+Terminal, splitting a terminal pane, and terminal tabs restored in place all use
+this rule; restoration installs a window's roots before its layout, so restored
+shells see them. `terminals.open` accepts an explicit directory instead. The
+rule lives in [terminal/directory.rs](../../src/app/terminal/directory.rs).
+
 `TerminalView` owns focus, layout, scroll interaction, drawing, and input. An
 attachment lease gives one view input/resize authority. Releasing it does not stop
 the session; natural exit retains the final grid, and startup failure remains

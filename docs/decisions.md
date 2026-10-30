@@ -577,6 +577,17 @@ over detected text, and release-time validation prevents changing output from
 opening a stale destination. Physical application-keypad support remains deferred
 rather than vendoring gpui solely to recover its missing native key identity.
 
+A new terminal starts in the root of the window's most recently focused
+document, as Zed's default does, rather than always in the first root, which
+lands in the wrong folder of a multi-root window, or asking with a picker, as
+VS Code does, which adds a step to every terminal. Remembering the last focused
+document lets a terminal opened from another terminal or a tool still follow
+the file being edited. A window without roots uses the home directory rather
+than the active document's folder, as most editors do: such a window is usually
+a scratch window, and the result should not depend on which file happens to be
+open. Daily use may revisit this. The process's own working directory is never
+used, because it is `/` when Knot is launched from Finder.
+
 Reference: [workbench and lifecycle](architecture/workbench-and-lifecycle.md).
 
 ## Extension tree content and actions
