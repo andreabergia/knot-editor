@@ -77,12 +77,12 @@ to be rebuilt later:
     ([extension host](../architecture/extension-host.md#settings),
     [decisions](../decisions.md#application-settings)).
 
-- **D121 — Terminals start in the workspace root**
-  - A new terminal starts in its window's workspace root instead of the
-    process's working directory. Decide which root a multi-root window uses
-    (the first, or the active document's), what a window without roots uses
-    (the home directory). Restored terminals are D127.
-  - 🚧 [Plan](d121-terminal-working-directory.md)
+- ✅ **D121 — Terminals start in the workspace root**
+  - A new terminal starts in the root of the window's most recently focused
+    document, else the first root, else home. Restored terminals use the same
+    rule until D127, and `terminals.open` takes an explicit directory
+    ([workbench and lifecycle](../architecture/workbench-and-lifecycle.md#terminal-sessions-and-views),
+    [decisions](../decisions.md#terminal)).
 
 - **D127 — Restored terminals keep their working directory** (depends on D121)
   - A terminal restored in place, by hot exit or a project switch, starts its
