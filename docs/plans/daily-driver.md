@@ -82,6 +82,7 @@ to be rebuilt later:
     process's working directory. Decide which root a multi-root window uses
     (the first, or the active document's), what a window without roots uses
     (the home directory). Restored terminals are D127.
+  - 🚧 [Plan](d121-terminal-working-directory.md)
 
 - **D127 — Restored terminals keep their working directory** (depends on D121)
   - A terminal restored in place, by hot exit or a project switch, starts its
