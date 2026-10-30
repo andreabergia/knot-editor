@@ -223,6 +223,25 @@ callback path. Commits never await listeners, and a listener may await host work
 or its own disposal. Queries can see newer state than an event. No separate replay,
 recovery, or backpressure mechanism is introduced.
 
+## Settings
+
+`app::settings` owns one `ApplicationSettings` global: definitions and value
+entries shared by personal config, every package, and native code. Writes and
+definitions commit on the foreground inside the host operation, so they resolve
+after the store changed. Values have no owner and outlive lifecycles; a
+definition belongs to the lifecycle that made it, and teardown removes it
+together with that lifecycle's observers, leaving the values for a restarted
+package to define again. Native keys are defined when the store is created.
+
+A definition validates the values already written for its key and drops those
+of the wrong type; each drop is a warning in the startup report, which
+outlives package restarts. After a write or reset, the host queues every
+observer of that key through the ordinary FIFO listener path, the same as
+application observation: the commit never awaits listeners, and a listener
+reads the values it needs with `get`. Native consumers do not observe through
+the host; editor views observe the global itself (see
+[editor views](workbench-and-lifecycle.md#editor-views)).
+
 ## Extension record storage
 
 `app::extensions::storage` owns separate SQLite databases selected by canonical

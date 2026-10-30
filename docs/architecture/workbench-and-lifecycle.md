@@ -50,7 +50,11 @@ horizontal offset. The caret never sits inside a `\r\n` terminator, and
 inserted newlines from typing, paste, and IME take the buffer's line ending.
 Editing/navigation reveal the caret; wheel scrolling may move away from it, up
 to the widest line shaped since the text last changed. Clipboard operations use
-source text; expanded tabs are only a rendering projection. A view's own edit
+source text; expanded tabs are only a rendering projection. Tab stops follow
+`editor.tabSize`, which the view resolves while laying out for its scope: its
+document's effective language and the `editor` view kind, or a contributed
+text frame's view ID. Views observe the settings store and repaint on any
+change. A view's own edit
 refreshes its derived state synchronously before resolving the resulting caret.
 Other views update through their persistent positions.
 

@@ -450,6 +450,46 @@ restarts; this is rare, and settings (D070) behave the same way.
 
 Reference: [commands](architecture/commands.md).
 
+## Application settings
+
+Settings work like Emacs variables: one in-memory store that personal config,
+packages, and native code all write, where a later write replaces an earlier
+one whoever made it. This is the keymap rule above applied to values, and
+ranking writers by owner was rejected for the same reason. Nothing is
+persisted natively, because config and packages rebuild the store on every
+launch; a UI that changes a setting is an extension that keeps its choice in
+its own storage and sets it again in `start()`.
+
+A scope is a set of facts that must all match a read's context: a document's
+language and a view kind, with a file path to come for project settings
+(D089). The match with the most facts wins and ties go to the latest write, so
+a scoped value beats an unscoped one however late that is written, as an
+Emacs buffer-local value beats `setq-default`. Ranking by fact count keeps one
+rule that a `path` fact extends without new precedence.
+
+Definitions follow `defcustom`: a key gets a type, a default, and a
+description that a future settings UI lists. Values may precede their
+definition because `pre-init` runs before packages start; definition
+validates them, and keys never defined stay inert, so typos are silent as in
+Emacs. Teardown removes a lifecycle's definitions but not the values, which
+belong to nobody, so Restart Extension needs no rewrite. A write of the wrong
+type is a host error rather than a `TypeError`, because only the native store
+knows the definition. A setting that names a contribution, such as a theme,
+holds only the name and falls back when it is unregistered, so values never
+depend on package load order.
+
+Detection overrides are claims, not a setting. A map-valued
+`files.associations` was built and reverted: a map is one value, so one
+writer's `set` replaced every other writer's patterns and teardown could not
+remove a package's entries, and a merging write would still leave entries
+without owners. `languages.associate` makes each claim lifecycle-owned in the
+same order as registrations, so claims compose and disposal reveals the
+previous one.
+
+References: [extension host](architecture/extension-host.md#settings),
+[editor views](architecture/workbench-and-lifecycle.md#editor-views), and
+[semantic UI](architecture/semantic-ui.md#syntax-highlighting-and-languages).
+
 ## Views and extension UI
 
 Share text and contributions through buffer models; keep interaction per view.

@@ -1,6 +1,6 @@
 # D070 — Application settings
 
-Status: 🚧 checkpoints 1–4 done; checkpoint 5 next. Item of the
+Status: 🚧 checkpoints 1–4 done; checkpoint 5 documentation written, awaiting final review. Item of the
 [daily-driver plan](daily-driver.md#phase-2--foundations).
 
 ## Outcome
@@ -176,7 +176,15 @@ A `settings.merge` for map values was considered and not added: merged
 entries would still have no owner, so teardown and `reset` could not separate
 them. No map setting exists, so the `stringMap` type was dropped too.
 
-### 5. Documentation
+### 5. Documentation 🔍
+
+Written ✅: [architecture](../architecture.md) ownership, the
+[extension host](../architecture/extension-host.md#settings) settings flow,
+[editor views](../architecture/workbench-and-lifecycle.md#editor-views) tab
+stops, the [decisions](../decisions.md#application-settings) entry, and D045
+and D059 pointing at scoped `font.*` keys. Removing this plan and marking D070
+✅ waits for the final review.
+
 
 - Deliverable: the settings store and its owner in `docs/architecture.md`
   (application ownership) and the relevant subsystem reference: extension host

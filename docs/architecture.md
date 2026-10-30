@@ -36,7 +36,9 @@ The default `knot` binary enters the product through `app::run`.
 
 gpui's foreground thread exclusively owns editor state; native I/O runs off it.
 The application owns documents, resource providers, the command catalog and
-keymap registry, terminal sessions, and one extension pool.
+keymap registry, the in-memory settings store, terminal sessions, and one
+extension pool. Native views resolve settings for their own scope while laying
+out, so a write needs no per-view push.
 
 A document owns persistence identity and a shared `BufferModel`. The model owns
 text, session-local history, anchored geometry, semantic contributions, and

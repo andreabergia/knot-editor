@@ -146,9 +146,10 @@ complete list for that item.
     differ between the editor and the PTY grid.
   - Reconsider: Daily readability or a font choice requires ligatures,
     stylistic sets, variable-font settings, or configurable terminal
-    typography. Then define font selection and fallback per surface, feature
-    toggles and their persistence scope (with D045), and terminal cell metrics
-    for fonts whose shaped advance differs from the default.
+    typography. Then define font selection, fallback, and feature toggles as
+    `font.*` settings (D070) scoped per surface, such as `{ view: "terminal" }`
+    (with D045), and terminal cell metrics for fonts whose shaped advance
+    differs from the default.
   - Order: after D070; with D045.
 
 - **D061 — Empty normal-group start panel**
@@ -544,9 +545,10 @@ Keep each primitive generic, so a Helix or Kakoune mode could use it too. The
 
 - **D045 — General terminal settings**
   - Deferred: Shared typography and the session-local mouse toggle cover D026;
-    a persisted settings system has no selected contract.
+    no terminal keys are defined in the settings store (D070).
   - Reconsider: Daily use needs configurable fonts or terminal preferences;
-    define their scope and persistence with the application settings model.
+    define them as settings, with fonts as `font.*` keys scoped
+    `{ view: "terminal" }` so the editor keeps its own values.
   - Order: after D070; with D059.
 
 - **D063 — Migrate the terminal engine to libghostty**
