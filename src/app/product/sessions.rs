@@ -746,7 +746,7 @@ impl ProductShell {
     /// each tab kind is then recreated by its own step. A recorded explicit
     /// language applies unless the live document already has one. Never
     /// publishes the tool-only default.
-    fn apply_layout(
+    pub(super) fn apply_layout(
         &mut self,
         layout: &WindowLayout,
         entries: &[SessionEntry],

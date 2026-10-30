@@ -196,9 +196,12 @@ impl Drop for TerminalAttachment {
 }
 
 impl TerminalSession {
-    pub(crate) fn new(cx: &mut Context<Self>) -> Self {
+    pub(crate) fn new(
+        working_directory: Option<std::path::PathBuf>,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let options = Options {
-            working_directory: std::env::current_dir().ok(),
+            working_directory,
             drain_on_exit: true,
             env: [
                 ("TERM".to_owned(), "xterm-256color".to_owned()),
@@ -409,6 +412,11 @@ impl TerminalSession {
         self._wakeup_task = None;
         self.state = TerminalState::Closed;
         cx.notify();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn working_directory(&self) -> Option<&std::path::Path> {
+        self.options.working_directory.as_deref()
     }
 
     pub(crate) fn restart(&mut self, cx: &mut Context<Self>) {

@@ -390,6 +390,9 @@ pub(crate) struct ProductShell {
     command_palette_subscription: Option<Subscription>,
     transient: Option<ActiveTransient>,
     workspace: WorkspaceState,
+    /// The document of the last focused document tab, which new terminals
+    /// follow while a terminal or tool has focus.
+    last_focused_document: Option<DocumentId>,
     application_observer: Option<Subscription>,
     application_activation: Option<Subscription>,
     application_focus: Vec<(FocusHandle, Subscription, Subscription)>,
@@ -474,6 +477,7 @@ impl ProductShell {
             command_palette_subscription: None,
             transient: None,
             workspace: WorkspaceState::default(),
+            last_focused_document: None,
             application_observer: None,
             application_activation: None,
             application_focus: Vec::new(),
@@ -578,11 +582,19 @@ impl ProductShell {
             {
                 continue;
             }
+            // A view focused before its subscription exists sends no event.
+            if handle.is_focused(window) {
+                self.remember_focused_document(&handle, cx);
+            }
             self.application_focus.push((
                 handle.clone(),
-                cx.on_focus(&handle, window, |this, _, cx| {
-                    super::extensions::host::application_changed(cx);
-                    this.schedule_view_state(cx);
+                cx.on_focus(&handle, window, {
+                    let handle = handle.clone();
+                    move |this, _, cx| {
+                        this.remember_focused_document(&handle, cx);
+                        super::extensions::host::application_changed(cx);
+                        this.schedule_view_state(cx);
+                    }
                 }),
                 cx.on_blur(&handle, window, |_, _, cx| {
                     super::extensions::host::application_changed(cx)
@@ -590,6 +602,48 @@ impl ProductShell {
             ));
         }
         self.observe_editor_view_state(cx);
+    }
+
+    fn remember_focused_document(&mut self, handle: &FocusHandle, cx: &App) {
+        let document = self
+            .workbench
+            .read(cx)
+            .panes()
+            .iter()
+            .flat_map(|pane| pane.tabs())
+            .find(|tab| {
+                tab.command_view()
+                    .is_some_and(|view| &view.focus_handle(cx) == handle)
+            })
+            .and_then(|tab| tab.document_id());
+        if document.is_some() {
+            self.last_focused_document = document;
+        }
+    }
+
+    /// The directory a new terminal in this window starts in.
+    fn terminal_directory(&self, cx: &App) -> Option<std::path::PathBuf> {
+        let document = self
+            .workbench
+            .read(cx)
+            .focused_pane()
+            .and_then(|pane| pane.active_tab().document_id())
+            .or(self.last_focused_document);
+        let documents = Self::documents(cx);
+        let uri = document
+            .and_then(|document| documents.read(cx).get(document))
+            .and_then(|document| document.resource_uri());
+        let roots = self.workspace.snapshot();
+        let roots = roots
+            .roots()
+            .iter()
+            .map(|root| root.uri.clone())
+            .collect::<Vec<_>>();
+        super::terminal::directory::working_directory(
+            &roots,
+            uri,
+            directories::BaseDirs::new().map(|base| base.home_dir().to_owned()),
+        )
     }
 
     pub(crate) fn application_window(
@@ -693,7 +747,8 @@ impl ProductShell {
             .0
             .borrow_mut()
             .allocate_id();
-        let session = cx.new(TerminalSession::new);
+        let directory = self.terminal_directory(cx);
+        let session = cx.new(|cx| TerminalSession::new(directory, cx));
         let view = cx.new(|cx| TerminalView::new(session.clone(), cx));
         cx.global::<ApplicationTerminalSessions>()
             .0

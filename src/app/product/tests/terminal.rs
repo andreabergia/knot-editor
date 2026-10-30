@@ -1155,3 +1155,128 @@ async fn process_exit_during_terminal_handoff_keeps_final_grid(cx: &mut TestAppC
         );
     });
 }
+
+fn focused_terminal_directory(
+    shell: &Entity<ProductShell>,
+    cx: &TestAppContext,
+) -> Option<std::path::PathBuf> {
+    cx.read(|cx| {
+        let surface = shell
+            .read(cx)
+            .workbench
+            .read(cx)
+            .focused_pane()
+            .unwrap()
+            .active_tab()
+            .surface_id();
+        let TabSurfaceId::Terminal(id) = surface else {
+            panic!("no terminal is focused")
+        };
+        cx.global::<ApplicationTerminalSessions>()
+            .0
+            .borrow()
+            .sessions[&id]
+            .read(cx)
+            .working_directory()
+            .map(Path::to_owned)
+    })
+}
+
+fn directory_uri(path: &Path) -> ResourceUri {
+    ResourceUri::parse(url::Url::from_directory_path(path).unwrap().as_str()).unwrap()
+}
+
+fn home() -> Option<std::path::PathBuf> {
+    directories::BaseDirs::new().map(|base| base.home_dir().to_owned())
+}
+
+#[gpui::test]
+async fn new_terminals_start_in_the_root_of_the_last_focused_document(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let first = temp.path().join("first");
+    let second = temp.path().join("second");
+    std::fs::create_dir_all(&first).unwrap();
+    std::fs::create_dir_all(&second).unwrap();
+    let documents = install_globals(cx);
+    let document = cx.update(|cx| {
+        let model = cx.new(|_| BufferModel::from_text(""));
+        let uri = url::Url::from_file_path(second.join("src/lib.rs")).unwrap();
+        documents.update(cx, |documents, cx| {
+            documents.create_destination(
+                "lib.rs",
+                model,
+                ResourceUri::parse(uri.as_str()).unwrap(),
+                cx,
+            )
+        })
+    });
+    let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+    let (shell, window) = product_window(document, model, cx);
+    shell.update(cx, |shell, cx| {
+        shell.replace_workspace_roots(vec![directory_uri(&first), directory_uri(&second)], cx);
+    });
+    cx.update_window(window, |_, window, cx| {
+        shell.update(cx, |shell, cx| {
+            let pane = shell.workbench.read(cx).focused_pane().unwrap();
+            let (pane, tab) = (pane.id(), pane.active_tab().id());
+            shell.activate_tab(pane, tab, window, cx);
+        });
+        window.activate_window();
+    })
+    .unwrap();
+    // Focus events are delivered when the window draws.
+    cx.refresh().unwrap();
+    cx.run_until_parked();
+
+    let command = dispatch_product_command(&shell, window, NEW_TERMINAL_COMMAND, cx);
+    assert_eq!(command.completion.await.unwrap(), CommandOutcome::Completed);
+    assert_eq!(focused_terminal_directory(&shell, cx), Some(second.clone()));
+
+    // With the terminal focused, the next one still follows the document.
+    let command = dispatch_product_command(&shell, window, NEW_TERMINAL_COMMAND, cx);
+    assert_eq!(command.completion.await.unwrap(), CommandOutcome::Completed);
+    assert_eq!(focused_terminal_directory(&shell, cx), Some(second));
+
+    // A document outside every root falls back to the first root, and a
+    // window without roots to home.
+    shell.update(cx, |shell, cx| {
+        shell.replace_workspace_roots(vec![directory_uri(&first)], cx);
+    });
+    let command = dispatch_product_command(&shell, window, NEW_TERMINAL_COMMAND, cx);
+    assert_eq!(command.completion.await.unwrap(), CommandOutcome::Completed);
+    assert_eq!(focused_terminal_directory(&shell, cx), Some(first));
+    shell.update(cx, |shell, cx| {
+        shell.replace_workspace_roots(Vec::new(), cx)
+    });
+    let command = dispatch_product_command(&shell, window, NEW_TERMINAL_COMMAND, cx);
+    assert_eq!(command.completion.await.unwrap(), CommandOutcome::Completed);
+    assert_eq!(focused_terminal_directory(&shell, cx), home());
+}
+
+#[gpui::test]
+async fn restored_terminals_start_in_their_windows_root(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let documents = install_globals(cx);
+    let document = cx.update(|cx| create_untitled_document(&documents, cx));
+    let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+    let (source, source_window) = product_window(document, model, cx);
+    let command = dispatch_product_command(&source, source_window, NEW_TERMINAL_COMMAND, cx);
+    assert_eq!(command.completion.await.unwrap(), CommandOutcome::Completed);
+    let layout = cx
+        .update_window(source_window, |_, window, cx| {
+            source.read(cx).capture_layout(window, cx)
+        })
+        .unwrap();
+
+    let document = cx.update(|cx| create_untitled_document(&documents, cx));
+    let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+    let (restored, _) = product_window(document, model, cx);
+    restored.update(cx, |shell, cx| {
+        shell.replace_workspace_roots(vec![directory_uri(temp.path())], cx);
+        shell.apply_layout(&layout, &[], &[], cx);
+    });
+    assert_eq!(
+        focused_terminal_directory(&restored, cx),
+        Some(temp.path().to_owned())
+    );
+}

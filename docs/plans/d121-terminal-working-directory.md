@@ -1,6 +1,6 @@
 # D121 — Terminals start in the workspace root
 
-Status: 🚧 approved, not started. Item of the
+Status: 🚧 checkpoint 1 implemented, awaiting review. Item of the
 [daily-driver plan](daily-driver.md); no dependencies. D127 builds on it.
 
 ## Goal
@@ -59,7 +59,7 @@ Finder. Extensions can open a terminal in a directory of their choosing.
 
 ## Checkpoints
 
-### 1. Native default directory
+### 1. Native default directory ✅ (review gate pending)
 
 - Deliverables:
   - `TerminalSession::new` takes the working directory.
@@ -83,8 +83,10 @@ Finder. Extensions can open a terminal in a directory of their choosing.
   - `ProductShell::create_terminal` in `src/app/product.rs` resolves the
     directory from `self.workspace.roots()` (`src/app/workspace.rs`) and the
     remembered document's `resource_uri()`.
-  - Record the focused document where focus is already synchronized
-    (`sync_focused_pane`, `focus_active_surface`).
+  - Record the focused document where focus is already observed: the
+    `on_focus` subscriptions in `observe_application_focus`, plus a view that
+    is already focused when its subscription is installed, since gpui sends
+    it no event.
   - Convert URIs with `ResourceUri::as_url().to_file_path()` and use
     `ResourceUri::is_within` for containment.
   - Home comes from `directories::BaseDirs`, already used in
