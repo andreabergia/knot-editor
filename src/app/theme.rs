@@ -234,6 +234,7 @@ native_colors! {
     ERROR = "error", "Errors and failures.", Rgb(0xf48771), Rgb(0xc4314b);
     INFO = "info", "Informational markers.", Rgb(0x6cb6ff), Rgb(0x1a73c7);
     LIST_GROUP_BACKGROUND = "list.group.background", "Group headers in trees.", Rgb(0x262626), Rgb(0xf0f0f0);
+    LIST_MATCH_FOREGROUND = "list.match.foreground", "Characters a filter query matched in a list row.", Key(TEXT_ACCENT), Key(TEXT_ACCENT);
     LIST_HOVER_BACKGROUND = "list.hover.background", "A list or tree row under the pointer.", Rgb(0x2a2a2a), Rgb(0xebebeb);
     LIST_SELECTED_BACKGROUND = "list.selected.background", "The selected list or tree row.", Rgb(0x2a4a7a), Rgb(0xcce0f7);
     LIST_SELECTED_FOREGROUND = "list.selected.foreground", "Text of the selected list or tree row.", Rgb(0xffffff), Key(TEXT);

@@ -323,6 +323,8 @@ declare module "knot" {
     readonly "list.group.background"?: string;
     /** A list or tree row under the pointer. */
     readonly "list.hover.background"?: string;
+    /** Characters a filter query matched in a list row. */
+    readonly "list.match.foreground"?: string;
     /** The selected list or tree row. */
     readonly "list.selected.background"?: string;
     /** Text of the selected list or tree row. */

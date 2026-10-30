@@ -44,7 +44,7 @@ use launch::{dispatch_launch_request, open_tab_transfer_window, product_filesyst
 pub(crate) use launch::{open_product_window, run};
 
 use super::{
-    CommandCompletion, CommandPalette, CommandPaletteEntry, CommandPaletteEvent,
+    CommandCompletion, CommandPalette,
     commands::dispatch::{
         ApplicationProductCommands, CLOSE_TAB_COMMAND, CLOSE_WINDOW_COMMAND, COPY_COMMAND,
         CUT_COMMAND, NEW_COMMAND, NEW_TERMINAL_COMMAND, NEW_WINDOW_COMMAND, OPEN_COMMAND,
@@ -64,11 +64,11 @@ use super::{
     },
     model::BufferModel,
     open::{OpenResource, enumerate_directory, load_resource},
+    picker::{Picker, PickerEntry, PickerEvent},
     terminal::session::TerminalSession,
     terminal::view::TerminalView,
     transient::{
-        InputEvent, InputView, PickerEvent, PickerView, PromptText, TransientOutcome,
-        TransientOwner, TransientSurface,
+        InputEvent, InputView, PromptText, TransientOutcome, TransientOwner, TransientSurface,
     },
     workbench::{
         CloseRequestOutcome, DockLocation, DocumentCloseDisposition, PaneId, SplitDirection,
@@ -386,7 +386,7 @@ pub(crate) struct ProductShell {
     window: Option<AnyWindowHandle>,
     tab_drag: std::rc::Rc<RefCell<tab_drag::TabDragState>>,
     dock_resize: Option<DockResizeDrag>,
-    command_palette: Option<Entity<CommandPalette<ProductCommandTarget>>>,
+    command_palette: Option<CommandPalette<ProductCommandTarget>>,
     command_palette_subscription: Option<Subscription>,
     transient: Option<ActiveTransient>,
     workspace: WorkspaceState,
@@ -962,30 +962,22 @@ impl ProductShell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let entries = Self::command_dispatcher(cx)
+        let definitions = Self::command_dispatcher(cx)
             .read(cx)
             .definitions()
-            .map(|definition| {
-                CommandPaletteEntry::new(
-                    definition,
-                    crate::host::protocol::CommandArgumentValue::Null,
-                )
-            })
             .collect::<Vec<_>>();
-        let palette = cx.new(|cx| CommandPalette::new(entries, origin, cx));
-        let subscription = cx.subscribe(
-            &palette,
-            |this, _palette, event: &CommandPaletteEvent<ProductCommandTarget>, cx| {
-                this.command_palette = None;
-                this.command_palette_subscription = None;
-                if let CommandPaletteEvent::Confirmed { command, origin } = event {
-                    this.dispatch_command(command.clone(), origin.clone(), cx);
-                }
-                this.refocus_active_transient(cx);
-                cx.notify();
-            },
-        );
-        window.focus(&palette.focus_handle(cx));
+        let palette = CommandPalette::new(definitions, origin, cx);
+        let picker = palette.picker().clone();
+        let subscription = cx.subscribe(&picker, |this, _picker, event: &PickerEvent, cx| {
+            let palette = this.command_palette.take();
+            this.command_palette_subscription = None;
+            if let (PickerEvent::Confirmed(entry), Some(palette)) = (event, palette) {
+                this.dispatch_command(palette.command(*entry), palette.origin(), cx);
+            }
+            this.refocus_active_transient(cx);
+            cx.notify();
+        });
+        window.focus(&picker.read(cx).focus_handle(cx));
         self.command_palette = Some(palette);
         self.command_palette_subscription = Some(subscription);
         cx.notify();
@@ -1078,18 +1070,32 @@ impl ProductShell {
     ) -> Result<tokio::sync::oneshot::Receiver<TransientOutcome>, TransientError> {
         self.transient_slot_free()?;
         let restore_focus = self.transient_restore_focus(window, cx);
-        let view = cx.new(|cx| PickerView::new(title, items, cx));
+        let (ids, entries): (Vec<_>, Vec<_>) = items
+            .into_iter()
+            .map(|item| {
+                let entry = PickerEntry {
+                    description: item.description,
+                    ..PickerEntry::new(item.label)
+                };
+                (item.id, entry)
+            })
+            .unzip();
+        let view = cx.new(|cx| Picker::new(Some(title), entries, super::TRANSIENT_KEY_CONTEXT, cx));
         let focus = view.read(cx).focus_handle(cx);
-        let subscription =
-            cx.subscribe(&view, |this: &mut Self, _view, event: &PickerEvent, cx| {
+        let subscription = cx.subscribe(
+            &view,
+            move |this: &mut Self, _view, event: &PickerEvent, cx| {
                 this.finish_transient(
                     match event {
-                        PickerEvent::Selected(id) => TransientOutcome::Picker(id.clone()),
+                        PickerEvent::Confirmed(entry) => {
+                            TransientOutcome::Picker(ids[*entry].clone())
+                        }
                         PickerEvent::Dismissed => TransientOutcome::Dismissed,
                     },
                     cx,
                 );
-            });
+            },
+        );
         let (completion, receiver) = tokio::sync::oneshot::channel();
         self.transient = Some(ActiveTransient {
             owner,

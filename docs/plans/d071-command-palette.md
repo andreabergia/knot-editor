@@ -120,7 +120,7 @@ passed in `src/app/mod.rs` or the startup entry. Quit flushing runs from
 Review gate: one database file in the data directory, with restore and tool
 layout behaving as before.
 
-### 2. Shared picker with fuzzy matching
+### 2. ✅ Shared picker with fuzzy matching
 
 Deliverables:
 
@@ -132,8 +132,8 @@ Deliverables:
 - `PickerView` (`src/app/transient.rs`) and `CommandPalette`
   (`src/app/command_palette.rs`) become thin wrappers over it, or are removed in
   its favor. Palette rows keep their current content for now.
-- A `PICKER_MATCH` color key in the native theme table colors highlighted
-  characters.
+- A `list.match.foreground` color key in the native theme table colors
+  highlighted characters, and every bundled theme sets it.
 
 Validation: a table of ranking tests (query → expected first items) over
 command-like titles and paths. Further tests cover stable order for an empty

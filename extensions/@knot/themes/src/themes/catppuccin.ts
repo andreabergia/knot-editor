@@ -44,6 +44,7 @@ function catppuccin(name: string, appearance: "dark" | "light", p: Flavor): Them
       "info": p.blue,
       "list.group.background": dark ? p.base : p.crust,
       "list.hover.background": p.surface0,
+      "list.match.foreground": p.blue,
       "list.selected.background": p.surface1,
       "list.selected.foreground": p.text,
       "popover.background": dark ? p.mantle : p.base,

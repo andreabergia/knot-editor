@@ -1,372 +1,106 @@
-use gpui::{prelude::*, *};
+//! The command palette: the catalog's commands presented in the shared
+//! [`Picker`] and confirmed against the target captured when it opened.
+
+use gpui::{App, AppContext as _, Entity};
 
 use crate::host::protocol::{Command, CommandArgumentValue};
 
 use super::{
     PALETTE_KEY_CONTEXT,
     commands::catalog::CommandDefinition,
-    text_input::{TextInput, TextInputEvent},
-    theme::{color, theme},
+    picker::{Picker, PickerEntry},
 };
 
-#[derive(Clone, PartialEq)]
-pub(crate) enum CommandPaletteEvent<Origin> {
-    Confirmed { command: Command, origin: Origin },
-    Dismissed,
-}
-
-#[derive(Clone)]
-pub(crate) struct CommandPaletteEntry {
-    definition: CommandDefinition,
-    arguments: CommandArgumentValue,
-}
-
-impl CommandPaletteEntry {
-    pub(crate) fn new(definition: CommandDefinition, arguments: CommandArgumentValue) -> Self {
-        Self {
-            definition,
-            arguments,
-        }
-    }
-
-    fn command(&self) -> Command {
-        Command {
-            name: self.definition.name.clone(),
-            arguments: self.arguments.clone(),
-        }
-    }
-}
-
 pub(crate) struct CommandPalette<Origin> {
-    entries: Vec<CommandPaletteEntry>,
-    query: String,
-    selected: usize,
-    input: Entity<TextInput>,
-    _input_subscription: Subscription,
+    picker: Entity<Picker>,
+    commands: Vec<Command>,
     origin: Origin,
 }
 
-impl<Origin> CommandPalette<Origin>
-where
-    Origin: Clone + PartialEq + 'static,
-{
+impl<Origin: Clone> CommandPalette<Origin> {
     pub(crate) fn new(
-        entries: impl IntoIterator<Item = CommandPaletteEntry>,
+        definitions: impl IntoIterator<Item = CommandDefinition>,
         origin: Origin,
-        cx: &mut Context<Self>,
+        cx: &mut App,
     ) -> Self {
-        let mut entries = entries.into_iter().collect::<Vec<_>>();
-        entries.sort_by(|left, right| left.definition.name.cmp(&right.definition.name));
-        let input = cx.new(|cx| TextInput::new("", cx));
-        let subscription = cx.subscribe(
-            &input,
-            |this: &mut Self, _input, _event: &TextInputEvent, cx| {
-                this.query = this.input.read(cx).text().to_string();
-                this.selected = 0;
-                cx.notify();
-            },
-        );
+        let mut definitions = definitions.into_iter().collect::<Vec<_>>();
+        definitions.sort_by(|left, right| left.title.cmp(&right.title));
+        let entries = definitions
+            .iter()
+            .map(|definition| PickerEntry {
+                description: Some(definition.name.to_string()),
+                ..PickerEntry::new(definition.title.clone())
+            })
+            .collect();
+        let commands = definitions
+            .into_iter()
+            .map(|definition| Command {
+                name: definition.name,
+                arguments: CommandArgumentValue::Null,
+            })
+            .collect();
+        let picker = cx.new(|cx| Picker::new(None, entries, PALETTE_KEY_CONTEXT, cx));
         Self {
-            entries,
-            query: String::new(),
-            selected: 0,
-            input,
-            _input_subscription: subscription,
+            picker,
+            commands,
             origin,
         }
+    }
+
+    pub(crate) fn picker(&self) -> &Entity<Picker> {
+        &self.picker
     }
 
     pub(crate) fn origin(&self) -> Origin {
         self.origin.clone()
     }
 
-    fn visible_entries(&self) -> Vec<&CommandPaletteEntry> {
-        let query = self.query.to_lowercase();
-        self.entries
-            .iter()
-            .filter(|entry| {
-                query.is_empty()
-                    || entry
-                        .definition
-                        .name
-                        .as_ref()
-                        .to_lowercase()
-                        .contains(&query)
-                    || entry.definition.title.to_lowercase().contains(&query)
-            })
-            .collect()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn visible_definitions(&self) -> Vec<&CommandDefinition> {
-        self.visible_entries()
-            .into_iter()
-            .map(|entry| &entry.definition)
-            .collect()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn set_query(&mut self, query: String, cx: &mut Context<Self>) {
-        self.input.update(cx, |input, cx| input.set_text(query, cx));
-        self.query = self.input.read(cx).text().to_string();
-        self.selected = 0;
-        cx.notify();
-    }
-
-    fn move_selection(&mut self, delta: isize, cx: &mut Context<Self>) {
-        let count = self.visible_entries().len();
-        if count == 0 {
-            self.selected = 0;
-            return;
-        }
-        self.selected = self
-            .selected
-            .saturating_add_signed(delta)
-            .min(count.saturating_sub(1));
-        cx.notify();
-    }
-
-    fn confirm(&mut self, cx: &mut Context<Self>) {
-        if let Some(entry) = self.visible_entries().get(self.selected) {
-            cx.emit(CommandPaletteEvent::Confirmed {
-                command: entry.command(),
-                origin: self.origin(),
-            });
-        }
-    }
-
-    fn dismiss(&mut self, cx: &mut Context<Self>) {
-        cx.emit(CommandPaletteEvent::Dismissed);
-    }
-
-    fn on_key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
-        match event.keystroke.key.to_lowercase().as_str() {
-            "escape" => self.dismiss(cx),
-            "enter" => self.confirm(cx),
-            "up" => self.move_selection(-1, cx),
-            "down" => self.move_selection(1, cx),
-            "pageup" => self.move_selection(-10, cx),
-            "pagedown" => self.move_selection(10, cx),
-            _ => return,
-        }
-        cx.stop_propagation();
-    }
-}
-
-impl<Origin> EventEmitter<CommandPaletteEvent<Origin>> for CommandPalette<Origin> where
-    Origin: Clone + PartialEq + 'static
-{
-}
-
-impl<Origin> Focusable for CommandPalette<Origin>
-where
-    Origin: Clone + PartialEq + 'static,
-{
-    fn focus_handle(&self, cx: &App) -> FocusHandle {
-        self.input.read(cx).focus_handle()
-    }
-}
-
-impl<Origin> Render for CommandPalette<Origin>
-where
-    Origin: Clone + PartialEq + 'static,
-{
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let entity = cx.entity();
-        let selected = self.selected;
-        let selected_background = theme(cx).color(color::LIST_SELECTED_BACKGROUND);
-        let hover_background = theme(cx).color(color::LIST_HOVER_BACKGROUND);
-        let muted = theme(cx).color(color::TEXT_MUTED);
-        let accent = theme(cx).color(color::TEXT_ACCENT);
-        let rows = self
-            .visible_entries()
-            .into_iter()
-            .enumerate()
-            .map(|(index, entry)| {
-                let entity = entity.clone();
-                let command = entry.command();
-                let arguments = (entry.arguments != CommandArgumentValue::Null)
-                    .then(|| serde_json::to_string(&entry.arguments).expect("arguments serialize"));
-                div()
-                    .id(("command-palette-entry", index))
-                    .px_3()
-                    .py_1()
-                    .flex()
-                    .flex_col()
-                    .when(index == selected, |row| row.bg(selected_background))
-                    .hover(|row| row.bg(hover_background))
-                    .child(entry.definition.title.clone())
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(muted)
-                            .child(entry.definition.name.to_string()),
-                    )
-                    .children(arguments.map(|arguments| {
-                        div()
-                            .text_xs()
-                            .text_color(accent)
-                            .child(format!("Arguments: {arguments}"))
-                    }))
-                    .on_click(move |_, _, cx| {
-                        entity.update(cx, |palette, cx| {
-                            cx.emit(CommandPaletteEvent::Confirmed {
-                                command: command.clone(),
-                                origin: palette.origin(),
-                            });
-                        });
-                    })
-            })
-            .collect::<Vec<_>>();
-
-        div()
-            .id("command-palette")
-            .w(px(560.))
-            .max_h(px(420.))
-            .flex()
-            .flex_col()
-            .rounded_md()
-            .border_1()
-            .border_color(theme(cx).color(color::POPOVER_BORDER))
-            .bg(theme(cx).color(color::POPOVER_BACKGROUND))
-            .shadow_lg()
-            .key_context(PALETTE_KEY_CONTEXT)
-            .on_key_down(cx.listener(Self::on_key_down))
-            .child(
-                div()
-                    .px_3()
-                    .py_2()
-                    .border_b_1()
-                    .border_color(theme(cx).color(color::BORDER))
-                    .child(self.input.clone()),
-            )
-            .child(
-                div()
-                    .id("command-palette-results")
-                    .overflow_scroll()
-                    .children(rows),
-            )
+    /// The command of a confirmed picker entry.
+    pub(crate) fn command(&self, entry: usize) -> Command {
+        self.commands[entry].clone()
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::RefCell, rc::Rc};
+    use gpui::TestAppContext;
 
-    use gpui::{AnyWindowHandle, TestAppContext, WeakFocusHandle};
-
-    use super::{CommandPalette, CommandPaletteEntry, CommandPaletteEvent};
+    use super::CommandPalette;
     use crate::app::commands::catalog::{CommandDefinition, CommandOwner};
-    use crate::host::protocol::{BufferHandle, Command, CommandArgumentValue};
 
-    #[derive(Clone, Eq, PartialEq)]
-    struct CommandOrigin {
-        window: AnyWindowHandle,
-        focus: WeakFocusHandle,
-        buffer: Option<BufferHandle>,
+    fn definition(name: &str, title: &str) -> CommandDefinition {
+        CommandDefinition {
+            name: name.into(),
+            title: title.into(),
+            owner: CommandOwner::Native,
+        }
     }
 
     #[gpui::test]
-    fn filters_by_name_and_title_and_confirms_the_selection(cx: &mut TestAppContext) {
-        let (palette, cx) = cx.add_window_view(|window, cx| {
-            let origin_focus = cx.focus_handle();
+    fn lists_by_title_and_matches_the_command_name(cx: &mut TestAppContext) {
+        let palette = cx.update(|cx| {
             CommandPalette::new(
                 [
-                    CommandPaletteEntry::new(
-                        CommandDefinition {
-                            name: "copy".into(),
-                            title: "Copy selection".into(),
-                            owner: CommandOwner::Native,
-                        },
-                        CommandArgumentValue::String("fixture".into()),
-                    ),
-                    CommandPaletteEntry::new(
-                        CommandDefinition {
-                            name: "workspace.close".into(),
-                            title: "Close window".into(),
-                            owner: CommandOwner::Native,
-                        },
-                        CommandArgumentValue::Null,
-                    ),
+                    definition("workspace.close", "Close window"),
+                    definition("copy", "Copy selection"),
                 ],
-                CommandOrigin {
-                    window: window.window_handle(),
-                    focus: origin_focus.downgrade(),
-                    buffer: None,
-                },
+                (),
                 cx,
             )
         });
-        let events = Rc::new(RefCell::new(Vec::new()));
-        let observed = events.clone();
-        let _subscription = cx.update(|_, cx| {
-            cx.subscribe(&palette, move |_, event, _| {
-                observed.borrow_mut().push(event.clone());
+        let picker = palette.picker().clone();
+        let window = cx.add_window(|_, _| gpui::Empty);
+        window
+            .update(cx, |_, _, cx| {
+                picker.update(cx, |picker, cx| {
+                    assert_eq!(picker.visible_entries(), [0, 1]);
+                    picker.set_query("workspace.cl", cx);
+                    assert_eq!(picker.visible_entries(), [0]);
+                    picker.set_query("selection", cx);
+                    let entry = picker.selected_entry().unwrap();
+                    assert_eq!(palette.command(entry).name.as_ref(), "copy");
+                });
             })
-        });
-
-        let expected_origin = palette.read_with(cx, |palette, _| palette.origin());
-        palette.update(cx, |palette, cx| {
-            palette.set_query("selection".into(), cx);
-            assert_eq!(
-                palette
-                    .visible_definitions()
-                    .iter()
-                    .map(|definition| definition.name.as_ref())
-                    .collect::<Vec<_>>(),
-                ["copy"]
-            );
-            palette.confirm(cx);
-        });
-
-        assert!(
-            events.borrow().as_slice()
-                == [CommandPaletteEvent::Confirmed {
-                    command: Command {
-                        name: "copy".into(),
-                        arguments: CommandArgumentValue::String("fixture".into()),
-                    },
-                    origin: expected_origin,
-                }]
-                .as_slice()
-        );
-    }
-
-    #[gpui::test]
-    fn selection_is_clamped_and_dismissal_is_emitted(cx: &mut TestAppContext) {
-        let (palette, cx) = cx.add_window_view(|window, cx| {
-            let origin_focus = cx.focus_handle();
-            CommandPalette::new(
-                [CommandPaletteEntry::new(
-                    CommandDefinition {
-                        name: "copy".into(),
-                        title: "Copy selection".into(),
-                        owner: CommandOwner::Native,
-                    },
-                    CommandArgumentValue::Null,
-                )],
-                CommandOrigin {
-                    window: window.window_handle(),
-                    focus: origin_focus.downgrade(),
-                    buffer: None,
-                },
-                cx,
-            )
-        });
-        let events = Rc::new(RefCell::new(Vec::new()));
-        let observed = events.clone();
-        let _subscription = cx.update(|_, cx| {
-            cx.subscribe(&palette, move |_, event, _| {
-                observed.borrow_mut().push(event.clone());
-            })
-        });
-
-        palette.update(cx, |palette, cx| {
-            palette.move_selection(10, cx);
-            assert_eq!(palette.selected, 0);
-            palette.dismiss(cx);
-        });
-
-        assert!(events.borrow().as_slice() == [CommandPaletteEvent::Dismissed].as_slice());
+            .unwrap();
     }
 }

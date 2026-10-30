@@ -292,7 +292,10 @@ impl Render for ProductShell {
         self.tab_drag.borrow_mut().begin_frame();
         let layout = self.workbench.read(cx).layout().cloned();
         let entity = cx.entity();
-        let command_palette = self.command_palette.clone();
+        let command_palette = self
+            .command_palette
+            .as_ref()
+            .map(|palette| palette.picker().clone());
         let transient = self.render_transient();
         let dismiss_transient =
             cx.listener(|this: &mut Self, _: &MouseDownEvent, _: &mut Window, cx| {

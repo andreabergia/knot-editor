@@ -33,6 +33,7 @@ export const ONE_LIGHT: ThemeDefinition = {
     "info": blue,
     "list.group.background": "#e5e5e6",
     "list.hover.background": "#dbdbdc",
+    "list.match.foreground": blue,
     "list.selected.background": "#d0d0d1",
     "list.selected.foreground": "#232324",
     "popover.background": "#f2f2f2",

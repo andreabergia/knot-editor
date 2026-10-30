@@ -23,6 +23,7 @@ pub mod model;
 mod open;
 mod personal_config;
 mod personal_config_error;
+mod picker;
 mod product;
 mod record_store;
 mod recovery;
@@ -44,7 +45,7 @@ mod workbench;
 mod workspace;
 mod workspace_tree;
 
-use command_palette::{CommandPalette, CommandPaletteEntry, CommandPaletteEvent};
+use command_palette::CommandPalette;
 
 actions!(
     knot,

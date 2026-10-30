@@ -44,6 +44,7 @@ tree-sitter-toml-ng = "0.7.0"
 tree-sitter-yaml = "0.7.2"
 tree-sitter-md = "0.5.4"
 tree-sitter-tsquery = "0.8.0"
+nucleo-matcher = "0.3.1"
 
 [dev-dependencies]
 pollster = "1"

@@ -33,6 +33,7 @@ export const ONE_DARK: ThemeDefinition = {
     "info": blue,
     "list.group.background": bg,
     "list.hover.background": "#2c313a",
+    "list.match.foreground": blue,
     "list.selected.background": "#3a3f4b",
     "list.selected.foreground": "#d7dae0",
     "popover.background": panel,

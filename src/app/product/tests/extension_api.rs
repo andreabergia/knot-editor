@@ -130,7 +130,7 @@ await commands.register("api.cross", async (context) => {
             first_shell.update(cx, |shell, cx| {
                 shell.focus_active_surface(window, cx);
                 shell.open_command_palette(window, cx);
-                shell.command_palette.as_ref().unwrap().read(cx).origin()
+                shell.command_palette.as_ref().unwrap().origin()
             })
         })
         .unwrap();
