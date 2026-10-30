@@ -51,7 +51,7 @@ removes demo surfaces and adds workbench and editing commands, a richer
 palette, themes, Find, navigation, file watching, and bundled explorer,
 project-selector, and search extensions, keymap presets, and extension
 entitlements. It promotes D007, D008, D010, D031, D034, D053, D060, D064, D068,
-and D089 and adds D069–D088 and D120–D123.
+and D089 and adds D069–D088, D120–D123, and D127.
 
 The [package manager](plans/package-manager.md) initiative is selected: extension
 installation becomes an inspectable application-owned lifecycle with a lockfile,
@@ -94,7 +94,7 @@ complete list for that item.
 - **Projects and workspaces:** D070, D084 → D120; D122 → D123; D087 → D125,
   D126; D089 → D125.
 - **Start surface:** D083, D084 → D061.
-- **Terminal:** D063 with or before D041.
+- **Terminal:** D063 with or before D041; D121 → D127 → D043.
 
 ## Deferred register
 
@@ -533,8 +533,8 @@ Keep each primitive generic, so a Helix or Kakoune mode could use it too. The
 - **D043 — Persistent terminal sessions**
   - Deferred: Live local sessions survive view reconstruction, but not application
     exit. Persistent processes/grid restoration need a separate lifecycle contract.
-  - Reconsider: Restored terminal tabs, which start fresh shells, need their
-    processes or scrollback to continue.
+  - Reconsider: Restored terminal tabs, which start fresh shells in their last
+    working directory (D127), need their processes or scrollback to continue.
 
 - **D044 — Simultaneous terminal views**
   - Deferred: A sole attachment keeps input ownership and PTY resize authority

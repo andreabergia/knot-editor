@@ -2,7 +2,7 @@
 
 Status: 🚧 approved, not started. Promotes D007, D008, D010, D031, D034, D053,
 D060, D064, D068, and D089 from the [roadmap](../roadmap.md) and adds
-D069–D088 and D120–D123.
+D069–D088, D120–D123, and D127.
 
 ## Goal
 
@@ -82,8 +82,17 @@ to be rebuilt later:
   - A new terminal starts in its window's workspace root instead of the
     process's working directory. Decide which root a multi-root window uses
     (the first, or the active document's), what a window without roots uses
-    (the home directory), and whether terminals restored in place follow the
-    same rule.
+    (the home directory). Restored terminals are D127.
+
+- **D127 — Restored terminals keep their working directory** (depends on D121)
+  - A terminal restored in place, by hot exit or a project switch, starts its
+    fresh shell in the directory its shell was last in, rather than in
+    D121's default. The window layout records that directory for each
+    terminal tab.
+  - Decide how the directory is read: from the shell process at capture time,
+    or reported by the shell through OSC 7, which needs shell setup (D039).
+    Also decide what happens when the directory no longer exists. Processes
+    and scrollback stay deferred (D043).
 
 - **D089 — Project-local settings** (depends on D070, D122)
   - Settings read from a file in the repository, attached to folders rather
