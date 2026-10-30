@@ -117,6 +117,25 @@ impl EditorView {
             }
             return true;
         }
+        if command == commands::DELETE_TO_LINE_END_COMMAND {
+            if self.has_selection || self.marked_range_utf16.is_some() {
+                self.replace_text_with_grouping(None, "", None, window, cx);
+                return true;
+            }
+            let model = self.model.read(cx);
+            let caret = to_flat_byte(model, self.cursor_line, self.cursor_col);
+            let end = to_flat_byte(model, self.cursor_line, line_end(model, self.cursor_line));
+            let range = if caret < end {
+                caret..end
+            } else {
+                self.grapheme_deletion_range(model, false)
+            };
+            if !range.is_empty() {
+                self.break_history_group(cx);
+                self.replace_text_with_grouping(Some(range), "", None, window, cx);
+            }
+            return true;
+        }
         let (movement, extend) =
             if let Some(movement) = command.strip_prefix(commands::EDITOR_MOVE_PREFIX) {
                 (movement, false)

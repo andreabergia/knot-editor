@@ -465,6 +465,31 @@ fn crlf_is_one_navigation_and_deletion_boundary(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn delete_to_line_end_removes_the_rest_of_the_line_then_its_break(cx: &mut TestAppContext) {
+    let model = cx.new(|_| BufferModel::from_text("hello world\r\nnext"));
+    let (editor, cx) = cx.add_window_view(|_, cx| EditorView::new(model, cx));
+    cx.update(|window, cx| {
+        editor.update(cx, |view, cx| {
+            view.execute_editing_command("editor.move-word-right", window, cx);
+            view.execute_editing_command("editor.delete-to-line-end", window, cx);
+            assert_eq!(view.text(cx), "hello\r\nnext");
+            view.execute_editing_command("editor.delete-to-line-end", window, cx);
+            assert_eq!(view.text(cx), "hellonext");
+            view.execute_editing_command("editor.undo", window, cx);
+            assert_eq!(view.text(cx), "hello\r\nnext");
+
+            view.execute_editing_command("editor.select-left", window, cx);
+            view.execute_editing_command("editor.delete-to-line-end", window, cx);
+            assert_eq!(view.text(cx), "hell\r\nnext");
+
+            view.execute_editing_command("editor.move-document-end", window, cx);
+            assert!(view.execute_editing_command("editor.delete-to-line-end", window, cx));
+            assert_eq!(view.text(cx), "hell\r\nnext");
+        })
+    });
+}
+
+#[gpui::test]
 fn inserted_newlines_follow_a_crlf_buffer(cx: &mut TestAppContext) {
     let model = cx.new(|_| BufferModel::from_text("a\r\nb"));
     let (editor, cx) = cx.add_window_view(|_, cx| EditorView::new(model, cx));

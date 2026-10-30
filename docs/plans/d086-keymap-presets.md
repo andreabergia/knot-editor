@@ -1,6 +1,6 @@
 # D086 — Keymap presets
 
-Status: 🚧 approved, not started. Item of the
+Status: 🚧 in progress (checkpoint 1 ✅). Item of the
 [daily-driver plan](daily-driver.md); depends on D070 (settings) and D071
 (palette); promotes D060 (audited platform defaults). D088 fills in the other
 presets.
@@ -96,7 +96,7 @@ Presets follow the [themes](../decisions.md#themes) precedent.
 
 ## Checkpoints
 
-### 1. Platform-correct Knot preset
+### 1. ✅ Platform-correct Knot preset
 
 - Replace `COMMON_BINDINGS` / `PLATFORM_BINDINGS` with the redesigned Knot
   preset: `secondary-` shared bindings plus macOS, Windows, and Linux tables
@@ -110,6 +110,12 @@ Presets follow the [themes](../decisions.md#themes) precedent.
   the new commands; product keybinding tests for terminal copy and paste and a
   shell pass-through key.
 - Review gate: walk through the Knot preset tables for each platform.
+- ✅ Done: `knot_preset(platform)` expands `secondary-` per platform, so tests
+  check all three tables on any host. On Windows and Linux the terminal
+  unbinds every global binding whose first keystroke is a plain ctrl chord,
+  derived rather than listed. `editor.delete-to-line-end` backs macOS
+  `ctrl-k`. The duplicate `cmd-t` New Document binding is dropped; New
+  Terminal keeps `secondary-shift-t` until D072 reassigns it.
 - **Implementation context:** `src/app/commands/keymaps.rs` (tables,
   `native_registry`, `install`, config-error quit binding),
   `src/app/commands/keymaps/tests.rs` (extend

@@ -1,40 +1,133 @@
 use super::*;
 use gpui::{KeyContext, TestAppContext};
 
-#[cfg(windows)]
+const PLATFORMS: [Platform; 3] = [Platform::MacOs, Platform::Windows, Platform::Linux];
+
 #[test]
-fn windows_native_defaults_use_control_shortcuts() {
-    let registry = native_registry();
+fn every_preset_binding_is_unique_and_names_a_native_command() {
+    let native = inventory::iter::<crate::app::commands::declarations::CommandDescriptor>
+        .into_iter()
+        .map(|descriptor| descriptor.name)
+        .collect::<HashSet<_>>();
+    for platform in PLATFORMS {
+        let mut seen = HashSet::new();
+        for (key, command, view) in knot_preset(platform) {
+            let key =
+                canonical_key(&key).unwrap_or_else(|_| panic!("{platform:?}: invalid key {key}"));
+            assert!(
+                seen.insert((key.clone(), view)),
+                "{platform:?}: {key} bound twice in {view:?}"
+            );
+            if let Some(command) = command {
+                assert!(
+                    native.contains(command),
+                    "{platform:?}: {key} names unknown command {command}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn windows_and_linux_presets_use_control_shortcuts() {
+    for platform in [Platform::Windows, Platform::Linux] {
+        let registry = preset_registry(platform);
+        for (key, command_name) in [
+            ("ctrl-shift-p", SHOW_COMMAND_PALETTE_COMMAND),
+            ("ctrl-o", OPEN_COMMAND),
+            ("ctrl-s", SAVE_COMMAND),
+            ("ctrl-shift-s", SAVE_AS_COMMAND),
+            ("ctrl-c", COPY_COMMAND),
+            ("ctrl-x", CUT_COMMAND),
+            ("ctrl-v", PASTE_COMMAND),
+            ("ctrl-w", CLOSE_TAB_COMMAND),
+            ("ctrl-shift-w", CLOSE_WINDOW_COMMAND),
+            ("ctrl-q", QUIT_COMMAND),
+            ("ctrl-y", REDO_COMMAND),
+            ("ctrl-shift-z", REDO_COMMAND),
+            ("ctrl-left", MOVE_WORD_LEFT_COMMAND),
+            ("ctrl-right", MOVE_WORD_RIGHT_COMMAND),
+            ("ctrl-home", MOVE_DOCUMENT_START_COMMAND),
+            ("ctrl-end", MOVE_DOCUMENT_END_COMMAND),
+        ] {
+            assert_eq!(
+                resolved(&registry, key, Some("editor")).as_deref(),
+                Some(command_name),
+                "{platform:?}: {key}"
+            );
+        }
+        assert!(
+            registry.keys().iter().all(|key| !key.contains("cmd-")),
+            "{platform:?} binds the platform key"
+        );
+    }
+}
+
+#[test]
+fn windows_and_linux_terminals_leave_plain_control_keys_to_the_shell() {
+    for platform in [Platform::Windows, Platform::Linux] {
+        let registry = preset_registry(platform);
+        for key in [
+            "ctrl-c",
+            "ctrl-v",
+            "ctrl-w",
+            "ctrl-a",
+            "ctrl-z",
+            "ctrl-k right",
+        ] {
+            assert_eq!(
+                resolved(&registry, key, Some("terminal")).as_deref(),
+                Some("<unbound>"),
+                "{platform:?}: {key}"
+            );
+        }
+        assert_eq!(
+            resolved(&registry, "ctrl-shift-c", Some("terminal")).as_deref(),
+            Some(COPY_COMMAND)
+        );
+        assert_eq!(
+            resolved(&registry, "ctrl-shift-v", Some("terminal")).as_deref(),
+            Some(PASTE_COMMAND)
+        );
+        assert_eq!(
+            resolved(&registry, "ctrl-shift-p", Some("terminal")).as_deref(),
+            Some(SHOW_COMMAND_PALETTE_COMMAND)
+        );
+        assert_eq!(resolved(&registry, "ctrl-shift-c", Some("editor")), None);
+    }
+}
+
+#[test]
+fn macos_preset_binds_cocoa_editing_keys_in_the_editor_only() {
+    let registry = preset_registry(Platform::MacOs);
     for (key, command_name) in [
-        ("ctrl-shift-p", SHOW_COMMAND_PALETTE_COMMAND),
-        ("ctrl-o", OPEN_COMMAND),
-        ("ctrl-s", SAVE_COMMAND),
-        ("ctrl-shift-s", SAVE_AS_COMMAND),
-        ("ctrl-c", COPY_COMMAND),
-        ("ctrl-x", CUT_COMMAND),
-        ("ctrl-v", PASTE_COMMAND),
-        ("ctrl-w", CLOSE_TAB_COMMAND),
-        ("ctrl-shift-w", CLOSE_WINDOW_COMMAND),
-        ("ctrl-q", QUIT_COMMAND),
-        ("ctrl-y", REDO_COMMAND),
+        ("cmd-s", SAVE_COMMAND),
+        ("cmd-shift-z", REDO_COMMAND),
+        ("alt-left", MOVE_WORD_LEFT_COMMAND),
+        ("cmd-up", MOVE_DOCUMENT_START_COMMAND),
+        ("ctrl-a", MOVE_LINE_START_COMMAND),
+        ("ctrl-e", MOVE_LINE_END_COMMAND),
+        ("ctrl-f", MOVE_RIGHT_COMMAND),
+        ("ctrl-b", MOVE_LEFT_COMMAND),
+        ("ctrl-n", MOVE_DOWN_COMMAND),
+        ("ctrl-p", MOVE_UP_COMMAND),
+        ("ctrl-d", DELETE_FORWARD_COMMAND),
+        ("ctrl-h", DELETE_BACKWARD_COMMAND),
+        ("ctrl-k", DELETE_TO_LINE_END_COMMAND),
     ] {
         assert_eq!(
             resolved(&registry, key, Some("editor")).as_deref(),
-            Some(command_name)
+            Some(command_name),
+            "{key}"
         );
     }
-    for (key, command_name) in [
-        ("ctrl-left", MOVE_WORD_LEFT_COMMAND),
-        ("ctrl-right", MOVE_WORD_RIGHT_COMMAND),
-        ("ctrl-home", MOVE_DOCUMENT_START_COMMAND),
-        ("ctrl-end", MOVE_DOCUMENT_END_COMMAND),
-    ] {
-        assert_eq!(
-            resolved(&registry, key, Some("editor")).as_deref(),
-            Some(command_name)
-        );
+    assert_eq!(
+        resolved(&registry, "cmd-c", Some("terminal")).as_deref(),
+        Some(COPY_COMMAND)
+    );
+    for key in ["ctrl-a", "ctrl-c", "ctrl-k", "ctrl-y"] {
+        assert_eq!(resolved(&registry, key, Some("terminal")), None, "{key}");
     }
-    assert_eq!(resolved(&registry, "win-shift-p", Some("editor")), None);
 }
 
 fn command(name: &str) -> Command {
@@ -58,7 +151,7 @@ fn extension_global_beats_editor_default_and_editor_unbind_leaves_terminal_bindi
     let personal = BindingOwner::Extension(ExtensionId::new(1), ExtensionLifecycleId::new(1));
     registry
         .set(
-            BindingOwner::Native,
+            BindingOwner::Preset,
             "Cmd-C",
             Some("editor"),
             Some(command("copy")),
@@ -66,7 +159,7 @@ fn extension_global_beats_editor_default_and_editor_unbind_leaves_terminal_bindi
         .unwrap();
     registry
         .set(
-            BindingOwner::Native,
+            BindingOwner::Preset,
             "Cmd-C",
             Some("terminal"),
             Some(command("terminal.copy")),
@@ -99,7 +192,7 @@ fn owner_replacement_removal_and_lifecycle_cleanup_reveal_earlier_writes() {
     let extension = BindingOwner::Extension(ExtensionId::new(2), ExtensionLifecycleId::new(1));
     let personal = BindingOwner::Extension(ExtensionId::new(3), ExtensionLifecycleId::new(1));
     registry
-        .set(BindingOwner::Native, "cmd-a", None, Some(command("native")))
+        .set(BindingOwner::Preset, "cmd-a", None, Some(command("native")))
         .unwrap();
     registry
         .set(extension, "cmd-a", None, Some(command("first")))
@@ -148,7 +241,7 @@ fn shadowed_writes_update_the_one_active_map_only_when_visible() {
     // unchanged.
     assert!(
         !registry
-            .set(BindingOwner::Native, "cmd-a", None, Some(command("native")))
+            .set(BindingOwner::Preset, "cmd-a", None, Some(command("native")))
             .unwrap()
     );
     assert_eq!(registry.keys(), vec![canonical_key("cmd-a").unwrap()]);
@@ -212,7 +305,7 @@ fn later_extension_and_same_source_conflicts_follow_registration_order() {
 #[test]
 fn declared_kinds_and_sequences_are_validated_and_normalized() {
     let mut registry = BindingRegistry::new();
-    let owner = BindingOwner::Native;
+    let owner = BindingOwner::Preset;
     assert_eq!(
         registry.set(owner, "", None, Some(command("x"))),
         Err(BindingError::InvalidKey)
@@ -259,7 +352,7 @@ fn declared_kinds_and_sequences_are_validated_and_normalized() {
 fn bare_uppercase_key_preserves_implicit_shift() {
     let mut registry = BindingRegistry::new();
     registry
-        .set(BindingOwner::Native, "A", None, Some(command("shifted")))
+        .set(BindingOwner::Preset, "A", None, Some(command("shifted")))
         .unwrap();
     assert_eq!(registry.keys(), vec!["shift-a"]);
     assert_eq!(
@@ -275,7 +368,7 @@ fn gpui_contexts_limit_scoped_prefixes_and_exclude_palette_input() {
     registry.declare_extension_kind("outline").unwrap();
     registry
         .set(
-            BindingOwner::Native,
+            BindingOwner::Preset,
             "cmd-k right",
             Some("editor"),
             Some(command("split")),
@@ -283,7 +376,7 @@ fn gpui_contexts_limit_scoped_prefixes_and_exclude_palette_input() {
         .unwrap();
     registry
         .set(
-            BindingOwner::Native,
+            BindingOwner::Preset,
             "cmd-j",
             Some("outline"),
             Some(command("copy")),
@@ -323,7 +416,7 @@ fn unbound_keys_do_not_install_actions_in_their_scope() {
     assert!(registry.gpui_bindings().is_empty());
 
     registry
-        .set(BindingOwner::Native, "cmd-n", None, Some(command("new")))
+        .set(BindingOwner::Preset, "cmd-n", None, Some(command("new")))
         .unwrap();
     registry
         .set(personal, "cmd-n", Some("editor"), None)
@@ -427,13 +520,13 @@ fn shown_bindings_prefer_short_view_scoped_and_latest_bindings() {
     let mut registry = BindingRegistry::new();
     let personal = BindingOwner::Extension(ExtensionId::new(1), ExtensionLifecycleId::new(1));
     for (owner, key, view, name) in [
-        (BindingOwner::Native, "cmd-k cmd-s", None, "file.save"),
-        (BindingOwner::Native, "cmd-s", None, "file.save"),
-        (BindingOwner::Native, "cmd-b", None, "first"),
-        (BindingOwner::Native, "cmd-e", None, "first"),
-        (BindingOwner::Native, "cmd-c", None, "copy"),
+        (BindingOwner::Preset, "cmd-k cmd-s", None, "file.save"),
+        (BindingOwner::Preset, "cmd-s", None, "file.save"),
+        (BindingOwner::Preset, "cmd-b", None, "first"),
+        (BindingOwner::Preset, "cmd-e", None, "first"),
+        (BindingOwner::Preset, "cmd-c", None, "copy"),
         (
-            BindingOwner::Native,
+            BindingOwner::Preset,
             "cmd-c",
             Some("terminal"),
             "terminal.copy",

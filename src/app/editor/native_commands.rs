@@ -39,6 +39,7 @@ fn claim_editor(command: &Command, target: &ProductCommandTarget, cx: &App) -> b
 #[command("editor.insert-tab", title = "Insert Tab", palette = false, id = INSERT_TAB_COMMAND, participant = Editor)]
 #[command("editor.delete-backward", title = "Delete Backward", palette = false, id = DELETE_BACKWARD_COMMAND, participant = Editor)]
 #[command("editor.delete-forward", title = "Delete Forward", palette = false, id = DELETE_FORWARD_COMMAND, participant = Editor)]
+#[command("editor.delete-to-line-end", title = "Delete to Line End", palette = false, id = DELETE_TO_LINE_END_COMMAND, participant = Editor)]
 #[command("editor.select-all", title = "Select All", description = "Select the whole document.", id = SELECT_ALL_COMMAND, participant = Editor)]
 #[command("editor.undo", title = "Undo", description = "Undo the last edit.", id = UNDO_COMMAND, participant = Editor)]
 #[command("editor.redo", title = "Redo", description = "Redo the last undone edit.", id = REDO_COMMAND, participant = Editor)]

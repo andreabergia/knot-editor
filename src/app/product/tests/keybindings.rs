@@ -842,3 +842,53 @@ fn personal_config_ctrl_shift_p_opens_command_palette(cx: &mut TestAppContext) {
     cx.run_until_parked();
     cx.read(|cx| assert!(shell.read(cx).command_palette.is_some()));
 }
+
+#[cfg(target_os = "macos")]
+#[gpui::test]
+fn macos_emacs_keys_edit_through_the_knot_preset(cx: &mut TestAppContext) {
+    let documents = install_globals(cx);
+    cx.update(super::super::bind_product_keys);
+    let document = cx.update(|cx| create_untitled_document(&documents, cx));
+    let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+    model.update(cx, |model, _| model.replace(0..0, "hello world").unwrap());
+    let (shell, window) = product_window(document, model.clone(), cx);
+    cx.update_window(window, |_, window, cx| {
+        shell.read(cx).focus_active_editor(window, cx)
+    })
+    .unwrap();
+    cx.refresh().unwrap();
+    cx.simulate_keystrokes(window, "ctrl-e ctrl-b ctrl-b ctrl-h ctrl-a ctrl-f ctrl-k");
+    cx.run_until_parked();
+    cx.read(|cx| assert_eq!(model.read(cx).text(), "h"));
+}
+
+#[gpui::test]
+async fn linux_preset_leaves_plain_control_keys_to_the_terminal(cx: &mut TestAppContext) {
+    use super::super::super::commands::keymaps::{Platform, preset_registry};
+    let documents = install_globals(cx);
+    cx.update(super::super::bind_product_keys);
+    let document = cx.update(|cx| create_untitled_document(&documents, cx));
+    let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+    let (shell, window) = product_window(document, model, cx);
+    cx.update(|cx| {
+        cx.global_mut::<ApplicationKeymaps>().0 = preset_registry(Platform::Linux);
+        super::super::super::commands::keymaps::rebuild(cx);
+    });
+    let terminal = dispatch_product_command(&shell, window, NEW_TERMINAL_COMMAND, cx);
+    assert_eq!(
+        terminal.completion.await.unwrap(),
+        CommandOutcome::Completed
+    );
+    cx.refresh().unwrap();
+    let tabs = |cx: &mut TestAppContext| {
+        cx.read(|cx| shell.read(cx).workbench.read(cx).panes()[0].tabs().len())
+    };
+    assert_eq!(tabs(cx), 2);
+    cx.simulate_keystrokes(window, "ctrl-w");
+    cx.run_until_parked();
+    assert_eq!(tabs(cx), 2);
+
+    cx.simulate_keystrokes(window, "ctrl-shift-p");
+    cx.run_until_parked();
+    cx.read(|cx| assert!(shell.read(cx).command_palette.is_some()));
+}
