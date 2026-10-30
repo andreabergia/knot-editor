@@ -733,10 +733,18 @@ impl ProductShell {
                 .and_then(|display| display.uuid().ok())
                 .map(|uuid| uuid.to_string()),
         };
+        let sessions = cx.global::<ApplicationTerminalSessions>().0.borrow();
+        let terminal_directory = |id| {
+            sessions
+                .sessions
+                .get(&id)
+                .and_then(|session: &Entity<TerminalSession>| session.read(cx).current_directory())
+        };
         WindowLayout::capture(
             self.workbench.read(cx),
             Some(geometry),
             Self::documents(cx).read(cx),
+            &terminal_directory,
             cx,
         )
     }
@@ -819,8 +827,11 @@ impl ProductShell {
                         .tool_by_stable_id(&tool)
                         .expect("planned tools are registered"),
                 ),
-                PlannedTab::Terminal => {
-                    let (id, view) = self.create_terminal(cx);
+                PlannedTab::Terminal { directory } => {
+                    let (id, view) = match directory.filter(|directory| directory.is_dir()) {
+                        Some(directory) => self.create_terminal_in(Some(directory), cx),
+                        None => self.create_terminal(cx),
+                    };
                     ArrangedTab::Terminal(id, Some(view))
                 }
             })

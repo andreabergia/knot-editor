@@ -119,8 +119,9 @@ the split tree with dock groups; ordered tabs and the selected tab per pane; the
 focused pane; dock sizes; and each editor tab's view state. Every tab kind is
 restored by position and records only what recreates it: a document tab its
 document identity, resource URI, and explicit language, a tool tab its stable
-tool ID, and a terminal tab nothing, so a restored terminal starts a fresh
-shell. The value never contains pane, tab, view, or window handles.
+tool ID, and a terminal tab its shell's working directory, so a restored
+terminal starts a fresh shell there. The value never contains pane, tab, view,
+or window handles.
 
 Restoring plans a pruned arrangement in one place for both restorers. Document
 tabs resolve to the window's entry with the same document identity, else the
@@ -129,7 +130,8 @@ repeated documents within a pane are dropped, then empty panes and one-child
 splits collapse; a second pane claiming a taken dock becomes ordinary, and an
 out-of-range selection or focus falls back to the first tab or the normal group.
 Each surviving tab is then recreated by its kind's step (a fresh editor view of
-the shared model, the registered tool frame, a new terminal session), so a
+the shared model, the registered tool frame, a new terminal session in its
+recorded directory, or the window's default when that no longer exists), so a
 split of one document restores as independent views of one model. A recorded
 language becomes the document's explicit language unless the live document
 already has one. Tools the
@@ -317,10 +319,17 @@ A new session's working directory is chosen when it is created and kept across
 restart. The window's shell picks the innermost root containing the window's
 most recently focused document, otherwise the first root, otherwise the home
 directory, skipping roots that are not existing local directories. New
-Terminal, splitting a terminal pane, and terminal tabs restored in place all use
-this rule; restoration installs a window's roots before its layout, so restored
-shells see them. `terminals.open` accepts an explicit directory instead. The
-rule lives in [terminal/directory.rs](../../src/app/terminal/directory.rs).
+Terminal, splitting a terminal pane, and terminal tabs restored without a
+usable recorded directory use this rule; restoration installs a window's roots
+before its layout, so restored shells see them. `terminals.open` accepts an
+explicit directory instead. The rule lives in
+[terminal/directory.rs](../../src/app/terminal/directory.rs).
+
+A session reports its shell's current working directory by querying the shell
+process, on macOS and Linux, and otherwise the directory it started in; the
+query lives in [terminal/process.rs](../../src/app/terminal/process.rs). A
+captured layout records it, so quit and project switches see the latest `cd`,
+while a crash restores the directory of the last debounced capture.
 
 `TerminalView` owns focus, layout, scroll interaction, drawing, and input. An
 attachment lease gives one view input/resize authority. Releasing it does not stop

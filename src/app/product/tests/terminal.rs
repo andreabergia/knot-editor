@@ -1254,7 +1254,9 @@ async fn new_terminals_start_in_the_root_of_the_last_focused_document(cx: &mut T
 }
 
 #[gpui::test]
-async fn restored_terminals_start_in_their_windows_root(cx: &mut TestAppContext) {
+async fn restored_terminals_without_a_recorded_directory_start_in_their_windows_root(
+    cx: &mut TestAppContext,
+) {
     let temp = tempfile::tempdir().unwrap();
     let documents = install_globals(cx);
     let document = cx.update(|cx| create_untitled_document(&documents, cx));
@@ -1267,6 +1269,11 @@ async fn restored_terminals_start_in_their_windows_root(cx: &mut TestAppContext)
             source.read(cx).capture_layout(window, cx)
         })
         .unwrap();
+    let mut value = serde_json::to_value(&layout).unwrap();
+    for tab in value["root"]["tabs"].as_array_mut().unwrap() {
+        tab.as_object_mut().unwrap().remove("directory");
+    }
+    let layout = crate::app::window_layout::WindowLayout::decode(&value).unwrap();
 
     let document = cx.update(|cx| create_untitled_document(&documents, cx));
     let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());

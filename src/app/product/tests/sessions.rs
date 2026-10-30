@@ -1161,6 +1161,75 @@ fn layouts_restore_splits_shared_views_docks_and_fresh_terminals(cx: &mut TestAp
     );
 }
 
+fn terminal_start_directory(
+    shell: &Entity<ProductShell>,
+    cx: &TestAppContext,
+) -> Option<std::path::PathBuf> {
+    let [TabSurfaceId::Terminal(id)] = terminal_sessions(shell, cx)[..] else {
+        panic!("expected one terminal")
+    };
+    cx.read(|cx| {
+        cx.global::<ApplicationTerminalSessions>()
+            .0
+            .borrow()
+            .sessions[&id]
+            .read(cx)
+            .working_directory()
+            .map(Path::to_owned)
+    })
+}
+
+#[gpui::test]
+fn restored_terminals_start_in_their_recorded_directory(cx: &mut TestAppContext) {
+    let h = harness(cx);
+    let temp = tempfile::tempdir().unwrap();
+    let directory = std::fs::canonicalize(temp.path()).unwrap();
+    let (one, shell, window) = h.file_window("a/one.txt", cx);
+    shell.update(cx, |shell, cx| {
+        let (id, view) = shell.create_terminal_in(Some(directory.clone()), cx);
+        let pane = shell.workbench.read(cx).focused_pane_id().unwrap();
+        shell.workbench.update(cx, |workbench, _| {
+            workbench.open_terminal_tab(pane, id, view)
+        });
+    });
+    let layout = capture_layout(window, cx).to_string();
+    let recorded = url::Url::from_directory_path(&directory)
+        .unwrap()
+        .to_string();
+    assert!(layout.contains(&format!("\"directory\":\"{recorded}\"")));
+
+    let restore = |layout: &str, release, cx: &mut TestAppContext| {
+        let layout: serde_json::Value = serde_json::from_str(layout).unwrap();
+        let result = h
+            .replace(
+                json!({
+                    "suspend": [{ "document": h.identity(one, cx), "capture": null }],
+                    "windows": [{ "roots": ["mem://product/a/"], "layout": layout,
+                                  "entries": [{ "uri": "mem://product/a/one.txt" }] }],
+                    "release": [window_id(release)],
+                }),
+                cx,
+            )
+            .unwrap();
+        created(&result, 0, cx)
+    };
+    let (restored, restored_window) = restore(&layout, window, cx);
+    assert_eq!(
+        terminal_start_directory(&restored, cx),
+        Some(directory.clone())
+    );
+
+    // A directory that no longer exists falls back to the window's default.
+    let gone = url::Url::from_directory_path(directory.join("gone"))
+        .unwrap()
+        .to_string();
+    let (fallback, _) = restore(&layout.replace(&recorded, &gone), restored_window, cx);
+    assert_eq!(
+        terminal_start_directory(&fallback, cx),
+        cx.read(|cx| fallback.read(cx).terminal_directory(cx))
+    );
+}
+
 #[gpui::test]
 fn layouts_prune_unknown_tabs_hide_unnamed_tools_and_ignore_unsupported_versions(
     cx: &mut TestAppContext,

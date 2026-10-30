@@ -7,7 +7,7 @@
 //! handles. Every tab records only what its kind needs to recreate a
 //! presentation in the same position: a document tab its document identity,
 //! resource URI, and explicit language, a tool tab its stable tool ID, and a
-//! terminal tab nothing.
+//! terminal tab its shell's working directory.
 //!
 //! Restoring plans a pruned arrangement in one place for both restorers:
 //! unresolved documents, unregistered or repeated tools, and repeated documents
@@ -19,7 +19,9 @@ use serde::{Deserialize, Serialize};
 use super::{
     documents::DocumentCollection,
     editor::EditorViewState,
-    workbench::{DockLocation, SplitDirection, TabSurfaceId, Workbench, WorkbenchLayout},
+    workbench::{
+        DockLocation, SplitDirection, TabSurfaceId, TerminalSessionId, Workbench, WorkbenchLayout,
+    },
 };
 
 pub(crate) const WINDOW_LAYOUT_VERSION: u32 = 1;
@@ -89,7 +91,11 @@ pub(crate) enum LayoutTab {
     Tool {
         tool: String,
     },
-    Terminal,
+    Terminal {
+        /// The shell's working directory as a file URI.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        directory: Option<String>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -166,17 +172,20 @@ impl WindowLayout {
         (sizes.iter().all(|size| size.is_finite()) && geometry).then_some(layout)
     }
 
-    /// Capture a workbench with its window geometry.
+    /// Capture a workbench with its window geometry. `terminal_directory`
+    /// reports a terminal session's working directory.
     pub(crate) fn capture(
         workbench: &Workbench,
         geometry: Option<WindowGeometry>,
         documents: &DocumentCollection,
+        terminal_directory: &dyn Fn(TerminalSessionId) -> Option<std::path::PathBuf>,
         cx: &App,
     ) -> Self {
         fn node(
             layout: &WorkbenchLayout,
             workbench: &Workbench,
             documents: &DocumentCollection,
+            terminal_directory: &dyn Fn(TerminalSessionId) -> Option<std::path::PathBuf>,
             cx: &App,
         ) -> LayoutNode {
             match layout {
@@ -211,7 +220,11 @@ impl WindowLayout {
                                     .map(|tool| tool.stable_id.clone())
                                     .unwrap_or_default(),
                             },
-                            TabSurfaceId::Terminal(_) => LayoutTab::Terminal,
+                            TabSurfaceId::Terminal(id) => LayoutTab::Terminal {
+                                directory: terminal_directory(id)
+                                    .and_then(|path| url::Url::from_directory_path(path).ok())
+                                    .map(String::from),
+                            },
                         })
                         .collect();
                     LayoutNode::Pane {
@@ -230,8 +243,8 @@ impl WindowLayout {
                     second,
                 } => LayoutNode::Split {
                     direction: *direction,
-                    first: Box::new(node(first, workbench, documents, cx)),
-                    second: Box::new(node(second, workbench, documents, cx)),
+                    first: Box::new(node(first, workbench, documents, terminal_directory, cx)),
+                    second: Box::new(node(second, workbench, documents, terminal_directory, cx)),
                 },
             }
         }
@@ -250,7 +263,7 @@ impl WindowLayout {
             geometry,
             root: workbench
                 .layout()
-                .map(|layout| node(layout, workbench, documents, cx)),
+                .map(|layout| node(layout, workbench, documents, terminal_directory, cx)),
             focused: workbench
                 .focused_pane_id()
                 .and_then(|focused| order.iter().position(|pane| *pane == focused)),
@@ -355,7 +368,12 @@ impl WindowLayout {
                                 state.tools.push(tool.clone());
                                 PlannedTab::Tool(tool.clone())
                             }),
-                            LayoutTab::Terminal => Some(PlannedTab::Terminal),
+                            LayoutTab::Terminal { directory } => Some(PlannedTab::Terminal {
+                                directory: directory
+                                    .as_deref()
+                                    .and_then(|uri| url::Url::parse(uri).ok())
+                                    .and_then(|url| url.to_file_path().ok()),
+                            }),
                         };
                         if let Some(tab) = kept {
                             if position == *selected {
@@ -458,7 +476,10 @@ pub(crate) enum PlannedTab<D> {
         language: Option<String>,
     },
     Tool(String),
-    Terminal,
+    /// A fresh shell, started in `directory` when it still exists.
+    Terminal {
+        directory: Option<std::path::PathBuf>,
+    },
 }
 
 /// A logical-pixel rectangle.
@@ -593,7 +614,9 @@ mod tests {
                     "first": { "kind": "pane", "dock": "left", "selected": 0,
                                "tabs": [{ "kind": "tool", "tool": "knot.explorer" }] },
                     "second": { "kind": "pane", "dock": null, "selected": 1,
-                                "tabs": [document("a"), { "kind": "terminal" },
+                                "tabs": [document("a"),
+                                         { "kind": "terminal", "directory": "file:///work/" },
+                                         { "kind": "terminal" },
                                          { "kind": "document", "document": "b", "uri": null,
                                            "language": "rust",
                                            "view": { "anchor": 0, "caret": 0, "top": 0, "scrollX": 0 } }] } }),
@@ -646,6 +669,8 @@ mod tests {
                           "language": "rust",
                           "view": { "anchor": 0, "caret": 0, "top": 0, "scrollX": 0 } },
                         { "kind": "terminal" },
+                        { "kind": "terminal", "directory": "file:///work/" },
+                        { "kind": "terminal", "directory": "not a uri" },
                     ] } }),
             Some(1),
         );
@@ -684,7 +709,14 @@ mod tests {
                             view: view(0),
                             language: Some("rust".into()),
                         },
-                        PlannedTab::Terminal,
+                        PlannedTab::Terminal { directory: None },
+                        PlannedTab::Terminal {
+                            directory: url::Url::parse("file:///work/")
+                                .unwrap()
+                                .to_file_path()
+                                .ok(),
+                        },
+                        PlannedTab::Terminal { directory: None },
                     ],
                 }),
             }

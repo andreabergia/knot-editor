@@ -427,7 +427,6 @@ impl TerminalSession {
 
     /// The directory the shell is in now where the platform can report it,
     /// otherwise the directory the session started in.
-    #[allow(dead_code)]
     pub(crate) fn current_directory(&self) -> Option<std::path::PathBuf> {
         match &self.state {
             TerminalState::Running(RunningTerminal { pid: Some(pid), .. }) => {

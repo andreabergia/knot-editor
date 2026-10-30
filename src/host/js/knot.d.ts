@@ -913,14 +913,16 @@ declare module "knot" {
     scrollX: number;
   }>;
   /** Each tab kind records only what recreates it in the same position. A
-   * terminal tab restores as a fresh shell; no process or content survives.
+   * terminal tab records its shell's working directory as a file URI and
+   * restores as a fresh shell started there, or in the window's default
+   * directory when it no longer exists; no process or content survives.
    * A document tab records its document's explicit language, if any;
    * restoration applies it unless the live document already has an explicit
    * language. */
   export type LayoutTab =
     | Readonly<{ kind: "document"; document: DocumentId | null; uri: string | null; view: EditorViewState; language?: string }>
     | Readonly<{ kind: "tool"; tool: string }>
-    | Readonly<{ kind: "terminal" }>;
+    | Readonly<{ kind: "terminal"; directory?: string }>;
   export type LayoutNode =
     | Readonly<{ kind: "pane"; dock: "left" | "right" | "bottom" | null; selected: number; tabs: readonly LayoutTab[] }>
     | Readonly<{ kind: "split"; direction: "horizontal" | "vertical"; first: LayoutNode; second: LayoutNode }>;

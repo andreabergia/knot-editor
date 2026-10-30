@@ -1,6 +1,6 @@
 # D127 — Restored terminals keep their working directory
 
-Status: 🚧 in progress; checkpoint 1 complete. Item of the
+Status: 🚧 in progress; checkpoint 2 awaiting review. Item of the
 [daily-driver plan](daily-driver.md); builds on D121's default directory rule
 ([workbench and lifecycle](../architecture/workbench-and-lifecycle.md#terminal-sessions-and-views),
 [decisions](../decisions.md#terminal)).
@@ -31,8 +31,9 @@ A `terminals.open` directory or the D121 choice therefore stays stable across
 restarts instead of being re-derived from the last focused document.
 
 **Recording.** A terminal tab records an optional `directory` as a file URI,
-read when the layout is captured. The layout version is bumped; no
-compatibility path. Captures already happen when the per-window debounce
+read when the layout is captured. The field is optional, so the layout
+version stays 1: a stored layout without it restores with D121's default, and
+bumping would only discard stored sessions. Captures already happen when the per-window debounce
 settles, at quit, and when a project switch captures layouts, so quit and
 switches always see a fresh value. A `cd` does not start a capture, so after a
 crash a terminal restores to its directory at the last debounced capture; this
@@ -64,21 +65,20 @@ all share the default.
   start directory. Live queries were validated on macOS only; the Linux path
   is untested.
 
-### 2. Record and restore the directory
+### 2. Record and restore the directory ✅ (awaiting review)
 
 - Deliverable: the window layout records each terminal's directory, and
   restoration by hot exit and project switch starts the shell there, falling
   back to D121's default when the directory is gone.
 - Validation: `window_layout.rs` round-trip and planning tests for the new
-  field and version; product tests that capture a window with a terminal whose
+  field; product tests that capture a window with a terminal whose
   start directory differs from the default, restore it, and check the new
   session's directory, plus the missing-directory fallback.
 - Review gate: layout shape and restore fallback.
 - **Implementation context:** `src/app/window_layout.rs`: `LayoutTab::Terminal`
   gains `directory: Option<String>`, capture at the
   `TabSurfaceId::Terminal(_)` arm reads the session through
-  `TerminalSessions`, `PlannedTab::Terminal` carries the directory, and
-  `WINDOW_LAYOUT_VERSION` goes to 2 (update the JSON fixtures in its tests).
+  `TerminalSessions`, and `PlannedTab::Terminal` carries the directory.
   `src/app/product/sessions.rs`: the `PlannedTab::Terminal` arm calls
   `create_terminal_in` with the recorded path when it is an existing
   directory, else `create_terminal`. Product tests live in
