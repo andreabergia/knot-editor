@@ -129,33 +129,15 @@ capture rejects with the `UnknownCapture` host error, because only native
 code knows the vocabulary. gpui's test platform cannot change the system
 appearance, so `system` mode is tested only against the reported one.
 
-### 3. Contributions name color keys 🚧 awaiting review
+### 3. Contributions name color keys ✅
 
-Deliverables:
-- ✅ `EditorContribution.decoration` and `gutter` and `TreeItem.badge` take
-  any color key string (`ColorKey` in the declarations) instead of the
-  severity tokens; the editor paints decorations as wavy underlines and
-  gutter markers, and trees paint badges, in the resolved key's color, or
-  interface text (`text`) for an undefined key, as `Theme::color` already
-  does.
-- ✅ Declarations, the fake host (which needed no change), examples (the
-  git-status badge `neutral` → `text.muted`), the extension guide, the
-  semantic UI reference, and D114's roadmap entry updated.
-
-Notes: decoration names left the highlight vocabulary, so highlight spans
-carry resolved styles and decorations form one layer per key. Overlap order
-keeps today's rule for diagnostics: `error`, `warning`, and `info` paint above
-every other key, most severe on top; other keys paint in contribution order
-beneath them. Undefined keys paint as interface text rather than the editor
-foreground, which matches the existing `Theme::color` fallback.
-
-Validation: a product test in `src/app/product/tests/themes.rs` in which an
-extension decorates a buffer with its own key and an undefined one, checks
-the painted underline and gutter colors, and follows a theme switch; model
-and editor tests for overlap order with a custom key; a theme test for
-decoration colors; existing contribution, tree, and engine tests updated.
-
-Review gate: the contribution contract.
+Editor decorations and gutter markers and tree badges name any color key
+(`ColorKey` in `src/host/js/knot.d.ts`); see the extension guide's theme
+section and the [semantic UI](../architecture/semantic-ui.md) layering
+paragraph. Where decorations overlap, `error`, `warning`, and `info` paint
+above other keys, most severe on top, and an undefined key paints as
+interface text. Tree badge colors are covered only through the shared
+`Theme::color` lookup, not a painted-color test.
 
 ### 4. `@knot/themes` with One Dark, One Light, and Select Theme
 
