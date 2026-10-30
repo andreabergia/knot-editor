@@ -126,8 +126,8 @@ Added to the Knot preset. `secondary-` is cmd on macOS and ctrl elsewhere.
 
 ### 1. Split ratios and resizing
 
-- Ratios in `WorkbenchLayout` and `LayoutNode::Split` (bump the layout
-  version; older records are ignored as unsupported).
+- Ratios in `WorkbenchLayout` and `LayoutNode::Split`; the record format
+  simply changes, with no version bump.
 - Every divider drags and settles through the existing debounce.
 - Grow, Shrink, and Equalize Panes; Split Left and Split Up.
 - **Validation:** workbench model tests for ratio changes, clamping, equalize,
