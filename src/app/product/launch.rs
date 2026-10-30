@@ -449,69 +449,13 @@ pub(crate) fn run(initial_request: Option<OpenRequest>) {
         cx.set_global(ApplicationProductCommands(commands));
         let extension_host = crate::app::extensions::host::install(cx);
         bind_product_keys(cx);
-        cx.set_menus(vec![
-            Menu {
-                name: "Knot".into(),
-                items: vec![MenuItem::action(
-                    "Quit Knot",
-                    ProductCommandSource::new(QUIT_COMMAND),
-                )],
-            },
-            Menu {
-                name: "File".into(),
-                items: vec![
-                    MenuItem::action("New", ProductCommandSource::new(NEW_COMMAND)),
-                    MenuItem::action(
-                        "New Terminal",
-                        ProductCommandSource::new(NEW_TERMINAL_COMMAND),
-                    ),
-                    MenuItem::action(
-                        "New Blank Window",
-                        ProductCommandSource::new(NEW_WINDOW_COMMAND),
-                    ),
-                    MenuItem::action("Open…", ProductCommandSource::new(OPEN_COMMAND)),
-                    MenuItem::action(
-                        "Add Folder to Workspace…",
-                        ProductCommandSource::new(commands::ADD_FOLDER_COMMAND),
-                    ),
-                    MenuItem::action("Save", ProductCommandSource::new(SAVE_COMMAND)),
-                    MenuItem::action("Save As…", ProductCommandSource::new(SAVE_AS_COMMAND)),
-                    MenuItem::action(
-                        "Recover Unsaved Documents…",
-                        ProductCommandSource::new(commands::RECOVER_COMMAND),
-                    ),
-                    MenuItem::action("Close Tab", ProductCommandSource::new(CLOSE_TAB_COMMAND)),
-                    MenuItem::action(
-                        "Close Window",
-                        ProductCommandSource::new(CLOSE_WINDOW_COMMAND),
-                    ),
-                ],
-            },
-            Menu {
-                name: "Edit".into(),
-                items: vec![
-                    MenuItem::action("Undo", ProductCommandSource::new(UNDO_COMMAND)),
-                    MenuItem::action("Redo", ProductCommandSource::new(REDO_COMMAND)),
-                    MenuItem::action("Cut", ProductCommandSource::new(CUT_COMMAND)),
-                    MenuItem::action("Copy", ProductCommandSource::new(COPY_COMMAND)),
-                    MenuItem::action("Paste", ProductCommandSource::new(PASTE_COMMAND)),
-                    MenuItem::action("Select All", ProductCommandSource::new(SELECT_ALL_COMMAND)),
-                ],
-            },
-            Menu {
-                name: "View".into(),
-                items: vec![
-                    MenuItem::action(
-                        "Split Right",
-                        ProductCommandSource::new(SPLIT_HORIZONTAL_COMMAND),
-                    ),
-                    MenuItem::action(
-                        "Split Down",
-                        ProductCommandSource::new(SPLIT_VERTICAL_COMMAND),
-                    ),
-                ],
-            },
-        ]);
+        cx.set_menus(product_menus());
+        // Menu key equivalents are read when the menus are set, so set them
+        // again whenever the keymap changes.
+        cx.observe_global::<crate::app::commands::keymaps::ApplicationKeymaps>(|cx| {
+            cx.set_menus(product_menus())
+        })
+        .detach();
         let first_request = initial_request.or_else(|| incoming_requests.try_recv().ok());
         if let Some(request) = first_request {
             dispatch_launch_request(Some(request), cx);
@@ -527,6 +471,72 @@ pub(crate) fn run(initial_request: Option<OpenRequest>) {
             host.start_product_startup(None, extensions_root, cx)
         });
     });
+}
+
+fn product_menus() -> Vec<Menu> {
+    vec![
+        Menu {
+            name: "Knot".into(),
+            items: vec![MenuItem::action(
+                "Quit Knot",
+                ProductCommandSource::new(QUIT_COMMAND),
+            )],
+        },
+        Menu {
+            name: "File".into(),
+            items: vec![
+                MenuItem::action("New", ProductCommandSource::new(NEW_COMMAND)),
+                MenuItem::action(
+                    "New Terminal",
+                    ProductCommandSource::new(NEW_TERMINAL_COMMAND),
+                ),
+                MenuItem::action(
+                    "New Blank Window",
+                    ProductCommandSource::new(NEW_WINDOW_COMMAND),
+                ),
+                MenuItem::action("Open…", ProductCommandSource::new(OPEN_COMMAND)),
+                MenuItem::action(
+                    "Add Folder to Workspace…",
+                    ProductCommandSource::new(commands::ADD_FOLDER_COMMAND),
+                ),
+                MenuItem::action("Save", ProductCommandSource::new(SAVE_COMMAND)),
+                MenuItem::action("Save As…", ProductCommandSource::new(SAVE_AS_COMMAND)),
+                MenuItem::action(
+                    "Recover Unsaved Documents…",
+                    ProductCommandSource::new(commands::RECOVER_COMMAND),
+                ),
+                MenuItem::action("Close Tab", ProductCommandSource::new(CLOSE_TAB_COMMAND)),
+                MenuItem::action(
+                    "Close Window",
+                    ProductCommandSource::new(CLOSE_WINDOW_COMMAND),
+                ),
+            ],
+        },
+        Menu {
+            name: "Edit".into(),
+            items: vec![
+                MenuItem::action("Undo", ProductCommandSource::new(UNDO_COMMAND)),
+                MenuItem::action("Redo", ProductCommandSource::new(REDO_COMMAND)),
+                MenuItem::action("Cut", ProductCommandSource::new(CUT_COMMAND)),
+                MenuItem::action("Copy", ProductCommandSource::new(COPY_COMMAND)),
+                MenuItem::action("Paste", ProductCommandSource::new(PASTE_COMMAND)),
+                MenuItem::action("Select All", ProductCommandSource::new(SELECT_ALL_COMMAND)),
+            ],
+        },
+        Menu {
+            name: "View".into(),
+            items: vec![
+                MenuItem::action(
+                    "Split Right",
+                    ProductCommandSource::new(SPLIT_HORIZONTAL_COMMAND),
+                ),
+                MenuItem::action(
+                    "Split Down",
+                    ProductCommandSource::new(SPLIT_VERTICAL_COMMAND),
+                ),
+            ],
+        },
+    ]
 }
 
 pub(in crate::app) fn bind_product_keys(cx: &mut App) {

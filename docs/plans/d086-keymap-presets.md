@@ -1,6 +1,6 @@
 # D086 — Keymap presets
 
-Status: 🚧 in progress (checkpoints 1–3 ✅). Item of the
+Status: 🚧 in progress (checkpoints 1–3 ✅, 4 awaiting manual check). Item of the
 [daily-driver plan](daily-driver.md); depends on D070 (settings) and D071
 (palette); promotes D060 (audited platform defaults). D088 fills in the other
 presets.
@@ -138,6 +138,14 @@ slots; accepting runs the command on the captured target.
   (including after a preset switch); manual macOS check.
 - Review gate: menus show the right keys after switching preset and after a
   personal override.
+- 🚧 Implemented, awaiting the manual macOS check. Spike result from gpui
+  0.2.2's source: the window handles `performKeyEquivalent:` first and the
+  menu fires only when gpui leaves the key unhandled, so a pressed key runs
+  once through `KeymapAction`. Consequences: a key some view unbinds gets no
+  menu key (otherwise the menu would run its command there), and keys the
+  palette or a transient leaves unhandled now reach menu commands, as in
+  native apps. Chords show no key, since macOS menus take one keystroke.
+  Launch sets the menus again whenever `ApplicationKeymaps` changes.
 - **Implementation context:** menus are built in `src/app/product/launch.rs`
   (`MenuItem::action` with `ProductCommandSource`). gpui picks the key
   equivalent in `gpui-0.2.2/src/platform/mac/platform.rs` (it prefers bindings

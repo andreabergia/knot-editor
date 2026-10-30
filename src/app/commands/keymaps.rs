@@ -9,7 +9,10 @@ use crate::host::protocol::{
     KeybindingMutation,
 };
 
-use crate::app::commands::dispatch::QUIT_COMMAND;
+use crate::app::commands::dispatch::{ProductCommandSource, QUIT_COMMAND};
+
+/// A key context no element declares, for bindings that only label menus.
+const MENU_SHORTCUT_CONTEXT: &str = "menu_shortcut";
 
 /// The preset's bindings are the defaults beneath every extension binding.
 /// Extension bindings, including personal config's, form one stack in which
@@ -571,6 +574,28 @@ pub(crate) fn install(cx: &mut App) {
     rebuild(cx);
 }
 
+/// The key each argument-less command shows in a menu: its shown global
+/// single keystroke. macOS performs a menu's key equivalent when the window
+/// leaves the key unhandled, so a key that some view unbinds gets no menu key,
+/// or pressing it there would run the menu command.
+///
+/// Menus show the key bound to their action. Binding these keys to the menu
+/// action in a context no element declares labels the menu without the
+/// binding ever dispatching; a pressed key still reaches the keymap action.
+fn menu_shortcuts(registry: &BindingRegistry) -> Vec<(CommandName, String)> {
+    registry
+        .shown_bindings(None)
+        .into_iter()
+        .filter(|(_, key)| {
+            !key.contains(' ')
+                && !registry.active[key]
+                    .views
+                    .values()
+                    .any(|resolution| *resolution == BindingResolution::Unbound)
+        })
+        .collect()
+}
+
 pub(crate) fn rebuild(cx: &mut App) {
     let bindings = cx.global::<ApplicationKeymaps>().0.gpui_bindings();
     cx.clear_key_bindings();
@@ -583,9 +608,19 @@ pub(crate) fn rebuild(cx: &mut App) {
             Some(&context),
         )
     }));
+    let shortcuts = menu_shortcuts(&cx.global::<ApplicationKeymaps>().0);
+    cx.bind_keys(shortcuts.into_iter().map(|(name, key)| {
+        KeyBinding::new(
+            &key,
+            ProductCommandSource {
+                name: name.to_string().into(),
+            },
+            Some(MENU_SHORTCUT_CONTEXT),
+        )
+    }));
     cx.bind_keys([KeyBinding::new(
         "secondary-q",
-        crate::app::commands::dispatch::ProductCommandSource::new(QUIT_COMMAND),
+        ProductCommandSource::new(QUIT_COMMAND),
         Some("config-error"),
     )]);
 }

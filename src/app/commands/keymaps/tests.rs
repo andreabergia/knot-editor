@@ -798,3 +798,68 @@ fn listing_names_each_slot_and_the_owner_that_overrides_it() {
         ]
     );
 }
+
+#[gpui::test]
+fn menu_shortcuts_follow_the_effective_global_keymap(cx: &mut TestAppContext) {
+    fn menu_key(cx: &gpui::App, command: &str) -> Option<String> {
+        let keymap = cx.key_bindings();
+        let keymap = keymap.borrow();
+        let action = ProductCommandSource {
+            name: command.to_owned().into(),
+        };
+        let keys = keymap
+            .bindings_for_action(&action)
+            .filter(|binding| {
+                binding
+                    .predicate()
+                    .is_some_and(|predicate| predicate.to_string() == MENU_SHORTCUT_CONTEXT)
+            })
+            .map(|binding| {
+                binding
+                    .keystrokes()
+                    .iter()
+                    .map(|stroke| stroke.unparse())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .collect::<Vec<_>>();
+        assert!(keys.len() <= 1, "{command} has several menu keys: {keys:?}");
+        keys.into_iter().next()
+    }
+    let key = |source: &str| canonical_key(source).unwrap();
+    cx.update(install);
+    cx.read(|cx| {
+        assert_eq!(menu_key(cx, SAVE_COMMAND), Some(key("secondary-s")));
+        assert_eq!(menu_key(cx, SPLIT_HORIZONTAL_COMMAND), None);
+        assert_eq!(menu_key(cx, MOVE_LEFT_COMMAND), None);
+    });
+
+    let personal = BindingOwner::Extension(ExtensionId::new(0), ExtensionLifecycleId::new(1));
+    cx.update(|cx| {
+        let registry = &mut cx.global_mut::<ApplicationKeymaps>().0;
+        registry
+            .set(personal, "secondary-s", None, Some(command(NEW_COMMAND)))
+            .unwrap();
+        registry
+            .set(personal, "secondary-o", Some("editor"), None)
+            .unwrap();
+        rebuild(cx);
+    });
+    cx.read(|cx| {
+        assert_eq!(menu_key(cx, SAVE_COMMAND), None);
+        // Equally short keys show the latest write.
+        assert_eq!(menu_key(cx, NEW_COMMAND), Some(key("secondary-s")));
+        assert_eq!(menu_key(cx, OPEN_COMMAND), None);
+    });
+
+    cx.update(|cx| {
+        cx.global_mut::<ApplicationKeymaps>().0.replace_preset(
+            &preset("other", &[("secondary-g", Some(SAVE_COMMAND), None)]).bindings,
+        );
+        rebuild(cx);
+    });
+    cx.read(|cx| {
+        assert_eq!(menu_key(cx, SAVE_COMMAND), Some(key("secondary-g")));
+        assert_eq!(menu_key(cx, NEW_COMMAND), Some(key("secondary-s")));
+    });
+}
