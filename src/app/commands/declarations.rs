@@ -3,7 +3,9 @@
 //! Annotate a safe async function taking owned `CommandContext` and arguments and
 //! returning `Result<Success, Error>`. The `command` attribute requires a wire
 //! name, `title`, generated name constant `id`, and routing `participant`:
-//! `#[command("file.open", title = "Open…", id = OPEN_COMMAND, participant = Workbench)]`.
+//! `#[command("file.open", title = "Open…", description = "Open a file or folder.", id = OPEN_COMMAND, participant = Workbench)]`.
+//! An optional `description = "…"` is shown in the command palette, and
+//! `palette = false` hides a low-level input command from it.
 //! Repeated attributes share an implementation; `context.name` identifies its
 //! declaration. An optional `claim = path` predicate returns false to decline
 //! synchronously, preserving routing before any handler work starts.
@@ -214,9 +216,17 @@ type Invoke = fn(
     CommandContext,
 ) -> Result<HandlerFuture<CommandOutcome>, CommandOutcome>;
 
+/// Palette presentation shared by every declaration of one native command.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) struct NativeCommandMetadata {
+    pub(crate) title: &'static str,
+    pub(crate) description: Option<&'static str>,
+    pub(crate) palette: bool,
+}
+
 pub(crate) struct CommandDescriptor {
     pub(crate) name: &'static str,
-    pub(crate) title: &'static str,
+    pub(crate) metadata: NativeCommandMetadata,
     pub(crate) participant: Participant,
     claim: Claim,
     invoke: Invoke,
@@ -224,7 +234,11 @@ pub(crate) struct CommandDescriptor {
 inventory::collect!(CommandDescriptor);
 
 impl CommandDescriptor {
-    pub(crate) const fn new<H>(title: &'static str, participant: Participant, claim: Claim) -> Self
+    pub(crate) const fn new<H>(
+        metadata: NativeCommandMetadata,
+        participant: Participant,
+        claim: Claim,
+    ) -> Self
     where
         H: AsyncHandler<
                 Context = CommandContext,
@@ -235,7 +249,7 @@ impl CommandDescriptor {
     {
         Self {
             name: H::NAME,
-            title,
+            metadata,
             participant,
             claim,
             invoke: |arguments, context| {
@@ -293,7 +307,7 @@ impl CommandDescriptor {
 
 pub(crate) struct CommandRegistry {
     entries: BTreeMap<(&'static str, Participant), &'static CommandDescriptor>,
-    definitions: BTreeMap<&'static str, &'static str>,
+    definitions: BTreeMap<&'static str, NativeCommandMetadata>,
 }
 
 impl CommandRegistry {
@@ -301,13 +315,13 @@ impl CommandRegistry {
         descriptors: impl IntoIterator<Item = &'static CommandDescriptor>,
     ) -> Result<Self, String> {
         let mut descriptors = descriptors.into_iter().collect::<Vec<_>>();
-        descriptors.sort_by_key(|entry| (entry.name, entry.participant, entry.title));
+        descriptors.sort_by_key(|entry| (entry.name, entry.participant, entry.metadata));
         let mut registry = Self {
             entries: BTreeMap::new(),
             definitions: BTreeMap::new(),
         };
         for descriptor in descriptors {
-            if descriptor.name.is_empty() || descriptor.title.is_empty() {
+            if descriptor.name.is_empty() || descriptor.metadata.title.is_empty() {
                 return Err("native commands require nonempty names and titles".into());
             }
             if registry
@@ -320,22 +334,26 @@ impl CommandRegistry {
                     descriptor.name, descriptor.participant
                 ));
             }
-            if let Some(title) = registry
+            if let Some(metadata) = registry
                 .definitions
-                .insert(descriptor.name, descriptor.title)
-                && title != descriptor.title
+                .insert(descriptor.name, descriptor.metadata)
+                && metadata != descriptor.metadata
             {
                 return Err(format!(
-                    "conflicting titles for native command {:?}: {title:?} and {:?}",
-                    descriptor.name, descriptor.title
+                    "conflicting metadata for native command {:?}: {:?} and {:?}",
+                    descriptor.name, metadata.title, descriptor.metadata.title
                 ));
             }
         }
         Ok(registry)
     }
 
-    pub(crate) fn definitions(&self) -> impl Iterator<Item = (&'static str, &'static str)> + '_ {
-        self.definitions.iter().map(|(name, title)| (*name, *title))
+    pub(crate) fn definitions(
+        &self,
+    ) -> impl Iterator<Item = (&'static str, NativeCommandMetadata)> + '_ {
+        self.definitions
+            .iter()
+            .map(|(name, metadata)| (*name, *metadata))
     }
 
     pub(crate) fn dispatch(
@@ -377,12 +395,22 @@ mod tests {
             Box::pin(async { Ok(()) })
         }
     }
+    const fn titled(title: &'static str) -> NativeCommandMetadata {
+        NativeCommandMetadata {
+            title,
+            description: None,
+            palette: true,
+        }
+    }
     static EDITOR: CommandDescriptor =
-        CommandDescriptor::new::<Fixture>("Fixture", Participant::Editor, always_claim);
+        CommandDescriptor::new::<Fixture>(titled("Fixture"), Participant::Editor, always_claim);
     static WORKBENCH: CommandDescriptor =
-        CommandDescriptor::new::<Fixture>("Fixture", Participant::Workbench, always_claim);
-    static CONFLICT: CommandDescriptor =
-        CommandDescriptor::new::<Fixture>("Other title", Participant::Application, always_claim);
+        CommandDescriptor::new::<Fixture>(titled("Fixture"), Participant::Workbench, always_claim);
+    static CONFLICT: CommandDescriptor = CommandDescriptor::new::<Fixture>(
+        titled("Other title"),
+        Participant::Application,
+        always_claim,
+    );
 
     #[test]
     fn discovery_combines_participants_and_rejects_conflicts_deterministically() {
@@ -390,7 +418,7 @@ mod tests {
             let registry = CommandRegistry::assemble(descriptors).unwrap();
             assert_eq!(
                 registry.definitions().collect::<Vec<_>>(),
-                [("fixture.command", "Fixture")]
+                [("fixture.command", titled("Fixture"))]
             );
             assert_eq!(registry.entries.len(), 2);
         }
@@ -409,7 +437,7 @@ mod tests {
         );
         assert_eq!(
             conflict,
-            "conflicting titles for native command \"fixture.command\": \"Fixture\" and \"Other title\""
+            "conflicting metadata for native command \"fixture.command\": \"Fixture\" and \"Other title\""
         );
     }
 

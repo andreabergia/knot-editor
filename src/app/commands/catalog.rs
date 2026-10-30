@@ -26,7 +26,40 @@ pub enum CommandOwner {
 pub struct CommandDefinition {
     pub name: CommandName,
     pub title: String,
+    pub description: Option<String>,
+    /// False hides the command from the palette; it stays invocable.
+    pub palette: bool,
     pub owner: CommandOwner,
+}
+
+/// How a command presents itself in the palette.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CommandMetadata {
+    pub title: String,
+    pub description: Option<String>,
+    pub palette: bool,
+}
+
+impl From<&str> for CommandMetadata {
+    fn from(title: &str) -> Self {
+        Self {
+            title: title.to_owned(),
+            description: None,
+            palette: true,
+        }
+    }
+}
+
+impl CommandDefinition {
+    fn new(name: CommandName, metadata: CommandMetadata, owner: CommandOwner) -> Self {
+        Self {
+            name,
+            title: metadata.title,
+            description: metadata.description,
+            palette: metadata.palette,
+            owner,
+        }
+    }
 }
 
 /// Foreground-authoritative command definitions and their ownership.
@@ -91,7 +124,7 @@ impl CommandCatalog {
     pub(crate) fn register_extension(
         &mut self,
         name: CommandName,
-        title: String,
+        metadata: CommandMetadata,
         extension: ExtensionId,
         lifecycle: ExtensionLifecycleId,
     ) -> Result<CommandRegistrationId, CommandCatalogError> {
@@ -106,14 +139,14 @@ impl CommandCatalog {
         self.by_name.insert(
             name.clone(),
             CommandCatalogEntry {
-                definition: CommandDefinition {
-                    name: name.clone(),
-                    title,
-                    owner: CommandOwner::Extension {
+                definition: CommandDefinition::new(
+                    name.clone(),
+                    metadata,
+                    CommandOwner::Extension {
                         extension,
                         lifecycle,
                     },
-                },
+                ),
                 extension_registration: Some(id),
             },
         );
@@ -212,7 +245,7 @@ impl CommandCatalog {
     pub(crate) fn register_native(
         &mut self,
         name: CommandName,
-        title: String,
+        metadata: CommandMetadata,
     ) -> Result<(), CommandCatalogError> {
         if self.by_name.contains_key(&name) {
             return Err(CommandCatalogError::NameInUse);
@@ -220,11 +253,7 @@ impl CommandCatalog {
         self.by_name.insert(
             name.clone(),
             CommandCatalogEntry {
-                definition: CommandDefinition {
-                    name,
-                    title,
-                    owner: CommandOwner::Native,
-                },
+                definition: CommandDefinition::new(name, metadata, CommandOwner::Native),
                 extension_registration: None,
             },
         );
@@ -392,6 +421,8 @@ mod tests {
             vec![CommandDefinition {
                 name: "knot.fixture.edit".into(),
                 title: "Edit fixture".into(),
+                description: None,
+                palette: true,
                 owner: CommandOwner::Extension {
                     extension,
                     lifecycle,
@@ -500,6 +531,8 @@ mod tests {
             vec![CommandDefinition {
                 name: "fixture.copy".into(),
                 title: "Copy".into(),
+                description: None,
+                palette: true,
                 owner: CommandOwner::Native,
             }]
         );
@@ -587,11 +620,15 @@ mod tests {
         let native = CommandDefinition {
             name: "fixture.copy".into(),
             title: "Copy".into(),
+            description: None,
+            palette: true,
             owner: CommandOwner::Native,
         };
         let extension = CommandDefinition {
             name: "example.transform".into(),
             title: "Transform Selection".into(),
+            description: None,
+            palette: true,
             owner: CommandOwner::Extension {
                 extension: ExtensionId::new(7),
                 lifecycle: ExtensionLifecycleId::new(3),

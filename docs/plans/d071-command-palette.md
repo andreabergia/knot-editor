@@ -55,8 +55,9 @@ Select Theme previews themes live.
 - **Palette rows.** Each row shows the title (highlighted), the description,
   and the effective binding as the hint. The binding comes from the keymap
   registry for the focused view kind captured when the palette opens, and only
-  argument-less bindings count. With several keys, the shortest is shown and
-  ties go to the latest write. Chords render in platform style: `⌘K ⌘S` on
+  argument-less bindings count. With several keys, the one with the fewest
+  keystrokes is shown, then the shortest text, and remaining ties go to the
+  latest write. Chords render in platform style: `⌘K ⌘S` on
   macOS, `Ctrl+K Ctrl+S` elsewhere. The raw command name is not displayed.
 - **Recently used commands.** Every command confirmed in the palette is
   recorded in a most-recently-used list of up to 50 names, persisted in the
@@ -152,7 +153,7 @@ stay unchanged until checkpoint 5. Colors live in `src/app/theme.rs` (the
 Review gate: try the palette and Set Language Mode by hand for ranking feel
 before command metadata builds on it.
 
-### 3. Command metadata and palette rows
+### 3. ✅ Command metadata and palette rows
 
 Deliverables:
 

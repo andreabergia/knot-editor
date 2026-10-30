@@ -48,6 +48,8 @@ pub fn command(attribute: TokenStream, item: TokenStream) -> TokenStream {
 struct CommandOptions {
     name: LitStr,
     title: LitStr,
+    description: Option<LitStr>,
+    palette: bool,
     id: syn::Ident,
     participant: syn::Ident,
     claim: Option<syn::Path>,
@@ -57,6 +59,8 @@ impl syn::parse::Parse for CommandOptions {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
         let name = input.parse()?;
         let mut title = None;
+        let mut description = None;
+        let mut palette = true;
         let mut id = None;
         let mut participant = None;
         let mut claim = None;
@@ -69,13 +73,15 @@ impl syn::parse::Parse for CommandOptions {
             input.parse::<syn::Token![=]>()?;
             match key.to_string().as_str() {
                 "title" => title = Some(input.parse()?),
+                "description" => description = Some(input.parse()?),
+                "palette" => palette = input.parse::<syn::LitBool>()?.value,
                 "id" => id = Some(input.parse()?),
                 "participant" => participant = Some(input.parse()?),
                 "claim" => claim = Some(input.parse()?),
                 _ => {
                     return Err(syn::Error::new_spanned(
                         key,
-                        "expected title, id, participant, or claim",
+                        "expected title, description, palette, id, participant, or claim",
                     ));
                 }
             }
@@ -83,6 +89,8 @@ impl syn::parse::Parse for CommandOptions {
         Ok(Self {
             name,
             title: title.ok_or_else(|| input.error("expected title"))?,
+            description,
+            palette,
             id: id.ok_or_else(|| input.error("expected id"))?,
             participant: participant.ok_or_else(|| input.error("expected participant"))?,
             claim,
@@ -160,6 +168,11 @@ fn expand_handler(
     let (marker, definition, registration, handler_name) = if let Some(options) = command {
         let id = options.id;
         let title = options.title;
+        let description = match options.description {
+            Some(description) => quote! { Some(#description) },
+            None => quote! { None },
+        };
+        let palette = options.palette;
         let participant = options.participant;
         let marker = quote::format_ident!("__command_{}", id);
         let claim = if let Some(claim) = options.claim {
@@ -172,7 +185,12 @@ fn expand_handler(
             quote! { #(#conditions)* #visibility const #id: &str = #name; },
             quote! {
                 crate::app::commands::declarations::CommandDescriptor::new::<#marker>(
-                    #title, crate::app::commands::declarations::Participant::#participant, #claim)
+                    crate::app::commands::declarations::NativeCommandMetadata {
+                        title: #title,
+                        description: #description,
+                        palette: #palette,
+                    },
+                    crate::app::commands::declarations::Participant::#participant, #claim)
             },
             quote! { #id },
         )
@@ -386,6 +404,7 @@ mod tests {
             quote! { "example", title = "Example", participant = Editor },
             quote! { "example", title = "Example", id = EXAMPLE },
             quote! { "example", title = "Example", id = EXAMPLE, participant = Editor, unknown = value },
+            quote! { "example", title = "Example", id = EXAMPLE, participant = Editor, palette = "no" },
         ] {
             assert!(syn::parse2::<CommandOptions>(options).is_err());
         }
@@ -404,7 +423,8 @@ mod tests {
             .is_err()
         );
         let options = syn::parse2::<CommandOptions>(quote! {
-            "example", title = "Example", id = EXAMPLE, participant = Editor, claim = claim_example
+            "example", title = "Example", description = "Does the example.", palette = false,
+            id = EXAMPLE, participant = Editor, claim = claim_example
         })
         .unwrap();
         let expanded = expand_handler(
@@ -420,6 +440,8 @@ mod tests {
         assert!(expanded.contains("AsyncHandler"));
         assert!(expanded.contains("CommandDescriptor :: new"));
         assert!(expanded.contains("claim_example"));
+        assert!(expanded.contains("description : Some (\"Does the example.\")"));
+        assert!(expanded.contains("palette : false"));
         assert!(expanded.contains("const EXAMPLE"));
     }
 

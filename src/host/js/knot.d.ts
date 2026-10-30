@@ -825,6 +825,15 @@ declare module "knot" {
    * Throws become handlerFailure; invalidArguments produces invalidArgument.
    */
   export type CommandHandler = (context: CommandContext) => void | Promise<void>;
+  /** How a command presents itself in the command palette. */
+  export interface CommandOptions {
+    /** Palette title; defaults to the command name. */
+    readonly title?: string;
+    /** Muted text shown beside the title. */
+    readonly description?: string | null;
+    /** False hides the command from the palette; it stays invocable. */
+    readonly palette?: boolean;
+  }
   /**
    * Execution status rather than a semantic result. Unavailable includes declined
    * routing and unsupported composition; invalidTarget identifies a stale capture.
@@ -1037,13 +1046,14 @@ declare module "knot" {
   /** Register handlers and compose child invocations with captured context. */
   export const commands: Readonly<{
     /**
-     * Register a global command name; its palette title is the same name.
+     * Register a global command name. The palette shows its title, which
+     * defaults to the name, and description, and matches the name too.
      * Valid during activation. Resolves when native ownership exists;
      * teardown races reject instead of publishing a late callable handler.
      * @throws TypeError for invalid arguments; HostError with CommandNameInUse
      * when the name is already owned, or Cancelled on teardown.
      */
-    register(name: string, handler: CommandHandler): Promise<Disposable>;
+    register(name: string, handler: CommandHandler, options?: CommandOptions): Promise<Disposable>;
     /**
      * Handle an existing command for one registered contribution ID. Native
      * routing binds live instances and preserves the captured presentation.

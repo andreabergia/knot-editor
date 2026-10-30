@@ -3,7 +3,7 @@ use super::*;
 use crate::app::commands::declarations::{CommandContext, command};
 use crate::host::protocol::CommandOutcome;
 
-#[command("file.new", title = "New Document", id = NEW_COMMAND, participant = Workbench)]
+#[command("file.new", title = "New Document", description = "Open an untitled document.", id = NEW_COMMAND, participant = Workbench)]
 pub(crate) async fn new(context: CommandContext, (): ()) -> Result<(), CommandOutcome> {
     context
         .foreground(move |target, _, cx| {
@@ -21,7 +21,7 @@ pub(crate) async fn new(context: CommandContext, (): ()) -> Result<(), CommandOu
         .await
 }
 
-#[command("terminal.new", title = "New Terminal", id = NEW_TERMINAL_COMMAND, participant = Workbench)]
+#[command("terminal.new", title = "New Terminal", description = "Open a terminal in a new tab.", id = NEW_TERMINAL_COMMAND, participant = Workbench)]
 pub(crate) async fn new_terminal(context: CommandContext, (): ()) -> Result<(), CommandOutcome> {
     context
         .foreground(move |target, _, cx| {
@@ -40,7 +40,7 @@ pub(crate) async fn new_terminal(context: CommandContext, (): ()) -> Result<(), 
         .await
 }
 
-#[command("workbench.close-tab", title = "Close Tab", id = CLOSE_TAB_COMMAND, participant = Workbench)]
+#[command("workbench.close-tab", title = "Close Tab", description = "Close the focused tab.", id = CLOSE_TAB_COMMAND, participant = Workbench)]
 pub(crate) async fn close_tab(
     context: CommandContext,
     (): (),
@@ -54,7 +54,7 @@ pub(crate) async fn close_tab(
     close_target(&context, ProtectedCloseKind::Tab).await
 }
 
-#[command("workbench.split-horizontal", title = "Split Right", id = SPLIT_HORIZONTAL_COMMAND, participant = Workbench)]
+#[command("workbench.split-horizontal", title = "Split Right", description = "Split the focused pane to the right.", id = SPLIT_HORIZONTAL_COMMAND, participant = Workbench)]
 pub(crate) async fn split_horizontal(
     context: CommandContext,
     (): (),
@@ -68,7 +68,7 @@ pub(crate) async fn split_horizontal(
     split(&context, SplitDirection::Horizontal).await
 }
 
-#[command("workbench.split-vertical", title = "Split Down", id = SPLIT_VERTICAL_COMMAND, participant = Workbench)]
+#[command("workbench.split-vertical", title = "Split Down", description = "Split the focused pane downward.", id = SPLIT_VERTICAL_COMMAND, participant = Workbench)]
 pub(crate) async fn split_vertical(context: CommandContext, (): ()) -> Result<(), CommandOutcome> {
     context
         .foreground(move |target, _, cx| {
@@ -79,7 +79,7 @@ pub(crate) async fn split_vertical(context: CommandContext, (): ()) -> Result<()
     split(&context, SplitDirection::Vertical).await
 }
 
-#[command("file.open", title = "Open…", id = OPEN_COMMAND, participant = Workbench)]
+#[command("file.open", title = "Open…", description = "Open a file or folder.", id = OPEN_COMMAND, participant = Workbench)]
 pub(crate) async fn open(
     context: CommandContext,
     (): (),
@@ -93,7 +93,7 @@ pub(crate) async fn open(
     context.pending(dispatch_open_to_captured_target).await
 }
 
-#[command("file.save", title = "Save", id = SAVE_COMMAND, participant = Workbench)]
+#[command("file.save", title = "Save", description = "Save the current document.", id = SAVE_COMMAND, participant = Workbench)]
 pub(crate) async fn save(
     context: CommandContext,
     (): (),
@@ -107,7 +107,7 @@ pub(crate) async fn save(
     save_to_target(&context, false).await
 }
 
-#[command("file.save-as", title = "Save As…", id = SAVE_AS_COMMAND, participant = Workbench)]
+#[command("file.save-as", title = "Save As…", description = "Save the current document under a new name.", id = SAVE_AS_COMMAND, participant = Workbench)]
 pub(crate) async fn save_as(
     context: CommandContext,
     (): (),
@@ -121,7 +121,7 @@ pub(crate) async fn save_as(
     save_to_target(&context, true).await
 }
 
-#[command("file.recover", title = "Recover Unsaved Documents…", id = RECOVER_COMMAND, participant = Workbench)]
+#[command("file.recover", title = "Recover Unsaved Documents…", description = "Restore or discard unsaved text kept from earlier sessions.", id = RECOVER_COMMAND, participant = Workbench)]
 pub(crate) async fn recover(context: CommandContext, (): ()) -> Result<(), CommandOutcome> {
     context
         .foreground(move |target, _, cx| {
@@ -137,7 +137,7 @@ pub(crate) async fn recover(context: CommandContext, (): ()) -> Result<(), Comma
         .await
 }
 
-#[command("editor.set-language-mode", title = "Set Language Mode…", id = SET_LANGUAGE_MODE_COMMAND, participant = Workbench)]
+#[command("editor.set-language-mode", title = "Set Language Mode…", description = "Choose the language of the current document.", id = SET_LANGUAGE_MODE_COMMAND, participant = Workbench)]
 pub(crate) async fn set_language_mode(
     context: CommandContext,
     (): (),
@@ -147,7 +147,7 @@ pub(crate) async fn set_language_mode(
         .await
 }
 
-#[command("extensions.restart", title = "Developer: Restart Extension…", id = RESTART_EXTENSION_COMMAND, participant = Workbench)]
+#[command("extensions.restart", title = "Developer: Restart Extension…", description = "Reload one extension package without restarting Knot.", id = RESTART_EXTENSION_COMMAND, participant = Workbench)]
 pub(crate) async fn restart_extension(
     context: CommandContext,
     (): (),
@@ -160,7 +160,7 @@ pub(crate) async fn restart_extension(
         .await
 }
 
-#[command("editor.show-completions", title = "Show Completions", id = SHOW_COMPLETIONS_COMMAND, participant = Workbench)]
+#[command("editor.show-completions", title = "Show Completions", description = "Show completions at the cursor.", id = SHOW_COMPLETIONS_COMMAND, participant = Workbench)]
 pub(crate) async fn show_completions(
     context: CommandContext,
     (): (),
@@ -181,7 +181,7 @@ pub(crate) async fn show_completions(
         .await
 }
 
-#[command("workbench.show-command-palette", title = "Show Command Palette", id = SHOW_COMMAND_PALETTE_COMMAND, participant = Workbench)]
+#[command("workbench.show-command-palette", title = "Show Command Palette", description = "Search and run commands.", id = SHOW_COMMAND_PALETTE_COMMAND, participant = Workbench)]
 pub(crate) async fn show_command_palette(
     context: CommandContext,
     (): (),
@@ -200,7 +200,7 @@ pub(crate) async fn show_command_palette(
         .await
 }
 
-#[command("extensions.show-startup-report", title = "Developer: Show Extension Startup Report", id = SHOW_EXTENSION_REPORT_COMMAND, participant = Application)]
+#[command("extensions.show-startup-report", title = "Developer: Show Extension Startup Report", description = "Show which packages started and why any failed.", id = SHOW_EXTENSION_REPORT_COMMAND, participant = Application)]
 pub(crate) async fn show_extension_report(
     context: CommandContext,
     (): (),
@@ -219,7 +219,7 @@ pub(crate) async fn show_extension_report(
         .await
 }
 
-#[command("window.new", title = "New Blank Window", id = NEW_WINDOW_COMMAND, participant = Application)]
+#[command("window.new", title = "New Blank Window", description = "Open a window without folders.", id = NEW_WINDOW_COMMAND, participant = Application)]
 pub(crate) async fn new_window(context: CommandContext, (): ()) -> Result<(), CommandOutcome> {
     context
         .foreground(move |target, _, cx| {
@@ -235,7 +235,7 @@ pub(crate) async fn new_window(context: CommandContext, (): ()) -> Result<(), Co
         .await
 }
 
-#[command("window.close", title = "Close Window", id = CLOSE_WINDOW_COMMAND, participant = Application)]
+#[command("window.close", title = "Close Window", description = "Close the window and its tabs.", id = CLOSE_WINDOW_COMMAND, participant = Application)]
 pub(crate) async fn close_window(
     context: CommandContext,
     (): (),
@@ -249,7 +249,7 @@ pub(crate) async fn close_window(
     close_target(&context, ProtectedCloseKind::Window).await
 }
 
-#[command("application.quit", title = "Quit Knot", id = QUIT_COMMAND, participant = Application)]
+#[command("application.quit", title = "Quit Knot", description = "Quit Knot, keeping unsaved text for the next launch.", id = QUIT_COMMAND, participant = Application)]
 pub(crate) async fn quit(
     context: CommandContext,
     (): (),
@@ -295,7 +295,7 @@ async fn close_target(
         .await
 }
 
-#[command("workbench.toggle-explorer", title = "Toggle Explorer", id = TOGGLE_EXPLORER_COMMAND, participant = Workbench)]
+#[command("workbench.toggle-explorer", title = "Toggle Explorer", description = "Show or hide the file explorer.", id = TOGGLE_EXPLORER_COMMAND, participant = Workbench)]
 pub(crate) async fn toggle_explorer(context: CommandContext, (): ()) -> Result<(), CommandOutcome> {
     context
         .shell(|shell, _, window, cx| {
@@ -305,7 +305,7 @@ pub(crate) async fn toggle_explorer(context: CommandContext, (): ()) -> Result<(
         .await
 }
 
-#[command("workspace.add-folder", title = "Add Folder to Workspace…", id = ADD_FOLDER_COMMAND, participant = Workbench)]
+#[command("workspace.add-folder", title = "Add Folder to Workspace…", description = "Add a folder to this window's workspace.", id = ADD_FOLDER_COMMAND, participant = Workbench)]
 pub(crate) async fn add_folder(context: CommandContext, (): ()) -> Result<(), CommandOutcome> {
     context
         .shell(|shell, target, window, cx| {
@@ -315,21 +315,21 @@ pub(crate) async fn add_folder(context: CommandContext, (): ()) -> Result<(), Co
         .await
 }
 
-#[command("workspace.remove-folder", title = "Remove Folder from Workspace", id = REMOVE_FOLDER_COMMAND, participant = Workbench)]
+#[command("workspace.remove-folder", title = "Remove Folder from Workspace", description = "Remove the selected root folder from the workspace.", id = REMOVE_FOLDER_COMMAND, participant = Workbench)]
 pub(crate) async fn remove_folder(context: CommandContext, (): ()) -> Result<(), CommandOutcome> {
     context
         .shell(|shell, _, _, cx| shell.remove_selected_root(cx))
         .await
 }
 
-#[command("workspace.move-folder-up", title = "Move Folder Up", id = MOVE_FOLDER_UP_COMMAND, participant = Workbench)]
+#[command("workspace.move-folder-up", title = "Move Folder Up", description = "Move the selected root folder up.", id = MOVE_FOLDER_UP_COMMAND, participant = Workbench)]
 pub(crate) async fn move_folder_up(context: CommandContext, (): ()) -> Result<(), CommandOutcome> {
     context
         .shell(|shell, _, _, cx| shell.move_selected_root(true, cx))
         .await
 }
 
-#[command("workspace.move-folder-down", title = "Move Folder Down", id = MOVE_FOLDER_DOWN_COMMAND, participant = Workbench)]
+#[command("workspace.move-folder-down", title = "Move Folder Down", description = "Move the selected root folder down.", id = MOVE_FOLDER_DOWN_COMMAND, participant = Workbench)]
 pub(crate) async fn move_folder_down(
     context: CommandContext,
     (): (),
@@ -339,7 +339,7 @@ pub(crate) async fn move_folder_down(
         .await
 }
 
-#[command("workbench.toggle-left-sidebar", title = "Toggle Left Sidebar", id = TOGGLE_LEFT_SIDEBAR_COMMAND, participant = Workbench)]
+#[command("workbench.toggle-left-sidebar", title = "Toggle Left Sidebar", description = "Show or hide the left dock.", id = TOGGLE_LEFT_SIDEBAR_COMMAND, participant = Workbench)]
 pub(crate) async fn toggle_left_sidebar(
     context: CommandContext,
     (): (),
@@ -347,7 +347,7 @@ pub(crate) async fn toggle_left_sidebar(
     toggle_dock(context, DockLocation::Left).await
 }
 
-#[command("workbench.toggle-right-sidebar", title = "Toggle Right Sidebar", id = TOGGLE_RIGHT_SIDEBAR_COMMAND, participant = Workbench)]
+#[command("workbench.toggle-right-sidebar", title = "Toggle Right Sidebar", description = "Show or hide the right dock.", id = TOGGLE_RIGHT_SIDEBAR_COMMAND, participant = Workbench)]
 pub(crate) async fn toggle_right_sidebar(
     context: CommandContext,
     (): (),
@@ -355,7 +355,7 @@ pub(crate) async fn toggle_right_sidebar(
     toggle_dock(context, DockLocation::Right).await
 }
 
-#[command("workbench.toggle-bottom-dock", title = "Toggle Bottom Dock", id = TOGGLE_BOTTOM_DOCK_COMMAND, participant = Workbench)]
+#[command("workbench.toggle-bottom-dock", title = "Toggle Bottom Dock", description = "Show or hide the bottom dock.", id = TOGGLE_BOTTOM_DOCK_COMMAND, participant = Workbench)]
 pub(crate) async fn toggle_bottom_dock(
     context: CommandContext,
     (): (),
@@ -377,7 +377,7 @@ async fn toggle_dock(context: CommandContext, dock: DockLocation) -> Result<(), 
         .await
 }
 
-#[command("workbench.reset-layout", title = "Reset Layout", id = RESET_LAYOUT_COMMAND, participant = Workbench)]
+#[command("workbench.reset-layout", title = "Reset Layout", description = "Return docks and tools to their default arrangement.", id = RESET_LAYOUT_COMMAND, participant = Workbench)]
 pub(crate) async fn reset_layout(context: CommandContext, (): ()) -> Result<(), CommandOutcome> {
     context
         .shell(move |shell, _, window, cx| {

@@ -1111,15 +1111,15 @@ fn claim_terminal(command: &Command, target: &ProductCommandTarget, cx: &App) ->
     true
 }
 
-#[command("copy", title = "Copy", id = TERMINAL_COPY_COMMAND, participant = Terminal, claim = claim_terminal)]
+#[command("copy", title = "Copy", description = "Copy the selection to the clipboard.", id = TERMINAL_COPY_COMMAND, participant = Terminal, claim = claim_terminal)]
 pub(crate) async fn terminal_copy(context: CommandContext, (): ()) -> Result<(), CommandOutcome> {
     execute_terminal(context, TerminalCommand::Copy).await
 }
-#[command("editor.paste", title = "Paste", id = TERMINAL_PASTE_COMMAND, participant = Terminal, claim = claim_terminal)]
+#[command("editor.paste", title = "Paste", description = "Paste from the clipboard.", id = TERMINAL_PASTE_COMMAND, participant = Terminal, claim = claim_terminal)]
 pub(crate) async fn terminal_paste(context: CommandContext, (): ()) -> Result<(), CommandOutcome> {
     execute_terminal(context, TerminalCommand::Paste).await
 }
-#[command("terminal.toggle-mouse-reporting", title = "Toggle Terminal Mouse Reporting", id = TOGGLE_TERMINAL_MOUSE_REPORTING_COMMAND, participant = Terminal, claim = claim_terminal)]
+#[command("terminal.toggle-mouse-reporting", title = "Toggle Terminal Mouse Reporting", description = "Let the terminal program receive mouse input, or select text instead.", id = TOGGLE_TERMINAL_MOUSE_REPORTING_COMMAND, participant = Terminal, claim = claim_terminal)]
 pub(crate) async fn terminal_toggle(context: CommandContext, (): ()) -> Result<(), CommandOutcome> {
     execute_terminal(context, TerminalCommand::ToggleMouseReporting).await
 }

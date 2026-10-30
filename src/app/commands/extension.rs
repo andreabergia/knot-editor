@@ -21,7 +21,9 @@ use crate::host::declarations::HostError;
 
 use crate::app::{
     CommandCompletion, CommandExecution,
-    commands::catalog::{CommandCatalogError, CommandTarget, SharedCommandCatalog},
+    commands::catalog::{
+        CommandCatalogError, CommandMetadata, CommandTarget, SharedCommandCatalog,
+    },
 };
 
 type Lifecycle = (ExtensionId, ExtensionLifecycleId);
@@ -168,12 +170,12 @@ impl ExtensionCommandBridge {
         &mut self,
         request: &RequestContext,
         name: CommandName,
-        title: String,
+        metadata: CommandMetadata,
     ) -> Result<CommandRegistrationId, CommandError> {
         self.validate_request(request)?;
         self.catalog
             .borrow_mut()
-            .register_extension(name, title, request.extension, request.lifecycle)
+            .register_extension(name, metadata, request.extension, request.lifecycle)
             .map_err(map_catalog_error)
     }
 

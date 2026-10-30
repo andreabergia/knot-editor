@@ -10,5 +10,5 @@ export async function start() {
   let selection = await restore();
   await commands.register("themes.select", async () => {
     selection = await select(selection);
-  });
+  }, { title: "Select Theme…", description: "Choose the color theme." });
 }

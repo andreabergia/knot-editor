@@ -1,6 +1,13 @@
 import { commands, editor, workbench, keybinding, removeKeybinding } from "knot";
 import type { Buffer, CommandTarget, Disposable, HostError, HostErrorCode } from "knot";
 
+void commands.register("described", async () => {}, {
+  title: "Described Command",
+  description: "Shown beside the title.",
+  palette: false,
+});
+// @ts-expect-error palette is a boolean
+void commands.register("bad", async () => {}, { palette: "no" });
 const registration: Promise<Disposable> = commands.register("check", async (context) => {
   const target: CommandTarget = context.target;
   const buffer: Buffer | null = await editor.activeBuffer(target);

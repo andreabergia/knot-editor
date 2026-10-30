@@ -927,16 +927,7 @@ impl ProductShell {
             cx.propagate();
             return;
         };
-        // Resolve the view kind from the focused tab; contributed frames and
-        // native tools share this path instead of a shell-level special case.
-        let view_kind = target.command_view(cx).and_then(|view| {
-            view.matches_focus(&target.focus, cx).then(|| match view {
-                super::workbench::CommandView::Editor(_) => "editor".to_owned(),
-                super::workbench::CommandView::Terminal(_) => "terminal".to_owned(),
-                super::workbench::CommandView::Workspace(_) => "workspace-tree".to_owned(),
-                super::workbench::CommandView::Extension(view) => view.kind(cx),
-            })
-        });
+        let view_kind = Self::target_view_kind(&target, cx);
         let resolution = cx
             .global::<ApplicationKeymaps>()
             .0
@@ -956,6 +947,20 @@ impl ProductShell {
         self.open_command_palette_from(origin, window, cx);
     }
 
+    /// The keymap view kind of a captured target's focused tab; contributed
+    /// frames and native tools share this path instead of a shell-level
+    /// special case.
+    fn target_view_kind(target: &ProductCommandTarget, cx: &App) -> Option<String> {
+        target.command_view(cx).and_then(|view| {
+            view.matches_focus(&target.focus, cx).then(|| match view {
+                super::workbench::CommandView::Editor(_) => "editor".to_owned(),
+                super::workbench::CommandView::Terminal(_) => "terminal".to_owned(),
+                super::workbench::CommandView::Workspace(_) => "workspace-tree".to_owned(),
+                super::workbench::CommandView::Extension(view) => view.kind(cx),
+            })
+        })
+    }
+
     fn open_command_palette_from(
         &mut self,
         origin: ProductCommandTarget,
@@ -966,7 +971,15 @@ impl ProductShell {
             .read(cx)
             .definitions()
             .collect::<Vec<_>>();
-        let palette = CommandPalette::new(definitions, origin, cx);
+        let bindings = cx
+            .try_global::<ApplicationKeymaps>()
+            .map(|keymaps| {
+                keymaps
+                    .0
+                    .shown_bindings(Self::target_view_kind(&origin, cx).as_deref())
+            })
+            .unwrap_or_default();
+        let palette = CommandPalette::new(definitions, &bindings, origin, cx);
         let picker = palette.picker().clone();
         let subscription = cx.subscribe(&picker, |this, _picker, event: &PickerEvent, cx| {
             let palette = this.command_palette.take();

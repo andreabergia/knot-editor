@@ -372,3 +372,79 @@ async fn native_participants_reject_arguments_before_mutation(cx: &mut TestAppCo
         assert_eq!(cx.windows().len(), 1);
     });
 }
+
+#[gpui::test]
+fn palette_shows_titles_descriptions_and_bindings_and_hides_opted_out_commands(
+    cx: &mut TestAppContext,
+) {
+    use crate::host::lifecycle::ExtensionKey;
+    use crate::host::protocol::{ExtensionId, ExtensionLifecycleId};
+
+    const SOURCE: &str = r#"
+import { commands, keybinding } from "knot";
+await commands.register("fixture.described", async () => {}, {
+  title: "Run Fixture",
+  description: "Runs the fixture.",
+});
+await commands.register("fixture.hidden", async () => {}, { palette: false });
+await commands.register("fixture.plain", async () => {});
+keybinding("ctrl-alt-f", "fixture.described");
+"#;
+    let documents = install_globals(cx);
+    cx.update(crate::app::commands::keymaps::install);
+    let host = cx.update(crate::app::extensions::host::install);
+    let key = ExtensionKey::new(ExtensionId::new(712), ExtensionLifecycleId::new(1));
+    host.update(cx, |host, cx| {
+        let execution = host.load_test_source(key, SOURCE).unwrap();
+        cx.spawn(async move |_, _| {
+            execution.await.unwrap();
+        })
+        .detach();
+    });
+    wait_for_api_condition(cx, |cx| {
+        cx.global::<ApplicationProductCommands>()
+            .0
+            .read(cx)
+            .catalog()
+            .borrow()
+            .resolve("fixture.plain")
+            .is_ok()
+    });
+    cx.run_until_parked();
+    let document = cx.update(|cx| create_untitled_document(&documents, cx));
+    let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+    let (shell, window) = product_window(document, model, cx);
+    cx.update_window(window, |_, window, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.focus_active_surface(window, cx);
+            shell.open_command_palette(window, cx);
+        });
+    })
+    .unwrap();
+    cx.update(|cx| {
+        let picker = shell
+            .read(cx)
+            .command_palette
+            .as_ref()
+            .unwrap()
+            .picker()
+            .clone();
+        let picker = picker.read(cx);
+        let rows = picker
+            .visible_entries()
+            .into_iter()
+            .map(|entry| picker.entry(entry).clone())
+            .collect::<Vec<_>>();
+        let described = rows.iter().find(|row| row.label == "Run Fixture").unwrap();
+        assert_eq!(described.description.as_deref(), Some("Runs the fixture."));
+        assert_eq!(
+            described.hint,
+            Some(crate::app::commands::keymaps::display_key("ctrl-alt-f"))
+        );
+        assert!(rows.iter().any(|row| row.label == "fixture.plain"));
+        assert!(!rows.iter().any(|row| row.label == "fixture.hidden"));
+        assert!(!rows.iter().any(|row| row.label == "Move left"));
+        let save = rows.iter().find(|row| row.label == "Save").unwrap();
+        assert!(save.hint.is_some());
+    });
+}

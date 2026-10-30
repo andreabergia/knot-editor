@@ -66,6 +66,7 @@ function emptyState() {
     captures: new Map<Knot.CaptureId, Knot.RetainedCapture & { text: string }>(),
     views: new Map<string, FakeView>(),
     commands: new Map<string, Handler>(),
+    commandOptions: new Map<string, Knot.CommandOptions>(),
     viewCommands: new Map<string, Handler>(),
     listeners: [] as ((event: Knot.ApplicationEvent) => void | Promise<void>)[],
     sequence: 0,
@@ -871,12 +872,14 @@ export const api: KnotApi = {
     },
   },
   commands: {
-    register: async (name, handler) => {
+    register: async (name, handler, options) => {
       if (state.commands.has(name)) throw hostError("CommandNameInUse");
+      state.commandOptions.set(name, options ?? {});
       state.commands.set(name, handler);
       return {
         dispose: async () => {
           state.commands.delete(name);
+          state.commandOptions.delete(name);
         },
       };
     },

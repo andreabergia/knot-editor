@@ -2,7 +2,7 @@
 
 use gpui::*;
 
-use super::catalog::{CommandCatalog, CommandDefinition, SharedCommandCatalog};
+use super::catalog::{CommandCatalog, CommandDefinition, CommandMetadata, SharedCommandCatalog};
 use crate::app::product::ProductShell;
 use crate::app::workbench::CommandView;
 use crate::app::{CommandCompletion, CommandExecution};
@@ -152,9 +152,16 @@ pub(crate) enum CommandClaim {
 impl ProductCommandDispatcher {
     pub(crate) fn new(_cx: &mut Context<Self>) -> Self {
         let mut catalog = CommandCatalog::new();
-        for (name, title) in crate::app::commands::declarations::registry().definitions() {
+        for (name, metadata) in crate::app::commands::declarations::registry().definitions() {
             catalog
-                .register_native(name.into(), title.into())
+                .register_native(
+                    name.into(),
+                    CommandMetadata {
+                        title: metadata.title.to_owned(),
+                        description: metadata.description.map(str::to_owned),
+                        palette: metadata.palette,
+                    },
+                )
                 .expect("product command names are unique");
         }
 

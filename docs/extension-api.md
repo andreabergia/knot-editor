@@ -81,8 +81,12 @@ await commands.register("example.insert-greeting", async ({ buffer }) => {
     range: { startByteOffset: 0, endByteOffset: 0 },
     text: "Hello ",
   }], { ifRevision: snapshot.revision });
-});
+}, { title: "Insert Greeting", description: "Insert a greeting at the start." });
 ```
+
+The command palette lists the title, which defaults to the command name, with
+its description and binding, and still matches the name as typed. Pass
+`palette: false` for a command that only makes sense from a key.
 
 The buffer belongs to the command’s captured context. Focus changes during
 `await` do not select another buffer. Offsets are UTF-8 bytes; edits require

@@ -5,7 +5,8 @@ use std::collections::{HashMap, HashSet};
 use gpui::{App, DummyKeyboardMapper, Global, KeyBinding, KeyBindingContextPredicate, Keystroke};
 
 use crate::host::protocol::{
-    Command, CommandArgumentValue, ExtensionId, ExtensionLifecycleId, KeybindingMutation,
+    Command, CommandArgumentValue, CommandName, ExtensionId, ExtensionLifecycleId,
+    KeybindingMutation,
 };
 
 use crate::app::commands::dispatch::{
@@ -240,6 +241,45 @@ impl BindingRegistry {
         self.active.get(key)?.resolve(view).cloned()
     }
 
+    /// The key sequence to show for each argument-less command in a view:
+    /// the binding with the fewest keystrokes, then the shortest text, with
+    /// remaining ties going to the latest write.
+    pub(crate) fn shown_bindings(&self, view: Option<&str>) -> HashMap<CommandName, String> {
+        let mut shown: HashMap<CommandName, (usize, usize, std::cmp::Reverse<u64>, &str)> =
+            HashMap::new();
+        for (key, effective) in &self.active {
+            let Some(BindingResolution::Command(command)) = effective.resolve(view) else {
+                continue;
+            };
+            if command.arguments != CommandArgumentValue::Null {
+                continue;
+            }
+            let order = self
+                .slots
+                .iter()
+                .filter(|(slot_key, slot)| {
+                    slot_key.key == *key && slot.command.as_ref() == Some(command)
+                })
+                .map(|(_, slot)| slot.order)
+                .max()
+                .unwrap_or_default();
+            let rank = (
+                key.split_whitespace().count(),
+                key.len(),
+                std::cmp::Reverse(order),
+                key.as_str(),
+            );
+            shown
+                .entry(command.name.clone())
+                .and_modify(|best| *best = (*best).min(rank))
+                .or_insert(rank);
+        }
+        shown
+            .into_iter()
+            .map(|(name, (_, _, _, key))| (name, key.to_owned()))
+            .collect()
+    }
+
     pub(crate) fn keys(&self) -> Vec<String> {
         let mut keys = self.active.keys().cloned().collect::<Vec<_>>();
         keys.sort();
@@ -328,6 +368,90 @@ impl BindingRegistry {
             self.active.insert(key.to_owned(), effective);
         }
     }
+}
+
+/// Render a canonical key sequence for display: `⌘K ⌘S` on macOS and
+/// `Ctrl+K Ctrl+S` elsewhere.
+pub(crate) fn display_key(key: &str) -> String {
+    display_key_for(key, cfg!(target_os = "macos"))
+}
+
+fn display_key_for(key: &str, mac: bool) -> String {
+    key.split_whitespace()
+        .map(|stroke| {
+            let Ok(stroke) = Keystroke::parse(stroke) else {
+                return stroke.to_owned();
+            };
+            let modifiers = stroke.modifiers;
+            let name = display_key_name(&stroke.key, mac);
+            if mac {
+                let mut text = String::new();
+                for (held, symbol) in [
+                    (modifiers.control, "⌃"),
+                    (modifiers.alt, "⌥"),
+                    (modifiers.shift, "⇧"),
+                    (modifiers.platform, "⌘"),
+                    (modifiers.function, "fn "),
+                ] {
+                    if held {
+                        text.push_str(symbol);
+                    }
+                }
+                text + &name
+            } else {
+                let platform = if cfg!(windows) { "Win" } else { "Super" };
+                [
+                    (modifiers.control, "Ctrl"),
+                    (modifiers.alt, "Alt"),
+                    (modifiers.shift, "Shift"),
+                    (modifiers.platform, platform),
+                    (modifiers.function, "Fn"),
+                ]
+                .into_iter()
+                .filter_map(|(held, label)| held.then_some(label))
+                .chain([name.as_str()])
+                .collect::<Vec<_>>()
+                .join("+")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn display_key_name(key: &str, mac: bool) -> String {
+    let named = match (key, mac) {
+        ("left", true) => "←",
+        ("right", true) => "→",
+        ("up", true) => "↑",
+        ("down", true) => "↓",
+        ("enter", true) => "↩",
+        ("escape", true) => "⎋",
+        ("tab", true) => "⇥",
+        ("backspace", true) => "⌫",
+        ("delete", true) => "⌦",
+        ("left", false) => "Left",
+        ("right", false) => "Right",
+        ("up", false) => "Up",
+        ("down", false) => "Down",
+        ("enter", false) => "Enter",
+        ("escape", false) => "Esc",
+        ("tab", false) => "Tab",
+        ("backspace", false) => "Backspace",
+        ("delete", false) => "Delete",
+        ("space", _) => "Space",
+        ("pageup", _) => "PgUp",
+        ("pagedown", _) => "PgDn",
+        ("home", _) => "Home",
+        ("end", _) => "End",
+        _ => {
+            let mut chars = key.chars();
+            return match chars.next() {
+                Some(first) => first.to_uppercase().chain(chars).collect(),
+                None => String::new(),
+            };
+        }
+    };
+    named.to_owned()
 }
 
 pub(crate) fn view_context(kind: &str) -> String {

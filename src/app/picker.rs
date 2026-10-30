@@ -124,6 +124,11 @@ impl Picker {
     }
 
     #[cfg(test)]
+    pub(crate) fn entry(&self, index: usize) -> &PickerEntry {
+        &self.entries[index]
+    }
+
+    #[cfg(test)]
     pub(crate) fn set_query(&mut self, query: &str, cx: &mut Context<Self>) {
         self.input.update(cx, |input, cx| input.set_text(query, cx));
         self.refilter(query);

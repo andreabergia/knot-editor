@@ -31,11 +31,11 @@ export async function registerCommands(state: ProjectsState) {
   // so the native tool-layout snapshot remembers it as the fresh-window default.
   await commands.register("projects.show", async () => {
     if (state.view !== null) await state.view.show();
-  });
+  }, { title: "Show Projects", description: "Show the Projects tool." });
 
   await commands.register("projects.hide", async () => {
     if (state.view !== null) await state.view.hide();
-  });
+  }, { title: "Hide Projects", description: "Hide the Projects tool." });
 
   await commands.register("projects.create", async ({ target }) => {
     const picked = await workspaces.pickFolder();
@@ -69,7 +69,7 @@ export async function registerCommands(state: ProjectsState) {
       return;
     }
     await switchTo(state, project, target.windowTarget);
-  });
+  }, { title: "New Project…", description: "Name this window's folders as a project." });
 
   await commands.register("projects.select", async ({ target }) => {
     await reload(state);
@@ -88,7 +88,7 @@ export async function registerCommands(state: ProjectsState) {
     if (picked.kind === "dismissed") return;
     const project = projectById(state.registry, picked.id);
     if (project !== null) await switchTo(state, project, target.windowTarget);
-  });
+  }, { title: "Switch Project…", description: "Replace this window's session with another project." });
 
   // Row activation routes through the focused tree instance and reads the
   // selected row's label, which is the unique project name.
@@ -115,7 +115,7 @@ export async function registerCommands(state: ProjectsState) {
     } catch (error) {
       await report(`cannot open a window for ${project.name}: ${describe(error)}`);
     }
-  });
+  }, { title: "Open Project in New Window", description: "Open another window on this window's project." });
 
   await commands.register("projects.rename", async ({ arguments: args }) => {
     await reload(state);
@@ -141,7 +141,7 @@ export async function registerCommands(state: ProjectsState) {
     } catch (error) {
       await report(`cannot rename project: ${describe(error)}`);
     }
-  });
+  }, { title: "Rename Project…", palette: false });
 
   await commands.register("projects.remove", async ({ arguments: args }) => {
     await reload(state);
@@ -174,7 +174,7 @@ export async function registerCommands(state: ProjectsState) {
     // Captures are released only after both deletes are durable.
     state.sessions.delete(project.id);
     await release(captures);
-  });
+  }, { title: "Remove Project…", palette: false });
 
   await commands.register("projects.list", async () => {
     await reload(state);
@@ -190,11 +190,11 @@ export async function registerCommands(state: ProjectsState) {
         sessions: Object.fromEntries(state.sessions),
       }),
     );
-  });
+  }, { title: "Developer: Copy Projects Record", description: "Copy the stored projects and sessions as JSON." });
 
   await commands.register("projects.refresh", async () => {
     await reload(state);
     await refreshTree(state);
     if (state.loadFailure !== null) await report(`cannot read projects: ${state.loadFailure}`);
-  });
+  }, { title: "Refresh Projects", description: "Reread the stored projects." });
 }

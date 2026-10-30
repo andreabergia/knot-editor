@@ -421,3 +421,67 @@ fn batch_is_ordered_atomic_and_reports_only_effective_changes() {
     );
     assert_eq!(resolved(&registry, "cmd-c", None), None);
 }
+
+#[test]
+fn shown_bindings_prefer_short_view_scoped_and_latest_bindings() {
+    let mut registry = BindingRegistry::new();
+    let personal = BindingOwner::Extension(ExtensionId::new(1), ExtensionLifecycleId::new(1));
+    for (owner, key, view, name) in [
+        (BindingOwner::Native, "cmd-k cmd-s", None, "file.save"),
+        (BindingOwner::Native, "cmd-s", None, "file.save"),
+        (BindingOwner::Native, "cmd-b", None, "first"),
+        (BindingOwner::Native, "cmd-e", None, "first"),
+        (BindingOwner::Native, "cmd-c", None, "copy"),
+        (
+            BindingOwner::Native,
+            "cmd-c",
+            Some("terminal"),
+            "terminal.copy",
+        ),
+        (personal, "cmd-j", Some("editor"), "editor.only"),
+    ] {
+        registry.set(owner, key, view, Some(command(name))).unwrap();
+    }
+    registry
+        .set(
+            personal,
+            "cmd-g",
+            None,
+            Some(Command {
+                name: "with.arguments".into(),
+                arguments: CommandArgumentValue::String("x".into()),
+            }),
+        )
+        .unwrap();
+
+    let editor = registry.shown_bindings(Some("editor"));
+    assert_eq!(editor["file.save"], "cmd-s");
+    // Equal length: the later write wins.
+    assert_eq!(editor["first"], "cmd-e");
+    assert_eq!(editor["copy"], "cmd-c");
+    assert_eq!(editor["editor.only"], "cmd-j");
+    assert!(!editor.contains_key("with.arguments"));
+
+    let terminal = registry.shown_bindings(Some("terminal"));
+    assert_eq!(terminal["terminal.copy"], "cmd-c");
+    assert!(!terminal.contains_key("copy"));
+    assert!(!terminal.contains_key("editor.only"));
+}
+
+#[test]
+fn keys_display_in_platform_style() {
+    for (key, mac, other) in [
+        ("cmd-shift-p", "⇧⌘P", "Shift+Super+P"),
+        ("cmd-k right", "⌘K →", "Super+K Right"),
+        ("ctrl-alt-enter", "⌃⌥↩", "Ctrl+Alt+Enter"),
+        ("ctrl-k ctrl-s", "⌃K ⌃S", "Ctrl+K Ctrl+S"),
+        ("f5", "F5", "F5"),
+        ("ctrl-space", "⌃Space", "Ctrl+Space"),
+    ] {
+        let canonical = canonical_key(key).unwrap();
+        assert_eq!(display_key_for(&canonical, true), mac, "{key}");
+        if !cfg!(windows) {
+            assert_eq!(display_key_for(&canonical, false), other, "{key}");
+        }
+    }
+}

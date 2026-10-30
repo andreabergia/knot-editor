@@ -383,7 +383,7 @@ fn personal_config_phases_share_one_awaited_lifecycle() {
         request.operation,
         operation::<declared::register_command>(declared::RegisterCommandArguments {
             name: "knot.config.test".into(),
-            title: "knot.config.test".into(),
+            metadata: "knot.config.test".into(),
         })
     );
     pool.respond(HostResponse {
@@ -4335,7 +4335,7 @@ fn command_registration_delivers_arguments_and_captured_buffer() {
         request.operation,
         operation::<declared::register_command>(declared::RegisterCommandArguments {
             name: "knot.fixture.arguments".into(),
-            title: "knot.fixture.arguments".into(),
+            metadata: "knot.fixture.arguments".into(),
         })
     );
     pool.respond(HostResponse {

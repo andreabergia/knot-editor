@@ -329,11 +329,20 @@ globalThis.__knotDispatchBufferChange = async (subscription, change) => {
   }));
 };
 
-export async function registerCommand(name, handler) {
+export async function registerCommand(name, handler, options = {}) {
   if (typeof name !== "string" || typeof handler !== "function") {
     throw new TypeError("commands.register requires a name and handler");
   }
-  const registration = await request("registerCommand", name, name);
+  if (options === null || typeof options !== "object") {
+    throw new TypeError("command options must be an object");
+  }
+  const title = options.title == null ? name : string(options.title, "command title must be text");
+  const description = optionalText(options.description);
+  if (options.palette != null && typeof options.palette !== "boolean") {
+    throw new TypeError("command palette option must be a boolean");
+  }
+  const palette = options.palette === false ? 0 : 1;
+  const registration = await request("registerCommand", name, title, description, palette);
   commandHandlers.set(registration, handler);
   const owned = ownership(() => commandHandlers.delete(registration),
     () => request("unregisterCommand", registration));

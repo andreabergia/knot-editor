@@ -1317,6 +1317,7 @@ pub(crate) async fn unregister_completion_provider(
     })?
 }
 
+use crate::app::commands::catalog::CommandMetadata;
 use crate::app::commands::extension::CommandError;
 use crate::host::protocol::{
     Command, CommandInvokeDispatch, CommandName, CommandOutcome, CommandRegistrationId,
@@ -1325,13 +1326,17 @@ use crate::host::protocol::{
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct RegisterCommandArguments {
     pub name: CommandName,
-    pub title: String,
+    pub metadata: CommandMetadata,
 }
 impl HostArguments for RegisterCommandArguments {
     fn decode(reader: &mut dyn ArgumentReader) -> Result<Self, DecodeError> {
         Ok(Self {
             name: reader.text(2, "UnsupportedOperation")?.into(),
-            title: reader.text(3, "UnsupportedOperation")?,
+            metadata: CommandMetadata {
+                title: reader.text(3, "UnsupportedOperation")?,
+                description: reader.optional_text(4, "UnsupportedOperation")?,
+                palette: reader.integer(5)? != 0,
+            },
         })
     }
 }
@@ -1395,7 +1400,7 @@ pub(crate) async fn register_command(
     let request = context.request;
     context.foreground(|host, _| {
         host.commands
-            .register_command(&request, arguments.name, arguments.title)
+            .register_command(&request, arguments.name, arguments.metadata)
     })?
 }
 #[host_operation("registerViewCommand")]
