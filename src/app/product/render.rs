@@ -227,7 +227,19 @@ impl ProductShell {
                     } else {
                         color::TAB_INACTIVE_BACKGROUND
                     }))
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_1()
                     .child(title)
+                    .when(tab.is_pinned(), |element| {
+                        element.child(
+                            div()
+                                .debug_selector(move || format!("pin-{}", tab_id.value()))
+                                .text_xs()
+                                .child("📌"),
+                        )
+                    })
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.activate_tab(pane_id, tab_id, window, cx);
                     }))

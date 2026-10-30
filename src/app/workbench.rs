@@ -227,6 +227,8 @@ impl WorkbenchLayout {
 
 pub(crate) struct WorkbenchTab {
     id: TabId,
+    /// Pinned tabs form a prefix of their pane's tabs.
+    pinned: bool,
     payload: WorkbenchTabPayload,
 }
 
@@ -333,6 +335,10 @@ impl WorkbenchTab {
         self.id
     }
 
+    pub(crate) fn is_pinned(&self) -> bool {
+        self.pinned
+    }
+
     pub(crate) fn surface_id(&self) -> TabSurfaceId {
         match &self.payload {
             WorkbenchTabPayload::Tool { id, .. } => TabSurfaceId::Tool(*id),
@@ -389,6 +395,20 @@ impl Pane {
         self.active_tab = tab;
         self.recent.retain(|id| *id != tab);
         self.recent.insert(0, tab);
+    }
+
+    fn pinned_count(&self) -> usize {
+        self.tabs.iter().take_while(|tab| tab.pinned).count()
+    }
+
+    /// Clamp an insertion index into the pinned or unpinned section.
+    fn section_index(&self, pinned: bool, index: usize) -> usize {
+        let pinned_count = self.pinned_count();
+        if pinned {
+            index.min(pinned_count)
+        } else {
+            index.clamp(pinned_count, self.tabs.len())
+        }
     }
 
     /// The pane's tabs in recently activated order.
@@ -478,6 +498,7 @@ impl Workbench {
                 pane_id,
                 vec![WorkbenchTab {
                     id: tab_id,
+                    pinned: false,
                     payload: WorkbenchTabPayload::Document {
                         document_id,
                         editor: cx.new(|cx| EditorView::new(model, cx)),
@@ -580,6 +601,20 @@ impl Workbench {
         Some(pane.tabs[next].id)
     }
 
+    /// Pin a tab at the end of its pane's pinned prefix, or unpin it to the
+    /// first unpinned position. Returns whether the tab is now pinned.
+    pub(crate) fn toggle_pin(&mut self, pane_id: PaneId, tab_id: TabId) -> Option<bool> {
+        let pane = self.panes.iter_mut().find(|pane| pane.id == pane_id)?;
+        let index = pane.tabs.iter().position(|tab| tab.id == tab_id)?;
+        let mut tab = pane.tabs.remove(index);
+        tab.pinned = !tab.pinned;
+        let pinned = tab.pinned;
+        let destination = pane.pinned_count();
+        pane.tabs.insert(destination, tab);
+        self.debug_assert_invariants();
+        Some(pinned)
+    }
+
     #[cfg(test)]
     pub(crate) fn open_tab(
         &mut self,
@@ -603,6 +638,7 @@ impl Workbench {
         let pane = &mut self.panes[pane_index];
         pane.tabs.push(WorkbenchTab {
             id: tab_id,
+            pinned: false,
             payload: WorkbenchTabPayload::Document {
                 document_id,
                 editor,
@@ -646,6 +682,7 @@ impl Workbench {
         let pane = &mut self.panes[pane_index];
         pane.tabs.push(WorkbenchTab {
             id: tab_id,
+            pinned: false,
             payload: WorkbenchTabPayload::Terminal { session_id, view },
         });
         pane.select(tab_id);
@@ -717,6 +754,7 @@ impl Workbench {
             new_pane_id,
             vec![WorkbenchTab {
                 id: tab_id,
+                pinned: false,
                 payload: WorkbenchTabPayload::Document {
                     document_id,
                     editor,
@@ -788,6 +826,7 @@ impl Workbench {
             new_pane_id,
             vec![WorkbenchTab {
                 id: tab_id,
+                pinned: false,
                 payload: WorkbenchTabPayload::Terminal {
                     session_id: new_session_id,
                     view,
@@ -950,6 +989,12 @@ impl Workbench {
                 debug_assert!(!pane.tabs.is_empty());
                 debug_assert!(pane.tabs.iter().any(|tab| tab.id == pane.active_tab));
                 debug_assert!(pane.tabs.iter().all(|tab| tab_ids.insert(tab.id)));
+                debug_assert!(
+                    pane.tabs
+                        .iter()
+                        .skip_while(|tab| tab.pinned)
+                        .all(|tab| !tab.pinned)
+                );
             }
         }
     }
@@ -1187,6 +1232,102 @@ mod tests {
             assert_eq!(
                 workbench.pane(other).unwrap().recent_tabs()[0],
                 moved.destination.tab_id
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn pinned_tabs_form_a_prefix_and_moves_stay_in_their_section(cx: &mut TestAppContext) {
+        let model = cx.new(|_| BufferModel::from_text("shared"));
+        let mut documents = DocumentCollection::new();
+        let document = cx.update(|cx| documents.create_untitled("Shared", model, cx));
+        let workbench = cx.new(|cx| Workbench::new(documents.get(document).unwrap(), cx));
+
+        workbench.update(cx, |workbench, cx| {
+            let pane = workbench.focused_pane_id().unwrap();
+            let a = workbench.focused_pane().unwrap().active_tab_id();
+            let [b, c, d] = [(); 3].map(|_| {
+                workbench
+                    .open_tab(pane, documents.get(document).unwrap(), cx)
+                    .unwrap()
+            });
+            let order = |workbench: &Workbench, pane| {
+                workbench
+                    .pane(pane)
+                    .unwrap()
+                    .tabs()
+                    .iter()
+                    .map(|tab| (tab.id(), tab.is_pinned()))
+                    .collect::<Vec<_>>()
+            };
+
+            assert_eq!(workbench.toggle_pin(pane, c), Some(true));
+            assert_eq!(workbench.toggle_pin(pane, d), Some(true));
+            assert_eq!(
+                order(workbench, pane),
+                [(c, true), (d, true), (a, false), (b, false)]
+            );
+            // Unpinning returns a tab to the first unpinned position.
+            assert_eq!(workbench.toggle_pin(pane, c), Some(false));
+            assert_eq!(
+                order(workbench, pane),
+                [(d, true), (c, false), (a, false), (b, false)]
+            );
+            assert_eq!(workbench.toggle_pin(pane, c), Some(true));
+
+            // A move within the pane stays in its section.
+            let capture =
+                |workbench: &Workbench, pane, tab| workbench.capture_tab_move(pane, tab).unwrap();
+            let source = capture(workbench, pane, b);
+            let anchor = capture(workbench, pane, d);
+            workbench
+                .relocate_tab(
+                    source,
+                    TabMoveDestination::At {
+                        anchor,
+                        placement: TabMovePlacement::Before,
+                    },
+                )
+                .unwrap();
+            assert_eq!(
+                order(workbench, pane),
+                [(d, true), (c, true), (b, false), (a, false)]
+            );
+            let source = capture(workbench, pane, d);
+            let anchor = capture(workbench, pane, a);
+            workbench
+                .relocate_tab(
+                    source,
+                    TabMoveDestination::At {
+                        anchor,
+                        placement: TabMovePlacement::End,
+                    },
+                )
+                .unwrap();
+            assert_eq!(
+                order(workbench, pane),
+                [(c, true), (d, true), (b, false), (a, false)]
+            );
+
+            // Another pane takes a pinned tab at the end of its pinned prefix.
+            let other = workbench
+                .split_pane(pane, SplitDirection::Horizontal, SplitPlacement::After, cx)
+                .unwrap();
+            let first = workbench.pane(other).unwrap().active_tab_id();
+            let source = capture(workbench, pane, c);
+            let anchor = capture(workbench, other, first);
+            let moved = workbench
+                .relocate_tab(
+                    source,
+                    TabMoveDestination::At {
+                        anchor,
+                        placement: TabMovePlacement::End,
+                    },
+                )
+                .unwrap();
+            assert_eq!(
+                order(workbench, other),
+                [(moved.destination.tab_id, true), (first, false)]
             );
         });
     }

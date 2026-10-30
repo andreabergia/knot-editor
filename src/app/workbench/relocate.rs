@@ -204,7 +204,8 @@ impl Workbench {
                 .iter_mut()
                 .find(|pane| pane.id == prepared.pane)
                 .expect("validated destination pane");
-            pane.tabs.insert(prepared.index, tab);
+            let index = pane.section_index(tab.pinned, prepared.index);
+            pane.tabs.insert(index, tab);
             pane.select(snapshot.tab_id);
         }
         self.layout = Some(prepared.layout);

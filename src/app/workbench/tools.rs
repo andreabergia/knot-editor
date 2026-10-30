@@ -391,9 +391,10 @@ impl Workbench {
             .find(|group| group.id == pane)
             .unwrap();
         group.tabs.insert(
-            index.min(group.tabs.len()),
+            group.section_index(false, index),
             WorkbenchTab {
                 id: tab,
+                pinned: false,
                 payload: WorkbenchTabPayload::Tool { id, content },
             },
         );

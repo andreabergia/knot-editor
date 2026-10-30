@@ -55,6 +55,50 @@ pub(crate) async fn close_tab(
     close_target(&context, ProtectedCloseKind::Tab).await
 }
 
+#[command("workbench.close-other-tabs", title = "Close Other Tabs", description = "Close every unpinned tab of the focused pane except the focused one.", id = CLOSE_OTHER_TABS_COMMAND, participant = Workbench)]
+pub(crate) async fn close_other_tabs(
+    context: CommandContext,
+    (): (),
+) -> Result<CommandOutcome, CommandOutcome> {
+    context
+        .foreground(move |target, _, cx| {
+            super::super::commands::dispatch::break_captured_history_group(target, cx);
+            Ok(())
+        })
+        .await?;
+    close_target(&context, ProtectedCloseKind::OtherTabs).await
+}
+
+#[command("workbench.close-pane", title = "Close Pane", description = "Close every tab of the focused pane.", id = CLOSE_PANE_COMMAND, participant = Workbench)]
+pub(crate) async fn close_pane(
+    context: CommandContext,
+    (): (),
+) -> Result<CommandOutcome, CommandOutcome> {
+    context
+        .foreground(move |target, _, cx| {
+            super::super::commands::dispatch::break_captured_history_group(target, cx);
+            Ok(())
+        })
+        .await?;
+    close_target(&context, ProtectedCloseKind::Pane).await
+}
+
+#[command("workbench.toggle-pin-tab", title = "Toggle Pin Tab", description = "Pin the focused tab before the others, or unpin it.", id = TOGGLE_PIN_TAB_COMMAND, participant = Workbench)]
+pub(crate) async fn toggle_pin_tab(context: CommandContext, (): ()) -> Result<(), CommandOutcome> {
+    context
+        .shell(|shell, target, _, cx| {
+            shell
+                .workbench
+                .update(cx, |workbench, _| {
+                    workbench.toggle_pin(target.pane, target.tab)
+                })
+                .ok_or(CommandOutcome::InvalidTarget)?;
+            cx.notify();
+            Ok(())
+        })
+        .await
+}
+
 #[command("workbench.split-horizontal", title = "Split Right", description = "Split the focused pane to the right.", id = SPLIT_HORIZONTAL_COMMAND, participant = Workbench)]
 pub(crate) async fn split_horizontal(
     context: CommandContext,

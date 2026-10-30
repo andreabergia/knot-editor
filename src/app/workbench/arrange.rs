@@ -62,13 +62,16 @@ impl Workbench {
                 dock,
                 selected,
                 focused: is_focused,
+                pinned,
                 tabs,
             } => {
                 let pane = self.allocate_pane_id();
                 let tabs = tabs
                     .into_iter()
-                    .map(|tab| WorkbenchTab {
+                    .enumerate()
+                    .map(|(index, tab)| WorkbenchTab {
                         id: self.allocate_tab_id(),
+                        pinned: index < pinned,
                         payload: match tab {
                             ArrangedTab::Document {
                                 document,

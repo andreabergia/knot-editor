@@ -1,4 +1,5 @@
-//! Protected closure planning, approval, and commit for tabs, windows, and quit.
+//! Protected closure planning, approval, and commit for tabs, a pane's tabs,
+//! windows, and quit.
 
 use super::*;
 
@@ -23,16 +24,15 @@ impl ProductShell {
                         snapshots
                             .into_iter()
                             .map(|snapshot| {
-                                let editor = {
+                                let (editor, pinned) = {
                                     let workbench = workbench.read(cx);
-                                    workbench
-                                        .pane(snapshot.pane_id)
-                                        .and_then(|pane| {
-                                            pane.tabs()
-                                                .iter()
-                                                .find(|tab| tab.id() == snapshot.tab_id)
-                                        })
-                                        .and_then(|tab| tab.editor().cloned())
+                                    let tab = workbench.pane(snapshot.pane_id).and_then(|pane| {
+                                        pane.tabs().iter().find(|tab| tab.id() == snapshot.tab_id)
+                                    });
+                                    (
+                                        tab.and_then(|tab| tab.editor().cloned()),
+                                        tab.is_some_and(|tab| tab.is_pinned()),
+                                    )
                                 };
                                 ProtectedView {
                                     key: ProtectedViewKey {
@@ -47,6 +47,7 @@ impl ProductShell {
                                         tab: snapshot.tab_id,
                                         surface: snapshot.surface,
                                     },
+                                    pinned,
                                     target: editor.map(|editor| ProductCommandTarget {
                                         window: window_handle,
                                         shell: shell.downgrade(),
@@ -95,6 +96,9 @@ impl ProductShell {
             .iter()
             .filter(|view| match request.kind {
                 ProtectedCloseKind::Tab => view.key == origin_key,
+                ProtectedCloseKind::OtherTabs | ProtectedCloseKind::Pane => {
+                    in_pane_scope(request.kind, &request.origin, view)
+                }
                 ProtectedCloseKind::Window => view.key.window == request.origin.window,
                 ProtectedCloseKind::Quit => true,
             })
@@ -548,6 +552,9 @@ impl ProductShell {
                         && view.key.tab == plan.request.origin.tab
                         && view.key.surface == plan.request.origin.surface
                 }
+                ProtectedCloseKind::OtherTabs | ProtectedCloseKind::Pane => {
+                    in_pane_scope(plan.request.kind, &plan.request.origin, view)
+                }
                 ProtectedCloseKind::Window => view.key.window == plan.request.origin.window,
                 ProtectedCloseKind::Quit => true,
             })
@@ -623,6 +630,18 @@ impl ProductShell {
                 plan.request.origin.surface,
                 cx,
             ),
+            ProtectedCloseKind::OtherTabs | ProtectedCloseKind::Pane => {
+                for key in &current_scope {
+                    self.close_tab_after_approval(key.window, key.pane, key.tab, key.surface, cx)?;
+                }
+                if current_scope
+                    .iter()
+                    .any(|key| matches!(key.surface, TabSurfaceId::Tool(_)))
+                {
+                    self.publish_tool_layout(cx);
+                }
+                Ok(())
+            }
             ProtectedCloseKind::Window => {
                 let final_documents = scoped_counts
                     .iter()
@@ -810,6 +829,22 @@ impl ProductShell {
         cx.notify();
         Ok(())
     }
+}
+
+/// Whether a view belongs to a bulk close of the origin's pane: every tab for
+/// Close Pane, and every unpinned tab but the origin for Close Other Tabs.
+fn in_pane_scope(
+    kind: ProtectedCloseKind,
+    origin: &ProductCommandTarget,
+    view: &ProtectedView,
+) -> bool {
+    view.key.window == origin.window
+        && view.key.workbench == origin.workbench.entity_id()
+        && view.key.pane == origin.pane
+        && match kind {
+            ProtectedCloseKind::OtherTabs => view.key.tab != origin.tab && !view.pinned,
+            _ => true,
+        }
 }
 
 pub(super) fn install_protected_window_close(

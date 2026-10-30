@@ -197,7 +197,14 @@ Added to the Knot preset. `secondary-` is cmd on macOS and ctrl elsewhere.
   `src/app/workbench/relocate.rs` and `src/app/product/relocate.rs`;
   maximize as shell render state in `src/app/product/render.rs`.
 
-### 4. Pinned tabs and bulk close
+### 4. Pinned tabs and bulk close ✅
+
+- Resolved: Close Pane on a dock hides its tools, and Close Other Tabs there
+  hides the other tools, since closing a tool tab already hides it. Tabs have
+  no close button, so the pin marker follows the title. The layout records
+  `pinned` per tab and restoration puts pinned tabs first. A bulk close
+  commits through the single-tab approval path for each tab in scope, after
+  one plan prompts for every dirty document that loses its last view.
 
 - Toggle Pin Tab, pinned prefix ordering, pin marker, drag constrained to the
   section, and `pinned` in `LayoutTab`.

@@ -159,6 +159,10 @@ impl TerminalSessions {
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(crate) enum ProtectedCloseKind {
     Tab,
+    /// Every unpinned tab of the origin's pane except the origin.
+    OtherTabs,
+    /// Every tab of the origin's pane.
+    Pane,
     Window,
     Quit,
 }
@@ -183,6 +187,7 @@ struct ProtectedViewKey {
 #[derive(Clone)]
 struct ProtectedView {
     key: ProtectedViewKey,
+    pinned: bool,
     target: Option<ProductCommandTarget>,
 }
 

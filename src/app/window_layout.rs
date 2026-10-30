@@ -89,15 +89,35 @@ pub(crate) enum LayoutTab {
         /// recorded, so restoration detects them again.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         language: Option<String>,
+        #[serde(default, skip_serializing_if = "is_false")]
+        pinned: bool,
     },
     Tool {
         tool: String,
+        #[serde(default, skip_serializing_if = "is_false")]
+        pinned: bool,
     },
     Terminal {
         /// The shell's working directory as a file URI.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         directory: Option<String>,
+        #[serde(default, skip_serializing_if = "is_false")]
+        pinned: bool,
     },
+}
+
+fn is_false(value: &bool) -> bool {
+    !value
+}
+
+impl LayoutTab {
+    pub(crate) fn is_pinned(&self) -> bool {
+        match self {
+            Self::Document { pinned, .. }
+            | Self::Tool { pinned, .. }
+            | Self::Terminal { pinned, .. } => *pinned,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -214,6 +234,7 @@ impl WindowLayout {
                                         .filter(|model| model.language_is_explicit())
                                         .and_then(|model| model.language())
                                         .map(ToString::to_string),
+                                    pinned: tab.is_pinned(),
                                 }
                             }
                             TabSurfaceId::Tool(id) => LayoutTab::Tool {
@@ -221,11 +242,13 @@ impl WindowLayout {
                                     .tool(id)
                                     .map(|tool| tool.stable_id.clone())
                                     .unwrap_or_default(),
+                                pinned: tab.is_pinned(),
                             },
                             TabSurfaceId::Terminal(id) => LayoutTab::Terminal {
                                 directory: terminal_directory(id)
                                     .and_then(|path| url::Url::from_directory_path(path).ok())
                                     .map(String::from),
+                                pinned: tab.is_pinned(),
                             },
                         })
                         .collect();
@@ -311,7 +334,7 @@ impl WindowLayout {
             match node {
                 LayoutNode::Pane { tabs, .. } => tabs
                     .iter()
-                    .any(|tab| matches!(tab, LayoutTab::Tool { tool: named } if named == tool)),
+                    .any(|tab| matches!(tab, LayoutTab::Tool { tool: named, .. } if named == tool)),
                 LayoutNode::Split { first, second, .. } => walk(first, tool) || walk(second, tool),
             }
         }
@@ -348,13 +371,21 @@ impl WindowLayout {
                     state.pane += 1;
                     let mut planned = Vec::new();
                     let mut selection = 0;
-                    for (position, tab) in tabs.iter().enumerate() {
+                    let mut pinned = 0;
+                    // Pinned tabs come first, whatever order the record has.
+                    let ordered = tabs
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, tab)| tab.is_pinned())
+                        .chain(tabs.iter().enumerate().filter(|(_, tab)| !tab.is_pinned()));
+                    for (position, tab) in ordered {
                         let kept = match tab {
                             LayoutTab::Document {
                                 document,
                                 uri,
                                 view,
                                 language,
+                                ..
                             } => (state.resolve)(document.as_deref(), uri.as_deref())
                                 .filter(|resolved| {
                                     !planned.iter().any(|tab| {
@@ -366,24 +397,25 @@ impl WindowLayout {
                                     view: *view,
                                     language: language.clone(),
                                 }),
-                            LayoutTab::Tool { tool } => ((state.has_tool)(tool)
+                            LayoutTab::Tool { tool, .. } => ((state.has_tool)(tool)
                                 && !state.tools.contains(tool))
                             .then(|| {
                                 state.tools.push(tool.clone());
                                 PlannedTab::Tool(tool.clone())
                             }),
-                            LayoutTab::Terminal { directory } => Some(PlannedTab::Terminal {
+                            LayoutTab::Terminal { directory, .. } => Some(PlannedTab::Terminal {
                                 directory: directory
                                     .as_deref()
                                     .and_then(|uri| url::Url::parse(uri).ok())
                                     .and_then(|url| url.to_file_path().ok()),
                             }),
                         };
-                        if let Some(tab) = kept {
+                        if let Some(kept) = kept {
                             if position == *selected {
                                 selection = planned.len();
                             }
-                            planned.push(tab);
+                            pinned += usize::from(tab.is_pinned());
+                            planned.push(kept);
                         }
                     }
                     if planned.is_empty() {
@@ -395,6 +427,7 @@ impl WindowLayout {
                         dock,
                         selected: selection,
                         focused: state.focused == Some(index),
+                        pinned,
                         tabs: planned,
                     })
                 }
@@ -438,6 +471,8 @@ pub(crate) enum PlanNode<T> {
         dock: Option<DockLocation>,
         selected: usize,
         focused: bool,
+        /// How many of the leading tabs are pinned.
+        pinned: usize,
         tabs: Vec<T>,
     },
     Split {
@@ -455,11 +490,13 @@ impl<T> PlanNode<T> {
                 dock,
                 selected,
                 focused,
+                pinned,
                 tabs,
             } => PlanNode::Pane {
                 dock,
                 selected,
                 focused,
+                pinned,
                 tabs: tabs.into_iter().map(&mut *step).collect(),
             },
             Self::Split {
@@ -624,7 +661,8 @@ mod tests {
                                "tabs": [{ "kind": "tool", "tool": "knot.explorer" }] },
                     "second": { "kind": "pane", "dock": null, "selected": 1,
                                 "tabs": [document("a"),
-                                         { "kind": "terminal", "directory": "file:///work/" },
+                                         { "kind": "terminal", "directory": "file:///work/",
+                                           "pinned": true },
                                          { "kind": "terminal" },
                                          { "kind": "document", "document": "b", "uri": null,
                                            "language": "rust",
@@ -638,8 +676,9 @@ mod tests {
             serde_json::from_str(&encoded.to_string().replace(":1,", ":1.0,")).unwrap();
         assert_eq!(WindowLayout::decode(&doubles).unwrap(), original);
         let payload = encoded.to_string();
-        // Only an explicit language is recorded.
+        // Only an explicit language and pinned tabs are recorded.
         assert_eq!(payload.matches("\"language\"").count(), 1);
+        assert_eq!(payload.matches("\"pinned\"").count(), 1);
         for forbidden in ["pane\":", "tab\":", "window\":", "presentation"] {
             assert!(!payload.contains(forbidden), "layout leaks {forbidden}");
         }
@@ -696,6 +735,7 @@ mod tests {
                     // The selected tool was pruned, so the first tab is selected.
                     selected: 0,
                     focused: false,
+                    pinned: 0,
                     tabs: vec![PlannedTab::Tool("knot.explorer".into())],
                 }),
                 second: Box::new(PlanNode::Pane {
@@ -703,6 +743,7 @@ mod tests {
                     dock: None,
                     selected: 1,
                     focused: true,
+                    pinned: 0,
                     tabs: vec![
                         PlannedTab::Document {
                             document: 1,
@@ -734,6 +775,36 @@ mod tests {
     }
 
     #[test]
+    fn pinned_tabs_plan_first_and_count_only_kept_tabs() {
+        let layout = layout(
+            json!({ "kind": "pane", "dock": null, "selected": 2, "tabs": [
+                document("a"),
+                { "kind": "terminal", "pinned": true },
+                { "kind": "document", "document": "missing", "uri": null, "pinned": true,
+                  "view": { "anchor": 0, "caret": 0, "top": 0, "scrollX": 0 } },
+                { "kind": "document", "document": "b", "uri": null, "pinned": true,
+                  "view": { "anchor": 0, "caret": 0, "top": 0, "scrollX": 0 } },
+            ] }),
+            Some(0),
+        );
+        let Some(PlanNode::Pane {
+            pinned,
+            selected,
+            tabs,
+            ..
+        }) = layout.plan(resolve, |_| true)
+        else {
+            panic!("expected a pane");
+        };
+        assert_eq!(pinned, 2);
+        assert_eq!(tabs[0], PlannedTab::Terminal { directory: None });
+        assert!(matches!(tabs[1], PlannedTab::Document { document: 2, .. }));
+        assert!(matches!(tabs[2], PlannedTab::Document { document: 1, .. }));
+        // The selected tab was pruned, so the first kept tab is selected.
+        assert_eq!(selected, 0);
+    }
+
+    #[test]
     fn pruning_collapses_empty_panes_and_nested_one_child_splits() {
         let layout = layout(
             json!({ "kind": "split", "direction": "vertical", "ratio": 0.5,
@@ -755,6 +826,7 @@ mod tests {
                 selected: 0,
                 // An out-of-range focus marks no pane; the installer falls back.
                 focused: false,
+                pinned: 0,
                 tabs: vec![PlannedTab::Document {
                     document: 2,
                     view: EditorViewState {

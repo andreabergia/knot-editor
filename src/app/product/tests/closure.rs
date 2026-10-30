@@ -1194,3 +1194,166 @@ async fn native_window_close_is_vetoed_until_protected_closure_finishes(cx: &mut
         assert!(documents.read(cx).get(document).is_none());
     });
 }
+
+/// One pane holding a clean pinned document, a dirty document twice, a second
+/// dirty document, and the clean focused document, in that order.
+fn bulk_close_fixture(
+    documents: &Entity<DocumentCollection>,
+    cx: &mut TestAppContext,
+) -> (
+    Entity<ProductShell>,
+    gpui::AnyWindowHandle,
+    [super::super::DocumentId; 4],
+) {
+    let created = ["shared", "other", "pinned", "focused"].map(|text| {
+        let model = cx.new(|_| BufferModel::from_text(text));
+        let document = documents.update(cx, |documents, cx| {
+            documents.create_untitled(text, model.clone(), cx)
+        });
+        (document, model)
+    });
+    for (_, model) in &created[..2] {
+        model.update(cx, |model, _| model.replace(0..0, "unsaved ").unwrap());
+    }
+    let (shell, window) = product_window(created[0].0, created[0].1.clone(), cx);
+    shell.update(cx, |shell, cx| {
+        shell.workbench.update(cx, |workbench, cx| {
+            let pane = workbench.focused_pane_id().unwrap();
+            for (document, model) in [&created[0], &created[1], &created[2], &created[3]] {
+                workbench
+                    .open_tab_for_document(pane, *document, model.clone(), cx)
+                    .unwrap();
+            }
+            let pinned = workbench.focused_pane().unwrap().tabs()[3].id();
+            workbench.toggle_pin(pane, pinned).unwrap();
+        });
+    });
+    cx.run_until_parked();
+    (shell, window, created.map(|(document, _)| document))
+}
+
+fn tab_documents(
+    shell: &Entity<ProductShell>,
+    cx: &TestAppContext,
+) -> Vec<super::super::DocumentId> {
+    cx.read(|cx| {
+        shell
+            .read(cx)
+            .workbench
+            .read(cx)
+            .tab_snapshots()
+            .into_iter()
+            .filter_map(|tab| match tab.surface {
+                TabSurfaceId::Document(document) => Some(document),
+                _ => None,
+            })
+            .collect()
+    })
+}
+
+#[gpui::test]
+async fn cancelling_a_bulk_close_leaves_every_tab(cx: &mut TestAppContext) {
+    let documents = install_globals(cx);
+    let (shell, window, _) = bulk_close_fixture(&documents, cx);
+    let before = tab_documents(&shell, cx);
+    let execution = dispatch_product_command(
+        &shell,
+        window,
+        crate::app::commands::dispatch::CLOSE_OTHER_TABS_COMMAND,
+        cx,
+    );
+    wait_prompt(cx);
+    cx.simulate_prompt_answer("Don't Save");
+    wait_prompt(cx);
+    cx.simulate_prompt_answer("Cancel");
+    assert_eq!(
+        execution.completion.await.unwrap(),
+        CommandOutcome::Cancelled
+    );
+    assert_eq!(tab_documents(&shell, cx), before);
+}
+
+#[gpui::test]
+async fn close_other_tabs_prompts_once_per_dirty_document_and_keeps_pinned_tabs(
+    cx: &mut TestAppContext,
+) {
+    let documents = install_globals(cx);
+    let (shell, window, [shared, other, pinned, focused]) = bulk_close_fixture(&documents, cx);
+    let execution = dispatch_product_command(
+        &shell,
+        window,
+        crate::app::commands::dispatch::CLOSE_OTHER_TABS_COMMAND,
+        cx,
+    );
+    // The shared document loses both views but is asked about once.
+    wait_prompt(cx);
+    cx.simulate_prompt_answer("Don't Save");
+    wait_prompt(cx);
+    cx.simulate_prompt_answer("Don't Save");
+    assert_eq!(
+        execution.completion.await.unwrap(),
+        CommandOutcome::Completed
+    );
+    assert!(!cx.has_pending_prompt());
+    assert_eq!(tab_documents(&shell, cx), [pinned, focused]);
+    cx.read(|cx| {
+        assert!(documents.read(cx).get(shared).is_none());
+        assert!(documents.read(cx).get(other).is_none());
+    });
+
+    // Close Pane closes pinned tabs too, leaving a replacement document.
+    let execution = dispatch_product_command(
+        &shell,
+        window,
+        crate::app::commands::dispatch::CLOSE_PANE_COMMAND,
+        cx,
+    );
+    assert_eq!(
+        execution.completion.await.unwrap(),
+        CommandOutcome::Completed
+    );
+    let remaining = tab_documents(&shell, cx);
+    assert_eq!(remaining.len(), 1);
+    assert!(!remaining.contains(&pinned) && !remaining.contains(&focused));
+}
+
+#[gpui::test]
+async fn close_pane_collapses_its_split_and_keeps_the_other_pane(cx: &mut TestAppContext) {
+    let documents = install_globals(cx);
+    let (shell, window, [_, _, pinned, focused]) = bulk_close_fixture(&documents, cx);
+    let split = cx
+        .update_window(window, |_, window, cx| {
+            shell.update(cx, |shell, cx| {
+                let pane = shell.workbench.read(cx).focused_pane_id().unwrap();
+                shell.split_pane(
+                    pane,
+                    SplitDirection::Horizontal,
+                    super::super::SplitPlacement::After,
+                    window,
+                    cx,
+                );
+                shell.workbench.read(cx).focused_pane_id().unwrap()
+            })
+        })
+        .unwrap();
+    let execution = dispatch_product_command(
+        &shell,
+        window,
+        crate::app::commands::dispatch::CLOSE_PANE_COMMAND,
+        cx,
+    );
+    assert_eq!(
+        execution.completion.await.unwrap(),
+        CommandOutcome::Completed
+    );
+    assert!(!cx.has_pending_prompt());
+    cx.read(|cx| {
+        let workbench = shell.read(cx).workbench.read(cx);
+        assert!(workbench.pane(split).is_none());
+        assert_eq!(workbench.panes().len(), 1);
+    });
+    let remaining = tab_documents(&shell, cx);
+    assert_eq!(remaining.len(), 5);
+    assert_eq!(remaining.first(), Some(&pinned));
+    assert_eq!(remaining.last(), Some(&focused));
+}
