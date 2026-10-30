@@ -2074,6 +2074,31 @@ async fn register_language(
         .map_err(LanguageError::from)
 }
 
+impl HostArguments for crate::app::languages::LanguageAssociation {
+    fn decode(reader: &mut dyn ArgumentReader) -> Result<Self, DecodeError> {
+        Ok(Self {
+            language: reader.text(2, "language id must be text")?,
+            file_extensions: reader.text_list(3)?,
+            file_names: reader.text_list(4)?,
+            interpreters: reader.text_list(5)?,
+        })
+    }
+}
+
+/// Claim file patterns for a language ID; `unregisterLanguage` removes the
+/// claim like a registration.
+#[host_operation("associateLanguage")]
+async fn associate_language(
+    context: HostContext,
+    arguments: crate::app::languages::LanguageAssociation,
+) -> Result<u64, AccessError> {
+    let owner = crate::app::languages::LanguageOwner {
+        extension: context.request.extension,
+        lifecycle: context.request.lifecycle,
+    };
+    context.foreground(|_, cx| crate::app::languages::associate(owner, arguments, cx))
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct LanguageRegistrationArguments {
     registration: u64,

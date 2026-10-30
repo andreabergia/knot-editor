@@ -1,6 +1,6 @@
 # D070 — Application settings
 
-Status: 🚧 checkpoints 1–3 done; checkpoint 4 next. Item of the
+Status: 🚧 checkpoints 1–3 done; checkpoint 4 implemented, awaiting review. Item of the
 [daily-driver plan](daily-driver.md#phase-2--foundations).
 
 ## Outcome
@@ -113,8 +113,8 @@ that only reads a value when it needs it can call `get` instead.
   theme (D064), soft wrap (D078), trim whitespace and final newline (D079), and
   the keymap preset (D086) are added by the items that first consume them.
 - Natively persisted settings.
-- Richer definition types (enums, ranges, arrays, objects). Add them when a
-  key needs one.
+- Richer definition types (enums, ranges, arrays, objects) and a
+  `settings.merge` for them. Add them when a key needs one.
 - Project-local settings (D089), `.editorconfig` support (D090), and a
   settings UI (D091), which are deferred roadmap items.
 - Terminal typography (D045, D059), which later becomes `font.*` keys scoped
@@ -128,7 +128,7 @@ Keybindings and languages no longer rank writers by owner: the latest write
 wins and teardown reveals the previous one. Native bindings remain a base
 beneath every extension and personal binding, so a D086 preset never overrides
 them, and view-scoped bindings still beat global ones. User overrides of
-language detection move to a setting (checkpoint 4). Rationale is in
+language detection move to `languages.associate` (checkpoint 4). Rationale is in
 [decisions](../decisions.md#commands-and-keymaps); the keymap rule is in
 [commands](../architecture/commands.md#keymaps).
 
@@ -159,22 +159,22 @@ satisfy `integer`. Product tests cover the pre-init, package, and post-init
 flow, Restart Extension, painted tab stops in open windows, and observer
 teardown; the fake host's own tests live in `scripts/extensions/testing`.
 
-### 4. Language file associations setting
+### 4. Language file associations 🔍
 
-- Deliverable: a native setting through which personal config maps file names
-  or extensions to a language ID, overriding registration-based detection, as
-  VS Code's `files.associations` and Zed's `file_types` do. Choose its shape
-  here: a richer definition type (a string-to-string map) or one scoped key
-  per pattern. Changing it re-detects open documents whose language is not
-  explicit, like a registration change. An unregistered target ID paints as
-  plain text.
-- Validation: detection tests that the setting beats a registration and that
-  resetting it reveals registration detection, and a product test in which
-  personal config remaps an extension and an open document re-detects.
-- Review gate: the setting's shape and its interaction with detection.
-
-**Implementation context:** detection is `LanguageRegistry::detect` in
-`src/app/languages.rs`; re-detection on registration change is already there.
+Implemented ✅, review gate pending. Personal config redirects detection with
+`languages.associate(id, { fileExtensions, fileNames, interpreters })`
+rather than a setting. A single `files.associations` map setting was built
+first and reverted: a map is one value, so any writer's `set` replaced every
+other writer's associations, and teardown could not remove one package's
+entries. An association is a lifecycle-owned claim in the registry's single
+order, so the latest registration or association claiming a pattern wins,
+disposal or teardown reveals the previous claim, and detection keeps its
+rules (file name, longest extension, interpreter). An association defines no
+language and is absent from `languages.list`; an unregistered target paints
+as plain text. Claims re-detect open documents through the registration path.
+A `settings.merge` for map values was considered and not added: merged
+entries would still have no owner, so teardown and `reset` could not separate
+them. No map setting exists, so the `stringMap` type was dropped too.
 
 ### 5. Documentation
 

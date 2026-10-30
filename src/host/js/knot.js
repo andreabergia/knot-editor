@@ -19,6 +19,7 @@ import {
   registerCompletionProvider,
   registerView,
   registerLanguage,
+  associateLanguage,
   listLanguages,
   listGrammars,
   defineSetting, setSettings, getSetting, resetSetting, observeSetting,
@@ -53,7 +54,7 @@ export const workbench = Object.freeze({
 });
 
 export const documents = Object.freeze({ list: listDocuments, get: getDocument, open: openDocument, createUntitled, present: presentDocument, setLanguage: setDocumentLanguage });
-export const languages = Object.freeze({ register: registerLanguage, list: listLanguages, grammars: listGrammars });
+export const languages = Object.freeze({ register: registerLanguage, associate: associateLanguage, list: listLanguages, grammars: listGrammars });
 export const settings = Object.freeze({ define: defineSetting, set: setSettings, get: getSetting, reset: resetSetting, observe: observeSetting });
 export const windows = Object.freeze({ list: listWindows, get: getWindow, open: openWindow, focus: focusWindow });
 export const workspaces = Object.freeze({ get: getWorkspace, openFolder, replaceRoots: replaceWorkspaceRoots, pickFolder });

@@ -55,7 +55,9 @@ Grammars are compiled in and named by stable native grammar IDs. Language
 definitions are contributed data: extensions and personal config register an
 LSP language ID, the grammar it parses with, the file names, extensions, and
 shebang interpreters it claims, and its highlight and injection queries, through
-the same `languages` API the bundled `@knot/languages` package uses.
+the same `languages` API the bundled `@knot/languages` package uses. An
+association claims patterns for an ID without defining the language, so
+personal config redirects detection without replacing a package's language.
 
 ```text
 languages.register --> background query compilation --> LanguageRegistry
@@ -68,11 +70,10 @@ documents.setLanguage / Set Language Mode --> explicit ID   |
 ```
 
 - `ApplicationLanguages` owns the registry and tracks every buffer with a
-  language. Registrations are lifecycle-owned and ranked like keymaps:
-  personal config, then installed, then bundled packages, later registrations
-  winning within a rank. One ranking decides both an ID's definition and the
-  claimant of a file name, extension, or interpreter, so removal reveals the
-  next.
+  language. Registrations and associations are lifecycle-owned and share one
+  order: the latest registration defines an ID, and the latest registration or
+  association claiming a file name, extension, or interpreter wins it, so
+  removal reveals the previous one.
 - Queries compile on the background executor at registration, so a bad query
   rejects with its location and a package's registrations compile in
   parallel; only the insertion runs on the foreground.

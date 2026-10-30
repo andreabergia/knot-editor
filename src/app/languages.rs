@@ -3,9 +3,10 @@
 //!
 //! Extensions and personal config register languages: a language ID, the
 //! compiled-in grammar it parses with, the file names, extensions, and shebang
-//! interpreters it claims, and its queries. The latest registration of an ID
-//! defines that language, and the latest registration claiming a pattern
-//! decides detection, so removing a registration reveals the previous one.
+//! interpreters it claims, and its queries. An association claims patterns for
+//! an ID without defining the language. The latest registration of an ID
+//! defines that language, and the latest registration or association claiming
+//! a pattern decides detection, so removing either reveals the previous one.
 //!
 //! A buffer records a language ID, explicit or detected, independently of
 //! registration: an unregistered ID paints and reports as `plaintext` until
@@ -67,11 +68,22 @@ pub(crate) struct CompiledLanguage {
     language: Arc<SyntaxLanguage>,
 }
 
+/// File patterns claimed for a language without defining it.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct LanguageAssociation {
+    pub(crate) language: String,
+    pub(crate) file_extensions: Vec<String>,
+    pub(crate) file_names: Vec<String>,
+    pub(crate) interpreters: Vec<String>,
+}
+
+/// A language registration, or an association, which claims patterns for
+/// `info.id` and has no name, grammar, or language of its own.
 struct Registration {
     id: u64,
     owner: LanguageOwner,
     info: LanguageInfo,
-    language: Arc<SyntaxLanguage>,
+    language: Option<Arc<SyntaxLanguage>>,
 }
 
 /// The languages injections and buffers resolve, rebuilt on every change.
@@ -116,7 +128,32 @@ impl LanguageRegistry {
             id: self.next_id,
             owner,
             info: language.info,
-            language: language.language,
+            language: Some(language.language),
+        });
+        self.rebuild();
+        self.next_id
+    }
+
+    /// Add an association, returning its ID. It shares registration IDs and
+    /// order, so the latest claim of a pattern wins either way.
+    pub(crate) fn associate(
+        &mut self,
+        owner: LanguageOwner,
+        association: LanguageAssociation,
+    ) -> u64 {
+        self.next_id += 1;
+        self.registrations.push(Registration {
+            id: self.next_id,
+            owner,
+            info: LanguageInfo {
+                id: association.language,
+                name: String::new(),
+                grammar: String::new(),
+                file_extensions: association.file_extensions,
+                file_names: association.file_names,
+                interpreters: association.interpreters,
+            },
+            language: None,
         });
         self.rebuild();
         self.next_id
@@ -162,7 +199,11 @@ impl LanguageRegistry {
     /// The registration that defines each language ID, sorted by ID.
     fn effective(&self) -> Vec<&Registration> {
         let mut effective: HashMap<&str, &Registration> = HashMap::new();
-        for registration in &self.registrations {
+        for registration in self
+            .registrations
+            .iter()
+            .filter(|registration| registration.language.is_some())
+        {
             effective.insert(&registration.info.id, registration);
         }
         let mut effective: Vec<_> = effective.into_values().collect();
@@ -177,7 +218,7 @@ impl LanguageRegistry {
             .map(|registration| {
                 (
                     registration.info.id.clone(),
-                    Arc::clone(&registration.language),
+                    Arc::clone(registration.language.as_ref().expect("effective languages")),
                 )
             })
             .collect();
@@ -299,6 +340,19 @@ pub(crate) fn register(owner: LanguageOwner, language: CompiledLanguage, cx: &mu
         .default_global::<ApplicationLanguages>()
         .registry
         .register(owner, language);
+    refresh(cx);
+    id
+}
+
+pub(crate) fn associate(
+    owner: LanguageOwner,
+    association: LanguageAssociation,
+    cx: &mut App,
+) -> u64 {
+    let id = cx
+        .default_global::<ApplicationLanguages>()
+        .registry
+        .associate(owner, association);
     refresh(cx);
     id
 }

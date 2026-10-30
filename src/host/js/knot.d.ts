@@ -137,21 +137,24 @@ declare module "knot" {
      * through, and a versioned program also matches its unversioned name. */
     readonly interpreters: readonly string[];
   }
-  export interface LanguageDefinition {
-    readonly id: string;
-    readonly name: string;
-    readonly grammar: string;
+  /** File patterns a language claims for detection; see LanguageInfo. */
+  export interface LanguagePatterns {
     readonly fileExtensions?: readonly string[];
     readonly fileNames?: readonly string[];
     readonly interpreters?: readonly string[];
+  }
+  export interface LanguageDefinition extends LanguagePatterns {
+    readonly id: string;
+    readonly name: string;
+    readonly grammar: string;
     /** Tree-sitter queries using nvim-treesitter capture names. Injections
      * name languages by ID, or by a registered file extension such as "py". */
     readonly queries: Readonly<{ highlights: string; injections?: string }>;
   }
   /**
    * Syntax highlighting languages. The latest registration of an ID defines
-   * the language, and the latest registration claiming a pattern decides
-   * detection; disposal or teardown reveals the previous one. Personal config
+   * the language, and the latest registration or association claiming a
+   * pattern decides detection; disposal or teardown reveals the previous one. Personal config
    * replaces a package's language from post-init, which runs after packages
    * start. Every change re-detects open documents whose language is not
    * explicit. Register in activation, before startup restores windows, so
@@ -165,6 +168,15 @@ declare module "knot" {
      * InvalidQuery (details: query "highlights" or "injections", message, and
      * the 0-indexed row and column), or Cancelled. */
     register(definition: LanguageDefinition): Promise<Disposable>;
+    /**
+     * Claim file patterns for a language ID without defining the language, so
+     * personal config can redirect detection, such as "mdx" files to
+     * "markdown", without replacing a package's registration. The claim takes
+     * part in detection like a registration's: the latest claim of a pattern
+     * wins, and disposal or teardown reveals the previous one. An unregistered
+     * ID paints as "plaintext". Associations do not appear in list.
+     * @throws TypeError for invalid fields; HostError with Cancelled. */
+    associate(id: string, patterns: LanguagePatterns): Promise<Disposable>;
     /** The language each registered ID resolves to, sorted by ID. */
     list(): Promise<readonly LanguageInfo[]>;
     /** Every compiled-in grammar ID, sorted. */

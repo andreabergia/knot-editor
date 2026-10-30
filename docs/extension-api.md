@@ -234,6 +234,14 @@ from their first frame. The latest registration of an ID or file pattern
 wins, so personal config replaces a package's language from `post-init`. The
 bundled `@knot/languages` package is a complete example.
 
+To send files to a language without replacing its registration, associate
+patterns with its ID. The claim competes with registrations' claims, so the
+latest one wins and disposing it reveals the previous one:
+
+```js
+await languages.associate("markdown", { fileExtensions: ["mdx"] });
+```
+
 `DocumentInfo.language` reports a document's language, or `plaintext`.
 `documents.setLanguage(id, "python")` makes a language explicit, which is
 recorded in window layouts and survives restarts and project switches; `null`

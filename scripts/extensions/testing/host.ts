@@ -78,6 +78,7 @@ function emptyState() {
     failures: new Map<string, HostErrorCode[]>(),
     replaced: [] as Knot.ReplaceWindowsOptions[],
     languages: [] as Knot.LanguageDefinition[],
+    associations: [] as { id: string; patterns: Knot.LanguagePatterns }[],
     settingDefinitions: new Map<string, Knot.SettingDefinition>([[
       "editor.tabSize",
       { key: "editor.tabSize", type: "integer", default: 4, description: "Columns per tab stop in editor views" },
@@ -497,6 +498,11 @@ export const CAPTURE_NAMES: readonly string[] = [
   "variable.member", "variable.parameter", "variable.parameter.builtin",
 ];
 
+/** Every live association, in the order it was made. The fake does not detect. */
+export function languageAssociations(): readonly { id: string; patterns: Knot.LanguagePatterns }[] {
+  return state.associations;
+}
+
 /** Every live language registration, queries included, in registration order. */
 export function languageDefinitions(): readonly Knot.LanguageDefinition[] {
   return state.languages;
@@ -576,6 +582,15 @@ export const api: KnotApi = {
       return {
         dispose: async () => {
           state.languages = state.languages.filter((candidate) => candidate !== definition);
+        },
+      };
+    },
+    associate: async (id, patterns) => {
+      const association = { id, patterns };
+      state.associations.push(association);
+      return {
+        dispose: async () => {
+          state.associations = state.associations.filter((candidate) => candidate !== association);
         },
       };
     },

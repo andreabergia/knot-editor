@@ -394,3 +394,94 @@ fn buffers_outside_documents_keep_a_fixed_language(cx: &mut TestAppContext) {
     register(cx, owner(1), claiming("rust", &["rs"], &[], &[]));
     assert_eq!(state(&model, cx), (Some("rust".into()), true, true));
 }
+
+fn association(language: &str, extensions: &[&str], names: &[&str]) -> LanguageAssociation {
+    let owned = |values: &[&str]| values.iter().map(|value| (*value).to_owned()).collect();
+    LanguageAssociation {
+        language: language.into(),
+        file_extensions: owned(extensions),
+        file_names: owned(names),
+        interpreters: Vec::new(),
+    }
+}
+
+#[test]
+fn associations_claim_patterns_in_registration_order_without_defining_languages() {
+    let mut registry = LanguageRegistry::default();
+    registry.register(
+        owner(1),
+        claiming("markdown", &["md"], &[], &[]).compile().unwrap(),
+    );
+    registry.register(
+        owner(1),
+        claiming("rust", &["rs"], &[], &[]).compile().unwrap(),
+    );
+    let mdx = registry.associate(owner(2), association("markdown", &["mdx"], &["NOTES"]));
+    let rs = registry.associate(owner(2), association("python", &["rs"], &[]));
+    assert_eq!(
+        registry.detect(Some("page.mdx"), ""),
+        Some("markdown".into())
+    );
+    assert_eq!(registry.detect(Some("NOTES"), ""), Some("markdown".into()));
+    assert_eq!(registry.detect(Some("main.rs"), ""), Some("python".into()));
+
+    // An association neither defines nor lists a language, even one that is
+    // registered nowhere.
+    assert!(registry.resolve("python").is_none());
+    let listed = registry
+        .list()
+        .into_iter()
+        .map(|info| info.id)
+        .collect::<Vec<_>>();
+    assert_eq!(listed, ["markdown", "rust"]);
+
+    // A later registration claiming the pattern wins it back, and removing
+    // claims reveals the previous one.
+    let later = registry.register(
+        owner(3),
+        claiming("rust", &["rs"], &[], &[]).compile().unwrap(),
+    );
+    assert_eq!(registry.detect(Some("main.rs"), ""), Some("rust".into()));
+    assert!(registry.unregister(ExtensionId::new(3), ExtensionLifecycleId::new(1), later));
+    assert_eq!(registry.detect(Some("main.rs"), ""), Some("python".into()));
+    assert!(registry.unregister(ExtensionId::new(2), ExtensionLifecycleId::new(1), rs));
+    assert_eq!(registry.detect(Some("main.rs"), ""), Some("rust".into()));
+    registry.remove_lifecycle(ExtensionId::new(2), ExtensionLifecycleId::new(1));
+    assert_eq!(registry.detect(Some("page.mdx"), ""), None);
+    assert!(!registry.unregister(ExtensionId::new(2), ExtensionLifecycleId::new(1), mdx));
+}
+
+#[gpui::test]
+fn associations_redetect_open_documents(cx: &mut TestAppContext) {
+    let documents = install(cx);
+    register(cx, owner(1), claiming("rust", &["rs"], &[], &[]));
+    register(cx, owner(1), claiming("python", &["py"], &[], &[]));
+    let main = persisted(&documents, "mem://workspace/main.rs", "", cx);
+    let explicit = persisted(&documents, "mem://workspace/lib.rs", "", cx);
+    cx.update(|cx| super::set_document_language(&explicit, None, Some("rust".into()), cx));
+
+    let python =
+        cx.update(|cx| super::associate(owner(2), association("python", &["rs"], &[]), cx));
+    assert_eq!(state(&main, cx), (Some("python".into()), false, true));
+    assert_eq!(state(&explicit, cx), (Some("rust".into()), true, true));
+
+    // An unregistered target is kept and paints as plain text.
+    let cobol = cx.update(|cx| super::associate(owner(2), association("cobol", &["rs"], &[]), cx));
+    assert_eq!(state(&main, cx), (Some("cobol".into()), false, false));
+    assert_eq!(
+        cx.read(|cx| super::effective_language(main.read(cx), cx)),
+        "plaintext"
+    );
+
+    for (id, expected) in [(cobol, "python"), (python, "rust")] {
+        cx.update(|cx| {
+            assert!(super::unregister(
+                ExtensionId::new(2),
+                ExtensionLifecycleId::new(1),
+                id,
+                cx
+            ))
+        });
+        assert_eq!(state(&main, cx), (Some(expected.into()), false, true));
+    }
+}

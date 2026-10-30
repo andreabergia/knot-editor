@@ -436,3 +436,7 @@ await settings.set("editor.tabSize", "2");
 await settings.get("check.missing");
 // @ts-expect-error the default follows the declared key type
 await settings.define({ key: "check.timeout", type: "integer", default: "52", description: "Timeout" });
+const association: Disposable = await languages.associate("markdown", { fileExtensions: ["mdx"], fileNames: ["NOTES"] });
+await association.dispose();
+// @ts-expect-error patterns are lists
+await languages.associate("markdown", { fileExtensions: "mdx" });

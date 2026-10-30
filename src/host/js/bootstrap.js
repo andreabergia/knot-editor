@@ -799,20 +799,35 @@ export async function setDocumentLanguage(id, language) {
 function textList(value, message) {
   return value === undefined ? [] : arrayItems(value, (item) => string(item, message));
 }
-export async function registerLanguage(definition) {
-  const value = record(definition, "languages.register requires a language object");
-  const id = string(value.id, "language id must be text");
+function languageId(value) {
+  const id = string(value, "language id must be text");
   if (id.length === 0 || /\s/.test(id)) {
     throw new TypeError("language id must be nonempty and contain no whitespace");
   }
-  const name = string(value.name, "language name must be text");
-  const grammar = string(value.grammar, "language grammar must be text");
+  return id;
+}
+function languagePatterns(value) {
   const fileExtensions = textList(value.fileExtensions, "file extensions must be text");
   if (fileExtensions.some((extension) => extension.length === 0 || extension.startsWith("."))) {
     throw new TypeError("file extensions must be nonempty and omit the leading dot");
   }
   const fileNames = textList(value.fileNames, "file names must be text");
   const interpreters = textList(value.interpreters, "interpreters must be text");
+  return [fileExtensions, fileNames, interpreters];
+}
+export async function associateLanguage(id, patterns) {
+  const language = languageId(id);
+  const claimed = languagePatterns(record(patterns, "languages.associate requires patterns"));
+  const association = await request("associateLanguage", language, ...claimed);
+  const owned = ownership(() => {}, () => request("unregisterLanguage", association));
+  return Object.freeze({ dispose: () => owned.dispose() });
+}
+export async function registerLanguage(definition) {
+  const value = record(definition, "languages.register requires a language object");
+  const id = languageId(value.id);
+  const name = string(value.name, "language name must be text");
+  const grammar = string(value.grammar, "language grammar must be text");
+  const [fileExtensions, fileNames, interpreters] = languagePatterns(value);
   const queries = record(value.queries, "language queries must be an object");
   const highlights = string(queries.highlights, "highlights query must be text");
   const injections = queries.injections === undefined
