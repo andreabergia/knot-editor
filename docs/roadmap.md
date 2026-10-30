@@ -45,6 +45,14 @@ project-selector, and search extensions, keymap presets, and extension
 entitlements. It promotes D007, D008, D010, D031, D034, D053, D060, D064, and
 D068 and adds D069–D088.
 
+The [package manager](plans/package-manager.md) initiative is selected: extension
+installation becomes an inspectable application-owned lifecycle with a lockfile,
+a local archive format, installs from git repository links, version-constrained
+dependency resolution, a manager surface, and updates with pinning and rollback.
+Git links replace a package registry, so publishing is a push and discoverability
+is a website; consent stays with entitlement grants. It promotes D033 and adds
+D101–D106.
+
 ## Deferred register
 
 ## Editing and workbench
@@ -217,11 +225,6 @@ D068 and adds D069–D088.
   - Reconsider: Debugging built extensions requires errors and stack traces to
     identify the original source locations.
 
-- **D033 — Extension archive installation and unpacking**
-  - Deferred: D018 installs extension directories directly.
-  - Reconsider: Distributing or updating extensions as single archives becomes
-    a concrete workflow.
-
 - **D019 — Quotas, backpressure, slow-consumer policy, and timeouts**
   - Deferred: Correct policy depends on observed extension workloads.
   - Reconsider: Real extensions can affect responsiveness or resource use.
@@ -236,6 +239,41 @@ D068 and adds D069–D088.
 - **D021 — General extension UI or WebView escape hatch**
   - Deferred: Surface-specific semantic UI remains sufficient.
   - Reconsider: A selected extension requires genuinely arbitrary UI.
+
+- **D107 — Package signing and verified publishers**
+  - Deferred: The package manager (D101–D106) installs unsigned archives and git
+    repositories and treats an explicit install confirmation plus entitlement
+    grants (D087) as consent. A git install is only as trustworthy as the
+    repository it came from: the pinned commit proves the content did not change
+    after install, but not who wrote it. Archive hashes are published beside the
+    file by the same party that serves it.
+  - Reconsider: Installs are common enough that "trust this link" is not a
+    sufficient story. Then define a signature over the installed content hash and
+    commit, publisher keys and their distribution, how a source vouches for a
+    publisher, and how revoked or rotated keys surface, without making signatures
+    a condition for local installs.
+
+- **D108 — Hosted package registry and publishing**
+  - Deferred: The package manager (D101–D106) treats a git repository as the
+    publishing mechanism, so it owns no artifact server, upload or publication
+    flow, accounts, archive storage, download metrics, or in-editor catalog.
+    Discoverability and voting live on a separate website that links
+    repositories.
+  - Reconsider: Git installs prove too risky or awkward (mutable history,
+    missing build output in repositories, no version metadata to resolve
+    against), or in-editor search and popularity ranking become worth running a
+    server. Then define an index schema, publication and ownership, archive
+    hosting and hashes, version metadata for resolution, and how it coexists
+    with git sources under one lockfile.
+
+- **D116 — Additional package sources**
+  - Deferred: The package manager (D101–D106) installs from local archives and
+    git repositories over public HTTPS, with one version per package identity.
+  - Reconsider: A concrete workflow needs private repositories, SSH or token
+    credentials, a local filesystem path as a long-lived source, or a
+    per-project package set (which depends on D089). Then define credential
+    storage, source precedence, and pinning per source rather than adding
+    ad-hoc special cases to the lockfile.
 
 - **D055 — Extensible icon and status-glyph system (icon packs)**
   - Deferred: Contributed tree items use a small fixed `TreeIcon` set, status
