@@ -142,6 +142,38 @@ D068 and adds D069–D088.
   - Deferred: The first slice handles identity within one application process.
   - Reconsider: Multi-process editing or document handoff is introduced.
 
+- **D089 — Project-local settings**
+  - Deferred: Settings (D070) come only from personal config and packages.
+    Emacs, Neovim, VS Code, and Zed all read per-project settings from the
+    repository (`dir-locals.el`, `exrc`, `.vscode/settings.json`,
+    `.zed/settings.json`).
+  - Reconsider: Daily use needs settings that differ per repository. Then add
+    the `path` scope fact with its glob syntax and path normalization, decide
+    where project settings live (a file in the repository or a
+    `@knot/projects` record) and whether they are declarative data or code,
+    and decide what trust an untrusted repository's settings require.
+    Precedes D090.
+
+- **D090 — EditorConfig support**
+  - Deferred: `.editorconfig` files need file watching (D008), reading
+    arbitrary files through the public API, and the `path` scope fact (D089).
+  - Reconsider: D008 and D089 are complete, or daily use hits a project that
+    relies on `.editorconfig`. Then a bundled package finds the files above
+    each opened document, turns each section into a `path`-glob scope, and
+    writes them from the root down to the nearest file, so last-write-wins
+    reproduces EditorConfig's rule that the nearest file takes precedence.
+
+- **D091 — Settings UI**
+  - Deferred: Settings (D070) are set from code. Definitions carry a type,
+    default, and description so a UI can be built later, but none exists.
+  - Reconsider: Discovering or changing settings from code becomes the
+    friction in daily use. Then build the UI as an ordinary extension over
+    `settings.define`, `get`, `set`, and `observe`. It keeps its choices in
+    extension storage and applies them again in `start()`, which beats
+    `pre-init` and loses to `post-init`, so it must show when a later write
+    overrides a choice. Also decide whether it lists undefined keys that hold
+    values, to help spot typos.
+
 - **D016 — Sandboxed workspace roots**
   - Deferred: Local roots are trusted and intentionally follow symlinks.
   - Reconsider: Knot opens untrusted workspaces under a security boundary.

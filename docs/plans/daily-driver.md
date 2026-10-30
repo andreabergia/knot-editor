@@ -66,7 +66,7 @@ to be rebuilt later:
 
 ## Phase 2 — Foundations
 
-- **D070 — Application settings**
+- 🚧 **D070 — Application settings** ([plan](d070-settings.md))
   - A small typed settings model for editor preferences: font family and size,
     tab size, insert spaces, soft wrap, trim trailing whitespace, final
     newline, and theme. Personal config sets values through a public API.
