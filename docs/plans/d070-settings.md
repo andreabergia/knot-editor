@@ -1,6 +1,6 @@
 # D070 — Application settings
 
-Status: 🚧 checkpoint 1 in review. Item of the
+Status: 🚧 checkpoint 1 done; checkpoint 2 next. Item of the
 [daily-driver plan](daily-driver.md#phase-2--foundations).
 
 ## Outcome
@@ -122,47 +122,15 @@ that only reads a value when it needs it can call `get` instead.
 
 ## Checkpoints
 
-### 1. Review owner layering in keybindings and languages 🚧
+### 1. Review owner layering in keybindings and languages ✅
 
-**Outcome (pending review):** both registries drop owner ranking, matching
-Emacs and Neovim, whose config is code that runs in order. VS Code and Zed
-rank the user's keymap above extensions only because it is a declarative file
-with no place in a load order.
-
-- Keymaps keep native bindings as a base level beneath every extension
-  binding, like a setting's default and Zed's base keymap, so switching a
-  D086 preset never beats extension or personal bindings. Extension and
-  personal bindings form one last-write-wins stack; view-scoped still beats
-  global. Personal overrides belong in `post-init`.
-- Languages are last-write-wins with no base level: nothing switches bundled
-  languages at runtime. User overrides of detection move to a setting
-  (checkpoint 4), as in VS Code's `files.associations` and Zed's `file_types`.
-- Accepted cost: a package that restarts or binds late beats earlier personal
-  writes until Knot restarts. Teardown still reveals the previous write.
-
-Settings drop layering by owner. Before building them, review the
-personal > installed > bundled > native precedence that keybindings and
-languages use today, and decide with the user whether each keeps it, moves to
-the unified last-write-wins model, or changes later. D086's preset slot also
-depends on the keymap answer.
-
-- Deliverable: a short written assessment covering each registry: what the
-  layering protects, which flows rely on teardown revealing a lower owner
-  (Restart Extension, package failure, presets), and the cost of each.
-  Act on whatever the user agrees: implement a small simplification here
-  and record its rationale in `decisions.md`, or add a roadmap item for a
-  larger one.
-- Validation: if behavior changes, run the existing keymap and language
-  registry tests and the product keybinding tests, updated to the new rule.
-- Review gate: the user approves the outcome for both registries before
-  checkpoint 2 starts.
-
-**Implementation context:** keymap owner slots and precedence live under
-`src/app/commands/` (see [commands](../architecture/commands.md) on keymap
-precedence). Language precedence is `src/app/languages.rs`
-(`LanguageOwner`, `register`, `remove_lifecycle`), with its contract written in
-the `languages` doc comment in `src/host/js/knot.d.ts`. Teardown reaches both
-through the shared foreground cleanup in `src/app/extensions/`.
+Keybindings and languages no longer rank writers by owner: the latest write
+wins and teardown reveals the previous one. Native bindings remain a base
+beneath every extension and personal binding, so a D086 preset never overrides
+them, and view-scoped bindings still beat global ones. User overrides of
+language detection move to a setting (checkpoint 4). Rationale is in
+[decisions](../decisions.md#commands-and-keymaps); the keymap rule is in
+[commands](../architecture/commands.md#keymaps).
 
 ### 2. Native settings store and `editor.tabSize`
 
