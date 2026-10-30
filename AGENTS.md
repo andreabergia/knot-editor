@@ -66,6 +66,9 @@ canonical source before reading broadly.
 
 ## Rules
 
+- Plan a task, including any `D###` item of an index plan, with the
+  `brainstorm-plan` skill, and execute a plan with the `implement-plan` skill.
+  Both live in `.agents/skills`, which `.claude/skills` links to.
 - Whenever implementing a plan or design document, always keep the plan
 updated. Use ✅ and other emoji to mark executed steps.
 - Keep @docs/architecture.md up-to-date when a change alters architectural

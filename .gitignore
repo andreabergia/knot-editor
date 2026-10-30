@@ -5,3 +5,4 @@
 /examples/extensions/*/*/dist
 /scripts/extensions/.test-build
 /.cloudflare
+/.claude/worktrees
