@@ -166,6 +166,7 @@ to be rebuilt later:
     switching by name. Decide whether Go to File (D082) covers it instead.
   - Maximize is window-local presentation state; decide whether the window
     layout records it.
+  - 🚧 [Plan](d072-workbench-navigation.md)
 
 ## Phase 3 — Editing
 
