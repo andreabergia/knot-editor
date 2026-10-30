@@ -14,8 +14,8 @@ and restart Knot. On macOS the destination is
 `just install-example-apps-mac` builds and copies it in one step. On Linux it is
 `~/.local/share/Knot/extensions/@example`; on Windows use the local app-data
 `Knot\extensions\@example` directory. Knot loads only `knot.jsonc` and the
-built JavaScript. Use the toolbar's **extensions** button or the **Show
-Extension Startup Report** command to inspect load results.
+built JavaScript. Use the **Developer: Show Extension Startup Report** command
+to inspect load results.
 
 The manifest declares `apiVersion: 1`. See the
 [extension author guide](../../docs/extension-api.md) for the API reference,

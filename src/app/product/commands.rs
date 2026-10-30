@@ -147,7 +147,7 @@ pub(crate) async fn set_language_mode(
         .await
 }
 
-#[command("extensions.restart", title = "Restart Extension…", id = RESTART_EXTENSION_COMMAND, participant = Workbench)]
+#[command("extensions.restart", title = "Developer: Restart Extension…", id = RESTART_EXTENSION_COMMAND, participant = Workbench)]
 pub(crate) async fn restart_extension(
     context: CommandContext,
     (): (),
@@ -200,7 +200,7 @@ pub(crate) async fn show_command_palette(
         .await
 }
 
-#[command("extensions.show-startup-report", title = "Show Extension Startup Report", id = SHOW_EXTENSION_REPORT_COMMAND, participant = Application)]
+#[command("extensions.show-startup-report", title = "Developer: Show Extension Startup Report", id = SHOW_EXTENSION_REPORT_COMMAND, participant = Application)]
 pub(crate) async fn show_extension_report(
     context: CommandContext,
     (): (),

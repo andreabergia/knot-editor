@@ -1,6 +1,6 @@
 # D069 — Remove demo and test-only commands
 
-Status: 🚧 in progress (checkpoints 1–2 ✅). Part of the
+Status: 🚧 in progress (checkpoints 1–3 ✅). Part of the
 [daily-driver plan](daily-driver.md), phase 1.
 
 ## Outcome
@@ -113,7 +113,7 @@ Completion: `ProductShell::place_tool` returns whether the workbench accepted
 the placement and publishes only then; it always refocuses. Tool tests use a
 `place_explorer` helper in `src/app/product/tests.rs`.
 
-### 3. Group developer commands
+### 3. ✅ Group developer commands
 
 Deliverable: `Developer: Show Extension Startup Report` and
 `Developer: Restart Extension…` are renamed, and Restart is no longer in the

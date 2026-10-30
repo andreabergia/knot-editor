@@ -511,8 +511,8 @@ written by a newer version is kept unchanged, marked unreadable in the Projects
 tool, and never switched to; while one exists, no retained capture is released
 as an orphan.
 
-If a package stops responding, File › Restart Extension… stops and reloads it,
-re-reading an installed package from disk.
+If a package stops responding, the palette's Developer: Restart Extension…
+stops and reloads it, re-reading an installed package from disk.
 
 ## Native contributors
 
