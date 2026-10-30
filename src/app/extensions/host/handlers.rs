@@ -2508,6 +2508,180 @@ async fn unobserve_setting(
     })?
 }
 
+use crate::app::theme::ColorDefinition;
+use crate::app::themes::{ApplicationThemes, ThemeDefinition, ThemeInfo, ThemeOwner};
+
+/// Failures of a theme operation.
+#[derive(Debug, HostError)]
+pub(crate) enum ThemeError {
+    #[error(transparent)]
+    Access(AccessError),
+    #[error(
+        code = "UnknownCapture",
+        message = "{capture} is not a highlight capture name or prefix"
+    )]
+    UnknownCapture { capture: String },
+    #[error(code = "DuplicateColor", message = "{key} is already defined")]
+    DuplicateColor { key: String },
+    #[error(
+        code = "ThemeRegistrationNotFound",
+        message = "ThemeRegistrationNotFound"
+    )]
+    RegistrationNotFound,
+}
+
+impl From<AccessError> for ThemeError {
+    fn from(error: AccessError) -> Self {
+        Self::Access(error)
+    }
+}
+
+fn theme_owner(context: &HostContext) -> ThemeOwner {
+    ThemeOwner {
+        extension: context.request.extension,
+        lifecycle: context.request.lifecycle,
+    }
+}
+
+impl HostArguments for ThemeDefinition {
+    fn decode(reader: &mut dyn ArgumentReader) -> Result<Self, DecodeError> {
+        let definition: Self = serde_json::from_value(setting_value(reader.command_arguments(2)?))
+            .map_err(|_| DecodeError::Type("invalid theme definition"))?;
+        match definition.invalid_value() {
+            Some(message) => Err(DecodeError::Type(message)),
+            None => Ok(definition),
+        }
+    }
+}
+
+impl HostSuccess for ThemeInfo {
+    fn encode(self) -> Result<EncodedValue, DecodeError> {
+        encode_json(self)
+    }
+}
+
+#[host_operation("registerTheme")]
+async fn register_theme(
+    context: HostContext,
+    arguments: ThemeDefinition,
+) -> Result<u64, ThemeError> {
+    if let Some(capture) = arguments.unknown_capture() {
+        return Err(ThemeError::UnknownCapture {
+            capture: capture.into(),
+        });
+    }
+    let owner = theme_owner(&context);
+    Ok(context.foreground(|_, cx| {
+        cx.default_global::<ApplicationThemes>()
+            .0
+            .register(owner, arguments)
+    })?)
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ThemeRegistrationArguments {
+    registration: u64,
+}
+
+impl HostArguments for ThemeRegistrationArguments {
+    fn decode(reader: &mut dyn ArgumentReader) -> Result<Self, DecodeError> {
+        Ok(Self {
+            registration: reader.integer(2)?,
+        })
+    }
+}
+
+#[host_operation("unregisterTheme")]
+async fn unregister_theme(
+    context: HostContext,
+    arguments: ThemeRegistrationArguments,
+) -> Result<(), ThemeError> {
+    let owner = theme_owner(&context);
+    context.foreground(|_, cx| {
+        if cx
+            .default_global::<ApplicationThemes>()
+            .0
+            .unregister(owner, arguments.registration)
+        {
+            Ok(())
+        } else {
+            Err(ThemeError::RegistrationNotFound)
+        }
+    })?
+}
+
+#[host_operation("listThemes")]
+async fn list_themes(context: HostContext, _: ()) -> Result<Vec<ThemeInfo>, AccessError> {
+    context.foreground(|_, cx| {
+        cx.try_global::<ApplicationThemes>()
+            .map(|themes| themes.0.list())
+            .unwrap_or_default()
+    })
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ThemeName {
+    name: String,
+}
+
+impl HostArguments for ThemeName {
+    fn decode(reader: &mut dyn ArgumentReader) -> Result<Self, DecodeError> {
+        Ok(Self {
+            name: reader.text(2, "theme name must be text")?,
+        })
+    }
+}
+
+#[host_operation("getTheme")]
+async fn get_theme(
+    context: HostContext,
+    arguments: ThemeName,
+) -> Result<Option<ThemeDefinition>, AccessError> {
+    context.foreground(|_, cx| {
+        cx.try_global::<ApplicationThemes>()
+            .and_then(|themes| themes.0.get(&arguments.name).cloned())
+    })
+}
+
+impl HostArguments for ColorDefinition {
+    fn decode(reader: &mut dyn ArgumentReader) -> Result<Self, DecodeError> {
+        let key = reader.text(2, "color key must be text")?;
+        let description = reader.text(3, "color description must be text")?;
+        let mut default = |index| {
+            reader
+                .text(index, "color default must be text")
+                .and_then(|text| {
+                    crate::app::themes::color_default(&text).ok_or(DecodeError::Type(
+                        "color default must be #rrggbb, #rrggbbaa, or a color key",
+                    ))
+                })
+        };
+        let dark = default(4)?;
+        let light = default(5)?;
+        if key.is_empty() {
+            return Err(DecodeError::Type("color key must be nonempty text"));
+        }
+        Ok(Self {
+            key,
+            description,
+            dark,
+            light,
+        })
+    }
+}
+
+#[host_operation("defineColor")]
+async fn define_color(context: HostContext, arguments: ColorDefinition) -> Result<(), ThemeError> {
+    let owner = theme_owner(&context);
+    context.foreground(|_, cx| {
+        let key = arguments.key.clone();
+        cx.default_global::<ApplicationThemes>()
+            .0
+            .define_color(owner, arguments)
+            .map_err(|_| ThemeError::DuplicateColor { key })
+    })?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

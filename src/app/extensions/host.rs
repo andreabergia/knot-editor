@@ -2224,6 +2224,7 @@ impl ProductExtensionHost {
         self.commands.remove_lifecycle(key.extension, key.lifecycle);
         crate::app::languages::remove_lifecycle(key.extension, key.lifecycle, cx);
         crate::app::settings::remove_lifecycle(key.extension, key.lifecycle, cx);
+        crate::app::themes::remove_lifecycle(key.extension, key.lifecycle, cx);
         self.command_targets
             .retain(|root, _| self.commands.contains_invocation(*root));
         self.view_command_handlers

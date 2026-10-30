@@ -133,6 +133,16 @@ impl Highlight {
         })
     }
 
+    /// Whether a theme may style `name`: a capture name or a dotted prefix
+    /// of one, such as `markup` for every `markup.*` capture.
+    pub(crate) fn styles_captures(name: &str) -> bool {
+        CAPTURE_NAMES.iter().any(|capture| {
+            capture
+                .strip_prefix(name)
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
+        })
+    }
+
     /// The capture or decoration name `name`, which must exist exactly.
     pub(crate) fn named(name: &str) -> Self {
         all_names()
@@ -171,7 +181,6 @@ pub(crate) enum ColorDefault {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ColorDefinition {
     pub(crate) key: String,
-    #[allow(dead_code)]
     pub(crate) description: String,
     pub(crate) dark: ColorDefault,
     pub(crate) light: ColorDefault,
@@ -284,11 +293,25 @@ pub(crate) fn native_color_definitions() -> Vec<ColorDefinition> {
         .collect()
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub(crate) enum Appearance {
     Dark,
-    #[cfg_attr(not(test), allow(dead_code))]
     Light,
+}
+
+/// A `#rrggbb` or `#rrggbbaa` color.
+pub(crate) fn parse_color(text: &str) -> Option<Hsla> {
+    let digits = text.strip_prefix('#')?;
+    if !digits.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    let value = u32::from_str_radix(digits, 16).ok()?;
+    match digits.len() {
+        6 => Some(rgb(value).into()),
+        8 => Some(rgba(value).into()),
+        _ => None,
+    }
 }
 
 /// Resolved colors by key and a resolved style for every highlight name.
@@ -304,12 +327,13 @@ impl Global for Theme {}
 
 impl Default for Theme {
     fn default() -> Self {
-        Self::defaults(Appearance::Dark)
+        Self::defaults(Appearance::Dark, &native_color_definitions())
     }
 }
 
-/// Styles every theme shares for markup that carries no color.
-fn markup_styles() -> [(&'static str, HighlightStyle); 4] {
+/// Styles every theme shares for markup that carries no color; a theme's own
+/// styles for these names win.
+pub(crate) fn markup_styles() -> [(&'static str, HighlightStyle); 4] {
     [
         (
             "markup.italic",
@@ -350,9 +374,9 @@ fn markup_styles() -> [(&'static str, HighlightStyle); 4] {
 }
 
 impl Theme {
-    /// Native color defaults and a minimal syntax palette, used when no
-    /// registered theme applies.
-    pub(crate) fn defaults(appearance: Appearance) -> Self {
+    /// Color defaults and a minimal syntax palette, used when no registered
+    /// theme applies.
+    pub(crate) fn defaults(appearance: Appearance, definitions: &[ColorDefinition]) -> Self {
         let syntax: [(&str, u32); 8] = match appearance {
             Appearance::Dark => [
                 ("comment", 0x6a9955),
@@ -380,12 +404,7 @@ impl Theme {
             .map(|(name, color)| (name, HighlightStyle::color(rgb(color).into())))
             .chain(markup_styles())
             .collect::<Vec<_>>();
-        Self::new(
-            appearance,
-            &HashMap::new(),
-            &native_color_definitions(),
-            &syntax,
-        )
+        Self::new(appearance, &HashMap::new(), definitions, &syntax)
     }
 
     /// A theme whose `values` win over each definition's default for
@@ -497,7 +516,6 @@ pub(crate) fn theme(cx: &App) -> &Theme {
 }
 
 /// Replace the application theme and repaint every window.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn set_theme(theme: Theme, cx: &mut App) {
     cx.set_global(theme);
     cx.refresh_windows();
@@ -536,6 +554,53 @@ mod tests {
             .step_by(2)
             .collect::<Vec<_>>();
         assert_eq!(fake, CAPTURE_NAMES);
+    }
+
+    #[test]
+    fn themes_style_capture_names_and_their_prefixes() {
+        for name in ["markup", "markup.heading", "function.method.call", "type"] {
+            assert!(Highlight::styles_captures(name), "{name}");
+        }
+        for name in ["", "mark", "function.method.call.deep", "diagnostic.error"] {
+            assert!(!Highlight::styles_captures(name), "{name}");
+        }
+    }
+
+    /// The declarations and the in-memory extension test host list the
+    /// native color keys the table defines.
+    #[test]
+    fn declarations_and_fake_host_list_every_native_color_key() {
+        let mut native = native_color_definitions()
+            .into_iter()
+            .map(|definition| definition.key)
+            .collect::<Vec<_>>();
+        native.sort_unstable();
+        let fake = include_str!("../../scripts/extensions/testing/host.ts")
+            .split("export const NATIVE_COLOR_KEYS: readonly string[] = [")
+            .nth(1)
+            .unwrap()
+            .split("];")
+            .next()
+            .unwrap()
+            .split('"')
+            .skip(1)
+            .step_by(2)
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        assert_eq!(fake, native);
+        let declared = include_str!("../host/js/knot.d.ts")
+            .split("export interface ThemeColors {")
+            .nth(1)
+            .unwrap()
+            .split("\n  }")
+            .next()
+            .unwrap()
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("readonly \""))
+            .filter_map(|line| line.split('"').next())
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        assert_eq!(declared, native);
     }
 
     #[test]
@@ -606,6 +671,15 @@ mod tests {
     }
 
     #[test]
+    fn colors_parse_from_six_or_eight_hex_digits() {
+        assert_eq!(parse_color("#1e1e1e"), Some(rgb(0x1e1e1e).into()));
+        assert_eq!(parse_color("#1E1E1E80"), Some(rgba(0x1e1e1e80).into()));
+        for invalid in ["1e1e1e", "#1e1e1", "#1e1e1e8", "#+1e1e1e", "#gggggg", ""] {
+            assert_eq!(parse_color(invalid), None, "{invalid}");
+        }
+    }
+
+    #[test]
     fn reference_cycles_and_dangling_references_stay_unresolved() {
         let definition = |key: &str, target: &str| ColorDefinition {
             key: key.to_owned(),
@@ -628,7 +702,7 @@ mod tests {
     #[test]
     fn decorations_take_the_status_colors() {
         for appearance in [Appearance::Dark, Appearance::Light] {
-            let theme = Theme::defaults(appearance);
+            let theme = Theme::defaults(appearance, &native_color_definitions());
             assert_eq!(theme.appearance, appearance);
             assert_eq!(
                 theme.underline_color(Highlight::named("diagnostic.error")),
@@ -641,7 +715,7 @@ mod tests {
         }
     }
 
-    /// Every surface takes its colors from the theme.
+    /// Every surface takes its colors from the theme; tests may build colors.
     #[test]
     fn no_color_literals_outside_the_theme() {
         let mut offenders = Vec::new();
@@ -658,6 +732,10 @@ mod tests {
                 );
             } else if path.extension().is_some_and(|extension| extension == "rs")
                 && !path.ends_with("theme.rs")
+                && !path.ends_with("tests.rs")
+                && !path
+                    .components()
+                    .any(|component| component.as_os_str() == "tests")
             {
                 let source = std::fs::read_to_string(&path).unwrap();
                 for (index, line) in source.lines().enumerate() {
@@ -697,7 +775,10 @@ mod tests {
         let before = renders.get();
         cx.update(|cx| {
             assert_eq!(theme(cx).appearance, Appearance::Dark);
-            set_theme(Theme::defaults(Appearance::Light), cx);
+            set_theme(
+                Theme::defaults(Appearance::Light, &native_color_definitions()),
+                cx,
+            );
         });
         cx.run_until_parked();
         assert!(renders.get() > before);

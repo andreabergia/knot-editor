@@ -40,6 +40,27 @@ overlap. Sources resolve into nvim-treesitter's standard capture names by
 longest dotted prefix; decoration names are separate so no capture can resolve
 to one. The `Theme` global maps each name to a style.
 
+## Themes and color keys
+
+Native surfaces and contributions paint with color keys rather than colors.
+A color definition gives a key a description and a default per appearance,
+either a color or another key; native keys are defined in one table beside the
+code that paints them, because native surfaces paint before packages start and
+when they fail, and extensions define more through `themes.defineColor`. A
+registered theme sets values for any keys, including ones nobody has defined
+yet, and styles capture names or their dotted prefixes.
+
+`ApplicationThemes` owns lifecycle-owned registrations, where the latest
+registration of a name wins, and extension color definitions. The
+`theme.mode`, `theme.dark`, and `theme.light` settings select a theme, which
+resolves into the `Theme` global: each defined key takes the theme's value,
+else its default for the theme's appearance, following references. An
+unregistered selection resolves the defaults alone, so the native defaults are
+also the fallback when the theme package fails. Resolution happens once when
+startup completes and again when the selection settings or, in `system` mode,
+the system appearance change; registering or removing a theme later takes
+effect at the next selection change rather than repainting mid-session.
+
 ## Syntax highlighting and languages
 
 Highlight layers compose in a fixed order: syntax, then contribution

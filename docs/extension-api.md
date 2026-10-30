@@ -291,6 +291,62 @@ again on every launch: teardown and Restart Extension remove only your
 definitions and observers. To remember a choice, such as one a command makes,
 keep it in [storage](#durable-storage) and set it again in `start()`.
 
+## Register a theme and define colors
+
+A theme names its appearance, sets colors by key, and styles capture names.
+Colors are `#rrggbb` or `#rrggbbaa`; the native keys are declared in
+`ThemeColors` in `knot.d.ts`, and a key a theme leaves out takes its default for
+the theme's appearance:
+
+```js
+import { themes } from "knot";
+
+await themes.register({
+  name: "Ember",
+  appearance: "dark",
+  colors: { background: "#1c1917", "editor.selection": "#f9731640" },
+  syntax: {
+    comment: { color: "#78716c", fontStyle: "italic" },
+    keyword: { color: "#f97316", fontWeight: 700 },
+  },
+});
+```
+
+`syntax` keys are capture names or a dotted prefix of them, such as `markup`;
+a capture takes its longest styled prefix, and an unknown name rejects
+`UnknownCapture`. Themes are code, so derive one by spreading a registered
+theme:
+
+```js
+const base = await themes.get("One Dark");
+await themes.register({
+  ...base,
+  name: "My Dark",
+  colors: { ...base.colors, "editor.background": "#101010" },
+});
+```
+
+The `theme.mode` (`dark`, `light`, or `system`), `theme.dark`, and
+`theme.light` [settings](#read-and-write-settings) select the theme. Knot
+resolves it when startup completes and again whenever the selection changes,
+so register themes in activation; a theme registered or disposed later shows
+at the next selection change. The latest registration of a name wins.
+
+Define the color keys your package paints with, giving each a default per
+appearance, either a color or another key to follow. Themes may then set it,
+and keys stay open, so a theme can style a package that loads after it:
+
+```js
+await themes.defineColor({
+  key: "diff.add",
+  description: "Added lines in diffs",
+  defaults: { dark: "success", light: "#2ea04340" },
+});
+```
+
+A key defined by native code or a live lifecycle rejects `DuplicateColor`;
+teardown removes your definitions.
+
 ## Ask the user transiently
 
 `workbench` exposes window-local pickers, text input, and native confirmation or

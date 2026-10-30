@@ -79,12 +79,16 @@ function emptyState() {
     replaced: [] as Knot.ReplaceWindowsOptions[],
     languages: [] as Knot.LanguageDefinition[],
     associations: [] as { id: string; patterns: Knot.LanguagePatterns }[],
-    settingDefinitions: new Map<string, Knot.SettingDefinition>([[
-      "editor.tabSize",
-      { key: "editor.tabSize", type: "integer", default: 4, description: "Columns per tab stop in editor views" },
-    ]]),
+    settingDefinitions: new Map<string, Knot.SettingDefinition>([
+      ["editor.tabSize", { key: "editor.tabSize", type: "integer", default: 4, description: "Columns per tab stop in editor views" }],
+      ["theme.mode", { key: "theme.mode", type: "string", default: "dark", description: "Which theme applies" }],
+      ["theme.dark", { key: "theme.dark", type: "string", default: "One Dark", description: "The theme used in dark mode" }],
+      ["theme.light", { key: "theme.light", type: "string", default: "One Light", description: "The theme used in light mode" }],
+    ]),
     settingValues: [] as FakeSettingValue[],
     settingListeners: [] as { key: string; listener: (key: Knot.SettingKey) => void | Promise<void> }[],
+    themes: [] as Knot.ThemeDefinition[],
+    colors: new Map<string, Knot.ColorDefinition>(),
   };
 }
 
@@ -498,6 +502,33 @@ export const CAPTURE_NAMES: readonly string[] = [
   "variable.member", "variable.parameter", "variable.parameter.builtin",
 ];
 
+/** The color keys native code defines, as the native table lists them. */
+export const NATIVE_COLOR_KEYS: readonly string[] = [
+  "background", "border", "border.hover", "button.background", "button.hover.background",
+  "dropTarget.background", "editor.background", "editor.cursor", "editor.foreground",
+  "editor.markedText", "editor.selection", "error", "info", "list.group.background",
+  "list.hover.background", "list.selected.background", "list.selected.foreground",
+  "popover.background", "popover.border", "scrim", "scrollbar.thumb", "success",
+  "tab.active.background", "tab.active.foreground", "tab.bar.background",
+  "tab.inactive.background", "tab.inactive.foreground", "terminal.ansi.black",
+  "terminal.ansi.blue", "terminal.ansi.brightBlack", "terminal.ansi.brightBlue",
+  "terminal.ansi.brightCyan", "terminal.ansi.brightGreen", "terminal.ansi.brightMagenta",
+  "terminal.ansi.brightRed", "terminal.ansi.brightWhite", "terminal.ansi.brightYellow",
+  "terminal.ansi.cyan", "terminal.ansi.green", "terminal.ansi.magenta", "terminal.ansi.red",
+  "terminal.ansi.white", "terminal.ansi.yellow", "terminal.background", "terminal.cursor",
+  "terminal.foreground", "terminal.selection", "text", "text.accent", "text.muted", "warning",
+];
+
+/** Every live theme registration, in registration order. */
+export function themeDefinitions(): readonly Knot.ThemeDefinition[] {
+  return state.themes;
+}
+
+/** Every live extension color definition, in definition order. */
+export function colorDefinitions(): readonly Knot.ColorDefinition[] {
+  return [...state.colors.values()];
+}
+
 /** Every live association, in the order it was made. The fake does not detect. */
 export function languageAssociations(): readonly { id: string; patterns: Knot.LanguagePatterns }[] {
   return state.associations;
@@ -664,6 +695,39 @@ export const api: KnotApi = {
           state.settingListeners = state.settingListeners.filter((candidate) => candidate !== entry);
         },
       };
+    },
+  },
+  // The fake neither validates colors nor selects a theme.
+  themes: {
+    register: async (definition) => {
+      const unknown = Object.keys(definition.syntax ?? {}).find((name) =>
+        !CAPTURE_NAMES.some((capture) => capture === name || capture.startsWith(`${name}.`)));
+      if (unknown !== undefined) throw hostError("UnknownCapture");
+      state.themes.push(definition);
+      return {
+        dispose: async () => {
+          state.themes = state.themes.filter((candidate) => candidate !== definition);
+        },
+      };
+    },
+    // Later registrations win, as in the native registry.
+    get: async (name) => {
+      const definition = [...state.themes].reverse().find((candidate) => candidate.name === name);
+      return definition === undefined
+        ? null
+        : { ...definition, colors: definition.colors ?? {}, syntax: definition.syntax ?? {} };
+    },
+    list: async () => {
+      const byName = new Map(state.themes.map((definition) => [definition.name, definition.appearance]));
+      return [...byName]
+        .map(([name, appearance]) => ({ name, appearance }))
+        .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    },
+    defineColor: async (definition) => {
+      if (NATIVE_COLOR_KEYS.includes(definition.key) || state.colors.has(definition.key)) {
+        throw hostError("DuplicateColor");
+      }
+      state.colors.set(definition.key, definition);
     },
   },
   windows: {

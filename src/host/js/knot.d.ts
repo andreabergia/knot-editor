@@ -208,6 +208,13 @@ declare module "knot" {
     /** Columns per tab stop in editor views. Native default 4; editors use
      * at least 1 and at most 32. */
     "editor.tabSize": number;
+    /** Which theme applies: theme.dark's, theme.light's, or the one matching
+     * the system appearance. Native default "dark"; other text means "dark". */
+    "theme.mode": "dark" | "light" | "system";
+    /** The theme name used in dark mode. Native default "One Dark". */
+    "theme.dark": string;
+    /** The theme name used in light mode. Native default "One Light". */
+    "theme.light": string;
   }
   export type SettingKey = keyof Settings & string;
   /** "integer" accepts safe integers; "number" accepts any finite number. */
@@ -268,6 +275,172 @@ declare module "knot" {
      * matter. Listeners run serially with other listeners and stop with
      * their lifecycle. */
     observe(key: SettingKey, listener: (key: SettingKey) => void | Promise<void>): Promise<Disposable>;
+  }>;
+  /** Which defaults fill the colors a theme leaves out. */
+  export type ThemeAppearance = "dark" | "light";
+  /**
+   * Colors by key, each "#rrggbb" or "#rrggbbaa". Native keys are declared
+   * here; a package declares the keys it defines by merging into this
+   * interface. A theme may set any key: one nobody defines is kept and stays
+   * inert until something defines it.
+   */
+  export interface ThemeColors {
+    readonly [key: string]: string | undefined;
+    /** Window and pane background. */
+    readonly "background"?: string;
+    /** Dividers and panel borders. */
+    readonly "border"?: string;
+    /** A resizable divider under the pointer. */
+    readonly "border.hover"?: string;
+    /** Inline action buttons. */
+    readonly "button.background"?: string;
+    /** An inline action button under the pointer. */
+    readonly "button.hover.background"?: string;
+    /** Where a dragged tab would land. */
+    readonly "dropTarget.background"?: string;
+    /** Text editor background. */
+    readonly "editor.background"?: string;
+    /** Text cursor. */
+    readonly "editor.cursor"?: string;
+    /** Unhighlighted editor text. */
+    readonly "editor.foreground"?: string;
+    /** Underline of text being composed by an input method. */
+    readonly "editor.markedText"?: string;
+    /** Selected text. */
+    readonly "editor.selection"?: string;
+    /** Errors and failures. */
+    readonly "error"?: string;
+    /** Informational markers. */
+    readonly "info"?: string;
+    /** Group headers in trees. */
+    readonly "list.group.background"?: string;
+    /** A list or tree row under the pointer. */
+    readonly "list.hover.background"?: string;
+    /** The selected list or tree row. */
+    readonly "list.selected.background"?: string;
+    /** Text of the selected list or tree row. */
+    readonly "list.selected.foreground"?: string;
+    /** Pickers, the command palette, completion, and reports. */
+    readonly "popover.background"?: string;
+    /** Border of popovers. */
+    readonly "popover.border"?: string;
+    /** Dims the window behind a modal surface. */
+    readonly "scrim"?: string;
+    /** Scrollbar thumb. */
+    readonly "scrollbar.thumb"?: string;
+    /** Success markers. */
+    readonly "success"?: string;
+    /** The active tab. */
+    readonly "tab.active.background"?: string;
+    /** Title of the active tab. */
+    readonly "tab.active.foreground"?: string;
+    /** The tab bar behind the tabs. */
+    readonly "tab.bar.background"?: string;
+    /** Inactive tabs. */
+    readonly "tab.inactive.background"?: string;
+    /** Titles of inactive tabs. */
+    readonly "tab.inactive.foreground"?: string;
+    /** ANSI black. */
+    readonly "terminal.ansi.black"?: string;
+    /** ANSI blue. */
+    readonly "terminal.ansi.blue"?: string;
+    /** ANSI bright black. */
+    readonly "terminal.ansi.brightBlack"?: string;
+    /** ANSI bright blue. */
+    readonly "terminal.ansi.brightBlue"?: string;
+    /** ANSI bright cyan. */
+    readonly "terminal.ansi.brightCyan"?: string;
+    /** ANSI bright green. */
+    readonly "terminal.ansi.brightGreen"?: string;
+    /** ANSI bright magenta. */
+    readonly "terminal.ansi.brightMagenta"?: string;
+    /** ANSI bright red. */
+    readonly "terminal.ansi.brightRed"?: string;
+    /** ANSI bright white. */
+    readonly "terminal.ansi.brightWhite"?: string;
+    /** ANSI bright yellow. */
+    readonly "terminal.ansi.brightYellow"?: string;
+    /** ANSI cyan. */
+    readonly "terminal.ansi.cyan"?: string;
+    /** ANSI green. */
+    readonly "terminal.ansi.green"?: string;
+    /** ANSI magenta. */
+    readonly "terminal.ansi.magenta"?: string;
+    /** ANSI red. */
+    readonly "terminal.ansi.red"?: string;
+    /** ANSI white. */
+    readonly "terminal.ansi.white"?: string;
+    /** ANSI yellow. */
+    readonly "terminal.ansi.yellow"?: string;
+    /** Terminal background and default cell background. */
+    readonly "terminal.background"?: string;
+    /** Terminal cursor. */
+    readonly "terminal.cursor"?: string;
+    /** Default terminal text. */
+    readonly "terminal.foreground"?: string;
+    /** Selected terminal cells. */
+    readonly "terminal.selection"?: string;
+    /** Default interface text. */
+    readonly "text"?: string;
+    /** Interface text that acts, such as buttons and links. */
+    readonly "text.accent"?: string;
+    /** Secondary interface text. */
+    readonly "text.muted"?: string;
+    /** Warnings. */
+    readonly "warning"?: string;
+  }
+  export interface ThemeSyntaxStyle {
+    /** "#rrggbb" or "#rrggbbaa". */
+    readonly color?: string;
+    readonly fontStyle?: "normal" | "italic";
+    /** From 100 to 900; 700 is bold. */
+    readonly fontWeight?: number;
+    readonly underline?: boolean;
+    readonly strikethrough?: boolean;
+  }
+  export interface ThemeDefinition {
+    readonly name: string;
+    readonly appearance: ThemeAppearance;
+    readonly colors?: ThemeColors;
+    /** Styles by capture name (nvim-treesitter's) or a dotted prefix of
+     * one, such as "markup"; a capture takes its longest styled prefix. */
+    readonly syntax?: Readonly<Record<string, ThemeSyntaxStyle>>;
+  }
+  export interface ThemeInfo {
+    readonly name: string;
+    readonly appearance: ThemeAppearance;
+  }
+  export interface ColorDefinition {
+    /** Flat dotted name, such as "diff.add". */
+    readonly key: string;
+    /** Shown by a future settings UI. */
+    readonly description: string;
+    /** For each appearance, "#rrggbb", "#rrggbbaa", or another key whose
+     * color to use. */
+    readonly defaults: Readonly<{ dark: string; light: string }>;
+  }
+  /**
+   * Themes and color keys. The latest registration of a name defines that
+   * theme, and disposal or teardown reveals the previous one. The theme.mode,
+   * theme.dark, and theme.light settings select the theme; it is resolved
+   * when startup completes and again whenever the selection or, in "system"
+   * mode, the system appearance changes, so register themes in activation.
+   * A color the theme leaves out takes its key's default for the theme's
+   * appearance; an unregistered selection uses the defaults alone.
+   */
+  export const themes: Readonly<{
+    /** Register a lifecycle-owned theme.
+     * @throws TypeError for invalid fields or colors; HostError with
+     * UnknownCapture (details: capture) or Cancelled. */
+    register(definition: ThemeDefinition): Promise<Disposable>;
+    /** The registration of `name` that applies, with every field present. */
+    get(name: string): Promise<ThemeDefinition | null>;
+    /** Every registered theme, sorted by name. */
+    list(): Promise<readonly ThemeInfo[]>;
+    /** Define a lifecycle-owned color key; teardown removes it.
+     * @throws TypeError for invalid fields; HostError with DuplicateColor
+     * when native code or a live lifecycle defined the key, or Cancelled. */
+    defineColor(definition: ColorDefinition): Promise<void>;
   }>;
   /** Only product windows; diagnostic and startup-error windows are excluded.
    * get returns null after closure; fabricated/command targets reject InvalidTarget. */
@@ -457,7 +630,8 @@ declare module "knot" {
     | "InvalidUri" | "DocumentNotFound" | "OperationInProgress" | "PersistenceFailed" | "ResourceNotFound" | "ResourceWrongKind" | "InvalidUtf8" | "ProviderFailure" | "StorageUnavailable"
     | "CaptureNotFound" | "RecoveryUnavailable" | "SessionConflict"
     | "UnknownGrammar" | "InvalidQuery" | "LanguageRegistrationNotFound"
-    | "DuplicateSetting" | "SettingTypeMismatch";
+    | "DuplicateSetting" | "SettingTypeMismatch"
+    | "UnknownCapture" | "DuplicateColor" | "ThemeRegistrationNotFound";
   /**
    * Native operation failure. Narrow a caught Error by name === "KnotHostError"
    * and its string code property, then dispatch on code. No error constructor

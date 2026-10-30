@@ -395,6 +395,7 @@ pub(crate) struct ProductShell {
     last_focused_document: Option<DocumentId>,
     application_observer: Option<Subscription>,
     application_activation: Option<Subscription>,
+    _appearance_observer: Option<Subscription>,
     application_focus: Vec<(FocusHandle, Subscription, Subscription)>,
     workspace_tree: Option<Entity<WorkspaceTree>>,
     workspace_tree_subscription: Option<Subscription>,
@@ -480,6 +481,7 @@ impl ProductShell {
             last_focused_document: None,
             application_observer: None,
             application_activation: None,
+            _appearance_observer: None,
             application_focus: Vec::new(),
             workspace_tree: None,
             workspace_tree_subscription: None,
@@ -515,6 +517,9 @@ impl ProductShell {
             Some(cx.observe_window_activation(native_window, |_, _, cx| {
                 super::extensions::host::application_changed(cx)
             }));
+        self._appearance_observer = Some(
+            native_window.observe_window_appearance(|_, cx| super::themes::selection_changed(cx)),
+        );
         super::extensions::host::application_changed(cx);
         // A closed window drops its live frames and any pending transient
         // interaction; other windows keep theirs.

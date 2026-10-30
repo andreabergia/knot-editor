@@ -23,6 +23,7 @@ import {
   listLanguages,
   listGrammars,
   defineSetting, setSettings, getSetting, resetSetting, observeSetting,
+  registerTheme, getTheme, listThemes, defineColor,
 } from "knot:bootstrap";
 
 export { keybinding, removeKeybinding };
@@ -57,6 +58,7 @@ export const documents = Object.freeze({ list: listDocuments, get: getDocument, 
 export const languages = Object.freeze({ register: registerLanguage, associate: associateLanguage, list: listLanguages, grammars: listGrammars });
 export const settings = Object.freeze({ define: defineSetting, set: setSettings, get: getSetting, reset: resetSetting, observe: observeSetting });
 export const terminals = Object.freeze({ open: openTerminal });
+export const themes = Object.freeze({ register: registerTheme, get: getTheme, list: listThemes, defineColor });
 export const windows = Object.freeze({ list: listWindows, get: getWindow, open: openWindow, focus: focusWindow });
 export const workspaces = Object.freeze({ get: getWorkspace, openFolder, replaceRoots: replaceWorkspaceRoots, pickFolder });
 

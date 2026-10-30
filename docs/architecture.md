@@ -42,9 +42,10 @@ out, so a write needs no per-view push.
 
 A document owns persistence identity and a shared `BufferModel`. The model owns
 text, session-local history, anchored geometry, semantic contributions, and
-its language and syntax state. Extensions contribute language definitions;
-native code owns grammars and parsing, and the theme maps highlight names to
-styles.
+its language and syntax state. Extensions contribute language definitions and
+themes; native code owns grammars, parsing, and the defaults of the color keys
+it paints with, and the application theme maps color keys and highlight names
+to styles.
 Each window owns a workbench whose split panes contain typed document, terminal, or native tool tabs.
 The workbench retains native tool definitions independently of visible tab
 attachments, including dock placement and hide/reopen state. The application

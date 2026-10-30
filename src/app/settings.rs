@@ -23,6 +23,12 @@ use crate::host::protocol::{ExtensionId, ExtensionLifecycleId};
 
 /// Columns per tab stop in editor views.
 pub(crate) const EDITOR_TAB_SIZE: &str = "editor.tabSize";
+/// Which appearance's theme applies: `dark`, `light`, or `system`.
+pub(crate) const THEME_MODE: &str = "theme.mode";
+/// The theme name used in dark mode.
+pub(crate) const THEME_DARK: &str = "theme.dark";
+/// The theme name used in light mode.
+pub(crate) const THEME_LIGHT: &str = "theme.light";
 
 /// The value type a definition accepts.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -146,12 +152,27 @@ impl Default for SettingsStore {
 }
 
 fn native_definitions() -> Vec<SettingDefinition> {
-    vec![SettingDefinition {
-        key: EDITOR_TAB_SIZE.into(),
-        value_type: SettingType::Integer,
-        default: 4.into(),
-        description: "Columns per tab stop in editor views".into(),
-    }]
+    let text = |key: &str, default: &str, description: &str| SettingDefinition {
+        key: key.into(),
+        value_type: SettingType::String,
+        default: default.into(),
+        description: description.into(),
+    };
+    vec![
+        SettingDefinition {
+            key: EDITOR_TAB_SIZE.into(),
+            value_type: SettingType::Integer,
+            default: 4.into(),
+            description: "Columns per tab stop in editor views".into(),
+        },
+        text(
+            THEME_MODE,
+            "dark",
+            "Which theme applies: \"dark\", \"light\", or \"system\" to follow the system appearance",
+        ),
+        text(THEME_DARK, "One Dark", "The theme used in dark mode"),
+        text(THEME_LIGHT, "One Light", "The theme used in light mode"),
+    ]
 }
 
 impl SettingsStore {
@@ -310,6 +331,21 @@ pub(crate) fn editor_tab_size(context: &SettingsScope, cx: &App) -> usize {
     };
     size.expect("editor.tabSize is a native integer setting")
         .clamp(1, 32) as usize
+}
+
+/// The value of a native text setting, unscoped.
+pub(crate) fn text(key: &str, cx: &App) -> String {
+    let read = |store: &SettingsStore| {
+        store
+            .get(key, &SettingsScope::default())
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+    };
+    match cx.try_global::<ApplicationSettings>() {
+        Some(settings) => read(&settings.0),
+        None => read(&SettingsStore::default()),
+    }
+    .expect("a native text setting")
 }
 
 #[cfg(test)]

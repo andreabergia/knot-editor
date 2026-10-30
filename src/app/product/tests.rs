@@ -18,6 +18,7 @@ mod sessions;
 mod settings;
 mod startup;
 mod terminal;
+mod themes;
 mod tool_layout;
 mod tools;
 mod transient;

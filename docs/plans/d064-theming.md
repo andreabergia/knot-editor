@@ -116,22 +116,31 @@ Every native surface paints from color keys defined in one native table in
 out of `src/app` outside `theme.rs`. The fallback syntax palette is
 deliberately small until bundled themes land.
 
-### 2. Theme registration API and selection settings
+### 2. Theme registration API and selection settings 🚧 awaiting review
 
 Deliverables:
-- A native theme registry mirroring `LanguageRegistry`: lifecycle-owned
+- ✅ A native theme registry mirroring `LanguageRegistry`: lifecycle-owned
   registrations, latest name wins, teardown reveals the previous one.
-- Host operations `registerTheme`, `unregisterTheme`, `listThemes`,
+- ✅ Host operations `registerTheme`, `unregisterTheme`, `listThemes`,
   `getTheme`, and `defineColor`, with typed decoding and `TypeError` for
   invalid colors, captures, and styles. Extension color definitions join the
   native table, are removed at teardown, and re-resolve the active theme.
-- Native settings `theme.mode`, `theme.dark`, `theme.light`; the effective
-  theme recomputes on any registry change, settings write, or window
-  appearance change (`system`), resolving missing keys from the definition
-  defaults of the theme's appearance.
-- `knot.d.ts` declarations, with native color keys as an interface packages
+- ✅ Native settings `theme.mode`, `theme.dark`, `theme.light`; the theme
+  resolves when startup completes and again when the selection settings or,
+  in `system` mode, the window appearance change, resolving missing keys from
+  the definition defaults of the theme's appearance. Registering or removing
+  a theme later takes effect at the next selection change, by decision during
+  review: themes rarely change mid-session.
+- ✅ `knot.d.ts` declarations, with native color keys as an interface packages
   extend by declaration merging like `Settings`; the fake host's `themes`
   implementation; and the extension guide section.
+
+Notes: invalid colors, font weights, and fields reject with `TypeError`
+naming the key; an unknown capture rejects with a `UnknownCapture` host error
+carrying the capture, like `UnknownGrammar`, because only native code knows
+the capture vocabulary. Theme values for keys nobody defines are kept and
+inert. Gpui's test platform cannot change the system appearance, so `system`
+mode is tested only against the reported appearance.
 
 Validation: registry unit tests (override, teardown reveal, missing-key
 defaults, unknown name falls back, extension definitions and references);

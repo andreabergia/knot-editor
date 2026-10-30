@@ -919,6 +919,83 @@ export async function listLanguages() {
     interpreters: Object.freeze(language.interpreters),
   })));
 }
+const hexColor = /^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
+function themeColor(value, name) {
+  if (typeof value !== "string" || !hexColor.test(value)) {
+    throw new TypeError(`theme color ${name} must be #rrggbb or #rrggbbaa`);
+  }
+  return value;
+}
+function syntaxStyle(value, capture) {
+  record(value, `syntax style ${capture} must be an object`);
+  const style = {};
+  for (const [field, entry] of Object.entries(value)) {
+    if (entry === undefined) continue;
+    if (field === "color") style.color = themeColor(entry, capture);
+    else if (field === "fontStyle") {
+      if (entry !== "normal" && entry !== "italic") {
+        throw new TypeError(`syntax style ${capture} fontStyle must be "normal" or "italic"`);
+      }
+      style.fontStyle = entry;
+    } else if (field === "fontWeight") {
+      if (!Number.isInteger(entry) || entry < 100 || entry > 900) {
+        throw new TypeError(`syntax style ${capture} fontWeight must be an integer from 100 to 900`);
+      }
+      style.fontWeight = entry;
+    } else if (field === "underline" || field === "strikethrough") {
+      if (typeof entry !== "boolean") throw new TypeError(`syntax style ${capture} ${field} must be boolean`);
+      style[field] = entry;
+    } else {
+      throw new TypeError(`syntax style ${capture} has unknown field ${field}`);
+    }
+  }
+  return style;
+}
+export async function registerTheme(definition) {
+  const value = record(definition, "themes.register requires a theme object");
+  const name = string(value.name, "theme name must be text");
+  if (name.length === 0) throw new TypeError("theme name must be nonempty");
+  if (value.appearance !== "dark" && value.appearance !== "light") {
+    throw new TypeError('theme appearance must be "dark" or "light"');
+  }
+  const colors = {};
+  for (const [key, color] of Object.entries(record(value.colors ?? {}, "theme colors must be an object"))) {
+    if (color !== undefined) colors[key] = themeColor(color, key);
+  }
+  const syntax = {};
+  for (const [capture, style] of Object.entries(record(value.syntax ?? {}, "theme syntax must be an object"))) {
+    if (style !== undefined) syntax[capture] = syntaxStyle(style, capture);
+  }
+  const registration = await request("registerTheme",
+    { name, appearance: value.appearance, colors, syntax });
+  const owned = ownership(() => {}, () => request("unregisterTheme", registration));
+  return Object.freeze({ dispose: () => owned.dispose() });
+}
+export async function getTheme(name) {
+  const theme = await request("getTheme", string(name, "theme name must be text"));
+  if (theme === null) return null;
+  const syntax = Object.fromEntries(Object.entries(theme.syntax)
+    .map(([capture, style]) => [capture, Object.freeze(style)]));
+  return Object.freeze({ ...theme, colors: Object.freeze(theme.colors), syntax: Object.freeze(syntax) });
+}
+export async function listThemes() {
+  return Object.freeze((await request("listThemes")).map((theme) => Object.freeze(theme)));
+}
+export async function defineColor(definition) {
+  const value = record(definition, "themes.defineColor requires a definition object");
+  const key = string(value.key, "color key must be text");
+  if (key.length === 0) throw new TypeError("color key must be nonempty");
+  const description = string(value.description, "color description must be text");
+  const defaults = record(value.defaults, "color defaults must be an object");
+  const fallback = (appearance) => {
+    const entry = string(defaults[appearance], `color default ${appearance} must be text`);
+    if (entry.length === 0 || (entry.startsWith("#") && !hexColor.test(entry))) {
+      throw new TypeError(`color default ${appearance} must be #rrggbb, #rrggbbaa, or a color key`);
+    }
+    return entry;
+  };
+  await request("defineColor", key, description, fallback("dark"), fallback("light"));
+}
 export async function listGrammars() {
   return Object.freeze(await request("listGrammars"));
 }
