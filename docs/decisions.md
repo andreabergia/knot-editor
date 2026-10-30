@@ -577,16 +577,32 @@ over detected text, and release-time validation prevents changing output from
 opening a stale destination. Physical application-keypad support remains deferred
 rather than vendoring gpui solely to recover its missing native key identity.
 
-A new terminal starts in the root of the window's most recently focused
-document, as Zed's default does, rather than always in the first root, which
-lands in the wrong folder of a multi-root window, or asking with a picker, as
-VS Code does, which adds a step to every terminal. Remembering the last focused
-document lets a terminal opened from another terminal or a tool still follow
-the file being edited. A window without roots uses the home directory rather
+A new terminal opened from a focused terminal, or by splitting one, starts in
+that terminal's current directory, as iTerm, Ghostty, and Zed's split do:
+someone working in a terminal wants the next one where they already are.
+Otherwise a new terminal starts in the root of the window's most recently
+focused document, as Zed's default does, rather than always in the first root,
+which lands in the wrong folder of a multi-root window, or asking with a
+picker, as VS Code does, which adds a step to every terminal. Remembering the
+last focused document lets a terminal opened from a tool still follow the file
+being edited. A window without roots uses the home directory rather
 than the active document's folder, as most editors do: such a window is usually
 a scratch window, and the result should not depend on which file happens to be
 open. Daily use may revisit this. The process's own working directory is never
 used, because it is `/` when Knot is launched from Finder.
+
+A restored terminal starts in the directory its shell was last in, read from
+the shell process when the layout is captured (`proc_pidinfo` on macOS,
+`/proc/<pid>/cwd` on Linux). Querying the process needs no shell setup, unlike
+OSC 7, which `alacritty_terminal` does not parse and which needs shell
+integration (D039); it reads the shell rather than the foreground job, so a
+running editor or build does not change the answer. Where the query is
+unavailable, as on Windows, the start directory is recorded, so a chosen
+directory survives restarts. A deleted directory falls back to the default rule
+rather than its nearest existing parent, a rare case where the root is a fine
+landing place. A `cd` starts no capture, so a crash can restore an older
+directory; quit and project switches always capture fresh. Moving to
+libghostty (D063) replaces the query with the emulator's OSC 7 state (D128).
 
 Reference: [workbench and lifecycle](architecture/workbench-and-lifecycle.md).
 

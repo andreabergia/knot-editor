@@ -1,6 +1,6 @@
 # D127 — Restored terminals keep their working directory
 
-Status: 🚧 in progress; checkpoints 1–2 complete. Item of the
+Status: 🚧 in progress; checkpoint 3 awaiting review. Item of the
 [daily-driver plan](daily-driver.md); builds on D121's default directory rule
 ([workbench and lifecycle](../architecture/workbench-and-lifecycle.md#terminal-sessions-and-views),
 [decisions](../decisions.md#terminal)).
@@ -72,7 +72,7 @@ all share the default.
   restoration starts the shell there or falls back to D121's default. The
   layout version stays 1.
 
-### 3. New terminals from a focused terminal
+### 3. New terminals from a focused terminal ✅ (awaiting review)
 
 - Deliverable: New Terminal, splitting a terminal pane, and `terminals.open`
   without a directory start in the focused terminal's current directory.

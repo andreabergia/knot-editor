@@ -316,13 +316,15 @@ in a process-generation-scoped queue. Restart replaces the process/grid and
 rejects old events. Shutdown and child reaping run off the foreground.
 
 A new session's working directory is chosen when it is created and kept across
-restart. The window's shell picks the innermost root containing the window's
+restart. New Terminal, splitting a terminal pane, and `terminals.open` without
+a directory start in the focused (or split) terminal's current directory.
+Otherwise the window's shell picks the innermost root containing the window's
 most recently focused document, otherwise the first root, otherwise the home
-directory, skipping roots that are not existing local directories. New
-Terminal, splitting a terminal pane, and terminal tabs restored without a
-usable recorded directory use this rule; restoration installs a window's roots
-before its layout, so restored shells see them. `terminals.open` accepts an
-explicit directory instead. The rule lives in
+directory, skipping roots that are not existing local directories. A terminal
+tab restored in place starts in its recorded directory, or by this rule when
+that no longer exists; restoration installs a window's roots before its layout,
+so restored shells see them. `terminals.open` also accepts an explicit
+directory. The rule lives in
 [terminal/directory.rs](../../src/app/terminal/directory.rs).
 
 A session reports its shell's current working directory by querying the shell

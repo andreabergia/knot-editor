@@ -908,14 +908,13 @@ await commands.register("operations.terminal", async () => {{
                 _ => None,
             })
             .map(|id| {
-                sessions.sessions[&id]
-                    .read(cx)
-                    .working_directory()
+                std::fs::canonicalize(sessions.sessions[&id].read(cx).working_directory().unwrap())
                     .unwrap()
-                    .to_owned()
             })
             .collect::<Vec<_>>()
     });
-    assert_eq!(directories, [explicit, root.path().to_owned()]);
+    // Without a directory, the second terminal follows the focused first one.
+    let explicit = std::fs::canonicalize(explicit).unwrap();
+    assert_eq!(directories, [explicit.clone(), explicit]);
     host.update(cx, |host, cx| host.unload(key, cx).unwrap());
 }

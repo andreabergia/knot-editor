@@ -733,18 +733,11 @@ impl ProductShell {
                 .and_then(|display| display.uuid().ok())
                 .map(|uuid| uuid.to_string()),
         };
-        let sessions = cx.global::<ApplicationTerminalSessions>().0.borrow();
-        let terminal_directory = |id| {
-            sessions
-                .sessions
-                .get(&id)
-                .and_then(|session: &Entity<TerminalSession>| session.read(cx).current_directory())
-        };
         WindowLayout::capture(
             self.workbench.read(cx),
             Some(geometry),
             Self::documents(cx).read(cx),
-            &terminal_directory,
+            &|id| Self::terminal_session_directory(id, cx),
             cx,
         )
     }

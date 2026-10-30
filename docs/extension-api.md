@@ -407,9 +407,9 @@ directory:
 await terminals.open({ cwd: "file:///Users/me/project/" });
 ```
 
-Without `cwd` the shell starts where New Terminal would: the root containing
-the window's most recently focused document, else its first root, else the home
-directory. A docked target opens the terminal in the window's document area.
+Without `cwd` the shell starts where New Terminal would: the focused
+terminal's current directory, else the root containing the window's most
+recently focused document, else its first root, else the home directory. A docked target opens the terminal in the window's document area.
 
 Pass an explicit live target when acting on a previously selected window, pane,
 or presentation. Omitting it captures the command's originating window, or the

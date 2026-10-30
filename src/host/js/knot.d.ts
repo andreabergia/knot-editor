@@ -121,8 +121,9 @@ declare module "knot" {
 
   export interface TerminalOptions extends DocumentDestinationOptions {
     /** Existing local directory URI the shell starts in. Omission uses the
-     * window's default: the root containing its most recently focused
-     * document, else its first root, else the home directory. */
+     * window's default: the focused terminal's current directory, else the
+     * root containing its most recently focused document, else its first
+     * root, else the home directory. */
     readonly cwd?: string;
   }
   export const terminals: Readonly<{

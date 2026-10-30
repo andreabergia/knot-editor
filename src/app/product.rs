@@ -621,8 +621,32 @@ impl ProductShell {
         }
     }
 
-    /// The directory a new terminal in this window starts in.
+    /// The directory a new terminal in this window starts in: the focused
+    /// terminal's current directory, otherwise the window's default.
     fn terminal_directory(&self, cx: &App) -> Option<std::path::PathBuf> {
+        let focused = self
+            .workbench
+            .read(cx)
+            .focused_pane()
+            .map(|pane| pane.active_tab().surface_id());
+        match focused {
+            Some(TabSurfaceId::Terminal(id)) => Self::terminal_session_directory(id, cx),
+            _ => None,
+        }
+        .or_else(|| self.default_terminal_directory(cx))
+    }
+
+    fn terminal_session_directory(id: TerminalSessionId, cx: &App) -> Option<std::path::PathBuf> {
+        let sessions = cx.global::<ApplicationTerminalSessions>().0.borrow();
+        sessions
+            .sessions
+            .get(&id)
+            .and_then(|session| session.read(cx).current_directory())
+    }
+
+    /// The window's default terminal directory: the root of its most recently
+    /// focused document, otherwise its first root, otherwise home.
+    fn default_terminal_directory(&self, cx: &App) -> Option<std::path::PathBuf> {
         let document = self
             .workbench
             .read(cx)
@@ -742,7 +766,7 @@ impl ProductShell {
         &mut self,
         cx: &mut Context<Self>,
     ) -> (TerminalSessionId, Entity<TerminalView>) {
-        let directory = self.terminal_directory(cx);
+        let directory = self.default_terminal_directory(cx);
         self.create_terminal_in(directory, cx)
     }
 
@@ -1390,14 +1414,20 @@ impl ProductShell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        let terminal = matches!(
-            self.workbench
-                .read(cx)
-                .pane(pane)
-                .map(|pane| pane.active_tab().surface_id()),
-            Some(TabSurfaceId::Terminal(_))
-        );
-        let new_session = terminal.then(|| self.create_terminal(cx));
+        let terminal = match self
+            .workbench
+            .read(cx)
+            .pane(pane)
+            .map(|pane| pane.active_tab().surface_id())
+        {
+            Some(TabSurfaceId::Terminal(id)) => Some(id),
+            _ => None,
+        };
+        let new_session = terminal.map(|id| {
+            let directory = Self::terminal_session_directory(id, cx)
+                .or_else(|| self.default_terminal_directory(cx));
+            self.create_terminal_in(directory, cx)
+        });
         let split = self
             .workbench
             .update(cx, |workbench, cx| match new_session.clone() {
