@@ -65,17 +65,39 @@ pub(crate) enum SplitPlacement {
     After,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) enum WorkbenchLayout {
     Pane(PaneId),
     Split {
         direction: SplitDirection,
+        /// The fraction of the split's extent given to `first`.
+        ratio: f32,
         first: Box<Self>,
         second: Box<Self>,
     },
 }
 
 impl WorkbenchLayout {
+    /// Each side of an ordinary split keeps at least this share.
+    pub(crate) const MIN_RATIO: f32 = 0.1;
+
+    pub(crate) fn clamp_ratio(ratio: f32) -> f32 {
+        if ratio.is_finite() {
+            ratio.clamp(Self::MIN_RATIO, 1. - Self::MIN_RATIO)
+        } else {
+            0.5
+        }
+    }
+
+    pub(crate) fn split(direction: SplitDirection, first: Self, second: Self) -> Self {
+        Self::Split {
+            direction,
+            ratio: 0.5,
+            first: Box::new(first),
+            second: Box::new(second),
+        }
+    }
+
     fn split_pane(
         &mut self,
         target: PaneId,
@@ -89,11 +111,7 @@ impl WorkbenchLayout {
                     SplitPlacement::Before => (new_pane, target),
                     SplitPlacement::After => (target, new_pane),
                 };
-                *self = Self::Split {
-                    direction,
-                    first: Box::new(Self::Pane(first)),
-                    second: Box::new(Self::Pane(second)),
-                };
+                *self = Self::split(direction, Self::Pane(first), Self::Pane(second));
                 true
             }
             Self::Pane(_) => false,
@@ -109,11 +127,13 @@ impl WorkbenchLayout {
             Self::Pane(pane_id) => (pane_id != target).then_some(Self::Pane(pane_id)),
             Self::Split {
                 direction,
+                ratio,
                 first,
                 second,
             } => match (first.remove_pane(target), second.remove_pane(target)) {
                 (Some(first), Some(second)) => Some(Self::Split {
                     direction,
+                    ratio,
                     first: Box::new(first),
                     second: Box::new(second),
                 }),
@@ -146,6 +166,61 @@ impl WorkbenchLayout {
                 first.pane_ids(result);
                 second.pane_ids(result);
             }
+        }
+    }
+
+    /// The pane that identifies a split: the first pane of its second child.
+    /// Exactly one split has a given boundary pane, so dividers can address
+    /// their split without a separate identity.
+    pub(crate) fn boundary(&self) -> Option<PaneId> {
+        match self {
+            Self::Pane(_) => None,
+            Self::Split { second, .. } => Some(second.first_pane()),
+        }
+    }
+
+    fn split_with_boundary_mut(&mut self, boundary: PaneId) -> Option<&mut Self> {
+        if self.boundary() == Some(boundary) {
+            return Some(self);
+        }
+        match self {
+            Self::Pane(_) => None,
+            Self::Split { first, second, .. } => first
+                .split_with_boundary_mut(boundary)
+                .or_else(|| second.split_with_boundary_mut(boundary)),
+        }
+    }
+
+    /// The splits enclosing `target`, outermost first, each with whether
+    /// `target` lies in its second child.
+    fn ancestors(&self, target: PaneId) -> Vec<(&Self, bool)> {
+        let mut ancestors = Vec::new();
+        let mut node = self;
+        while let Self::Split { first, second, .. } = node {
+            if first.contains_pane(target) {
+                ancestors.push((node, false));
+                node = first;
+            } else if second.contains_pane(target) {
+                ancestors.push((node, true));
+                node = second;
+            } else {
+                break;
+            }
+        }
+        ancestors
+    }
+
+    /// How many panes lie side by side along `direction`, counting nested
+    /// splits of the same direction.
+    fn weight(&self, direction: SplitDirection) -> f32 {
+        match self {
+            Self::Split {
+                direction: nested,
+                first,
+                second,
+                ..
+            } if *nested == direction => first.weight(direction) + second.weight(direction),
+            _ => 1.,
         }
     }
 }
@@ -830,6 +905,7 @@ pub(crate) use tools::{DockLocation, ToolContent, ToolFrame, ToolFrameId, ToolPl
 mod arrange;
 mod close;
 mod relocate;
+mod resize;
 
 pub(crate) use arrange::ArrangedTab;
 

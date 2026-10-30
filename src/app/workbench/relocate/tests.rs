@@ -128,6 +128,7 @@ fn all_edges_move_the_payload_and_order_the_new_pane(cx: &mut TestAppContext) {
                 workbench.layout(),
                 Some(&WorkbenchLayout::Split {
                     direction,
+                    ratio: 0.5,
                     first: Box::new(WorkbenchLayout::Pane(first)),
                     second: Box::new(WorkbenchLayout::Pane(second)),
                 })
@@ -192,6 +193,7 @@ fn moving_between_panes_collapses_a_nested_branch(cx: &mut TestAppContext) {
             workbench.layout(),
             Some(&WorkbenchLayout::Split {
                 direction: SplitDirection::Horizontal,
+                ratio: 0.5,
                 first: Box::new(WorkbenchLayout::Pane(first)),
                 second: Box::new(WorkbenchLayout::Pane(third)),
             })

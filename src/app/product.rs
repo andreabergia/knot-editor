@@ -388,6 +388,7 @@ pub(crate) struct ProductShell {
     window: Option<AnyWindowHandle>,
     tab_drag: std::rc::Rc<RefCell<tab_drag::TabDragState>>,
     dock_resize: Option<DockResizeDrag>,
+    split_resize: Option<SplitResizeDrag>,
     command_palette: Option<CommandPalette<ProductCommandTarget>>,
     command_palette_subscription: Option<Subscription>,
     transient: Option<ActiveTransient>,
@@ -469,6 +470,20 @@ struct DockResizeDrag {
     start_size: f32,
 }
 
+/// An ordinary divider being dragged: its split, identified by its boundary
+/// pane, and the split's painted extent along its direction.
+#[derive(Clone, Copy)]
+struct SplitResizeDrag {
+    boundary: PaneId,
+    horizontal: bool,
+    start_pointer: Point<Pixels>,
+    start_ratio: f32,
+    extent: f32,
+}
+
+/// The smallest extent, in logical pixels, a divider drag leaves either side.
+const MIN_DRAGGED_PANE_SIZE: f32 = 120.;
+
 impl ProductShell {
     fn new(workbench: Entity<Workbench>) -> Self {
         Self {
@@ -476,6 +491,7 @@ impl ProductShell {
             window: None,
             tab_drag: Default::default(),
             dock_resize: None,
+            split_resize: None,
             command_palette: None,
             command_palette_subscription: None,
             transient: None,
@@ -1465,13 +1481,14 @@ impl ProductShell {
         let Some(pane) = self.workbench.read(cx).focused_pane_id() else {
             return;
         };
-        self.split_pane(pane, direction, window, cx);
+        self.split_pane(pane, direction, SplitPlacement::After, window, cx);
     }
 
     fn split_pane(
         &mut self,
         pane: PaneId,
         direction: SplitDirection,
+        placement: SplitPlacement,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
@@ -1492,15 +1509,10 @@ impl ProductShell {
         let split = self
             .workbench
             .update(cx, |workbench, cx| match new_session.clone() {
-                Some((id, view)) => workbench.split_pane_with_terminal(
-                    pane,
-                    direction,
-                    SplitPlacement::After,
-                    id,
-                    view,
-                    cx,
-                ),
-                None => workbench.split_pane(pane, direction, SplitPlacement::After, cx),
+                Some((id, view)) => {
+                    workbench.split_pane_with_terminal(pane, direction, placement, id, view, cx)
+                }
+                None => workbench.split_pane(pane, direction, placement, cx),
             });
         if split.is_some() {
             self.focus_active_surface(window, cx);

@@ -19,6 +19,8 @@ const DOCK_PREVIEW_BOTTOM: f32 = 220.;
 #[derive(Default)]
 pub(super) struct TabDragState {
     panes: Vec<PaneGeometry>,
+    /// Painted bounds of each ordinary split, keyed by its boundary pane.
+    splits: Vec<(PaneId, Bounds<Pixels>)>,
     workbench: Option<Bounds<Pixels>>,
     preview: Option<DropTarget>,
 }
@@ -160,7 +162,15 @@ impl TabDragState {
 
     pub(super) fn begin_frame(&mut self) {
         self.panes.clear();
+        self.splits.clear();
         self.workbench = None;
+    }
+
+    pub(super) fn split_bounds(&self, boundary: PaneId) -> Option<Bounds<Pixels>> {
+        self.splits
+            .iter()
+            .find(|(pane, _)| *pane == boundary)
+            .map(|(_, bounds)| *bounds)
     }
 }
 
@@ -516,6 +526,20 @@ impl ProductShell {
         .size_full()
     }
 
+    pub(super) fn split_drag_geometry(&self, boundary: PaneId) -> impl IntoElement + use<> {
+        let state = self.tab_drag.clone();
+        canvas(
+            move |bounds, _, _| {
+                state.borrow_mut().splits.push((boundary, bounds));
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+    }
+
     pub(super) fn tab_bar_drag_geometry(&self, pane: PaneId) -> impl IntoElement + use<> {
         let state = self.tab_drag.clone();
         canvas(
@@ -569,6 +593,16 @@ impl ProductShell {
         cx: &mut Context<Self>,
     ) {
         if event.keystroke.key == "escape"
+            && let Some(resize) = self.split_resize.take()
+        {
+            self.workbench.update(cx, |workbench, _| {
+                workbench.set_split_ratio(resize.boundary, resize.start_ratio);
+            });
+            cx.stop_propagation();
+            cx.notify();
+            return;
+        }
+        if event.keystroke.key == "escape"
             && let Some(resize) = self.dock_resize.take()
         {
             self.workbench.update(cx, |workbench, _| {
@@ -617,6 +651,23 @@ impl ProductShell {
                     if phase == DispatchPhase::Capture
                         && let Some(shell) = resize_shell.upgrade()
                     {
+                        if let Some(resize) = shell.read(cx).split_resize
+                            && event.dragging()
+                        {
+                            let delta = event.position - resize.start_pointer;
+                            let delta = if resize.horizontal { delta.x } else { delta.y };
+                            let extent = resize.extent.max(1.);
+                            let limit = (MIN_DRAGGED_PANE_SIZE / extent).min(0.5);
+                            let ratio = (resize.start_ratio + f32::from(delta) / extent)
+                                .clamp(limit, 1. - limit);
+                            shell.update(cx, |shell, cx| {
+                                shell.workbench.update(cx, |workbench, _| {
+                                    workbench.set_split_ratio(resize.boundary, ratio);
+                                });
+                                cx.notify();
+                            });
+                            return;
+                        }
                         let resize = shell.read(cx).dock_resize;
                         if let Some(resize) = resize
                             && event.dragging()
@@ -653,6 +704,16 @@ impl ProductShell {
                 window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
                     if phase != DispatchPhase::Capture || event.button != MouseButton::Left {
                         return;
+                    }
+                    if let Some(shell) = resize_release.upgrade()
+                        && shell.read(cx).split_resize.is_some()
+                    {
+                        // The settled ratio reaches the window layout through
+                        // the view-state debounce that notification restarts.
+                        shell.update(cx, |shell, cx| {
+                            shell.split_resize = None;
+                            cx.notify();
+                        });
                     }
                     if let Some(shell) = resize_release.upgrade()
                         && shell.read(cx).dock_resize.is_some()

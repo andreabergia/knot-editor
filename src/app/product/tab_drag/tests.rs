@@ -567,3 +567,74 @@ fn dock_divider_drag_resizes_and_escape_reverts(cx: &mut TestAppContext) {
         );
     });
 }
+
+#[gpui::test]
+fn ordinary_divider_drag_changes_the_split_ratio_and_escape_reverts(cx: &mut TestAppContext) {
+    let (shell, window) = fixture(cx);
+    let split = shell.update(cx, |shell, cx| {
+        let split = shell.workbench.update(cx, |workbench, cx| {
+            let pane = workbench.focused_pane_id().unwrap();
+            workbench
+                .split_pane(
+                    pane,
+                    crate::app::workbench::SplitDirection::Horizontal,
+                    crate::app::workbench::SplitPlacement::After,
+                    cx,
+                )
+                .unwrap()
+        });
+        cx.notify();
+        split
+    });
+    let mut visual = VisualTestContext::from_window(window, cx);
+    visual.run_until_parked();
+    let selector = format!("split-divider-{}", split.value());
+    let selector: &'static str = Box::leak(selector.into_boxed_str());
+    let left = visual.debug_bounds("pane-1").unwrap();
+    let divider = visual.debug_bounds(selector).unwrap().center();
+    let ratio = |visual: &mut VisualTestContext| {
+        visual.read(|cx| {
+            shell
+                .read(cx)
+                .workbench
+                .read(cx)
+                .split_ratio(split)
+                .unwrap()
+        })
+    };
+    let shift = left.size.width / 5.;
+    visual.simulate_mouse_down(divider, MouseButton::Left, Modifiers::default());
+    visual.simulate_mouse_move(
+        divider - point(shift, px(0.)),
+        MouseButton::Left,
+        Modifiers::default(),
+    );
+    visual.simulate_mouse_up(
+        divider - point(shift, px(0.)),
+        MouseButton::Left,
+        Modifiers::default(),
+    );
+    visual.run_until_parked();
+    let dragged = ratio(&mut visual);
+    assert!(dragged < 0.5, "{dragged}");
+    let resized = visual.debug_bounds("pane-1").unwrap();
+    assert!(resized.size.width < left.size.width);
+
+    // Escape restores the ratio the drag started from.
+    let divider = visual.debug_bounds(selector).unwrap().center();
+    visual.simulate_mouse_down(divider, MouseButton::Left, Modifiers::default());
+    visual.simulate_mouse_move(
+        divider + point(shift, px(0.)),
+        MouseButton::Left,
+        Modifiers::default(),
+    );
+    assert!(ratio(&mut visual) > dragged);
+    visual.simulate_keystrokes("escape");
+    visual.simulate_mouse_up(
+        divider + point(shift, px(0.)),
+        MouseButton::Left,
+        Modifiers::default(),
+    );
+    visual.run_until_parked();
+    assert_eq!(ratio(&mut visual), dragged);
+}

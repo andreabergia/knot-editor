@@ -1,6 +1,6 @@
 # D072 — Workbench navigation and layout commands
 
-Status: 🚧 approved, not started. Item of the
+Status: 🚧 in progress. Item of the
 [daily-driver plan](daily-driver.md); depends on D086 (keymap presets).
 
 ## Goal
@@ -124,7 +124,12 @@ Added to the Knot preset. `secondary-` is cmd on macOS and ctrl elsewhere.
 
 ## Checkpoints
 
-### 1. Split ratios and resizing
+### 1. Split ratios and resizing ✅
+
+- Resolved: a step moves 5% of the split's extent, ordinary splits keep at
+  least 10% per side, and a pointer drag leaves at least 120px. Growing or
+  shrinking a focused dock changes its absolute size by 40px instead. A split
+  is addressed by its boundary pane, the first pane of its second child.
 
 - Ratios in `WorkbenchLayout` and `LayoutNode::Split`; the record format
   simply changes, with no version bump.

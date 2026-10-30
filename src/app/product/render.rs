@@ -13,110 +13,102 @@ impl ProductShell {
             WorkbenchLayout::Pane(pane) => self.render_pane(*pane, cx),
             WorkbenchLayout::Split {
                 direction,
+                ratio,
                 first,
                 second,
             } => {
                 let direction = *direction;
-                // Only dock-adjacent dividers resize. Document/document splits
-                // stay equal; docks keep window-local sizes with usable limits.
-                let dock_extent = |layout: &WorkbenchLayout| match layout {
-                    WorkbenchLayout::Pane(pane) => self
-                        .workbench
-                        .read(cx)
-                        .dock_location(*pane)
-                        .filter(|dock| {
-                            (direction == SplitDirection::Vertical)
-                                == (*dock == DockLocation::Bottom)
-                        })
-                        .map(|dock| (dock, self.workbench.read(cx).dock_size(dock))),
+                let workbench = self.workbench.read(cx);
+                // A dock keeps its absolute size and its sibling takes the
+                // rest; an ordinary split divides its extent by ratio.
+                let dock = workbench.split_dock(layout);
+                let extent = |child: &WorkbenchLayout| match (child, dock) {
+                    (WorkbenchLayout::Pane(pane), Some(dock))
+                        if workbench.dock_location(*pane) == Some(dock) =>
+                    {
+                        Some(workbench.dock_size(dock))
+                    }
                     _ => None,
                 };
-                let first_extent = dock_extent(first);
-                let second_extent = dock_extent(second);
-                let divider_dock = first_extent
-                    .map(|(dock, _)| dock)
-                    .or_else(|| second_extent.map(|(dock, _)| dock));
+                let first_extent = extent(first);
+                let second_extent = extent(second);
+                let boundary = layout.boundary().expect("splits have a boundary");
+                let horizontal = direction == SplitDirection::Horizontal;
+                let child = |extent: Option<f32>, grow: f32| {
+                    let mut element = div().min_w_0().min_h_0();
+                    match extent {
+                        Some(extent) => {
+                            element = element
+                                .flex_none()
+                                .when(horizontal, |element| element.w(px(extent)))
+                                .when(!horizontal, |element| element.h(px(extent)));
+                        }
+                        None if dock.is_some() => element = element.flex_1(),
+                        None => {
+                            element = element.flex_basis(px(0.)).flex_shrink();
+                            element.style().flex_grow = Some(grow);
+                        }
+                    }
+                    element
+                };
+                let first_child = child(first_extent, *ratio);
+                let second_child = child(second_extent, 1. - *ratio);
                 div()
                     .flex()
-                    .when(direction == SplitDirection::Horizontal, |element| {
-                        element.flex_row()
-                    })
-                    .when(direction == SplitDirection::Vertical, |element| {
-                        element.flex_col()
-                    })
+                    .when(horizontal, |element| element.flex_row())
+                    .when(!horizontal, |element| element.flex_col())
                     .size_full()
                     .min_w_0()
                     .min_h_0()
-                    .child(
-                        div()
-                            .when(first_extent.is_none(), |element| element.flex_1())
-                            .min_w_0()
-                            .min_h_0()
-                            .when_some(first_extent, |element, (_, extent)| {
-                                element
-                                    .flex_none()
-                                    .when(direction == SplitDirection::Horizontal, |element| {
-                                        element.w(px(extent))
-                                    })
-                                    .when(direction == SplitDirection::Vertical, |element| {
-                                        element.h(px(extent))
-                                    })
-                            })
-                            .child(self.render_layout(first, cx)),
-                    )
-                    .child(self.render_divider(direction, divider_dock, cx))
-                    .child(
-                        div()
-                            .when(second_extent.is_none(), |element| element.flex_1())
-                            .min_w_0()
-                            .min_h_0()
-                            .when_some(second_extent, |element, (_, extent)| {
-                                element
-                                    .flex_none()
-                                    .when(direction == SplitDirection::Horizontal, |element| {
-                                        element.w(px(extent))
-                                    })
-                                    .when(direction == SplitDirection::Vertical, |element| {
-                                        element.h(px(extent))
-                                    })
-                            })
-                            .child(self.render_layout(second, cx)),
-                    )
+                    .relative()
+                    .when(dock.is_none(), |element| {
+                        element.child(self.split_drag_geometry(boundary))
+                    })
+                    .child(first_child.child(self.render_layout(first, cx)))
+                    .child(self.render_divider(direction, dock, boundary, cx))
+                    .child(second_child.child(self.render_layout(second, cx)))
                     .into_any_element()
             }
         }
     }
 
-    /// Divider between two split children. Dock-adjacent dividers get a wider
-    /// hit area and drag to resize; other dividers stay a fixed 1px rule.
+    /// Divider between two split children, with a wider hit area that drags
+    /// to resize: a dock's divider changes its size, an ordinary divider its
+    /// split's ratio.
     pub(super) fn render_divider(
         &self,
         direction: SplitDirection,
         dock: Option<DockLocation>,
+        boundary: PaneId,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let Some(dock) = dock else {
-            return div()
-                .when(direction == SplitDirection::Horizontal, |element| {
-                    element.w(px(1.)).h_full()
-                })
-                .when(direction == SplitDirection::Vertical, |element| {
-                    element.h(px(1.)).w_full()
-                })
-                .bg(theme(cx).color(color::BORDER))
-                .into_any_element();
-        };
         let horizontal = direction == SplitDirection::Horizontal;
-        div()
-            .id(("dock-divider", dock.index()))
-            .debug_selector(move || format!("dock-divider-{}", dock.index()))
+        let element = match dock {
+            Some(dock) => div()
+                .id(("dock-divider", dock.index()))
+                .debug_selector(move || format!("dock-divider-{}", dock.index())),
+            None => div()
+                .id(("split-divider", boundary.value()))
+                .debug_selector(move || format!("split-divider-{}", boundary.value())),
+        };
+        element
             .flex()
             .flex_none()
             .when(horizontal, |element| {
-                element.flex_row().w(px(9.)).h_full().justify_center()
+                element
+                    .flex_row()
+                    .w(px(9.))
+                    .h_full()
+                    .justify_center()
+                    .cursor(CursorStyle::ResizeLeftRight)
             })
             .when(!horizontal, |element| {
-                element.flex_col().h(px(9.)).w_full().items_center()
+                element
+                    .flex_col()
+                    .h(px(9.))
+                    .w_full()
+                    .items_center()
+                    .cursor(CursorStyle::ResizeUpDown)
             })
             .child(
                 div()
@@ -131,12 +123,33 @@ impl ProductShell {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, event: &MouseDownEvent, _, cx| {
-                    let size = this.workbench.read(cx).dock_size(dock);
-                    this.dock_resize = Some(DockResizeDrag {
-                        dock,
-                        start_pointer: event.position,
-                        start_size: size,
-                    });
+                    match dock {
+                        Some(dock) => {
+                            let size = this.workbench.read(cx).dock_size(dock);
+                            this.dock_resize = Some(DockResizeDrag {
+                                dock,
+                                start_pointer: event.position,
+                                start_size: size,
+                            });
+                        }
+                        None => {
+                            let ratio = this.workbench.read(cx).split_ratio(boundary);
+                            let bounds = this.tab_drag.borrow().split_bounds(boundary);
+                            if let (Some(ratio), Some(bounds)) = (ratio, bounds) {
+                                this.split_resize = Some(SplitResizeDrag {
+                                    boundary,
+                                    horizontal,
+                                    start_pointer: event.position,
+                                    start_ratio: ratio,
+                                    extent: if horizontal {
+                                        f32::from(bounds.size.width)
+                                    } else {
+                                        f32::from(bounds.size.height)
+                                    },
+                                });
+                            }
+                        }
+                    }
                     cx.stop_propagation();
                     cx.notify();
                 }),

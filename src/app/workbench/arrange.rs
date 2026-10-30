@@ -112,10 +112,12 @@ impl Workbench {
             }
             PlanNode::Split {
                 direction,
+                ratio,
                 first,
                 second,
             } => WorkbenchLayout::Split {
                 direction,
+                ratio: WorkbenchLayout::clamp_ratio(ratio),
                 first: Box::new(self.install(*first, focused, cx)),
                 second: Box::new(self.install(*second, focused, cx)),
             },

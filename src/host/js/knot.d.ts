@@ -1132,7 +1132,14 @@ declare module "knot" {
     | Readonly<{ kind: "terminal"; directory?: string }>;
   export type LayoutNode =
     | Readonly<{ kind: "pane"; dock: "left" | "right" | "bottom" | null; selected: number; tabs: readonly LayoutTab[] }>
-    | Readonly<{ kind: "split"; direction: "horizontal" | "vertical"; first: LayoutNode; second: LayoutNode }>;
+    | Readonly<{
+        kind: "split";
+        direction: "horizontal" | "vertical";
+        /** The fraction of the split's extent given to `first`. */
+        ratio: number;
+        first: LayoutNode;
+        second: LayoutNode;
+      }>;
   /** Logical bounds, presentation state, and the display UUID. */
   export type WindowGeometry = Readonly<{
     x: number;

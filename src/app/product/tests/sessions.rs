@@ -1244,7 +1244,7 @@ fn layouts_prune_unknown_tabs_hide_unnamed_tools_and_ignore_unsupported_versions
     let layout = json!({
         "version": 1, "geometry": null, "focused": 1,
         "dockSizes": { "left": 200, "right": 240, "bottom": 220 },
-        "root": { "kind": "split", "direction": "vertical",
+        "root": { "kind": "split", "direction": "vertical", "ratio": 0.5,
             "first": { "kind": "pane", "dock": null, "selected": 5, "tabs": [
                 { "kind": "document", "document": null, "uri": "mem://product/a/one.txt", "view": view },
                 { "kind": "document", "document": null, "uri": "mem://product/a/./one.txt", "view": view },

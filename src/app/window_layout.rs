@@ -71,6 +71,8 @@ pub(crate) enum LayoutNode {
     },
     Split {
         direction: SplitDirection,
+        /// The fraction of the split's extent given to `first`.
+        ratio: f32,
         first: Box<LayoutNode>,
         second: Box<LayoutNode>,
     },
@@ -239,10 +241,12 @@ impl WindowLayout {
                 }
                 WorkbenchLayout::Split {
                     direction,
+                    ratio,
                     first,
                     second,
                 } => LayoutNode::Split {
                     direction: *direction,
+                    ratio: *ratio,
                     first: Box::new(node(first, workbench, documents, terminal_directory, cx)),
                     second: Box::new(node(second, workbench, documents, terminal_directory, cx)),
                 },
@@ -396,11 +400,13 @@ impl WindowLayout {
                 }
                 LayoutNode::Split {
                     direction,
+                    ratio,
                     first,
                     second,
                 } => match (prune(first, state), prune(second, state)) {
                     (Some(first), Some(second)) => Some(PlanNode::Split {
                         direction: *direction,
+                        ratio: *ratio,
                         first: Box::new(first),
                         second: Box::new(second),
                     }),
@@ -436,6 +442,7 @@ pub(crate) enum PlanNode<T> {
     },
     Split {
         direction: SplitDirection,
+        ratio: f32,
         first: Box<PlanNode<T>>,
         second: Box<PlanNode<T>>,
     },
@@ -457,10 +464,12 @@ impl<T> PlanNode<T> {
             },
             Self::Split {
                 direction,
+                ratio,
                 first,
                 second,
             } => PlanNode::Split {
                 direction,
+                ratio,
                 first: Box::new(first.map(step)),
                 second: Box::new(second.map(step)),
             },
@@ -610,7 +619,7 @@ mod tests {
     #[test]
     fn layouts_round_trip_through_json() {
         let original = layout(
-            json!({ "kind": "split", "direction": "horizontal",
+            json!({ "kind": "split", "direction": "horizontal", "ratio": 0.25,
                     "first": { "kind": "pane", "dock": "left", "selected": 0,
                                "tabs": [{ "kind": "tool", "tool": "knot.explorer" }] },
                     "second": { "kind": "pane", "dock": null, "selected": 1,
@@ -657,7 +666,7 @@ mod tests {
     #[test]
     fn pruning_drops_unknown_tools_unmatched_documents_and_duplicates() {
         let layout = layout(
-            json!({ "kind": "split", "direction": "horizontal",
+            json!({ "kind": "split", "direction": "horizontal", "ratio": 0.3,
                     "first": { "kind": "pane", "dock": "left", "selected": 1, "tabs": [
                         { "kind": "tool", "tool": "knot.explorer" },
                         { "kind": "tool", "tool": "gone.tool" },
@@ -681,6 +690,7 @@ mod tests {
             plan,
             PlanNode::Split {
                 direction: SplitDirection::Horizontal,
+                ratio: 0.3,
                 first: Box::new(PlanNode::Pane {
                     dock: Some(DockLocation::Left),
                     // The selected tool was pruned, so the first tab is selected.
@@ -726,11 +736,11 @@ mod tests {
     #[test]
     fn pruning_collapses_empty_panes_and_nested_one_child_splits() {
         let layout = layout(
-            json!({ "kind": "split", "direction": "vertical",
-                    "first": { "kind": "split", "direction": "horizontal",
+            json!({ "kind": "split", "direction": "vertical", "ratio": 0.5,
+                    "first": { "kind": "split", "direction": "horizontal", "ratio": 0.5,
                                "first": { "kind": "pane", "dock": null, "selected": 0,
                                           "tabs": [document("missing")] },
-                               "second": { "kind": "split", "direction": "vertical",
+                               "second": { "kind": "split", "direction": "vertical", "ratio": 0.5,
                                            "first": { "kind": "pane", "dock": null, "selected": 9,
                                                       "tabs": [document("b")] },
                                            "second": { "kind": "pane", "dock": "bottom", "selected": 0,

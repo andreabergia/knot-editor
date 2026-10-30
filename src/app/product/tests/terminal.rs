@@ -1294,7 +1294,13 @@ async fn new_terminals_from_a_focused_terminal_start_in_its_directory(cx: &mut T
     cx.update_window(window, |_, window, cx| {
         shell.update(cx, |shell, cx| {
             let pane = shell.workbench.read(cx).focused_pane_id().unwrap();
-            assert!(shell.split_pane(pane, SplitDirection::Horizontal, window, cx));
+            assert!(shell.split_pane(
+                pane,
+                SplitDirection::Horizontal,
+                super::super::SplitPlacement::After,
+                window,
+                cx
+            ));
         });
     })
     .unwrap();

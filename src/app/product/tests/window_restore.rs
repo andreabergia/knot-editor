@@ -293,6 +293,7 @@ fn several_windows_restore_with_splits_shared_views_docks_dirty_text_and_fresh_t
                 .split_pane(pane, SplitDirection::Vertical, SplitPlacement::After, cx)
                 .unwrap();
             workbench.open_terminal_tab(split, terminal, view);
+            workbench.set_split_ratio(split, 0.3);
             workbench.set_dock_size(DockLocation::Left, 280.);
         });
         terminal
@@ -326,6 +327,9 @@ fn several_windows_restore_with_splits_shared_views_docks_dirty_text_and_fresh_t
     let before = record(cx);
     assert_eq!(before.windows.len(), 2);
     assert_eq!(before.active, Some(0));
+    // The split's ratio is recorded with the layout and restored with it.
+    let recorded = serde_json::to_string(&before.windows[0].layout).unwrap();
+    assert!(recorded.contains(r#""ratio":0.3"#), "{recorded}");
     let identity = cx.read(|cx| documents(cx).read(cx).get(long).unwrap().identity());
 
     // A contributed tool whose package fails at the next launch is pruned.

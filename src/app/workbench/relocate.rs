@@ -137,11 +137,7 @@ impl Workbench {
                                 DockLocation::Right => (SplitDirection::Horizontal, root, leaf),
                                 DockLocation::Bottom => (SplitDirection::Vertical, root, leaf),
                             };
-                            WorkbenchLayout::Split {
-                                direction,
-                                first: Box::new(first),
-                                second: Box::new(second),
-                            }
+                            WorkbenchLayout::split(direction, first, second)
                         }
                     };
                     (pane, 0, true, Some(dock), layout)

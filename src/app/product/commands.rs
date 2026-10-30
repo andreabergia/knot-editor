@@ -65,7 +65,29 @@ pub(crate) async fn split_horizontal(
             Ok(())
         })
         .await?;
-    split(&context, SplitDirection::Horizontal).await
+    split(&context, SplitDirection::Horizontal, SplitPlacement::After).await
+}
+
+#[command("workbench.split-left", title = "Split Left", description = "Split the focused pane to the left.", id = SPLIT_LEFT_COMMAND, participant = Workbench)]
+pub(crate) async fn split_left(context: CommandContext, (): ()) -> Result<(), CommandOutcome> {
+    context
+        .foreground(move |target, _, cx| {
+            super::super::commands::dispatch::break_captured_history_group(target, cx);
+            Ok(())
+        })
+        .await?;
+    split(&context, SplitDirection::Horizontal, SplitPlacement::Before).await
+}
+
+#[command("workbench.split-up", title = "Split Up", description = "Split the focused pane upward.", id = SPLIT_UP_COMMAND, participant = Workbench)]
+pub(crate) async fn split_up(context: CommandContext, (): ()) -> Result<(), CommandOutcome> {
+    context
+        .foreground(move |target, _, cx| {
+            super::super::commands::dispatch::break_captured_history_group(target, cx);
+            Ok(())
+        })
+        .await?;
+    split(&context, SplitDirection::Vertical, SplitPlacement::Before).await
 }
 
 #[command("workbench.split-vertical", title = "Split Down", description = "Split the focused pane downward.", id = SPLIT_VERTICAL_COMMAND, participant = Workbench)]
@@ -76,7 +98,50 @@ pub(crate) async fn split_vertical(context: CommandContext, (): ()) -> Result<()
             Ok(())
         })
         .await?;
-    split(&context, SplitDirection::Vertical).await
+    split(&context, SplitDirection::Vertical, SplitPlacement::After).await
+}
+
+#[command("workbench.grow-pane", title = "Grow Pane", description = "Give the focused pane more room.", id = GROW_PANE_COMMAND, participant = Workbench)]
+pub(crate) async fn grow_pane(context: CommandContext, (): ()) -> Result<(), CommandOutcome> {
+    resize(&context, true).await
+}
+
+#[command("workbench.shrink-pane", title = "Shrink Pane", description = "Give the focused pane less room.", id = SHRINK_PANE_COMMAND, participant = Workbench)]
+pub(crate) async fn shrink_pane(context: CommandContext, (): ()) -> Result<(), CommandOutcome> {
+    resize(&context, false).await
+}
+
+#[command("workbench.equalize-panes", title = "Equalize Panes", description = "Give every split pane an even share.", id = EQUALIZE_PANES_COMMAND, participant = Workbench)]
+pub(crate) async fn equalize_panes(context: CommandContext, (): ()) -> Result<(), CommandOutcome> {
+    context
+        .shell(|shell, _, _, cx| {
+            shell
+                .workbench
+                .update(cx, |workbench, _| workbench.equalize_splits());
+            cx.notify();
+            Ok(())
+        })
+        .await
+}
+
+async fn resize(context: &CommandContext, grow: bool) -> Result<(), CommandOutcome> {
+    context
+        .shell(move |shell, target, _, cx| {
+            let pane = target.pane;
+            let dock = shell.workbench.read(cx).dock_location(pane);
+            if !shell
+                .workbench
+                .update(cx, |workbench, _| workbench.resize_pane(pane, grow))
+            {
+                return Err(CommandOutcome::Unavailable);
+            }
+            if dock.is_some() {
+                shell.publish_tool_layout(cx);
+            }
+            cx.notify();
+            Ok(())
+        })
+        .await
 }
 
 #[command("file.open", title = "Open…", description = "Open a file or folder.", id = OPEN_COMMAND, participant = Workbench)]
@@ -276,10 +341,14 @@ pub(crate) async fn quit(
     close_target(&context, ProtectedCloseKind::Quit).await
 }
 
-async fn split(context: &CommandContext, direction: SplitDirection) -> Result<(), CommandOutcome> {
+async fn split(
+    context: &CommandContext,
+    direction: SplitDirection,
+    placement: SplitPlacement,
+) -> Result<(), CommandOutcome> {
     context
         .shell(move |shell, target, window, cx| {
-            if shell.split_pane(target.pane, direction, window, cx) {
+            if shell.split_pane(target.pane, direction, placement, window, cx) {
                 Ok(())
             } else {
                 Err(CommandOutcome::InvalidTarget)

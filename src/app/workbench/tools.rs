@@ -287,6 +287,7 @@ impl Workbench {
                     direction,
                     first,
                     second,
+                    ..
                 } => {
                     if first.contains_pane(target) {
                         walk(first, target).or(Some((*direction, SplitPlacement::Before)))
@@ -496,11 +497,7 @@ impl Workbench {
                     Some(DockLocation::Right) | None => (SplitDirection::Horizontal, layout, leaf),
                     Some(DockLocation::Bottom) => (SplitDirection::Vertical, layout, leaf),
                 };
-                WorkbenchLayout::Split {
-                    direction,
-                    first: Box::new(first),
-                    second: Box::new(second),
-                }
+                WorkbenchLayout::split(direction, first, second)
             }
         });
         if let Some(dock) = dock {

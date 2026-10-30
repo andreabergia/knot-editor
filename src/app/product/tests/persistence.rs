@@ -221,6 +221,7 @@ async fn save_completion_rejects_a_closed_captured_tab(cx: &mut TestAppContext) 
             assert!(shell.split_pane(
                 shell.workbench.read(cx).focused_pane_id().unwrap(),
                 SplitDirection::Horizontal,
+                super::super::SplitPlacement::After,
                 window,
                 cx,
             ));

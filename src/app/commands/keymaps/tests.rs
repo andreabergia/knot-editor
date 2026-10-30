@@ -38,6 +38,34 @@ fn every_preset_binding_is_unique_and_names_a_native_command() {
 }
 
 #[test]
+fn every_platform_binds_the_pane_layout_chords() {
+    for platform in PLATFORMS {
+        let registry = preset_registry(platform);
+        let secondary = if platform == Platform::MacOs {
+            "cmd"
+        } else {
+            "ctrl"
+        };
+        for (chord, command_name) in [
+            ("left", SPLIT_LEFT_COMMAND),
+            ("up", SPLIT_UP_COMMAND),
+            ("right", SPLIT_HORIZONTAL_COMMAND),
+            ("down", SPLIT_VERTICAL_COMMAND),
+            ("=", GROW_PANE_COMMAND),
+            ("-", SHRINK_PANE_COMMAND),
+            ("0", EQUALIZE_PANES_COMMAND),
+        ] {
+            let key = format!("{secondary}-k {chord}");
+            assert_eq!(
+                resolved(&registry, &key, Some("editor")).as_deref(),
+                Some(command_name),
+                "{platform:?}: {key}"
+            );
+        }
+    }
+}
+
+#[test]
 fn windows_and_linux_presets_use_control_shortcuts() {
     for platform in [Platform::Windows, Platform::Linux] {
         let registry = preset_registry(platform);
