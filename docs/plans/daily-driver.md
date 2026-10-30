@@ -79,21 +79,19 @@ to be rebuilt later:
 
 - ✅ **D121 — Terminals start in the workspace root**
   - A new terminal starts in the root of the window's most recently focused
-    document, else the first root, else home. Restored terminals use the same
-    rule until D127, and `terminals.open` takes an explicit directory
+    document, else the first root, else home. Restored terminals fall back to
+    the same rule (D127), and `terminals.open` takes an explicit directory
     ([workbench and lifecycle](../architecture/workbench-and-lifecycle.md#terminal-sessions-and-views),
     [decisions](../decisions.md#terminal)).
 
-- **D127 — Restored terminals keep their working directory** (depends on D121)
-  - A terminal restored in place, by hot exit or a project switch, starts its
-    fresh shell in the directory its shell was last in, rather than in
-    D121's default. The window layout records that directory for each
-    terminal tab.
-  - Decide how the directory is read: from the shell process at capture time,
-    or reported by the shell through OSC 7, which needs shell setup (D039).
-    Also decide what happens when the directory no longer exists. Processes
-    and scrollback stay deferred (D043).
-  - 🚧 [Plan](d127-terminal-working-directory.md)
+- ✅ **D127 — Restored terminals keep their working directory**
+  - A terminal restored in place starts in the directory its shell was last
+    in, read from the shell process and recorded in the window layout; a
+    missing directory falls back to D121's rule. New terminals opened from a
+    focused terminal start in its directory. D128 moves the query to
+    libghostty
+    ([workbench and lifecycle](../architecture/workbench-and-lifecycle.md#terminal-sessions-and-views),
+    [decisions](../decisions.md#terminal)).
 
 - **D089 — Project-local settings** (depends on D070, D122)
   - Settings read from a file in the repository, attached to folders rather
