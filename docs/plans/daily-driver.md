@@ -116,6 +116,7 @@ to be rebuilt later:
     the system appearance.
   - Startup already awaits package entries, so a theme registered in `start()`
     styles the first frame.
+  - 🚧 [Plan](d064-theming.md)
 
 - **D071 — Command palette and shared picker**
   - Commands gain an optional `description`, for native commands and in
