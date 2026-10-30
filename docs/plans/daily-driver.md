@@ -135,6 +135,7 @@ to be rebuilt later:
     packages (a contributed preset would make user-written presets free).
     Also decide how chords and conflicts are reported. D088 fills in the
     other presets.
+  - 🚧 [Plan](d086-keymap-presets.md)
 
 - **D072 — Workbench navigation and layout commands** (depends on D086)
   - Default bindings:
