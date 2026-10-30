@@ -1,6 +1,6 @@
 # D127 — Restored terminals keep their working directory
 
-Status: 🚧 in progress; checkpoint 2 awaiting review. Item of the
+Status: 🚧 in progress; checkpoints 1–2 complete. Item of the
 [daily-driver plan](daily-driver.md); builds on D121's default directory rule
 ([workbench and lifecycle](../architecture/workbench-and-lifecycle.md#terminal-sessions-and-views),
 [decisions](../decisions.md#terminal)).
@@ -65,25 +65,12 @@ all share the default.
   start directory. Live queries were validated on macOS only; the Linux path
   is untested.
 
-### 2. Record and restore the directory ✅ (awaiting review)
+### 2. Record and restore the directory ✅
 
-- Deliverable: the window layout records each terminal's directory, and
-  restoration by hot exit and project switch starts the shell there, falling
-  back to D121's default when the directory is gone.
-- Validation: `window_layout.rs` round-trip and planning tests for the new
-  field; product tests that capture a window with a terminal whose
-  start directory differs from the default, restore it, and check the new
-  session's directory, plus the missing-directory fallback.
-- Review gate: layout shape and restore fallback.
-- **Implementation context:** `src/app/window_layout.rs`: `LayoutTab::Terminal`
-  gains `directory: Option<String>`, capture at the
-  `TabSurfaceId::Terminal(_)` arm reads the session through
-  `TerminalSessions`, and `PlannedTab::Terminal` carries the directory.
-  `src/app/product/sessions.rs`: the `PlannedTab::Terminal` arm calls
-  `create_terminal_in` with the recorded path when it is an existing
-  directory, else `create_terminal`. Product tests live in
-  `src/app/product/tests/terminal.rs` (see `focused_terminal_directory`) and
-  the session tests beside `product/sessions.rs`.
+- Terminal tabs record an optional `directory` file URI in the
+  [window layout](../architecture/workbench-and-lifecycle.md#window-layouts);
+  restoration starts the shell there or falls back to D121's default. The
+  layout version stays 1.
 
 ### 3. New terminals from a focused terminal
 
