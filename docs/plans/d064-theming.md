@@ -32,19 +32,44 @@ theme by changing a few keys.
   await themes.register({ ...base, name: "My Dark",
     colors: { ...base.colors, "editor.background": "#101010" } });
   ```
-- **A closed native key vocabulary**, validated at registration. Unknown UI
-  keys and unknown capture names reject with `TypeError`, so typos fail
-  loudly; syntax keys are capture names (resolved by longest dotted prefix as
-  today) and never decoration names. The vocabulary starts small, derived
-  from what surfaces draw today (editor, tabs and panes, docks, trees,
-  pickers and transient fields, completion, prompts, terminal and its 16 ANSI
-  colors, and `error`/`warning`/`info`, which also color diagnostic
-  underlines). Later surfaces (palette, gutter, status bar, Find) add their
-  keys when they land.
-- **Missing keys fall back** to a minimal native theme of the same
-  appearance. Native code keeps one dark and one light fallback, which also
-  apply when no registered theme matches the selection or the package fails.
-  Today's built-in palette is dropped.
+- **Color keys are definitions, like settings.** A definition gives a key a
+  description and a default per appearance; a default is a hex color or the
+  name of another key, as in VS Code's `contributes.colors`:
+  ```ts
+  await themes.defineColor({ key: "diff.add", description: "Added lines",
+    defaults: { dark: "#2ea04366", light: "#2ea04340" } });
+  await themes.defineColor({ key: "git.untracked", description: "Untracked files",
+    defaults: { dark: "success", light: "success" } });
+  ```
+  Native keys are defined in one Rust table beside the code that paints them,
+  because native surfaces paint before packages start and when they fail, so
+  their defaults must not depend on a package; `editor.tabSize` works the
+  same way for settings. Extension definitions are lifecycle-owned, and
+  defining a key native code or a live lifecycle already defines rejects, as
+  `settings.define` does. The native set starts small, derived from what
+  surfaces draw today (editor, tabs and panes, docks, trees, pickers and
+  transient fields, completion, prompts, terminal and its 16 ANSI colors,
+  and `error`/`warning`/`info`/`success`); later surfaces add their keys when
+  they land.
+- **Theme color maps are open.** A theme may set any key; a key nobody has
+  defined is kept and inert, so a theme can style an extension that loads
+  later, and typos are silent as with settings. Syntax keys stay the closed
+  capture vocabulary (resolved by longest dotted prefix as today), because
+  capture names are the contract with grammar queries; unknown captures
+  reject with `TypeError`.
+- **Resolution.** A key's color is the active theme's value, else the
+  definition's default for the theme's appearance, following references.
+  With no registered theme (before packages start, or when the selection is
+  not registered or the package fails) the defaults alone apply, so there
+  are no separate fallback themes. Today's built-in palette is dropped.
+- **Contributions name color keys.** Wherever a contribution chooses a
+  color, it names any color key: editor decoration and gutter tokens and
+  tree badges become color-key strings. `"info"`, `"warning"`, `"error"`, and
+  `"success"` are keys, and the badge's `"neutral"` becomes `"text.muted"`.
+  A key with no definition yet paints in the surface's foreground, since
+  its definition may arrive later. The shape stays fixed (a wavy underline,
+  a gutter marker, a badge dot); line backgrounds and other decoration
+  styles remain D114.
 - **Selection is settings.** Native keys `theme.mode` (`"dark"`, `"light"`,
   `"system"`; default `"dark"`), `theme.dark` (default `"One Dark"`), and
   `theme.light` (default `"One Light"`). `system` follows the window
@@ -77,28 +102,34 @@ theme by changing a few keys.
 - Per-window or per-language themes.
 - Theme families, inheritance by name, and importing VS Code or Zed theme
   files.
+- Decoration styles beyond today's shapes (backgrounds, inline text) stay
+  with D114.
 
 ## Checkpoints
 
 ### 1. Native theme model and themed surfaces
 
 Deliverables:
-- `Theme` holds an appearance, a color for every UI key, and the resolved
-  highlight styles. A minimal native dark and light theme define every key.
-  Dark is the active default, so the app looks different from today but
-  coherent.
+- A native color definition table: each key with its description and dark
+  and light defaults (a color or another key). Native code names keys
+  through constants generated from the same table.
+- `Theme` holds an appearance, a resolved color per key (theme values over
+  definition defaults), and the resolved highlight styles. With no
+  registered theme the dark defaults apply, so the app looks different from
+  today but coherent.
 - Every native surface reads the `Theme` global: product shell render, tab
   drag, tree view, explorer tree, transient interactions, command palette,
   completion, text input, editor, terminal view and ANSI defaults, and the
   personal-config error window. No color literals remain outside `theme.rs`.
 - Replacing the global repaints every window.
 
-Validation: unit tests that the key vocabulary is sorted and unique and that
-both fallbacks define every key; a source-scan test that no `rgb(0x`,
+Validation: unit tests that native keys are unique, that every default
+reference names a defined key without cycles, and that theme values win
+over defaults; a source-scan test that no `rgb(0x`,
 `rgba(0x`, or `hsla(` literal appears in `src/app` outside `theme.rs`;
 existing editor and terminal tests pass. Manual look at every surface.
 
-Review gate: the key vocabulary and how surfaces map onto it.
+Review gate: the native keys and how surfaces map onto them.
 
 **Implementation context:** `src/app/theme.rs` (today `Theme::dark()`,
 `with_styles`, `Highlight` vocabulary; editor paint already reads it via
@@ -116,20 +147,24 @@ paint). Color literals live in `src/app/product/render.rs`,
 Deliverables:
 - A native theme registry mirroring `LanguageRegistry`: lifecycle-owned
   registrations, latest name wins, teardown reveals the previous one.
-- Host operations `registerTheme`, `unregisterTheme`, `listThemes`, `getTheme`,
-  with typed decoding and `TypeError` for invalid keys, colors, and styles.
+- Host operations `registerTheme`, `unregisterTheme`, `listThemes`,
+  `getTheme`, and `defineColor`, with typed decoding and `TypeError` for
+  invalid colors, captures, and styles. Extension color definitions join the
+  native table, are removed at teardown, and re-resolve the active theme.
 - Native settings `theme.mode`, `theme.dark`, `theme.light`; the effective
   theme recomputes on any registry change, settings write, or window
-  appearance change (`system`), resolving missing keys from the fallback of
-  the theme's appearance.
-- `knot.d.ts` declarations with `ThemeColorKey` as a string-literal union,
-  the fake host's `themes` implementation, and the extension guide section.
+  appearance change (`system`), resolving missing keys from the definition
+  defaults of the theme's appearance.
+- `knot.d.ts` declarations, with native color keys as an interface packages
+  extend by declaration merging like `Settings`; the fake host's `themes`
+  implementation; and the extension guide section.
 
 Validation: registry unit tests (override, teardown reveal, missing-key
-fallback, unknown name falls back); product tests in
+defaults, unknown name falls back, extension definitions and references);
+product tests in
 `src/app/product/tests/themes.rs` for registration through the host,
-validation errors, settings-driven switching, teardown during use, and
-`system` mode following a changed appearance where gpui's test platform
+validation errors, duplicate definitions, settings-driven switching,
+teardown during use, and `system` mode following a changed appearance where gpui's test platform
 allows it; a fake-host test that the fake's key list matches the native one,
 like `fake_host_lists_every_capture_name`.
 
@@ -151,7 +186,30 @@ Docs: `docs/architecture/semantic-ui.md#syntax-highlighting-and-languages`
 (theme ownership), `docs/extension-api.md`, `docs/schemas/knot.schema.json` if
 it lists API namespaces.
 
-### 3. `@knot/themes` with One Dark, One Light, and Select Theme
+### 3. Contributions name color keys
+
+Deliverables:
+- `EditorContribution.decoration` and `gutter` and `TreeItem.badge` take
+  any color key string instead of the severity tokens; the editor paints
+  decorations and gutter markers, and trees paint badges, in the resolved
+  key's color, or the surface foreground for an undefined key.
+- Declarations, the fake host, examples, and bundled packages updated.
+
+Validation: product tests that a contribution naming an extension-defined
+key paints in that key's color, follows a theme switch, and falls back for
+an undefined key; existing highlight and tree tests updated.
+
+Review gate: the contribution contract.
+
+**Implementation context:** `SemanticToken` and `TreeBadge` in
+`src/host/js/knot.d.ts`; their decoders in the engine's marshaling module
+and `src/app/extensions/semantics.rs`; editor decoration layering through
+`Highlight` decoration names in `src/app/theme.rs` and
+`src/app/editor/layout.rs`/`paint.rs`; badge painting in
+`src/app/tree_view.rs`; highlight tests in
+`src/app/extensions/host/highlight_tests.rs`.
+
+### 4. `@knot/themes` with One Dark, One Light, and Select Theme
 
 Deliverables:
 - A bundled `extensions/@knot/themes` package that registers One Dark and One
@@ -160,13 +218,13 @@ Deliverables:
   described above, and the choice persisted in package storage and applied
   again in `start()`.
 
-Validation: package tests under `node:test` that every bundled theme defines
-every UI key and only known captures, and that selecting a theme writes the
+Validation: package tests under `node:test` that every bundled theme sets
+every native color key and only known captures, and that selecting a theme writes the
 settings and survives a restart of the package; a product test that the
 bundled defaults are active after startup.
 
-Review gate: how the ported themes look across every surface; adjust the key
-vocabulary or port mapping here before porting the rest.
+Review gate: how the ported themes look across every surface; adjust the
+native keys or port mapping here before porting the rest.
 
 **Implementation context:** copy the layout of `extensions/@knot/languages`
 (`knot.jsonc`, `src/extension.ts`, `test/`, `tsconfig.json`); `build.rs`
@@ -174,14 +232,14 @@ picks up every directory under `extensions/@knot`. Picker and storage usage
 to mirror: `extensions/@knot/projects/src/commands.ts` (`workbench.showPicker`)
 and `state.ts` (`storage.read`/`write`).
 
-### 4. Remaining bundled themes and documentation
+### 5. Remaining bundled themes and documentation
 
 Deliverables:
 - Catppuccin Mocha and Latte, Tokyo Night and Tokyo Night Day, Solarized Dark
   and Light, with their license notices.
 - Durable behavior moved into the architecture references and rationale
-  into `docs/decisions.md` (theme ownership, closed vocabulary, native
-  fallback, selection settings, no `extends`); D055's roadmap entry updated
+  into `docs/decisions.md` (theme ownership, color definitions and native
+  defaults, open theme maps, selection settings, no `extends`); D055's roadmap entry updated
   to point at themes; this plan removed and the index item marked ✅.
 
 Validation: the package completeness tests cover the new themes; manual
