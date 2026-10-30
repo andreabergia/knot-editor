@@ -436,6 +436,3 @@ await settings.set("editor.tabSize", "2");
 await settings.get("check.missing");
 // @ts-expect-error the default follows the declared key type
 await settings.define({ key: "check.timeout", type: "integer", default: "52", description: "Timeout" });
-await settings.set("files.associations", { "*.mdx": "markdown", Jenkinsfile: "groovy" });
-// @ts-expect-error associations map patterns to language IDs
-await settings.set("files.associations", { "*.mdx": 1 });

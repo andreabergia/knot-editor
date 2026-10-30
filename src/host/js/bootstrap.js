@@ -828,8 +828,6 @@ const settingTypes = {
   integer: Number.isSafeInteger,
   number: Number.isFinite,
   string: (value) => typeof value === "string",
-  stringMap: (value) => value !== null && typeof value === "object" && !Array.isArray(value)
-    && Object.values(value).every((entry) => typeof entry === "string"),
 };
 const settingListeners = new Map();
 function settingKey(value) {
@@ -846,7 +844,7 @@ export async function defineSetting(definition) {
   const key = settingKey(value.key);
   const type = string(value.type, "setting type must be text");
   if (!Object.hasOwn(settingTypes, type)) {
-    throw new TypeError("setting type must be boolean, integer, number, string, or stringMap");
+    throw new TypeError("setting type must be boolean, integer, number, or string");
   }
   if (!settingTypes[type](value.default)) throw new TypeError(`setting default must be of type ${type}`);
   const description = string(value.description, "setting description must be text");

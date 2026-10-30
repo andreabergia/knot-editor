@@ -1890,12 +1890,8 @@ impl ProductExtensionHost {
         true
     }
 
-    /// Apply a committed write or reset of `setting` to native consumers that
-    /// do not resolve it during layout, then queue every observer.
-    pub(crate) fn setting_changed(&self, setting: &str, cx: &mut App) {
-        if setting == crate::app::settings::FILES_ASSOCIATIONS {
-            crate::app::languages::associations_changed(cx);
-        }
+    /// Queue every observer of `setting` after a committed write or reset.
+    pub(crate) fn setting_changed(&self, setting: &str) {
         for (subscription, (observed, key)) in &self.setting_observers {
             if observed == setting {
                 let _ = self

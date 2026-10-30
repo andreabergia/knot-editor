@@ -249,32 +249,3 @@ fn undefined_keys_are_inert() {
     assert_eq!(store.get("test.typo", &SettingsScope::default()), None);
     assert!(store.reset("test.typo", &SettingsScope::default()));
 }
-
-#[test]
-fn string_maps_accept_only_objects_of_strings() {
-    let mut store = SettingsStore::default();
-    let scope = SettingsScope::default();
-    store
-        .set(
-            FILES_ASSOCIATIONS,
-            json!({ "*.mdx": "markdown" }),
-            scope.clone(),
-        )
-        .unwrap();
-    assert_eq!(
-        store.get(FILES_ASSOCIATIONS, &rust_editor()),
-        Some(&json!({ "*.mdx": "markdown" }))
-    );
-    for value in [
-        json!({ "*.mdx": 1 }),
-        json!(["markdown"]),
-        json!("markdown"),
-    ] {
-        assert_eq!(
-            store.set(FILES_ASSOCIATIONS, value, scope.clone()),
-            Err(SettingsError::TypeMismatch {
-                expected: SettingType::StringMap
-            })
-        );
-    }
-}

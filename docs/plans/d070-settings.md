@@ -1,6 +1,6 @@
 # D070 — Application settings
 
-Status: 🚧 checkpoints 1–3 done; checkpoint 4 implemented, awaiting review. Item of the
+Status: 🚧 checkpoints 1–3 done; checkpoint 4 next. Item of the
 [daily-driver plan](daily-driver.md#phase-2--foundations).
 
 ## Outcome
@@ -159,24 +159,7 @@ satisfy `integer`. Product tests cover the pre-init, package, and post-init
 flow, Restart Extension, painted tab stops in open windows, and observer
 teardown; the fake host's own tests live in `scripts/extensions/testing`.
 
-### 4. Language file associations setting 🔍
-
-Implemented ✅, review gate pending. Scope decisions:
-
-- Shape: one native key, `files.associations`, holding a map from pattern to
-  language ID, with a new `stringMap` definition type (an object whose values
-  are strings). One scoped key per pattern was rejected because scopes have
-  no pattern fact until `path` arrives with D089.
-- A pattern is an exact file name (`Jenkinsfile`) or `*.extension`
-  (`*.d.ts`), matched like registrations: a file name first, then the
-  longest extension, case-insensitively. Globs wait for D089.
-- Any association beats every registration, including registered file names
-  and shebang interpreters.
-- Detection reads only the unscoped value, because it runs before a document
-  has a language or a view.
-- A write or reset of the key re-detects open documents without reattaching
-  unchanged syntax, unlike a registration change, which reparses injecting
-  languages.
+### 4. Language file associations setting
 
 - Deliverable: a native setting through which personal config maps file names
   or extensions to a language ID, overriding registration-based detection, as

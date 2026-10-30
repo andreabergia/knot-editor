@@ -180,17 +180,10 @@ declare module "knot" {
     /** Columns per tab stop in editor views. Native default 4; editors use
      * at least 1 and at most 32. */
     "editor.tabSize": number;
-    /** Language IDs by exact file name ("Jenkinsfile") or extension pattern
-     * ("*.mdx", "*.d.ts"), ahead of every registration: a file name wins, then
-     * the longest extension, matched case-insensitively. Only unscoped values
-     * apply. Every change re-detects open documents whose language is not
-     * explicit; an unregistered ID paints as "plaintext". */
-    "files.associations": Readonly<Record<string, string>>;
   }
   export type SettingKey = keyof Settings & string;
-  /** "integer" accepts safe integers; "number" accepts any finite number;
-   * "stringMap" accepts an object whose values are all strings. */
-  export type SettingType = "boolean" | "integer" | "number" | "string" | "stringMap";
+  /** "integer" accepts safe integers; "number" accepts any finite number. */
+  export type SettingType = "boolean" | "integer" | "number" | "string";
   export interface SettingDefinition<K extends SettingKey = SettingKey> {
     /** Flat dotted name saying what the key sets, such as "lsp.timeout.launch". */
     readonly key: K;
