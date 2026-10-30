@@ -1,6 +1,6 @@
 # D070 — Application settings
 
-Status: 🚧 checkpoint 1 done; checkpoint 2 implemented, awaiting review. Item of the
+Status: 🚧 checkpoints 1–2 done; checkpoint 3 next. Item of the
 [daily-driver plan](daily-driver.md#phase-2--foundations).
 
 ## Outcome
@@ -132,49 +132,17 @@ language detection move to a setting (checkpoint 4). Rationale is in
 [decisions](../decisions.md#commands-and-keymaps); the keymap rule is in
 [commands](../architecture/commands.md#keymaps).
 
-### 2. Native settings store and `editor.tabSize` 🔍
+### 2. Native settings store and `editor.tabSize` ✅
 
-Implemented ✅, review gate pending. Scope decisions:
-
-- No generation counter: gpui notifies global observers on every mutable
-  access, so editor views observe `ApplicationSettings` directly, drop their
-  cached widest-line width, and repaint.
-- `editor.tabSize` resolves to at least 1 and at most 32 columns, so a stray
-  value cannot divide by zero or expand a tab into megabytes of spaces.
-- An `integer` accepts only JSON integers that fit `i64`; a `number`
-  accepts any JSON number. Checkpoint 3 decides how JavaScript numbers map.
-- Native code alone writes today, so the store's write and definition paths
-  carry a `dead_code` allowance outside tests until the public API lands.
-
-- Deliverable: `src/app/settings.rs` with the definition registry (native
-  definitions installed at startup, lifecycle-owned extension definitions),
-  JSON values kept for undefined keys and validated at definition, entries
-  keyed by key and scope with a write sequence, resolution by fact count then
-  sequence, and `define`, `set`, `reset`, and `get`, exposed as an
-  `ApplicationSettings` `Global`.
-  Editor views resolve `editor.tabSize` for `{ view: "editor" or the contributed
-  view ID, language: effective language }`, and tab expansion uses it instead of
-  the fixed 4. Changing the setting repaints open views.
-- Validation: unit tests for resolution (unscoped default, scoped beats
-  unscoped, more facts beat fewer, ties go to the last write, re-set moves an
-  entry later, reset reveals the next match, mismatched facts are ignored), for
-  definitions (a pending value adopted, a mismatching pending value dropped,
-  a typed write rejected after definition, a duplicate definition rejected,
-  removal on teardown keeping values), and for an inert undefined key. A gpui test changes the global and a
-  Rust-scoped value and checks that the caret x position and shaped width of a
-  line with tabs follow the change in an already-open view.
-- Review gate: the store shape and the editor wiring, before any public API
-  exists.
-
-**Implementation context:** register the module in `src/app/mod.rs` and
-install the global at startup next to the other application globals (see
-`ApplicationLanguages` in `src/app/languages.rs`). Tab expansion is
-`expand_tabs` in `src/app/editor/layout.rs`, used by `shape_editor_line` and
-`x_for_index_dir`. Thread the tab size through these instead of the hard-coded
-`4`, and check other callers of `expand_tabs` for hit testing. The editor finds
-its language through `languages::effective_language(model, cx)`. Mirror an
-existing `cx.observe_global` subscription for repaint, or add the first one in
-`src/app/editor.rs`. Product test helpers live in `src/app/product/tests/`.
+`src/app/settings.rs` holds the `ApplicationSettings` store: native and
+lifecycle-owned definitions, pending JSON values validated at definition, and
+resolution by fact count then write sequence. Editor views resolve
+`editor.tabSize` for their view kind and effective language and repaint when
+the global changes. There is no generation counter, because gpui notifies
+global observers on every mutable access. Tab size is clamped to 1–32
+columns, and an `integer` is a JSON integer that fits `i64`. The store's write
+and definition paths carry a `dead_code` allowance outside tests until
+checkpoint 3 gives them product callers.
 
 ### 3. Public `settings` API
 
