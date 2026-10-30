@@ -15,7 +15,10 @@ test("registers every theme before start resolves", async () => {
   );
   assert.deepEqual(
     (await themes.list()).map((theme) => `${theme.name}:${theme.appearance}`),
-    ["One Dark:dark", "One Light:light"],
+    [
+      "Catppuccin Latte:light", "Catppuccin Mocha:dark", "One Dark:dark", "One Light:light",
+      "Solarized Dark:dark", "Solarized Light:light", "Tokyo Night:dark", "Tokyo Night Light:light",
+    ],
   );
 });
 

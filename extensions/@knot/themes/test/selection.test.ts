@@ -34,11 +34,13 @@ test("selecting a theme sets its appearance's theme and the mode", async () => {
 
   assert.deepEqual(await selection(), { mode: "light", dark: "One Dark", light: "One Light" });
   const [prompt] = host.prompts();
+  const items = (prompt?.options as { items: { label: string; description: string }[] }).items;
   assert.deepEqual(
-    (prompt?.options as { items: { label: string; description: string }[] }).items,
+    items.filter((item) => item.label.startsWith("One ") || item.label === "Solarized Dark"),
     [
       { id: "One Dark", label: "One Dark", description: "dark, selected" },
       { id: "One Light", label: "One Light", description: "light, selected" },
+      { id: "Solarized Dark", label: "Solarized Dark", description: "dark" },
     ],
   );
 });
