@@ -102,21 +102,16 @@ to be rebuilt later:
     `@knot/projects` record. Workspace trust (D124) stays deferred, so
     project settings must not run code until it exists.
 
-- **D064 — Theming system** (depends on D070)
-  - Themes become extension contributions, like languages. A public
-    registration API is added, the built-in palette moves into a bundled
-    package with at least one light and one dark theme, and native code keeps
-    only a minimal fallback for a failed package.
-  - Follow Zed's theme layout: a theme family with an appearance per theme,
-    flat dotted UI color keys (`editor.background`, `error`, …) for every
-    surface, and a `syntax` map from capture names to color, font style, and
-    weight.
-  - Every existing surface (editor, tabs, docks, trees, palette, terminal ANSI
-    colors) reads theme keys. Add a Select Theme picker, and optionally follow
-    the system appearance.
-  - Startup already awaits package entries, so a theme registered in `start()`
-    styles the first frame.
-  - 🚧 [Plan](d064-theming.md)
+- ✅ **D064 — Theming system**
+  - Themes are extension contributions registered like languages, and every
+    native surface paints from color keys whose native defaults are also the
+    fallback. Extensions define their own keys and name them in decorations,
+    gutter markers, and badges. `theme.mode`, `theme.dark`, and `theme.light`
+    select the theme, and the bundled `@knot/themes` package ships One Dark,
+    One Light, Catppuccin, Tokyo Night, and Solarized with a remembered Select
+    Theme command
+    ([semantic UI](../architecture/semantic-ui.md#themes-and-color-keys),
+    [decisions](../decisions.md#themes)).
 
 - **D071 — Command palette and shared picker**
   - Commands gain an optional `description`, for native commands and in
