@@ -104,6 +104,7 @@ struct RunningTerminal {
     terminal: Arc<FairMutex<Term<TerminalEventListener>>>,
     sender: EventLoopSender,
     thread: Option<PtyThread>,
+    pid: Option<u32>,
 }
 
 impl RunningTerminal {
@@ -118,6 +119,10 @@ impl RunningTerminal {
             listener.clone(),
         )));
         let pty = tty::new(options, size.window_size(), 0)?;
+        #[cfg(unix)]
+        let pid = Some(pty.child().id());
+        #[cfg(not(unix))]
+        let pid = None;
         let event_loop = EventLoop::new(
             terminal.clone(),
             listener,
@@ -131,6 +136,7 @@ impl RunningTerminal {
             terminal,
             sender,
             thread: Some(thread),
+            pid,
         })
     }
 
@@ -417,6 +423,19 @@ impl TerminalSession {
     #[cfg(test)]
     pub(crate) fn working_directory(&self) -> Option<&std::path::Path> {
         self.options.working_directory.as_deref()
+    }
+
+    /// The directory the shell is in now where the platform can report it,
+    /// otherwise the directory the session started in.
+    #[allow(dead_code)]
+    pub(crate) fn current_directory(&self) -> Option<std::path::PathBuf> {
+        match &self.state {
+            TerminalState::Running(RunningTerminal { pid: Some(pid), .. }) => {
+                super::process::working_directory(*pid)
+            }
+            _ => None,
+        }
+        .or_else(|| self.options.working_directory.clone())
     }
 
     pub(crate) fn restart(&mut self, cx: &mut Context<Self>) {

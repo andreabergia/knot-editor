@@ -1,6 +1,6 @@
 # D127 — Restored terminals keep their working directory
 
-Status: 🚧 approved, not started. Item of the
+Status: 🚧 in progress; checkpoint 1 awaiting review. Item of the
 [daily-driver plan](daily-driver.md); builds on D121's default directory rule
 ([workbench and lifecycle](../architecture/workbench-and-lifecycle.md#terminal-sessions-and-views),
 [decisions](../decisions.md#terminal)).
@@ -57,7 +57,7 @@ all share the default.
 
 ## Checkpoints
 
-### 1. Session working directory query
+### 1. Session working directory query ✅ (awaiting review)
 
 - Deliverable: `TerminalSession::current_directory()` returns the shell's live
   working directory on macOS and Linux, otherwise the start directory.

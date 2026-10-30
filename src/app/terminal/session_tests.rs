@@ -178,6 +178,81 @@ fn natural_exit_retains_final_output_and_status(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn current_directory_follows_the_shell(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let nested = temp.path().join("nested");
+    fs::create_dir(&nested).unwrap();
+    let session = cx.new(|cx| {
+        TerminalSession::new_with_options(
+            tty::Options {
+                working_directory: Some(temp.path().to_owned()),
+                ..shell("printf 'started\\n'; while IFS= read -r dir; do cd \"$dir\" && printf 'moved\\n'; done")
+            },
+            cx,
+        )
+    });
+    wait_for(cx, &session, |session| output(session).contains("started"));
+    let canonical = |path: &Path| fs::canonicalize(path).unwrap();
+    assert_eq!(
+        session
+            .read_with(cx, |session, _| session.current_directory())
+            .map(|path| canonical(&path)),
+        Some(canonical(temp.path()))
+    );
+
+    session.update(cx, |session, _| session.send(b"nested\r".to_vec()));
+    wait_for(cx, &session, |session| output(session).contains("moved"));
+    assert_eq!(
+        session
+            .read_with(cx, |session, _| session.current_directory())
+            .map(|path| canonical(&path)),
+        Some(canonical(&nested))
+    );
+    session.update(cx, |session, cx| session.close(cx));
+}
+
+#[gpui::test]
+fn stopped_and_failed_sessions_report_their_start_directory(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let nested = temp.path().join("nested");
+    fs::create_dir(&nested).unwrap();
+    let exited = cx.new(|cx| {
+        TerminalSession::new_with_options(
+            tty::Options {
+                working_directory: Some(temp.path().to_owned()),
+                ..shell("cd nested; exit 0")
+            },
+            cx,
+        )
+    });
+    wait_for(cx, &exited, |session| {
+        matches!(session.status(), TerminalStatus::Exited(_))
+    });
+    assert_eq!(
+        exited.read_with(cx, |session, _| session.current_directory()),
+        Some(temp.path().to_owned())
+    );
+
+    let failed = cx.new(|cx| {
+        TerminalSession::new_with_options(
+            tty::Options {
+                shell: Some(tty::Shell::new(
+                    "/does-not-exist/knot-test-shell".to_owned(),
+                    Vec::new(),
+                )),
+                working_directory: Some(temp.path().to_owned()),
+                ..Default::default()
+            },
+            cx,
+        )
+    });
+    assert_eq!(
+        failed.read_with(cx, |session, _| session.current_directory()),
+        Some(temp.path().to_owned())
+    );
+}
+
+#[gpui::test]
 fn resize_updates_grid_and_child_pty(cx: &mut TestAppContext) {
     let session = cx.new(|cx| {
         TerminalSession::new_with_options(
