@@ -41,7 +41,7 @@ use super::{
     languages,
     model::{BufferModel, ContributionSource, ResolvedEditorContribution},
     settings::{self, ApplicationSettings, SettingsScope},
-    theme::{Highlight, Theme},
+    theme::{Highlight, Theme, color, theme},
 };
 
 static NEXT_HISTORY_CONTEXT: AtomicU64 = AtomicU64::new(1);
@@ -350,7 +350,6 @@ impl EditorView {
         rendering: EditorRenderingOptions,
         cx: &mut Context<Self>,
     ) -> Self {
-        cx.default_global::<Theme>();
         let (line_count, seen_revision, (decorations, gutter_markers, contribution_actions)) = {
             let model = model.read(cx);
             (

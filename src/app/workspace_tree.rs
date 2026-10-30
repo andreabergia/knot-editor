@@ -2,6 +2,8 @@ use std::collections::{HashMap, HashSet};
 
 use gpui::{prelude::FluentBuilder, *};
 
+use super::theme::{color, theme};
+
 use super::{
     filesystem::{ResourceEntry, ResourceKind},
     resource::ResourceUri,
@@ -509,7 +511,8 @@ impl Render for WorkspaceTree {
         let selected = self.selected.clone();
         let expanded = self.expanded.clone();
         let entity = cx.entity();
-        uniform_list("workspace-tree", rows.len(), move |range, _, _| {
+        uniform_list("workspace-tree", rows.len(), move |range, _, cx| {
+            let theme = theme(cx);
             range
                 .map(|index| {
                     let row = &rows[index];
@@ -531,7 +534,11 @@ impl Render for WorkspaceTree {
                                 .pl(px(22. + *depth as f32 * 14.))
                                 .py_1()
                                 .text_sm()
-                                .text_color(if *error { rgb(0xf48771) } else { rgb(0x888888) })
+                                .text_color(theme.color(if *error {
+                                    color::ERROR
+                                } else {
+                                    color::TEXT_MUTED
+                                }))
                                 .child(label.clone())
                                 .into_any_element();
                         }
@@ -552,9 +559,10 @@ impl Render for WorkspaceTree {
                         .text_sm()
                         .when(is_root, |row| row.font_weight(FontWeight::SEMIBOLD))
                         .when(is_selected, |row| {
-                            row.bg(rgb(0x2a4a7a)).text_color(rgb(0xffffff))
+                            row.bg(theme.color(color::LIST_SELECTED_BACKGROUND))
+                                .text_color(theme.color(color::LIST_SELECTED_FOREGROUND))
                         })
-                        .hover(|style| style.bg(rgb(0x222222)))
+                        .hover(|style| style.bg(theme.color(color::LIST_HOVER_BACKGROUND)))
                         .child(Self::disclosure(&kind, is_expanded))
                         .when(!is_root, |row| row.child(Self::icon(&kind)))
                         .child(label)

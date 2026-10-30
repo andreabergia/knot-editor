@@ -10,7 +10,7 @@ use std::rc::Rc;
 
 use crate::app::{
     TERMINAL_KEY_CONTEXT,
-    terminal::colors::{BACKGROUND, FOREGROUND, dim, resolve_color},
+    terminal::colors::{TerminalPalette, dim, resolve_color},
     terminal::input::terminal_key_bytes,
     terminal::layout::TerminalLayout,
     terminal::links::{LinkGrid, LinkTarget},
@@ -19,6 +19,7 @@ use crate::app::{
         mouse_bytes, wheel_route,
     },
     terminal::session::{TerminalAttachment, TerminalSession, TerminalSize, TerminalStatus},
+    theme::{color, theme},
     typography::{TEXT_SIZE, text_font},
 };
 
@@ -673,7 +674,7 @@ impl Render for TerminalView {
             .size_full()
             .flex()
             .flex_col()
-            .bg(rgb(BACKGROUND))
+            .bg(theme(cx).color(color::TERMINAL_BACKGROUND))
             .occlude()
             .child(
                 div()
@@ -684,8 +685,8 @@ impl Render for TerminalView {
                     .justify_between()
                     .px_2()
                     .text_xs()
-                    .text_color(rgb(0x8f8f8f))
-                    .bg(rgb(0x202020))
+                    .text_color(theme(cx).color(color::TEXT_MUTED))
+                    .bg(theme(cx).color(color::TAB_BAR_BACKGROUND))
                     .child(format!(
                         "TERMINAL · {} · mouse: {}",
                         match self.session.read(cx).status() {
@@ -708,7 +709,7 @@ impl Render for TerminalView {
                                 div()
                                     .id("close-terminal")
                                     .cursor_pointer()
-                                    .text_color(rgb(0xffb080))
+                                    .text_color(theme(cx).color(color::TEXT_ACCENT))
                                     .child("close")
                                     .on_click(cx.listener(|this, _, _, cx| this.close(cx))),
                             )
@@ -716,7 +717,7 @@ impl Render for TerminalView {
                                 div()
                                     .id("restart-terminal")
                                     .cursor_pointer()
-                                    .text_color(rgb(0x80c0ff))
+                                    .text_color(theme(cx).color(color::TEXT_ACCENT))
                                     .child("restart")
                                     .on_click(cx.listener(|this, _, _, cx| this.restart(cx))),
                             ),
@@ -779,6 +780,7 @@ impl TerminalSnapshot {
                 links: None,
             };
         };
+        let palette = TerminalPalette::new(theme(cx));
         let terminal = terminal.lock();
         let content = terminal.renderable_content();
         let display_offset = content.display_offset;
@@ -794,8 +796,8 @@ impl TerminalSnapshot {
                 if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
                     return None;
                 }
-                let mut foreground = resolve_color(cell.fg, &colors, FOREGROUND);
-                let mut background = resolve_color(cell.bg, &colors, BACKGROUND);
+                let mut foreground = resolve_color(cell.fg, &colors, palette.foreground, &palette);
+                let mut background = resolve_color(cell.bg, &colors, palette.background, &palette);
                 if cell.flags.contains(Flags::INVERSE) {
                     std::mem::swap(&mut foreground, &mut background);
                 }
@@ -954,10 +956,13 @@ impl Element for TerminalElement {
         let cell_width = layout.cell_width;
         let cell_height = layout.cell_height;
         let mask = Some(ContentMask { bounds });
+        let terminal_background = TerminalPalette::new(theme(cx)).background;
+        let selection = theme(cx).color(color::TERMINAL_SELECTION);
+        let cursor_color = theme(cx).color(color::TERMINAL_CURSOR);
         window.with_content_mask(mask, |window| {
             for cell in &snapshot.cells {
                 let origin = layout.origin(bounds, cell.column, cell.line);
-                if cell.background != BACKGROUND || cell.selected {
+                if cell.background != terminal_background || cell.selected {
                     let width = if cell.flags.contains(Flags::WIDE_CHAR) {
                         cell_width * 2
                     } else {
@@ -968,11 +973,11 @@ impl Element for TerminalElement {
                             origin,
                             size: size(width, cell_height),
                         },
-                        rgb(if cell.selected {
-                            0x355a88
+                        if cell.selected {
+                            selection
                         } else {
-                            cell.background
-                        }),
+                            rgb(cell.background).into()
+                        },
                     ));
                 }
             }
@@ -999,7 +1004,7 @@ impl Element for TerminalElement {
                             0.,
                             transparent_black(),
                             px(1.),
-                            rgb(0xd4d4d4),
+                            cursor_color,
                             BorderStyle::Solid,
                         ));
                         Bounds {
@@ -1014,7 +1019,7 @@ impl Element for TerminalElement {
                     CursorShape::Hidden => unreachable!(),
                 };
                 if cursor_bounds.size.width > px(0.) {
-                    window.paint_quad(fill(cursor_bounds, rgba(0xd4d4d480)));
+                    window.paint_quad(fill(cursor_bounds, cursor_color.opacity(0.5)));
                 }
             }
 

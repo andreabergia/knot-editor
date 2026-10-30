@@ -6,6 +6,8 @@ use std::{
 
 use gpui::{prelude::*, *};
 
+use super::theme::{Theme, color};
+
 use crate::host::protocol::{
     BufferHandle, CompletionProviderRegistrationId, CompletionRequest, CompletionResponse,
     CompletionResultItem, ExtensionId, ExtensionLifecycleId,
@@ -87,7 +89,7 @@ impl CompletionSurface {
         self.selected
     }
 
-    pub(crate) fn render(&self, anchor: Point<Pixels>) -> AnyElement {
+    pub(crate) fn render(&self, anchor: Point<Pixels>, theme: &Theme) -> AnyElement {
         let selected = self.selected;
         let status = format!(
             "{} pending · {} failed",
@@ -103,8 +105,8 @@ impl CompletionSurface {
             .overflow_hidden()
             .rounded_md()
             .border_1()
-            .border_color(rgb(0x4c566a))
-            .bg(rgb(0x252a34))
+            .border_color(theme.color(color::POPOVER_BORDER))
+            .bg(theme.color(color::POPOVER_BACKGROUND))
             .text_sm()
             .children(self.snapshot.items.iter().take(8).map(|item| {
                 div()
@@ -112,11 +114,13 @@ impl CompletionSurface {
                     .justify_between()
                     .px_2()
                     .py_1()
-                    .when(Some(item.id) == selected, |row| row.bg(rgb(0x3b4252)))
+                    .when(Some(item.id) == selected, |row| {
+                        row.bg(theme.color(color::LIST_SELECTED_BACKGROUND))
+                    })
                     .child(item.label.clone())
                     .child(
                         div()
-                            .text_color(rgb(0x88c0d0))
+                            .text_color(theme.color(color::TEXT_ACCENT))
                             .child(item.provider_label.clone()),
                     )
             }))
@@ -124,16 +128,16 @@ impl CompletionSurface {
                 div()
                     .px_2()
                     .py_1()
-                    .text_color(rgb(0xbf616a))
+                    .text_color(theme.color(color::ERROR))
                     .child(format!("{}: {}", failure.provider_label, failure.message))
             }))
             .child(
                 div()
                     .border_t_1()
-                    .border_color(rgb(0x4c566a))
+                    .border_color(theme.color(color::POPOVER_BORDER))
                     .px_2()
                     .py_1()
-                    .text_color(rgb(0xa3a3a3))
+                    .text_color(theme.color(color::TEXT_MUTED))
                     .child(status),
             )
             .into_any_element()

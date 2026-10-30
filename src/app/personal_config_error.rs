@@ -4,11 +4,12 @@ use gpui::prelude::FluentBuilder;
 use gpui::{
     App, AppContext, Bounds, ClipboardItem, Context, FocusHandle, InteractiveElement, IntoElement,
     ParentElement, Render, StatefulInteractiveElement, Styled, Window, WindowBounds, WindowOptions,
-    div, px, rgb, size,
+    div, px, size,
 };
 
 use super::commands::dispatch::{ProductCommandSource, QUIT_COMMAND};
 use super::personal_config::ConfigDiagnostic;
+use super::theme::{color, theme};
 
 pub(crate) struct PersonalConfigErrorView {
     diagnostic: ConfigDiagnostic,
@@ -64,10 +65,10 @@ impl Render for PersonalConfigErrorView {
             .flex_col()
             .gap_4()
             .p_5()
-            .bg(rgb(0x202024))
-            .text_color(rgb(0xe6e6e6))
+            .bg(theme(cx).color(color::BACKGROUND))
+            .text_color(theme(cx).color(color::TEXT))
             .child(div().text_lg().child("Personal configuration failed"))
-            .child(div().text_color(rgb(0xf19a8e)).child(phase))
+            .child(div().text_color(theme(cx).color(color::ERROR)).child(phase))
             .child(div().text_sm().child(location))
             .child(
                 div()
@@ -91,10 +92,10 @@ impl Render for PersonalConfigErrorView {
                             .cursor_pointer()
                             .rounded_md()
                             .border_1()
-                            .border_color(rgb(0x5c5c65))
+                            .border_color(theme(cx).color(color::BORDER))
                             .px_3()
                             .py_1()
-                            .text_color(rgb(0x80c0ff))
+                            .text_color(theme(cx).color(color::TEXT_ACCENT))
                             .child("Copy")
                             .on_click(cx.listener(|this, _, _, cx| this.copy(cx))),
                     )
@@ -104,10 +105,10 @@ impl Render for PersonalConfigErrorView {
                             .cursor_pointer()
                             .rounded_md()
                             .border_1()
-                            .border_color(rgb(0x5c5c65))
+                            .border_color(theme(cx).color(color::BORDER))
                             .px_3()
                             .py_1()
-                            .text_color(rgb(0x80c0ff))
+                            .text_color(theme(cx).color(color::TEXT_ACCENT))
                             .child("Quit")
                             .on_click(|_, _, cx| super::extensions::host::quit_after_storage(cx)),
                     ),

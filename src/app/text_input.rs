@@ -10,6 +10,7 @@ use gpui::{prelude::*, *};
 use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation;
 
+use super::theme::{color, theme};
 use super::typography::{TEXT_SIZE as FONT_SIZE, text_font};
 
 const INPUT_LINE_HEIGHT: f32 = 22.;
@@ -218,7 +219,8 @@ impl TextInput {
         let run = TextRun {
             len: self.text.len(),
             font: text_font(false, false),
-            color: rgb(0xffffff).into(),
+            // Only measured, never painted.
+            color: Hsla::default(),
             background_color: None,
             underline: None,
             strikethrough: None,
@@ -470,6 +472,10 @@ impl Render for TextInput {
         let caret = self.caret;
         let marked = self.marked.clone();
         let font = text_font(false, false);
+        let foreground = theme(cx).color(color::TEXT);
+        let selection_color = theme(cx).color(color::EDITOR_SELECTION);
+        let marked_color = theme(cx).color(color::EDITOR_MARKED_TEXT);
+        let caret_color = theme(cx).color(color::EDITOR_CURSOR);
         div()
             .id("text-input")
             .h(px(INPUT_LINE_HEIGHT))
@@ -492,7 +498,7 @@ impl Render for TextInput {
                         let runs = [TextRun {
                             len: text.len(),
                             font: font.clone(),
-                            color: rgb(0xffffff).into(),
+                            color: foreground,
                             background_color: None,
                             underline: None,
                             strikethrough: None,
@@ -513,7 +519,7 @@ impl Render for TextInput {
                                     origin: point(origin.x + left, origin.y),
                                     size: size((x0 - x1).abs(), px(INPUT_LINE_HEIGHT)),
                                 },
-                                hsla(0.6, 0.7, 0.55, 0.35),
+                                selection_color,
                             ));
                         }
                         shaped
@@ -533,7 +539,7 @@ impl Render for TextInput {
                                     ),
                                     size: size((x0 - x1).abs().max(px(2.)), px(1.5)),
                                 },
-                                rgb(0xb0b0b0),
+                                marked_color,
                             ));
                         }
                         if focused && selection.start == selection.end {
@@ -543,7 +549,7 @@ impl Render for TextInput {
                                     origin: point(bounds.origin.x + x, bounds.origin.y),
                                     size: size(px(1.5), px(INPUT_LINE_HEIGHT)),
                                 },
-                                rgb(0xffffff),
+                                caret_color,
                             ));
                         }
                         window.handle_input(

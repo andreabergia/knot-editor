@@ -1,4 +1,4 @@
-//! Editor colors and the highlight-name vocabulary.
+//! Theme colors and the highlight-name vocabulary.
 //!
 //! Capture names follow nvim-treesitter's standard captures, which upstream
 //! grammar queries also use, so adapted queries keep their names. A source
@@ -8,10 +8,17 @@
 //! decorations produce them, so a query can never draw a diagnostic. The
 //! `Theme` resolves every name to a style the same way, so a theme may style
 //! `function` alone and have `function.method` follow it.
+//!
+//! UI colors are named by flat dotted keys. A color definition gives a key a
+//! default per appearance, either a color or another key; native surfaces
+//! paint only with keys from the native table here. A theme's values win
+//! over the defaults, and with no theme installed the dark defaults apply.
+
+use std::{collections::HashMap, sync::LazyLock};
 
 use gpui::{
-    FontStyle, FontWeight, Global, HighlightStyle, Hsla, StrikethroughStyle, UnderlineStyle, hsla,
-    px, rgb,
+    App, FontStyle, FontWeight, Global, HighlightStyle, Hsla, StrikethroughStyle, UnderlineStyle,
+    px, rgb, rgba,
 };
 
 /// Every name a syntax capture or semantic token can resolve to.
@@ -152,14 +159,143 @@ fn dotted_prefixes(name: &str) -> impl Iterator<Item = &str> {
     })
 }
 
-/// Editor surface colors and a resolved style for every highlight name.
+/// A color definition's default for one appearance.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum ColorDefault {
+    Color(Hsla),
+    /// The resolved color of another key.
+    Key(String),
+}
+
+/// A color key with a description and a default per appearance.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ColorDefinition {
+    pub(crate) key: String,
+    #[allow(dead_code)]
+    pub(crate) description: String,
+    pub(crate) dark: ColorDefault,
+    pub(crate) light: ColorDefault,
+}
+
+impl ColorDefinition {
+    fn default_for(&self, appearance: Appearance) -> &ColorDefault {
+        match appearance {
+            Appearance::Dark => &self.dark,
+            Appearance::Light => &self.light,
+        }
+    }
+}
+
+enum NativeDefault {
+    Rgb(u32),
+    Rgba(u32),
+    Key(&'static str),
+}
+
+impl NativeDefault {
+    fn definition(&self) -> ColorDefault {
+        match self {
+            Self::Rgb(color) => ColorDefault::Color(rgb(*color).into()),
+            Self::Rgba(color) => ColorDefault::Color(rgba(*color).into()),
+            Self::Key(key) => ColorDefault::Key((*key).to_owned()),
+        }
+    }
+}
+
+macro_rules! native_colors {
+    ($($name:ident = $key:literal, $description:literal, $dark:expr, $light:expr;)*) => {
+        /// Color keys native surfaces paint with.
+        pub(crate) mod color {
+            $(pub(crate) const $name: &str = $key;)*
+        }
+
+        fn native_color_table() -> Vec<(&'static str, &'static str, NativeDefault, NativeDefault)> {
+            use NativeDefault::{Key, Rgb, Rgba};
+            use color::*;
+            vec![$(($key, $description, $dark, $light),)*]
+        }
+    };
+}
+
+native_colors! {
+    BACKGROUND = "background", "Window and pane background.", Rgb(0x1e1e1e), Rgb(0xffffff);
+    BORDER = "border", "Dividers and panel borders.", Rgb(0x454545), Rgb(0xd4d4d4);
+    BORDER_HOVER = "border.hover", "A resizable divider under the pointer.", Rgb(0x7fb5ff), Rgb(0x3b82d6);
+    BUTTON_BACKGROUND = "button.background", "Inline action buttons.", Rgb(0x2d2d2d), Rgb(0xececec);
+    BUTTON_HOVER_BACKGROUND = "button.hover.background", "An inline action button under the pointer.", Rgb(0x3a3a3a), Rgb(0xdcdcdc);
+    DROP_TARGET_BACKGROUND = "dropTarget.background", "Where a dragged tab would land.", Rgba(0x7fb5ff55), Rgba(0x3b82d640);
+    EDITOR_BACKGROUND = "editor.background", "Text editor background.", Key(BACKGROUND), Key(BACKGROUND);
+    EDITOR_CURSOR = "editor.cursor", "Text cursor.", Rgb(0xe6e6e6), Rgb(0x1f1f1f);
+    EDITOR_FOREGROUND = "editor.foreground", "Unhighlighted editor text.", Rgb(0xd4d4d4), Rgb(0x1f1f1f);
+    EDITOR_MARKED_TEXT = "editor.markedText", "Underline of text being composed by an input method.", Rgba(0xb3b3b3cc), Rgba(0x595959cc);
+    EDITOR_SELECTION = "editor.selection", "Selected text.", Rgba(0x3c7cdd59), Rgba(0x3b82d640);
+    ERROR = "error", "Errors and failures.", Rgb(0xf48771), Rgb(0xc4314b);
+    INFO = "info", "Informational markers.", Rgb(0x6cb6ff), Rgb(0x1a73c7);
+    LIST_GROUP_BACKGROUND = "list.group.background", "Group headers in trees.", Rgb(0x262626), Rgb(0xf0f0f0);
+    LIST_HOVER_BACKGROUND = "list.hover.background", "A list or tree row under the pointer.", Rgb(0x2a2a2a), Rgb(0xebebeb);
+    LIST_SELECTED_BACKGROUND = "list.selected.background", "The selected list or tree row.", Rgb(0x2a4a7a), Rgb(0xcce0f7);
+    LIST_SELECTED_FOREGROUND = "list.selected.foreground", "Text of the selected list or tree row.", Rgb(0xffffff), Key(TEXT);
+    POPOVER_BACKGROUND = "popover.background", "Pickers, the command palette, completion, and reports.", Rgb(0x252526), Rgb(0xf8f8f8);
+    POPOVER_BORDER = "popover.border", "Border of popovers.", Rgb(0x555555), Rgb(0xc8c8c8);
+    SCRIM = "scrim", "Dims the window behind a modal surface.", Rgba(0x00000080), Rgba(0x00000040);
+    SCROLLBAR_THUMB = "scrollbar.thumb", "Scrollbar thumb.", Rgba(0x99999966), Rgba(0x64646466);
+    SUCCESS = "success", "Success markers.", Rgb(0x8fd18f), Rgb(0x2e8540);
+    TAB_ACTIVE_BACKGROUND = "tab.active.background", "The active tab.", Key(EDITOR_BACKGROUND), Key(EDITOR_BACKGROUND);
+    TAB_ACTIVE_FOREGROUND = "tab.active.foreground", "Title of the active tab.", Rgb(0xf0f0f0), Key(TEXT);
+    TAB_BAR_BACKGROUND = "tab.bar.background", "The tab bar behind the tabs.", Rgb(0x2d2d2d), Rgb(0xf0f0f0);
+    TAB_INACTIVE_BACKGROUND = "tab.inactive.background", "Inactive tabs.", Key(TAB_BAR_BACKGROUND), Key(TAB_BAR_BACKGROUND);
+    TAB_INACTIVE_FOREGROUND = "tab.inactive.foreground", "Titles of inactive tabs.", Rgb(0xaaaaaa), Key(TEXT_MUTED);
+    TERMINAL_ANSI_BLACK = "terminal.ansi.black", "ANSI black.", Rgb(0x000000), Rgb(0x000000);
+    TERMINAL_ANSI_BLUE = "terminal.ansi.blue", "ANSI blue.", Rgb(0x2472c8), Rgb(0x0451a5);
+    TERMINAL_ANSI_BRIGHT_BLACK = "terminal.ansi.brightBlack", "ANSI bright black.", Rgb(0x666666), Rgb(0x666666);
+    TERMINAL_ANSI_BRIGHT_BLUE = "terminal.ansi.brightBlue", "ANSI bright blue.", Rgb(0x3b8eea), Rgb(0x0451a5);
+    TERMINAL_ANSI_BRIGHT_CYAN = "terminal.ansi.brightCyan", "ANSI bright cyan.", Rgb(0x29b8db), Rgb(0x0598bc);
+    TERMINAL_ANSI_BRIGHT_GREEN = "terminal.ansi.brightGreen", "ANSI bright green.", Rgb(0x23d18b), Rgb(0x14ce14);
+    TERMINAL_ANSI_BRIGHT_MAGENTA = "terminal.ansi.brightMagenta", "ANSI bright magenta.", Rgb(0xd670d6), Rgb(0xbc05bc);
+    TERMINAL_ANSI_BRIGHT_RED = "terminal.ansi.brightRed", "ANSI bright red.", Rgb(0xf14c4c), Rgb(0xcd3131);
+    TERMINAL_ANSI_BRIGHT_WHITE = "terminal.ansi.brightWhite", "ANSI bright white.", Rgb(0xffffff), Rgb(0xa5a5a5);
+    TERMINAL_ANSI_BRIGHT_YELLOW = "terminal.ansi.brightYellow", "ANSI bright yellow.", Rgb(0xf5f543), Rgb(0xb5ba00);
+    TERMINAL_ANSI_CYAN = "terminal.ansi.cyan", "ANSI cyan.", Rgb(0x11a8cd), Rgb(0x0598bc);
+    TERMINAL_ANSI_GREEN = "terminal.ansi.green", "ANSI green.", Rgb(0x0dbc79), Rgb(0x00bc00);
+    TERMINAL_ANSI_MAGENTA = "terminal.ansi.magenta", "ANSI magenta.", Rgb(0xbc3fbc), Rgb(0xbc05bc);
+    TERMINAL_ANSI_RED = "terminal.ansi.red", "ANSI red.", Rgb(0xcd3131), Rgb(0xcd3131);
+    TERMINAL_ANSI_WHITE = "terminal.ansi.white", "ANSI white.", Rgb(0xe5e5e5), Rgb(0x555555);
+    TERMINAL_ANSI_YELLOW = "terminal.ansi.yellow", "ANSI yellow.", Rgb(0xe5e510), Rgb(0x949800);
+    TERMINAL_BACKGROUND = "terminal.background", "Terminal background and default cell background.", Rgb(0x181818), Key(BACKGROUND);
+    TERMINAL_CURSOR = "terminal.cursor", "Terminal cursor.", Key(TERMINAL_FOREGROUND), Key(TERMINAL_FOREGROUND);
+    TERMINAL_FOREGROUND = "terminal.foreground", "Default terminal text.", Key(EDITOR_FOREGROUND), Key(EDITOR_FOREGROUND);
+    TERMINAL_SELECTION = "terminal.selection", "Selected terminal cells.", Rgb(0x355a88), Rgb(0xadd6ff);
+    TEXT = "text", "Default interface text.", Rgb(0xe0e0e0), Rgb(0x1f1f1f);
+    TEXT_ACCENT = "text.accent", "Interface text that acts, such as buttons and links.", Rgb(0x80c0ff), Rgb(0x1a73c7);
+    TEXT_MUTED = "text.muted", "Secondary interface text.", Rgb(0x999999), Rgb(0x6e6e6e);
+    WARNING = "warning", "Warnings.", Rgb(0xe2c08d), Rgb(0x9a6700);
+}
+
+/// The definitions of every native color key.
+pub(crate) fn native_color_definitions() -> Vec<ColorDefinition> {
+    native_color_table()
+        .into_iter()
+        .map(|(key, description, dark, light)| ColorDefinition {
+            key: key.to_owned(),
+            description: description.to_owned(),
+            dark: dark.definition(),
+            light: light.definition(),
+        })
+        .collect()
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Appearance {
+    Dark,
+    #[cfg_attr(not(test), allow(dead_code))]
+    Light,
+}
+
+/// Resolved colors by key and a resolved style for every highlight name.
 pub(crate) struct Theme {
-    pub(crate) background: Hsla,
-    pub(crate) foreground: Hsla,
-    pub(crate) selection: Hsla,
-    pub(crate) caret: Hsla,
-    pub(crate) marked_text: Hsla,
-    pub(crate) scrollbar: Hsla,
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) appearance: Appearance,
+    colors: HashMap<String, Hsla>,
     /// Indexed by `Highlight`.
     highlights: Vec<HighlightStyle>,
 }
@@ -168,132 +304,119 @@ impl Global for Theme {}
 
 impl Default for Theme {
     fn default() -> Self {
-        Self::dark()
+        Self::defaults(Appearance::Dark)
     }
 }
 
+/// Styles every theme shares for markup that carries no color.
+fn markup_styles() -> [(&'static str, HighlightStyle); 4] {
+    [
+        (
+            "markup.italic",
+            HighlightStyle {
+                font_style: Some(FontStyle::Italic),
+                ..Default::default()
+            },
+        ),
+        (
+            "markup.strikethrough",
+            HighlightStyle {
+                strikethrough: Some(StrikethroughStyle {
+                    thickness: px(1.),
+                    color: None,
+                }),
+                ..Default::default()
+            },
+        ),
+        (
+            "markup.strong",
+            HighlightStyle {
+                font_weight: Some(FontWeight::BOLD),
+                ..Default::default()
+            },
+        ),
+        (
+            "markup.underline",
+            HighlightStyle {
+                underline: Some(UnderlineStyle {
+                    thickness: px(1.),
+                    color: None,
+                    wavy: false,
+                }),
+                ..Default::default()
+            },
+        ),
+    ]
+}
+
 impl Theme {
-    /// The built-in dark palette.
-    pub(crate) fn dark() -> Self {
-        let color = |hex: u32| HighlightStyle::color(rgb(hex).into());
-        let bold = |hex: u32| HighlightStyle {
-            font_weight: Some(FontWeight::BOLD),
-            ..color(hex)
+    /// Native color defaults and a minimal syntax palette, used when no
+    /// registered theme applies.
+    pub(crate) fn defaults(appearance: Appearance) -> Self {
+        let syntax: [(&str, u32); 8] = match appearance {
+            Appearance::Dark => [
+                ("comment", 0x6a9955),
+                ("constant", 0x4fc1ff),
+                ("function", 0xdcdcaa),
+                ("keyword", 0x569cd6),
+                ("markup.heading", 0x569cd6),
+                ("number", 0xb5cea8),
+                ("string", 0xce9178),
+                ("type", 0x4ec9b0),
+            ],
+            Appearance::Light => [
+                ("comment", 0x008000),
+                ("constant", 0x0070c1),
+                ("function", 0x795e26),
+                ("keyword", 0x0000ff),
+                ("markup.heading", 0x0000ff),
+                ("number", 0x098658),
+                ("string", 0xa31515),
+                ("type", 0x267f99),
+            ],
         };
-        let italic = |hex: u32| HighlightStyle {
-            font_style: Some(FontStyle::Italic),
-            ..color(hex)
-        };
-        let wavy = |hex: u32| HighlightStyle {
+        let syntax = syntax
+            .into_iter()
+            .map(|(name, color)| (name, HighlightStyle::color(rgb(color).into())))
+            .chain(markup_styles())
+            .collect::<Vec<_>>();
+        Self::new(
+            appearance,
+            &HashMap::new(),
+            &native_color_definitions(),
+            &syntax,
+        )
+    }
+
+    /// A theme whose `values` win over each definition's default for
+    /// `appearance`, whose capture styles resolve against `syntax` by longest
+    /// dotted prefix, and whose decorations take the status colors.
+    pub(crate) fn new(
+        appearance: Appearance,
+        values: &HashMap<String, Hsla>,
+        definitions: &[ColorDefinition],
+        syntax: &[(&str, HighlightStyle)],
+    ) -> Self {
+        let colors = resolve_colors(appearance, values, definitions);
+        let wavy = |key: &str| HighlightStyle {
             underline: Some(UnderlineStyle {
                 thickness: px(1.5),
-                color: Some(rgb(hex).into()),
+                color: colors.get(key).copied(),
                 wavy: true,
             }),
             ..Default::default()
         };
-        Self::with_styles(
-            Self {
-                background: rgb(0x1e1e1e).into(),
-                foreground: rgb(0xd4d4d4).into(),
-                selection: hsla(0.6, 0.7, 0.55, 0.35),
-                caret: hsla(0., 0., 0.9, 1.0),
-                marked_text: hsla(0.0, 0.0, 0.7, 0.8),
-                scrollbar: hsla(0., 0., 0.6, 0.4),
-                highlights: Vec::new(),
-            },
-            &[
-                ("attribute", color(0x9cdcfe)),
-                ("boolean", color(0x569cd6)),
-                ("character", color(0xce9178)),
-                ("character.special", color(0xd7ba7d)),
-                ("comment", italic(0x6a9955)),
-                ("comment.error", bold(0xf48771)),
-                ("comment.note", bold(0x6cb6ff)),
-                ("comment.todo", bold(0xe2c08d)),
-                ("comment.warning", bold(0xe2c08d)),
-                ("constant", color(0x4fc1ff)),
-                ("constant.builtin", color(0x569cd6)),
-                ("constructor", color(0x4ec9b0)),
-                ("diagnostic.error", wavy(0xf48771)),
-                ("diagnostic.info", wavy(0x6cb6ff)),
-                ("diagnostic.warning", wavy(0xe2c08d)),
-                ("diff.delta", color(0xe2c08d)),
-                ("diff.minus", color(0xf48771)),
-                ("diff.plus", color(0x81b88b)),
-                ("function", color(0xdcdcaa)),
-                ("function.macro", color(0x569cd6)),
-                ("keyword", color(0x569cd6)),
-                ("keyword.conditional", color(0xc586c0)),
-                ("keyword.coroutine", color(0xc586c0)),
-                ("keyword.exception", color(0xc586c0)),
-                ("keyword.import", color(0xc586c0)),
-                ("keyword.repeat", color(0xc586c0)),
-                ("keyword.return", color(0xc586c0)),
-                ("label", color(0xc8c8c8)),
-                ("markup.heading", bold(0x569cd6)),
-                (
-                    "markup.italic",
-                    HighlightStyle {
-                        font_style: Some(FontStyle::Italic),
-                        ..Default::default()
-                    },
-                ),
-                ("markup.link", color(0x9cdcfe)),
-                ("markup.link.url", color(0xce9178)),
-                ("markup.list", color(0x6796e6)),
-                ("markup.quote", italic(0x6a9955)),
-                ("markup.raw", color(0xce9178)),
-                (
-                    "markup.strikethrough",
-                    HighlightStyle {
-                        strikethrough: Some(StrikethroughStyle {
-                            thickness: px(1.),
-                            color: None,
-                        }),
-                        ..Default::default()
-                    },
-                ),
-                (
-                    "markup.strong",
-                    HighlightStyle {
-                        font_weight: Some(FontWeight::BOLD),
-                        ..Default::default()
-                    },
-                ),
-                (
-                    "markup.underline",
-                    HighlightStyle {
-                        underline: Some(UnderlineStyle {
-                            thickness: px(1.),
-                            color: None,
-                            wavy: false,
-                        }),
-                        ..Default::default()
-                    },
-                ),
-                ("module", color(0x4ec9b0)),
-                ("number", color(0xb5cea8)),
-                ("property", color(0x9cdcfe)),
-                ("punctuation.special", color(0x569cd6)),
-                ("string", color(0xce9178)),
-                ("string.escape", color(0xd7ba7d)),
-                ("string.regexp", color(0xd16969)),
-                ("string.special", color(0xd7ba7d)),
-                ("tag", color(0x569cd6)),
-                ("tag.attribute", color(0x9cdcfe)),
-                ("tag.delimiter", color(0x808080)),
-                ("type", color(0x4ec9b0)),
-                ("variable", color(0x9cdcfe)),
-                ("variable.builtin", color(0x569cd6)),
-            ],
-        )
-    }
-
-    /// Resolve every capture and decoration name against `styles` by longest
-    /// dotted prefix; names with no styled prefix keep the default style.
-    fn with_styles(mut theme: Self, styles: &[(&str, HighlightStyle)]) -> Self {
-        theme.highlights = all_names()
+        let decorations = [
+            ("diagnostic.error", wavy(color::ERROR)),
+            ("diagnostic.info", wavy(color::INFO)),
+            ("diagnostic.warning", wavy(color::WARNING)),
+        ];
+        let styles = syntax
+            .iter()
+            .copied()
+            .chain(decorations)
+            .collect::<Vec<_>>();
+        let highlights = all_names()
             .map(|name| {
                 dotted_prefixes(name)
                     .find_map(|prefix| {
@@ -305,7 +428,21 @@ impl Theme {
                     .unwrap_or_default()
             })
             .collect();
-        theme
+        Self {
+            appearance,
+            colors,
+            highlights,
+        }
+    }
+
+    /// The resolved color of `key`; an undefined key paints as interface
+    /// text, since its definition may arrive later.
+    pub(crate) fn color(&self, key: &str) -> Hsla {
+        self.colors
+            .get(key)
+            .or_else(|| self.colors.get(color::TEXT))
+            .copied()
+            .unwrap_or_default()
     }
 
     pub(crate) fn style(&self, highlight: Highlight) -> HighlightStyle {
@@ -318,8 +455,52 @@ impl Theme {
         self.style(highlight)
             .underline
             .and_then(|underline| underline.color)
-            .unwrap_or(self.foreground)
+            .unwrap_or_else(|| self.color(color::EDITOR_FOREGROUND))
     }
+}
+
+/// Each defined key's color: its value in `values`, else its default for
+/// `appearance`. A default naming an undefined key, or a reference cycle,
+/// leaves the key unresolved.
+fn resolve_colors(
+    appearance: Appearance,
+    values: &HashMap<String, Hsla>,
+    definitions: &[ColorDefinition],
+) -> HashMap<String, Hsla> {
+    let definitions = definitions
+        .iter()
+        .map(|definition| (definition.key.as_str(), definition))
+        .collect::<HashMap<_, _>>();
+    let resolve = |key: &str| {
+        let mut key = key;
+        for _ in 0..=definitions.len() {
+            if let Some(value) = values.get(key) {
+                return Some(*value);
+            }
+            match definitions.get(key)?.default_for(appearance) {
+                ColorDefault::Color(color) => return Some(*color),
+                ColorDefault::Key(next) => key = next,
+            }
+        }
+        None
+    };
+    definitions
+        .keys()
+        .filter_map(|key| Some(((*key).to_owned(), resolve(key)?)))
+        .collect()
+}
+
+/// The application theme: the installed global, else the dark defaults.
+pub(crate) fn theme(cx: &App) -> &Theme {
+    static DEFAULTS: LazyLock<Theme> = LazyLock::new(Theme::default);
+    cx.try_global::<Theme>().unwrap_or(&DEFAULTS)
+}
+
+/// Replace the application theme and repaint every window.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn set_theme(theme: Theme, cx: &mut App) {
+    cx.set_global(theme);
+    cx.refresh_windows();
 }
 
 #[cfg(test)]
@@ -375,8 +556,10 @@ mod tests {
 
     #[test]
     fn theme_styles_follow_the_longest_styled_prefix() {
-        let theme = Theme::with_styles(
-            Theme::dark(),
+        let theme = Theme::new(
+            Appearance::Dark,
+            &HashMap::new(),
+            &native_color_definitions(),
             &[
                 ("function", HighlightStyle::color(rgb(0x111111).into())),
                 (
@@ -389,6 +572,136 @@ mod tests {
         assert_eq!(color("function.method"), Some(rgb(0x111111).into()));
         assert_eq!(color("function.macro"), Some(rgb(0x222222).into()));
         assert_eq!(color("keyword"), None);
+    }
+
+    #[test]
+    fn native_keys_are_unique_and_every_default_resolves() {
+        let definitions = native_color_definitions();
+        let mut keys = definitions
+            .iter()
+            .map(|definition| definition.key.as_str())
+            .collect::<Vec<_>>();
+        keys.sort_unstable();
+        keys.dedup();
+        assert_eq!(keys.len(), definitions.len());
+        for appearance in [Appearance::Dark, Appearance::Light] {
+            let colors = resolve_colors(appearance, &HashMap::new(), &definitions);
+            for key in &keys {
+                assert!(
+                    colors.contains_key(*key),
+                    "{key} has no {appearance:?} default"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn theme_values_win_over_defaults_and_references_follow_them() {
+        let values = HashMap::from([(color::BACKGROUND.to_owned(), rgb(0x123456).into())]);
+        let theme = Theme::new(Appearance::Dark, &values, &native_color_definitions(), &[]);
+        assert_eq!(theme.color(color::BACKGROUND), rgb(0x123456).into());
+        // editor.background defaults to background.
+        assert_eq!(theme.color(color::EDITOR_BACKGROUND), rgb(0x123456).into());
+        assert_eq!(theme.color("undefined.key"), theme.color(color::TEXT));
+    }
+
+    #[test]
+    fn reference_cycles_and_dangling_references_stay_unresolved() {
+        let definition = |key: &str, target: &str| ColorDefinition {
+            key: key.to_owned(),
+            description: String::new(),
+            dark: ColorDefault::Key(target.to_owned()),
+            light: ColorDefault::Key(target.to_owned()),
+        };
+        let colors = resolve_colors(
+            Appearance::Dark,
+            &HashMap::new(),
+            &[
+                definition("a", "b"),
+                definition("b", "a"),
+                definition("c", "missing"),
+            ],
+        );
+        assert!(colors.is_empty());
+    }
+
+    #[test]
+    fn decorations_take_the_status_colors() {
+        for appearance in [Appearance::Dark, Appearance::Light] {
+            let theme = Theme::defaults(appearance);
+            assert_eq!(theme.appearance, appearance);
+            assert_eq!(
+                theme.underline_color(Highlight::named("diagnostic.error")),
+                theme.color(color::ERROR)
+            );
+            assert_eq!(
+                theme.underline_color(Highlight::named("diagnostic.warning")),
+                theme.color(color::WARNING)
+            );
+        }
+    }
+
+    /// Every surface takes its colors from the theme.
+    #[test]
+    fn no_color_literals_outside_the_theme() {
+        let mut offenders = Vec::new();
+        let mut pending = vec![std::path::PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/app"
+        ))];
+        while let Some(path) = pending.pop() {
+            if path.is_dir() {
+                pending.extend(
+                    std::fs::read_dir(&path)
+                        .unwrap()
+                        .map(|entry| entry.unwrap().path()),
+                );
+            } else if path.extension().is_some_and(|extension| extension == "rs")
+                && !path.ends_with("theme.rs")
+            {
+                let source = std::fs::read_to_string(&path).unwrap();
+                for (index, line) in source.lines().enumerate() {
+                    if ["rgb(0x", "rgba(0x", "hsla("]
+                        .iter()
+                        .any(|literal| line.contains(literal))
+                    {
+                        offenders.push(format!("{}:{}", path.display(), index + 1));
+                    }
+                }
+            }
+        }
+        assert!(offenders.is_empty(), "color literals: {offenders:#?}");
+    }
+
+    #[gpui::test]
+    fn installing_a_theme_repaints_windows_and_replaces_the_defaults(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        struct Probe(std::rc::Rc<std::cell::Cell<usize>>);
+        impl gpui::Render for Probe {
+            fn render(
+                &mut self,
+                _: &mut gpui::Window,
+                _: &mut gpui::Context<Self>,
+            ) -> impl gpui::IntoElement {
+                self.0.set(self.0.get() + 1);
+                gpui::Empty
+            }
+        }
+        let renders = std::rc::Rc::new(std::cell::Cell::new(0));
+        cx.add_window({
+            let renders = renders.clone();
+            move |_, _| Probe(renders)
+        });
+        cx.run_until_parked();
+        let before = renders.get();
+        cx.update(|cx| {
+            assert_eq!(theme(cx).appearance, Appearance::Dark);
+            set_theme(Theme::defaults(Appearance::Light), cx);
+        });
+        cx.run_until_parked();
+        assert!(renders.get() > before);
+        cx.update(|cx| assert_eq!(theme(cx).appearance, Appearance::Light));
     }
 
     #[test]

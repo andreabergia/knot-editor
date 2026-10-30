@@ -12,6 +12,7 @@ use crate::host::protocol::{
 };
 
 use super::TREE_KEY_CONTEXT;
+use super::theme::{color, theme};
 
 pub(crate) static NEXT_VIEW_ID: AtomicU64 = AtomicU64::new(1);
 static NEXT_TREE_GENERATION: AtomicU64 = AtomicU64::new(1);
@@ -702,13 +703,13 @@ impl TreeView {
         }
     }
 
-    fn badge_color(badge: TreeBadge) -> u32 {
+    fn badge_color(badge: TreeBadge) -> &'static str {
         match badge {
-            TreeBadge::Neutral => 0x9a9a9a,
-            TreeBadge::Info => 0x6cb6ff,
-            TreeBadge::Success => 0x5fb85f,
-            TreeBadge::Warning => 0xe2c08d,
-            TreeBadge::Error => 0xf48771,
+            TreeBadge::Neutral => color::TEXT_MUTED,
+            TreeBadge::Info => color::INFO,
+            TreeBadge::Success => color::SUCCESS,
+            TreeBadge::Warning => color::WARNING,
+            TreeBadge::Error => color::ERROR,
         }
     }
 }
@@ -729,6 +730,11 @@ impl Render for TreeView {
         let action_focus = self.action_focus.clone();
         let frame_actions = self.frame_actions.clone();
         let entity = cx.entity();
+        let border = theme(cx).color(color::BORDER);
+        let button_text = theme(cx).color(color::TEXT);
+        let button_focused = theme(cx).color(color::LIST_SELECTED_BACKGROUND);
+        let button = theme(cx).color(color::BUTTON_BACKGROUND);
+        let button_hover = theme(cx).color(color::BUTTON_HOVER_BACKGROUND);
         let mut key_context = KeyContext::default();
         key_context.add(TREE_KEY_CONTEXT);
         key_context.add(super::commands::keymaps::view_context(&self.view_id));
@@ -748,7 +754,7 @@ impl Render for TreeView {
                 .flex_row()
                 .gap_2()
                 .border_b_1()
-                .border_color(rgb(0x333333));
+                .border_color(border);
             for (action_index, action) in frame_actions.into_iter().enumerate() {
                 let focused = frame_focused
                     && action_focus
@@ -763,13 +769,9 @@ impl Render for TreeView {
                         .py_0p5()
                         .rounded_sm()
                         .text_xs()
-                        .text_color(rgb(0xd0d0d0))
-                        .bg(if focused {
-                            rgb(0x2a4a7a)
-                        } else {
-                            rgb(0x2d2d2d)
-                        })
-                        .hover(|style| style.bg(rgb(0x3a3a3a)))
+                        .text_color(button_text)
+                        .bg(if focused { button_focused } else { button })
+                        .hover(|style| style.bg(button_hover))
                         .child(action.label)
                         .on_click(move |_, window, cx| {
                             let handle = window.window_handle();
@@ -784,7 +786,8 @@ impl Render for TreeView {
             Some(bar)
         };
 
-        let list = uniform_list("extension-tree", rows.len(), move |range, _, _| {
+        let list = uniform_list("extension-tree", rows.len(), move |range, _, cx| {
+            let theme = theme(cx);
             range
                 .map(|index| match &rows[index] {
                     VisibleRow::Item { item, depth, .. } => {
@@ -808,23 +811,35 @@ impl Render for TreeView {
                             .gap_1()
                             .text_sm()
                             .when(is_group, |row| {
-                                row.bg(rgb(0x262626)).text_color(rgb(0x9a9a9a))
+                                row.bg(theme.color(color::LIST_GROUP_BACKGROUND))
+                                    .text_color(theme.color(color::TEXT_MUTED))
                             })
                             .when(is_selected, |row| {
-                                row.bg(rgb(0x2a4a7a)).text_color(rgb(0xffffff))
+                                row.bg(theme.color(color::LIST_SELECTED_BACKGROUND))
+                                    .text_color(theme.color(color::LIST_SELECTED_FOREGROUND))
                             })
                             // A selected row keeps its highlight while hovered.
                             .when(!is_selected, |row| {
-                                row.hover(|style| style.bg(rgb(0x222222)))
+                                row.hover(|style| {
+                                    style.bg(theme.color(color::LIST_HOVER_BACKGROUND))
+                                })
                             })
                             .child(Self::disclosure(item, expanded.contains(&item.id)))
                             .child(Self::icon(item))
                             .child(div().flex_1().truncate().child(item.label.clone()))
                             .when_some(item.description.clone(), |row, description| {
-                                row.child(div().text_color(rgb(0x888888)).child(description))
+                                row.child(
+                                    div()
+                                        .text_color(theme.color(color::TEXT_MUTED))
+                                        .child(description),
+                                )
                             });
                         if let Some(status) = item.status_text.clone() {
-                            row = row.child(div().text_color(rgb(0xb0b0b0)).child(status));
+                            row = row.child(
+                                div()
+                                    .text_color(theme.color(color::TEXT_MUTED))
+                                    .child(status),
+                            );
                         }
                         if let Some(badge) = item.badge {
                             row = row.child(
@@ -832,7 +847,7 @@ impl Render for TreeView {
                                     .size(px(6.0))
                                     .flex_shrink_0()
                                     .rounded_full()
-                                    .bg(rgb(Self::badge_color(badge))),
+                                    .bg(theme.color(Self::badge_color(badge))),
                             );
                         }
                         for (action_index, action) in item.actions.iter().enumerate() {
@@ -845,13 +860,15 @@ impl Render for TreeView {
                                     .px_1()
                                     .rounded_sm()
                                     .text_xs()
-                                    .text_color(rgb(0x6cb6ff))
-                                    .bg(if focused {
-                                        rgb(0x2a4a7a)
+                                    .text_color(theme.color(color::TEXT_ACCENT))
+                                    .bg(theme.color(if focused {
+                                        color::LIST_SELECTED_BACKGROUND
                                     } else {
-                                        rgb(0x2d2d2d)
+                                        color::BUTTON_BACKGROUND
+                                    }))
+                                    .hover(|style| {
+                                        style.bg(theme.color(color::BUTTON_HOVER_BACKGROUND))
                                     })
-                                    .hover(|style| style.bg(rgb(0x3a3a3a)))
                                     .child(action.label.clone())
                                     .on_click(move |_, window, cx| {
                                         let handle = window.window_handle();
@@ -885,7 +902,11 @@ impl Render for TreeView {
                         .pl(px(22. + *depth as f32 * 14.))
                         .py_1()
                         .text_sm()
-                        .text_color(if *error { rgb(0xf48771) } else { rgb(0x888888) })
+                        .text_color(theme.color(if *error {
+                            color::ERROR
+                        } else {
+                            color::TEXT_MUTED
+                        }))
                         .child(label.clone())
                         .into_any_element(),
                 })

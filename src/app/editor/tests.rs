@@ -17,7 +17,7 @@ use crate::{
         languages::{self, LanguageDefinition, LanguageOwner},
         settings::{ApplicationSettings, EDITOR_TAB_SIZE, SettingsScope},
         syntax::{SyntaxLanguage, SyntaxState},
-        theme::{Highlight, Theme},
+        theme::{Appearance, Highlight, Theme, color, native_color_definitions, theme},
     },
     host::protocol::{
         BufferHandle, ByteRange, CompletionResponse, CompletionResultItem, DecorationToken,
@@ -1036,12 +1036,35 @@ fn run_styles(runs: &[gpui::TextRun]) -> Vec<(usize, gpui::Hsla, Option<gpui::Hs
         .collect()
 }
 
+/// A theme styling the captures these tests paint.
+fn test_theme() -> Theme {
+    let style = |hex: u32| gpui::HighlightStyle::color(gpui::rgb(hex).into());
+    Theme::new(
+        Appearance::Dark,
+        &std::collections::HashMap::new(),
+        &native_color_definitions(),
+        &[
+            (
+                "comment",
+                gpui::HighlightStyle {
+                    font_style: Some(gpui::FontStyle::Italic),
+                    ..style(0x111111)
+                },
+            ),
+            ("keyword", style(0x222222)),
+            ("string", style(0x333333)),
+            ("type", style(0x444444)),
+            ("variable", style(0x555555)),
+        ],
+    )
+}
+
 #[test]
 fn layered_runs_apply_layers_in_order_and_fill_gaps() {
-    let theme = Theme::dark();
+    let theme = test_theme();
     let color = |name| theme.style(Highlight::named(name)).color.unwrap();
     let error = Some(theme.underline_color(Highlight::named("diagnostic.error")));
-    let fg = theme.foreground;
+    let fg = theme.color(color::EDITOR_FOREGROUND);
     let text = "let x = \"é\";";
     let syntax = [
         span(0..3, "keyword"),
@@ -1070,7 +1093,7 @@ fn layered_runs_apply_layers_in_order_and_fill_gaps() {
 
 #[test]
 fn layered_runs_merge_equal_styles_and_clip_to_the_line() {
-    let theme = Theme::dark();
+    let theme = test_theme();
     let keyword = theme.style(Highlight::named("keyword")).color.unwrap();
     let layer = [
         span(0..2, "keyword"),
@@ -1081,14 +1104,14 @@ fn layered_runs_merge_equal_styles_and_clip_to_the_line() {
         run_styles(&runs_for("abcd e", &[&layer], &theme)),
         [
             (4, keyword, None),
-            (1, theme.foreground, None),
+            (1, theme.color(color::EDITOR_FOREGROUND), None),
             (1, keyword, None)
         ]
     );
     assert!(runs_for("", &[&layer], &theme).is_empty());
     assert_eq!(
         run_styles(&runs_for("plain", &[], &theme)),
-        [(5, theme.foreground, None)]
+        [(5, theme.color(color::EDITOR_FOREGROUND), None)]
     );
 
     let comment = [span(0..5, "comment")];
@@ -1100,7 +1123,7 @@ fn layered_runs_merge_equal_styles_and_clip_to_the_line() {
 fn layered_runs_keep_tab_and_rtl_geometry(cx: &mut TestAppContext) {
     let model = cx.new(|_| BufferModel::from_text(""));
     let (_, cx) = cx.add_window_view(|_, cx| EditorView::new(model, cx));
-    let theme = Theme::dark();
+    let theme = test_theme();
     cx.update(|window, _| {
         for text in ["\tfoo\tbar(baz)\t", "مرحبا بالعالم", "\tשלום world"] {
             let layer: Vec<HighlightSpan> = text
@@ -1163,9 +1186,9 @@ fn overlapping_decorations_underline_with_the_most_severe(cx: &mut TestAppContex
     cx.run_until_parked();
 
     cx.read(|cx| {
-        let theme = cx.global::<Theme>();
+        let theme = theme(cx);
         let underline = |name| Some(theme.underline_color(Highlight::named(name)));
-        let fg = theme.foreground;
+        let fg = theme.color(color::EDITOR_FOREGROUND);
         assert_eq!(
             run_styles(&editor.read(cx).line_runs(model.read(cx), 0, "abcdefgh", cx)),
             [
@@ -1251,13 +1274,13 @@ fn syntax_highlights_paint_beneath_decorations(cx: &mut TestAppContext) {
         })
     };
     let (keyword, function, warning, fg) = cx.read(|cx| {
-        let theme = cx.global::<Theme>();
+        let theme = theme(cx);
         let color = |name| theme.style(Highlight::named(name)).color.unwrap();
         (
             color("keyword"),
             color("function"),
             Some(theme.underline_color(Highlight::named("diagnostic.warning"))),
-            theme.foreground,
+            theme.color(color::EDITOR_FOREGROUND),
         )
     });
     assert_eq!(

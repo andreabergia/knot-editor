@@ -15,14 +15,14 @@ impl Render for EditorView {
         if self.completion.is_some() {
             key_context.add("editor_completion");
         }
-        let completion = self
-            .completion_surface
-            .as_ref()
-            .map(|surface| surface.render(self.completion_anchor(self.model.read(cx), window, cx)));
+        let completion = self.completion_surface.as_ref().map(|surface| {
+            let anchor = self.completion_anchor(self.model.read(cx), window, cx);
+            surface.render(anchor, theme(cx))
+        });
         div()
             .id(("editor", self.element_id))
             .size_full()
-            .bg(cx.global::<Theme>().background)
+            .bg(theme(cx).color(color::EDITOR_BACKGROUND))
             // Track focus so clicking the pane focuses this view (gpui
             // auto-focuses a tracked element on mouse-down) and so on_key_down
             // listeners below actually receive keystrokes.
@@ -179,7 +179,7 @@ impl Element for EditorElement {
         ): EditorPaintState = {
             let view = self.entity.read(cx);
             let model = view.model.read(cx);
-            let theme = cx.global::<Theme>();
+            let theme = theme(cx);
             let max = (view.line_count as f32) * LINE_HEIGHT;
             let Range {
                 start: first,
@@ -226,10 +226,10 @@ impl Element for EditorElement {
                 marked,
                 gutter_markers,
                 PaintColors {
-                    selection: theme.selection,
-                    caret: theme.caret,
-                    marked_text: theme.marked_text,
-                    scrollbar: theme.scrollbar,
+                    selection: theme.color(color::EDITOR_SELECTION),
+                    caret: theme.color(color::EDITOR_CURSOR),
+                    marked_text: theme.color(color::EDITOR_MARKED_TEXT),
+                    scrollbar: theme.color(color::SCROLLBAR_THUMB),
                 },
                 view.focus.clone(),
                 self.entity.clone(),

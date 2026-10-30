@@ -17,6 +17,9 @@ use alacritty_terminal::{
 };
 use gpui::{Context, Task};
 
+use super::colors::{TerminalPalette, query_color};
+use crate::app::theme::theme;
+
 const INITIAL_COLUMNS: usize = 80;
 const INITIAL_LINES: usize = 11;
 
@@ -261,7 +264,8 @@ impl TerminalSession {
                     std::mem::take(&mut *events.lock().expect("terminal event queue poisoned"));
                 if this
                     .update(cx, |session, cx| {
-                        session.apply_events(generation, pending);
+                        let palette = TerminalPalette::new(theme(cx));
+                        session.apply_events(generation, pending, &palette);
                         cx.notify();
                     })
                     .is_err()
@@ -273,7 +277,7 @@ impl TerminalSession {
         cx.notify();
     }
 
-    fn apply_events(&mut self, generation: u64, events: Vec<Event>) {
+    fn apply_events(&mut self, generation: u64, events: Vec<Event>, palette: &TerminalPalette) {
         if self.generation != generation {
             return;
         }
@@ -282,7 +286,7 @@ impl TerminalSession {
                 Event::PtyWrite(text) => self.send(text.into_bytes()),
                 Event::ColorRequest(index, format) => {
                     if let Some(terminal) = self.terminal() {
-                        let color = super::colors::query_color(index, terminal.lock().colors());
+                        let color = query_color(index, terminal.lock().colors(), palette);
                         self.send(format(color).into_bytes());
                     }
                 }
@@ -525,9 +529,11 @@ mod compatibility_tests {
             .unwrap()
             .iter()
             .map(|event| match event {
-                Event::ColorRequest(index, format) => {
-                    format(super::super::colors::query_color(*index, terminal.colors()))
-                }
+                Event::ColorRequest(index, format) => format(query_color(
+                    *index,
+                    terminal.colors(),
+                    &TerminalPalette::new(&crate::app::theme::Theme::default()),
+                )),
                 _ => panic!("unexpected event: {event:?}"),
             })
             .collect();
@@ -565,6 +571,7 @@ mod compatibility_tests {
                     Event::TextAreaSizeRequest(Arc::new(|_| panic!("stale size formatter ran"))),
                     Event::ColorRequest(0, Arc::new(|_| panic!("stale color formatter ran"))),
                 ],
+                &TerminalPalette::new(&crate::app::theme::Theme::default()),
             );
             assert_eq!(session.status(), status);
             session.close(cx);

@@ -2,6 +2,7 @@
 
 use super::relocate::{TabRelocationDestination, TabRelocationSource};
 use super::*;
+use crate::app::theme::{color, theme};
 use crate::app::workbench::{
     DockLocation, SplitEdge, TabMoveCapture, TabMoveDestination, TabMovePlacement,
 };
@@ -422,7 +423,7 @@ pub(super) struct TabDragLabel {
     coordinator: Rc<RefCell<TabDragCoordinator>>,
 }
 impl Render for TabDragLabel {
-    fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let state = self.coordinator.borrow();
         let content = content_bounds(window);
         let pointer = state.pointer.filter(|pointer| {
@@ -443,8 +444,8 @@ impl Render for TabDragLabel {
                     .px_3()
                     .py_1()
                     .text_sm()
-                    .bg(rgb(0x405e90))
-                    .text_color(rgb(0xffffff))
+                    .bg(theme(cx).color(color::LIST_SELECTED_BACKGROUND))
+                    .text_color(theme(cx).color(color::LIST_SELECTED_FOREGROUND))
                     .child(self.title.clone()),
             )
         })
@@ -592,6 +593,7 @@ impl ProductShell {
         let shell = cx.entity().downgrade();
         let workbench = self.workbench.downgrade();
         let accepts_drop = self.command_palette.is_none() && !self.extension_report_open;
+        let drop_target = theme(cx).color(color::DROP_TARGET_BACKGROUND);
         canvas(
             |_, _, _| (),
             move |_, _, window, _| {
@@ -607,7 +609,7 @@ impl ProductShell {
                 });
                 drop(shared);
                 if let Some(preview) = state.borrow().preview {
-                    window.paint_quad(fill(preview.bounds, rgba(0x7fb5ff55)));
+                    window.paint_quad(fill(preview.bounds, drop_target));
                 }
                 let moves = coordinator.clone();
                 let resize_shell = shell.clone();

@@ -17,7 +17,7 @@ impl EditorView {
         let decorations = self.decoration_layers(line);
         let mut layers = vec![syntax.as_slice()];
         layers.extend(decorations.iter().map(Vec::as_slice));
-        runs_for(text, &layers, cx.global::<Theme>())
+        runs_for(text, &layers, theme(cx))
     }
 
     /// Shape `line`, whose content is `text`, with its highlight runs.
@@ -307,7 +307,7 @@ pub(super) fn runs_for(line: &str, layers: &[&[HighlightSpan]], theme: &Theme) -
             TextRun {
                 len,
                 font,
-                color: style.color.unwrap_or(theme.foreground),
+                color: style.color.unwrap_or(theme.color(color::EDITOR_FOREGROUND)),
                 background_color: None,
                 underline: style.underline,
                 strikethrough: style.strikethrough,

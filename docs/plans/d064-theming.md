@@ -107,21 +107,27 @@ theme by changing a few keys.
 
 ## Checkpoints
 
-### 1. Native theme model and themed surfaces
+### 1. Native theme model and themed surfaces 🚧 awaiting review
 
 Deliverables:
-- A native color definition table: each key with its description and dark
+- ✅ A native color definition table: each key with its description and dark
   and light defaults (a color or another key). Native code names keys
   through constants generated from the same table.
-- `Theme` holds an appearance, a resolved color per key (theme values over
+- ✅ `Theme` holds an appearance, a resolved color per key (theme values over
   definition defaults), and the resolved highlight styles. With no
   registered theme the dark defaults apply, so the app looks different from
   today but coherent.
-- Every native surface reads the `Theme` global: product shell render, tab
+- ✅ Every native surface reads the `Theme` global: product shell render, tab
   drag, tree view, explorer tree, transient interactions, command palette,
   completion, text input, editor, terminal view and ANSI defaults, and the
   personal-config error window. No color literals remain outside `theme.rs`.
-- Replacing the global repaints every window.
+- ✅ Replacing the global repaints every window.
+
+Notes: `theme::theme(cx)` returns the installed global, else the dark
+defaults, so no startup installation is needed until a theme is selected
+and views built outside the product shell need no setup. Fallback syntax is
+a small palette (comments, strings, keywords, numbers, constants, types,
+functions, headings) plus colorless markup styles.
 
 Validation: unit tests that native keys are unique, that every default
 reference names a defined key without cycles, and that theme values win

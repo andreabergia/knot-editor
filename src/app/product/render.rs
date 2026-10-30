@@ -1,6 +1,7 @@
 //! Rendering of the product shell's panes, split layout, dividers, and extension report.
 
 use super::*;
+use crate::app::theme::{Theme, color, theme};
 
 impl ProductShell {
     pub(super) fn render_layout(
@@ -102,7 +103,7 @@ impl ProductShell {
                 .when(direction == SplitDirection::Vertical, |element| {
                     element.h(px(1.)).w_full()
                 })
-                .bg(rgb(0x454545))
+                .bg(theme(cx).color(color::BORDER))
                 .into_any_element();
         };
         let horizontal = direction == SplitDirection::Horizontal;
@@ -121,8 +122,11 @@ impl ProductShell {
                 div()
                     .when(horizontal, |element| element.w(px(1.)).h_full())
                     .when(!horizontal, |element| element.h(px(1.)).w_full())
-                    .bg(rgb(0x454545))
-                    .hover(|style| style.bg(rgb(0x7fb5ff))),
+                    .bg(theme(cx).color(color::BORDER))
+                    .hover({
+                        let hover = theme(cx).color(color::BORDER_HOVER);
+                        move |style| style.bg(hover)
+                    }),
             )
             .on_mouse_down(
                 MouseButton::Left,
@@ -200,16 +204,16 @@ impl ProductShell {
                     .py_1()
                     .cursor_pointer()
                     .text_sm()
-                    .text_color(if tab_id == active_tab {
-                        rgb(0xf0f0f0)
+                    .text_color(theme(cx).color(if tab_id == active_tab {
+                        color::TAB_ACTIVE_FOREGROUND
                     } else {
-                        rgb(0xaaaaaa)
-                    })
-                    .bg(if tab_id == active_tab {
-                        rgb(0x1e1e1e)
+                        color::TAB_INACTIVE_FOREGROUND
+                    }))
+                    .bg(theme(cx).color(if tab_id == active_tab {
+                        color::TAB_ACTIVE_BACKGROUND
                     } else {
-                        rgb(0x2d2d2d)
-                    })
+                        color::TAB_INACTIVE_BACKGROUND
+                    }))
                     .child(title)
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.activate_tab(pane_id, tab_id, window, cx);
@@ -233,7 +237,7 @@ impl ProductShell {
             .size_full()
             .min_w_0()
             .min_h_0()
-            .bg(rgb(0x1e1e1e))
+            .bg(theme(cx).color(color::BACKGROUND))
             .child(
                 div()
                     .flex()
@@ -244,7 +248,7 @@ impl ProductShell {
                     .debug_selector(move || format!("tab-bar-{}", pane_id.value()))
                     .child(self.tab_bar_drag_geometry(pane_id))
                     .overflow_hidden()
-                    .bg(rgb(0x2d2d2d))
+                    .bg(theme(cx).color(color::TAB_BAR_BACKGROUND))
                     .children(tabs)
                     .when(
                         matches!(pane.active_tab().surface_id(), TabSurfaceId::Tool(_)),
@@ -294,6 +298,7 @@ impl Render for ProductShell {
             cx.listener(|this: &mut Self, _: &MouseDownEvent, _: &mut Window, cx| {
                 this.finish_transient(TransientOutcome::Dismissed, cx);
             });
+        let scrim = theme(cx).color(color::SCRIM);
         let startup_report = crate::app::extensions::host::startup_report(cx);
         let extension_report = self.extension_report_open.then(|| {
             (
@@ -312,8 +317,8 @@ impl Render for ProductShell {
             .flex()
             .flex_col()
             .size_full()
-            .bg(rgb(0x1e1e1e))
-            .text_color(rgb(0xe0e0e0))
+            .bg(theme(cx).color(color::BACKGROUND))
+            .text_color(theme(cx).color(color::TEXT))
             .child(
                 div()
                     .flex_1()
@@ -343,7 +348,7 @@ impl Render for ProductShell {
                         .items_start()
                         .justify_center()
                         .pt(px(80.))
-                        .bg(rgba(0x00000080))
+                        .bg(scrim)
                         .on_mouse_down(MouseButton::Left, dismiss_transient)
                         .child(transient),
                 )
@@ -357,12 +362,17 @@ impl Render for ProductShell {
                         .items_start()
                         .justify_center()
                         .pt(px(80.))
-                        .bg(rgba(0x00000080))
+                        .bg(scrim)
                         .child(palette),
                 )
             })
             .when_some(extension_report, |root, (report, setting_warnings)| {
-                root.child(render_extension_report(report, setting_warnings, &entity))
+                root.child(render_extension_report(
+                    report,
+                    setting_warnings,
+                    &entity,
+                    theme(cx),
+                ))
             })
             .into_any_element()
     }
@@ -372,6 +382,7 @@ pub(super) fn render_extension_report(
     snapshot: Option<crate::app::extensions::host::StartupReportSnapshot>,
     setting_warnings: Vec<String>,
     shell: &Entity<ProductShell>,
+    theme: &Theme,
 ) -> AnyElement {
     use crate::app::extensions::host::StartupState;
     use crate::app::extensions::load::LoadResult;
@@ -397,9 +408,9 @@ pub(super) fn render_extension_report(
         .into_iter()
         .map(|entry| {
             let name = entry.name.unwrap_or_else(|| "<invalid package>".into());
-            let (label, color, cause) = match entry.result {
-                LoadResult::Loaded => ("Loaded", 0x8fd18f, None),
-                LoadResult::Failed(cause) => ("Failed", 0xf19a8e, Some(cause)),
+            let (label, status_color, cause) = match entry.result {
+                LoadResult::Loaded => ("Loaded", color::SUCCESS, None),
+                LoadResult::Failed(cause) => ("Failed", color::ERROR, Some(cause)),
             };
             div()
                 .flex()
@@ -407,28 +418,28 @@ pub(super) fn render_extension_report(
                 .gap_1()
                 .py_2()
                 .border_b_1()
-                .border_color(rgb(0x454545))
+                .border_color(theme.color(color::BORDER))
                 .child(
                     div()
-                        .text_color(rgb(color))
+                        .text_color(theme.color(status_color))
                         .child(format!("{label}: {name}")),
                 )
                 .child(
                     div()
                         .text_xs()
-                        .text_color(rgb(0xaaaaaa))
+                        .text_color(theme.color(color::TEXT_MUTED))
                         .child(entry.directory.display().to_string()),
                 )
                 .when_some(cause, |row, cause| {
-                    row.child(div().text_color(rgb(0xf19a8e)).child(cause))
+                    row.child(div().text_color(theme.color(color::ERROR)).child(cause))
                 })
         })
         .chain(setting_warnings.into_iter().map(|warning| {
             div()
                 .py_2()
                 .border_b_1()
-                .border_color(rgb(0x454545))
-                .text_color(rgb(0xe5c07b))
+                .border_color(theme.color(color::BORDER))
+                .text_color(theme.color(color::WARNING))
                 .child(warning)
         }))
         .collect::<Vec<_>>();
@@ -439,16 +450,16 @@ pub(super) fn render_extension_report(
         .items_start()
         .justify_center()
         .pt(px(60.))
-        .bg(rgba(0x000000a0))
+        .bg(theme.color(color::SCRIM))
         .child(
             div()
                 .w(px(760.))
                 .h(px(520.))
                 .flex()
                 .flex_col()
-                .bg(rgb(0x252526))
+                .bg(theme.color(color::POPOVER_BACKGROUND))
                 .border_1()
-                .border_color(rgb(0x555555))
+                .border_color(theme.color(color::POPOVER_BORDER))
                 .p_4()
                 .gap_3()
                 .child(
@@ -461,9 +472,15 @@ pub(super) fn render_extension_report(
                             "close-extension-report",
                             shell,
                             SHOW_EXTENSION_REPORT_COMMAND,
+                            theme.color(color::TEXT_ACCENT),
                         )),
                 )
-                .child(div().text_xs().text_color(rgb(0xaaaaaa)).child(root))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.color(color::TEXT_MUTED))
+                        .child(root),
+                )
                 .child(
                     div()
                         .id("extension-report-rows")
@@ -484,13 +501,14 @@ pub(super) fn command_button(
     id: &'static str,
     shell: &Entity<ProductShell>,
     command: &'static str,
+    accent: Hsla,
 ) -> Stateful<Div> {
     let shell = shell.clone();
     let label = label.into();
     div()
         .id(id)
         .cursor_pointer()
-        .text_color(rgb(0x80c0ff))
+        .text_color(accent)
         .child(label)
         .on_click(move |_, window, cx| {
             shell.update(cx, |shell, cx| {

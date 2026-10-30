@@ -6,6 +6,7 @@ use super::{
     PALETTE_KEY_CONTEXT,
     commands::catalog::CommandDefinition,
     text_input::{TextInput, TextInputEvent},
+    theme::{color, theme},
 };
 
 #[derive(Clone, PartialEq)]
@@ -173,6 +174,10 @@ where
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let entity = cx.entity();
         let selected = self.selected;
+        let selected_background = theme(cx).color(color::LIST_SELECTED_BACKGROUND);
+        let hover_background = theme(cx).color(color::LIST_HOVER_BACKGROUND);
+        let muted = theme(cx).color(color::TEXT_MUTED);
+        let accent = theme(cx).color(color::TEXT_ACCENT);
         let rows = self
             .visible_entries()
             .into_iter()
@@ -188,19 +193,19 @@ where
                     .py_1()
                     .flex()
                     .flex_col()
-                    .when(index == selected, |row| row.bg(rgb(0x2a4a7a)))
-                    .hover(|row| row.bg(rgb(0x333333)))
+                    .when(index == selected, |row| row.bg(selected_background))
+                    .hover(|row| row.bg(hover_background))
                     .child(entry.definition.title.clone())
                     .child(
                         div()
                             .text_xs()
-                            .text_color(rgb(0x999999))
+                            .text_color(muted)
                             .child(entry.definition.name.to_string()),
                     )
                     .children(arguments.map(|arguments| {
                         div()
                             .text_xs()
-                            .text_color(rgb(0xc586c0))
+                            .text_color(accent)
                             .child(format!("Arguments: {arguments}"))
                     }))
                     .on_click(move |_, _, cx| {
@@ -222,8 +227,8 @@ where
             .flex_col()
             .rounded_md()
             .border_1()
-            .border_color(rgb(0x555555))
-            .bg(rgb(0x252526))
+            .border_color(theme(cx).color(color::POPOVER_BORDER))
+            .bg(theme(cx).color(color::POPOVER_BACKGROUND))
             .shadow_lg()
             .key_context(PALETTE_KEY_CONTEXT)
             .on_key_down(cx.listener(Self::on_key_down))
@@ -232,7 +237,7 @@ where
                     .px_3()
                     .py_2()
                     .border_b_1()
-                    .border_color(rgb(0x444444))
+                    .border_color(theme(cx).color(color::BORDER))
                     .child(self.input.clone()),
             )
             .child(

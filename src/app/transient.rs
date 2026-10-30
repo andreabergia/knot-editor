@@ -12,6 +12,7 @@ use gpui::{prelude::*, *};
 use crate::host::protocol::{CommandInvocationId, ExtensionId, ExtensionLifecycleId, PickerItem};
 
 use super::text_input::{TextInput, TextInputEvent};
+use super::theme::{color, theme};
 
 const PANEL_WIDTH: f32 = 560.;
 const ROW_HEIGHT: f32 = 28.;
@@ -158,35 +159,38 @@ impl Render for PickerView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let entity = cx.entity();
         let selected = self.selected;
-        let rows = self
-            .visible_items()
-            .into_iter()
-            .enumerate()
-            .map(|(index, item)| {
-                let entity = entity.clone();
-                let id = item.id.clone();
-                let description = item.description.clone();
-                div()
-                    .id(("picker-row", index))
-                    .h(px(ROW_HEIGHT))
-                    .px_3()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap_3()
-                    .when(index == selected, |row| row.bg(rgb(0x2a4a7a)))
-                    .hover(|row| row.bg(rgb(0x333333)))
-                    .child(item.label.clone())
-                    .children(description.map(|description| {
-                        div().text_xs().text_color(rgb(0x999999)).child(description)
-                    }))
-                    .on_click(move |_, _, cx| {
-                        entity.update(cx, |_, cx| {
-                            cx.emit(PickerEvent::Selected(id.clone()));
-                        });
-                    })
-            })
-            .collect::<Vec<_>>();
+        let selected_background = theme(cx).color(color::LIST_SELECTED_BACKGROUND);
+        let hover_background = theme(cx).color(color::LIST_HOVER_BACKGROUND);
+        let muted = theme(cx).color(color::TEXT_MUTED);
+        let rows =
+            self.visible_items()
+                .into_iter()
+                .enumerate()
+                .map(|(index, item)| {
+                    let entity = entity.clone();
+                    let id = item.id.clone();
+                    let description = item.description.clone();
+                    div()
+                        .id(("picker-row", index))
+                        .h(px(ROW_HEIGHT))
+                        .px_3()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap_3()
+                        .when(index == selected, |row| row.bg(selected_background))
+                        .hover(|row| row.bg(hover_background))
+                        .child(item.label.clone())
+                        .children(description.map(|description| {
+                            div().text_xs().text_color(muted).child(description)
+                        }))
+                        .on_click(move |_, _, cx| {
+                            entity.update(cx, |_, cx| {
+                                cx.emit(PickerEvent::Selected(id.clone()));
+                            });
+                        })
+                })
+                .collect::<Vec<_>>();
         let empty = self.visible_items().is_empty();
         div()
             .id("extension-picker")
@@ -196,8 +200,8 @@ impl Render for PickerView {
             .flex_col()
             .rounded_md()
             .border_1()
-            .border_color(rgb(0x555555))
-            .bg(rgb(0x252526))
+            .border_color(theme(cx).color(color::POPOVER_BORDER))
+            .bg(theme(cx).color(color::POPOVER_BACKGROUND))
             .shadow_lg()
             .key_context(super::TRANSIENT_KEY_CONTEXT)
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -207,7 +211,7 @@ impl Render for PickerView {
                     .px_3()
                     .py_2()
                     .text_sm()
-                    .text_color(rgb(0xcccccc))
+                    .text_color(theme(cx).color(color::TEXT))
                     .child(self.title.clone()),
             )
             .child(div().px_3().pb_2().child(self.input.clone()))
@@ -221,7 +225,7 @@ impl Render for PickerView {
                             div()
                                 .px_3()
                                 .py_2()
-                                .text_color(rgb(0x999999))
+                                .text_color(muted)
                                 .child("No matching items"),
                         )
                     })
@@ -277,8 +281,8 @@ impl Render for InputView {
             .flex_col()
             .rounded_md()
             .border_1()
-            .border_color(rgb(0x555555))
-            .bg(rgb(0x252526))
+            .border_color(theme(cx).color(color::POPOVER_BORDER))
+            .bg(theme(cx).color(color::POPOVER_BACKGROUND))
             .shadow_lg()
             .key_context(super::TRANSIENT_KEY_CONTEXT)
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -288,7 +292,7 @@ impl Render for InputView {
                     .px_3()
                     .py_2()
                     .text_sm()
-                    .text_color(rgb(0xcccccc))
+                    .text_color(theme(cx).color(color::TEXT))
                     .child(self.title.clone()),
             )
             .child(div().px_3().pb_3().child(self.input.clone()))
