@@ -113,19 +113,16 @@ to be rebuilt later:
     ([semantic UI](../architecture/semantic-ui.md#themes-and-color-keys),
     [decisions](../decisions.md#themes)).
 
-- **D071 — Command palette and shared picker**
-  - Commands gain an optional `description`, for native commands and in
-    extension registration.
-  - Each row shows the title, the description, and the effective binding,
-    resolved through the keymap.
-    Chorded bindings render readably.
-  - One fuzzy matcher with match highlighting, shared by the palette and
-    `workbench.showPicker`. Recently used commands rank first.
-  - Picker items gain optional detail and right-aligned hint text. Every later
-    picker uses these additions.
-  - The picker reports the highlighted item as it changes, so a consumer can
-    preview it. Select Theme (D064) uses this to preview themes live.
-  - 🚧 [Plan](d071-command-palette.md)
+- ✅ **D071 — Command palette and shared picker**
+  - One native fuzzy-matching picker (`nucleo-matcher`) serves the palette,
+    native pickers, and `workbench.showPicker`, with highlighted matches,
+    item detail and hints, and pulled highlight previews that Select Theme
+    uses. Palette rows show titles, descriptions, and bindings, hide input
+    commands, and rank recently used commands first across restarts, kept in
+    the application state database
+    ([semantic UI](../architecture/semantic-ui.md#extension-transient-interactions),
+    [commands](../architecture/commands.md#dispatch),
+    [decisions](../decisions.md#extension-transient-interactions)).
 
 - **D086 — Keymap presets** (depends on D070, D071; promotes D060)
   - A preset is a named set of default bindings occupying the native keymap
