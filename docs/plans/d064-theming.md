@@ -139,33 +139,16 @@ above other keys, most severe on top, and an undefined key paints as
 interface text. Tree badge colors are covered only through the shared
 `Theme::color` lookup, not a painted-color test.
 
-### 4. `@knot/themes` with One Dark, One Light, and Select Theme 🚧 awaiting review
+### 4. `@knot/themes` with One Dark, One Light, and Select Theme ✅
 
-Deliverables:
-- ✅ A bundled `extensions/@knot/themes` package that registers One Dark and
-  One Light in `start()`, ported from Atom's one-dark and one-light syntax and
-  UI themes, with their MIT notice in its `LICENSE`. Themes share one
-  capture mapping over a palette of roles (`src/syntax.ts`), so later ports
-  supply colors rather than mappings.
-- ✅ A `themes.select` command: a picker over `themes.list()` marking each
-  appearance's selected theme, the setting writes described above, and the
-  choice persisted in package storage and applied again in `start()`. An
-  unreadable record keeps the native defaults rather than failing the package.
-- ✅ The extension guide recommends theme customization in `post-init`: it
-  beats the package's remembered choice and can derive from bundled themes,
-  which `pre-init` cannot see yet.
-
-Notes: the command's palette title is its name, `themes.select`, as for every
-extension command. The fake `knot` module now exports `themes`.
-
-Validation: package tests that every theme sets exactly the native color keys
-with valid colors and styles only known captures; selection tests for the
-setting writes, `system` mode, dismissal, an unreadable record, and restoring
-the choice after a package restart; the bundled-packages product test loads
-`@knot/themes` and resolves One Dark at startup.
-
-Review gate: how the ported themes look across every surface; adjust the
-native keys or port mapping here before porting the rest.
+[`extensions/@knot/themes`](../../extensions/@knot/themes/) registers One
+Dark and One Light, ported from Atom's syntax and UI themes; themes share one
+capture mapping over a palette of roles in `src/syntax.ts`, so later ports
+supply colors only. UI keys Atom's themes do not map one-to-one (lists,
+popovers, buttons, scrim, bright ANSI colors) were chosen for the port and
+approved by manual review. `themes.select` persists its setting writes in
+package storage and replays them in `start()`. The command's palette title is
+its name, as for every extension command.
 
 ### 5. Remaining bundled themes and documentation
 
