@@ -124,18 +124,15 @@ to be rebuilt later:
     [commands](../architecture/commands.md#dispatch),
     [decisions](../decisions.md#extension-transient-interactions)).
 
-- **D086 — Keymap presets** (depends on D070, D071; promotes D060)
-  - A preset is a named set of default bindings occupying the native keymap
-    slot, so extension and personal bindings still override it. The selected
-    preset is a setting, and switching presets rebinds every open window.
-  - Design the Knot preset from scratch rather than carrying over the
-    prototype's bindings. Give it macOS, Windows, and Linux variants, checked
-    against system and terminal or TUI keys (D060).
-  - Decide whether presets are native data or contributions from bundled
-    packages (a contributed preset would make user-written presets free).
-    Also decide how chords and conflicts are reported. D088 fills in the
-    other presets.
-  - 🚧 [Plan](d086-keymap-presets.md)
+- ✅ **D086 — Keymap presets** (promotes D060)
+  - Default bindings are a preset in one slot beneath every extension and
+    personal binding. The native Knot preset is correct on macOS, Windows, and
+    Linux; packages register further presets, and `keymap.preset` selects
+    one. Extensions read `knot.platform`. Show Keybindings lists every binding
+    with its owner and overrides, and menus show the effective keys
+    ([commands](../architecture/commands.md#keymaps),
+    [decisions](../decisions.md#commands-and-keymaps),
+    [extension guide](../extension-api.md#register-a-keymap-preset)).
 
 - **D072 — Workbench navigation and layout commands** (depends on D086)
   - Default bindings:
