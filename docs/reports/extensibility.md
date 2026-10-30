@@ -96,7 +96,7 @@ What is missing for editing-level extensibility:
 | `.` repeat, `q` macros | Record commands with arguments plus typed text; replay through dispatch | Not possible | D113 |
 | Registers | Extension state plus clipboard read and write | Write only | D109 |
 | Marks, jumplist | Anchored positions without decoration | Only decorated contributions | D109 |
-| `/` search highlights, visual feedback | Theme decoration tokens | Three severity tokens | D114 |
+| `/` search highlights, visual feedback | Decoration styles | Wavy underlines in any color key | D114 |
 | `:s` | Regex over snapshots and an edit batch | Possible in JS; bulk edits need D092 | D092 |
 | Ex command line | Transient input with completion | `showInput` without completion | D058 |
 | Folds | Fold state and commands | None | D066 |
@@ -113,8 +113,8 @@ Neovim-level extensibility also includes things Vim emulation barely uses:
   change, and wrap or replace a native command (D115). Today an extension
   observes metadata changes after they commit.
 - **Presentation that extensions own:** virtual text, inlay hints, floating
-  panels anchored to a position, and decoration tokens beyond severities
-  (D114).
+  panels anchored to a position, and decoration styles beyond a wavy
+  underline (D114).
 - **Interactive generated buffers:** magit- or oil-style text with semantic
   actions per range (D027).
 - **Settings per buffer and language:** D070 already scopes values by language
@@ -185,8 +185,8 @@ presets, and D068 and D077 surfaces. Then:
    D092 before multi-selection edits.
 3. D111 undo groups and D112 visual-line movement, in parallel.
 4. D113 recording, once commands, contexts, and selections are stable.
-5. D066 syntax-tree queries, folds, and text objects, and D114's theme
-   decoration keys, which Vim's search and mode highlights need.
+5. D066 syntax-tree queries, folds, and text objects, and D114's decoration
+   styles, which Vim's search and mode highlights need.
 6. D058 Vim mode as a bundled or installed extension.
 7. The rest of D114 (virtual text, floating panels) and D115 alongside the
    first language client (D067), which drives them harder than Vim does.

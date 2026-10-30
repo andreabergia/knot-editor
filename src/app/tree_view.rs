@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use gpui::{prelude::FluentBuilder, *};
 
 use crate::host::protocol::{
-    Command, CommandArgumentValue, ExtensionId, ExtensionLifecycleId, TreeAction, TreeBadge,
+    Command, CommandArgumentValue, ExtensionId, ExtensionLifecycleId, TreeAction,
     TreeChildrenRequest, TreeChildrenResponse, TreeCollapsibleState, TreeIcon, TreeItem,
     TreeItemKind, TreeProviderRegistrationId, ViewId,
 };
@@ -493,9 +493,9 @@ impl TreeView {
     }
 
     #[cfg(test)]
-    pub(crate) fn status_for_test(&self, id: &str) -> Option<(Option<String>, Option<TreeBadge>)> {
+    pub(crate) fn status_for_test(&self, id: &str) -> Option<(Option<String>, Option<String>)> {
         self.item(id)
-            .map(|item| (item.status_text.clone(), item.badge))
+            .map(|item| (item.status_text.clone(), item.badge.clone()))
     }
 
     #[cfg(test)]
@@ -702,16 +702,6 @@ impl TreeView {
             None => "",
         }
     }
-
-    fn badge_color(badge: TreeBadge) -> &'static str {
-        match badge {
-            TreeBadge::Neutral => color::TEXT_MUTED,
-            TreeBadge::Info => color::INFO,
-            TreeBadge::Success => color::SUCCESS,
-            TreeBadge::Warning => color::WARNING,
-            TreeBadge::Error => color::ERROR,
-        }
-    }
 }
 
 impl EventEmitter<TreeViewEvent> for TreeView {}
@@ -841,13 +831,13 @@ impl Render for TreeView {
                                     .child(status),
                             );
                         }
-                        if let Some(badge) = item.badge {
+                        if let Some(badge) = &item.badge {
                             row = row.child(
                                 div()
                                     .size(px(6.0))
                                     .flex_shrink_0()
                                     .rounded_full()
-                                    .bg(theme.color(Self::badge_color(badge))),
+                                    .bg(theme.color(badge)),
                             );
                         }
                         for (action_index, action) in item.actions.iter().enumerate() {

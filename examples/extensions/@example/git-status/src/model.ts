@@ -1,6 +1,6 @@
 // Fixture source-control state and the tree it presents. Everything here is
 // plain data, so the extension's behavior can be tested without a host.
-import type { JsonValue, TreeAction, TreeBadge, TreeItem } from "knot";
+import type { ColorKey, JsonValue, TreeAction, TreeItem } from "knot";
 
 export type Status = "modified" | "added" | "deleted" | "renamed" | "untracked" | "conflicted";
 export type Entry = { path: string; status: Status };
@@ -23,12 +23,12 @@ const STATUS_LETTERS: Record<Status, string> = {
   conflicted: "!",
 };
 
-const STATUS_BADGES: Record<Status, TreeBadge> = {
+const STATUS_BADGES: Record<Status, ColorKey> = {
   modified: "warning",
   added: "success",
   deleted: "error",
   renamed: "info",
-  untracked: "neutral",
+  untracked: "text.muted",
   conflicted: "error",
 };
 

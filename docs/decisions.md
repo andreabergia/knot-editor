@@ -613,8 +613,8 @@ pushed text, and frame actions. Groups are explicit tree headers rather than a
 second list model, so grouping, expansion, and invalidation share one provider
 tree. Row and group actions carry a command name plus JSON arguments and reuse
 the captured-window command route, keeping native controls and activation
-mutually exclusive without a parallel dispatch path. Row status uses a generic
-theme severity rather than a feature's change-state taxonomy, and action and
+mutually exclusive without a parallel dispatch path. Row status names a theme
+color key rather than a feature's change-state taxonomy, and action and
 status glyphs stay out of the boundary until an extension-replaceable icon
 system exists (D055).
 

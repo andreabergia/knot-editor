@@ -561,23 +561,9 @@ pub(super) fn editor_contributions(
         let range_value = property(scope, object, "range", error)?;
         let range = byte_range(scope, range_value)?;
         let decoration_value = property(scope, object, "decoration", error)?;
-        let decoration = optional_string(scope, decoration_value, error)?
-            .map(|value| match value.as_str() {
-                "info" => Ok(DecorationToken::Info),
-                "warning" => Ok(DecorationToken::Warning),
-                "error" => Ok(DecorationToken::Error),
-                _ => Err(BoundaryError::Type(error)),
-            })
-            .transpose()?;
+        let decoration = optional_string(scope, decoration_value, error)?;
         let gutter_value = property(scope, object, "gutter", error)?;
-        let gutter = optional_string(scope, gutter_value, error)?
-            .map(|value| match value.as_str() {
-                "info" => Ok(GutterToken::Info),
-                "warning" => Ok(GutterToken::Warning),
-                "error" => Ok(GutterToken::Error),
-                _ => Err(BoundaryError::Type(error)),
-            })
-            .transpose()?;
+        let gutter = optional_string(scope, gutter_value, error)?;
         let command_value = property(scope, object, "command", error)?;
         let command = optional_string(scope, command_value, error)?;
         contributions.push(EditorContribution {
@@ -927,16 +913,6 @@ pub(super) fn tree_item_from_v8<'s>(
             _ => Err(BoundaryError::Type("invalid tree icon")),
         })
         .transpose()?;
-    let badge = optional_text_property(scope, object, "badge")?
-        .map(|badge| match badge.as_str() {
-            "neutral" => Ok(TreeBadge::Neutral),
-            "info" => Ok(TreeBadge::Info),
-            "success" => Ok(TreeBadge::Success),
-            "warning" => Ok(TreeBadge::Warning),
-            "error" => Ok(TreeBadge::Error),
-            _ => Err(BoundaryError::Type("invalid tree badge")),
-        })
-        .transpose()?;
     Ok(TreeItem {
         id: string_property(scope, object, "id")?,
         label: string_property(scope, object, "label")?,
@@ -946,7 +922,7 @@ pub(super) fn tree_item_from_v8<'s>(
         command: optional_text_property(scope, object, "command")?,
         kind,
         status_text: optional_text_property(scope, object, "statusText")?,
-        badge,
+        badge: optional_text_property(scope, object, "badge")?,
         actions: tree_actions_from_v8(scope, object, "actions")?,
     })
 }

@@ -5,8 +5,8 @@ use gpui::{AppContext, Focusable, Subscription, TestAppContext};
 
 use super::{TreeProviderIdentity, TreeView, TreeViewEvent, TreeViewRegistrationError};
 use crate::host::protocol::{
-    CommandArgumentValue, ExtensionId, ExtensionLifecycleId, TreeAction, TreeBadge,
-    TreeChildrenResponse, TreeCollapsibleState, TreeItem, TreeItemKind, TreeProviderRegistrationId,
+    CommandArgumentValue, ExtensionId, ExtensionLifecycleId, TreeAction, TreeChildrenResponse,
+    TreeCollapsibleState, TreeItem, TreeItemKind, TreeProviderRegistrationId,
 };
 
 type CommandLog = Rc<RefCell<Vec<(String, CommandArgumentValue)>>>;
@@ -53,7 +53,7 @@ fn item(id: &str, label: &str, kind: TreeItemKind, actions: Vec<TreeAction>) -> 
         command: Some("example.activate".into()),
         kind,
         status_text: Some("M".into()),
-        badge: Some(TreeBadge::Warning),
+        badge: Some("warning".to_owned()),
         actions,
     }
 }

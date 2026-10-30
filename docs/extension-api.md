@@ -134,8 +134,8 @@ changes the fresh-window default. Pass a live `WindowTarget` from
 An item is `item` by default. A `group` is a non-activatable header that
 organizes child rows: the native view fetches its children immediately, shows no
 disclosure, and keeps them visible. Items carry optional `statusText` plus a
-severity `badge` (`neutral`, `info`, `success`, `warning`, `error`) that the
-theme colors, and either kind may declare command-backed `actions`. A
+`badge` naming a [color key](#register-a-theme-and-define-colors), such as
+`warning` or `text.muted`, and either kind may declare command-backed `actions`. A
 contribution's own `actions` populate the frame toolbar. Action labels are
 text; a general extensible icon system is deferred (roadmap D055).
 
@@ -346,6 +346,19 @@ await themes.defineColor({
 
 A key defined by native code or a live lifecycle rejects `DuplicateColor`;
 teardown removes your definitions.
+
+Editor decorations and gutter markers and tree badges name the color key they
+paint with, native or defined, so a contribution looks right under every
+theme. A key nobody has defined paints as interface text until its definition
+arrives. Where decorations overlap, `error`, `warning`, and `info` paint above
+other keys, the most severe on top:
+
+```js
+await buffer.contributions.replace([
+  { range, decoration: "diff.add", gutter: "diff.add" },
+  { range: problem, decoration: "error" },
+], { ifRevision: revision });
+```
 
 ## Ask the user transiently
 

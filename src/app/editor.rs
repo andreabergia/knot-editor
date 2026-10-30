@@ -28,7 +28,7 @@ use unicode_segmentation::UnicodeSegmentation;
 use crate::core::anchored_range::AnchoredRangeId;
 use crate::host::protocol::{
     BufferHandle, ByteRange, CompletionProviderRegistrationId, CompletionRequest,
-    CompletionResponse, DecorationToken, GutterToken, TextEdit,
+    CompletionResponse, TextEdit,
 };
 
 use super::commands::dispatch as commands;
@@ -46,14 +46,14 @@ use super::{
 
 static NEXT_HISTORY_CONTEXT: AtomicU64 = AtomicU64::new(1);
 
-/// One contributed decoration segment, styled through the decoration
-/// highlight layers. `start` and `end` are byte columns within `line`.
-#[derive(Clone, Copy)]
+/// One contributed decoration segment, painted in the color of `key`.
+/// `start` and `end` are byte columns within `line`.
+#[derive(Clone)]
 struct RenderedDecoration {
     line: usize,
     start: usize,
     end: usize,
-    token: DecorationToken,
+    key: String,
 }
 
 /// Syntax highlights queried for a range of whole lines.
@@ -71,10 +71,10 @@ impl SyntaxCache {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct RenderedGutterMarker {
     line: usize,
-    highlight: Highlight,
+    key: String,
 }
 
 #[derive(Clone)]
@@ -227,6 +227,31 @@ impl EditorView {
     pub(crate) fn caret_x_at(&mut self, col: usize, window: &Window, cx: &App) -> Pixels {
         (self.cursor_line, self.cursor_col) = (0, col);
         self.caret_x(self.model.read(cx), window, cx)
+    }
+
+    /// Each text run on `line` as its length and underline color, as the
+    /// view paints them.
+    #[cfg(test)]
+    pub(crate) fn underline_colors_for_test(
+        &self,
+        line: usize,
+        cx: &App,
+    ) -> Vec<(usize, Option<Hsla>)> {
+        let model = self.model.read(cx);
+        let text = line_text(model, line);
+        self.line_runs(model, line, &text, cx)
+            .into_iter()
+            .map(|run| (run.len, run.underline.and_then(|underline| underline.color)))
+            .collect()
+    }
+
+    /// Each gutter marker's line and color, as the view paints them.
+    #[cfg(test)]
+    pub(crate) fn gutter_colors_for_test(&self, cx: &App) -> Vec<(usize, Hsla)> {
+        self.gutter_markers
+            .iter()
+            .map(|marker| (marker.line, theme(cx).color(&marker.key)))
+            .collect()
     }
 
     #[cfg(test)]
@@ -693,10 +718,10 @@ fn project_contributions(
         let first_line = model.line_of_offset(start);
         let last_line = model.line_of_offset(end);
 
-        if let Some(token) = contribution.gutter {
+        if let Some(key) = &contribution.gutter {
             gutter_markers.push(RenderedGutterMarker {
                 line: first_line,
-                highlight: gutter_highlight(token),
+                key: key.clone(),
             });
         }
 
@@ -712,14 +737,14 @@ fn project_contributions(
             let segment_start = start.max(line_start);
             let segment_end = end.min(line_end);
 
-            if let Some(token) = contribution.decoration
+            if let Some(key) = &contribution.decoration
                 && segment_start < segment_end
             {
                 decorations.push(RenderedDecoration {
                     line,
                     start: segment_start - line_start,
                     end: segment_end - line_start,
-                    token,
+                    key: key.clone(),
                 });
             }
 
@@ -741,22 +766,6 @@ fn project_contributions(
         }
     }
     (decorations, gutter_markers, actions)
-}
-
-fn decoration_highlight(token: DecorationToken) -> Highlight {
-    Highlight::named(match token {
-        DecorationToken::Info => "diagnostic.info",
-        DecorationToken::Warning => "diagnostic.warning",
-        DecorationToken::Error => "diagnostic.error",
-    })
-}
-
-fn gutter_highlight(token: GutterToken) -> Highlight {
-    Highlight::named(match token {
-        GutterToken::Info => "diagnostic.info",
-        GutterToken::Warning => "diagnostic.warning",
-        GutterToken::Error => "diagnostic.error",
-    })
 }
 
 impl Focusable for EditorView {

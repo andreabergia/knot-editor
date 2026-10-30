@@ -33,12 +33,13 @@ Editor contributions include anchored decorations, gutter markers, and
 command-backed actions.
 
 Views paint styled text by composing each line's runs from ordered highlight
-layers of line-relative `(byte range, highlight name)` spans; a later layer
-overrides an earlier one's color and font and adds its underline. Decorations
-form one layer per severity, so the most severe underline wins where they
-overlap. Sources resolve into nvim-treesitter's standard capture names by
-longest dotted prefix; decoration names are separate so no capture can resolve
-to one. The `Theme` global maps each name to a style.
+layers of line-relative `(byte range, style)` spans; a later layer overrides an
+earlier one's color and font and adds its underline. Syntax sources resolve
+into nvim-treesitter's standard capture names by longest dotted prefix, and the
+`Theme` global maps each capture to a style. A decoration or gutter marker
+names a color key instead, so a query can never draw one: decorations form one
+wavy-underline layer per key in the model's paint order, which puts `error`,
+`warning`, and `info` above other keys with the most severe on top.
 
 ## Themes and color keys
 
@@ -191,8 +192,8 @@ command path.
 Items are ordinary content or `group` headers. A group is neither activatable
 nor disclosable: its children are fetched when it first appears and remain
 visible, so a grouped list is one provider tree rather than a second model.
-Items expose optional right-aligned status text and a theme severity badge
-(`neutral`, `info`, `success`, `warning`, `error`). Actions are labeled text
+Items expose optional right-aligned status text and a badge dot in a named
+color key. Actions are labeled text
 commands; icon glyphs are not part of the boundary yet. A general,
 extension-replaceable icon/status source (icon packs) is deferred (roadmap
 D055).

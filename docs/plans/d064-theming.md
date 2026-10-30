@@ -129,28 +129,33 @@ capture rejects with the `UnknownCapture` host error, because only native
 code knows the vocabulary. gpui's test platform cannot change the system
 appearance, so `system` mode is tested only against the reported one.
 
-### 3. Contributions name color keys
+### 3. Contributions name color keys 🚧 awaiting review
 
 Deliverables:
-- `EditorContribution.decoration` and `gutter` and `TreeItem.badge` take
-  any color key string instead of the severity tokens; the editor paints
-  decorations and gutter markers, and trees paint badges, in the resolved
-  key's color, or the surface foreground for an undefined key.
-- Declarations, the fake host, examples, and bundled packages updated.
+- ✅ `EditorContribution.decoration` and `gutter` and `TreeItem.badge` take
+  any color key string (`ColorKey` in the declarations) instead of the
+  severity tokens; the editor paints decorations as wavy underlines and
+  gutter markers, and trees paint badges, in the resolved key's color, or
+  interface text (`text`) for an undefined key, as `Theme::color` already
+  does.
+- ✅ Declarations, the fake host (which needed no change), examples (the
+  git-status badge `neutral` → `text.muted`), the extension guide, the
+  semantic UI reference, and D114's roadmap entry updated.
 
-Validation: product tests that a contribution naming an extension-defined
-key paints in that key's color, follows a theme switch, and falls back for
-an undefined key; existing highlight and tree tests updated.
+Notes: decoration names left the highlight vocabulary, so highlight spans
+carry resolved styles and decorations form one layer per key. Overlap order
+keeps today's rule for diagnostics: `error`, `warning`, and `info` paint above
+every other key, most severe on top; other keys paint in contribution order
+beneath them. Undefined keys paint as interface text rather than the editor
+foreground, which matches the existing `Theme::color` fallback.
+
+Validation: a product test in `src/app/product/tests/themes.rs` in which an
+extension decorates a buffer with its own key and an undefined one, checks
+the painted underline and gutter colors, and follows a theme switch; model
+and editor tests for overlap order with a custom key; a theme test for
+decoration colors; existing contribution, tree, and engine tests updated.
 
 Review gate: the contribution contract.
-
-**Implementation context:** `SemanticToken` and `TreeBadge` in
-`src/host/js/knot.d.ts`; their decoders in the engine's marshaling module
-and `src/app/extensions/semantics.rs`; editor decoration layering through
-`Highlight` decoration names in `src/app/theme.rs` and
-`src/app/editor/layout.rs`/`paint.rs`; badge painting in
-`src/app/tree_view.rs`; highlight tests in
-`src/app/extensions/host/highlight_tests.rs`.
 
 ### 4. `@knot/themes` with One Dark, One Light, and Select Theme
 

@@ -13,11 +13,12 @@ impl EditorView {
         text: &str,
         cx: &App,
     ) -> Vec<TextRun> {
-        let syntax = self.syntax_layer(model, line);
-        let decorations = self.decoration_layers(line);
+        let theme = theme(cx);
+        let syntax = self.syntax_layer(model, line, theme);
+        let decorations = self.decoration_layers(line, theme);
         let mut layers = vec![syntax.as_slice()];
         layers.extend(decorations.iter().map(Vec::as_slice));
-        runs_for(text, &layers, theme(cx))
+        runs_for(text, &layers, theme)
     }
 
     /// Shape `line`, whose content is `text`, with its highlight runs.
@@ -84,7 +85,7 @@ impl EditorView {
     }
 
     /// The syntax highlights on `line`, relative to its start.
-    fn syntax_layer(&self, model: &BufferModel, line: usize) -> Vec<HighlightSpan> {
+    fn syntax_layer(&self, model: &BufferModel, line: usize, theme: &Theme) -> Vec<HighlightSpan> {
         let Some(generation) = model.syntax_generation() else {
             return Vec::new();
         };
@@ -118,40 +119,42 @@ impl EditorView {
             .take_while(|(span, _)| span.start < range.end)
             .map(|(span, highlight)| HighlightSpan {
                 range: span.start.saturating_sub(range.start)..span.end - range.start,
-                highlight: *highlight,
+                style: theme.style(*highlight),
             })
             .collect()
     }
 
-    /// The decorations on `line`, one layer per severity in increasing
-    /// order so the most severe underline wins where they overlap.
-    fn decoration_layers(&self, line: usize) -> [Vec<HighlightSpan>; 3] {
-        let severities = [
-            DecorationToken::Info,
-            DecorationToken::Warning,
-            DecorationToken::Error,
-        ];
-        severities.map(|token| {
-            let mut ranges: Vec<Range<usize>> = self
-                .decorations
-                .iter()
-                .filter(|decoration| decoration.line == line && decoration.token == token)
-                .map(|decoration| decoration.start..decoration.end)
-                .collect();
-            ranges.sort_unstable_by_key(|range| range.start);
-            let mut merged: Vec<Range<usize>> = Vec::new();
-            for range in ranges {
-                match merged.last_mut() {
-                    Some(last) if range.start <= last.end => last.end = last.end.max(range.end),
-                    _ => merged.push(range),
+    /// The decorations on `line`, one layer per color key in the order the
+    /// model paints them, so a later key's underline wins where they overlap.
+    fn decoration_layers(&self, line: usize, theme: &Theme) -> Vec<Vec<HighlightSpan>> {
+        let mut keys: Vec<&str> = Vec::new();
+        for decoration in self.decorations.iter().filter(|d| d.line == line) {
+            keys.retain(|key| *key != decoration.key);
+            keys.push(&decoration.key);
+        }
+        keys.into_iter()
+            .map(|key| {
+                let mut ranges: Vec<Range<usize>> = self
+                    .decorations
+                    .iter()
+                    .filter(|decoration| decoration.line == line && decoration.key == key)
+                    .map(|decoration| decoration.start..decoration.end)
+                    .collect();
+                ranges.sort_unstable_by_key(|range| range.start);
+                let mut merged: Vec<Range<usize>> = Vec::new();
+                for range in ranges {
+                    match merged.last_mut() {
+                        Some(last) if range.start <= last.end => last.end = last.end.max(range.end),
+                        _ => merged.push(range),
+                    }
                 }
-            }
-            let highlight = decoration_highlight(token);
-            merged
-                .into_iter()
-                .map(|range| HighlightSpan { range, highlight })
-                .collect()
-        })
+                let style = theme.decoration(key);
+                merged
+                    .into_iter()
+                    .map(|range| HighlightSpan { range, style })
+                    .collect()
+            })
+            .collect()
     }
 
     pub(super) fn caret_x(&self, model: &BufferModel, window: &Window, cx: &App) -> Pixels {
@@ -249,11 +252,11 @@ pub(super) fn shape_editor_line(
     )
 }
 
-/// A highlight over a line-relative byte range.
+/// A resolved style over a line-relative byte range.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct HighlightSpan {
     pub(super) range: Range<usize>,
-    pub(super) highlight: Highlight,
+    pub(super) style: HighlightStyle,
 }
 
 /// Compose `line`'s text runs from ordered highlight layers.
@@ -291,7 +294,7 @@ pub(super) fn runs_for(line: &str, layers: &[&[HighlightSpan]], theme: &Theme) -
             if let Some(span) = layer.get(*cursor)
                 && span.range.start <= start
             {
-                style = style.highlight(theme.style(span.highlight));
+                style = style.highlight(span.style);
             }
         }
         match runs.last_mut() {

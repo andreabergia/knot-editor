@@ -279,6 +279,13 @@ declare module "knot" {
   /** Which defaults fill the colors a theme leaves out. */
   export type ThemeAppearance = "dark" | "light";
   /**
+   * The name of a theme color, native or defined with
+   * `themes.defineColor`, such as "error", "text.muted", or "diff.add". A key
+   * nobody defines paints as interface text, so a contribution may name a key
+   * whose definition arrives later.
+   */
+  export type ColorKey = string;
+  /**
    * Colors by key, each "#rrggbb" or "#rrggbbaa". Native keys are declared
    * here; a package declares the keys it defines by merging into this
    * interface. A theme may set any key: one nobody defines is kept and stays
@@ -715,16 +722,16 @@ declare module "knot" {
     /** Ordered replacements in beforeRevision coordinates. */
     readonly edits: readonly TextEdit[];
   }
-  /** Theme-aware decoration and gutter token interpreted by native views. */
-  export type SemanticToken = "info" | "warning" | "error";
   /**
    * Anchored semantic range. Optional decoration, gutter and command may be null.
    * Edits stabilize its anchors. Command is a name, not structured arguments.
    */
   export interface EditorContribution {
     readonly range: ByteRange;
-    readonly decoration?: SemanticToken | null;
-    readonly gutter?: SemanticToken | null;
+    /** Underlines the range with a wavy line in this key's color. */
+    readonly decoration?: ColorKey | null;
+    /** Marks the range's first line in the gutter in this key's color. */
+    readonly gutter?: ColorKey | null;
     readonly command?: string | null;
   }
   /** One replaceable set per buffer and extension lifecycle. */
@@ -826,12 +833,6 @@ declare module "knot" {
     | { kind: "invalidArgument" | "handlerFailure"; message: string }
   >;
   /**
-   * Theme-aware severity token rendered as a row badge. The native theme owns
-   * the color; authors choose the severity and put any short label in
-   * statusText. Extensible/replaceable icon and badge packs remain deferred.
-   */
-  export type TreeBadge = "neutral" | "info" | "success" | "warning" | "error";
-  /**
    * One semantic command-backed action on a row, group header, or frame.
    * Arguments are JSON and are passed to the command as its argument value;
    * an absent value is null. Clicking an action never activates the row.
@@ -860,7 +861,8 @@ declare module "knot" {
     readonly kind?: "item" | "group";
     /** Right-aligned short status text, e.g. a Git change letter. */
     readonly statusText?: string | null;
-    readonly badge?: TreeBadge | null;
+    /** A badge dot in this key's color; put any short label in statusText. */
+    readonly badge?: ColorKey | null;
     /** Row or group actions; frame actions belong to the contribution. */
     readonly actions?: readonly TreeAction[];
   }

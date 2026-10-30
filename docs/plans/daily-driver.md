@@ -258,7 +258,7 @@ to be rebuilt later:
     Today only the debounced `viewStateChanged` window event exists. Size
     the API for other cursor-driven extensions and keep it off the painting
     path.
-  - Highlights are anchored contributions using a theme decoration token, so
+  - Highlights are anchored contributions naming a theme color key, so
     they follow edits without help from the extension.
 
 ## Phase 4 — Files and workspace

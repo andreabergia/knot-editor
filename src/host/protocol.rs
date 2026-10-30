@@ -273,31 +273,14 @@ pub struct TextEdit {
     pub text: String,
 }
 
-/// Theme-aware range decoration tokens supported by native editor views.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub enum DecorationToken {
-    Info,
-    Warning,
-    Error,
-}
-
-/// Theme-aware gutter marker tokens supported by native editor views.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub enum GutterToken {
-    Info,
-    Warning,
-    Error,
-}
-
-/// One semantic editor contribution supplied by an extension.
+/// One semantic editor contribution supplied by an extension. The
+/// decoration and gutter marker each name a theme color key.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EditorContribution {
     pub range: ByteRange,
-    pub decoration: Option<DecorationToken>,
-    pub gutter: Option<GutterToken>,
+    pub decoration: Option<String>,
+    pub gutter: Option<String>,
     pub command: Option<String>,
 }
 
@@ -318,17 +301,6 @@ pub enum TreeCollapsibleState {
     None,
     Collapsed,
     Expanded,
-}
-
-/// Theme-aware severity tokens rendered as a tree row badge.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub enum TreeBadge {
-    Neutral,
-    Info,
-    Success,
-    Warning,
-    Error,
 }
 
 /// One semantic command-backed action attached to a row, group, or frame.
@@ -367,8 +339,9 @@ pub struct TreeItem {
     pub kind: TreeItemKind,
     #[serde(default)]
     pub status_text: Option<String>,
+    /// The theme color key of the row's badge.
     #[serde(default)]
-    pub badge: Option<TreeBadge>,
+    pub badge: Option<String>,
     #[serde(default)]
     pub actions: Vec<TreeAction>,
 }

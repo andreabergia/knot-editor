@@ -147,3 +147,79 @@ fn registered_themes_apply_at_startup_and_follow_the_selection_settings(cx: &mut
         assert_eq!(theme(cx).color("diff.add"), theme(cx).color(color::TEXT));
     });
 }
+
+#[gpui::test]
+fn contributions_paint_in_the_color_keys_they_name(cx: &mut TestAppContext) {
+    const SOURCE: &str = r##"
+import { commands, settings, themes } from "knot";
+await themes.defineColor({
+  key: "diff.add", description: "Added lines", defaults: { dark: "#00aa00", light: "#008800" },
+});
+await themes.register({ name: "Green", appearance: "dark", colors: { "diff.add": "#00ff00" } });
+await commands.register("decorate", async ({ buffer }) => {
+  const { revision } = await buffer.snapshot();
+  await buffer.contributions.replace([
+    { range: { startByteOffset: 0, endByteOffset: 2 }, decoration: "diff.add", gutter: "diff.add" },
+    { range: { startByteOffset: 2, endByteOffset: 4 }, decoration: "made.up" },
+  ], { ifRevision: revision });
+});
+await commands.register("green", async () => { await settings.set("theme.dark", "Green"); });
+"##;
+    let documents = install_globals(cx);
+    let host = cx.update(super::super::super::extensions::host::install);
+    let document = cx.update(|cx| create_untitled_document(&documents, cx));
+    let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+    model.update(cx, |model, _| model.replace(0..0, "abcdef").unwrap());
+    let (shell, window) = product_window(document, model, cx);
+    let key = ExtensionKey::new(ExtensionId::new(961), ExtensionLifecycleId::new(1));
+    let loaded = Arc::new(Mutex::new(None));
+    let result = loaded.clone();
+    host.update(cx, |host, cx| {
+        let execution = host.load_test_source(key, SOURCE).unwrap();
+        cx.spawn(async move |_, _| {
+            *result.lock().unwrap() = Some(execution.await.map(|_| ()));
+        })
+        .detach();
+    });
+    wait_for_api_condition(cx, |_| loaded.lock().unwrap().is_some());
+    loaded.lock().unwrap().take().unwrap().unwrap();
+    cx.update(crate::app::themes::apply_at_startup);
+    let execution = dispatch_product_command(&shell, window, "decorate", cx);
+    assert_eq!(wait_for_command(execution, cx), CommandOutcome::Completed);
+    cx.run_until_parked();
+
+    let painted = |cx: &mut TestAppContext| {
+        cx.read(|cx| {
+            let pane = shell.read(cx).workbench.read(cx).focused_pane().unwrap();
+            let editor = pane.active_tab().editor().unwrap().read(cx);
+            (
+                editor.underline_colors_for_test(0, cx),
+                editor.gutter_colors_for_test(cx),
+            )
+        })
+    };
+    // The extension's key takes its default; an undefined key paints as
+    // interface text.
+    let text = cx.read(|cx| theme(cx).color(color::TEXT));
+    let green = gpui::rgb(0x00aa00).into();
+    assert_eq!(
+        painted(cx),
+        (
+            vec![(2, Some(green)), (2, Some(text)), (2, None)],
+            vec![(0, green)]
+        )
+    );
+
+    // A theme that sets the key repaints it.
+    let execution = dispatch_product_command(&shell, window, "green", cx);
+    assert_eq!(wait_for_command(execution, cx), CommandOutcome::Completed);
+    cx.run_until_parked();
+    let green = gpui::rgb(0x00ff00).into();
+    assert_eq!(
+        painted(cx),
+        (
+            vec![(2, Some(green)), (2, Some(text)), (2, None)],
+            vec![(0, green)]
+        )
+    );
+}

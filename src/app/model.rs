@@ -16,15 +16,15 @@ use crate::{
         buffer::{BufferEdit, TextBuffer},
     },
     host::protocol::{
-        BufferHandle, BufferSubscriptionId, ByteRange, DecorationToken, EditorContribution,
-        ExtensionId, ExtensionLifecycleId, GutterToken, SnapshotText,
+        BufferHandle, BufferSubscriptionId, ByteRange, EditorContribution, ExtensionId,
+        ExtensionLifecycleId, SnapshotText,
     },
 };
 
 use super::{
     history::{EditGrouping, EditHistory, HistoryViewChange, HistoryViewState},
     syntax::{FOREGROUND_BUDGET, ParsedTree, SyntaxLanguage, SyntaxState},
-    theme::Highlight,
+    theme::{Highlight, color},
 };
 
 /// The extension lifecycle whose complete contribution set is stored in this buffer.
@@ -44,13 +44,14 @@ impl ContributionSource {
     }
 }
 
-impl DecorationToken {
-    fn precedence(self) -> u8 {
-        match self {
-            Self::Info => 0,
-            Self::Warning => 1,
-            Self::Error => 2,
-        }
+/// Where a decoration naming color `key` paints among overlapping ones:
+/// status colors above every other key, the most severe on top.
+fn decoration_precedence(key: &str) -> u8 {
+    match key {
+        color::INFO => 1,
+        color::WARNING => 2,
+        color::ERROR => 3,
+        _ => 0,
     }
 }
 
@@ -58,8 +59,8 @@ impl DecorationToken {
 pub(crate) struct ResolvedEditorContribution {
     pub range: ByteRange,
     pub source: ContributionSource,
-    pub decoration: Option<DecorationToken>,
-    pub gutter: Option<GutterToken>,
+    pub decoration: Option<String>,
+    pub gutter: Option<String>,
     pub command: Option<String>,
 }
 
@@ -85,8 +86,8 @@ struct ContributionSet {
 #[derive(Clone)]
 struct ContributionMetadata {
     source: ContributionSource,
-    decoration: Option<DecorationToken>,
-    gutter: Option<GutterToken>,
+    decoration: Option<String>,
+    gutter: Option<String>,
     command: Option<String>,
 }
 
@@ -344,8 +345,8 @@ impl BufferModel {
             }
             validated.push((
                 range,
-                contribution.decoration,
-                contribution.gutter,
+                contribution.decoration.clone(),
+                contribution.gutter.clone(),
                 contribution.command.clone(),
             ));
         }
@@ -470,8 +471,8 @@ impl BufferModel {
             (
                 metadata
                     .decoration
-                    .map(DecorationToken::precedence)
-                    .unwrap_or(0),
+                    .as_deref()
+                    .map_or(0, decoration_precedence),
                 *id,
             )
         });
@@ -483,8 +484,8 @@ impl BufferModel {
                     end_byte_offset: range.end,
                 },
                 source: metadata.source,
-                decoration: metadata.decoration,
-                gutter: metadata.gutter,
+                decoration: metadata.decoration.clone(),
+                gutter: metadata.gutter.clone(),
                 command: metadata.command.clone(),
             })
             .collect()

@@ -211,7 +211,7 @@ impl Element for EditorElement {
                 view.gutter_markers
                     .iter()
                     .filter(|marker| marker.line >= first && marker.line < last)
-                    .map(|marker| (marker.line, theme.underline_color(marker.highlight)))
+                    .map(|marker| (marker.line, theme.color(&marker.key)))
                     .collect()
             } else {
                 Vec::new()

@@ -20,8 +20,8 @@ use crate::{
         theme::{Appearance, Highlight, Theme, color, native_color_definitions, theme},
     },
     host::protocol::{
-        BufferHandle, ByteRange, CompletionResponse, CompletionResultItem, DecorationToken,
-        EditorContribution, ExtensionId, ExtensionLifecycleId, GutterToken, LanguageInfo,
+        BufferHandle, ByteRange, CompletionResponse, CompletionResultItem, EditorContribution,
+        ExtensionId, ExtensionLifecycleId, LanguageInfo,
     },
 };
 
@@ -805,8 +805,8 @@ fn contribution_projection_indexes_multiline_ranges() {
                 end_byte_offset: 9,
             },
             source: ContributionSource::fixture(),
-            decoration: Some(DecorationToken::Warning),
-            gutter: Some(GutterToken::Warning),
+            decoration: Some("warning".to_owned()),
+            gutter: Some("warning".to_owned()),
             command: Some("fixture.action".into()),
         }],
     );
@@ -958,8 +958,8 @@ fn views_share_model_state_and_keep_presentation_state_independent(cx: &mut Test
                         start_byte_offset: 0,
                         end_byte_offset: 6,
                     },
-                    decoration: Some(DecorationToken::Warning),
-                    gutter: Some(GutterToken::Warning),
+                    decoration: Some("warning".to_owned()),
+                    gutter: Some("warning".to_owned()),
                     command: None,
                 }],
                 model.revision(),
@@ -1019,10 +1019,11 @@ fn selection_tracks_a_deletion_from_another_view(cx: &mut TestAppContext) {
     });
 }
 
+/// `range` styled as `test_theme` styles capture `name`.
 fn span(range: std::ops::Range<usize>, name: &str) -> HighlightSpan {
     HighlightSpan {
         range,
-        highlight: Highlight::named(name),
+        style: test_theme().style(Highlight::named(name)),
     }
 }
 
@@ -1063,7 +1064,7 @@ fn test_theme() -> Theme {
 fn layered_runs_apply_layers_in_order_and_fill_gaps() {
     let theme = test_theme();
     let color = |name| theme.style(Highlight::named(name)).color.unwrap();
-    let error = Some(theme.underline_color(Highlight::named("diagnostic.error")));
+    let error = Some(theme.color(color::ERROR));
     let fg = theme.color(color::EDITOR_FOREGROUND);
     let text = "let x = \"é\";";
     let syntax = [
@@ -1072,7 +1073,10 @@ fn layered_runs_apply_layers_in_order_and_fill_gaps() {
         span(8..12, "string"),
     ];
     let semantic = [span(0..3, "type")];
-    let decorations = [span(6..11, "diagnostic.error")];
+    let decorations = [HighlightSpan {
+        range: 6..11,
+        style: theme.decoration(color::ERROR),
+    }];
 
     let runs = runs_for(text, &[&syntax, &semantic, &decorations], &theme);
     assert_eq!(
@@ -1174,9 +1178,9 @@ fn overlapping_decorations_underline_with_the_most_severe(cx: &mut TestAppContex
             .replace_contributions(
                 ContributionSource::fixture(),
                 &[
-                    decoration(0..4, DecorationToken::Warning),
-                    decoration(1..3, DecorationToken::Warning),
-                    decoration(2..6, DecorationToken::Error),
+                    decoration(0..4, "warning".to_owned()),
+                    decoration(1..3, "warning".to_owned()),
+                    decoration(2..6, "error".to_owned()),
                 ],
                 model.revision(),
             )
@@ -1187,13 +1191,13 @@ fn overlapping_decorations_underline_with_the_most_severe(cx: &mut TestAppContex
 
     cx.read(|cx| {
         let theme = theme(cx);
-        let underline = |name| Some(theme.underline_color(Highlight::named(name)));
+        let underline = |key| Some(theme.color(key));
         let fg = theme.color(color::EDITOR_FOREGROUND);
         assert_eq!(
             run_styles(&editor.read(cx).line_runs(model.read(cx), 0, "abcdefgh", cx)),
             [
-                (2, fg, underline("diagnostic.warning")),
-                (4, fg, underline("diagnostic.error")),
+                (2, fg, underline(color::WARNING)),
+                (4, fg, underline(color::ERROR)),
                 (2, fg, None),
             ]
         );
@@ -1254,7 +1258,7 @@ fn syntax_highlights_paint_beneath_decorations(cx: &mut TestAppContext) {
                 start_byte_offset: 0,
                 end_byte_offset: 5,
             },
-            decoration: Some(DecorationToken::Warning),
+            decoration: Some("warning".to_owned()),
             gutter: None,
             command: None,
         };
@@ -1279,7 +1283,7 @@ fn syntax_highlights_paint_beneath_decorations(cx: &mut TestAppContext) {
         (
             color("keyword"),
             color("function"),
-            Some(theme.underline_color(Highlight::named("diagnostic.warning"))),
+            Some(theme.color(color::WARNING)),
             theme.color(color::EDITOR_FOREGROUND),
         )
     });

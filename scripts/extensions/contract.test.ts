@@ -111,8 +111,8 @@ await editor.registerCompletionProvider("bad", { provideCompletions: () => [{ la
 await workbench.registerView({ id: "check.bad", title: "Bad", content: { kind: "tree" } });
 // @ts-expect-error tree item requires collapsibleState
 await workbench.registerView({ id: "check.bad", title: "Bad", content: { kind: "tree", provider: { getChildren: () => [{ id: "bad", label: "bad" }] } } });
-// @ts-expect-error decoration token is closed
-const token: import("knot").EditorContribution = { range: { startByteOffset: 0, endByteOffset: 1 }, decoration: "blue" };
+// @ts-expect-error decorations name a color key
+const token: import("knot").EditorContribution = { range: { startByteOffset: 0, endByteOffset: 1 }, decoration: 4 };
 // @ts-expect-error clipboard requires text
 await workbench.writeClipboardText(null);
 // @ts-expect-error contextual targets cannot be null

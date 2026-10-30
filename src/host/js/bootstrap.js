@@ -92,8 +92,8 @@ function contribution(value) {
   record(value, "contribution must be an object");
   return {
     range: byteRange(value.range),
-    decoration: token(value.decoration, ["info", "warning", "error"]),
-    gutter: token(value.gutter, ["info", "warning", "error"]),
+    decoration: optionalText(value.decoration),
+    gutter: optionalText(value.gutter),
     command: optionalText(value.command),
   };
 }
@@ -128,7 +128,7 @@ function treeItem(value) {
     command: optionalText(value.command),
     kind: kind === null ? "item" : kind,
     statusText: optionalText(value.statusText),
-    badge: token(value.badge, ["neutral", "info", "success", "warning", "error"]),
+    badge: optionalText(value.badge),
     actions: treeActions(value.actions),
   };
 }

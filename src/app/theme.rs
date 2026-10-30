@@ -4,10 +4,9 @@
 //! grammar queries also use, so adapted queries keep their names. A source
 //! name resolves to the capture name with the longest dotted prefix
 //! (`function.method.call.deep` → `function.method.call`), and names with no
-//! such prefix are ignored. Decoration names are separate: only native
-//! decorations produce them, so a query can never draw a diagnostic. The
-//! `Theme` resolves every name to a style the same way, so a theme may style
-//! `function` alone and have `function.method` follow it.
+//! such prefix are ignored. The `Theme` resolves every name to a style the
+//! same way, so a theme may style `function` alone and have `function.method`
+//! follow it.
 //!
 //! UI colors are named by flat dotted keys. A color definition gives a key a
 //! default per appearance, either a color or another key; native surfaces
@@ -115,10 +114,7 @@ pub(crate) const CAPTURE_NAMES: &[&str] = &[
     "variable.parameter.builtin",
 ];
 
-/// Names only native decorations produce.
-const DECORATION_NAMES: &[&str] = &["diagnostic.error", "diagnostic.info", "diagnostic.warning"];
-
-/// One capture or decoration name.
+/// One capture name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct Highlight(u16);
 
@@ -143,23 +139,20 @@ impl Highlight {
         })
     }
 
-    /// The capture or decoration name `name`, which must exist exactly.
+    /// The capture name `name`, which must exist exactly.
+    #[cfg(test)]
     pub(crate) fn named(name: &str) -> Self {
-        all_names()
-            .position(|known| known == name)
+        CAPTURE_NAMES
+            .iter()
+            .position(|known| *known == name)
             .map(|index| Self(index as u16))
             .unwrap_or_else(|| panic!("{name} is not a highlight name"))
     }
 
     #[cfg(test)]
     pub(crate) fn name(self) -> &'static str {
-        all_names().nth(self.0 as usize).unwrap()
+        CAPTURE_NAMES[self.0 as usize]
     }
-}
-
-/// Capture names followed by decoration names, in `Highlight` index order.
-fn all_names() -> impl Iterator<Item = &'static str> {
-    CAPTURE_NAMES.iter().chain(DECORATION_NAMES).copied()
 }
 
 /// `name`, then each shorter prefix ending before a `.`.
@@ -314,7 +307,7 @@ pub(crate) fn parse_color(text: &str) -> Option<Hsla> {
     }
 }
 
-/// Resolved colors by key and a resolved style for every highlight name.
+/// Resolved colors by key and a resolved style for every capture name.
 pub(crate) struct Theme {
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) appearance: Appearance,
@@ -408,8 +401,8 @@ impl Theme {
     }
 
     /// A theme whose `values` win over each definition's default for
-    /// `appearance`, whose capture styles resolve against `syntax` by longest
-    /// dotted prefix, and whose decorations take the status colors.
+    /// `appearance` and whose capture styles resolve against `syntax` by
+    /// longest dotted prefix.
     pub(crate) fn new(
         appearance: Appearance,
         values: &HashMap<String, Hsla>,
@@ -417,29 +410,12 @@ impl Theme {
         syntax: &[(&str, HighlightStyle)],
     ) -> Self {
         let colors = resolve_colors(appearance, values, definitions);
-        let wavy = |key: &str| HighlightStyle {
-            underline: Some(UnderlineStyle {
-                thickness: px(1.5),
-                color: colors.get(key).copied(),
-                wavy: true,
-            }),
-            ..Default::default()
-        };
-        let decorations = [
-            ("diagnostic.error", wavy(color::ERROR)),
-            ("diagnostic.info", wavy(color::INFO)),
-            ("diagnostic.warning", wavy(color::WARNING)),
-        ];
-        let styles = syntax
+        let highlights = CAPTURE_NAMES
             .iter()
-            .copied()
-            .chain(decorations)
-            .collect::<Vec<_>>();
-        let highlights = all_names()
             .map(|name| {
                 dotted_prefixes(name)
                     .find_map(|prefix| {
-                        styles
+                        syntax
                             .iter()
                             .find(|(styled, _)| *styled == prefix)
                             .map(|(_, style)| *style)
@@ -468,13 +444,17 @@ impl Theme {
         self.highlights[highlight.0 as usize]
     }
 
-    /// The underline color of `highlight`, used where a diagnostic marks a
-    /// whole line rather than a span.
-    pub(crate) fn underline_color(&self, highlight: Highlight) -> Hsla {
-        self.style(highlight)
-            .underline
-            .and_then(|underline| underline.color)
-            .unwrap_or_else(|| self.color(color::EDITOR_FOREGROUND))
+    /// How an editor decoration naming color `key` paints: a wavy underline
+    /// in that color.
+    pub(crate) fn decoration(&self, key: &str) -> HighlightStyle {
+        HighlightStyle {
+            underline: Some(UnderlineStyle {
+                thickness: px(1.5),
+                color: Some(self.color(key)),
+                wavy: true,
+            }),
+            ..Default::default()
+        }
     }
 }
 
@@ -604,19 +584,8 @@ mod tests {
     }
 
     #[test]
-    fn captures_never_resolve_to_decorations() {
-        assert_eq!(Highlight::resolve("diagnostic.error"), None);
-        assert_eq!(
-            Highlight::named("diagnostic.error").name(),
-            "diagnostic.error"
-        );
-    }
-
-    #[test]
     fn names_are_sorted_and_unique() {
-        for names in [CAPTURE_NAMES, DECORATION_NAMES] {
-            assert!(names.windows(2).all(|pair| pair[0] < pair[1]));
-        }
+        assert!(CAPTURE_NAMES.windows(2).all(|pair| pair[0] < pair[1]));
     }
 
     #[test]
@@ -700,18 +669,22 @@ mod tests {
     }
 
     #[test]
-    fn decorations_take_the_status_colors() {
+    fn decorations_underline_in_their_key_color() {
+        let mut definitions = native_color_definitions();
+        definitions.push(ColorDefinition {
+            key: "diff.add".into(),
+            description: String::new(),
+            dark: ColorDefault::Color(rgb(0x00ff00).into()),
+            light: ColorDefault::Key(color::SUCCESS.into()),
+        });
         for appearance in [Appearance::Dark, Appearance::Light] {
-            let theme = Theme::defaults(appearance, &native_color_definitions());
+            let theme = Theme::defaults(appearance, &definitions);
             assert_eq!(theme.appearance, appearance);
-            assert_eq!(
-                theme.underline_color(Highlight::named("diagnostic.error")),
-                theme.color(color::ERROR)
-            );
-            assert_eq!(
-                theme.underline_color(Highlight::named("diagnostic.warning")),
-                theme.color(color::WARNING)
-            );
+            let underline = |key| theme.decoration(key).underline.unwrap().color.unwrap();
+            assert_eq!(underline(color::ERROR), theme.color(color::ERROR));
+            assert_eq!(underline("diff.add"), theme.color("diff.add"));
+            assert_ne!(underline("diff.add"), theme.color(color::TEXT));
+            assert_eq!(underline("undefined"), theme.color(color::TEXT));
         }
     }
 

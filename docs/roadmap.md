@@ -127,7 +127,7 @@ complete list for that item.
     adds completion to `showInput`, and the mode indicator and relative line
     numbers use D077 and D068.
   - Order: after D066, D109, D110, D111, D112, D113, and D114's decoration
-    keys, and the daily-driver items D068, D072, and D077.
+    styles, and the daily-driver items D068, D072, and D077.
 
 - **D066 — Syntax-tree editing features and public syntax-tree API**
   - Deferred: D002 uses tree-sitter trees only for highlighting. Folding,
@@ -488,14 +488,14 @@ Keep each primitive generic, so a Helix or Kakoune mode could use it too. The
   - Order: after D109 and D110; before D058.
 
 - **D114 — Extension-owned editor presentation**
-  - Deferred: Contributions carry only `info`, `warning`, and `error`
-    decoration and gutter tokens. Extensions cannot draw virtual text or
-    inlay hints, anchor a floating panel to a position, or choose other theme
-    decoration keys.
+  - Deferred: Contribution decorations name any theme color key but always
+    paint as a wavy underline. Extensions cannot choose another decoration
+    style, such as a background or a straight underline, draw virtual text or
+    inlay hints, or anchor a floating panel to a position.
   - Reconsider: D067 needs hover, inlay hints, or diagnostic text, or D058
-    needs search and mode highlights. Then add theme decoration keys,
-    inline virtual text, and an anchored floating surface that reuses the
-    semantic tree and text content kinds.
+    needs search and mode highlights. Then add decoration styles, inline
+    virtual text, and an anchored floating surface that reuses the semantic
+    tree and text content kinds.
   - Order: after D064 and D068; before D067 and D058; D021 only if it falls
     short.
 
@@ -596,7 +596,7 @@ Keep each primitive generic, so a Helix or Kakoune mode could use it too. The
     define how an extension creates and refreshes the view, attaches per-range
     actions, and how such views behave in closure, recovery, and restoration.
   - Order: after D109, whose cursor and selection access per-range actions
-    need, and D114, whose theme decoration keys style its ranges.
+    need, and D114, whose decoration styles style its ranges.
 
 - **D054 — Dedicated read-only generated text surface**
   - Deferred: Contributed text frames embed the ordinary editor view over a

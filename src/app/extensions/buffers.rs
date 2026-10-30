@@ -325,9 +325,7 @@ mod tests {
 
     use gpui::{AppContext, TestAppContext};
 
-    use crate::host::protocol::{
-        ByteRange, DecorationToken, EditorContribution, GutterToken, RequestId, TextEdit,
-    };
+    use crate::host::protocol::{ByteRange, EditorContribution, RequestId, TextEdit};
 
     use super::*;
 
@@ -512,7 +510,7 @@ mod tests {
                                     start_byte_offset: 0,
                                     end_byte_offset: 1
                                 },
-                                decoration: Some(DecorationToken::Info),
+                                decoration: Some("info".to_owned()),
                                 gutter: None,
                                 command: None,
                             }],
@@ -588,8 +586,8 @@ mod tests {
                             start_byte_offset: 1,
                             end_byte_offset: 3,
                         },
-                        decoration: Some(DecorationToken::Warning),
-                        gutter: Some(GutterToken::Info),
+                        decoration: Some("warning".to_owned()),
+                        gutter: Some("info".to_owned()),
                         command: Some("fixture.action".into()),
                     }],
                     if_revision: 0,
@@ -638,7 +636,7 @@ mod tests {
                     start_byte_offset: 0,
                     end_byte_offset: 1,
                 },
-                decoration: Some(DecorationToken::Error),
+                decoration: Some("error".to_owned()),
                 gutter: None,
                 command: None,
             };
@@ -654,8 +652,10 @@ mod tests {
             );
             assert_eq!(replaced, Ok(()));
             assert_eq!(
-                model.read_with(cx, |model, _| model.resolved_contributions()[0].decoration),
-                Some(DecorationToken::Error)
+                model.read_with(cx, |model, _| model.resolved_contributions()[0]
+                    .decoration
+                    .clone()),
+                Some("error".to_owned())
             );
 
             for id in 6..=7 {

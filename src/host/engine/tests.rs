@@ -958,7 +958,7 @@ fn facade_rejects_malformed_coordinates_revisions_and_json_before_transport() {
       await expect(() => buffer.contributions.replace([]), "TypeError");
       await expect(() => buffer.snapshot({ startByteOffset: 2, endByteOffset: 1 }), "RangeError");
       await expect(() => buffer.applyEdits([{ range: { startByteOffset: 0, endByteOffset: 0 }, text: 4 }], { ifRevision: 0 }), "TypeError");
-      await expect(() => buffer.contributions.replace([{ range: { startByteOffset: 0, endByteOffset: 0 }, decoration: "other" }], { ifRevision: 0 }), "TypeError");
+      await expect(() => buffer.contributions.replace([{ range: { startByteOffset: 0, endByteOffset: 0 }, decoration: 4 }], { ifRevision: 0 }), "TypeError");
       const cyclic = {}; cyclic.self = cyclic;
       const custom = { toJSON() { return {}; } };
       const sparse = new Array(2);
@@ -2320,8 +2320,8 @@ fn buffer_requests_and_typed_responses_round_trip() {
                     start_byte_offset: 0,
                     end_byte_offset: 2
                 },
-                decoration: Some(DecorationToken::Warning),
-                gutter: Some(GutterToken::Error),
+                decoration: Some("warning".to_owned()),
+                gutter: Some("error".to_owned()),
                 command: Some("fixture.command".into()),
             }],
             if_revision: 8,

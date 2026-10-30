@@ -94,10 +94,7 @@ fn git_status_frame_groups_actions_and_log_through_public_apis(cx: &mut TestAppC
     );
     assert_eq!(
         cx.read(|cx| tree.read(cx).status_for_test("notes.txt")),
-        Some((
-            Some("U".to_owned()),
-            Some(crate::host::protocol::TreeBadge::Neutral)
-        ))
+        Some((Some("U".to_owned()), Some("text.muted".to_owned())))
     );
     let stage = cx.read(|cx| {
         tree.read(cx)
