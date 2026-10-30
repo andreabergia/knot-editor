@@ -83,7 +83,7 @@ pub(super) fn open_product_window_with(
             shell.read(cx).focus_active_surface(window, cx);
             shell.update(cx, |shell, cx| {
                 if let Some(request) = request {
-                    let _ = shell.start_open_operation(request, target, true, cx);
+                    drop(shell.start_open_operation(request, target, true, cx));
                 }
                 if let Some((title, detail)) = notice {
                     shell.show_notice(PromptLevel::Warning, title, detail, cx);

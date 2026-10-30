@@ -716,7 +716,6 @@ impl ProductShell {
             cx.global::<ApplicationWorkbenches>()
                 .register(&workbench, window.window_handle());
             self.workbench = workbench;
-        } else {
         }
         self.focus_active_editor(window, cx);
         cx.notify();
@@ -804,7 +803,6 @@ impl ProductShell {
         }
         if transition.workbench_is_empty() {
             self.replace_empty_workbench(window_handle, cx);
-        } else {
         }
         let _ = cx.update_window(window_handle, |_, window, cx| {
             self.focus_active_surface(window, cx)

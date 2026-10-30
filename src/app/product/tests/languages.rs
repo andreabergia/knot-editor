@@ -194,7 +194,7 @@ fn set_language_mode_picks_an_explicit_language_or_returns_to_detection(cx: &mut
     wait_for_api_condition(cx, |_| loaded.lock().unwrap().is_some());
     loaded.lock().unwrap().take().unwrap().unwrap();
 
-    let mut pick = |label: &str, cx: &mut TestAppContext| {
+    let pick = |label: &str, cx: &mut TestAppContext| {
         let execution = dispatch_product_command(
             &shell,
             window,
