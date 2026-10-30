@@ -1,6 +1,6 @@
 # D121 — Terminals start in the workspace root
 
-Status: 🚧 checkpoint 2 implemented, awaiting review. Item of the
+Status: 🚧 checkpoints 1–2 complete; checkpoint 3 next. Item of the
 [daily-driver plan](daily-driver.md); no dependencies. D127 builds on it.
 
 ## Goal
@@ -70,39 +70,17 @@ Finder. Extensions can open a terminal in a directory of their choosing.
   `src/app/product/tests/terminal.rs`. Those tests read the session's options
   rather than asking the spawned shell for its directory.
 
-### 2. `terminals.open` extension API ✅ (review gate pending)
+### 2. `terminals.open` extension API ✅
 
-- Deliverables:
-  - The `terminals.open` operation and its declaration with documented
-    errors.
-  - The extension guide gains a short terminal section.
-- Validation:
-  - Product tests through the host:
-    - Opening in the default directory and in an explicit `cwd`.
-    - Each rejection (`InvalidUri`, `ResourceNotFound`, `ResourceWrongKind`,
-      `InvalidTarget`).
-    - A docked target opens in the normal group.
-    - The resolved presentation matches the new tab.
-  - The declaration-context startup check passes.
-- **Implementation context:**
-  - Mirror `open_document` and `create_untitled` in
-    `src/app/extensions/host/handlers.rs` (`#[host_operation]`, a
-    `HostArguments` decoder reading the destination with
-    `reader.destination`, `host.document_destination`).
-  - Validate `cwd` off the foreground with a stat through the registered
-    filesystems, as `workspaces.openFolder` does.
-  - The foreground operation goes in `src/app/product/operations.rs` beside
-    `create_untitled` (`capture_destination`), calling a
-    `new_terminal_in_pane` variant that takes an explicit directory.
-  - Return the presentation the way `host.document_presentation` builds
-    `PresentationInfo` for terminals.
-  - Declaration: a `terminals` namespace in `src/host/js/knot.d.ts` next to
-    `documents`; the JS binding sits where the other namespaces are wired in
-    `src/host/js`.
-  - The fake host in `scripts/extensions/` stays "not faked" until a package
-    uses it.
-- Review gate: the API shape fits a future tasks extension (D125) without
-  breaking changes.
+- Approved. The `openTerminal` host operation in
+  `src/app/extensions/host/handlers.rs` validates `cwd` through
+  `product::operations::resolve_terminal_directory`, then opens the tab with
+  `open_terminal`. The contract is declared in `src/host/js/knot.d.ts` and
+  described in the [extension guide](../extension-api.md). The fake host in
+  `scripts/extensions/` reports it as not faked.
+- Covered by a product test in `src/app/product/tests/operations.rs`. Review
+  found that environment variables or a shell command for tasks (D125) can be
+  added later as optional fields without breaking the API.
 
 ### 3. Documentation
 
