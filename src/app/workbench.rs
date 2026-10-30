@@ -369,9 +369,44 @@ pub(crate) struct Pane {
     id: PaneId,
     tabs: Vec<WorkbenchTab>,
     active_tab: TabId,
+    /// Tabs most recently activated first. Tabs never activated, such as
+    /// restored ones, follow in tab order.
+    recent: Vec<TabId>,
 }
 
 impl Pane {
+    fn new(id: PaneId, tabs: Vec<WorkbenchTab>, active_tab: TabId) -> Self {
+        Self {
+            id,
+            tabs,
+            active_tab,
+            recent: vec![active_tab],
+        }
+    }
+
+    /// Make a tab active and the most recently used.
+    fn select(&mut self, tab: TabId) {
+        self.active_tab = tab;
+        self.recent.retain(|id| *id != tab);
+        self.recent.insert(0, tab);
+    }
+
+    /// The pane's tabs in recently activated order.
+    pub(crate) fn recent_tabs(&self) -> Vec<TabId> {
+        let mut order = self
+            .recent
+            .iter()
+            .copied()
+            .filter(|id| self.tabs.iter().any(|tab| tab.id == *id))
+            .collect::<Vec<_>>();
+        for tab in &self.tabs {
+            if !order.contains(&tab.id) {
+                order.push(tab.id);
+            }
+        }
+        order
+    }
+
     pub(crate) fn id(&self) -> PaneId {
         self.id
     }
@@ -439,17 +474,17 @@ impl Workbench {
             next_pane_id: 2,
             next_tab_id: 2,
             layout: Some(WorkbenchLayout::Pane(pane_id)),
-            panes: vec![Pane {
-                id: pane_id,
-                tabs: vec![WorkbenchTab {
+            panes: vec![Pane::new(
+                pane_id,
+                vec![WorkbenchTab {
                     id: tab_id,
                     payload: WorkbenchTabPayload::Document {
                         document_id,
                         editor: cx.new(|cx| EditorView::new(model, cx)),
                     },
                 }],
-                active_tab: tab_id,
-            }],
+                tab_id,
+            )],
             focused_pane: Some(pane_id),
         };
         workbench.debug_assert_invariants();
@@ -507,17 +542,42 @@ impl Workbench {
         true
     }
 
+    /// Make a tab active and its pane focused, recording the activation in
+    /// the pane's recently used order.
     pub(crate) fn activate_tab(&mut self, pane_id: PaneId, tab_id: TabId) -> bool {
+        self.show_tab(pane_id, tab_id, true)
+    }
+
+    /// Make a tab active and its pane focused. Without `record`, the pane's
+    /// recently used order stays as it was, as a recent-tab walk needs.
+    pub(crate) fn show_tab(&mut self, pane_id: PaneId, tab_id: TabId, record: bool) -> bool {
         let Some(pane) = self.panes.iter_mut().find(|pane| pane.id == pane_id) else {
             return false;
         };
         if !pane.tabs.iter().any(|tab| tab.id == tab_id) {
             return false;
         }
-        pane.active_tab = tab_id;
+        if record {
+            pane.select(tab_id);
+        } else {
+            pane.active_tab = tab_id;
+        }
         self.focused_pane = Some(pane_id);
         self.debug_assert_invariants();
         true
+    }
+
+    /// The tab after (or before) the active one in tab order, wrapping.
+    pub(crate) fn adjacent_tab(&self, pane_id: PaneId, forward: bool) -> Option<TabId> {
+        let pane = self.pane(pane_id)?;
+        let count = pane.tabs.len();
+        let index = pane.tabs.iter().position(|tab| tab.id == pane.active_tab)?;
+        let next = if forward {
+            (index + 1) % count
+        } else {
+            (index + count - 1) % count
+        };
+        Some(pane.tabs[next].id)
     }
 
     #[cfg(test)]
@@ -548,7 +608,7 @@ impl Workbench {
                 editor,
             },
         });
-        pane.active_tab = tab_id;
+        pane.select(tab_id);
         self.focused_pane = Some(pane_id);
         self.debug_assert_invariants();
         Some(tab_id)
@@ -588,7 +648,7 @@ impl Workbench {
             id: tab_id,
             payload: WorkbenchTabPayload::Terminal { session_id, view },
         });
-        pane.active_tab = tab_id;
+        pane.select(tab_id);
         self.focused_pane = Some(pane_id);
         self.debug_assert_invariants();
         Some(tab_id)
@@ -615,7 +675,7 @@ impl Workbench {
             document_id,
             editor: cx.new(|cx| EditorView::new(model, cx)),
         };
-        pane.active_tab = tab_id;
+        pane.select(tab_id);
         self.focused_pane = Some(pane_id);
         self.debug_assert_invariants();
         true
@@ -653,17 +713,17 @@ impl Workbench {
             layout.split_pane(pane_id, new_pane_id, direction, placement),
             "captured pane must occur exactly once in the layout"
         );
-        self.panes.push(Pane {
-            id: new_pane_id,
-            tabs: vec![WorkbenchTab {
+        self.panes.push(Pane::new(
+            new_pane_id,
+            vec![WorkbenchTab {
                 id: tab_id,
                 payload: WorkbenchTabPayload::Document {
                     document_id,
                     editor,
                 },
             }],
-            active_tab: tab_id,
-        });
+            tab_id,
+        ));
         self.focused_pane = Some(new_pane_id);
         self.debug_assert_invariants();
         Some(new_pane_id)
@@ -724,17 +784,17 @@ impl Workbench {
             layout.split_pane(pane_id, new_pane_id, direction, placement),
             "captured pane must occur exactly once in the layout"
         );
-        self.panes.push(Pane {
-            id: new_pane_id,
-            tabs: vec![WorkbenchTab {
+        self.panes.push(Pane::new(
+            new_pane_id,
+            vec![WorkbenchTab {
                 id: tab_id,
                 payload: WorkbenchTabPayload::Terminal {
                     session_id: new_session_id,
                     view,
                 },
             }],
-            active_tab: tab_id,
-        });
+            tab_id,
+        ));
         self.focused_pane = Some(new_pane_id);
         self.debug_assert_invariants();
         Some(new_pane_id)
@@ -818,8 +878,9 @@ impl Workbench {
             Some(removed)
         } else {
             let pane = &mut self.panes[pane_index];
+            pane.recent.retain(|id| *id != tab_id);
             if pane.active_tab == tab_id {
-                pane.active_tab = pane.tabs[tab_index.min(pane.tabs.len() - 1)].id;
+                pane.select(pane.tabs[tab_index.min(pane.tabs.len() - 1)].id);
             }
             let removed = RemovedTab {
                 tab,
@@ -1062,6 +1123,70 @@ mod tests {
             assert!(workbench.activate_tab(pane_id, first_tab));
             assert_eq!(workbench.focused_pane().unwrap().active_tab_id(), first_tab);
             assert!(!workbench.activate_tab(PaneId(u64::MAX), first_tab));
+        });
+    }
+
+    #[gpui::test]
+    fn tab_order_wraps_and_recent_order_follows_activation_closure_and_moves(
+        cx: &mut TestAppContext,
+    ) {
+        let model = cx.new(|_| BufferModel::from_text("shared"));
+        let mut documents = DocumentCollection::new();
+        let document = cx.update(|cx| documents.create_untitled("Shared", model, cx));
+        let workbench = cx.new(|cx| Workbench::new(documents.get(document).unwrap(), cx));
+
+        workbench.update(cx, |workbench, cx| {
+            let pane = workbench.focused_pane_id().unwrap();
+            let first = workbench.focused_pane().unwrap().active_tab_id();
+            let second = workbench
+                .open_tab(pane, documents.get(document).unwrap(), cx)
+                .unwrap();
+            let third = workbench
+                .open_tab(pane, documents.get(document).unwrap(), cx)
+                .unwrap();
+            let recent = |workbench: &Workbench| workbench.pane(pane).unwrap().recent_tabs();
+
+            assert_eq!(workbench.adjacent_tab(pane, true), Some(first));
+            assert_eq!(workbench.adjacent_tab(pane, false), Some(second));
+            assert_eq!(recent(workbench), [third, second, first]);
+            assert!(workbench.activate_tab(pane, first));
+            assert_eq!(workbench.adjacent_tab(pane, false), Some(third));
+            assert_eq!(recent(workbench), [first, third, second]);
+
+            // Showing without recording leaves the order for a walk.
+            assert!(workbench.show_tab(pane, second, false));
+            assert_eq!(recent(workbench), [first, third, second]);
+            assert!(workbench.activate_tab(pane, second));
+            assert_eq!(recent(workbench), [second, first, third]);
+
+            // Closing the active tab activates its neighbor, which becomes
+            // the most recent.
+            workbench.remove_tab(pane, second).unwrap();
+            assert_eq!(workbench.pane(pane).unwrap().active_tab_id(), third);
+            assert_eq!(recent(workbench), [third, first]);
+
+            // A tab moved into another pane is that pane's most recent.
+            let other = workbench
+                .split_pane(pane, SplitDirection::Horizontal, SplitPlacement::After, cx)
+                .unwrap();
+            let source = workbench.capture_tab_move(pane, first).unwrap();
+            let anchor = workbench
+                .capture_tab_move(other, workbench.pane(other).unwrap().active_tab_id())
+                .unwrap();
+            let moved = workbench
+                .relocate_tab(
+                    source,
+                    TabMoveDestination::At {
+                        anchor,
+                        placement: TabMovePlacement::Before,
+                    },
+                )
+                .unwrap();
+            assert_eq!(recent(workbench), [third]);
+            assert_eq!(
+                workbench.pane(other).unwrap().recent_tabs()[0],
+                moved.destination.tab_id
+            );
         });
     }
 

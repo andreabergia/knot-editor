@@ -131,6 +131,22 @@ fn windows_and_linux_terminals_leave_plain_control_keys_to_the_shell() {
             Some(SHOW_COMMAND_PALETTE_COMMAND)
         );
         assert_eq!(resolved(&registry, "ctrl-shift-c", Some("editor")), None);
+        // Named keys and ctrl-` are not shell input, so they stay global.
+        for (key, command_name) in [
+            ("ctrl-tab", NEXT_RECENT_TAB_COMMAND),
+            ("ctrl-shift-tab", PREVIOUS_RECENT_TAB_COMMAND),
+            ("ctrl-pagedown", NEXT_TAB_COMMAND),
+            ("ctrl-pageup", PREVIOUS_TAB_COMMAND),
+            ("ctrl-`", NEW_TERMINAL_COMMAND),
+            ("alt-1", GO_TO_TAB_1_COMMAND),
+            ("alt-9", GO_TO_LAST_TAB_COMMAND),
+        ] {
+            assert_eq!(
+                resolved(&registry, key, Some("terminal")).as_deref(),
+                Some(command_name),
+                "{platform:?}: {key}"
+            );
+        }
     }
 }
 
@@ -162,6 +178,21 @@ fn macos_preset_binds_cocoa_editing_keys_in_the_editor_only() {
         resolved(&registry, "cmd-c", Some("terminal")).as_deref(),
         Some(COPY_COMMAND)
     );
+    for (key, command_name) in [
+        ("cmd-}", NEXT_TAB_COMMAND),
+        ("cmd-{", PREVIOUS_TAB_COMMAND),
+        ("cmd-1", GO_TO_TAB_1_COMMAND),
+        ("cmd-8", GO_TO_TAB_8_COMMAND),
+        ("cmd-9", GO_TO_LAST_TAB_COMMAND),
+        ("ctrl-tab", NEXT_RECENT_TAB_COMMAND),
+        ("ctrl-`", NEW_TERMINAL_COMMAND),
+    ] {
+        assert_eq!(
+            resolved(&registry, key, Some("terminal")).as_deref(),
+            Some(command_name),
+            "{key}"
+        );
+    }
     for key in ["ctrl-a", "ctrl-c", "ctrl-k", "ctrl-y"] {
         assert_eq!(resolved(&registry, key, Some("terminal")), None, "{key}");
     }

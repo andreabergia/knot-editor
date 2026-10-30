@@ -144,6 +144,66 @@ async fn resize(context: &CommandContext, grow: bool) -> Result<(), CommandOutco
         .await
 }
 
+#[command("workbench.next-tab", title = "Next Tab", description = "Show the next tab of the focused pane.", id = NEXT_TAB_COMMAND, participant = Workbench)]
+pub(crate) async fn next_tab(context: CommandContext, (): ()) -> Result<(), CommandOutcome> {
+    context
+        .shell(|shell, target, window, cx| shell.cycle_tab(target.pane, true, window, cx))
+        .await
+}
+
+#[command("workbench.previous-tab", title = "Previous Tab", description = "Show the previous tab of the focused pane.", id = PREVIOUS_TAB_COMMAND, participant = Workbench)]
+pub(crate) async fn previous_tab(context: CommandContext, (): ()) -> Result<(), CommandOutcome> {
+    context
+        .shell(|shell, target, window, cx| shell.cycle_tab(target.pane, false, window, cx))
+        .await
+}
+
+#[command("workbench.next-recent-tab", title = "Next Recently Used Tab", description = "Walk the focused pane's tabs from most to least recently used.", id = NEXT_RECENT_TAB_COMMAND, participant = Workbench)]
+pub(crate) async fn next_recent_tab(context: CommandContext, (): ()) -> Result<(), CommandOutcome> {
+    context
+        .shell(|shell, target, window, cx| shell.walk_recent_tabs(target.pane, true, window, cx))
+        .await
+}
+
+#[command("workbench.previous-recent-tab", title = "Previous Recently Used Tab", description = "Walk the focused pane's tabs from least to most recently used.", id = PREVIOUS_RECENT_TAB_COMMAND, participant = Workbench)]
+pub(crate) async fn previous_recent_tab(
+    context: CommandContext,
+    (): (),
+) -> Result<(), CommandOutcome> {
+    context
+        .shell(|shell, target, window, cx| shell.walk_recent_tabs(target.pane, false, window, cx))
+        .await
+}
+
+macro_rules! go_to_tab {
+    ($($name:literal, $title:literal, $id:ident, $function:ident, $index:expr;)*) => {$(
+        #[command($name, title = $title, palette = false, id = $id, participant = Workbench)]
+        pub(crate) async fn $function(context: CommandContext, (): ()) -> Result<(), CommandOutcome> {
+            context
+                .shell(|shell, target, window, cx| shell.go_to_tab(target.pane, $index, window, cx))
+                .await
+        }
+    )*};
+}
+
+go_to_tab! {
+    "workbench.go-to-tab-1", "Go to Tab 1", GO_TO_TAB_1_COMMAND, go_to_tab_1, Some(0);
+    "workbench.go-to-tab-2", "Go to Tab 2", GO_TO_TAB_2_COMMAND, go_to_tab_2, Some(1);
+    "workbench.go-to-tab-3", "Go to Tab 3", GO_TO_TAB_3_COMMAND, go_to_tab_3, Some(2);
+    "workbench.go-to-tab-4", "Go to Tab 4", GO_TO_TAB_4_COMMAND, go_to_tab_4, Some(3);
+    "workbench.go-to-tab-5", "Go to Tab 5", GO_TO_TAB_5_COMMAND, go_to_tab_5, Some(4);
+    "workbench.go-to-tab-6", "Go to Tab 6", GO_TO_TAB_6_COMMAND, go_to_tab_6, Some(5);
+    "workbench.go-to-tab-7", "Go to Tab 7", GO_TO_TAB_7_COMMAND, go_to_tab_7, Some(6);
+    "workbench.go-to-tab-8", "Go to Tab 8", GO_TO_TAB_8_COMMAND, go_to_tab_8, Some(7);
+}
+
+#[command("workbench.go-to-last-tab", title = "Go to Last Tab", description = "Show the last tab of the focused pane.", id = GO_TO_LAST_TAB_COMMAND, participant = Workbench)]
+pub(crate) async fn go_to_last_tab(context: CommandContext, (): ()) -> Result<(), CommandOutcome> {
+    context
+        .shell(|shell, target, window, cx| shell.go_to_tab(target.pane, None, window, cx))
+        .await
+}
+
 #[command("file.open", title = "Open…", description = "Open a file or folder.", id = OPEN_COMMAND, participant = Workbench)]
 pub(crate) async fn open(
     context: CommandContext,

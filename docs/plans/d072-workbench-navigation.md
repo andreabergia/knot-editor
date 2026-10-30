@@ -150,7 +150,12 @@ Added to the Knot preset. `secondary-` is cmd on macOS and ctrl elsewhere.
   `src/app/product/commands.rs`; entries in `SHARED_BINDINGS` in
   `src/app/commands/keymaps/presets.rs`.
 
-### 2. Tab navigation and terminal keys
+### 2. Tab navigation and terminal keys ✅
+
+- Resolved: macOS reports cmd-shift-] and cmd-shift-[ as cmd-} and cmd-{, so
+  the preset binds those. Go to Tab 1–8 stay out of the palette. A walk run
+  without ctrl held, as from the palette, commits at once. Closing a tab still
+  activates its neighbor, which becomes the pane's most recent tab.
 
 - Next and Previous Tab, Go to Tab 1–9.
 - Per-pane recently used order, ctrl-tab walks, and commit on ctrl release.

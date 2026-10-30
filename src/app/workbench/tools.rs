@@ -397,7 +397,7 @@ impl Workbench {
                 payload: WorkbenchTabPayload::Tool { id, content },
             },
         );
-        group.active_tab = tab;
+        group.select(tab);
         self.focused_pane = Some(pane);
         self.debug_assert_invariants();
         Some((pane, tab))
@@ -504,11 +504,7 @@ impl Workbench {
             self.docks.push((pane, dock));
         }
         // The caller installs the first tab before publishing this transition.
-        self.panes.push(Pane {
-            id: pane,
-            tabs: Vec::new(),
-            active_tab: TabId(0),
-        });
+        self.panes.push(Pane::new(pane, Vec::new(), TabId(0)));
         pane
     }
 

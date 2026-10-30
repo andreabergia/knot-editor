@@ -196,11 +196,8 @@ impl Workbench {
             if let Some(dock) = prepared.dock {
                 self.docks.push((prepared.pane, dock));
             }
-            self.panes.push(Pane {
-                id: prepared.pane,
-                tabs: vec![tab],
-                active_tab: snapshot.tab_id,
-            });
+            self.panes
+                .push(Pane::new(prepared.pane, vec![tab], snapshot.tab_id));
         } else {
             let pane = self
                 .panes
@@ -208,7 +205,7 @@ impl Workbench {
                 .find(|pane| pane.id == prepared.pane)
                 .expect("validated destination pane");
             pane.tabs.insert(prepared.index, tab);
-            pane.active_tab = snapshot.tab_id;
+            pane.select(snapshot.tab_id);
         }
         self.layout = Some(prepared.layout);
         self.focused_pane = Some(prepared.pane);

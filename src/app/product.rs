@@ -20,6 +20,7 @@ pub(super) mod commands;
 mod extension_restart;
 mod language_mode;
 mod launch;
+mod navigation;
 mod open;
 pub(super) mod operations;
 mod recovery_listing;
@@ -389,6 +390,7 @@ pub(crate) struct ProductShell {
     tab_drag: std::rc::Rc<RefCell<tab_drag::TabDragState>>,
     dock_resize: Option<DockResizeDrag>,
     split_resize: Option<SplitResizeDrag>,
+    recent_walk: Option<navigation::RecentWalk>,
     command_palette: Option<CommandPalette<ProductCommandTarget>>,
     command_palette_subscription: Option<Subscription>,
     transient: Option<ActiveTransient>,
@@ -492,6 +494,7 @@ impl ProductShell {
             tab_drag: Default::default(),
             dock_resize: None,
             split_resize: None,
+            recent_walk: None,
             command_palette: None,
             command_palette_subscription: None,
             transient: None,

@@ -15,22 +15,7 @@ use gpui::{App, Global, Keystroke};
 use serde::{Deserialize, Serialize};
 
 use super::{ApplicationKeymaps, canonical_key, rebuild};
-use crate::app::commands::dispatch::{
-    CLOSE_TAB_COMMAND, CLOSE_WINDOW_COMMAND, COPY_COMMAND, CUT_COMMAND, DELETE_BACKWARD_COMMAND,
-    DELETE_FORWARD_COMMAND, DELETE_TO_LINE_END_COMMAND, EQUALIZE_PANES_COMMAND, GROW_PANE_COMMAND,
-    INSERT_NEWLINE_COMMAND, INSERT_TAB_COMMAND, MOVE_DOCUMENT_END_COMMAND,
-    MOVE_DOCUMENT_START_COMMAND, MOVE_DOWN_COMMAND, MOVE_LEFT_COMMAND, MOVE_LINE_END_COMMAND,
-    MOVE_LINE_START_COMMAND, MOVE_PAGE_DOWN_COMMAND, MOVE_PAGE_UP_COMMAND, MOVE_RIGHT_COMMAND,
-    MOVE_UP_COMMAND, MOVE_WORD_LEFT_COMMAND, MOVE_WORD_RIGHT_COMMAND, NEW_COMMAND,
-    NEW_TERMINAL_COMMAND, NEW_WINDOW_COMMAND, OPEN_COMMAND, PASTE_COMMAND, QUIT_COMMAND,
-    REDO_COMMAND, SAVE_AS_COMMAND, SAVE_COMMAND, SELECT_ALL_COMMAND, SELECT_DOCUMENT_END_COMMAND,
-    SELECT_DOCUMENT_START_COMMAND, SELECT_DOWN_COMMAND, SELECT_LEFT_COMMAND,
-    SELECT_LINE_END_COMMAND, SELECT_LINE_START_COMMAND, SELECT_PAGE_DOWN_COMMAND,
-    SELECT_PAGE_UP_COMMAND, SELECT_RIGHT_COMMAND, SELECT_UP_COMMAND, SELECT_WORD_LEFT_COMMAND,
-    SELECT_WORD_RIGHT_COMMAND, SHOW_COMMAND_PALETTE_COMMAND, SHOW_COMPLETIONS_COMMAND,
-    SHRINK_PANE_COMMAND, SPLIT_HORIZONTAL_COMMAND, SPLIT_LEFT_COMMAND, SPLIT_UP_COMMAND,
-    SPLIT_VERTICAL_COMMAND, UNDO_COMMAND,
-};
+use crate::app::commands::dispatch::*;
 use crate::app::settings::{self, ApplicationSettings, KEYMAP_PRESET};
 use crate::host::protocol::{Command, CommandArgumentValue, ExtensionId, ExtensionLifecycleId};
 
@@ -273,9 +258,11 @@ impl Platform {
 type PresetEntry = (&'static str, &'static str, Option<&'static str>);
 
 /// The Knot preset for a platform. On Windows and Linux, a global binding
-/// whose first keystroke is a plain ctrl chord is unbound in terminals, so the
-/// shell receives readline and job-control keys, and the terminal copies and
-/// pastes with ctrl-shift-c and ctrl-shift-v instead.
+/// whose first keystroke is ctrl with a printable character other than
+/// backtick is unbound in terminals, so the shell receives readline and
+/// job-control keys, and the terminal copies and pastes with ctrl-shift-c and
+/// ctrl-shift-v instead. Named keys such as tab and pageup, and ctrl-`, stay
+/// global because shells do not use them.
 pub(crate) fn knot_preset(platform: Platform) -> Vec<PresetBinding> {
     let (secondary, platform_entries) = match platform {
         Platform::MacOs => ("cmd-", MACOS_BINDINGS),
@@ -291,7 +278,7 @@ pub(crate) fn knot_preset(platform: Platform) -> Vec<PresetBinding> {
     if platform != Platform::MacOs {
         let mut pass_through = preset
             .iter()
-            .filter(|binding| binding.view.is_none() && starts_with_plain_control(&binding.key))
+            .filter(|binding| binding.view.is_none() && reaches_the_shell(&binding.key))
             .map(|binding| binding.key.clone())
             .collect::<Vec<_>>();
         pass_through.sort();
@@ -310,16 +297,21 @@ pub(crate) fn knot_preset(platform: Platform) -> Vec<PresetBinding> {
     preset
 }
 
-fn starts_with_plain_control(key: &str) -> bool {
+/// Whether a binding's first keystroke is one a shell reads: plain ctrl with
+/// a printable character other than backtick.
+fn reaches_the_shell(key: &str) -> bool {
     key.split_whitespace()
         .next()
         .and_then(|stroke| Keystroke::parse(stroke).ok())
         .is_some_and(|stroke| {
+            let mut characters = stroke.key.chars();
             stroke.modifiers
                 == gpui::Modifiers {
                     control: true,
                     ..Default::default()
                 }
+                && characters.next().is_some_and(|key| key != '`')
+                && characters.next().is_none()
         })
 }
 
@@ -346,7 +338,9 @@ const SHARED_BINDINGS: &[PresetEntry] = &[
     ("delete", DELETE_FORWARD_COMMAND, Some("editor")),
     ("ctrl-space", SHOW_COMPLETIONS_COMMAND, Some("editor")),
     ("secondary-n", NEW_COMMAND, None),
-    ("secondary-shift-t", NEW_TERMINAL_COMMAND, None),
+    ("ctrl-`", NEW_TERMINAL_COMMAND, None),
+    ("ctrl-tab", NEXT_RECENT_TAB_COMMAND, None),
+    ("ctrl-shift-tab", PREVIOUS_RECENT_TAB_COMMAND, None),
     ("secondary-shift-n", NEW_WINDOW_COMMAND, None),
     ("secondary-o", OPEN_COMMAND, None),
     ("secondary-s", SAVE_COMMAND, None),
@@ -370,8 +364,8 @@ const SHARED_BINDINGS: &[PresetEntry] = &[
     ("secondary-q", QUIT_COMMAND, None),
 ];
 
-/// macOS word, line, and document movement, plus the Emacs-style keys that
-/// every Cocoa text view accepts.
+/// macOS word, line, and document movement, the Emacs-style keys that every
+/// Cocoa text view accepts, and tab navigation.
 const MACOS_BINDINGS: &[PresetEntry] = &[
     ("alt-left", MOVE_WORD_LEFT_COMMAND, Some("editor")),
     ("shift-alt-left", SELECT_WORD_LEFT_COMMAND, Some("editor")),
@@ -402,9 +396,22 @@ const MACOS_BINDINGS: &[PresetEntry] = &[
     ("ctrl-d", DELETE_FORWARD_COMMAND, Some("editor")),
     ("ctrl-h", DELETE_BACKWARD_COMMAND, Some("editor")),
     ("ctrl-k", DELETE_TO_LINE_END_COMMAND, Some("editor")),
+    // macOS reports cmd-shift-] as cmd-}.
+    ("cmd-}", NEXT_TAB_COMMAND, None),
+    ("cmd-{", PREVIOUS_TAB_COMMAND, None),
+    ("cmd-1", GO_TO_TAB_1_COMMAND, None),
+    ("cmd-2", GO_TO_TAB_2_COMMAND, None),
+    ("cmd-3", GO_TO_TAB_3_COMMAND, None),
+    ("cmd-4", GO_TO_TAB_4_COMMAND, None),
+    ("cmd-5", GO_TO_TAB_5_COMMAND, None),
+    ("cmd-6", GO_TO_TAB_6_COMMAND, None),
+    ("cmd-7", GO_TO_TAB_7_COMMAND, None),
+    ("cmd-8", GO_TO_TAB_8_COMMAND, None),
+    ("cmd-9", GO_TO_LAST_TAB_COMMAND, None),
 ];
 
-/// Windows and Linux word and document movement and the extra Redo key.
+/// Windows and Linux word and document movement, the extra Redo key, and tab
+/// navigation keys that shells leave alone.
 const PC_BINDINGS: &[PresetEntry] = &[
     ("ctrl-left", MOVE_WORD_LEFT_COMMAND, Some("editor")),
     ("shift-ctrl-left", SELECT_WORD_LEFT_COMMAND, Some("editor")),
@@ -427,6 +434,17 @@ const PC_BINDINGS: &[PresetEntry] = &[
         Some("editor"),
     ),
     ("ctrl-y", REDO_COMMAND, None),
+    ("ctrl-pagedown", NEXT_TAB_COMMAND, None),
+    ("ctrl-pageup", PREVIOUS_TAB_COMMAND, None),
+    ("alt-1", GO_TO_TAB_1_COMMAND, None),
+    ("alt-2", GO_TO_TAB_2_COMMAND, None),
+    ("alt-3", GO_TO_TAB_3_COMMAND, None),
+    ("alt-4", GO_TO_TAB_4_COMMAND, None),
+    ("alt-5", GO_TO_TAB_5_COMMAND, None),
+    ("alt-6", GO_TO_TAB_6_COMMAND, None),
+    ("alt-7", GO_TO_TAB_7_COMMAND, None),
+    ("alt-8", GO_TO_TAB_8_COMMAND, None),
+    ("alt-9", GO_TO_LAST_TAB_COMMAND, None),
 ];
 
 const PC_TERMINAL_BINDINGS: &[PresetEntry] = &[

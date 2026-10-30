@@ -328,6 +328,7 @@ impl Render for ProductShell {
             .relative()
             .key_context("product")
             .capture_key_down(cx.listener(Self::cancel_tab_drag))
+            .on_modifiers_changed(cx.listener(Self::modifiers_changed))
             .on_action(cx.listener(Self::dispatch_source))
             .on_action(cx.listener(Self::dispatch_keybinding))
             .flex()

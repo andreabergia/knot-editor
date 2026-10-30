@@ -97,11 +97,7 @@ impl Workbench {
                     })
                     .collect::<Vec<_>>();
                 let active_tab = tabs[selected.min(tabs.len() - 1)].id;
-                self.panes.push(Pane {
-                    id: pane,
-                    tabs,
-                    active_tab,
-                });
+                self.panes.push(Pane::new(pane, tabs, active_tab));
                 if let Some(dock) = dock {
                     self.docks.push((pane, dock));
                 }
