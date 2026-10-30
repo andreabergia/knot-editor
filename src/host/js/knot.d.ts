@@ -119,6 +119,21 @@ declare module "knot" {
     setLanguage(id: DocumentId, language: string | null): Promise<void>;
   }>;
 
+  export interface TerminalOptions extends DocumentDestinationOptions {
+    /** Existing local directory URI the shell starts in. Omission uses the
+     * window's default: the root containing its most recently focused
+     * document, else its first root, else the home directory. */
+    readonly cwd?: string;
+  }
+  export const terminals: Readonly<{
+    /** Opens and focuses a terminal tab in the captured pane, or in the normal
+     * group when the pane is a dock. Resolves after commit.
+     * @throws TypeError for a non-text cwd; HostError with InvalidUri for a
+     * malformed or non-file URI, ResourceNotFound, ResourceWrongKind,
+     * ProviderFailure, InvalidTarget, ContextUnavailable, or Cancelled. */
+    open(options?: TerminalOptions): Promise<PresentationInfo>;
+  }>;
+
   /** A language as registered: its ID and the patterns detection matches. */
   export interface LanguageInfo {
     /** LSP languageId, such as "rust", "typescriptreact", or "shellscript". */

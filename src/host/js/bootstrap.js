@@ -750,11 +750,14 @@ function windowFromNative(value) {
     workspace: workspaceFromNative(value.workspace),
     panes: Object.freeze(value.panes.map(pane => Object.freeze({
       target: paneTarget(pane.target), selected: presentationTarget(pane.selected),
-      tabs: Object.freeze(pane.tabs.map(tab => Object.freeze({
-        target: presentationTarget(tab.target), kind: tab.kind, document: tab.document,
-        buffer: tab.buffer === null ? null : bufferFor(tab.buffer), tool: tab.tool,
-      }))),
+      tabs: Object.freeze(pane.tabs.map(presentationFromNative)),
     }))),
+  });
+}
+function presentationFromNative(tab) {
+  return Object.freeze({
+    target: presentationTarget(tab.target), kind: tab.kind, document: tab.document,
+    buffer: tab.buffer === null ? null : bufferFor(tab.buffer), tool: tab.tool,
   });
 }
 function destinationAuthority(options) {
@@ -789,6 +792,13 @@ export async function presentDocument(id, options) {
 export async function openDocument(uri, options) {
   const value = await request("openDocument", string(uri, "resource URI must be text"), destinationAuthority(options));
   return documentPresentationFromNative(value);
+}
+
+export async function openTerminal(options) {
+  const cwd = options === undefined ? undefined : record(options, "terminal options must be an object").cwd;
+  const tab = await request("openTerminal", cwd === undefined ? null : string(cwd, "terminal directory must be text"),
+    destinationAuthority(options));
+  return presentationFromNative(tab);
 }
 
 export async function setDocumentLanguage(id, language) {

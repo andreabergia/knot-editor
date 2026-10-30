@@ -1,6 +1,6 @@
 # D121 — Terminals start in the workspace root
 
-Status: 🚧 checkpoint 1 complete; checkpoint 2 next. Item of the
+Status: 🚧 checkpoint 2 implemented, awaiting review. Item of the
 [daily-driver plan](daily-driver.md); no dependencies. D127 builds on it.
 
 ## Goal
@@ -70,7 +70,7 @@ Finder. Extensions can open a terminal in a directory of their choosing.
   `src/app/product/tests/terminal.rs`. Those tests read the session's options
   rather than asking the spawned shell for its directory.
 
-### 2. `terminals.open` extension API
+### 2. `terminals.open` extension API ✅ (review gate pending)
 
 - Deliverables:
   - The `terminals.open` operation and its declaration with documented

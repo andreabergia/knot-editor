@@ -31,11 +31,11 @@ pub(crate) async fn new_terminal(context: CommandContext, (): ()) -> Result<(), 
         .await?;
     context
         .shell(move |shell, target, window, cx| {
-            if shell.new_terminal_in_pane(target.pane, window, cx) {
-                Ok(())
-            } else {
-                Err(CommandOutcome::InvalidTarget)
-            }
+            let directory = shell.terminal_directory(cx);
+            shell
+                .new_terminal_in_pane(target.pane, directory, window, cx)
+                .map(|_| ())
+                .ok_or(CommandOutcome::InvalidTarget)
         })
         .await
 }

@@ -234,6 +234,63 @@ async fn open_document(
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub(crate) struct TerminalArguments {
+    pub cwd: Option<String>,
+    pub target: Option<crate::host::protocol::DocumentDestination>,
+}
+
+impl HostArguments for TerminalArguments {
+    fn decode(reader: &mut dyn ArgumentReader) -> Result<Self, DecodeError> {
+        Ok(Self {
+            cwd: reader.optional_text(2, "terminal directory must be text")?,
+            target: reader.destination(3)?,
+        })
+    }
+}
+
+impl HostSuccess for crate::host::protocol::PresentationInfo {
+    fn encode(self) -> Result<EncodedValue, DecodeError> {
+        encode_json(self)
+    }
+}
+
+#[host_operation("openTerminal")]
+async fn open_terminal(
+    context: HostContext,
+    arguments: TerminalArguments,
+) -> Result<crate::host::protocol::PresentationInfo, OpenError> {
+    let request = context.request;
+    let destination = context
+        .foreground(|host, cx| host.document_destination(&request, arguments.target, cx))??;
+    let directory = match arguments.cwd {
+        Some(uri) => {
+            let (sender, receiver) = tokio::sync::oneshot::channel();
+            context.foreground(move |_, cx| {
+                product::operations::resolve_terminal_directory(
+                    uri,
+                    move |result| {
+                        let _ = sender.send(result);
+                    },
+                    cx,
+                )
+            })??;
+            Some(receiver.await.map_err(|_| AccessError::Cancelled)??)
+        }
+        None => None,
+    };
+    let target = context.foreground(move |_, cx| {
+        product::operations::open_terminal(destination, directory, cx)
+    })??;
+    Ok(crate::host::protocol::PresentationInfo {
+        target,
+        kind: crate::host::protocol::SurfaceKind::Terminal,
+        document: None,
+        buffer: None,
+        tool: None,
+    })
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct DocumentLookup {
     pub id: String,
 }

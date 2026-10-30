@@ -830,3 +830,92 @@ fn pick_folder_returns_a_normalized_directory_and_reports_path_failures(cx: &mut
     );
     assert_eq!(clipboard_json(cx)["error"], "ResourceNotFound");
 }
+
+#[gpui::test]
+fn public_terminal_open_starts_in_the_requested_directory_and_reports_path_failures(
+    cx: &mut TestAppContext,
+) {
+    let documents = install_globals(cx);
+    let root = tempfile::tempdir().unwrap();
+    let explicit = root.path().join("explicit");
+    std::fs::create_dir(&explicit).unwrap();
+    let file = root.path().join("notes.txt");
+    std::fs::write(&file, "text").unwrap();
+    let directory = |path: &Path| url::Url::from_directory_path(path).unwrap().to_string();
+    let source = format!(
+        r#"
+import {{ commands, terminals, windows }} from "knot";
+async function rejects(action, code) {{
+  try {{ await action(); }} catch (error) {{ if (error.code === code) return; throw error; }}
+  throw new Error(`expected ${{code}}`);
+}}
+await commands.register("operations.terminal", async () => {{
+  const [win] = await windows.list();
+  const pane = win.panes.find(pane => pane.tabs.some(tab => tab.kind === "document")).target;
+  const dock = win.panes.find(pane => pane.tabs.some(tab => tab.kind === "tool")).target;
+  const opened = await terminals.open({{ cwd: "{explicit}", target: pane }});
+  if (opened.kind !== "terminal" || opened.document !== null || opened.buffer !== null || opened.tool !== null) throw new Error("metadata");
+  if (opened.target.pane !== pane || !Object.isFrozen(opened)) throw new Error("destination");
+  const listed = (await windows.get(win.target)).panes.flatMap(pane => pane.tabs);
+  if (!listed.some(tab => tab.target === opened.target)) throw new Error("listing");
+  const docked = await terminals.open({{ target: dock }});
+  if (docked.kind !== "terminal" || docked.target.pane === dock) throw new Error("dock target");
+  await rejects(() => terminals.open({{ cwd: "mem://product/src" }}), "InvalidUri");
+  await rejects(() => terminals.open({{ cwd: "not a URI" }}), "InvalidUri");
+  await rejects(() => terminals.open({{ cwd: "{missing}" }}), "ResourceNotFound");
+  await rejects(() => terminals.open({{ cwd: "{file}" }}), "ResourceWrongKind");
+  await rejects(() => terminals.open({{ target: {{}} }}), "InvalidTarget");
+  try {{ await terminals.open({{ cwd: 42 }}); throw new Error("nontext cwd accepted"); }}
+  catch (error) {{ if (!(error instanceof TypeError)) throw error; }}
+}});
+"#,
+        explicit = directory(&explicit),
+        missing = directory(&root.path().join("missing")),
+        file = url::Url::from_file_path(&file).unwrap(),
+    );
+    let host = cx.update(extensions::host::install);
+    let key = install_operation_fixture(&host, &source, "operations.terminal", cx);
+    let (shell, window) = empty_product_window(&documents, cx);
+    shell.update(cx, |shell, cx| {
+        shell.replace_workspace_roots(
+            vec![ResourceUri::parse(&directory(root.path())).unwrap()],
+            cx,
+        );
+    });
+    place_explorer(
+        &shell,
+        window,
+        crate::app::workbench::ToolPlacement::Dock(crate::app::workbench::DockLocation::Left),
+        cx,
+    );
+    assert_eq!(
+        wait_for_command(
+            dispatch_product_command(&shell, window, "operations.terminal", cx),
+            cx
+        ),
+        CommandOutcome::Completed
+    );
+    let directories = cx.read(|cx| {
+        let sessions = cx.global::<ApplicationTerminalSessions>().0.borrow();
+        shell
+            .read(cx)
+            .workbench
+            .read(cx)
+            .tab_snapshots()
+            .into_iter()
+            .filter_map(|tab| match tab.surface {
+                TabSurfaceId::Terminal(id) => Some(id),
+                _ => None,
+            })
+            .map(|id| {
+                sessions.sessions[&id]
+                    .read(cx)
+                    .working_directory()
+                    .unwrap()
+                    .to_owned()
+            })
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(directories, [explicit, root.path().to_owned()]);
+    host.update(cx, |host, cx| host.unload(key, cx).unwrap());
+}

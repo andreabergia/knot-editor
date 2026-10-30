@@ -519,7 +519,7 @@ impl Workbench {
         &mut self,
         session: TerminalSessionId,
         view: Entity<TerminalView>,
-    ) -> Option<TabId> {
+    ) -> Option<(PaneId, TabId)> {
         if self.has_terminal_session(session) {
             return None;
         }
@@ -527,6 +527,7 @@ impl Workbench {
             .normal_pane()
             .unwrap_or_else(|| self.create_group(None));
         self.open_terminal_tab(pane, session, view)
+            .map(|tab| (pane, tab))
     }
 
     pub(crate) fn open_document_in_normal_group(

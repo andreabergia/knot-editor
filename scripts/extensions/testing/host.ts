@@ -697,6 +697,9 @@ export const api: KnotApi = {
     },
     pickFolder: async (options) => prompt("pickFolder", options),
   },
+  terminals: {
+    open: notFaked("terminals.open"),
+  },
   storage: {
     read: async (key) => {
       maybeFail("storage.read");

@@ -742,12 +742,20 @@ impl ProductShell {
         &mut self,
         cx: &mut Context<Self>,
     ) -> (TerminalSessionId, Entity<TerminalView>) {
+        let directory = self.terminal_directory(cx);
+        self.create_terminal_in(directory, cx)
+    }
+
+    fn create_terminal_in(
+        &mut self,
+        directory: Option<std::path::PathBuf>,
+        cx: &mut Context<Self>,
+    ) -> (TerminalSessionId, Entity<TerminalView>) {
         let id = cx
             .global::<ApplicationTerminalSessions>()
             .0
             .borrow_mut()
             .allocate_id();
-        let directory = self.terminal_directory(cx);
         let session = cx.new(|cx| TerminalSession::new(directory, cx));
         let view = cx.new(|cx| TerminalView::new(session.clone(), cx));
         cx.global::<ApplicationTerminalSessions>()
@@ -1330,33 +1338,40 @@ impl ProductShell {
         ))
     }
 
+    /// Opens a focused terminal starting in `directory`, in `pane` or, when
+    /// `pane` is a dock, in the normal group.
     fn new_terminal_in_pane(
         &mut self,
         pane: PaneId,
+        directory: Option<std::path::PathBuf>,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> bool {
-        if self.workbench.read(cx).pane(pane).is_none() {
-            return false;
-        }
-        let (id, view) = self.create_terminal(cx);
-        if self
-            .workbench
-            .update(cx, |workbench, _| {
-                if workbench.dock_location(pane).is_some() {
-                    workbench.open_terminal_in_normal_group(id, view)
-                } else {
-                    workbench.open_terminal_tab(pane, id, view)
-                }
-            })
-            .is_none()
-        {
+    ) -> Option<OpenTarget> {
+        self.workbench.read(cx).pane(pane)?;
+        let (id, view) = self.create_terminal_in(directory, cx);
+        let presentation = view.entity_id();
+        let Some((pane, tab)) = self.workbench.update(cx, |workbench, _| {
+            if workbench.dock_location(pane).is_some() {
+                workbench.open_terminal_in_normal_group(id, view)
+            } else {
+                workbench
+                    .open_terminal_tab(pane, id, view)
+                    .map(|tab| (pane, tab))
+            }
+        }) else {
             self.close_terminal(id, cx);
-            return false;
-        }
+            return None;
+        };
         self.focus_active_surface(window, cx);
         cx.notify();
-        true
+        Some(OpenTarget {
+            window: window.window_handle(),
+            workbench: self.workbench.downgrade(),
+            pane,
+            tab,
+            surface: TabSurfaceId::Terminal(id),
+            presentation: Some(presentation),
+        })
     }
 
     #[cfg(test)]

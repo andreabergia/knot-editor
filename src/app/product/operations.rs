@@ -204,6 +204,60 @@ pub(crate) fn resolve_directory(
     .detach();
 }
 
+/// Resolves an extension-supplied terminal directory: an existing local
+/// directory, checked through the registered providers.
+pub(crate) fn resolve_terminal_directory(
+    uri: String,
+    completion: impl FnOnce(Result<std::path::PathBuf, OpenError>) + 'static,
+    cx: &mut App,
+) -> Result<(), OpenError> {
+    let uri =
+        super::super::resource::ResourceUri::parse(&uri).map_err(|_| OpenError::InvalidUri)?;
+    if uri.scheme() != "file" {
+        return Err(OpenError::InvalidUri);
+    }
+    let providers = ProductShell::filesystems(cx);
+    cx.spawn(async move |_| {
+        let result = match super::super::open::load_resource_kind(
+            providers,
+            uri,
+            Some(ResourceKind::Directory),
+        )
+        .await
+        {
+            Ok(OpenResource::Directory(uri)) => uri
+                .as_url()
+                .to_file_path()
+                .map_err(|()| OpenError::InvalidUri),
+            Ok(_) => Err(OpenError::ResourceWrongKind),
+            Err(error) => Err(OpenFailure::Resource(error).host_error()),
+        };
+        completion(result);
+    })
+    .detach();
+    Ok(())
+}
+
+/// Opens a focused terminal at `destination`, starting in `directory` or, when
+/// it is omitted, in the window's default terminal directory.
+pub(crate) fn open_terminal(
+    destination: DocumentDestination,
+    directory: Option<std::path::PathBuf>,
+    cx: &mut App,
+) -> Result<PresentationTarget, AccessError> {
+    let (shell, target) = capture_destination(&destination, cx)?;
+    cx.update_window(target.window, |_, window, cx| {
+        shell.update(cx, |shell, cx| {
+            let directory = directory.or_else(|| shell.terminal_directory(cx));
+            shell
+                .new_terminal_in_pane(target.pane, directory, window, cx)
+                .map(|target| target.public_target())
+                .ok_or(AccessError::InvalidTarget)
+        })
+    })
+    .map_err(|_| AccessError::InvalidTarget)?
+}
+
 pub(crate) fn validate_presentation(
     target: &PresentationTarget,
     cx: &mut App,

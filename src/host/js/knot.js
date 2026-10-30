@@ -3,7 +3,7 @@ import {
   storageRead, storageWrite, storageDelete, storageList,
   recoveryList, recoveryRetain, recoveryRelease, recoveryRestore,
   observeWorkbench, closePresentation, replaceWindows, captureLayout,
-  openDocument, createUntitled, presentDocument, listDocuments, getDocument, setDocumentLanguage, listWindows, getWindow, openWindow, focusWindow, getWorkspace, openFolder, replaceWorkspaceRoots, pickFolder,
+  openDocument, createUntitled, presentDocument, listDocuments, getDocument, setDocumentLanguage, listWindows, getWindow, openWindow, focusWindow, getWorkspace, openFolder, replaceWorkspaceRoots, pickFolder, openTerminal,
   invalidCommandArguments,
   keybinding,
   removeKeybinding,
@@ -56,6 +56,7 @@ export const workbench = Object.freeze({
 export const documents = Object.freeze({ list: listDocuments, get: getDocument, open: openDocument, createUntitled, present: presentDocument, setLanguage: setDocumentLanguage });
 export const languages = Object.freeze({ register: registerLanguage, associate: associateLanguage, list: listLanguages, grammars: listGrammars });
 export const settings = Object.freeze({ define: defineSetting, set: setSettings, get: getSetting, reset: resetSetting, observe: observeSetting });
+export const terminals = Object.freeze({ open: openTerminal });
 export const windows = Object.freeze({ list: listWindows, get: getWindow, open: openWindow, focus: focusWindow });
 export const workspaces = Object.freeze({ get: getWorkspace, openFolder, replaceRoots: replaceWorkspaceRoots, pickFolder });
 
