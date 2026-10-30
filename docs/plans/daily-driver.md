@@ -115,12 +115,17 @@ to be rebuilt later:
     Also decide how chords and conflicts are reported. D088 fills in the
     other presets.
 
-- **D072 — Workbench navigation commands** (depends on D086)
+- **D072 — Workbench navigation and layout commands** (depends on D086)
   - Default bindings:
-    - next and previous tab (⌘⇧] / ⌘⇧[ and ctrl-tab)
+    - next and previous tab in order (⌘⇧] / ⌘⇧[)
+    - most recently used tab switching on ctrl-tab, as in VS Code and Zed
     - go to tab 1–9
     - focus pane left/right/up/down
-    - move tab to the adjacent pane
+    - move tab to the adjacent pane, creating a split when there is none
+    - split left and up, beside the existing split right and down
+    - maximize the focused pane or dock, and toggle back
+    - grow, shrink, and equalize panes from the keyboard
+    - pin and unpin tab
     - close other tabs
     - close pane
     - reopen closed tab
@@ -130,6 +135,18 @@ to be rebuilt later:
     commands and works for any tool.
   - Reopen closed tab keeps a bounded per-window stack of what each closed tab
     needs to be recreated, reusing the window layout's tab records.
+  - Pinned tabs sit first in their pane, survive close other tabs, and are
+    recorded in the window layout. Decide whether a pinned tab refuses plain
+    Close Tab and how it renders.
+  - Preview tabs, as in VS Code and Zed: a document opened as a preview
+    replaces the pane's previous preview until it is edited, pinned, or
+    double-clicked. Opening as a preview is an option of the public open
+    API, so the explorer and search extensions use it. Decide whether the
+    window layout records preview state.
+  - An open-documents picker lists the documents open in the window, for
+    switching by name. Decide whether Go to File (D082) covers it instead.
+  - Maximize is window-local presentation state; decide whether the window
+    layout records it.
 
 ## Phase 3 — Editing
 
@@ -281,6 +298,7 @@ to be rebuilt later:
     its commands, using the contributed tree API.
   - It provides:
     - multi-root browsing
+    - single click opens a preview tab, double click a regular one (D072)
     - new, rename, and delete actions
     - reveal the active file
     - refresh on watch events
@@ -309,7 +327,8 @@ to be rebuilt later:
     companion commands.
   - Remove the Projects tool registration and its tree code.
 
-- **D085 — Cross-file search** (depends on D087, D081, D071; promotes D007)
+- **D085 — Cross-file search** (depends on D087, D081, D071, D072; promotes
+  D007)
   - A bundled extension that wraps ripgrep through process spawning (D087)
     and parses its `--json` output. It passes the effective ignore rules
     (D081).
@@ -317,7 +336,7 @@ to be rebuilt later:
     - a query input with case, regex, whole-word, and glob options
     - streamed results in a tree grouped by file (contributed tree groups
       and row actions already exist)
-    - opening a result at its range
+    - opening a result at its range, as a preview tab
     - cancelling a superseded search
     - refresh
   - Stale-target recovery after edits (D007) is decided here.
