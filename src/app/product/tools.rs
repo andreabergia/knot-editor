@@ -215,6 +215,30 @@ impl ProductShell {
             .map(|tool| tool.id)
     }
 
+    /// Place a tool as an explicit user arrangement, publishing the
+    /// fresh-window default.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "no product command places a tool yet")
+    )]
+    pub(crate) fn place_tool(
+        &mut self,
+        id: ToolFrameId,
+        placement: ToolPlacement,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let placed = self
+            .workbench
+            .update(cx, |workbench, _| workbench.place_tool(id, placement));
+        if placed {
+            self.publish_tool_layout(cx);
+        }
+        self.focus_active_surface(window, cx);
+        cx.notify();
+        placed
+    }
+
     pub(super) fn toggle_explorer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.workspace_tree.is_none() {
             self.ensure_explorer(true, cx);

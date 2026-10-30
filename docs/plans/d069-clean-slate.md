@@ -1,6 +1,6 @@
 # D069 — Remove demo and test-only commands
 
-Status: 🚧 in progress (checkpoint 1 ✅). Part of the
+Status: 🚧 in progress (checkpoints 1–2 ✅). Part of the
 [daily-driver plan](daily-driver.md), phase 1.
 
 ## Outcome
@@ -91,7 +91,7 @@ source, and process-exit-during-handoff tests in
 `src/app/product/tests/terminal.rs` now call `relocate_tab_to_new_window_with`
 with a captured relocation. `open_tab_transfer_window` is test-only.
 
-### 2. Remove the explorer placement commands
+### 2. ✅ Remove the explorer placement commands
 
 Deliverable: the four `workbench.explorer-*` commands are removed, and a
 `ProductShell::place_tool(id, placement, window, cx)` method places a tool,
@@ -108,6 +108,10 @@ Implementation context:
 
 Review gate: `place_tool` is the seam D072 will wrap. Confirm that it fits
 before building on it.
+
+Completion: `ProductShell::place_tool` returns whether the workbench accepted
+the placement and publishes only then; it always refocuses. Tool tests use a
+`place_explorer` helper in `src/app/product/tests.rs`.
 
 ### 3. Group developer commands
 

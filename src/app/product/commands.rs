@@ -377,50 +377,6 @@ async fn toggle_dock(context: CommandContext, dock: DockLocation) -> Result<(), 
         .await
 }
 
-#[command("workbench.explorer-left", title = "Move Explorer to Left Sidebar", id = EXPLORER_LEFT_COMMAND, participant = Workbench)]
-pub(crate) async fn explorer_left(context: CommandContext, (): ()) -> Result<(), CommandOutcome> {
-    place_explorer(context, ToolPlacement::Dock(DockLocation::Left)).await
-}
-
-#[command("workbench.explorer-right", title = "Move Explorer to Right Sidebar", id = EXPLORER_RIGHT_COMMAND, participant = Workbench)]
-pub(crate) async fn explorer_right(context: CommandContext, (): ()) -> Result<(), CommandOutcome> {
-    place_explorer(context, ToolPlacement::Dock(DockLocation::Right)).await
-}
-
-#[command("workbench.explorer-bottom", title = "Move Explorer to Bottom Dock", id = EXPLORER_BOTTOM_COMMAND, participant = Workbench)]
-pub(crate) async fn explorer_bottom(context: CommandContext, (): ()) -> Result<(), CommandOutcome> {
-    place_explorer(context, ToolPlacement::Dock(DockLocation::Bottom)).await
-}
-
-#[command("workbench.explorer-in-editor", title = "Move Explorer to Editor Tabs", id = EXPLORER_IN_EDITOR_COMMAND, participant = Workbench)]
-pub(crate) async fn explorer_in_editor(
-    context: CommandContext,
-    (): (),
-) -> Result<(), CommandOutcome> {
-    place_explorer(context, ToolPlacement::DocumentGroup).await
-}
-
-async fn place_explorer(
-    context: CommandContext,
-    placement: ToolPlacement,
-) -> Result<(), CommandOutcome> {
-    context
-        .shell(move |shell, _, window, cx| {
-            if shell.workspace_tree.is_none() {
-                shell.toggle_explorer(window, cx);
-            }
-            let id = shell.explorer_frame(cx).unwrap();
-            shell.workbench.update(cx, |workbench, _| {
-                workbench.place_tool(id, placement);
-            });
-            shell.publish_tool_layout(cx);
-            shell.focus_active_surface(window, cx);
-            cx.notify();
-            Ok(())
-        })
-        .await
-}
-
 #[command("workbench.reset-layout", title = "Reset Layout", id = RESET_LAYOUT_COMMAND, participant = Workbench)]
 pub(crate) async fn reset_layout(context: CommandContext, (): ()) -> Result<(), CommandOutcome> {
     context

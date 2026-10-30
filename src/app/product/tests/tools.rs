@@ -83,8 +83,7 @@ fn docked_explorer_opens_resources_routes_copy_and_has_nontext_snapshot(cx: &mut
         assert_eq!(state.current_target, Some(tool.target.clone()));
     })
     .unwrap();
-    let moved = dispatch_product_command(&shell, window, "workbench.explorer-in-editor", cx);
-    assert_eq!(wait_for_command(moved, cx), CommandOutcome::Completed);
+    place_explorer(&shell, window, ToolPlacement::DocumentGroup, cx);
     cx.read(|cx| assert_eq!(target.validate_tab(cx), Err(CommandOutcome::InvalidTarget)));
     let close = dispatch_product_command(&shell, window, CLOSE_TAB_COMMAND, cx);
     assert_eq!(wait_for_command(close, cx), CommandOutcome::Completed);
@@ -213,8 +212,7 @@ async fn tools_do_not_bypass_dirty_document_or_terminal_protection(cx: &mut Test
     assert!(cx.has_pending_prompt());
     cx.simulate_prompt_answer("Cancel");
     assert_eq!(close.completion.await.unwrap(), CommandOutcome::Cancelled);
-    let moved = dispatch_product_command(&shell, window, "workbench.explorer-in-editor", cx);
-    assert_eq!(wait_for_command(moved, cx), CommandOutcome::Completed);
+    place_explorer(&shell, window, ToolPlacement::DocumentGroup, cx);
     let close_tool = dispatch_product_command(&shell, window, CLOSE_TAB_COMMAND, cx);
     assert_eq!(wait_for_command(close_tool, cx), CommandOutcome::Completed);
     assert!(!cx.has_pending_prompt());

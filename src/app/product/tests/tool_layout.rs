@@ -5,7 +5,8 @@ use crate::app::tool_layout::{
     ApplicationToolLayout, EXPLORER_TOOL_ID, StoredLocation, ToolLayoutSnapshot,
 };
 use crate::app::workbench::{
-    DockLocation, SplitEdge, TabMoveDestination, TabMovePlacement, ToolFrameId, WorkbenchLayout,
+    DockLocation, SplitEdge, TabMoveDestination, TabMovePlacement, ToolFrameId, ToolPlacement,
+    WorkbenchLayout,
 };
 
 fn stored(cx: &TestAppContext) -> ToolLayoutSnapshot {
@@ -42,8 +43,12 @@ fn user_customization_becomes_the_fresh_window_default(cx: &mut TestAppContext) 
             workbench.set_dock_size(DockLocation::Bottom, 300.);
         });
     });
-    let moved = dispatch_product_command(&shell, window, "workbench.explorer-bottom", cx);
-    assert_eq!(wait_for_command(moved, cx), CommandOutcome::Completed);
+    place_explorer(
+        &shell,
+        window,
+        ToolPlacement::Dock(DockLocation::Bottom),
+        cx,
+    );
     let snapshot = stored(cx);
     let record = snapshot.tool(EXPLORER_TOOL_ID).unwrap();
     assert_eq!(record.location, StoredLocation::Bottom);
@@ -79,8 +84,7 @@ fn existing_windows_keep_live_state_and_activation_does_not_publish(cx: &mut Tes
     let documents = install_globals(cx);
     let (shell, window) = empty_product_window(&documents, cx);
     open_workspace(&shell, cx);
-    let moved = dispatch_product_command(&shell, window, "workbench.explorer-right", cx);
-    assert_eq!(wait_for_command(moved, cx), CommandOutcome::Completed);
+    place_explorer(&shell, window, ToolPlacement::Dock(DockLocation::Right), cx);
     let published = stored(cx);
 
     let (fresh, _) = empty_product_window(&documents, cx);
@@ -114,8 +118,12 @@ fn hidden_tools_restore_placement_and_size_across_windows(cx: &mut TestAppContex
             workbench.set_dock_size(DockLocation::Bottom, 300.);
         });
     });
-    let moved = dispatch_product_command(&shell, window, "workbench.explorer-bottom", cx);
-    assert_eq!(wait_for_command(moved, cx), CommandOutcome::Completed);
+    place_explorer(
+        &shell,
+        window,
+        ToolPlacement::Dock(DockLocation::Bottom),
+        cx,
+    );
     let hidden = dispatch_product_command(&shell, window, "workbench.toggle-explorer", cx);
     assert_eq!(wait_for_command(hidden, cx), CommandOutcome::Completed);
     let record = stored(cx).tool(EXPLORER_TOOL_ID).unwrap().clone();
@@ -146,8 +154,7 @@ fn mixed_document_groups_leave_no_splits_or_placeholders(cx: &mut TestAppContext
     let documents = install_globals(cx);
     let (shell, window) = empty_product_window(&documents, cx);
     open_workspace(&shell, cx);
-    let moved = dispatch_product_command(&shell, window, "workbench.explorer-in-editor", cx);
-    assert_eq!(wait_for_command(moved, cx), CommandOutcome::Completed);
+    place_explorer(&shell, window, ToolPlacement::DocumentGroup, cx);
     assert_eq!(
         stored(cx).tool(EXPLORER_TOOL_ID).unwrap().location,
         StoredLocation::DocumentGroup
@@ -199,8 +206,12 @@ fn reset_layout_restores_product_defaults(cx: &mut TestAppContext) {
     let documents = install_globals(cx);
     let (shell, window) = empty_product_window(&documents, cx);
     open_workspace(&shell, cx);
-    let moved = dispatch_product_command(&shell, window, "workbench.explorer-bottom", cx);
-    assert_eq!(wait_for_command(moved, cx), CommandOutcome::Completed);
+    place_explorer(
+        &shell,
+        window,
+        ToolPlacement::Dock(DockLocation::Bottom),
+        cx,
+    );
     let hidden = dispatch_product_command(&shell, window, "workbench.toggle-explorer", cx);
     assert_eq!(wait_for_command(hidden, cx), CommandOutcome::Completed);
     assert_ne!(stored(cx), ToolLayoutSnapshot::product_default());
@@ -257,8 +268,7 @@ fn fresh_window_restores_visible_tools_without_folder(cx: &mut TestAppContext) {
     let documents = install_globals(cx);
     let (shell, window) = empty_product_window(&documents, cx);
     open_workspace(&shell, cx);
-    let moved = dispatch_product_command(&shell, window, "workbench.explorer-right", cx);
-    assert_eq!(wait_for_command(moved, cx), CommandOutcome::Completed);
+    place_explorer(&shell, window, ToolPlacement::Dock(DockLocation::Right), cx);
     // A fresh window with no folder inherits the visible right dock.
     let (fresh, _) = empty_product_window(&documents, cx);
     fresh.update(cx, |fresh, cx| fresh.restore_fresh_window_layout(cx));
@@ -291,8 +301,7 @@ fn fresh_window_with_hidden_tool_restores_nothing(cx: &mut TestAppContext) {
     let documents = install_globals(cx);
     let (shell, window) = empty_product_window(&documents, cx);
     open_workspace(&shell, cx);
-    let moved = dispatch_product_command(&shell, window, "workbench.explorer-right", cx);
-    assert_eq!(wait_for_command(moved, cx), CommandOutcome::Completed);
+    place_explorer(&shell, window, ToolPlacement::Dock(DockLocation::Right), cx);
     let hidden = dispatch_product_command(&shell, window, "workbench.toggle-explorer", cx);
     assert_eq!(wait_for_command(hidden, cx), CommandOutcome::Completed);
     let (fresh, _) = empty_product_window(&documents, cx);

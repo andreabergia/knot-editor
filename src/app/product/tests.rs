@@ -308,6 +308,21 @@ fn current_open_target(shell: &Entity<ProductShell>, cx: &gpui::App) -> OpenTarg
     }
 }
 
+fn place_explorer(
+    shell: &Entity<ProductShell>,
+    window_handle: gpui::AnyWindowHandle,
+    placement: crate::app::workbench::ToolPlacement,
+    cx: &mut TestAppContext,
+) {
+    cx.update_window(window_handle, |_, window, cx| {
+        shell.update(cx, |shell, cx| {
+            let id = shell.explorer_frame(cx).unwrap();
+            assert!(shell.place_tool(id, placement, window, cx));
+        })
+    })
+    .unwrap();
+}
+
 fn dispatch_product_command(
     shell: &Entity<ProductShell>,
     window_handle: gpui::AnyWindowHandle,
