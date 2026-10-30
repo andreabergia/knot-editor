@@ -371,6 +371,37 @@ await buffer.contributions.replace([
 ], { ifRevision: revision });
 ```
 
+## Register a keymap preset
+
+A preset is a named set of default bindings that replaces Knot's when the
+`keymap.preset` [setting](#read-and-write-settings) selects it; every
+`keymaps.bind` still wins over it. Presets are code, so derive one by
+spreading another and branch on `platform` for OS-specific keys:
+
+```js
+import { keymaps, platform, settings } from "knot";
+
+const knot = await keymaps.getPreset("knot");
+const mod = platform === "macos" ? "cmd" : "ctrl";
+await keymaps.registerPreset({
+  name: "mine",
+  title: "Mine",
+  bindings: [
+    ...knot.bindings,
+    { key: `${mod}-shift-d`, command: "me.insert-date", view: "editor" },
+    { key: `${mod}-k down`, command: null },
+  ],
+});
+await settings.set("keymap.preset", "mine");
+```
+
+A binding needs `command`, which is a name, a `{ name, arguments }` object, or
+`null` to unbind. The latest registration of a name wins and teardown reveals
+the previous one; `"knot"` cannot be replaced. Knot resolves the selection
+when startup completes and again whenever the setting changes, so registering
+the selected preset later takes effect at the next change, and an unregistered
+name selects Knot.
+
 ## Ask the user transiently
 
 `workbench` exposes window-local pickers, text input, and native confirmation or
@@ -548,11 +579,12 @@ message text. Narrow optional diagnostic `details` before reading fields. On
 `RevisionConflict`, choose whether to abandon work or deliberately read a new
 snapshot. Cancellation does not roll back a commit that already succeeded.
 
-Keybinding registration is synchronous; mutations from one V8 turn apply as one
-atomic batch. Invalid input fails the batch. Bindings sit above native defaults
-and the latest write wins, so personal overrides of package bindings belong in
-`post-init`. The activation example demonstrates
-registration and cleanup through the public API.
+Keybinding registration through `keymaps.bind` and `keymaps.unbind` is
+synchronous; mutations from one V8 turn apply as one atomic batch. Invalid
+input fails the batch. Bindings sit above the selected keymap preset and the
+latest write wins, so personal overrides of package bindings belong in
+`post-init`. The activation example demonstrates registration and cleanup
+through the public API. Show Keybindings lists every binding with its owner.
 
 ## Durable storage
 

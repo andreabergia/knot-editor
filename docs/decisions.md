@@ -484,6 +484,30 @@ nothing switches bundled languages at runtime. The accepted cost is that a
 package restarted or binding late beats earlier personal writes until Knot
 restarts; this is rare, and settings (D070) behave the same way.
 
+Default bindings are a preset in one slot beneath every write, selected by
+the `keymap.preset` setting, so switching presets never overrides extension or
+personal bindings. Presets follow the theme rule: the Knot preset is native
+data, because typing and saving must work before packages start and when they
+fail, and other presets are lifecycle-owned registrations by name with no
+`extends`, so a derived or user-written preset spreads `keymaps.getPreset`.
+The selection resolves at startup completion and on setting changes, not on
+registration, which keeps package load order out of the first keystroke.
+Extensions learn the OS from a `knot.platform` constant and branch in code
+rather than registrations carrying per-platform fields. Knot's own tables
+write shared keys with `secondary-`, expanded per platform so tests check all
+three tables on any host. On Windows and Linux terminals follow VS Code and
+Zed: plain ctrl chords belong to the shell, derived from the table rather than
+listed, and copy and paste move to ctrl-shift-c and ctrl-shift-v. On macOS
+editors take the Cocoa text system's Emacs keys, which every native text field
+accepts.
+
+Overlapping bindings are not reported as conflicts, because the latest write
+winning is the rule rather than an error. Show Keybindings instead lists every
+slot with its owner and what overrides it. Menus show the effective key
+through bindings in a context nothing declares: gpui 0.2.2 reads a menu's key
+equivalent from the bindings of its action, and the window handles a key
+before the menu does, so a key never runs twice.
+
 The palette lists commands by title and description rather than by name,
 because names are an addressing scheme, while still matching the name for
 users who know it. Low-level input commands opt out of the palette instead of

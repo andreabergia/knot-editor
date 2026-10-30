@@ -45,18 +45,37 @@ inline children. Dialog and protected-close handlers await semantic completion.
 
 ## Keymaps
 
-One application-owned registry retains native and lifecycle-owned slots, then
-derives a merged effective map. Native bindings are defaults beneath every
-extension and personal-config binding. Among those, view-specific bindings
-outrank global bindings and the latest write breaks remaining ties. Removing a
-lifecycle's ownership reveals earlier writes. An unavailable command does not select another
-binding. Null unbinds leave raw input available.
+One application-owned registry retains a preset slot and lifecycle-owned slots,
+then derives a merged effective map. The selected preset's bindings are defaults
+beneath every extension and personal-config binding. Among those, view-specific
+bindings outrank global bindings and the latest write breaks remaining ties.
+Removing a lifecycle's ownership reveals earlier writes. An unavailable command
+does not select another binding. Null unbinds leave raw input available.
+
+The Knot preset is native data for each platform: `secondary-` entries become
+cmd on macOS and ctrl on Windows and Linux, and per-platform tables add
+movement keys and, on macOS, the Cocoa Emacs editing keys in editors. On
+Windows and Linux every global binding whose first keystroke is a plain ctrl
+chord is unbound in terminals, so the shell receives readline and job-control
+keys, and terminals copy and paste with ctrl-shift-c and ctrl-shift-v.
+Extensions register further presets by name, lifecycle-owned like themes. The
+`keymap.preset` setting selects one when startup completes and whenever the
+setting changes; an unregistered name selects Knot, and installing a preset
+replaces the whole slot. A preset binding for an undeclared view kind is
+skipped.
 
 GPUI recognizes keys and scoped sequences, then one Knot action consults the map
 and enters command dispatch. Scoped prefixes remain local to their views; the
 palette retains its own input context. Menus and palette commands bypass keymaps.
-Native defaults follow platform modifiers; fixed config-error bindings remain
-available independently of product windows.
+Fixed config-error bindings remain available independently of product windows.
+
+Menus show each command's shown global single-keystroke binding through a
+binding to the menu action in a context no element declares, so it labels the
+menu without dispatching. The menus are set again whenever the keymap changes.
+macOS performs a menu's key equivalent only when the window leaves the key
+unhandled, so a key that some view unbinds shows no menu key. Show Keybindings
+lists every slot with its owner and the owner that overrides it, using the same
+winner rule as resolution.
 
 Synchronous JavaScript keybinding calls form an ordered atomic batch per V8 turn.
 Changed effective maps rebuild bindings across windows; host-response ordering is
