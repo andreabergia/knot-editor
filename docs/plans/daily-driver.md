@@ -67,16 +67,15 @@ to be rebuilt later:
 
 ## Phase 2 — Foundations
 
-- 🚧 **D070 — Application settings** ([plan](d070-settings.md))
-  - A small typed settings model for editor preferences: font family and size,
-    tab size, insert spaces, soft wrap, trim trailing whitespace, final
-    newline, and theme. Personal config sets values through a public API.
-  - Decide which values are personal config only and which are toggled from the
-    UI and persisted (for example, zoom and the selected theme). Also decide
-    whether languages can override values, and how a change repaints open
-    views.
-  - Terminal typography (D045, D059) stays deferred but must fit this model
-    later.
+- ✅ **D070 — Application settings**
+  - One in-memory `settings` store shared by personal config and packages:
+    the latest write wins, scoped values (`language`, `view`) beat unscoped
+    ones, and definitions give keys a type, default, and description. Editors
+    resolve `editor.tabSize` per language and view and repaint on change.
+    `languages.associate` claims file patterns for a language, so detection
+    overrides compose instead of living in one map setting
+    ([extension host](../architecture/extension-host.md#settings),
+    [decisions](../decisions.md#application-settings)).
 
 - **D121 — Terminals start in the workspace root**
   - A new terminal starts in its window's workspace root instead of the
