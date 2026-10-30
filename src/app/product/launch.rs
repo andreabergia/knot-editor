@@ -420,22 +420,22 @@ pub(crate) fn run(initial_request: Option<OpenRequest>) {
         cx.set_global(ApplicationTerminalSessions(RefCell::new(
             TerminalSessions::default(),
         )));
-        // Load the persisted tool arrangement before any window opens so the
-        // first window restores it; a missing or unreadable record keeps
-        // product defaults without delaying startup.
-        let layout_path = crate::app::tool_layout::ToolLayoutStore::user_path()
-            .unwrap_or_else(|_| std::env::temp_dir().join("knot-tool-layout.sqlite3"));
+        // Load the persisted tool arrangement and recorded windows before any
+        // window opens so the first window restores them; a missing or
+        // unreadable record keeps product defaults without delaying startup.
+        // Startup restores the recorded windows once config and extensions
+        // have started.
+        let state_path = crate::app::record_store::StateDatabase::user_path()
+            .unwrap_or_else(|_| std::env::temp_dir().join("knot-state.sqlite3"));
+        let state = crate::app::record_store::StateDatabase::open(
+            state_path,
+            cx.background_executor().clone(),
+        );
         cx.set_global(crate::app::tool_layout::ApplicationToolLayout(
-            crate::app::tool_layout::ToolLayoutStore::open(
-                layout_path,
-                cx.background_executor().clone(),
-            ),
+            crate::app::tool_layout::ToolLayoutStore::open(&state),
         ));
-        // Load the recorded windows beside the tool arrangement; startup
-        // restores them once config and extensions have started.
-        let sessions_path = crate::app::window_sessions::user_path()
-            .unwrap_or_else(|_| std::env::temp_dir().join("knot-window-session.sqlite3"));
-        crate::app::window_sessions::install(sessions_path, cx.background_executor().clone(), cx);
+        crate::app::window_sessions::install(&state, cx);
+        cx.set_global(crate::app::record_store::ApplicationState(state));
         cx.set_global(ApplicationLaunchGate(RefCell::new(LaunchGate::Pending(
             Vec::new(),
         ))));

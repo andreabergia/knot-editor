@@ -206,11 +206,11 @@ pub(crate) fn quit_after_storage(cx: &mut App) {
             _ => true,
         }
     });
-    // A debounced tool-layout write may still be pending; force it out before
-    // exiting so the last customization survives the restart.
-    let layout_flush = cx
-        .try_global::<crate::app::tool_layout::ApplicationToolLayout>()
-        .map(|store| store.0.flush());
+    // Debounced application-state writes may still be pending; force them
+    // out before exiting so the last customization survives the restart.
+    let state_flush = cx
+        .try_global::<crate::app::record_store::ApplicationState>()
+        .map(|state| state.0.flush());
     // A recovery capture inside its debounce window is drained so the last
     // edits reach the durable store before exit.
     let recovery_flush = cx
@@ -221,10 +221,10 @@ pub(crate) fn quit_after_storage(cx: &mut App) {
         if let Some(flush) = recovery_flush {
             let _ = flush.await;
         }
-        if let Some(flush) = layout_flush {
+        window_flush.await;
+        if let Some(flush) = state_flush {
             let _ = flush.await;
         }
-        window_flush.await;
         let _ = cx.update(|cx| cx.quit());
     })
     .detach();

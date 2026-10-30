@@ -13,12 +13,15 @@
 //! into a single write; [`ToolLayoutStore::flush`] forces a pending write out,
 //! which the quit path awaits before exiting.
 
-use std::{path::PathBuf, time::Duration};
+use std::time::Duration;
 
-use gpui::{BackgroundExecutor, Global, Task};
+use gpui::Global;
 use serde::{Deserialize, Serialize};
 
-use super::{record_store::RecordStore, workbench::DockLocation};
+use super::{
+    record_store::{RecordStore, StateDatabase},
+    workbench::DockLocation,
+};
 
 pub(crate) const TOOL_LAYOUT_VERSION: u32 = 1;
 pub(crate) const EXPLORER_TOOL_ID: &str = "knot.explorer";
@@ -111,23 +114,11 @@ pub(crate) struct ToolLayoutStore {
 }
 
 impl ToolLayoutStore {
-    pub(crate) fn user_path() -> Result<PathBuf, String> {
-        directories::ProjectDirs::from("", "", "Knot")
-            .map(|dirs| dirs.data_local_dir().join("tool-layout.sqlite3"))
-            .ok_or_else(|| "cannot determine the user application-data directory".into())
-    }
-
     /// Load the persisted default synchronously; missing, corrupt, or
     /// versioned-away records fall back to product defaults without I/O noise.
-    pub(crate) fn open(path: PathBuf, executor: BackgroundExecutor) -> Self {
+    pub(crate) fn open(database: &StateDatabase) -> Self {
         Self {
-            record: RecordStore::open(
-                path,
-                "tool_layout",
-                TOOL_LAYOUT_VERSION,
-                WRITE_DEBOUNCE,
-                executor,
-            ),
+            record: database.record("tool_layout", TOOL_LAYOUT_VERSION, WRITE_DEBOUNCE),
         }
     }
 
@@ -155,9 +146,11 @@ impl ToolLayoutStore {
         }
     }
 
-    /// Write the pending snapshot now, off the foreground. Used by tests and
-    /// the quit path; on failure the snapshot stays pending for a later retry.
-    pub(crate) fn flush(&self) -> Task<Result<(), String>> {
+    /// Write the pending snapshot now, off the foreground; on failure the
+    /// snapshot stays pending for a later retry. Quit flushes it through
+    /// [`StateDatabase::flush`].
+    #[cfg(test)]
+    pub(crate) fn flush(&self) -> gpui::Task<Result<(), String>> {
         self.record.flush()
     }
 }
@@ -173,7 +166,10 @@ mod tests {
     use std::path::Path;
 
     fn open_store(path: &Path, cx: &gpui::TestAppContext) -> ToolLayoutStore {
-        ToolLayoutStore::open(path.to_owned(), cx.background_executor.clone())
+        ToolLayoutStore::open(&StateDatabase::open(
+            path.to_owned(),
+            cx.background_executor.clone(),
+        ))
     }
 
     fn customized(size: f32) -> ToolLayoutSnapshot {

@@ -1,5 +1,5 @@
 //! Native window hot exit: every product window's roots and layout in one
-//! application-owned record beside the tool-only snapshot.
+//! application state record beside the tool-only snapshot.
 //!
 //! Recording starts once product startup has restored and opened its windows,
 //! so diagnostic windows and a launch whose config failed never write.
@@ -9,12 +9,16 @@
 //! record consumed durably before restoring it, so a crash during restoration
 //! loses only the arrangement and the next launch opens the default window.
 
-use std::{cell::Cell, path::PathBuf, time::Duration};
+use std::{cell::Cell, time::Duration};
 
-use gpui::{App, AppContext as _, BackgroundExecutor, Global, Subscription, Task};
+use gpui::{App, AppContext as _, Global, Subscription, Task};
 use serde::{Deserialize, Serialize};
 
-use super::{product::ProductShell, record_store::RecordStore, window_layout::WindowLayout};
+use super::{
+    product::ProductShell,
+    record_store::{RecordStore, StateDatabase},
+    window_layout::WindowLayout,
+};
 
 pub(crate) const WINDOW_SESSION_VERSION: u32 = 1;
 
@@ -52,21 +56,9 @@ pub(crate) struct ApplicationWindowSessions {
 
 impl Global for ApplicationWindowSessions {}
 
-pub(crate) fn user_path() -> Result<PathBuf, String> {
-    directories::ProjectDirs::from("", "", "Knot")
-        .map(|dirs| dirs.data_local_dir().join("window-session.sqlite3"))
-        .ok_or_else(|| "cannot determine the user application-data directory".into())
-}
-
 /// Load the record and observe window closure.
-pub(crate) fn install(path: PathBuf, executor: BackgroundExecutor, cx: &mut App) {
-    let store = RecordStore::open(
-        path,
-        "window_session",
-        WINDOW_SESSION_VERSION,
-        WRITE_DEBOUNCE,
-        executor,
-    );
+pub(crate) fn install(database: &StateDatabase, cx: &mut App) {
+    let store = database.record("window_session", WINDOW_SESSION_VERSION, WRITE_DEBOUNCE);
     let closed = cx.on_window_closed(|cx| cx.defer(record));
     cx.set_global(ApplicationWindowSessions {
         store,

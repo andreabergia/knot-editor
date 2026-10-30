@@ -916,10 +916,13 @@ fn schema_one_records_switch_without_a_layout(cx: &mut TestAppContext) {
 fn restored_windows_rebind_after_launch_and_unrestored_sessions_suspend(cx: &mut TestAppContext) {
     let mut fixture = start_registry(cx);
     let sessions = tempfile::tempdir().unwrap();
-    let path = sessions.path().join("window-session.sqlite3");
+    let path = sessions.path().join("state.sqlite3");
     let executor = cx.background_executor.clone();
     cx.update(|cx| {
-        crate::app::window_sessions::install(path.clone(), executor.clone(), cx);
+        crate::app::window_sessions::install(
+            &crate::app::record_store::StateDatabase::open(path.clone(), executor.clone()),
+            cx,
+        );
         crate::app::window_sessions::start_recording(cx);
     });
     let a = project_dir("one.txt", "one");
@@ -987,7 +990,10 @@ fn restored_windows_rebind_after_launch_and_unrestored_sessions_suspend(cx: &mut
     cx.set_global(ApplicationWorkbenches(RefCell::new(Vec::new())));
     cx.update(|cx| {
         crate::app::extensions::host::reset_launched_for_test(cx);
-        crate::app::window_sessions::install(path, executor, cx);
+        crate::app::window_sessions::install(
+            &crate::app::record_store::StateDatabase::open(path, executor),
+            cx,
+        );
     });
     restart_registry(&fixture.host, &fixture.extensions, cx);
     install_launch_gate(cx);

@@ -135,8 +135,10 @@ pub(super) fn install_globals(cx: &mut TestAppContext) -> Entity<DocumentCollect
     let layout_dir = tempfile::tempdir().unwrap();
     cx.set_global(crate::app::tool_layout::ApplicationToolLayout(
         crate::app::tool_layout::ToolLayoutStore::open(
-            layout_dir.path().join("tool-layout.sqlite3"),
-            cx.background_executor.clone(),
+            &crate::app::record_store::StateDatabase::open(
+                layout_dir.path().join("state.sqlite3"),
+                cx.background_executor.clone(),
+            ),
         ),
     ));
     cx.set_global(TestToolLayoutDir(layout_dir));

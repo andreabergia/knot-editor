@@ -189,8 +189,8 @@ from.
 ## Native window hot exit
 
 The application records every product window's roots and layout in one
-application-owned record beside the tool-only snapshot, in its own SQLite file
-with the same debounce and flush. Recording starts once startup has opened its
+record of the application state database, beside the tool-only snapshot, with
+the same debounce and flush. Recording starts once startup has opened its
 windows, so diagnostic windows and a launch whose config failed never write.
 Settled window changes and window closure re-record every product window in
 creation order; closing a window removes it, so quitting with no windows
@@ -250,8 +250,11 @@ code](../../src/app/product/tab_drag.rs).
 ## Automatic tool-layout memory
 
 One application-owned `ToolLayoutStore` holds a single versioned tool-only
-snapshot in SQLite beside extension storage, on the shared single-record store
-that also backs [native window hot exit](#native-window-hot-exit). It records stable namespaced tool
+snapshot in the application state database: one SQLite file with a table per
+UI-state record and one connection that serializes their writes, which also
+backs [native window hot exit](#native-window-hot-exit). Quit flushes every
+pending record. Unsaved-text recovery keeps its own database, because a
+damaged recovery file is preserved and reported rather than treated as empty. It records stable namespaced tool
 IDs, dock location, group order, dock sizes, visibility, the selected tool per
 dock, and hidden tools' remembered locations. Documents, terminals, document
 splits, and live handles never enter the record; a tool in a document group

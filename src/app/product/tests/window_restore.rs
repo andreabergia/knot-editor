@@ -46,12 +46,13 @@ impl Launch {
     }
 
     fn path(&self) -> std::path::PathBuf {
-        self.sessions.path().join("window-session.sqlite3")
+        self.sessions.path().join("state.sqlite3")
     }
 
     fn install_sessions(&self, cx: &mut TestAppContext) {
         let executor = cx.background_executor.clone();
-        cx.update(|cx| window_sessions::install(self.path(), executor, cx));
+        let database = crate::app::record_store::StateDatabase::open(self.path(), executor);
+        cx.update(|cx| window_sessions::install(&database, cx));
     }
 
     /// Run product startup and wait until its windows are open.
