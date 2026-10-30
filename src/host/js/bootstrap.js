@@ -1,6 +1,8 @@
 const nativeBindings = globalThis.__knotNativeBindings;
 delete globalThis.__knotNativeBindings;
 
+export const platform = nativeBindings.platform;
+
 export function keybinding(key, command, options) {
   if (command !== null && typeof command === "object" && !Array.isArray(command)) {
     try {
@@ -1029,6 +1031,47 @@ export async function defineColor(definition) {
     return entry;
   };
   await request("defineColor", key, description, fallback("dark"), fallback("light"));
+}
+function presetCommand(command) {
+  if (command === null) return null;
+  if (typeof command === "string") return { name: command, arguments: null };
+  const value = record(command, "keymap preset command must be a name, a command object, or null");
+  return {
+    name: string(value.name, "keymap preset command name must be text"),
+    arguments: value.arguments === undefined ? null : validateJsonValue(value.arguments),
+  };
+}
+export async function registerKeymapPreset(definition) {
+  const value = record(definition, "keymaps.registerPreset requires a preset object");
+  const name = string(value.name, "keymap preset name must be text");
+  const title = value.title === undefined ? name : string(value.title, "keymap preset title must be text");
+  if (!Array.isArray(value.bindings)) throw new TypeError("keymap preset bindings must be an array");
+  const bindings = value.bindings.map((binding) => {
+    const entry = record(binding, "keymap preset binding must be an object");
+    if (entry.command === undefined) throw new TypeError("keymap preset binding requires a command or null");
+    const view = entry.view ?? null;
+    if (view !== null) string(view, "keymap preset binding view must be text");
+    return {
+      key: string(entry.key, "keymap preset binding key must be text"),
+      command: presetCommand(entry.command),
+      view,
+    };
+  });
+  const registration = await request("registerKeymapPreset", { name, title, bindings });
+  const owned = ownership(() => {}, () => request("unregisterKeymapPreset", registration));
+  return Object.freeze({ dispose: () => owned.dispose() });
+}
+export async function getKeymapPreset(name) {
+  const preset = await request("getKeymapPreset", string(name, "keymap preset name must be text"));
+  if (preset === null) return null;
+  const bindings = preset.bindings.map((binding) => Object.freeze({
+    ...binding,
+    command: binding.command === null ? null : Object.freeze(binding.command),
+  }));
+  return Object.freeze({ ...preset, bindings: Object.freeze(bindings) });
+}
+export async function listKeymapPresets() {
+  return Object.freeze((await request("listKeymapPresets")).map((preset) => Object.freeze(preset)));
 }
 export async function listGrammars() {
   return Object.freeze(await request("listGrammars"));

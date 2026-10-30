@@ -1,5 +1,5 @@
 // API version 1 authoring example.
-import { commands, editor, workbench, keybinding, removeKeybinding } from "knot";
+import { commands, editor, workbench, keymaps } from "knot";
 
 /** @type {Set<import("knot").Disposable>} */
 const bufferOwnership = new Set();
@@ -89,16 +89,16 @@ const completion = await editor.registerCompletionProvider("guide", {
 });
 
 // These mutations commit together at the end of this V8 turn.
-keybinding("cmd-g", { name: "guide.compose", arguments: { source: "key" } });
-keybinding("cmd-c", "copy", { view: "guide.outline" });
-keybinding("cmd-alt-g", null, { view: "editor" });
-removeKeybinding("cmd-alt-g", { view: "editor" });
+keymaps.bind("cmd-g", { name: "guide.compose", arguments: { source: "key" } });
+keymaps.bind("cmd-c", "copy", { view: "guide.outline" });
+keymaps.bind("cmd-alt-g", null, { view: "editor" });
+keymaps.unbind("cmd-alt-g", { view: "editor" });
 
 // Called by an author-controlled feature toggle, not a promised unload hook.
 export async function deactivateFeature() {
   active = false;
-  removeKeybinding("cmd-g");
-  removeKeybinding("cmd-c", { view: "guide.outline" });
+  keymaps.unbind("cmd-g");
+  keymaps.unbind("cmd-c", { view: "guide.outline" });
   await Promise.all([
     ...Array.from(bufferOwnership, (owner) => owner.dispose()),
     command.dispose(), child.dispose(), nativeChild.dispose(), viewCommand.dispose(),

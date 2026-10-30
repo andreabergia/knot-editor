@@ -2637,6 +2637,130 @@ async fn unobserve_setting(
     })?
 }
 
+use crate::app::commands::keymaps::{
+    ApplicationKeymapPresets, KeymapPreset, KeymapPresetInfo, PresetOwner,
+};
+
+/// Failures of a keymap preset operation.
+#[derive(Debug, HostError)]
+pub(crate) enum KeymapPresetError {
+    #[error(transparent)]
+    Access(AccessError),
+    #[error(
+        code = "KeymapPresetRegistrationNotFound",
+        message = "KeymapPresetRegistrationNotFound"
+    )]
+    RegistrationNotFound,
+}
+
+impl From<AccessError> for KeymapPresetError {
+    fn from(error: AccessError) -> Self {
+        Self::Access(error)
+    }
+}
+
+fn preset_owner(context: &HostContext) -> PresetOwner {
+    PresetOwner {
+        extension: context.request.extension,
+        lifecycle: context.request.lifecycle,
+    }
+}
+
+impl HostArguments for KeymapPreset {
+    fn decode(reader: &mut dyn ArgumentReader) -> Result<Self, DecodeError> {
+        let preset: Self = serde_json::from_value(setting_value(reader.command_arguments(2)?))
+            .map_err(|_| DecodeError::Type("invalid keymap preset"))?;
+        match preset.invalid_value() {
+            Some(message) => Err(DecodeError::Type(message)),
+            None => Ok(preset),
+        }
+    }
+}
+
+impl HostSuccess for KeymapPresetInfo {
+    fn encode(self) -> Result<EncodedValue, DecodeError> {
+        encode_json(self)
+    }
+}
+
+#[host_operation("registerKeymapPreset")]
+async fn register_keymap_preset(
+    context: HostContext,
+    arguments: KeymapPreset,
+) -> Result<u64, AccessError> {
+    let owner = preset_owner(&context);
+    context.foreground(|_, cx| {
+        cx.default_global::<ApplicationKeymapPresets>()
+            .0
+            .register(owner, arguments)
+    })
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct KeymapPresetRegistrationArguments {
+    registration: u64,
+}
+
+impl HostArguments for KeymapPresetRegistrationArguments {
+    fn decode(reader: &mut dyn ArgumentReader) -> Result<Self, DecodeError> {
+        Ok(Self {
+            registration: reader.integer(2)?,
+        })
+    }
+}
+
+#[host_operation("unregisterKeymapPreset")]
+async fn unregister_keymap_preset(
+    context: HostContext,
+    arguments: KeymapPresetRegistrationArguments,
+) -> Result<(), KeymapPresetError> {
+    let owner = preset_owner(&context);
+    context.foreground(|_, cx| {
+        if cx
+            .default_global::<ApplicationKeymapPresets>()
+            .0
+            .unregister(owner, arguments.registration)
+        {
+            Ok(())
+        } else {
+            Err(KeymapPresetError::RegistrationNotFound)
+        }
+    })?
+}
+
+#[host_operation("listKeymapPresets")]
+async fn list_keymap_presets(
+    context: HostContext,
+    _: (),
+) -> Result<Vec<KeymapPresetInfo>, AccessError> {
+    context.foreground(|_, cx| cx.default_global::<ApplicationKeymapPresets>().0.list())
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct KeymapPresetName {
+    name: String,
+}
+
+impl HostArguments for KeymapPresetName {
+    fn decode(reader: &mut dyn ArgumentReader) -> Result<Self, DecodeError> {
+        Ok(Self {
+            name: reader.text(2, "keymap preset name must be text")?,
+        })
+    }
+}
+
+#[host_operation("getKeymapPreset")]
+async fn get_keymap_preset(
+    context: HostContext,
+    arguments: KeymapPresetName,
+) -> Result<Option<KeymapPreset>, AccessError> {
+    context.foreground(|_, cx| {
+        cx.default_global::<ApplicationKeymapPresets>()
+            .0
+            .get(&arguments.name)
+    })
+}
+
 use crate::app::theme::ColorDefinition;
 use crate::app::themes::{ApplicationThemes, ThemeDefinition, ThemeInfo, ThemeOwner};
 

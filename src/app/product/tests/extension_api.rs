@@ -441,9 +441,9 @@ throw new Error("closed buffer accepted operation");
 fn public_api_disposal_and_unload_release_foreground_ownership(cx: &mut TestAppContext) {
     use crate::host::lifecycle::ExtensionKey;
     const SOURCE: &str = r#"
-import { commands, editor, workbench, keybinding } from "knot";
+import { commands, editor, workbench, keymaps } from "knot";
 let owned;
-keybinding("cmd-alt-o", "api.owned");
+keymaps.bind("cmd-alt-o", "api.owned");
 await commands.register("api.owned-setup", async ({ buffer }) => {
   const snapshot = await buffer.snapshot();
   await buffer.contributions.replace([{ range: { startByteOffset: 0, endByteOffset: 1 }, decoration: "info" }], { ifRevision: snapshot.revision });

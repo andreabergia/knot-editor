@@ -1,4 +1,4 @@
-import { commands, editor, workbench, keybinding, removeKeybinding } from "knot";
+import { commands, editor, workbench, keymaps, platform } from "knot";
 import type { Buffer, CommandTarget, Disposable, HostError, HostErrorCode } from "knot";
 
 void commands.register("described", async () => {}, {
@@ -104,9 +104,25 @@ await editor.registerCompletionProvider("check", {
     return [{ label: context.prefix, insertText: context.prefix }];
   },
 });
-const keyResult: void = keybinding("cmd-k", { name: "check", arguments: null }, { view: "editor" });
-removeKeybinding("cmd-k", null);
+const keyResult: void = keymaps.bind("cmd-k", { name: "check", arguments: null }, { view: "editor" });
+keymaps.unbind("cmd-k", null);
 void keyResult;
+const knotPreset = await keymaps.getPreset("knot");
+const preset = await keymaps.registerPreset({
+  name: "check",
+  title: "Check",
+  bindings: [
+    ...(knotPreset?.bindings ?? []),
+    { key: platform === "macos" ? "cmd-g" : "ctrl-g", command: "check", view: "editor" },
+    { key: "ctrl-k", command: null },
+  ],
+});
+const presetNames: readonly string[] = (await keymaps.listPresets()).map((info) => info.name);
+await preset.dispose();
+void presetNames;
+// @ts-expect-error unknown platform names are not part of the union
+const otherPlatform: typeof platform = "beos";
+void otherPlatform;
 
 // @ts-expect-error command arguments must be JSON-compatible
 await commands.invoke("check", () => {});

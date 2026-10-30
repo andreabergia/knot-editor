@@ -7,6 +7,8 @@ import {
   invalidCommandArguments,
   keybinding,
   removeKeybinding,
+  registerKeymapPreset, getKeymapPreset, listKeymapPresets,
+  platform,
   invokeCommand,
   registerCommand,
   registerViewCommand,
@@ -26,7 +28,15 @@ import {
   registerTheme, getTheme, listThemes, defineColor,
 } from "knot:bootstrap";
 
-export { keybinding, removeKeybinding };
+export { platform };
+
+export const keymaps = Object.freeze({
+  bind: keybinding,
+  unbind: removeKeybinding,
+  registerPreset: registerKeymapPreset,
+  getPreset: getKeymapPreset,
+  listPresets: listKeymapPresets,
+});
 
 export const editor = Object.freeze({
   activeBuffer,

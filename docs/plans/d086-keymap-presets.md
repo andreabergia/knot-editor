@@ -1,6 +1,6 @@
 # D086 — Keymap presets
 
-Status: 🚧 in progress (checkpoint 1 ✅). Item of the
+Status: 🚧 in progress (checkpoints 1–2 ✅). Item of the
 [daily-driver plan](daily-driver.md); depends on D070 (settings) and D071
 (palette); promotes D060 (audited platform defaults). D088 fills in the other
 presets.
@@ -108,7 +108,7 @@ duplicate `cmd-t` New Document binding is gone; New Terminal keeps
 `secondary-shift-t` until D072. The owner is now `BindingOwner::Preset`.
 Validated on macOS only; other platforms are covered by table tests.
 
-### 2. Contributed presets, selection, and `knot.platform`
+### 2. ✅ Contributed presets, selection, and `knot.platform`
 
 - Add a preset registry (lifecycle-owned registrations, latest name wins,
   `"knot"` reserved and native) and the `keymap.preset` setting. Resolution
@@ -125,6 +125,12 @@ Validated on macOS only; other platforms are covered by table tests.
   it, and that switching back restores Knot; fake-host contract test; a
   `knot.platform` test.
 - Review gate: API shape and resolution timing.
+- ✅ Done: `src/app/commands/keymaps/presets.rs` owns the Knot tables, the
+  preset registry, and selection. A binding whose view kind is not declared
+  is skipped when the preset is installed. `bindings` without `command`
+  is a TypeError rather than an implied unbind. The fake host implements the
+  preset registry but not `bind`/`unbind` or the native Knot bindings, and
+  its `platform` is always `"macos"`.
 - **Implementation context:** mirror `src/app/themes.rs` (registry with owner
   and lifecycle, `apply_at_startup` observing `ApplicationSettings`,
   `remove_lifecycle`) and its handlers in

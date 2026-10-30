@@ -164,9 +164,9 @@ fn keybinding_calls_are_void_and_one_turn_sends_one_ordered_batch() {
             "file:///fixtures/keybindings.js",
             r#"
                 import * as knot from "knot";
-                if (knot.keybinding("Cmd-C", "copy") !== undefined) throw new Error("set returned a value");
-                if (knot.keybinding("Cmd-C", { name: "copy", arguments: { format: "plain" } }, { view: "editor" }) !== undefined) throw new Error("set returned a value");
-                if (knot.removeKeybinding("Cmd-C", { view: "editor" }) !== undefined) throw new Error("remove returned a value");
+                if (knot.keymaps.bind("Cmd-C", "copy") !== undefined) throw new Error("set returned a value");
+                if (knot.keymaps.bind("Cmd-C", { name: "copy", arguments: { format: "plain" } }, { view: "editor" }) !== undefined) throw new Error("set returned a value");
+                if (knot.keymaps.unbind("Cmd-C", { view: "editor" }) !== undefined) throw new Error("remove returned a value");
             "#,
         )
         .unwrap();
@@ -214,9 +214,9 @@ fn keybinding_batch_settles_before_await_continuation_and_rejects_turn_errors() 
             "file:///fixtures/keybinding-await.js",
             r#"
                 import * as knot from "knot";
-                knot.keybinding("cmd-a", "file.new");
+                knot.keymaps.bind("cmd-a", "file.new");
                 await knot.workbench.writeClipboardText("wait");
-                knot.keybinding("cmd-b", "file.open");
+                knot.keymaps.bind("cmd-b", "file.open");
             "#,
         )
         .unwrap();
@@ -284,8 +284,8 @@ fn invalid_keybinding_input_is_queued_for_batch_diagnostics() {
             "file:///fixtures/invalid-keybinding.js",
             r#"
                 import * as knot from "knot";
-                knot.keybinding("cmd-r", "file.open");
-                if (knot.keybinding("cmd-n", 42) !== undefined) throw new Error("invalid call returned a value");
+                knot.keymaps.bind("cmd-r", "file.open");
+                if (knot.keymaps.bind("cmd-n", 42) !== undefined) throw new Error("invalid call returned a value");
             "#,
         )
         .unwrap();
@@ -318,7 +318,7 @@ fn invalid_keybinding_input_is_queued_for_batch_diagnostics() {
             "file:///fixtures/invalid-binding-arguments.js",
             r#"
                 import * as knot from "knot";
-                knot.keybinding("cmd-r", { name: "file.open", arguments: { marker: Infinity } });
+                knot.keymaps.bind("cmd-r", { name: "file.open", arguments: { marker: Infinity } });
             "#,
         )
         .unwrap();
@@ -2167,7 +2167,7 @@ fn public_facade_is_semantic_and_private_bindings_are_hidden() {
             if (typeof globalThis.__knotNativeBindings !== "undefined") {
                 throw new Error("private native bindings are exposed");
             }
-            if (Object.keys(knot).sort().join(",") !== "commands,documents,editor,keybinding,languages,recovery,removeKeybinding,settings,storage,terminals,themes,windows,workbench,workspaces") {
+            if (Object.keys(knot).sort().join(",") !== "commands,documents,editor,keymaps,languages,platform,recovery,settings,storage,terminals,themes,windows,workbench,workspaces") {
                 throw new Error("unexpected public exports");
             }
             if (!Object.isFrozen(knot.editor) || !Object.isFrozen(knot.commands) || !Object.isFrozen(knot.workbench) || !Object.isFrozen(knot.storage)) {
@@ -2185,9 +2185,13 @@ fn public_facade_is_semantic_and_private_bindings_are_hidden() {
             if (!Object.isFrozen(knot.themes) || Object.keys(knot.themes).sort().join(",") !== "defineColor,get,list,register") {
                 throw new Error("themes facade is incomplete");
             }
+            if (!Object.isFrozen(knot.keymaps) || Object.keys(knot.keymaps).sort().join(",") !== "bind,getPreset,listPresets,registerPreset,unbind") {
+                throw new Error("keymaps facade is incomplete");
+            }
+            if (!["macos", "windows", "linux"].includes(knot.platform)) {
+                throw new Error("platform is missing");
+            }
             if (typeof knot.editor.activeBuffer !== "function"
-                || typeof knot.keybinding !== "function"
-                || typeof knot.removeKeybinding !== "function"
                 || typeof knot.editor.registerCompletionProvider !== "function"
                 || typeof knot.commands.invalidArguments !== "function"
                 || typeof knot.commands.invoke !== "function"

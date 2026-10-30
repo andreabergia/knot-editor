@@ -29,6 +29,8 @@ pub(crate) const THEME_MODE: &str = "theme.mode";
 pub(crate) const THEME_DARK: &str = "theme.dark";
 /// The theme name used in light mode.
 pub(crate) const THEME_LIGHT: &str = "theme.light";
+/// The keymap preset that supplies default bindings.
+pub(crate) const KEYMAP_PRESET: &str = "keymap.preset";
 
 /// The value type a definition accepts.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -172,6 +174,11 @@ fn native_definitions() -> Vec<SettingDefinition> {
         ),
         text(THEME_DARK, "One Dark", "The theme used in dark mode"),
         text(THEME_LIGHT, "One Light", "The theme used in light mode"),
+        text(
+            KEYMAP_PRESET,
+            "knot",
+            "The keymap preset that supplies default key bindings",
+        ),
     ]
 }
 

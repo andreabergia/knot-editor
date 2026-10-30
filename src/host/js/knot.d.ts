@@ -215,6 +215,9 @@ declare module "knot" {
     "theme.dark": string;
     /** The theme name used in light mode. Native default "One Light". */
     "theme.light": string;
+    /** The keymap preset that supplies default bindings. Native default
+     * "knot"; an unregistered name selects "knot". */
+    "keymap.preset": string;
   }
   export type SettingKey = keyof Settings & string;
   /** "integer" accepts safe integers; "number" accepts any finite number. */
@@ -640,7 +643,8 @@ declare module "knot" {
     | "CaptureNotFound" | "RecoveryUnavailable" | "SessionConflict"
     | "UnknownGrammar" | "InvalidQuery" | "LanguageRegistrationNotFound"
     | "DuplicateSetting" | "SettingTypeMismatch"
-    | "UnknownCapture" | "DuplicateColor" | "ThemeRegistrationNotFound";
+    | "UnknownCapture" | "DuplicateColor" | "ThemeRegistrationNotFound"
+    | "KeymapPresetRegistrationNotFound";
   /**
    * Native operation failure. Narrow a caught Error by name === "KnotHostError"
    * and its string code property, then dispatch on code. No error constructor
@@ -1286,22 +1290,68 @@ declare module "knot" {
   export interface KeybindingOptions { readonly view?: string | null; }
   /** Command name and JSON arguments, defaulting to null when omitted. */
   export interface KeybindingCommand { readonly name: string; readonly arguments?: JsonValue; }
+  /** One preset binding; a null command unbinds the key. A view scope names
+   * a view kind; a binding for a kind that is not declared is skipped. */
+  export interface KeymapPresetBinding {
+    readonly key: string;
+    readonly command: string | KeybindingCommand | null;
+    readonly view?: string | null;
+  }
+  /** A named set of default bindings. Title defaults to the name. */
+  export interface KeymapPresetDefinition {
+    readonly name: string;
+    readonly title?: string;
+    readonly bindings: readonly KeymapPresetBinding[];
+  }
+  /** A preset as `getPreset` returns it, with every field present. */
+  export interface KeymapPreset {
+    readonly name: string;
+    readonly title: string;
+    readonly bindings: readonly {
+      readonly key: string;
+      readonly command: { readonly name: string; readonly arguments: JsonValue } | null;
+      readonly view: string | null;
+    }[];
+  }
+  export interface KeymapPresetInfo { readonly name: string; readonly title: string; }
+  /** The operating system Knot runs on, for platform-specific configuration. */
+  export const platform: "macos" | "windows" | "linux";
   /**
-   * Bind a gpui key sequence, e.g. "cmd-g", in the caller's lifecycle-owned slot.
-   * Null command masks earlier bindings and leaves raw input available.
-   * Every binding outranks native defaults. Among the rest, a view-specific
-   * binding beats a global one and then the latest write wins, so personal
-   * config overrides a package's binding from post-init, which runs after
-   * packages start. Teardown reveals the previous write.
-   * Synchronous void call: mutations commit atomically at the end of the V8 turn.
-   * Invalid input fails the whole batch through its turn/startup/command result,
-   * with no partial map. No separate promise or asynchronous HostError is returned.
+   * Key bindings and keymap presets. The selected preset supplies default
+   * bindings beneath every `bind`; the `keymap.preset` setting selects it,
+   * resolved when startup completes and whenever the setting changes. An
+   * unregistered name selects the native `"knot"` preset.
    */
-  export function keybinding(key: string, command: string | KeybindingCommand | null, options?: KeybindingOptions | null): void;
-  /**
-   * Remove only the caller's slot for this key/scope, revealing lower owners.
-   * Same synchronous atomic turn-batch validation/completion as keybinding.
-   * Lifecycle teardown removes its slots without requiring explicit removal.
-   */
-  export function removeKeybinding(key: string, options?: KeybindingOptions | null): void;
+  export const keymaps: Readonly<{
+    /**
+     * Bind a gpui key sequence, e.g. "cmd-g", in the caller's lifecycle-owned slot.
+     * Null command masks earlier bindings and leaves raw input available.
+     * Every binding outranks the preset. Among the rest, a view-specific
+     * binding beats a global one and then the latest write wins, so personal
+     * config overrides a package's binding from post-init, which runs after
+     * packages start. Teardown reveals the previous write.
+     * Synchronous void call: mutations commit atomically at the end of the V8 turn.
+     * Invalid input fails the whole batch through its turn/startup/command result,
+     * with no partial map. No separate promise or asynchronous HostError is returned.
+     */
+    bind(key: string, command: string | KeybindingCommand | null, options?: KeybindingOptions | null): void;
+    /**
+     * Remove only the caller's slot for this key/scope, revealing lower owners.
+     * Same synchronous atomic turn-batch validation/completion as bind.
+     * Lifecycle teardown removes its slots without requiring explicit removal.
+     */
+    unbind(key: string, options?: KeybindingOptions | null): void;
+    /** Register a lifecycle-owned preset. The latest registration of a name
+     * wins and teardown reveals the previous one. A derived preset spreads
+     * `getPreset`'s bindings. Registering the selected name takes effect at
+     * the next selection change.
+     * @throws TypeError for invalid fields or key sequences, or the reserved
+     * name "knot"; HostError with Cancelled. */
+    registerPreset(definition: KeymapPresetDefinition): Promise<Disposable>;
+    /** The preset `name` selects, including the native "knot" preset for
+     * the current platform; null when no preset has that name. */
+    getPreset(name: string): Promise<KeymapPreset | null>;
+    /** "knot" and every registered preset, sorted by name. */
+    listPresets(): Promise<readonly KeymapPresetInfo[]>;
+  }>;
 }

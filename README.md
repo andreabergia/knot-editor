@@ -81,7 +81,7 @@ your platform's config folder. It runs an optional `pre-init.js` before
 extensions load and `post-init.js` after. For example, in `post-init.js`:
 
 ```js
-import { commands, keybinding, settings } from "knot";
+import { commands, keymaps, settings } from "knot";
 
 await settings.set("theme.mode", "system");
 await settings.set("editor.tabSize", 2);
@@ -96,7 +96,7 @@ await commands.register("me.insert-date", async ({ buffer }) => {
   }], { ifRevision: snapshot.revision });
 });
 
-keybinding("cmd-shift-d", "me.insert-date");
+keymaps.bind("cmd-shift-d", "me.insert-date");
 ```
 
 If your config throws, Knot shows an error window instead of starting with a

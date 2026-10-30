@@ -248,8 +248,10 @@ pub(in crate::app) fn finish_product_startup(
     match result {
         Ok(()) => {
             // Every package and both config phases have registered their
-            // themes, so the selected one can resolve before windows open.
+            // themes and keymap presets, so the selected ones can resolve
+            // before windows open.
             crate::app::themes::apply_at_startup(cx);
+            crate::app::commands::keymaps::apply_at_startup(cx);
             // Restore unsaved work, then the recorded windows, before the
             // launch gate opens, so restored windows present recovered
             // documents and queued requests deduplicate against both.

@@ -1,7 +1,14 @@
 use super::*;
+use crate::app::commands::dispatch::*;
 use gpui::{KeyContext, TestAppContext};
 
 const PLATFORMS: [Platform; 3] = [Platform::MacOs, Platform::Windows, Platform::Linux];
+
+fn preset_registry(platform: Platform) -> BindingRegistry {
+    let mut registry = BindingRegistry::new();
+    registry.replace_preset(&knot_preset(platform));
+    registry
+}
 
 #[test]
 fn every_preset_binding_is_unique_and_names_a_native_command() {
@@ -11,17 +18,19 @@ fn every_preset_binding_is_unique_and_names_a_native_command() {
         .collect::<HashSet<_>>();
     for platform in PLATFORMS {
         let mut seen = HashSet::new();
-        for (key, command, view) in knot_preset(platform) {
-            let key =
-                canonical_key(&key).unwrap_or_else(|_| panic!("{platform:?}: invalid key {key}"));
+        for binding in knot_preset(platform) {
+            let key = canonical_key(&binding.key)
+                .unwrap_or_else(|_| panic!("{platform:?}: invalid key {}", binding.key));
+            let view = binding.view;
             assert!(
-                seen.insert((key.clone(), view)),
+                seen.insert((key.clone(), view.clone())),
                 "{platform:?}: {key} bound twice in {view:?}"
             );
-            if let Some(command) = command {
+            if let Some(command) = binding.command {
                 assert!(
-                    native.contains(command),
-                    "{platform:?}: {key} names unknown command {command}"
+                    native.contains(command.name.as_ref()),
+                    "{platform:?}: {key} names unknown command {}",
+                    command.name
                 );
             }
         }
@@ -577,4 +586,145 @@ fn keys_display_in_platform_style() {
             assert_eq!(display_key_for(&canonical, false), other, "{key}");
         }
     }
+}
+
+fn preset(name: &str, bindings: &[(&str, Option<&str>, Option<&str>)]) -> KeymapPreset {
+    KeymapPreset {
+        name: name.into(),
+        title: name.to_uppercase(),
+        bindings: bindings
+            .iter()
+            .map(|&(key, command, view)| PresetBinding {
+                key: key.into(),
+                command: command.map(self::command),
+                view: view.map(ToOwned::to_owned),
+            })
+            .collect(),
+    }
+}
+
+fn preset_owner(lifecycle: u64) -> PresetOwner {
+    PresetOwner {
+        extension: ExtensionId::new(1),
+        lifecycle: ExtensionLifecycleId::new(lifecycle),
+    }
+}
+
+#[test]
+fn latest_preset_registration_wins_and_removal_reveals_the_previous_one() {
+    let mut presets = PresetRegistry::default();
+    let first = presets.register(
+        preset_owner(1),
+        preset("emacs", &[("ctrl-x ctrl-s", Some("first"), None)]),
+    );
+    presets.register(
+        preset_owner(2),
+        preset("emacs", &[("ctrl-x ctrl-s", Some("second"), None)]),
+    );
+    presets.register(preset_owner(2), preset("vscode", &[]));
+    let command_of = |presets: &PresetRegistry| {
+        presets.get("emacs").unwrap().bindings[0]
+            .command
+            .clone()
+            .unwrap()
+            .name
+            .to_string()
+    };
+    assert_eq!(command_of(&presets), "second");
+    assert_eq!(
+        presets
+            .list()
+            .into_iter()
+            .map(|info| (info.name, info.title))
+            .collect::<Vec<_>>(),
+        [
+            ("emacs".to_owned(), "EMACS".to_owned()),
+            ("knot".to_owned(), "Knot".to_owned()),
+            ("vscode".to_owned(), "VSCODE".to_owned()),
+        ]
+    );
+    presets.remove_lifecycle(preset_owner(2));
+    assert_eq!(command_of(&presets), "first");
+    assert!(presets.get("vscode").is_none());
+    assert!(!presets.unregister(preset_owner(2), first));
+    assert!(presets.unregister(preset_owner(1), first));
+    assert!(presets.get("emacs").is_none());
+}
+
+#[test]
+fn knot_is_native_and_the_fallback_for_unknown_selections() {
+    let presets = PresetRegistry::default();
+    let knot = presets.get(KNOT_PRESET).unwrap();
+    assert_eq!(knot.bindings, knot_preset(Platform::current()));
+    assert_eq!(presets.bindings("missing"), knot.bindings);
+    assert_eq!(
+        preset(KNOT_PRESET, &[]).invalid_value(),
+        Some("the knot keymap preset cannot be replaced")
+    );
+    assert!(preset("", &[]).invalid_value().is_some());
+    assert!(
+        preset("bad", &[("bad-modifier-key", Some("x"), None)])
+            .invalid_value()
+            .is_some()
+    );
+    assert!(
+        preset("bad", &[("cmd-x", Some(""), None)])
+            .invalid_value()
+            .is_some()
+    );
+    assert_eq!(
+        preset("good", &[("cmd-x", None, Some("editor"))]).invalid_value(),
+        None
+    );
+}
+
+#[test]
+fn replacing_the_preset_keeps_extension_bindings_on_top_and_skips_unknown_views() {
+    let mut registry = BindingRegistry::new();
+    let personal = BindingOwner::Extension(ExtensionId::new(1), ExtensionLifecycleId::new(1));
+    registry.replace_preset(
+        &preset(
+            "a",
+            &[
+                ("cmd-s", Some("save"), None),
+                ("cmd-j", Some("preset.j"), None),
+            ],
+        )
+        .bindings,
+    );
+    registry
+        .set(personal, "cmd-j", None, Some(command("personal.j")))
+        .unwrap();
+    assert!(
+        registry.replace_preset(
+            &preset(
+                "b",
+                &[
+                    ("cmd-r", Some("run"), None),
+                    ("cmd-j", Some("other.j"), None),
+                    ("cmd-o", Some("outline.open"), Some("example.outline")),
+                ],
+            )
+            .bindings
+        )
+    );
+    assert_eq!(resolved(&registry, "cmd-s", None), None);
+    assert_eq!(resolved(&registry, "cmd-r", None).as_deref(), Some("run"));
+    assert_eq!(
+        resolved(&registry, "cmd-j", None).as_deref(),
+        Some("personal.j")
+    );
+    assert_eq!(resolved(&registry, "cmd-o", Some("example.outline")), None);
+    assert!(
+        !registry.replace_preset(
+            &preset(
+                "b",
+                &[
+                    ("cmd-r", Some("run"), None),
+                    ("cmd-j", Some("other.j"), None)
+                ],
+            )
+            .bindings
+        )
+    );
 }

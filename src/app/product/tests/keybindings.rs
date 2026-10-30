@@ -7,12 +7,12 @@ fn script_keybindings_follow_config_phases_and_runtime_replacement(cx: &mut Test
     let extensions = tempfile::tempdir().unwrap();
     std::fs::write(
         config.path().join("pre-init.js"),
-        "import * as knot from 'knot'; knot.keybinding('cmd-n', 'file.open');",
+        "import * as knot from 'knot'; knot.keymaps.bind('cmd-n', 'file.open');",
     )
     .unwrap();
     std::fs::write(
         config.path().join("post-init.js"),
-        "import * as knot from 'knot'; knot.keybinding('cmd-n', 'file.save-as'); knot.keybinding('cmd-x', null); knot.keybinding('cmd-j', { name: 'test.args', arguments: { marker: 42 } });",
+        "import * as knot from 'knot'; knot.keymaps.bind('cmd-n', 'file.save-as'); knot.keymaps.bind('cmd-x', null); knot.keymaps.bind('cmd-j', { name: 'test.args', arguments: { marker: 42 } });",
     )
     .unwrap();
     install_extension(
@@ -23,21 +23,21 @@ fn script_keybindings_follow_config_phases_and_runtime_replacement(cx: &mut Test
             "main.js",
             r#"
                 import * as knot from 'knot';
-                knot.keybinding('cmd-n', 'file.save');
-                knot.keybinding('cmd-r', 'file.open');
+                knot.keymaps.bind('cmd-n', 'file.save');
+                knot.keymaps.bind('cmd-r', 'file.open');
                 await knot.commands.register('test.remap', () => {
-                    knot.keybinding('cmd-r', 'file.new');
-                    knot.removeKeybinding('cmd-n');
+                    knot.keymaps.bind('cmd-r', 'file.new');
+                    knot.keymaps.unbind('cmd-n');
                 });
-                await knot.commands.register('test.unbind', () => knot.keybinding('cmd-r', null, { view: 'editor' }));
-                await knot.commands.register('test.restore', () => knot.removeKeybinding('cmd-r', { view: 'editor' }));
-                await knot.commands.register('test.remove', () => knot.removeKeybinding('cmd-r'));
+                await knot.commands.register('test.unbind', () => knot.keymaps.bind('cmd-r', null, { view: 'editor' }));
+                await knot.commands.register('test.restore', () => knot.keymaps.unbind('cmd-r', { view: 'editor' }));
+                await knot.commands.register('test.remove', () => knot.keymaps.unbind('cmd-r'));
                 await knot.commands.register('test.args', ({ arguments: args }) => {
                     if (args.marker !== 42) throw new Error('wrong binding arguments');
                 });
                 await knot.commands.register('test.invalid', () => {
-                    knot.keybinding('cmd-r', 'file.save');
-                    knot.keybinding('bad-modifier-key', 'file.new');
+                    knot.keymaps.bind('cmd-r', 'file.save');
+                    knot.keymaps.bind('bad-modifier-key', 'file.new');
                 });
             "#,
         )],
@@ -48,7 +48,7 @@ fn script_keybindings_follow_config_phases_and_runtime_replacement(cx: &mut Test
         &[],
         &[(
             "main.js",
-            "import * as knot from 'knot'; knot.keybinding('cmd-l', 'file.new'); await knot.workbench.writeClipboardText('startup'); throw new Error('failed after binding');",
+            "import * as knot from 'knot'; knot.keymaps.bind('cmd-l', 'file.new'); await knot.workbench.writeClipboardText('startup'); throw new Error('failed after binding');",
         )],
     );
     install_globals(cx);
@@ -189,12 +189,12 @@ fn config_remaps_product_keys_without_changing_menu_or_palette_dispatch(cx: &mut
     let extensions = tempfile::tempdir().unwrap();
     std::fs::write(
         config.path().join("pre-init.js"),
-        "import * as knot from 'knot'; knot.keybinding('cmd-n', null); knot.keybinding('cmd-g', 'file.new');",
+        "import * as knot from 'knot'; knot.keymaps.bind('cmd-n', null); knot.keymaps.bind('cmd-g', 'file.new');",
     )
     .unwrap();
     std::fs::write(
         config.path().join("post-init.js"),
-        "import * as knot from 'knot'; knot.keybinding('cmd-r', 'test.mark');",
+        "import * as knot from 'knot'; knot.keymaps.bind('cmd-r', 'test.mark');",
     )
     .unwrap();
     install_extension(
@@ -203,7 +203,7 @@ fn config_remaps_product_keys_without_changing_menu_or_palette_dispatch(cx: &mut
         &[],
         &[(
             "main.js",
-            "import * as knot from 'knot'; await knot.commands.register('test.mark', () => knot.keybinding('cmd-y', 'file.new'));",
+            "import * as knot from 'knot'; await knot.commands.register('test.mark', () => knot.keymaps.bind('cmd-y', 'file.new'));",
         )],
     );
     install_globals(cx);
@@ -321,7 +321,7 @@ fn config_global_copy_binding_routes_to_editor_and_extension_view(cx: &mut TestA
     let extensions = tempfile::tempdir().unwrap();
     std::fs::write(
         config.path().join("post-init.js"),
-        "import * as knot from 'knot'; knot.keybinding('cmd-j', 'copy');",
+        "import * as knot from 'knot'; knot.keymaps.bind('cmd-j', 'copy');",
     )
     .unwrap();
     install_extension(
@@ -454,7 +454,7 @@ fn invalid_config_keybinding_batch_rolls_back_before_product_readiness(cx: &mut 
     let extensions = tempfile::tempdir().unwrap();
     std::fs::write(
         config.path().join("pre-init.js"),
-        "import * as knot from 'knot'; knot.keybinding('cmd-r', 'file.open'); knot.keybinding('bad-modifier-key', 'file.new');",
+        "import * as knot from 'knot'; knot.keymaps.bind('cmd-r', 'file.open'); knot.keymaps.bind('bad-modifier-key', 'file.new');",
     )
     .unwrap();
     install_globals(cx);
@@ -486,7 +486,7 @@ fn invalid_extension_keybinding_batch_does_not_block_other_extensions(cx: &mut T
         &[],
         &[(
             "main.js",
-            "import * as knot from 'knot'; knot.keybinding('cmd-r', 'file.new');",
+            "import * as knot from 'knot'; knot.keymaps.bind('cmd-r', 'file.new');",
         )],
     );
     install_extension(
@@ -495,7 +495,7 @@ fn invalid_extension_keybinding_batch_does_not_block_other_extensions(cx: &mut T
         &[],
         &[(
             "main.js",
-            "import * as knot from 'knot'; knot.keybinding('cmd-l', 'file.new'); knot.keybinding('bad-modifier-key', 'file.open');",
+            "import * as knot from 'knot'; knot.keymaps.bind('cmd-l', 'file.new'); knot.keymaps.bind('bad-modifier-key', 'file.open');",
         )],
     );
     install_globals(cx);
@@ -540,7 +540,7 @@ fn unloading_a_script_lifecycle_removes_its_keybindings(cx: &mut TestAppContext)
         let execution = host
             .load_test_source(
                 key,
-                "import * as knot from 'knot'; knot.keybinding('cmd-r', 'file.open');",
+                "import * as knot from 'knot'; knot.keymaps.bind('cmd-r', 'file.open');",
             )
             .unwrap();
         cx.spawn(async move |_, _| {
@@ -811,7 +811,7 @@ fn personal_config_ctrl_shift_p_opens_command_palette(cx: &mut TestAppContext) {
     let extensions = tempfile::tempdir().unwrap();
     std::fs::write(
         config.path().join("post-init.js"),
-        "import * as knot from 'knot'; knot.keybinding('ctrl-shift-p', 'workbench.show-command-palette');",
+        "import * as knot from 'knot'; knot.keymaps.bind('ctrl-shift-p', 'workbench.show-command-palette');",
     )
     .unwrap();
     install_globals(cx);
@@ -864,14 +864,16 @@ fn macos_emacs_keys_edit_through_the_knot_preset(cx: &mut TestAppContext) {
 
 #[gpui::test]
 async fn linux_preset_leaves_plain_control_keys_to_the_terminal(cx: &mut TestAppContext) {
-    use super::super::super::commands::keymaps::{Platform, preset_registry};
+    use super::super::super::commands::keymaps::{BindingRegistry, Platform, knot_preset};
     let documents = install_globals(cx);
     cx.update(super::super::bind_product_keys);
     let document = cx.update(|cx| create_untitled_document(&documents, cx));
     let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
     let (shell, window) = product_window(document, model, cx);
     cx.update(|cx| {
-        cx.global_mut::<ApplicationKeymaps>().0 = preset_registry(Platform::Linux);
+        let mut registry = BindingRegistry::new();
+        registry.replace_preset(&knot_preset(Platform::Linux));
+        cx.global_mut::<ApplicationKeymaps>().0 = registry;
         super::super::super::commands::keymaps::rebuild(cx);
     });
     let terminal = dispatch_product_command(&shell, window, NEW_TERMINAL_COMMAND, cx);
@@ -891,4 +893,90 @@ async fn linux_preset_leaves_plain_control_keys_to_the_terminal(cx: &mut TestApp
     cx.simulate_keystrokes(window, "ctrl-shift-p");
     cx.run_until_parked();
     cx.read(|cx| assert!(shell.read(cx).command_palette.is_some()));
+}
+
+#[cfg(target_os = "macos")]
+#[gpui::test]
+fn selected_contributed_preset_replaces_knot_beneath_extension_bindings(cx: &mut TestAppContext) {
+    let config = tempfile::tempdir().unwrap();
+    let extensions = tempfile::tempdir().unwrap();
+    std::fs::write(
+        config.path().join("post-init.js"),
+        r#"import * as knot from 'knot';
+        await knot.keymaps.registerPreset({ name: 'test', title: 'Test', bindings: [
+            { key: 'cmd-r', command: 'file.new' },
+            { key: 'cmd-j', command: 'file.open' },
+        ] });
+        knot.keymaps.bind('cmd-j', 'file.save-as');
+        await knot.settings.set('keymap.preset', 'test');
+        await knot.commands.register('test.knot', () => knot.settings.set('keymap.preset', 'knot'));"#,
+    )
+    .unwrap();
+    install_globals(cx);
+    cx.update(super::super::bind_product_keys);
+    install_launch_gate(cx);
+    let host = cx.update(super::super::super::extensions::host::install);
+    host.update(cx, |host, cx| {
+        host.start_product_startup(
+            Some(config.path().to_path_buf()),
+            Ok(extensions.path().to_path_buf()),
+            cx,
+        )
+    });
+    assert!(wait_for_product_startup(cx));
+    cx.read(|cx| {
+        assert_eq!(
+            keymap_command(cx, "cmd-r", None).as_deref(),
+            Some("file.new")
+        );
+        assert_eq!(keymap_command(cx, "cmd-s", None), None);
+        assert_eq!(
+            keymap_command(cx, "cmd-j", None).as_deref(),
+            Some("file.save-as")
+        );
+    });
+    let window = cx.windows()[0];
+    let shell = cx
+        .update_window(window, |_, window, _| {
+            window.root::<ProductShell>().flatten()
+        })
+        .unwrap()
+        .unwrap();
+    cx.update_window(window, |_, window, cx| {
+        shell.read(cx).focus_active_editor(window, cx);
+    })
+    .unwrap();
+    let tabs = |cx: &mut TestAppContext| {
+        cx.read(|cx| shell.read(cx).workbench.read(cx).panes()[0].tabs().len())
+    };
+    let before = tabs(cx);
+    cx.refresh().unwrap();
+    cx.simulate_keystrokes(window, "cmd-r");
+    cx.run_until_parked();
+    assert_eq!(tabs(cx), before + 1);
+
+    drop(dispatch_product_command(&shell, window, "test.knot", cx));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        cx.run_until_parked();
+        if cx.read(|cx| keymap_command(cx, "cmd-s", None).is_some()) {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "selecting knot did not restore its bindings"
+        );
+        std::thread::yield_now();
+    }
+    cx.read(|cx| {
+        assert_eq!(keymap_command(cx, "cmd-r", None), None);
+        assert_eq!(
+            keymap_command(cx, "cmd-s", None).as_deref(),
+            Some("file.save")
+        );
+        assert_eq!(
+            keymap_command(cx, "cmd-j", None).as_deref(),
+            Some("file.save-as")
+        );
+    });
 }

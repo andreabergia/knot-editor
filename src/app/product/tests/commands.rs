@@ -381,14 +381,14 @@ fn palette_shows_titles_descriptions_and_bindings_and_hides_opted_out_commands(
     use crate::host::protocol::{ExtensionId, ExtensionLifecycleId};
 
     const SOURCE: &str = r#"
-import { commands, keybinding } from "knot";
+import { commands, keymaps } from "knot";
 await commands.register("fixture.described", async () => {}, {
   title: "Run Fixture",
   description: "Runs the fixture.",
 });
 await commands.register("fixture.hidden", async () => {}, { palette: false });
 await commands.register("fixture.plain", async () => {});
-keybinding("ctrl-alt-f", "fixture.described");
+keymaps.bind("ctrl-alt-f", "fixture.described");
 "#;
     let documents = install_globals(cx);
     cx.update(crate::app::commands::keymaps::install);

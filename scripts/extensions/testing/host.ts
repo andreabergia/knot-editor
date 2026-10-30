@@ -86,10 +86,12 @@ function emptyState() {
       ["theme.mode", { key: "theme.mode", type: "string", default: "dark", description: "Which theme applies" }],
       ["theme.dark", { key: "theme.dark", type: "string", default: "One Dark", description: "The theme used in dark mode" }],
       ["theme.light", { key: "theme.light", type: "string", default: "One Light", description: "The theme used in light mode" }],
+      ["keymap.preset", { key: "keymap.preset", type: "string", default: "knot", description: "The keymap preset that supplies default key bindings" }],
     ]),
     settingValues: [] as FakeSettingValue[],
     settingListeners: [] as { key: string; listener: (key: Knot.SettingKey) => void | Promise<void> }[],
     themes: [] as Knot.ThemeDefinition[],
+    keymapPresets: [] as Knot.KeymapPresetDefinition[],
     colors: new Map<string, Knot.ColorDefinition>(),
   };
 }
@@ -532,6 +534,11 @@ export function themeDefinitions(): readonly Knot.ThemeDefinition[] {
   return state.themes;
 }
 
+/** Every live keymap preset registration, in registration order. */
+export function keymapPresetDefinitions(): readonly Knot.KeymapPresetDefinition[] {
+  return state.keymapPresets;
+}
+
 /** Every live extension color definition, in definition order. */
 export function colorDefinitions(): readonly Knot.ColorDefinition[] {
   return [...state.colors.values()];
@@ -928,6 +935,47 @@ export const api: KnotApi = {
     activeBuffer: notFaked("editor.activeBuffer"),
     registerCompletionProvider: notFaked("editor.registerCompletionProvider"),
   },
-  keybinding: notFaked("keybinding"),
-  removeKeybinding: notFaked("removeKeybinding"),
+  // The fake neither validates keys nor selects a preset, and does not know
+  // the native Knot preset's bindings.
+  keymaps: {
+    bind: notFaked("keymaps.bind"),
+    unbind: notFaked("keymaps.unbind"),
+    registerPreset: async (definition) => {
+      if (definition.name === "knot") throw new TypeError("the knot keymap preset cannot be replaced");
+      state.keymapPresets.push(definition);
+      return {
+        dispose: async () => {
+          state.keymapPresets = state.keymapPresets.filter((candidate) => candidate !== definition);
+        },
+      };
+    },
+    // Later registrations win, as in the native registry.
+    getPreset: async (name) => {
+      if (name === "knot") return notFaked("keymaps.getPreset(\"knot\")")();
+      const definition = [...state.keymapPresets].reverse().find((candidate) => candidate.name === name);
+      return definition === undefined
+        ? null
+        : {
+          name: definition.name,
+          title: definition.title ?? definition.name,
+          bindings: definition.bindings.map((binding) => ({
+            key: binding.key,
+            command: binding.command === null
+              ? null
+              : typeof binding.command === "string"
+              ? { name: binding.command, arguments: null }
+              : { name: binding.command.name, arguments: binding.command.arguments ?? null },
+            view: binding.view ?? null,
+          })),
+        };
+    },
+    listPresets: async () => {
+      const byName = new Map([["knot", "Knot"]]);
+      for (const definition of state.keymapPresets) byName.set(definition.name, definition.title ?? definition.name);
+      return [...byName]
+        .map(([name, title]) => ({ name, title }))
+        .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    },
+  },
+  platform: "macos",
 };
