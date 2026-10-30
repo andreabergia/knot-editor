@@ -1,6 +1,6 @@
 # D127 — Restored terminals keep their working directory
 
-Status: 🚧 in progress; checkpoint 1 awaiting review. Item of the
+Status: 🚧 in progress; checkpoint 1 complete. Item of the
 [daily-driver plan](daily-driver.md); builds on D121's default directory rule
 ([workbench and lifecycle](../architecture/workbench-and-lifecycle.md#terminal-sessions-and-views),
 [decisions](../decisions.md#terminal)).
@@ -57,23 +57,12 @@ all share the default.
 
 ## Checkpoints
 
-### 1. Session working directory query ✅ (awaiting review)
+### 1. Session working directory query ✅
 
-- Deliverable: `TerminalSession::current_directory()` returns the shell's live
-  working directory on macOS and Linux, otherwise the start directory.
-- Validation: session tests that spawn a shell in a temporary directory, send
-  `cd <subdir>` and observe the new directory, and that an exited or failed
-  session reports its start directory.
-- Review gate: query behavior and platform coverage.
-- **Implementation context:** `src/app/terminal/session.rs`.
-  `RunningTerminal::start` creates the PTY with `tty::new`, then moves it into
-  `EventLoop::new`; read `pty.child().id()` (Unix only) before the move and
-  keep the pid on `RunningTerminal`. Put the platform query in a small module
-  beside `terminal/directory.rs` (`cfg(target_os = "macos")` with `libc`'s
-  `proc_pidinfo`/`proc_vnodepathinfo`, `cfg(target_os = "linux")` with
-  `read_link`); add `libc` as a direct dependency in `Cargo.toml`. The existing
-  `working_directory()` accessor returns the start directory from `Options`.
-  Mirror the waiting patterns in `session_tests.rs`.
+- `TerminalSession::current_directory()` reports the shell's live directory
+  through [terminal/process.rs](../../src/app/terminal/process.rs), else the
+  start directory. Live queries were validated on macOS only; the Linux path
+  is untested.
 
 ### 2. Record and restore the directory
 
