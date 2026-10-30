@@ -69,7 +69,8 @@ theme by changing a few keys.
 ## Exclusions and deferred decisions
 
 - Live preview while moving through the picker: the picker has no
-  selection-change callback (D071 may add one).
+  selection-change callback yet. D071 adds one, and Select Theme then
+  previews the highlighted theme and restores the previous one on dismissal.
 - Theme-supplied icons and glyphs stay with D055.
 - Fonts, sizes, and font features stay with D078 and D059; themes carry
   only colors and syntax font style and weight.

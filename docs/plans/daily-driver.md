@@ -128,6 +128,8 @@ to be rebuilt later:
     `workbench.showPicker`. Recently used commands rank first.
   - Picker items gain optional detail and right-aligned hint text. Every later
     picker uses these additions.
+  - The picker reports the highlighted item as it changes, so a consumer can
+    preview it. Select Theme (D064) uses this to preview themes live.
 
 - **D086 — Keymap presets** (depends on D070, D071; promotes D060)
   - A preset is a named set of default bindings occupying the native keymap
