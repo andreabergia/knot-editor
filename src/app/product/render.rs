@@ -303,7 +303,10 @@ impl Render for ProductShell {
         self.observe_application_focus(window, cx);
         tab_drag::coordinator(cx);
         self.tab_drag.borrow_mut().begin_frame();
-        let layout = self.workbench.read(cx).layout().cloned();
+        let layout = match self.maximized_pane(cx) {
+            Some(pane) => Some(WorkbenchLayout::Pane(pane)),
+            None => self.workbench.read(cx).layout().cloned(),
+        };
         let entity = cx.entity();
         let command_palette = self
             .command_palette

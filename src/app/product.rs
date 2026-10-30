@@ -391,6 +391,8 @@ pub(crate) struct ProductShell {
     dock_resize: Option<DockResizeDrag>,
     split_resize: Option<SplitResizeDrag>,
     recent_walk: Option<navigation::RecentWalk>,
+    /// The pane rendered over the whole workbench, while it stays focused.
+    maximized: Option<PaneId>,
     command_palette: Option<CommandPalette<ProductCommandTarget>>,
     command_palette_subscription: Option<Subscription>,
     transient: Option<ActiveTransient>,
@@ -495,6 +497,7 @@ impl ProductShell {
             dock_resize: None,
             split_resize: None,
             recent_walk: None,
+            maximized: None,
             command_palette: None,
             command_palette_subscription: None,
             transient: None,

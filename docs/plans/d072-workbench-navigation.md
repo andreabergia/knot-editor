@@ -174,7 +174,14 @@ Added to the Knot preset. `secondary-` is cmd on macOS and ctrl elsewhere.
   `src/app/terminal/view.rs`); `knot_preset` and `starts_with_plain_control`
   in `src/app/commands/keymaps/presets.rs`; `NEW_TERMINAL_COMMAND` binding.
 
-### 3. Directional panes and maximize
+### 3. Directional panes and maximize ✅
+
+- Resolved: neighbors come from pane rectangles laid out from split ratios
+  and dock sizes over the painted workbench bounds, rather than from each
+  pane's painted bounds, because a maximized window paints only one pane.
+  Maximize lasts while its pane stays focused, so splitting, closing, and
+  every other focus change end it without separate hooks. Moving a pane's
+  only tab toward an edge with no neighbor is unavailable.
 
 - Focus Pane and Move Tab in four directions from painted bounds, splitting
   when no neighbor exists.

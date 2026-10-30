@@ -54,7 +54,17 @@ fn every_platform_binds_the_pane_layout_chords() {
             ("=", GROW_PANE_COMMAND),
             ("-", SHRINK_PANE_COMMAND),
             ("0", EQUALIZE_PANES_COMMAND),
+            ("secondary-left", FOCUS_PANE_LEFT_COMMAND),
+            ("secondary-right", FOCUS_PANE_RIGHT_COMMAND),
+            ("secondary-up", FOCUS_PANE_UP_COMMAND),
+            ("secondary-down", FOCUS_PANE_DOWN_COMMAND),
+            ("shift-left", MOVE_TAB_LEFT_COMMAND),
+            ("shift-right", MOVE_TAB_RIGHT_COMMAND),
+            ("shift-up", MOVE_TAB_UP_COMMAND),
+            ("shift-down", MOVE_TAB_DOWN_COMMAND),
+            ("secondary-m", TOGGLE_MAXIMIZE_PANE_COMMAND),
         ] {
+            let chord = chord.replace("secondary", secondary);
             let key = format!("{secondary}-k {chord}");
             assert_eq!(
                 resolved(&registry, &key, Some("editor")).as_deref(),

@@ -166,6 +166,15 @@ impl TabDragState {
         self.workbench = None;
     }
 
+    #[cfg(test)]
+    pub(super) fn painted_panes(&self) -> Vec<PaneId> {
+        self.panes.iter().map(|pane| pane.pane).collect()
+    }
+
+    pub(super) fn workbench_bounds(&self) -> Option<Bounds<Pixels>> {
+        self.workbench
+    }
+
     pub(super) fn split_bounds(&self, boundary: PaneId) -> Option<Bounds<Pixels>> {
         self.splits
             .iter()

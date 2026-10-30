@@ -967,6 +967,7 @@ mod arrange;
 mod close;
 mod relocate;
 mod resize;
+pub(crate) use resize::neighbor;
 
 pub(crate) use arrange::ArrangedTab;
 

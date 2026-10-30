@@ -1,6 +1,7 @@
 //! Workbench and application command declarations.
 use super::*;
 use crate::app::commands::declarations::{CommandContext, command};
+use crate::app::workbench::SplitEdge;
 use crate::host::protocol::CommandOutcome;
 
 #[command("file.new", title = "New Document", description = "Open an untitled document.", id = NEW_COMMAND, participant = Workbench)]
@@ -201,6 +202,78 @@ go_to_tab! {
 pub(crate) async fn go_to_last_tab(context: CommandContext, (): ()) -> Result<(), CommandOutcome> {
     context
         .shell(|shell, target, window, cx| shell.go_to_tab(target.pane, None, window, cx))
+        .await
+}
+
+#[command("workbench.focus-pane-left", title = "Focus Pane Left", description = "Focus the pane to the left.", id = FOCUS_PANE_LEFT_COMMAND, participant = Workbench)]
+pub(crate) async fn focus_pane_left(context: CommandContext, (): ()) -> Result<(), CommandOutcome> {
+    focus_toward(context, SplitEdge::Left).await
+}
+
+#[command("workbench.focus-pane-right", title = "Focus Pane Right", description = "Focus the pane to the right.", id = FOCUS_PANE_RIGHT_COMMAND, participant = Workbench)]
+pub(crate) async fn focus_pane_right(
+    context: CommandContext,
+    (): (),
+) -> Result<(), CommandOutcome> {
+    focus_toward(context, SplitEdge::Right).await
+}
+
+#[command("workbench.focus-pane-up", title = "Focus Pane Up", description = "Focus the pane above.", id = FOCUS_PANE_UP_COMMAND, participant = Workbench)]
+pub(crate) async fn focus_pane_up(context: CommandContext, (): ()) -> Result<(), CommandOutcome> {
+    focus_toward(context, SplitEdge::Top).await
+}
+
+#[command("workbench.focus-pane-down", title = "Focus Pane Down", description = "Focus the pane below.", id = FOCUS_PANE_DOWN_COMMAND, participant = Workbench)]
+pub(crate) async fn focus_pane_down(context: CommandContext, (): ()) -> Result<(), CommandOutcome> {
+    focus_toward(context, SplitEdge::Bottom).await
+}
+
+#[command("workbench.move-tab-left", title = "Move Tab Left", description = "Move the focused tab to the pane on the left, splitting when there is none.", id = MOVE_TAB_LEFT_COMMAND, participant = Workbench)]
+pub(crate) async fn move_tab_left(context: CommandContext, (): ()) -> Result<(), CommandOutcome> {
+    move_toward(context, SplitEdge::Left).await
+}
+
+#[command("workbench.move-tab-right", title = "Move Tab Right", description = "Move the focused tab to the pane on the right, splitting when there is none.", id = MOVE_TAB_RIGHT_COMMAND, participant = Workbench)]
+pub(crate) async fn move_tab_right(context: CommandContext, (): ()) -> Result<(), CommandOutcome> {
+    move_toward(context, SplitEdge::Right).await
+}
+
+#[command("workbench.move-tab-up", title = "Move Tab Up", description = "Move the focused tab to the pane above, splitting when there is none.", id = MOVE_TAB_UP_COMMAND, participant = Workbench)]
+pub(crate) async fn move_tab_up(context: CommandContext, (): ()) -> Result<(), CommandOutcome> {
+    move_toward(context, SplitEdge::Top).await
+}
+
+#[command("workbench.move-tab-down", title = "Move Tab Down", description = "Move the focused tab to the pane below, splitting when there is none.", id = MOVE_TAB_DOWN_COMMAND, participant = Workbench)]
+pub(crate) async fn move_tab_down(context: CommandContext, (): ()) -> Result<(), CommandOutcome> {
+    move_toward(context, SplitEdge::Bottom).await
+}
+
+async fn focus_toward(context: CommandContext, edge: SplitEdge) -> Result<(), CommandOutcome> {
+    context
+        .shell(move |shell, target, window, cx| {
+            shell.focus_pane_toward(target.pane, edge, window, cx)
+        })
+        .await
+}
+
+async fn move_toward(context: CommandContext, edge: SplitEdge) -> Result<(), CommandOutcome> {
+    context
+        .shell(move |shell, target, window, cx| {
+            shell.move_tab_toward(target.pane, target.tab, edge, window, cx)
+        })
+        .await
+}
+
+#[command("workbench.toggle-maximize-pane", title = "Toggle Maximize Pane", description = "Show only the focused pane, or the whole layout again.", id = TOGGLE_MAXIMIZE_PANE_COMMAND, participant = Workbench)]
+pub(crate) async fn toggle_maximize_pane(
+    context: CommandContext,
+    (): (),
+) -> Result<(), CommandOutcome> {
+    context
+        .shell(|shell, target, _, cx| {
+            shell.toggle_maximize(target.pane, cx);
+            Ok(())
+        })
         .await
 }
 
