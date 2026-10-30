@@ -49,12 +49,12 @@ to styles.
 Each window owns a workbench whose split panes contain typed document, terminal, or native tool tabs.
 The workbench retains native tool definitions independently of visible tab
 attachments, including dock placement and hide/reopen state. The application
-owns one versioned tool-only layout snapshot in SQLite; fresh windows inherit
-the last user-customized arrangement while already-open windows stay
-independent. It also owns one recovery database that protects dirty document
-text independently of extension health, and one record of every product
-window's roots and layout that startup restores before extensions see
-`launched`. Views own presentation and interaction; terminal sessions own
+owns one SQLite state database of UI-state records: a versioned tool-only
+layout snapshot, which fresh windows inherit while already-open windows stay
+independent; one record of every product window's roots and layout that
+startup restores before extensions see `launched`; and the palette's recently
+used commands. It also owns a separate recovery database that protects dirty
+document text independently of extension health. Views own presentation and interaction; terminal sessions own
 PTYs, processes, and emulator state independently of their sole attached view.
 The workbench owns layout transitions; the product shell coordinates windows,
 tab transfers, application-wide protected closure, and session replacement.

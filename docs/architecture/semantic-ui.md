@@ -259,9 +259,28 @@ one settled outcome (selection, acceptance, dismissal, cancellation)
 `TextInput` is one shared single-line gpui `EntityInputHandler`: typing, IME
 preedit, and clipboard flow through gpui, while the field owns caret, selection,
 keyboard movement, and pointer selection. It backs both transient fields and
-the command palette query, so text entry has one native path. Picker filtering
-is local to the supplied item list; no provider, scheduler, or event bus is
-added.
+the command palette query, so text entry has one native path.
+
+One native `Picker` serves the command palette, native pickers, and extension
+pickers. It fuzzy-matches the supplied item list locally with
+`nucleo-matcher`, ranking label matches above description matches above an
+item's hidden match text, and keeps the caller's order for an empty query and
+equal scores; no provider, scheduler, or event bus is added. An extension
+picker with `onHighlight` reports the highlighted item through a pull loop in
+the caller's own turn, because package roots are serial and a notification
+could not run while the command awaits the picker:
+
+```text
+showPicker({ onHighlight })
+  beginPicker ──> highlighted(session, id) ─┐
+  onHighlight(id) awaited                    │ repeat
+  nextPickerEvent(session) ──> highlighted ──┘
+                           └─> selected | dismissed
+```
+
+Native code keeps only the latest unread highlight, so a slow callback skips
+intermediate items, and a settled picker wins over an unread highlight.
+Unloading the lifecycle drops its sessions with its transients.
 
 Settlement happens once on acceptance, dismissal, native-prompt answer, window
 closure, extension unload, or caller cancellation. Window closure and unload

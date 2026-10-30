@@ -107,8 +107,7 @@ compilation.
 A document's language is buffer state, explicit or detected. An unregistered
 explicit ID is kept and paints as plain text, so restoration and personal config
 need no ordering against package startup, and the window layout records only
-explicit languages, so restores detect again. Set Language Mode is native
-because an extension command's palette title is its name.
+explicit languages, so restores detect again. Set Language Mode is native.
 
 References: [core and buffers](architecture/core-and-buffers.md#syntax-state)
 and [semantic UI](architecture/semantic-ui.md#syntax-highlighting-and-languages).
@@ -485,6 +484,15 @@ nothing switches bundled languages at runtime. The accepted cost is that a
 package restarted or binding late beats earlier personal writes until Knot
 restarts; this is rare, and settings (D070) behave the same way.
 
+The palette lists commands by title and description rather than by name,
+because names are an addressing scheme, while still matching the name for
+users who know it. Low-level input commands opt out of the palette instead of
+the palette gaining context rules like VS Code's `when` clauses: hiding a few
+commands that only make sense from a key needs one flag, and a command that
+does not apply to its target already reports so. Recently used commands rank
+first, as in VS Code, and the list survives restarts because rebuilding it
+each session would lose the ranking that makes the palette fast.
+
 Reference: [commands](architecture/commands.md).
 
 ## Application settings
@@ -673,7 +681,19 @@ an explicit `WindowTarget` or the admitted command capture, which keeps an
 awaited picker inside a command bound to its originating window.
 
 Pickers receive a complete item list and filter locally, deliberately avoiding
-streaming providers and a second scheduler. One extension interaction owns a
+streaming providers and a second scheduler. One native picker serves the
+palette, native pickers, and extensions, so every later picker inherits the
+same matching and presentation. Matching uses `nucleo-matcher` rather than a
+hand-written scorer: ranking quality is fzf's optimal alignment with boundary,
+camelCase, separator, and consecutive bonuses, plus smart case, Unicode
+normalization, and a path mode for Go to File, and that tuning is the part not
+worth redoing. It is MPL-2.0, used unmodified as a dependency.
+
+Highlight previews are pulled rather than pushed. Package roots run one at a
+time, so a notification for each highlight would queue behind the command that
+awaits the picker until it settles. The caller's own turn instead asks for the
+next highlight or the outcome, and native code keeps only the latest unread
+highlight, which coalesces a slow callback without a queue. One extension interaction owns a
 window at a time and a second request rejects `OperationInProgress`; the
 command palette stays an independent native surface rather than sharing that
 slot. Window closure, extension unload, and caller cancellation settle the
@@ -829,6 +849,21 @@ of its awaiting caller, preserving accepted native work without a final JS
 callback.
 
 Reference: [extension host](architecture/extension-host.md#extension-record-storage).
+
+## Application state database
+
+UI state that the application keeps across restarts, such as the tool-only
+layout, the recorded windows, and palette command history, lives in one SQLite
+file with a table per record. They were separate files only because each
+feature added its own path. One shared connection serializes their writes, so
+concurrent debounced writes never meet SQLite's busy error and quit flushes
+them together. Unsaved-text recovery stays in its own database: a damaged
+recovery file must be preserved and reported, while damaged UI state reads as
+absent; recovery commits every capture with FULL synchronization; and a UI-state
+failure must never reach the store that protects text. Extension records stay
+per package.
+
+Reference: [workbench and lifecycle](architecture/workbench-and-lifecycle.md#automatic-tool-layout-memory).
 
 ## Unsaved-document recovery store
 

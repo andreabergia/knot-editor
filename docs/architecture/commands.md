@@ -9,10 +9,20 @@ The application owns one foreground catalog for definitions, name ownership,
 and admission. Keys, palette, menus, and scripts invoke the same semantic commands
 and structured outcomes. The palette captures its origin before taking focus.
 
+Each definition carries a title, an optional description, and whether the
+palette lists it; native input commands such as cursor movement opt out, and
+extensions pass the same metadata to `commands.register`. The palette shows
+each command's title, description, and the binding shown for the origin's view
+kind: the argument-less binding with the fewest keystrokes, then the shortest
+text, then the latest write. It matches the command name without showing it.
+Commands confirmed in the palette form a most-recently-used list of 50 names in
+the application state database; recent commands list first with an empty query
+and break equal scores otherwise.
+
 Annotated native handlers declare metadata and typed async signatures; linked
 adapters assemble catalog entries and generated name constants. Distinct routing
-participants may share a name/title. Assembly rejects duplicate participant
-entries or conflicting titles. Dynamic extension ownership remains in the
+participants may share a name and metadata. Assembly rejects duplicate
+participant entries or conflicting metadata. Dynamic extension ownership remains in the
 application catalog. Declaration contracts live in
 [commands/declarations.rs](../../src/app/commands/declarations.rs).
 

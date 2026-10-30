@@ -250,7 +250,7 @@ in `scripts/extensions/testing/host.ts` (line 862). The consumer is
 
 Review gate: Select Theme previews smoothly when arrowing through themes.
 
-### 6. Documentation and completion
+### 6. 🚧 Documentation and completion
 
 - Update [semantic UI](../architecture/semantic-ui.md) (the shared picker,
   matching, and highlight pull),
@@ -261,4 +261,7 @@ Review gate: Select Theme previews smoothly when arrowing through themes.
 - Record rationale in [decisions](../decisions.md): `nucleo-matcher` over a
   hand-written scorer, one state database with recovery kept separate, and
   pull-based highlight because roots are serial.
-- Review gate: remove this plan and mark D071 ✅ in the daily-driver plan.
+- ✅ Architecture references, the overview, and decisions are updated.
+- Review gate: after the manual gates of checkpoints 2–5 pass (ranking feel,
+  palette content, recency after a few days, smooth theme preview), remove
+  this plan and mark D071 ✅ in the daily-driver plan.
