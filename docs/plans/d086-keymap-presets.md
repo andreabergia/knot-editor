@@ -98,34 +98,15 @@ Presets follow the [themes](../decisions.md#themes) precedent.
 
 ### 1. ✅ Platform-correct Knot preset
 
-- Replace `COMMON_BINDINGS` / `PLATFORM_BINDINGS` with the redesigned Knot
-  preset: `secondary-` shared bindings plus macOS, Windows, and Linux tables
-  selected by `cfg(target_os)`. Add terminal-scoped copy, paste, and
-  pass-through unbinds for Windows and Linux, and the macOS Emacs editing keys
-  with any missing editor commands.
-- Rename `BindingOwner::Native` to `BindingOwner::Preset`, still built from the
-  native table.
-- Validation: per-platform table tests (each table loads, has no duplicate key
-  and scope, and every binding names a registered command); editor tests for
-  the new commands; product keybinding tests for terminal copy and paste and a
-  shell pass-through key.
-- Review gate: walk through the Knot preset tables for each platform.
-- ✅ Done: `knot_preset(platform)` expands `secondary-` per platform, so tests
-  check all three tables on any host. On Windows and Linux the terminal
-  unbinds every global binding whose first keystroke is a plain ctrl chord,
-  derived rather than listed. `editor.delete-to-line-end` backs macOS
-  `ctrl-k`. The duplicate `cmd-t` New Document binding is dropped; New
-  Terminal keeps `secondary-shift-t` until D072 reassigns it.
-- **Implementation context:** `src/app/commands/keymaps.rs` (tables,
-  `native_registry`, `install`, config-error quit binding),
-  `src/app/commands/keymaps/tests.rs` (extend
-  `windows_native_defaults_use_control_shortcuts`). Command constants live in
-  `src/app/commands/dispatch.rs`, and editor commands are annotated with
-  `#[command]` beside the editor view (mirror an existing movement command).
-  The terminal commands are `TERMINAL_COPY_COMMAND` /
-  `TERMINAL_PASTE_COMMAND` in `src/app/terminal/view.rs`, and a null
-  terminal-scoped binding leaves raw input to `src/app/terminal/input.rs`.
-  Product key tests are in `src/app/product/tests/keybindings.rs`.
+Approved. `knot_preset(platform)` in `src/app/commands/keymaps.rs` expands
+`secondary-` per platform, so table tests check macOS, Windows, and Linux on any
+host. On Windows and Linux, every global binding whose first keystroke is a
+plain ctrl chord is unbound in terminals (derived, not listed), and terminals
+copy and paste with `ctrl-shift-c` / `ctrl-shift-v`. macOS editors take the
+Cocoa Emacs keys, with `editor.delete-to-line-end` behind `ctrl-k`. The
+duplicate `cmd-t` New Document binding is gone; New Terminal keeps
+`secondary-shift-t` until D072. The owner is now `BindingOwner::Preset`.
+Validated on macOS only; other platforms are covered by table tests.
 
 ### 2. Contributed presets, selection, and `knot.platform`
 
