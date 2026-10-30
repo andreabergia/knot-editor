@@ -107,46 +107,14 @@ theme by changing a few keys.
 
 ## Checkpoints
 
-### 1. Native theme model and themed surfaces 🚧 awaiting review
+### 1. Native theme model and themed surfaces ✅
 
-Deliverables:
-- ✅ A native color definition table: each key with its description and dark
-  and light defaults (a color or another key). Native code names keys
-  through constants generated from the same table.
-- ✅ `Theme` holds an appearance, a resolved color per key (theme values over
-  definition defaults), and the resolved highlight styles. With no
-  registered theme the dark defaults apply, so the app looks different from
-  today but coherent.
-- ✅ Every native surface reads the `Theme` global: product shell render, tab
-  drag, tree view, explorer tree, transient interactions, command palette,
-  completion, text input, editor, terminal view and ANSI defaults, and the
-  personal-config error window. No color literals remain outside `theme.rs`.
-- ✅ Replacing the global repaints every window.
-
-Notes: `theme::theme(cx)` returns the installed global, else the dark
-defaults, so no startup installation is needed until a theme is selected
-and views built outside the product shell need no setup. Fallback syntax is
-a small palette (comments, strings, keywords, numbers, constants, types,
-functions, headings) plus colorless markup styles.
-
-Validation: unit tests that native keys are unique, that every default
-reference names a defined key without cycles, and that theme values win
-over defaults; a source-scan test that no `rgb(0x`,
-`rgba(0x`, or `hsla(` literal appears in `src/app` outside `theme.rs`;
-existing editor and terminal tests pass. Manual look at every surface.
-
-Review gate: the native keys and how surfaces map onto them.
-
-**Implementation context:** `src/app/theme.rs` (today `Theme::dark()`,
-`with_styles`, `Highlight` vocabulary; editor paint already reads it via
-`cx.global::<Theme>()` in `src/app/editor/paint.rs` and copies colors per
-paint). Color literals live in `src/app/product/render.rs`,
-`src/app/tree_view.rs`, `src/app/transient.rs`, `src/app/command_palette.rs`,
-`src/app/completion.rs`, `src/app/text_input.rs`, `src/app/workspace_tree.rs`,
-`src/app/product/tab_drag.rs`, `src/app/personal_config_error.rs`,
-`src/app/terminal/view.rs`, and the default palette in
-`src/app/terminal/colors.rs`. `editor.rs` installs the global with
-`default_global`; keep one installation point at application startup.
+Every native surface paints from color keys defined in one native table in
+`src/app/theme.rs` (dark and light defaults, each a color or another key);
+`theme::theme(cx)` returns the installed theme, else the dark defaults, and
+`set_theme` repaints every window. A source-scan test keeps color literals
+out of `src/app` outside `theme.rs`. The fallback syntax palette is
+deliberately small until bundled themes land.
 
 ### 2. Theme registration API and selection settings
 
