@@ -1,0 +1,11 @@
+{
+  // Bundled TypeScript and JavaScript syntax highlighting.
+  "name": "@knot/language-typescript",
+  "apiVersion": 1,
+  "version": "0.1.0",
+  "main": "dist/main.js",
+  "displayName": "TypeScript and JavaScript",
+  "description": "Syntax highlighting for TypeScript, JavaScript, and their JSX variants.",
+  "author": "Knot",
+  "license": "Apache-2.0",
+}

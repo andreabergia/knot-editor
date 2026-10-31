@@ -2,32 +2,6 @@
 // nvim-treesitter (Apache-2.0); patterns that need `#offset!`,
 // `injection.combined`, or a language without a bundled grammar are left out.
 
-export const markdown = String.raw`
-(fenced_code_block
-  (info_string
-    (language) @injection.language)
-  (code_fence_content) @injection.content)
-
-((html_block) @injection.content
-  (#set! injection.language "html")
-  (#set! injection.include-children))
-
-((minus_metadata) @injection.content
-  (#set! injection.language "yaml")
-  (#set! injection.include-children))
-
-([
-  (inline)
-  (pipe_table_cell)
-] @injection.content
-  (#set! injection.language "markdown_inline"))
-`;
-
-export const markdownInline = String.raw`
-((html_tag) @injection.content
-  (#set! injection.language "html"))
-`;
-
 export const html = String.raw`
 ((style_element
   (start_tag) @_no_type_lang
@@ -94,29 +68,6 @@ export const html = String.raw`
     (attribute_value) @injection.content))
   (#match? @_name "^on[a-z]+$")
   (#set! injection.language "javascript"))
-`;
-
-export const rust = String.raw`
-(macro_invocation
-  macro: [
-    (scoped_identifier
-      name: (_) @_macro_name)
-    (identifier) @_macro_name
-  ]
-  (token_tree) @injection.content
-  (#not-any-of? @_macro_name "slint" "html" "json" "xml")
-  (#set! injection.language "rust")
-  (#set! injection.include-children))
-
-(macro_definition
-  (macro_rule
-    left: (token_tree_pattern) @injection.content
-    (#set! injection.language "rust")))
-
-(macro_definition
-  (macro_rule
-    right: (token_tree) @injection.content
-    (#set! injection.language "rust")))
 `;
 
 export const cpp = String.raw`

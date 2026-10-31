@@ -1,5 +1,5 @@
-//! Highlights the fixtures in `extensions/@knot/languages/test/fixtures` with
-//! the bundled package's registered languages and checks their assertions.
+//! Highlights the fixtures in each bundled package's `test/fixtures` with the
+//! bundled packages' registered languages and checks their assertions.
 //!
 //! A fixture is an ordinary source file whose language is detected from its
 //! name. An assertion is a line holding only a comment (`//`, `#`, `--`, or
@@ -81,10 +81,12 @@ fn assertions(text: &str) -> Vec<Assertion> {
 }
 
 fn fixtures() -> Vec<PathBuf> {
-    let directory =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("extensions/@knot/languages/test/fixtures");
-    let mut paths: Vec<_> = std::fs::read_dir(directory)
+    let bundled = Path::new(env!("CARGO_MANIFEST_DIR")).join("extensions/@knot");
+    let mut paths: Vec<_> = std::fs::read_dir(bundled)
         .unwrap()
+        .map(|package| package.unwrap().path().join("test/fixtures"))
+        .filter(|directory| directory.is_dir())
+        .flat_map(|directory| std::fs::read_dir(directory).unwrap())
         .map(|entry| entry.unwrap().path())
         .collect();
     paths.sort();

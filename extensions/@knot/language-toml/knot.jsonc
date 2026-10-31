@@ -1,0 +1,11 @@
+{
+  // Bundled TOML syntax highlighting.
+  "name": "@knot/language-toml",
+  "apiVersion": 1,
+  "version": "0.1.0",
+  "main": "dist/main.js",
+  "displayName": "TOML",
+  "description": "Syntax highlighting for TOML.",
+  "author": "Knot",
+  "license": "Apache-2.0",
+}

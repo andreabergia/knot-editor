@@ -64,7 +64,7 @@ let extensions contribute language definitions: an LSP language ID, the grammar,
 detection patterns, and queries. Running a grammar is a mechanic like shaping:
 the tree must follow every commit synchronously and painting never calls
 JavaScript, while the definition is data that personal config and packages
-replace through the same API the bundled `@knot/languages` package uses.
+replace through the same API the bundled language packages use.
 Grammars come from upstream crates over the `tree-sitter` crate rather than
 arborium, whose whole-string highlighter has no tree editing, old-tree reuse,
 chunked input, progress callback, or byte-range query. SQL is left out because
@@ -103,6 +103,14 @@ Queries compile off the foreground at registration: compiling every bundled
 query took about 420 ms, C++ alone 130 ms. The grammars grew the release
 binary from about 74 MB to 88.5 MB and add about 28 s of parallel C
 compilation.
+
+Each bundled language is its own package, such as `@knot/language-rust`, so
+each language's definition, and later its editing data, lives in one small
+package that changes independently of the others; the grammars that have no package yet share
+`@knot/language-others`. The queries adapted from nvim-treesitter share one
+Apache-2.0 license file, `extensions/@knot/LICENSE-APACHE`. Packages cannot import each other, so languages that
+compose one query family share a package: TypeScript and JavaScript share the
+ECMAScript and JSX queries, as VS Code ships them as one extension.
 
 A document's language is buffer state, explicit or detected. An unregistered
 explicit ID is kept and paints as plain text, so restoration and personal config

@@ -143,7 +143,7 @@ to be rebuilt later:
 - **D073 — Language editing configuration**
   - Language registration gains line and block comment tokens, bracket pairs,
     auto-closing pairs, and indentation rules (increase and decrease
-    patterns). `@knot/languages` supplies them for every bundled language.
+    patterns). The bundled language packages supply them for every language.
   - Data only. D074 and D075 consume it.
 
 - **D074 — Editing commands** (depends on D073)

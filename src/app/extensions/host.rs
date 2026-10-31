@@ -2558,7 +2558,16 @@ mod tests {
         let (host, _root) = start_bundled_packages(cx);
         cx.read(|cx| {
             let report = host.read(cx).startup_report.as_ref().unwrap();
-            for name in ["@knot/projects", "@knot/languages", "@knot/themes"] {
+            for name in [
+                "@knot/projects",
+                "@knot/language-markdown",
+                "@knot/language-others",
+                "@knot/language-python",
+                "@knot/language-rust",
+                "@knot/language-toml",
+                "@knot/language-typescript",
+                "@knot/themes",
+            ] {
                 let entry = report
                     .report
                     .entries

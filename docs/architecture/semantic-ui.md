@@ -82,7 +82,7 @@ Grammars are compiled in and named by stable native grammar IDs. Language
 definitions are contributed data: extensions and personal config register an
 LSP language ID, the grammar it parses with, the file names, extensions, and
 shebang interpreters it claims, and its highlight and injection queries, through
-the same `languages` API the bundled `@knot/languages` package uses. An
+the same `languages` API the bundled `@knot/language-*` packages use. An
 association claims patterns for an ID without defining the language, so
 personal config redirects detection without replacing a package's language.
 

@@ -236,7 +236,7 @@ Queries compile before `register` resolves: an unknown grammar rejects
 and column in `details`. Register in activation so restored documents highlight
 from their first frame. The latest registration of an ID or file pattern
 wins, so personal config replaces a package's language from `post-init`. The
-bundled `@knot/languages` package is a complete example.
+bundled `@knot/language-*` packages, one per language, are complete examples.
 
 To send files to a language without replacing its registration, associate
 patterns with its ID. The claim competes with registrations' claims, so the

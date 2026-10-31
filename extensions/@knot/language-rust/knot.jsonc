@@ -1,0 +1,11 @@
+{
+  // Bundled Rust syntax highlighting.
+  "name": "@knot/language-rust",
+  "apiVersion": 1,
+  "version": "0.1.0",
+  "main": "dist/main.js",
+  "displayName": "Rust",
+  "description": "Syntax highlighting for Rust.",
+  "author": "Knot",
+  "license": "Apache-2.0",
+}

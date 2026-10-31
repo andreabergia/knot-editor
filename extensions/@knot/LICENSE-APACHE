@@ -1,3 +1,6 @@
+The highlight and injection queries in the language-* packages are adapted
+from nvim-treesitter and used under the Apache License 2.0 below.
+
                                  Apache License
                            Version 2.0, January 2004
                         http://www.apache.org/licenses/

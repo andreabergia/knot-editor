@@ -1,0 +1,11 @@
+{
+  // Bundled Markdown syntax highlighting.
+  "name": "@knot/language-markdown",
+  "apiVersion": 1,
+  "version": "0.1.0",
+  "main": "dist/main.js",
+  "displayName": "Markdown",
+  "description": "Syntax highlighting for Markdown and its inline syntax.",
+  "author": "Knot",
+  "license": "Apache-2.0",
+}

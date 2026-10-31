@@ -1,6 +1,6 @@
 // Shared tests for language packages. A package's test calls
-// `testLanguagePackage` with its `start` and its `LANGUAGES`; `testLanguageSet`
-// checks every bundled package's languages together.
+// `testLanguagePackage` with its `start` and its `LANGUAGES`; `languages.test.ts`
+// calls `testLanguageSet` with every bundled package's languages together.
 import assert from "node:assert/strict";
 import { beforeEach, test } from "node:test";
 import type { LanguageDefinition } from "knot";
