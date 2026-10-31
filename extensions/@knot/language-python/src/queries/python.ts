@@ -1,3 +1,4 @@
+// Adapted from nvim-treesitter (Apache-2.0); see extensions/@knot/LICENSE-APACHE.
 export const highlights = String.raw`
 ; From tree-sitter-python licensed under MIT License
 ; Copyright (c) 2016 Max Brunsfeld

@@ -1,6 +1,7 @@
 // Injection queries for the injected languages Knot bundles. Adapted from
-// nvim-treesitter (Apache-2.0); patterns that need `#offset!`,
-// `injection.combined`, or a language without a bundled grammar are left out.
+// nvim-treesitter (Apache-2.0); see extensions/@knot/LICENSE-APACHE. Patterns
+// that need `#offset!`, `injection.combined`, or a language without a bundled
+// grammar are left out.
 
 export const html = String.raw`
 ((style_element

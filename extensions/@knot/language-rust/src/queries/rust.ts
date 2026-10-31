@@ -1,3 +1,4 @@
+// Adapted from nvim-treesitter (Apache-2.0); see extensions/@knot/LICENSE-APACHE.
 export const highlights = String.raw`
 ; Forked from https://github.com/tree-sitter/tree-sitter-rust
 ; Copyright (c) 2017 Maxim Sokolov
