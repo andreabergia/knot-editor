@@ -74,7 +74,7 @@ complete list for that item.
   - D078 → D112 → D058
   - D074 → D111 → D012, D058
   - D068, D073 → D066 → D058
-  - D073, D074, D075 → D130; D074 → D131
+  - D073, D074, D075 → D130; D074 → D131; D073 → D132
   - D064, D068 → D114 → D058
   - D092 → multi-selection editing in D109, D001, D067
 - **Extension presentation and language tooling:**
@@ -140,6 +140,19 @@ complete list for that item.
     through the extension API without exposing tree-sitter objects.
   - Order: after D073, which adds editing data to the same language
     registration, and D068, whose gutter lanes hold folds; before D058.
+
+- **D132 — Editing data for the remaining bundled languages**
+  - Deferred: D073 supplies comment, bracket, and indentation data only for
+    the languages with their own packages (Rust, TypeScript and JavaScript,
+    Python, TOML, Markdown). The languages in `@knot/language-others` (C,
+    C++, CSS, Go, HTML, Java, JSON, JSONC, tree-sitter query, shell script,
+    YAML) register without it, so editing commands treat them as having no
+    comments, brackets, or indentation rules.
+  - Reconsider: Daily editing in one of those languages misses toggle
+    comment, auto-indent, or auto-closing, or the languages move into their
+    own packages (D129). Then add the data with per-language behavior
+    tests like D073's, including YAML indentation patterns.
+  - Order: after D073; with or after D129.
 
 - **D130 — Syntax-scoped language configuration**
   - Deferred: D073's editing configuration applies to a whole language, or
