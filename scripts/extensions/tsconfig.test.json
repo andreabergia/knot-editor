@@ -6,7 +6,10 @@
     "rootDir": "../..",
     "outDir": ".test-build",
     "types": ["node"],
-    "paths": { "knot/testing": ["./testing/host.ts"] }
+    "paths": {
+      "knot/testing": ["./testing/host.ts"],
+      "knot/testing/languages": ["./testing/languages.ts"]
+    }
   },
   "include": [
     "testing/*.ts",
