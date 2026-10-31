@@ -241,6 +241,24 @@ impl ProductShell {
                                 .child("📌"),
                         )
                     })
+                    .child(
+                        div()
+                            .id(("close-tab", tab_id.value()))
+                            .debug_selector(move || format!("close-tab-{}", tab_id.value()))
+                            .px_1()
+                            .rounded_sm()
+                            .hover(|style| {
+                                style.bg(theme(cx).color(color::BUTTON_HOVER_BACKGROUND))
+                            })
+                            .child("×")
+                            // Keep the press from starting a tab drag or
+                            // activating the tab it closes.
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                cx.stop_propagation();
+                                this.close_tab_from_pointer(pane_id, tab_id, window, cx);
+                            })),
+                    )
                     .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                         if event.click_count() > 1 {
                             this.workbench.update(cx, |workbench, _| {
@@ -280,30 +298,7 @@ impl ProductShell {
                     .child(self.tab_bar_drag_geometry(pane_id))
                     .overflow_hidden()
                     .bg(theme(cx).color(color::TAB_BAR_BACKGROUND))
-                    .children(tabs)
-                    .when(
-                        matches!(pane.active_tab().surface_id(), TabSurfaceId::Tool(_)),
-                        |element| {
-                            element.child(div().flex_1()).child(
-                                div()
-                                    .id(("hide-tool", pane_id.value()))
-                                    .px_2()
-                                    .cursor_pointer()
-                                    .child("×")
-                                    .on_click(cx.listener(move |this, _, window, cx| {
-                                        let id = this.workbench.read(cx).pane(pane_id).and_then(
-                                            |pane| match pane.active_tab().surface_id() {
-                                                TabSurfaceId::Tool(id) => Some(id),
-                                                _ => None,
-                                            },
-                                        );
-                                        if let Some(id) = id {
-                                            this.hide_tool_from_pointer(id, window, cx);
-                                        }
-                                    })),
-                            )
-                        },
-                    ),
+                    .children(tabs),
             )
             .child(
                 div()

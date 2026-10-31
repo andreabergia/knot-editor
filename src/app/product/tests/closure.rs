@@ -1357,3 +1357,36 @@ async fn close_pane_collapses_its_split_and_keeps_the_other_pane(cx: &mut TestAp
     assert_eq!(remaining.first(), Some(&pinned));
     assert_eq!(remaining.last(), Some(&focused));
 }
+
+#[gpui::test]
+fn clicking_a_tab_close_button_closes_that_tab_after_its_save_decision(cx: &mut TestAppContext) {
+    let documents = install_globals(cx);
+    let (first, second, shell, window) = two_dirty_untitled_documents_in_one_window(&documents, cx);
+    let first_tab = cx.read(|cx| {
+        let workbench = shell.read(cx).workbench.read(cx);
+        let pane = workbench.focused_pane().unwrap();
+        pane.tabs()
+            .iter()
+            .find(|tab| tab.document_id() == Some(first))
+            .unwrap()
+            .id()
+    });
+    let mut visual = VisualTestContext::from_window(window, cx);
+    visual.run_until_parked();
+    let close = visual
+        .debug_bounds(format!("close-tab-{}", first_tab.value()).leak())
+        .unwrap()
+        .center();
+    visual.simulate_click(close, Modifiers::default());
+    wait_prompt(&mut visual);
+    visual.simulate_prompt_answer("Don't Save");
+    visual.run_until_parked();
+
+    visual.read(|cx| {
+        assert!(documents.read(cx).get(first).is_none());
+        let workbench = shell.read(cx).workbench.read(cx);
+        let pane = workbench.focused_pane().unwrap();
+        assert_eq!(pane.tabs().len(), 1);
+        assert_eq!(pane.active_tab().document_id(), Some(second));
+    });
+}
