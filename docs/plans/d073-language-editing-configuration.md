@@ -172,8 +172,16 @@ yet; D074 and D075 call the evaluators.
     startup report has no failures (so a pattern the `regex` crate rejects
     fails CI), and runs table-driven cases through the evaluators on each
     language's registered configuration. Each case names a language, the
-    text above the cursor, and the expected level change or comment result,
-    such as: Rust `fn main() {` indents the next line and `}` returns to the
+    text above the cursor, and the expected level change or comment result.
+    Every language's table is a full suite, not a sample: each bracket pair
+    in both directions, each comment token in both directions, each
+    indentation pattern with matching and non-matching lines, nesting, blank
+    and comment lines between a line and its reference, and the language's
+    common constructs (Rust closures, `match` arms and `where` clauses;
+    ECMAScript arrow functions, object literals, template literals, and JSX;
+    Python decorators, multi-line calls, `try`/`except`/`finally`, and
+    dedenting keywords; TOML tables and inline arrays; Markdown lists and
+    code fences). The following are illustrative only: Rust `fn main() {` indents the next line and `}` returns to the
     `fn` line's level; `match x {` inside an indented block nests one more
     level; `let s = "{";` does not indent; TypeScript `const a = [` and
     `foo(` indent and `]);` outdents; TSX's `<div>` keeps the level; Python
