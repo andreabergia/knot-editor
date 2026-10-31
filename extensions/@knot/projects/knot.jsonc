@@ -7,5 +7,5 @@
   "displayName": "Projects",
   "description": "Named projects, their roots, and session restoration.",
   "author": "Knot",
-  "license": "MIT",
+  "license": "GPL-3.0-or-later",
 }

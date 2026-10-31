@@ -8,5 +8,5 @@
   "displayName": "Other Languages",
   "description": "Syntax highlighting for the remaining bundled tree-sitter grammars.",
   "author": "Knot",
-  "license": "Apache-2.0",
+  "license": "GPL-3.0-or-later AND Apache-2.0",
 }

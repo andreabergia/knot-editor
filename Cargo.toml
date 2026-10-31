@@ -6,6 +6,7 @@ resolver = "3"
 name = "knot"
 version = "0.1.0"
 edition = "2024"
+license = "GPL-3.0-or-later"
 
 [dependencies]
 inventory = "0.3"

@@ -7,5 +7,5 @@
   "displayName": "Python",
   "description": "Syntax highlighting for Python.",
   "author": "Knot",
-  "license": "Apache-2.0",
+  "license": "GPL-3.0-or-later AND Apache-2.0",
 }

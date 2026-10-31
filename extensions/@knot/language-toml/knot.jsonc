@@ -7,5 +7,5 @@
   "displayName": "TOML",
   "description": "Syntax highlighting for TOML.",
   "author": "Knot",
-  "license": "Apache-2.0",
+  "license": "GPL-3.0-or-later AND Apache-2.0",
 }

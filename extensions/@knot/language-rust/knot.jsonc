@@ -7,5 +7,5 @@
   "displayName": "Rust",
   "description": "Syntax highlighting for Rust.",
   "author": "Knot",
-  "license": "Apache-2.0",
+  "license": "GPL-3.0-or-later AND Apache-2.0",
 }

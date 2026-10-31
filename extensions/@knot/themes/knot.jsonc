@@ -7,5 +7,5 @@
   "displayName": "Themes",
   "description": "Color themes ported from popular editor themes, and theme selection.",
   "author": "Knot",
-  "license": "MIT",
+  "license": "GPL-3.0-or-later AND MIT",
 }

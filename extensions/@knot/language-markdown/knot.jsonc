@@ -7,5 +7,5 @@
   "displayName": "Markdown",
   "description": "Syntax highlighting for Markdown and its inline syntax.",
   "author": "Knot",
-  "license": "Apache-2.0",
+  "license": "GPL-3.0-or-later AND Apache-2.0",
 }

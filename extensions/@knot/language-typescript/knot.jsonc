@@ -7,5 +7,5 @@
   "displayName": "TypeScript and JavaScript",
   "description": "Syntax highlighting for TypeScript, JavaScript, and their JSX variants.",
   "author": "Knot",
-  "license": "Apache-2.0",
+  "license": "GPL-3.0-or-later AND Apache-2.0",
 }
