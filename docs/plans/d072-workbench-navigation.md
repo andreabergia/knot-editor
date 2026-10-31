@@ -1,6 +1,6 @@
 # D072 — Workbench navigation and layout commands
 
-Status: 🚧 in progress. Item of the
+Status: ✅ complete. Item of the
 [daily-driver plan](daily-driver.md); depends on D086 (keymap presets).
 
 ## Goal
@@ -280,7 +280,7 @@ Added to the Knot preset. `secondary-` is cmd on macOS and ctrl elsewhere.
 - **Implementation context:** `place_tool` in `src/app/product/tools.rs`;
   mirror the native picker in `src/app/product/language_mode.rs`.
 
-### 8. Documentation
+### 8. Documentation ✅
 
 - Update [workbench and lifecycle](../architecture/workbench-and-lifecycle.md)
   (ratios, recent order, pinned and preview tabs, reopen stack, maximize),

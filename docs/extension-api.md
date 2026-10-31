@@ -509,7 +509,10 @@ a root is rejected.
 
 Use `documents.open` for files, `createUntitled` for new documents, and `present`
 for another presentation of a live document. These return committed document and
-presentation data. Use `workspaces.openFolder` to replace a window's roots with
+presentation data. Pass `{ preview: true }` to `documents.open` when the user is
+browsing, as a file list's single click does: the document replaces the pane's
+current preview tab instead of adding one, until the user edits, pins, or
+double-clicks it. The `workbench.previewTabs` setting turns previews off. Use `workspaces.openFolder` to replace a window's roots with
 one folder, or `replaceRoots` with an ordered list. Retained roots keep their IDs,
 so add, remove, and reorder by replacing the list read from `workspaces.get`;
 duplicates collapse after normalization and nested roots are allowed. Documents

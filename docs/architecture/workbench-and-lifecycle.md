@@ -76,9 +76,29 @@ Left/right sidebars and bottom docks are identified groups in the same split
 tree, with window-local sizes and selectors. Tools can also share ordinary
 document groups. Splitting a document
 creates another view; splitting a terminal creates another session. Empty panes
-collapse; final-tab closure returns an empty-workbench transition to the shell.
+collapse, keeping their siblings' ratios; final-tab closure returns an
+empty-workbench transition to the shell.
 
-One application-level coordinator protects tab, window, and quit closure. It
+Each ordinary split gives a ratio of its extent to its first child, addressed
+by its boundary pane, the first pane of its second child; a split beside a dock
+gives the dock its absolute size instead. Grow and shrink move the focused
+pane's nearest ordinary split by a step, or a focused dock's size, and equalize
+gives every pane of a same-direction chain an even share. Each pane keeps its
+tabs in recently activated order; a recent-tab walk shows tabs without
+reordering them and commits one activation when ctrl is released. Pinned tabs
+form a prefix of their pane, and every insertion, move, and restore keeps a tab
+in its pinned or unpinned section. A document opened as a preview replaces the
+pane's current preview in place and becomes regular when edited, pinned,
+double-clicked, moved, or opened again without `preview`; the
+`workbench.previewTabs` setting turns previews into regular tabs. Directional
+focus and moves find the neighbor from pane rectangles laid out from ratios
+and dock sizes over the painted workbench, so they work while a pane is
+maximized, and a move with no neighbor splits the pane on that side. Maximize
+is shell render state that lasts while its pane stays focused.
+
+One application-level coordinator protects tab, pane, window, and quit
+closure; Close Other Tabs covers a pane's unpinned tabs but the origin, and
+Close Pane every tab of the pane, hiding tools in a dock. It
 captures exact window, workbench, tab, surface, and presentation identities,
 counts live document views across windows, and deduplicates dirty documents
 losing their final view. Native Save / Don't Save / Cancel prompts run serially;
@@ -105,6 +125,11 @@ document closes; closed documents are removed normally. Closing a tool hides
 its attachment without entering document confirmation. Hiding the last visible
 tool can leave an empty window; native window closure needs no document prompt.
 
+Each window keeps its last 20 closed document and terminal tabs as layout tabs
+with their pane and position. Reopen Closed Tab recreates the latest through
+the [layout](#window-layouts) per-kind step, in its pane when that still exists
+and otherwise in the focused one; untitled documents and tools are not kept.
+
 Native commands and extension APIs adapt the coordinator's semantic result.
 Extension closure additionally revalidates caller lifecycle/cancellation before
 save and close admission. Completion follows the foreground transition without
@@ -115,8 +140,10 @@ awaiting observation listeners.
 One versioned `WindowLayout` value serves both restorers: native window hot exit
 and extension sessions through `workbench.captureLayout`. It records logical
 window bounds, windowed, maximized, or fullscreen state, and the display UUID;
-the split tree with dock groups; ordered tabs and the selected tab per pane; the
-focused pane; dock sizes; and each editor tab's view state. Every tab kind is
+the split tree with dock groups and each split's ratio; ordered tabs, which are
+pinned, and the selected tab per pane; the focused pane; dock sizes; and each
+editor tab's view state. Preview, maximize, recent order, and the reopen stack
+are not recorded, so restored tabs are regular. Every tab kind is
 restored by position and records only what recreates it: a document tab its
 document identity, resource URI, and explicit language, a tool tab its stable
 tool ID, and a terminal tab its shell's working directory, so a restored
@@ -213,7 +240,8 @@ insertion/split anchor. Both endpoints and document/session ownership are checke
 before mutation. Capturing or abandoning a move changes neither ownership nor
 focus.
 
-Same-pane reorder preserves tab identity. Moving between panes preserves the
+Same-pane reorder preserves tab identity. A moved tab stays in its pinned or
+unpinned section and stops being a preview. Moving between panes preserves the
 payload, collapses empty source panes, and allocates destination-local tab/pane
 identities. Editors retain their view entity and scroll state; pending caret
 reveals still apply. Terminal cross-window moves hand off the sole attachment to
@@ -225,7 +253,8 @@ reorders, joins a tab group, or splits pane edges like any tab; dropping near
 a workbench left/right/bottom edge moves it to that dock around the whole
 layout instead of splitting one pane. Releasing a tool outside all Knot frames
 cancels without creating a window. Dock-adjacent dividers drag to resize the
-window-local dock size within usable limits; other splits stay equal.
+window-local dock size within usable limits; other dividers drag the split's
+ratio, leaving each side a minimum size.
 
 Transfers do not enter protected closure or remove documents/sessions. An emptied
 source receives ordinary untitled replacement. New-window transfer creates and
@@ -297,7 +326,8 @@ that were loading under the stale snapshot, and never changes placement or
 visibility. Hiding preserves selection, expansion, and the live native view.
 Reopening returns to the former live group and tab order, or the remembered
 dock/normal group if that group disappeared; historical document groups are
-never recreated. Files opened from a dock go to the normal document group,
+never recreated. A single click opens a file as a preview tab, and a double click or
+Enter as a regular one. Files opened from a dock go to the normal document group,
 creating it when the window contains only tools. Root and directory request
 validation belongs to [documents and workspaces](documents-and-persistence.md).
 

@@ -55,9 +55,12 @@ does not select another binding. Null unbinds leave raw input available.
 The Knot preset is native data for each platform: `secondary-` entries become
 cmd on macOS and ctrl on Windows and Linux, and per-platform tables add
 movement keys and, on macOS, the Cocoa Emacs editing keys in editors. On
-Windows and Linux every global binding whose first keystroke is a plain ctrl
-chord is unbound in terminals, so the shell receives readline and job-control
-keys, and terminals copy and paste with ctrl-shift-c and ctrl-shift-v.
+Windows and Linux every global binding whose first keystroke is ctrl with a
+printable character other than backtick is unbound in terminals, so the shell
+receives readline and job-control keys, and terminals copy and paste with
+ctrl-shift-c and ctrl-shift-v. Named keys such as tab and pageup, and ctrl-`,
+stay global because shells do not read them, so tab navigation and New
+Terminal work from a terminal.
 Extensions register further presets by name, lifecycle-owned like themes. The
 `keymap.preset` setting selects one when startup completes and whenever the
 setting changes; an unregistered name selects Knot, and installing a preset

@@ -627,6 +627,40 @@ project registry and multi-root semantics rather than by this plan's internals.
 
 Reference: [workbench and lifecycle](architecture/workbench-and-lifecycle.md).
 
+
+## Workbench navigation
+
+Every common pane and tab operation has a command. Ordinary splits record a
+ratio so sizes survive restarts and project switches, while docks keep their
+absolute sizes because a sidebar should not grow with the window. A split is
+addressed by its boundary pane, the first pane of its second child, which is
+unique, so dividers and the layout need no separate split identity.
+
+Recently used switching on ctrl-tab has no overlay, unlike VS Code's and
+Zed's switchers: each press activates the next tab immediately and the order
+commits when ctrl is released, so a walk counts as one activation. The order is
+per pane, as both editors default to, and is not recorded. Directional
+commands use pane rectangles laid out from ratios and dock sizes rather than
+painted bounds, because a maximized window paints only one pane, and maximize
+lasts only while its pane is focused, so every focus change ends it without
+separate hooks.
+
+Preview tabs follow VS Code: a browsed document replaces the pane's preview in
+place, and editing, pinning, double-clicking, dragging, or opening it again
+without `preview` keeps it. Previews, the reopen stack, and maximize are not
+recorded, because each describes a moment of browsing rather than an
+arrangement worth restoring. Reopen Closed Tab recreates tabs through the
+layout's per-kind step, so a reopened tab is restored exactly as after a
+restart; untitled documents are skipped because their text is gone.
+
+New Terminal moved to ctrl-` because Reopen Closed Tab takes ⌘⇧T, as in
+browsers and VS Code; Knot has no terminal panel, so the key that shows one
+elsewhere opens a terminal tab. Named keys and ctrl-` stay global in
+terminals on Windows and Linux, because shells read only ctrl with printable
+characters. macOS reports cmd-shift-] as cmd-}, so the preset binds that.
+
+Reference: [workbench and lifecycle](architecture/workbench-and-lifecycle.md#workbench-and-protected-closure).
+
 ## Terminal
 
 Use `alacritty_terminal` as a native surface separate from text buffers. Ghostty
