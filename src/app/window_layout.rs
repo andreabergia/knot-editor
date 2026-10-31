@@ -21,6 +21,7 @@ use super::{
     editor::EditorViewState,
     workbench::{
         DockLocation, SplitDirection, TabSurfaceId, TerminalSessionId, Workbench, WorkbenchLayout,
+        WorkbenchTab,
     },
 };
 
@@ -216,40 +217,14 @@ impl WindowLayout {
                     let tabs = pane
                         .tabs()
                         .iter()
-                        .map(|tab| match tab.surface_id() {
-                            TabSurfaceId::Document(id) => {
-                                let document = documents.get(id);
-                                let model = document.map(|document| document.model().read(cx));
-                                LayoutTab::Document {
-                                    document: document
-                                        .map(|document| document.identity().to_string()),
-                                    uri: document
-                                        .and_then(|document| document.resource_uri())
-                                        .map(ToString::to_string),
-                                    view: tab
-                                        .editor()
-                                        .map(|editor| editor.read(cx).view_state(cx))
-                                        .unwrap_or_default(),
-                                    language: model
-                                        .filter(|model| model.language_is_explicit())
-                                        .and_then(|model| model.language())
-                                        .map(ToString::to_string),
-                                    pinned: tab.is_pinned(),
-                                }
-                            }
-                            TabSurfaceId::Tool(id) => LayoutTab::Tool {
-                                tool: workbench
-                                    .tool(id)
-                                    .map(|tool| tool.stable_id.clone())
-                                    .unwrap_or_default(),
-                                pinned: tab.is_pinned(),
-                            },
-                            TabSurfaceId::Terminal(id) => LayoutTab::Terminal {
-                                directory: terminal_directory(id)
-                                    .and_then(|path| url::Url::from_directory_path(path).ok())
-                                    .map(String::from),
-                                pinned: tab.is_pinned(),
-                            },
+                        .map(|tab| {
+                            WindowLayout::capture_tab(
+                                workbench,
+                                tab,
+                                documents,
+                                terminal_directory,
+                                cx,
+                            )
                         })
                         .collect();
                     LayoutNode::Pane {
@@ -297,6 +272,50 @@ impl WindowLayout {
             dock_sizes: DockSizes::from_array(
                 DockLocation::ALL.map(|dock| workbench.dock_size(dock)),
             ),
+        }
+    }
+
+    /// Capture what recreates one tab in place.
+    pub(crate) fn capture_tab(
+        workbench: &Workbench,
+        tab: &WorkbenchTab,
+        documents: &DocumentCollection,
+        terminal_directory: &dyn Fn(TerminalSessionId) -> Option<std::path::PathBuf>,
+        cx: &App,
+    ) -> LayoutTab {
+        match tab.surface_id() {
+            TabSurfaceId::Document(id) => {
+                let document = documents.get(id);
+                let model = document.map(|document| document.model().read(cx));
+                LayoutTab::Document {
+                    document: document.map(|document| document.identity().to_string()),
+                    uri: document
+                        .and_then(|document| document.resource_uri())
+                        .map(ToString::to_string),
+                    view: tab
+                        .editor()
+                        .map(|editor| editor.read(cx).view_state(cx))
+                        .unwrap_or_default(),
+                    language: model
+                        .filter(|model| model.language_is_explicit())
+                        .and_then(|model| model.language())
+                        .map(ToString::to_string),
+                    pinned: tab.is_pinned(),
+                }
+            }
+            TabSurfaceId::Tool(id) => LayoutTab::Tool {
+                tool: workbench
+                    .tool(id)
+                    .map(|tool| tool.stable_id.clone())
+                    .unwrap_or_default(),
+                pinned: tab.is_pinned(),
+            },
+            TabSurfaceId::Terminal(id) => LayoutTab::Terminal {
+                directory: terminal_directory(id)
+                    .and_then(|path| url::Url::from_directory_path(path).ok())
+                    .map(String::from),
+                pinned: tab.is_pinned(),
+            },
         }
     }
 

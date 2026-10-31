@@ -341,6 +341,7 @@ const SHARED_BINDINGS: &[PresetEntry] = &[
     ("ctrl-`", NEW_TERMINAL_COMMAND, None),
     ("ctrl-tab", NEXT_RECENT_TAB_COMMAND, None),
     ("ctrl-shift-tab", PREVIOUS_RECENT_TAB_COMMAND, None),
+    ("secondary-shift-t", REOPEN_CLOSED_TAB_COMMAND, None),
     ("secondary-shift-n", NEW_WINDOW_COMMAND, None),
     ("secondary-o", OPEN_COMMAND, None),
     ("secondary-s", SAVE_COMMAND, None),

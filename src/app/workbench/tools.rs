@@ -472,7 +472,7 @@ impl Workbench {
             .unwrap_or_else(|| self.create_group(Some(dock)))
     }
 
-    fn create_group(&mut self, dock: Option<DockLocation>) -> PaneId {
+    pub(super) fn create_group(&mut self, dock: Option<DockLocation>) -> PaneId {
         let pane = self.allocate_pane_id();
         let leaf = WorkbenchLayout::Pane(pane);
         self.layout = Some(match self.layout.take() {

@@ -15,6 +15,71 @@ pub(crate) enum ArrangedTab {
 }
 
 impl Workbench {
+    fn arranged_payload(&self, tab: ArrangedTab, cx: &mut Context<Self>) -> WorkbenchTabPayload {
+        match tab {
+            ArrangedTab::Document {
+                document,
+                model,
+                view,
+            } => WorkbenchTabPayload::Document {
+                document_id: document,
+                editor: cx.new(|cx| {
+                    let mut editor = EditorView::new(model, cx);
+                    editor.restore_view_state(view, cx);
+                    editor
+                }),
+            },
+            ArrangedTab::Tool(id) => WorkbenchTabPayload::Tool {
+                id,
+                content: self
+                    .tool(id)
+                    .expect("arranged tools are registered")
+                    .content
+                    .clone(),
+            },
+            ArrangedTab::Terminal(session_id, view) => {
+                WorkbenchTabPayload::Terminal { session_id, view }
+            }
+        }
+    }
+
+    /// Install one restored tab at `index` of `pane`, or at the end of the
+    /// normal group when that pane is gone, and activate it.
+    pub(crate) fn insert_arranged(
+        &mut self,
+        pane: PaneId,
+        index: usize,
+        tab: ArrangedTab,
+        pinned: bool,
+        cx: &mut Context<Self>,
+    ) -> (PaneId, TabId) {
+        let (pane, index) = if self.pane(pane).is_some() {
+            (pane, index)
+        } else {
+            let pane = self
+                .normal_pane()
+                .unwrap_or_else(|| self.create_group(None));
+            (pane, usize::MAX)
+        };
+        let tab = WorkbenchTab {
+            id: self.allocate_tab_id(),
+            pinned,
+            payload: self.arranged_payload(tab, cx),
+        };
+        let id = tab.id;
+        let group = self
+            .panes
+            .iter_mut()
+            .find(|group| group.id == pane)
+            .expect("destination pane is live");
+        let index = group.section_index(pinned, index);
+        group.tabs.insert(index, tab);
+        group.select(id);
+        self.focused_pane = Some(pane);
+        self.debug_assert_invariants();
+        (pane, id)
+    }
+
     /// Replace every presentation with a restored arrangement. Visible tools
     /// are hidden first, keeping their remembered placement, so tools the
     /// arrangement does not name stay hidden. Each document tab gets its own
@@ -72,31 +137,7 @@ impl Workbench {
                     .map(|(index, tab)| WorkbenchTab {
                         id: self.allocate_tab_id(),
                         pinned: index < pinned,
-                        payload: match tab {
-                            ArrangedTab::Document {
-                                document,
-                                model,
-                                view,
-                            } => WorkbenchTabPayload::Document {
-                                document_id: document,
-                                editor: cx.new(|cx| {
-                                    let mut editor = EditorView::new(model, cx);
-                                    editor.restore_view_state(view, cx);
-                                    editor
-                                }),
-                            },
-                            ArrangedTab::Tool(id) => WorkbenchTabPayload::Tool {
-                                id,
-                                content: self
-                                    .tool(id)
-                                    .expect("arranged tools are registered")
-                                    .content
-                                    .clone(),
-                            },
-                            ArrangedTab::Terminal(session_id, view) => {
-                                WorkbenchTabPayload::Terminal { session_id, view }
-                            }
-                        },
+                        payload: self.arranged_payload(tab, cx),
                     })
                     .collect::<Vec<_>>();
                 let active_tab = tabs[selected.min(tabs.len() - 1)].id;

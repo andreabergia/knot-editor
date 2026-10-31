@@ -55,6 +55,16 @@ pub(crate) async fn close_tab(
     close_target(&context, ProtectedCloseKind::Tab).await
 }
 
+#[command("workbench.reopen-closed-tab", title = "Reopen Closed Tab", description = "Reopen the tab this window closed most recently.", id = REOPEN_CLOSED_TAB_COMMAND, participant = Workbench)]
+pub(crate) async fn reopen_closed_tab(
+    context: CommandContext,
+    (): (),
+) -> Result<(), CommandOutcome> {
+    context
+        .shell(|shell, _, window, cx| shell.reopen_closed_tab(window, cx))
+        .await
+}
+
 #[command("workbench.close-other-tabs", title = "Close Other Tabs", description = "Close every unpinned tab of the focused pane except the focused one.", id = CLOSE_OTHER_TABS_COMMAND, participant = Workbench)]
 pub(crate) async fn close_other_tabs(
     context: CommandContext,

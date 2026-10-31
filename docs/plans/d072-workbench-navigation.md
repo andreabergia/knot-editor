@@ -221,7 +221,13 @@ Added to the Knot preset. `secondary-` is cmd on macOS and ctrl elsewhere.
   `Window`); tab rendering in `src/app/product/render.rs`; insertion rules in
   `src/app/workbench/relocate.rs`; `LayoutTab` in `src/app/window_layout.rs`.
 
-### 5. Reopen Closed Tab
+### 5. Reopen Closed Tab ✅
+
+- Resolved: closed tabs are captured by the same per-tab step as a window
+  layout and recreated through the per-kind payload step `arrange` uses. A
+  document already live elsewhere reopens without reading the file again; a
+  failed read shows a warning. A reopened tab is inserted into its pinned or
+  unpinned section.
 
 - The bounded per-window stack, pushed from every protected and tool-free
   closure path, and reopening through the layout restore step.

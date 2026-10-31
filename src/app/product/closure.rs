@@ -754,6 +754,7 @@ impl ProductShell {
         if !self.workbench.read(cx).contains_surface(pane, tab, surface) {
             return Err(ProtectedCloseFailure::InvalidTarget);
         }
+        self.remember_closed_tab(pane, tab, cx);
         if let TabSurfaceId::Tool(id) = surface {
             self.workbench.update(cx, |workbench, _| {
                 workbench.hide_tool(id);

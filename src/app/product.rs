@@ -26,6 +26,7 @@ pub(super) mod operations;
 mod recovery_listing;
 mod relocate;
 mod render;
+mod reopen;
 mod roots;
 mod save;
 pub(super) mod sessions;
@@ -398,6 +399,8 @@ pub(crate) struct ProductShell {
     recent_walk: Option<navigation::RecentWalk>,
     /// The pane rendered over the whole workbench, while it stays focused.
     maximized: Option<PaneId>,
+    /// Closed tabs Reopen Closed Tab recreates, most recent last.
+    closed_tabs: Vec<reopen::ClosedTab>,
     command_palette: Option<CommandPalette<ProductCommandTarget>>,
     command_palette_subscription: Option<Subscription>,
     transient: Option<ActiveTransient>,
@@ -503,6 +506,7 @@ impl ProductShell {
             split_resize: None,
             recent_walk: None,
             maximized: None,
+            closed_tabs: Vec::new(),
             command_palette: None,
             command_palette_subscription: None,
             transient: None,

@@ -15,6 +15,7 @@ mod persistence;
 mod project_sessions;
 mod projects;
 mod recovery;
+mod reopen;
 mod sessions;
 mod settings;
 mod startup;

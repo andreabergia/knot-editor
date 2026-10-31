@@ -345,34 +345,9 @@ impl ProductShell {
             Ok(OpenResource::Directory(root)) => {
                 OpenCommit::Workspace(self.install_workspace(root, cx))
             }
-            Ok(OpenResource::Missing(uri)) => {
-                let documents = Self::documents(cx);
-                let model = cx.new(|_| BufferModel::from_text(""));
-                let title = resource_title(&uri);
-                let document = documents.update(cx, |documents, cx| {
-                    documents.create_destination(title, model, uri.clone(), cx)
-                });
-                let target = self.present_open_document(document, target, replace_target, cx);
-                OpenCommit::Document { document, target }
-            }
-            Ok(OpenResource::File { uri, text, version }) => {
-                let documents = Self::documents(cx);
-                let document =
-                    if let Some(document) = documents.read(cx).document_for_resource(&uri) {
-                        document
-                    } else {
-                        let model = cx.new(|_| BufferModel::from_text(text));
-                        documents.update(cx, |documents, cx| {
-                            documents.create_persisted(
-                                resource_title(&uri),
-                                model,
-                                uri.clone(),
-                                0,
-                                version,
-                                cx,
-                            )
-                        })
-                    };
+            Ok(resource) => {
+                let document = Self::resource_document(resource, cx)
+                    .expect("files and missing resources are documents");
                 let target = self.present_open_document(document, target, replace_target, cx);
                 OpenCommit::Document { document, target }
             }
@@ -385,6 +360,38 @@ impl ProductShell {
         }
         cx.notify();
         Ok(committed)
+    }
+
+    /// The document for a loaded file or missing destination: the live
+    /// document of its URI, else a new one. A directory has none.
+    pub(super) fn resource_document(resource: OpenResource, cx: &mut App) -> Option<DocumentId> {
+        let documents = Self::documents(cx);
+        match resource {
+            OpenResource::Directory(_) => None,
+            OpenResource::Missing(uri) => {
+                let model = cx.new(|_| BufferModel::from_text(""));
+                let title = resource_title(&uri);
+                Some(documents.update(cx, |documents, cx| {
+                    documents.create_destination(title, model, uri.clone(), cx)
+                }))
+            }
+            OpenResource::File { uri, text, version } => {
+                if let Some(document) = documents.read(cx).document_for_resource(&uri) {
+                    return Some(document);
+                }
+                let model = cx.new(|_| BufferModel::from_text(text));
+                Some(documents.update(cx, |documents, cx| {
+                    documents.create_persisted(
+                        resource_title(&uri),
+                        model,
+                        uri.clone(),
+                        0,
+                        version,
+                        cx,
+                    )
+                }))
+            }
+        }
     }
 
     pub(super) fn present_open_document(
