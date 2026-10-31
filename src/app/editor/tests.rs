@@ -1378,3 +1378,37 @@ fn caret_geometry_and_painting_share_one_syntax_query(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert_eq!(queries(cx), before + 1);
 }
+
+#[gpui::test]
+fn the_caret_blinks_while_focused_and_shows_again_after_typing(cx: &mut TestAppContext) {
+    let model = cx.new(|_| BufferModel::from_text(""));
+    let (editor, cx) = cx.add_window_view(|_, cx| EditorView::new(model.clone(), cx));
+    let visible =
+        |cx: &mut gpui::VisualTestContext| cx.read(|cx| editor.read(cx).caret_blink.visible);
+    let blinking =
+        |cx: &mut gpui::VisualTestContext| cx.read(|cx| editor.read(cx).caret_blink.key.is_some());
+    cx.update(|window, cx| editor.read(cx).focus.focus(window));
+    cx.run_until_parked();
+    assert!(visible(cx));
+    cx.executor().advance_clock(super::CARET_BLINK_INTERVAL);
+    cx.run_until_parked();
+    assert!(!visible(cx));
+
+    cx.update(|window, cx| {
+        editor.update(cx, |view, cx| {
+            view.replace_text_in_range(None, "a", window, cx)
+        });
+    });
+    cx.run_until_parked();
+    assert!(visible(cx));
+    cx.executor().advance_clock(super::CARET_BLINK_INTERVAL);
+    cx.run_until_parked();
+    assert!(!visible(cx));
+    cx.executor().advance_clock(super::CARET_BLINK_INTERVAL);
+    cx.run_until_parked();
+    assert!(visible(cx));
+
+    cx.update(|window, _| window.blur());
+    cx.run_until_parked();
+    assert!(!blinking(cx));
+}

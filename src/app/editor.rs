@@ -46,6 +46,20 @@ use super::{
 
 static NEXT_HISTORY_CONTEXT: AtomicU64 = AtomicU64::new(1);
 
+const CARET_BLINK_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// The caret shows whenever it moves, the text changes, or the view gains
+/// focus, then toggles every [`CARET_BLINK_INTERVAL`] while the view stays
+/// focused.
+#[derive(Default)]
+struct CaretBlink {
+    /// The caret position, selection, and revision blinking restarted from;
+    /// `None` while unfocused.
+    key: Option<(usize, usize, bool, u64)>,
+    visible: bool,
+    _task: Option<Task<()>>,
+}
+
 /// One contributed decoration segment, painted in the color of `key`.
 /// `start` and `end` are byte columns within `line`.
 #[derive(Clone)]
@@ -183,6 +197,7 @@ pub struct EditorView {
     /// cleared by `replace_text_in_range` / `unmark_text`. The element paints
     /// an underline over this span.
     marked_range_utf16: Option<Range<usize>>,
+    caret_blink: CaretBlink,
     focus: FocusHandle,
     history_context: u64,
     history_was_focused: bool,
@@ -446,6 +461,7 @@ impl EditorView {
             position_range,
             selection_reversed: false,
             marked_range_utf16: None,
+            caret_blink: CaretBlink::default(),
             focus: cx.focus_handle(),
             history_context: NEXT_HISTORY_CONTEXT.fetch_add(1, Ordering::Relaxed),
             history_was_focused: false,
@@ -460,6 +476,38 @@ impl EditorView {
             _release_subscription: release_subscription,
             _settings_subscription: settings_subscription,
         }
+    }
+
+    /// Restart blinking with the caret shown when the caret, selection, text,
+    /// or focus changed since the last render, and stop it while unfocused.
+    fn update_caret_blink(&mut self, focused: bool, cx: &mut Context<Self>) {
+        let key = focused.then_some((
+            self.cursor_line,
+            self.cursor_col,
+            self.has_selection,
+            self.seen_revision,
+        ));
+        if key == self.caret_blink.key {
+            return;
+        }
+        self.caret_blink = CaretBlink {
+            key,
+            visible: true,
+            _task: key.map(|_| {
+                cx.spawn(async move |this, cx| {
+                    loop {
+                        cx.background_executor().timer(CARET_BLINK_INTERVAL).await;
+                        let toggled = this.update(cx, |view, cx| {
+                            view.caret_blink.visible = !view.caret_blink.visible;
+                            cx.notify();
+                        });
+                        if toggled.is_err() {
+                            break;
+                        }
+                    }
+                })
+            }),
+        };
     }
 
     /// Record that the model text changed: shaped widths no longer apply.

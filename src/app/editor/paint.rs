@@ -9,6 +9,7 @@ impl Render for EditorView {
             self.break_history_group(cx);
             self.history_was_focused = focused;
         }
+        self.update_caret_blink(focused, cx);
         let entity = cx.entity();
         let mut key_context = KeyContext::default();
         key_context.add(EDITOR_KEY_CONTEXT);
@@ -193,13 +194,16 @@ impl Element for EditorElement {
                     (ix, text, runs)
                 })
                 .collect();
-            // Only paint the caret when it's on a visible line; otherwise it
-            // is clipped anyway, so skip the shaping cost.
-            let caret = if view.cursor_line >= first && view.cursor_line < last {
-                Some((view.cursor_line, view.cursor_col))
-            } else {
-                None
-            };
+            // Only paint the caret when it's shown in its blink cycle and on a
+            // visible line; otherwise it is clipped anyway, so skip the
+            // shaping cost.
+            let caret =
+                if view.caret_blink.visible && view.cursor_line >= first && view.cursor_line < last
+                {
+                    Some((view.cursor_line, view.cursor_col))
+                } else {
+                    None
+                };
             // Convert marked UTF-16 range to (line, byte_col) start/end for
             // underline painting.
             let marked = view.marked_range_utf16.as_ref().map(|mr| {
@@ -416,8 +420,8 @@ impl Element for EditorElement {
             // Caret: a 2px vertical bar at the shaped line's
             // `x_for_index(cursor_col)`, painted only when the editor holds
             // window focus AND there is no active selection (macOS hides the
-            // caret while a selection is drag-held). No blink yet —
-            // IME/selection stages get a timer.
+            // caret while a selection is drag-held). `caret` is `None`
+            // during the hidden half of a blink.
             if focused
                 && selection.is_none()
                 && let Some((line_ix, col)) = caret
