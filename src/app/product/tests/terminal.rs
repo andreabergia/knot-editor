@@ -125,7 +125,11 @@ async fn terminal_mouse_reporting_toggle_routes_to_the_focused_session_and_plain
     window_cx.simulate_mouse_up(end, MouseButton::Left, Modifiers::default());
     cx.simulate_keystrokes(
         window_handle,
-        if cfg!(windows) { "ctrl-c" } else { "cmd-c" },
+        if cfg!(target_os = "macos") {
+            "cmd-c"
+        } else {
+            "ctrl-shift-c"
+        },
     );
     cx.run_until_parked();
     cx.update(|cx| {

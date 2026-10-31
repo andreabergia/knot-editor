@@ -439,24 +439,10 @@ fn editing_keybindings_use_semantic_commands(cx: &mut TestAppContext) {
     cx.simulate_input(window_handle, ">");
     cx.simulate_keystrokes(window_handle, "end");
     cx.simulate_input(window_handle, "<");
-    cx.simulate_keystrokes(
-        window_handle,
-        if cfg!(windows) {
-            "shift-home ctrl-c"
-        } else {
-            "shift-home cmd-c"
-        },
-    );
+    cx.simulate_keystrokes(window_handle, "shift-home secondary-c");
     cx.run_until_parked();
     cx.update(|cx| assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), ">tail<"));
-    cx.simulate_keystrokes(
-        window_handle,
-        if cfg!(windows) {
-            "ctrl-a ctrl-c"
-        } else {
-            "cmd-a cmd-c"
-        },
-    );
+    cx.simulate_keystrokes(window_handle, "secondary-a secondary-c");
     cx.run_until_parked();
     cx.update(|cx| {
         assert_eq!(
@@ -464,14 +450,7 @@ fn editing_keybindings_use_semantic_commands(cx: &mut TestAppContext) {
             "\tcafé👩‍💻\n>tail<"
         )
     });
-    cx.simulate_keystrokes(
-        window_handle,
-        if cfg!(windows) {
-            "ctrl-x ctrl-v"
-        } else {
-            "cmd-x cmd-v"
-        },
-    );
+    cx.simulate_keystrokes(window_handle, "secondary-x secondary-v");
     cx.run_until_parked();
     cx.read(|cx| assert_eq!(model.read(cx).text(), "\tcafé👩‍💻\n>tail<"));
 }
@@ -758,21 +737,11 @@ fn focus_transfer_and_distinct_views_break_typing_groups(cx: &mut TestAppContext
     cx.run_until_parked();
     cx.simulate_input(window_handle, "b");
     cx.refresh().unwrap();
-    cx.simulate_keystrokes(
-        window_handle,
-        if cfg!(windows) { "ctrl-z" } else { "cmd-z" },
-    );
+    cx.simulate_keystrokes(window_handle, "secondary-z");
     cx.run_until_parked();
     cx.read(|cx| assert_eq!(model.read(cx).text(), "a"));
 
-    cx.simulate_keystrokes(
-        window_handle,
-        if cfg!(windows) {
-            "ctrl-shift-z"
-        } else {
-            "cmd-shift-z"
-        },
-    );
+    cx.simulate_keystrokes(window_handle, "secondary-shift-z");
     cx.run_until_parked();
     cx.update_window(window_handle, |_, window, cx| {
         second.focus_handle(cx).focus(window)
@@ -786,10 +755,7 @@ fn focus_transfer_and_distinct_views_break_typing_groups(cx: &mut TestAppContext
     })
     .unwrap();
     cx.refresh().unwrap();
-    cx.simulate_keystrokes(
-        window_handle,
-        if cfg!(windows) { "ctrl-z" } else { "cmd-z" },
-    );
+    cx.simulate_keystrokes(window_handle, "secondary-z");
     cx.run_until_parked();
     cx.read(|cx| assert_eq!(model.read(cx).text(), "ab"));
 }

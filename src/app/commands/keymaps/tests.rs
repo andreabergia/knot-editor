@@ -517,7 +517,7 @@ fn unbound_keys_do_not_install_actions_in_their_scope() {
 #[gpui::test]
 fn rebuilt_map_retains_fixed_config_error_binding(cx: &mut TestAppContext) {
     cx.update(install);
-    let quit_key = if cfg!(windows) { "ctrl-q" } else { "cmd-q" };
+    let quit_key = "secondary-q";
     cx.update(|cx| {
         let owner = BindingOwner::Extension(ExtensionId::new(0), ExtensionLifecycleId::new(1));
         assert!(
@@ -812,18 +812,18 @@ fn listing_names_each_slot_and_the_owner_that_overrides_it() {
         &preset(
             "p",
             &[
-                ("cmd-s", Some("save"), None),
-                ("cmd-c", Some("copy"), None),
-                ("cmd-k", Some("kill"), Some("editor")),
+                ("ctrl-s", Some("save"), None),
+                ("ctrl-c", Some("copy"), None),
+                ("ctrl-k", Some("kill"), Some("editor")),
             ],
         )
         .bindings,
     );
     registry
-        .set(package, "cmd-s", None, Some(command("package.save")))
+        .set(package, "ctrl-s", None, Some(command("package.save")))
         .unwrap();
     registry
-        .set(package, "cmd-c", Some("terminal"), None)
+        .set(package, "ctrl-c", Some("terminal"), None)
         .unwrap();
     let rows = registry
         .listing()
@@ -842,29 +842,35 @@ fn listing_names_each_slot_and_the_owner_that_overrides_it() {
         rows,
         [
             (
-                "cmd-c".into(),
+                "ctrl-c".into(),
                 None,
                 BindingOwner::Preset,
                 Some("copy".into()),
                 None
             ),
-            ("cmd-c".into(), Some("terminal".into()), package, None, None),
             (
-                "cmd-k".into(),
+                "ctrl-c".into(),
+                Some("terminal".into()),
+                package,
+                None,
+                None
+            ),
+            (
+                "ctrl-k".into(),
                 Some("editor".into()),
                 BindingOwner::Preset,
                 Some("kill".into()),
                 None
             ),
             (
-                "cmd-s".into(),
+                "ctrl-s".into(),
                 None,
                 package,
                 Some("package.save".into()),
                 None
             ),
             (
-                "cmd-s".into(),
+                "ctrl-s".into(),
                 None,
                 BindingOwner::Preset,
                 Some("save".into()),
@@ -902,9 +908,16 @@ fn menu_shortcuts_follow_the_effective_global_keymap(cx: &mut TestAppContext) {
         keys.into_iter().next()
     }
     let key = |source: &str| canonical_key(source).unwrap();
-    cx.update(install);
+    // Windows and Linux terminals unbind ctrl with a printable character, so
+    // their presets show no menu key for those bindings.
+    cx.update(|cx| {
+        let mut registry = BindingRegistry::new();
+        registry.replace_preset(&knot_preset(Platform::MacOs));
+        cx.set_global(ApplicationKeymaps(registry));
+        rebuild(cx);
+    });
     cx.read(|cx| {
-        assert_eq!(menu_key(cx, SAVE_COMMAND), Some(key("secondary-s")));
+        assert_eq!(menu_key(cx, SAVE_COMMAND), Some(key("cmd-s")));
         assert_eq!(menu_key(cx, SPLIT_HORIZONTAL_COMMAND), None);
         assert_eq!(menu_key(cx, MOVE_LEFT_COMMAND), None);
     });
@@ -913,28 +926,28 @@ fn menu_shortcuts_follow_the_effective_global_keymap(cx: &mut TestAppContext) {
     cx.update(|cx| {
         let registry = &mut cx.global_mut::<ApplicationKeymaps>().0;
         registry
-            .set(personal, "secondary-s", None, Some(command(NEW_COMMAND)))
+            .set(personal, "cmd-s", None, Some(command(NEW_COMMAND)))
             .unwrap();
         registry
-            .set(personal, "secondary-o", Some("editor"), None)
+            .set(personal, "cmd-o", Some("editor"), None)
             .unwrap();
         rebuild(cx);
     });
     cx.read(|cx| {
         assert_eq!(menu_key(cx, SAVE_COMMAND), None);
         // Equally short keys show the latest write.
-        assert_eq!(menu_key(cx, NEW_COMMAND), Some(key("secondary-s")));
+        assert_eq!(menu_key(cx, NEW_COMMAND), Some(key("cmd-s")));
         assert_eq!(menu_key(cx, OPEN_COMMAND), None);
     });
 
     cx.update(|cx| {
-        cx.global_mut::<ApplicationKeymaps>().0.replace_preset(
-            &preset("other", &[("secondary-g", Some(SAVE_COMMAND), None)]).bindings,
-        );
+        cx.global_mut::<ApplicationKeymaps>()
+            .0
+            .replace_preset(&preset("other", &[("cmd-g", Some(SAVE_COMMAND), None)]).bindings);
         rebuild(cx);
     });
     cx.read(|cx| {
-        assert_eq!(menu_key(cx, SAVE_COMMAND), Some(key("secondary-g")));
-        assert_eq!(menu_key(cx, NEW_COMMAND), Some(key("secondary-s")));
+        assert_eq!(menu_key(cx, SAVE_COMMAND), Some(key("cmd-g")));
+        assert_eq!(menu_key(cx, NEW_COMMAND), Some(key("cmd-s")));
     });
 }

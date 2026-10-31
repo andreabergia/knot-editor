@@ -580,10 +580,7 @@ async fn keybinding_adapter_enters_the_product_dispatcher(cx: &mut TestAppContex
     })
     .unwrap();
 
-    cx.simulate_keystrokes(
-        window_handle,
-        if cfg!(windows) { "ctrl-n" } else { "cmd-n" },
-    );
+    cx.simulate_keystrokes(window_handle, "secondary-n");
     cx.run_until_parked();
 
     cx.read(|cx| {
@@ -690,22 +687,27 @@ async fn editor_unbind_leaves_global_binding_available_in_terminal(cx: &mut Test
         shell.read(cx).focus_active_editor(window, cx)
     })
     .unwrap();
+    // A named key, because Windows and Linux terminals leave ctrl with a
+    // printable character to the shell.
     cx.update(|cx| {
-        assert!(
-            cx.global_mut::<ApplicationKeymaps>()
-                .0
-                .set(
-                    BindingOwner::Extension(ExtensionId::new(0), ExtensionLifecycleId::new(1)),
-                    if cfg!(windows) { "ctrl-n" } else { "cmd-n" },
-                    Some("editor"),
-                    None,
-                )
-                .unwrap()
-        );
+        let registry = &mut cx.global_mut::<ApplicationKeymaps>().0;
+        let owner = BindingOwner::Extension(ExtensionId::new(0), ExtensionLifecycleId::new(1));
+        registry
+            .set(
+                owner,
+                "f9",
+                None,
+                Some(Command {
+                    name: NEW_COMMAND.into(),
+                    arguments: CommandArgumentValue::Null,
+                }),
+            )
+            .unwrap();
+        assert!(registry.set(owner, "f9", Some("editor"), None).unwrap());
         super::super::super::commands::keymaps::rebuild(cx);
     });
     cx.refresh().unwrap();
-    cx.simulate_keystrokes(window, if cfg!(windows) { "ctrl-n" } else { "cmd-n" });
+    cx.simulate_keystrokes(window, "f9");
     cx.run_until_parked();
     cx.read(|cx| assert_eq!(shell.read(cx).workbench.read(cx).panes()[0].tabs().len(), 1));
 
@@ -715,7 +717,7 @@ async fn editor_unbind_leaves_global_binding_available_in_terminal(cx: &mut Test
         CommandOutcome::Completed
     );
     cx.refresh().unwrap();
-    cx.simulate_keystrokes(window, if cfg!(windows) { "ctrl-n" } else { "cmd-n" });
+    cx.simulate_keystrokes(window, "f9");
     cx.run_until_parked();
     cx.read(|cx| assert_eq!(shell.read(cx).workbench.read(cx).panes()[0].tabs().len(), 3));
 }
@@ -732,14 +734,7 @@ fn sequence_prefix_dispatches_the_product_command(cx: &mut TestAppContext) {
     })
     .unwrap();
     cx.refresh().unwrap();
-    cx.simulate_keystrokes(
-        window,
-        if cfg!(windows) {
-            "ctrl-k right"
-        } else {
-            "cmd-k right"
-        },
-    );
+    cx.simulate_keystrokes(window, "secondary-k right");
     cx.run_until_parked();
     cx.read(|cx| assert_eq!(shell.read(cx).workbench.read(cx).panes().len(), 2));
 }
@@ -761,7 +756,7 @@ fn unavailable_high_priority_binding_does_not_invoke_native_default(cx: &mut Tes
                 .0
                 .set(
                     BindingOwner::Extension(ExtensionId::new(0), ExtensionLifecycleId::new(1)),
-                    if cfg!(windows) { "ctrl-n" } else { "cmd-n" },
+                    "secondary-n",
                     None,
                     Some(Command {
                         name: "missing.command".into(),
@@ -773,7 +768,7 @@ fn unavailable_high_priority_binding_does_not_invoke_native_default(cx: &mut Tes
         super::super::super::commands::keymaps::rebuild(cx);
     });
     cx.refresh().unwrap();
-    cx.simulate_keystrokes(window, if cfg!(windows) { "ctrl-n" } else { "cmd-n" });
+    cx.simulate_keystrokes(window, "secondary-n");
     cx.run_until_parked();
     cx.read(|cx| {
         assert_eq!(shell.read(cx).workbench.read(cx).panes()[0].tabs().len(), 1);

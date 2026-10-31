@@ -287,14 +287,7 @@ async fn palette_discovers_commands_and_keeps_its_opening_target(cx: &mut TestAp
         first_editor.focus_handle(cx).focus(window);
     })
     .unwrap();
-    cx.simulate_keystrokes(
-        window_handle,
-        if cfg!(windows) {
-            "ctrl-shift-p"
-        } else {
-            "cmd-shift-p"
-        },
-    );
+    cx.simulate_keystrokes(window_handle, "secondary-shift-p");
     cx.run_until_parked();
     cx.update_window(window_handle, |_, _, cx| {
         assert!(shell.read(cx).command_palette.is_some());
@@ -516,11 +509,7 @@ fn closing_the_palette_returns_focus_to_its_origin(cx: &mut TestAppContext) {
     })
     .unwrap();
     cx.refresh().unwrap();
-    let palette_key = if cfg!(windows) {
-        "ctrl-shift-p"
-    } else {
-        "cmd-shift-p"
-    };
+    let palette_key = "secondary-shift-p";
     let editor_focused = |cx: &mut TestAppContext| {
         cx.update_window(window, |_, window, cx| {
             editor.focus_handle(cx).is_focused(window)
