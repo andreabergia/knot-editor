@@ -134,39 +134,16 @@ to be rebuilt later:
     [decisions](../decisions.md#commands-and-keymaps),
     [extension guide](../extension-api.md#register-a-keymap-preset)).
 
-- **D072 — Workbench navigation and layout commands** (depends on D086)
-  - Default bindings:
-    - next and previous tab in order (⌘⇧] / ⌘⇧[)
-    - most recently used tab switching on ctrl-tab, as in VS Code and Zed
-    - go to tab 1–9
-    - focus pane left/right/up/down
-    - move tab to the adjacent pane, creating a split when there is none
-    - split left and up, beside the existing split right and down
-    - maximize the focused pane or dock, and toggle back
-    - grow, shrink, and equalize panes from the keyboard
-    - pin and unpin tab
-    - close other tabs
-    - close pane
-    - reopen closed tab
-  - Bindings go into the Knot preset. Reopen closed tab takes ⌘⇧T, so New
-    Terminal needs another key.
-  - Generic Move Tool to Dock… replaces the explorer-specific placement
-    commands and works for any tool.
-  - Reopen closed tab keeps a bounded per-window stack of what each closed tab
-    needs to be recreated, reusing the window layout's tab records.
-  - Pinned tabs sit first in their pane, survive close other tabs, and are
-    recorded in the window layout. Decide whether a pinned tab refuses plain
-    Close Tab and how it renders.
-  - Preview tabs, as in VS Code and Zed: a document opened as a preview
-    replaces the pane's previous preview until it is edited, pinned, or
-    double-clicked. Opening as a preview is an option of the public open
-    API, so the explorer and search extensions use it. Decide whether the
-    window layout records preview state.
-  - An open-documents picker lists the documents open in the window, for
-    switching by name. Decide whether Go to File (D082) covers it instead.
-  - Maximize is window-local presentation state; decide whether the window
-    layout records it.
-  - 🚧 [Plan](d072-workbench-navigation.md)
+- ✅ **D072 — Workbench navigation and layout commands**
+  - Splits record ratios and every divider drags; grow, shrink, equalize,
+    split left and up, directional focus and tab moves, and maximize work
+    from the keyboard. Tabs switch in order, by position, and by recent use on
+    ctrl-tab without an overlay. Pinned tabs, Close Other Tabs, Close Pane,
+    Reopen Closed Tab, preview tabs from the explorer and `documents.open`,
+    and Move Tool to Dock… complete the set; New Terminal moved to ctrl-`
+    ([workbench and lifecycle](../architecture/workbench-and-lifecycle.md#workbench-and-protected-closure),
+    [commands](../architecture/commands.md#keymaps),
+    [decisions](../decisions.md#workbench-navigation)).
 
 ## Phase 3 — Editing
 
