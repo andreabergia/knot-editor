@@ -249,6 +249,16 @@ complete list for that item.
 
 ## Extensions and automation
 
+- **D129 — Refactor builtin language extensions**
+  - Deferred: Each bundled language package is named `@knot/language-<name>`
+    because a package ID is exactly `@scope/name`. The grammars without a
+    package of their own still share `@knot/language-others`.
+  - Reconsider: Before the next bundled language package, or when the
+    remaining grammars in `@knot/language-others` get packages of their own.
+    Then decide whether package IDs gain a nested form such as
+    `@knot/language/rust`, which touches identity validation, discovery,
+    storage paths, and the build, and split the remaining grammars.
+
 - **D065 — Runtime grammar loading**
   - Deferred: D002 compiles a fixed tree-sitter grammar set into the binary;
     languages register by native grammar name, so an installed package cannot
