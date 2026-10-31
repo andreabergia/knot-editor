@@ -48,6 +48,8 @@ to be rebuilt later:
 - **The keymap preset mechanism before new commands; extra presets last.**
   New commands bind into a single Knot preset as they land. The VS Code, Zed,
   IntelliJ, and Sublime presets are filled in once the command set is stable.
+- **The file read API before project-local settings.** D089 reads a file from
+  the repository, so it follows D122 in the files phase.
 - **Entitlements before anything that spawns processes or uses the network.**
   Cross-file search wraps ripgrep and is the first consumer. Git, language
   servers, formatters, and AI integrations follow later.
@@ -92,15 +94,6 @@ to be rebuilt later:
     libghostty
     ([workbench and lifecycle](../architecture/workbench-and-lifecycle.md#terminal-sessions-and-views),
     [decisions](../decisions.md#terminal)).
-
-- **D089 — Project-local settings** (depends on D070, D122)
-  - Settings read from a file in the repository, attached to folders rather
-    than to projects, because a folder may belong to several projects. Add
-    D070's `path` scope fact with its glob syntax and path normalization.
-  - Decide the file's location and format (declarative data or code), and
-    whether settings for one particular root set live in the
-    `@knot/projects` record. Workspace trust (D124) stays deferred, so
-    project settings must not run code until it exists.
 
 - ✅ **D064 — Theming system**
   - Themes are extension contributions registered like languages, and every
@@ -275,6 +268,15 @@ to be rebuilt later:
     `workspace.fs` does. The explorer, project-local settings (D089),
     EditorConfig (D090), and project inference (D123) need it, and D010 and
     D081 cover only mutation and enumeration.
+
+- **D089 — Project-local settings** (depends on D070, D122)
+  - Settings read from a file in the repository, attached to folders rather
+    than to projects, because a folder may belong to several projects. Add
+    D070's `path` scope fact with its glob syntax and path normalization.
+  - Decide the file's location and format (declarative data or code), and
+    whether settings for one particular root set live in the
+    `@knot/projects` record. Workspace trust (D124) stays deferred, so
+    project settings must not run code until it exists.
 
 - **D081 — Workspace ignore rules and file enumeration**
   - Ignore policy is contributed and evaluated natively. Rules come from
