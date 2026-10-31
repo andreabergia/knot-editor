@@ -145,6 +145,7 @@ to be rebuilt later:
     auto-closing pairs, and indentation rules (increase and decrease
     patterns). The bundled language packages supply them for every language.
   - Data only. D074 and D075 consume it.
+  - 🚧 [Plan](d073-language-editing-configuration.md)
 
 - **D074 — Editing commands** (depends on D073)
   - Auto-indent on Enter: keep the current indentation, and adjust it with

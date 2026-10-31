@@ -74,6 +74,7 @@ complete list for that item.
   - D078 → D112 → D058
   - D074 → D111 → D012, D058
   - D068, D073 → D066 → D058
+  - D073, D074, D075 → D130; D074 → D131
   - D064, D068 → D114 → D058
   - D092 → multi-selection editing in D109, D001, D067
 - **Extension presentation and language tooling:**
@@ -139,6 +140,29 @@ complete list for that item.
     through the extension API without exposing tree-sitter objects.
   - Order: after D073, which adds editing data to the same language
     registration, and D068, whose gutter lanes hold folds; before D058.
+
+- **D130 — Syntax-scoped language configuration**
+  - Deferred: D073's editing configuration applies to a whole language, or
+    to an injected language's layer. Some constructs need other values
+    inside one language: JSX children comment with `{/* */}` rather than
+    `//`, and auto-closing may differ inside template strings or attributes.
+  - Reconsider: Toggle comment or auto-closing inside JSX, or another
+    language's sub-context, gets in the way in daily use. Then add a
+    per-language query that names syntax scopes and per-scope overrides of
+    the editing configuration, as Zed's `overrides.scm` does.
+  - Order: after D073, D074, and D075.
+
+- **D131 — Richer language editing data**
+  - Deferred: D073 carries comment tokens, one block comment style, bracket
+    pairs, and indentation patterns. Comment continuation on Enter (`///`,
+    `*` inside a block comment), VS Code's `onEnterRules`, per-language word
+    characters, and a second block comment style (Pascal's `{ }` and
+    `(* *)`) are not modelled.
+  - Reconsider: Writing doc comments, word selection in a language with
+    unusual identifiers (CSS `-`, Lisp), or a bundled language with two
+    block comment styles needs them. Then extend the same registration
+    rather than adding a parallel one.
+  - Order: after D074; word characters before D080 if it needs them.
 
 - **D059 — Professional typography: ligatures and configurable font features**
   - Deferred: Surfaces use shared fixed typography defaults. Ligatures and
