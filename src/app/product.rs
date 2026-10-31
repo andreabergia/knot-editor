@@ -1034,9 +1034,14 @@ impl ProductShell {
             if matches!(event, PickerEvent::Highlighted(_)) {
                 return;
             }
-            let palette = this.command_palette.take();
+            let Some(palette) = this.command_palette.take() else {
+                return;
+            };
             this.command_palette_subscription = None;
-            if let (PickerEvent::Confirmed(entry), Some(palette)) = (event, palette) {
+            // Give focus back before dispatch, so a command that moves focus
+            // or opens a transient takes it from the origin.
+            this.restore_palette_origin_focus(&palette.origin(), cx);
+            if let PickerEvent::Confirmed(entry) = event {
                 let command = palette.command(*entry);
                 Self::record_palette_command(command.name.as_ref(), cx);
                 this.dispatch_command(command, palette.origin(), cx);
@@ -1081,6 +1086,19 @@ impl ProductShell {
             return;
         };
         let _ = cx.update_window(window, |_, window, _| window.focus(&focus));
+    }
+
+    /// Focus the view the palette opened from, or the focused pane's active
+    /// surface when that view is gone.
+    fn restore_palette_origin_focus(&self, origin: &ProductCommandTarget, cx: &mut Context<Self>) {
+        let Some(window) = self.window else {
+            return;
+        };
+        let focus = origin.focus.upgrade();
+        let _ = cx.update_window(window, |_, window, cx| match focus {
+            Some(focus) => window.focus(&focus),
+            None => self.focus_active_surface(window, cx),
+        });
     }
 
     fn refocus_active_transient(&self, cx: &mut Context<Self>) {

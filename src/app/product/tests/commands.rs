@@ -496,3 +496,54 @@ fn confirming_a_palette_command_ranks_it_first_next_time(cx: &mut TestAppContext
         );
     });
 }
+
+#[gpui::test]
+fn closing_the_palette_returns_focus_to_its_origin(cx: &mut TestAppContext) {
+    let documents = install_globals(cx);
+    cx.update(super::super::bind_product_keys);
+    let document = cx.update(|cx| create_untitled_document(&documents, cx));
+    let model = cx.read(|cx| documents.read(cx).get(document).unwrap().model().clone());
+    let (shell, window) = product_window(document, model.clone(), cx);
+    let editor = cx.read(|cx| {
+        shell.read(cx).workbench.read(cx).panes()[0]
+            .active_tab()
+            .editor()
+            .unwrap()
+            .clone()
+    });
+    cx.update_window(window, |_, window, cx| {
+        editor.focus_handle(cx).focus(window);
+    })
+    .unwrap();
+    cx.refresh().unwrap();
+    let palette_key = if cfg!(windows) {
+        "ctrl-shift-p"
+    } else {
+        "cmd-shift-p"
+    };
+    let editor_focused = |cx: &mut TestAppContext| {
+        cx.update_window(window, |_, window, cx| {
+            editor.focus_handle(cx).is_focused(window)
+        })
+        .unwrap()
+    };
+
+    cx.simulate_keystrokes(window, palette_key);
+    cx.run_until_parked();
+    cx.simulate_keystrokes(window, "escape");
+    cx.run_until_parked();
+    cx.read(|cx| assert!(shell.read(cx).command_palette.is_none()));
+    assert!(editor_focused(cx));
+
+    cx.simulate_keystrokes(window, palette_key);
+    cx.run_until_parked();
+    cx.read(|cx| assert!(shell.read(cx).command_palette.is_some()));
+    cx.simulate_keystrokes(window, "t o g g l e p i n enter");
+    cx.run_until_parked();
+    cx.read(|cx| assert!(shell.read(cx).command_palette.is_none()));
+    assert!(editor_focused(cx));
+
+    cx.simulate_keystrokes(window, "a");
+    cx.run_until_parked();
+    cx.read(|cx| assert_eq!(model.read(cx).text(), "a"));
+}
