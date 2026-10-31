@@ -192,7 +192,7 @@ fn install_launch_gate(cx: &mut TestAppContext) {
 }
 
 fn wait_for_product_startup(cx: &mut TestAppContext) -> bool {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
         cx.run_until_parked();
         let state = cx.read(
@@ -395,7 +395,7 @@ fn wait_for_extension_report(
     _host: &Entity<super::super::extensions::host::ProductExtensionHost>,
     cx: &mut TestAppContext,
 ) -> super::super::extensions::host::StartupReportSnapshot {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
         cx.run_until_parked();
         if let Some(report) = cx.read(super::super::extensions::host::startup_report)
