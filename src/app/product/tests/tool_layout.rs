@@ -369,3 +369,47 @@ fn split_right_tool_restores_as_right_dock(cx: &mut TestAppContext) {
         assert_eq!(workbench.dock_location(pane), Some(DockLocation::Right));
     });
 }
+
+#[gpui::test]
+fn move_tool_to_dock_places_the_focused_tool_and_publishes_the_default(cx: &mut TestAppContext) {
+    use crate::app::commands::dispatch::MOVE_TOOL_TO_DOCK_COMMAND;
+    let documents = install_globals(cx);
+    let (shell, window) = empty_product_window(&documents, cx);
+    // A document has focus, so there is no tool to move.
+    assert_eq!(
+        wait_for_command(
+            dispatch_product_command(&shell, window, MOVE_TOOL_TO_DOCK_COMMAND, cx),
+            cx
+        ),
+        CommandOutcome::Unavailable
+    );
+    open_workspace(&shell, cx);
+    for (label, location) in [
+        ("Right", StoredLocation::Right),
+        ("Bottom", StoredLocation::Bottom),
+        ("Document Area", StoredLocation::DocumentGroup),
+        ("Left", StoredLocation::Left),
+    ] {
+        let id = cx.read(|cx| explorer_id(&shell, cx));
+        shell.update(cx, |shell, cx| {
+            shell.workbench.update(cx, |workbench, _| {
+                let (pane, tab) = workbench.tool_tab(id).unwrap();
+                workbench.activate_tab(pane, tab);
+            });
+        });
+        let execution = dispatch_product_command(&shell, window, MOVE_TOOL_TO_DOCK_COMMAND, cx);
+        assert_eq!(wait_for_command(execution, cx), CommandOutcome::Completed);
+        wait_for_api_condition(cx, |cx| shell.read(cx).transient.is_some());
+        cx.simulate_input(window, label);
+        cx.simulate_keystrokes(window, "enter");
+        cx.run_until_parked();
+        let record = stored(cx).tool(EXPLORER_TOOL_ID).unwrap().clone();
+        assert_eq!(record.location, location, "{label}");
+        assert!(record.visible);
+        cx.read(|cx| {
+            let workbench = shell.read(cx).workbench.read(cx);
+            let (pane, _) = workbench.tool_tab(explorer_id(&shell, cx)).unwrap();
+            assert_eq!(workbench.focused_pane_id(), Some(pane));
+        });
+    }
+}

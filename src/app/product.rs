@@ -20,6 +20,7 @@ pub(super) mod commands;
 mod extension_restart;
 mod language_mode;
 mod launch;
+mod move_tool;
 mod navigation;
 mod open;
 pub(super) mod operations;

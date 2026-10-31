@@ -266,7 +266,10 @@ Added to the Knot preset. `secondary-` is cmd on macOS and ctrl elsewhere.
   `src/host/js/knot.d.ts` and `docs/schemas/knot.schema.json`; explorer row
   activation in `src/app/workspace_tree.rs` and `src/app/product/tools.rs`.
 
-### 7. Move Tool to Dock…
+### 7. Move Tool to Dock… ✅
+
+- Resolved: without a focused tool the command reports `Unavailable`, the
+  command outcome Knot uses for a target the command does not apply to.
 
 - A native picker for the focused tool's destination that calls
   `ProductShell::place_tool` and publishes the tool-only default.

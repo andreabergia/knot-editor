@@ -646,6 +646,16 @@ async fn toggle_dock(context: CommandContext, dock: DockLocation) -> Result<(), 
         .await
 }
 
+#[command("workbench.move-tool-to-dock", title = "Move Tool to Dock…", description = "Move the focused tool to a dock or the document area.", id = MOVE_TOOL_TO_DOCK_COMMAND, participant = Workbench)]
+pub(crate) async fn move_tool_to_dock(
+    context: CommandContext,
+    (): (),
+) -> Result<(), CommandOutcome> {
+    context
+        .shell(|shell, target, window, cx| shell.start_move_tool(target, window, cx))
+        .await
+}
+
 #[command("workbench.reset-layout", title = "Reset Layout", description = "Return docks and tools to their default arrangement.", id = RESET_LAYOUT_COMMAND, participant = Workbench)]
 pub(crate) async fn reset_layout(context: CommandContext, (): ()) -> Result<(), CommandOutcome> {
     context
