@@ -66,7 +66,7 @@ fn file_tabs(shell: &Entity<ProductShell>, cx: &TestAppContext) -> Vec<(String, 
 }
 
 #[gpui::test]
-fn explorer_clicks_replace_one_preview_and_double_clicks_or_edits_keep_tabs(
+async fn explorer_clicks_replace_one_preview_and_double_clicks_or_edits_keep_tabs(
     cx: &mut TestAppContext,
 ) {
     let (shell, window) = explorer_window(cx);
@@ -96,6 +96,28 @@ fn explorer_clicks_replace_one_preview_and_double_clicks_or_edits_keep_tabs(
     assert_eq!(
         file_tabs(&shell, cx),
         [("other.txt".into(), false), ("notes.txt".into(), true)]
+    );
+
+    // Keep Tab Open makes the focused preview regular.
+    cx.run_until_parked();
+    let kept = dispatch_product_command(
+        &shell,
+        window,
+        crate::app::commands::dispatch::KEEP_TAB_OPEN_COMMAND,
+        cx,
+    );
+    cx.run_until_parked();
+    assert_eq!(kept.completion.await.unwrap(), CommandOutcome::Completed);
+    assert_eq!(
+        file_tabs(&shell, cx),
+        [("other.txt".into(), false), ("notes.txt".into(), false)]
+    );
+    click(&shell, window, "notes.txt", true, cx);
+    click(&shell, window, "other.txt", true, cx);
+    click(&shell, window, "notes.txt", true, cx);
+    assert_eq!(
+        file_tabs(&shell, cx),
+        [("other.txt".into(), false), ("notes.txt".into(), false)]
     );
 
     // Editing a preview keeps it.

@@ -109,6 +109,20 @@ pub(crate) async fn toggle_pin_tab(context: CommandContext, (): ()) -> Result<()
         .await
 }
 
+#[command("workbench.keep-tab-open", title = "Keep Tab Open", description = "Make the focused preview tab a regular tab.", id = KEEP_TAB_OPEN_COMMAND, participant = Workbench)]
+pub(crate) async fn keep_tab_open(context: CommandContext, (): ()) -> Result<(), CommandOutcome> {
+    context
+        .shell(|shell, target, _, cx| {
+            if shell.workbench.update(cx, |workbench, _| {
+                workbench.promote_preview(target.pane, target.tab)
+            }) {
+                cx.notify();
+            }
+            Ok(())
+        })
+        .await
+}
+
 #[command("workbench.split-horizontal", title = "Split Right", description = "Split the focused pane to the right.", id = SPLIT_HORIZONTAL_COMMAND, participant = Workbench)]
 pub(crate) async fn split_horizontal(
     context: CommandContext,

@@ -89,7 +89,8 @@ reordering them and commits one activation when ctrl is released. Pinned tabs
 form a prefix of their pane, and every insertion, move, and restore keeps a tab
 in its pinned or unpinned section. A document opened as a preview replaces the
 pane's current preview in place and becomes regular when edited, pinned,
-double-clicked, moved, or opened again without `preview`; the
+double-clicked, moved, kept open by command, or opened again without
+`preview`; the
 `workbench.previewTabs` setting turns previews into regular tabs. Directional
 focus and moves find the neighbor from pane rectangles laid out from ratios
 and dock sizes over the painted workbench, so they work while a pane is

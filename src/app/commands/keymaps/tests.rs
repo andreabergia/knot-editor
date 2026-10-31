@@ -63,6 +63,7 @@ fn every_platform_binds_the_pane_layout_chords() {
             ("shift-up", MOVE_TAB_UP_COMMAND),
             ("shift-down", MOVE_TAB_DOWN_COMMAND),
             ("secondary-m", TOGGLE_MAXIMIZE_PANE_COMMAND),
+            ("enter", KEEP_TAB_OPEN_COMMAND),
             ("shift-enter", TOGGLE_PIN_TAB_COMMAND),
             ("o", CLOSE_OTHER_TABS_COMMAND),
             ("w", CLOSE_PANE_COMMAND),

@@ -372,6 +372,7 @@ const SHARED_BINDINGS: &[PresetEntry] = &[
         TOGGLE_MAXIMIZE_PANE_COMMAND,
         None,
     ),
+    ("secondary-k enter", KEEP_TAB_OPEN_COMMAND, None),
     ("secondary-k shift-enter", TOGGLE_PIN_TAB_COMMAND, None),
     ("secondary-k o", CLOSE_OTHER_TABS_COMMAND, None),
     ("secondary-k w", CLOSE_PANE_COMMAND, None),
