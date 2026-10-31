@@ -604,25 +604,25 @@ fn shown_bindings_prefer_short_view_scoped_and_latest_bindings() {
     let mut registry = BindingRegistry::new();
     let personal = BindingOwner::Extension(ExtensionId::new(1), ExtensionLifecycleId::new(1));
     for (owner, key, view, name) in [
-        (BindingOwner::Preset, "cmd-k cmd-s", None, "file.save"),
-        (BindingOwner::Preset, "cmd-s", None, "file.save"),
-        (BindingOwner::Preset, "cmd-b", None, "first"),
-        (BindingOwner::Preset, "cmd-e", None, "first"),
-        (BindingOwner::Preset, "cmd-c", None, "copy"),
+        (BindingOwner::Preset, "ctrl-k ctrl-s", None, "file.save"),
+        (BindingOwner::Preset, "ctrl-s", None, "file.save"),
+        (BindingOwner::Preset, "ctrl-b", None, "first"),
+        (BindingOwner::Preset, "ctrl-e", None, "first"),
+        (BindingOwner::Preset, "ctrl-c", None, "copy"),
         (
             BindingOwner::Preset,
-            "cmd-c",
+            "ctrl-c",
             Some("terminal"),
             "terminal.copy",
         ),
-        (personal, "cmd-j", Some("editor"), "editor.only"),
+        (personal, "ctrl-j", Some("editor"), "editor.only"),
     ] {
         registry.set(owner, key, view, Some(command(name))).unwrap();
     }
     registry
         .set(
             personal,
-            "cmd-g",
+            "ctrl-g",
             None,
             Some(Command {
                 name: "with.arguments".into(),
@@ -632,15 +632,15 @@ fn shown_bindings_prefer_short_view_scoped_and_latest_bindings() {
         .unwrap();
 
     let editor = registry.shown_bindings(Some("editor"));
-    assert_eq!(editor["file.save"], "cmd-s");
+    assert_eq!(editor["file.save"], "ctrl-s");
     // Equal length: the later write wins.
-    assert_eq!(editor["first"], "cmd-e");
-    assert_eq!(editor["copy"], "cmd-c");
-    assert_eq!(editor["editor.only"], "cmd-j");
+    assert_eq!(editor["first"], "ctrl-e");
+    assert_eq!(editor["copy"], "ctrl-c");
+    assert_eq!(editor["editor.only"], "ctrl-j");
     assert!(!editor.contains_key("with.arguments"));
 
     let terminal = registry.shown_bindings(Some("terminal"));
-    assert_eq!(terminal["terminal.copy"], "cmd-c");
+    assert_eq!(terminal["terminal.copy"], "ctrl-c");
     assert!(!terminal.contains_key("copy"));
     assert!(!terminal.contains_key("editor.only"));
 }

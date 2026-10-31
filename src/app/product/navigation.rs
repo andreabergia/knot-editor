@@ -88,7 +88,7 @@ impl ProductShell {
         if order.len() < 2 {
             return Err(CommandOutcome::Unavailable);
         }
-        let walk = self.recent_walk.get_or_insert_with(|| RecentWalk {
+        let walk = self.recent_walk.get_or_insert(RecentWalk {
             pane,
             order,
             index: 0,
