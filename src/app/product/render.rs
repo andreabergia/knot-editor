@@ -231,6 +231,7 @@ impl ProductShell {
                     .flex_row()
                     .items_center()
                     .gap_1()
+                    .when(tab.is_preview(), |element| element.italic())
                     .child(title)
                     .when(tab.is_pinned(), |element| {
                         element.child(
@@ -240,7 +241,12 @@ impl ProductShell {
                                 .child("📌"),
                         )
                     })
-                    .on_click(cx.listener(move |this, _, window, cx| {
+                    .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                        if event.click_count() > 1 {
+                            this.workbench.update(cx, |workbench, _| {
+                                workbench.promote_preview(pane_id, tab_id)
+                            });
+                        }
                         this.activate_tab(pane_id, tab_id, window, cx);
                     }))
                     .on_mouse_up(

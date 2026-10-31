@@ -89,6 +89,11 @@ pub trait ArgumentReader {
         index: usize,
         message: &'static str,
     ) -> Result<Option<String>, DecodeError>;
+    fn optional_boolean(
+        &mut self,
+        index: usize,
+        message: &'static str,
+    ) -> Result<Option<bool>, DecodeError>;
     fn text_list(&mut self, index: usize) -> Result<Vec<String>, DecodeError>;
     fn integer(&mut self, index: usize) -> Result<u64, DecodeError>;
     fn text(&mut self, index: usize, message: &'static str) -> Result<String, DecodeError>;

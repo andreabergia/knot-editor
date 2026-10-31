@@ -176,7 +176,7 @@ impl ProductShell {
             surface: tab.surface_id(),
             presentation: tab.presentation(),
         };
-        self.present_open_document(document, &target, false, cx);
+        self.present_open_document(document, &target, false, false, cx);
     }
 
     pub(super) fn notice(

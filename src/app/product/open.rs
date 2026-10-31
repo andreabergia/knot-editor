@@ -261,15 +261,31 @@ impl ProductShell {
         replace_target: bool,
         cx: &mut Context<Self>,
     ) -> tokio::sync::oneshot::Receiver<Result<OpenCommit, OpenFailure>> {
-        let (completion, result) = tokio::sync::oneshot::channel();
-        let window = target.window;
-        self.start_resource_operation(
+        self.start_open_operation_with(
             request,
             target,
             operations::OpenOptions {
                 replace_target,
                 ..Default::default()
             },
+            cx,
+        )
+    }
+
+    /// Open a resource, reporting a resource failure in the target window.
+    pub(super) fn start_open_operation_with(
+        &mut self,
+        request: OpenRequest,
+        target: OpenTarget,
+        options: operations::OpenOptions,
+        cx: &mut Context<Self>,
+    ) -> tokio::sync::oneshot::Receiver<Result<OpenCommit, OpenFailure>> {
+        let (completion, result) = tokio::sync::oneshot::channel();
+        let window = target.window;
+        self.start_resource_operation(
+            request,
+            target,
+            options,
             move |outcome, cx| {
                 if let Err(OpenFailure::Resource(error)) = &outcome {
                     show_notice(
@@ -319,8 +335,14 @@ impl ProductShell {
                     {
                         Err(OpenFailure::InvalidTarget)
                     } else {
-                        this.apply_open_result(loaded, &target, options.replace_target, cx)
-                            .map_err(OpenFailure::Resource)
+                        this.apply_open_result(
+                            loaded,
+                            &target,
+                            options.replace_target,
+                            options.preview,
+                            cx,
+                        )
+                        .map_err(OpenFailure::Resource)
                     };
                     completion.take().unwrap()(outcome, cx);
                 })
@@ -339,6 +361,7 @@ impl ProductShell {
         result: Result<OpenResource, crate::app::open::OpenResourceError>,
         target: &OpenTarget,
         replace_target: bool,
+        preview: bool,
         cx: &mut Context<Self>,
     ) -> Result<OpenCommit, crate::app::open::OpenResourceError> {
         let committed = match result {
@@ -348,7 +371,8 @@ impl ProductShell {
             Ok(resource) => {
                 let document = Self::resource_document(resource, cx)
                     .expect("files and missing resources are documents");
-                let target = self.present_open_document(document, target, replace_target, cx);
+                let target =
+                    self.present_open_document(document, target, replace_target, preview, cx);
                 OpenCommit::Document { document, target }
             }
             Err(error) => return Err(error),
@@ -399,6 +423,7 @@ impl ProductShell {
         document: DocumentId,
         target: &OpenTarget,
         replace_target: bool,
+        preview: bool,
         cx: &mut Context<Self>,
     ) -> OpenTarget {
         let existing = self.workbench.read(cx).panes().iter().find_map(|pane| {
@@ -407,10 +432,35 @@ impl ProductShell {
                 .find(|tab| tab.document_id() == Some(document))
                 .map(|tab| (pane.id(), tab.id()))
         });
+        let preview = preview
+            && crate::app::settings::boolean(crate::app::settings::WORKBENCH_PREVIEW_TABS, cx);
         let (pane, tab) = if let Some((pane, tab)) = existing {
+            // Opening a document again without a preview keeps its tab.
             self.workbench.update(cx, |workbench, _| {
                 workbench.activate_tab(pane, tab);
+                if !preview {
+                    workbench.promote_preview(pane, tab);
+                }
             });
+            (pane, tab)
+        } else if preview {
+            let documents = Self::documents(cx);
+            let model = documents.read(cx).get(document).unwrap().model().clone();
+            let (pane, tab, replaced) = self.workbench.update(cx, |workbench, cx| {
+                workbench
+                    .open_preview_for_document(target.pane, document, model, cx)
+                    .expect("validated destination pane")
+            });
+            if let Some(replaced) = replaced.filter(|replaced| *replaced != document)
+                && cx
+                    .global::<ApplicationWorkbenches>()
+                    .view_count(replaced, cx)
+                    == 0
+            {
+                documents.update(cx, |documents, cx| {
+                    documents.remove(replaced, cx);
+                });
+            }
             (pane, tab)
         } else {
             let documents = Self::documents(cx);

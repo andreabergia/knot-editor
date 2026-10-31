@@ -542,7 +542,11 @@ impl ProductShell {
             WorkspaceTreeEvent::RequestChildren(request) => {
                 self.enumerate_workspace(request, cx);
             }
-            WorkspaceTreeEvent::OpenFile { workspace, uri } => {
+            WorkspaceTreeEvent::OpenFile {
+                workspace,
+                uri,
+                preview,
+            } => {
                 if !self.workspace.is_current(&workspace) {
                     return;
                 }
@@ -565,13 +569,15 @@ impl ProductShell {
                     surface: capture.tab.surface,
                     presentation: capture.presentation,
                 };
-                self.start_open_request(
+                drop(self.start_open_operation_with(
                     OpenRequest::from_uri_for_product(uri),
                     target,
-                    false,
-                    None,
+                    operations::OpenOptions {
+                        preview,
+                        ..Default::default()
+                    },
                     cx,
-                );
+                ));
             }
         }
     }

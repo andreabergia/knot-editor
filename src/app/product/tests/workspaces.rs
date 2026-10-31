@@ -327,7 +327,9 @@ fn native_root_commands_add_reorder_and_remove_roots_without_closing_documents(
     );
 
     let tree = cx.read(|cx| shell.read(cx).workspace_tree.clone().unwrap());
-    tree.update(cx, |tree, cx| assert!(tree.activate_for_test(&second, cx)));
+    tree.update(cx, |tree, cx| {
+        assert!(tree.activate_for_test(&second, false, cx))
+    });
     let up = super::super::commands::MOVE_FOLDER_UP_COMMAND;
     assert_eq!(
         wait_for_command(dispatch_product_command(&shell, window, up, cx), cx),

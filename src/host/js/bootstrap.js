@@ -826,7 +826,10 @@ export async function presentDocument(id, options) {
   return documentPresentationFromNative(await request("presentDocument", string(id, "document identity must be text"), destinationAuthority(options)));
 }
 export async function openDocument(uri, options) {
-  const value = await request("openDocument", string(uri, "resource URI must be text"), destinationAuthority(options));
+  const preview = options === undefined ? undefined : record(options, "destination options must be an object").preview;
+  if (preview !== undefined && typeof preview !== "boolean") throw new TypeError("preview must be a boolean");
+  const value = await request("openDocument", string(uri, "resource URI must be text"), destinationAuthority(options),
+    preview ?? null);
   return documentPresentationFromNative(value);
 }
 

@@ -229,6 +229,8 @@ pub(crate) struct WorkbenchTab {
     id: TabId,
     /// Pinned tabs form a prefix of their pane's tabs.
     pinned: bool,
+    /// A preview document tab is replaced by the pane's next preview.
+    preview: bool,
     payload: WorkbenchTabPayload,
 }
 
@@ -337,6 +339,10 @@ impl WorkbenchTab {
 
     pub(crate) fn is_pinned(&self) -> bool {
         self.pinned
+    }
+
+    pub(crate) fn is_preview(&self) -> bool {
+        self.preview
     }
 
     pub(crate) fn surface_id(&self) -> TabSurfaceId {
@@ -499,6 +505,7 @@ impl Workbench {
                 vec![WorkbenchTab {
                     id: tab_id,
                     pinned: false,
+                    preview: false,
                     payload: WorkbenchTabPayload::Document {
                         document_id,
                         editor: cx.new(|cx| EditorView::new(model, cx)),
@@ -608,11 +615,82 @@ impl Workbench {
         let index = pane.tabs.iter().position(|tab| tab.id == tab_id)?;
         let mut tab = pane.tabs.remove(index);
         tab.pinned = !tab.pinned;
+        tab.preview = false;
         let pinned = tab.pinned;
         let destination = pane.pinned_count();
         pane.tabs.insert(destination, tab);
         self.debug_assert_invariants();
         Some(pinned)
+    }
+
+    /// Open a document as the pane's preview tab, replacing its current
+    /// preview in place; a dock opens it in the normal group instead. Returns
+    /// the pane, the tab, and the document the preview replaced.
+    pub(crate) fn open_preview_for_document(
+        &mut self,
+        pane_id: PaneId,
+        document_id: DocumentId,
+        model: Entity<super::model::BufferModel>,
+        cx: &mut Context<Self>,
+    ) -> Option<(PaneId, TabId, Option<DocumentId>)> {
+        self.pane(pane_id)?;
+        if self.dock_location(pane_id).is_some() {
+            let Some(normal) = self.normal_pane() else {
+                let (pane, tab) = self.open_document_in_normal_group(document_id, model, cx);
+                self.panes
+                    .iter_mut()
+                    .find(|item| item.id == pane)?
+                    .tabs
+                    .last_mut()?
+                    .preview = true;
+                return Some((pane, tab, None));
+            };
+            return self.open_preview_for_document(normal, document_id, model, cx);
+        }
+        let preview = self
+            .pane(pane_id)?
+            .tabs
+            .iter()
+            .find(|tab| tab.preview)
+            .map(|tab| (tab.id, tab.document_id()));
+        let (tab, replaced) = match preview {
+            Some((tab, replaced)) => {
+                self.replace_tab_document(pane_id, tab, document_id, model, cx);
+                (tab, replaced)
+            }
+            None => (
+                self.open_tab_for_document(pane_id, document_id, model, cx)?,
+                None,
+            ),
+        };
+        let pane = self.panes.iter_mut().find(|pane| pane.id == pane_id)?;
+        pane.tabs.iter_mut().find(|item| item.id == tab)?.preview = true;
+        Some((pane_id, tab, replaced))
+    }
+
+    /// Make a preview tab regular. Returns whether it was a preview.
+    pub(crate) fn promote_preview(&mut self, pane_id: PaneId, tab_id: TabId) -> bool {
+        let Some(tab) = self
+            .panes
+            .iter_mut()
+            .find(|pane| pane.id == pane_id)
+            .and_then(|pane| pane.tabs.iter_mut().find(|tab| tab.id == tab_id))
+        else {
+            return false;
+        };
+        std::mem::replace(&mut tab.preview, false)
+    }
+
+    /// Make every preview tab whose document `edited` reports regular.
+    pub(crate) fn promote_edited_previews(&mut self, edited: impl Fn(DocumentId) -> bool) -> bool {
+        let mut promoted = false;
+        for tab in self.panes.iter_mut().flat_map(|pane| &mut pane.tabs) {
+            if tab.preview && tab.document_id().is_some_and(&edited) {
+                tab.preview = false;
+                promoted = true;
+            }
+        }
+        promoted
     }
 
     #[cfg(test)]
@@ -639,6 +717,7 @@ impl Workbench {
         pane.tabs.push(WorkbenchTab {
             id: tab_id,
             pinned: false,
+            preview: false,
             payload: WorkbenchTabPayload::Document {
                 document_id,
                 editor,
@@ -683,6 +762,7 @@ impl Workbench {
         pane.tabs.push(WorkbenchTab {
             id: tab_id,
             pinned: false,
+            preview: false,
             payload: WorkbenchTabPayload::Terminal { session_id, view },
         });
         pane.select(tab_id);
@@ -755,6 +835,7 @@ impl Workbench {
             vec![WorkbenchTab {
                 id: tab_id,
                 pinned: false,
+                preview: false,
                 payload: WorkbenchTabPayload::Document {
                     document_id,
                     editor,
@@ -827,6 +908,7 @@ impl Workbench {
             vec![WorkbenchTab {
                 id: tab_id,
                 pinned: false,
+                preview: false,
                 payload: WorkbenchTabPayload::Terminal {
                     session_id: new_session_id,
                     view,
@@ -1328,6 +1410,81 @@ mod tests {
             assert_eq!(
                 order(workbench, other),
                 [(moved.destination.tab_id, true), (first, false)]
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn a_preview_is_replaced_in_place_until_pinning_promotion_or_a_move(cx: &mut TestAppContext) {
+        let mut documents = DocumentCollection::new();
+        let [first, second, third, fourth] = ["one", "two", "three", "four"].map(|text| {
+            let model = cx.new(|_| BufferModel::from_text(text));
+            let document = cx.update(|cx| documents.create_untitled(text, model.clone(), cx));
+            (document, model)
+        });
+        let workbench = cx.new(|cx| Workbench::new(documents.get(first.0).unwrap(), cx));
+
+        workbench.update(cx, |workbench, cx| {
+            let pane = workbench.focused_pane_id().unwrap();
+            let (_, preview, replaced) = workbench
+                .open_preview_for_document(pane, second.0, second.1.clone(), cx)
+                .unwrap();
+            assert_eq!(replaced, None);
+            let (_, again, replaced) = workbench
+                .open_preview_for_document(pane, third.0, third.1.clone(), cx)
+                .unwrap();
+            assert_eq!((again, replaced), (preview, Some(second.0)));
+            let tabs = |workbench: &Workbench| {
+                workbench
+                    .pane(pane)
+                    .unwrap()
+                    .tabs()
+                    .iter()
+                    .map(|tab| (tab.document_id().unwrap(), tab.is_preview()))
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(tabs(workbench), [(first.0, false), (third.0, true)]);
+
+            // Promotion keeps the tab, and the next preview opens beside it.
+            assert!(workbench.promote_preview(pane, preview));
+            assert!(!workbench.promote_preview(pane, preview));
+            workbench.open_preview_for_document(pane, fourth.0, fourth.1.clone(), cx);
+            assert_eq!(
+                tabs(workbench),
+                [(first.0, false), (third.0, false), (fourth.0, true)]
+            );
+
+            // Edits, pinning, and moves promote too.
+            assert!(workbench.promote_edited_previews(|document| document == fourth.0));
+            assert_eq!(tabs(workbench)[2], (fourth.0, false));
+            let (_, pinned, _) = workbench
+                .open_preview_for_document(pane, second.0, second.1.clone(), cx)
+                .unwrap();
+            workbench.toggle_pin(pane, pinned);
+            assert_eq!(tabs(workbench)[0], (second.0, false));
+            let (_, moved, _) = workbench
+                .open_preview_for_document(pane, second.0, second.1.clone(), cx)
+                .unwrap();
+            let source = workbench.capture_tab_move(pane, moved).unwrap();
+            let anchor = workbench
+                .capture_tab_move(pane, workbench.pane(pane).unwrap().tabs()[1].id())
+                .unwrap();
+            let moved = workbench
+                .relocate_tab(
+                    source,
+                    TabMoveDestination::At {
+                        anchor,
+                        placement: TabMovePlacement::Before,
+                    },
+                )
+                .unwrap();
+            assert!(
+                workbench
+                    .pane(pane)
+                    .unwrap()
+                    .tabs()
+                    .iter()
+                    .all(|tab| tab.id() != moved.destination.tab_id || !tab.is_preview())
             );
         });
     }

@@ -33,6 +33,8 @@ pub(crate) enum WorkspaceTreeEvent {
     OpenFile {
         workspace: WorkspaceSnapshot,
         uri: ResourceUri,
+        /// A single click previews; a double click or Enter opens a tab.
+        preview: bool,
     },
 }
 
@@ -289,7 +291,7 @@ impl WorkspaceTree {
         }
     }
 
-    fn activate(&mut self, key: &RowKey, cx: &mut Context<Self>) {
+    fn activate(&mut self, key: &RowKey, preview: bool, cx: &mut Context<Self>) {
         let (root, uri) = key;
         let kind = if self
             .workspace
@@ -314,6 +316,7 @@ impl WorkspaceTree {
             ResourceKind::File => cx.emit(WorkspaceTreeEvent::OpenFile {
                 workspace: self.workspace.clone(),
                 uri: uri.clone(),
+                preview,
             }),
             ResourceKind::Directory if self.expanded.remove(key) => {}
             ResourceKind::Directory => {
@@ -326,16 +329,22 @@ impl WorkspaceTree {
         cx.notify();
     }
 
-    /// Activates the first visible row showing `uri`.
+    /// Activates the first visible row showing `uri`, as a single click does
+    /// with `preview`.
     #[cfg(test)]
-    pub(crate) fn activate_for_test(&mut self, uri: &ResourceUri, cx: &mut Context<Self>) -> bool {
+    pub(crate) fn activate_for_test(
+        &mut self,
+        uri: &ResourceUri,
+        preview: bool,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let key = self
             .visible_rows()
             .iter()
             .filter_map(VisibleRow::key)
             .find(|(_, row)| row == uri);
         if let Some(key) = &key {
-            self.activate(key, cx);
+            self.activate(key, preview, cx);
         }
         key.is_some()
     }
@@ -405,7 +414,7 @@ impl WorkspaceTree {
             "right" | "enter" => {
                 let index = current.unwrap_or(0);
                 let key = entries[index].0.clone();
-                self.activate(&key, cx);
+                self.activate(&key, false, cx);
                 cx.stop_propagation();
                 return;
             }
@@ -568,9 +577,10 @@ impl Render for WorkspaceTree {
                         .child(label)
                         .on_click({
                             let entity = entity.clone();
-                            move |_, window, cx| {
+                            move |event: &ClickEvent, window, cx| {
                                 window.focus(&entity.read(cx).focus);
-                                entity.update(cx, |tree, cx| tree.activate(&key, cx));
+                                let preview = event.click_count() < 2;
+                                entity.update(cx, |tree, cx| tree.activate(&key, preview, cx));
                             }
                         })
                         .into_any_element()
@@ -669,7 +679,7 @@ mod tests {
 
             // Expanding b under a reuses the cached listing and leaves the
             // second root's row state alone.
-            assert!(tree.activate_for_test(&uri("mem://host/a/b/"), cx));
+            assert!(tree.activate_for_test(&uri("mem://host/a/b/"), false, cx));
             assert_eq!(tree.row_labels(), ["a", "  b", "    x.txt", "b", "  x.txt"]);
             assert!(!tree.is_loading());
             assert_eq!(tree.selected_root(), Some(&workspace.roots()[0]));
@@ -708,7 +718,7 @@ mod tests {
                 cx,
             ));
             // dir is still loading when a second root arrives.
-            assert!(tree.activate_for_test(&uri("mem://host/one/dir/"), cx));
+            assert!(tree.activate_for_test(&uri("mem://host/one/dir/"), false, cx));
         });
         let added = state.replace_roots(vec![uri("mem://host/one/"), uri("mem://host/two/")]);
         tree.update(cx, |tree, cx| {

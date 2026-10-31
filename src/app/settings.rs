@@ -31,6 +31,8 @@ pub(crate) const THEME_DARK: &str = "theme.dark";
 pub(crate) const THEME_LIGHT: &str = "theme.light";
 /// The keymap preset that supplies default bindings.
 pub(crate) const KEYMAP_PRESET: &str = "keymap.preset";
+/// Whether documents browsed from the explorer and search open as previews.
+pub(crate) const WORKBENCH_PREVIEW_TABS: &str = "workbench.previewTabs";
 
 /// The value type a definition accepts.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -179,6 +181,12 @@ fn native_definitions() -> Vec<SettingDefinition> {
             "knot",
             "The keymap preset that supplies default key bindings",
         ),
+        SettingDefinition {
+            key: WORKBENCH_PREVIEW_TABS.into(),
+            value_type: SettingType::Boolean,
+            default: true.into(),
+            description: "Open documents browsed from the explorer or search as preview tabs that the next preview replaces".into(),
+        },
     ]
 }
 
@@ -338,6 +346,20 @@ pub(crate) fn editor_tab_size(context: &SettingsScope, cx: &App) -> usize {
     };
     size.expect("editor.tabSize is a native integer setting")
         .clamp(1, 32) as usize
+}
+
+/// The value of a native boolean setting, unscoped.
+pub(crate) fn boolean(key: &str, cx: &App) -> bool {
+    let read = |store: &SettingsStore| {
+        store
+            .get(key, &SettingsScope::default())
+            .and_then(Value::as_bool)
+    };
+    match cx.try_global::<ApplicationSettings>() {
+        Some(settings) => read(&settings.0),
+        None => read(&SettingsStore::default()),
+    }
+    .expect("a native boolean setting")
 }
 
 /// The value of a native text setting, unscoped.

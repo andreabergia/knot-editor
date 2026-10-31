@@ -353,6 +353,20 @@ impl crate::host::declarations::ArgumentReader for DeclarationReader<'_, '_, '_>
         optional_string(self.scope, self.arguments.get(index as i32), message)
             .map_err(declaration_decode_error)
     }
+    fn optional_boolean(
+        &mut self,
+        index: usize,
+        message: &'static str,
+    ) -> Result<Option<bool>, crate::host::declarations::DecodeError> {
+        let value = self.arguments.get(index as i32);
+        if value.is_null_or_undefined() {
+            Ok(None)
+        } else if value.is_boolean() {
+            Ok(Some(value.is_true()))
+        } else {
+            Err(crate::host::declarations::DecodeError::Type(message))
+        }
+    }
     fn text_list(
         &mut self,
         index: usize,

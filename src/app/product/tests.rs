@@ -12,6 +12,7 @@ mod navigation;
 mod observation;
 mod operations;
 mod persistence;
+mod previews;
 mod project_sessions;
 mod projects;
 mod recovery;

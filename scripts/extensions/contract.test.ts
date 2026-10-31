@@ -194,6 +194,9 @@ const opened: import("knot").DocumentPresentation = await documents.open("file:/
 await documents.open("file:///tmp/document.txt", { target: opened.presentation.target });
 await documents.open("file:///tmp/document.txt", { target: opened.presentation.target.pane });
 await documents.open("file:///tmp/document.txt", { target: opened.presentation.target.window });
+await documents.open("file:///tmp/document.txt", { preview: true });
+// @ts-expect-error preview is a boolean
+await documents.open("file:///tmp/document.txt", { preview: "yes" });
 // @ts-expect-error invocation targets do not grant discoverable live authority
 await documents.open("file:///tmp/document.txt", { target: {} as CommandTarget });
 // @ts-expect-error URI must be text

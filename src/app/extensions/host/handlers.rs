@@ -185,6 +185,7 @@ async fn write_clipboard(
 pub(crate) struct OpenArguments {
     uri: String,
     target: Option<crate::host::protocol::DocumentDestination>,
+    preview: bool,
 }
 
 impl HostArguments for OpenArguments {
@@ -192,6 +193,9 @@ impl HostArguments for OpenArguments {
         Ok(Self {
             uri: reader.text(2, "resource URI must be text")?,
             target: reader.destination(3)?,
+            preview: reader
+                .optional_boolean(4, "preview must be a boolean")?
+                .unwrap_or(false),
         })
     }
 }
@@ -215,6 +219,7 @@ async fn open_document(
         product::operations::open_document(
             arguments.uri,
             destination,
+            arguments.preview,
             product::operations::OperationCaller {
                 host,
                 key: ExtensionKey::new(request.extension, request.lifecycle),

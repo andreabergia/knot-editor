@@ -64,6 +64,7 @@ impl Workbench {
         let tab = WorkbenchTab {
             id: self.allocate_tab_id(),
             pinned,
+            preview: false,
             payload: self.arranged_payload(tab, cx),
         };
         let id = tab.id;
@@ -137,6 +138,7 @@ impl Workbench {
                     .map(|(index, tab)| WorkbenchTab {
                         id: self.allocate_tab_id(),
                         pinned: index < pinned,
+                        preview: false,
                         payload: self.arranged_payload(tab, cx),
                     })
                     .collect::<Vec<_>>();

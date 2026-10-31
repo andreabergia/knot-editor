@@ -174,7 +174,7 @@ fn replacing_a_shared_blank_tab_preserves_the_other_windows_document(cx: &mut Te
                     .map(Entity::entity_id)
                     .or_else(|| pane.active_tab().terminal_view().map(Entity::entity_id)),
             };
-            shell.present_open_document(replacement, &target, true, cx);
+            shell.present_open_document(replacement, &target, true, false, cx);
         });
     })
     .unwrap();

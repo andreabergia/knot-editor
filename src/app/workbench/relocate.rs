@@ -183,6 +183,7 @@ impl Workbench {
         prepared: PreparedDestination,
     ) -> WorkbenchTabSnapshot {
         tab.id = prepared.tab;
+        tab.preview = false;
         let snapshot = WorkbenchTabSnapshot {
             pane_id: prepared.pane,
             tab_id: tab.id,

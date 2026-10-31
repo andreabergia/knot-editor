@@ -16,7 +16,9 @@ fn docked_explorer_opens_resources_routes_copy_and_has_nontext_snapshot(cx: &mut
     let uri = ResourceUri::parse("mem://product/notes.txt").unwrap();
     cx.update_window(window, |_, window, cx| {
         tree.focus_handle(cx).focus(window);
-        tree.update(cx, |tree, cx| assert!(tree.activate_for_test(&uri, cx)));
+        tree.update(cx, |tree, cx| {
+            assert!(tree.activate_for_test(&uri, false, cx))
+        });
     })
     .unwrap();
     cx.run_until_parked();

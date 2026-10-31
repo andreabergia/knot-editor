@@ -29,6 +29,8 @@ impl OperationCaller {
 #[derive(Default)]
 pub(super) struct OpenOptions {
     pub(super) replace_target: bool,
+    /// Present a newly shown document as the pane's preview tab.
+    pub(super) preview: bool,
     pub(super) kind: Option<ResourceKind>,
     pub(super) caller: Option<OperationCaller>,
 }
@@ -268,6 +270,7 @@ pub(crate) fn validate_presentation(
 pub(crate) fn open_document(
     uri: String,
     destination: DocumentDestination,
+    preview: bool,
     caller: OperationCaller,
     completion: impl FnOnce(Result<(DocumentId, PresentationTarget), OpenError>, &mut App) + 'static,
     cx: &mut App,
@@ -281,6 +284,7 @@ pub(crate) fn open_document(
             target,
             OpenOptions {
                 kind: Some(ResourceKind::File),
+                preview,
                 caller: Some(caller),
                 ..Default::default()
             },
@@ -333,7 +337,7 @@ pub(crate) fn present_document(
         .ok_or(OpenError::DocumentNotFound)?;
     let target = shell.update(cx, |shell, cx| {
         shell.next_open_generation();
-        let target = shell.present_open_document(document, &target, false, cx);
+        let target = shell.present_open_document(document, &target, false, false, cx);
         let _ = cx.update_window(target.window, |_, window, cx| {
             shell.focus_active_surface(window, cx)
         });

@@ -69,6 +69,13 @@ fn clipboard_operation(text: &str) -> DeclaredRequest {
         ) -> Result<Option<String>, super::super::declarations::DecodeError> {
             unreachable!()
         }
+        fn optional_boolean(
+            &mut self,
+            _: usize,
+            _: &'static str,
+        ) -> Result<Option<bool>, super::super::declarations::DecodeError> {
+            unreachable!()
+        }
         fn text_list(
             &mut self,
             _: usize,

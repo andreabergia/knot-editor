@@ -395,6 +395,7 @@ impl Workbench {
             WorkbenchTab {
                 id: tab,
                 pinned: false,
+                preview: false,
                 payload: WorkbenchTabPayload::Tool { id, content },
             },
         );

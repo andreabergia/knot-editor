@@ -93,6 +93,14 @@ declare module "knot" {
      * active product window outside a command; missing context rejects. */
     readonly target?: WindowTarget | PaneTarget | ViewTarget;
   }
+  export interface OpenDocumentOptions extends DocumentDestinationOptions {
+    /** Open a document not already shown in the destination window as that
+     * pane's preview tab, replacing its current preview in place. A preview
+     * becomes a regular tab when edited, pinned, double-clicked, dragged, or
+     * opened again without `preview`. With the `workbench.previewTabs`
+     * setting off, a preview request opens a regular tab. */
+    readonly preview?: boolean;
+  }
   export interface DocumentPresentation {
     readonly document: DocumentInfo;
     readonly presentation: PresentationInfo;
@@ -104,7 +112,7 @@ declare module "knot" {
      * destinations; directories reject. Reuses an existing tab in the destination
      * window, otherwise creates one in the captured pane. Focus changes during I/O
      * never retarget the request. Resolves after commit without awaiting observers. */
-    open(uri: string, options?: DocumentDestinationOptions): Promise<DocumentPresentation>;
+    open(uri: string, options?: OpenDocumentOptions): Promise<DocumentPresentation>;
     /** Creates a clean, empty ordinary document together with its native tab. */
     createUntitled(options?: DocumentDestinationOptions): Promise<DocumentPresentation>;
     /** Presents a shared live document, reusing its tab in the destination window.

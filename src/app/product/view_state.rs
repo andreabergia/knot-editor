@@ -51,10 +51,29 @@ impl ProductShell {
             {
                 continue;
             }
-            let subscription = cx.observe(&editor, |this, _, cx| this.schedule_view_state(cx));
+            let subscription = cx.observe(&editor, |this, _, cx| {
+                this.promote_edited_previews(cx);
+                this.schedule_view_state(cx);
+            });
             self.view_state
                 .editors
                 .push((editor.entity_id(), subscription));
+        }
+    }
+
+    /// Make preview tabs whose documents have unsaved edits regular.
+    fn promote_edited_previews(&mut self, cx: &mut Context<Self>) {
+        let documents = Self::documents(cx);
+        let promoted = self.workbench.update(cx, |workbench, cx| {
+            workbench.promote_edited_previews(|document| {
+                documents
+                    .read(cx)
+                    .get(document)
+                    .is_some_and(|document| document.is_dirty(cx))
+            })
+        });
+        if promoted {
+            cx.notify();
         }
     }
 

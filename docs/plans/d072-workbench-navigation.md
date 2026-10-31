@@ -242,7 +242,13 @@ Added to the Knot preset. `secondary-` is cmd on macOS and ctrl elsewhere.
   `src/app/product/sessions.rs`; push in `commit_protected_close` and
   `close_tab_after_approval` in `src/app/product/closure.rs`.
 
-### 6. Preview tabs
+### 6. Preview tabs ✅
+
+- Resolved: `preview` is honored only for a document not already shown in the
+  destination window; opening a shown preview without it promotes the tab. A
+  replaced preview's document closes when it has no other view. An edit
+  promotes once the document is dirty. A preview aimed at a dock opens in the
+  normal group. The host reads `preview` with a new optional boolean argument.
 
 - Preview state on document tabs, replacement in place, the promotions, the
   italic title, and the `workbench.previewTabs` setting.
